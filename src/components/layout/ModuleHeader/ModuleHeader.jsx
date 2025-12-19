@@ -11,7 +11,7 @@ import HeroInsightCard from "./HeroInsightCard";
  * subtitle?: string
  * hero?:     { id, title, summary?, metric?, delta?, severity?, cta?, dismissible? } | null
  * onDismissHero?: (id) => void
- * heroVariant?: "compact" | "default"
+ * heroVariant?: "compact" | "default" | "minimal"
  * tone?:     "calm" | "neon"  (default: "calm")
  * right?:    ReactNode
  * className?: string
@@ -73,13 +73,12 @@ export default function ModuleHeader({
   const accentForLine = isBizzyFamily ? CHROME_HEX : t.accent;
   const glowForLine = isBizzyFamily ? CHROME_SOFT : t.accentFaint;
 
-  const pillClass =
-    "inline-flex items-center gap-3 rounded-full border border-white/12 bg-black/20 px-4 sm:px-5 py-2 text-[18px] sm:text-[20px] font-medium tracking-[0.18em] text-[#d3d7de]";
-
   return (
     <div className={className}>
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <span className={pillClass}>{effectiveTitle}</span>
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-[20px] sm:text-[22px] font-semibold tracking-[0.2em] text-white">
+          {effectiveTitle}
+        </span>
         {right ? <div className="shrink-0">{right}</div> : null}
       </div>
 
@@ -96,7 +95,14 @@ export default function ModuleHeader({
             variant={heroVariant}
           />
         </div>
-      ) : null}
+      ) : (
+        <div
+          className="mt-4 rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm text-white/60"
+          aria-live="polite"
+        >
+          Bizzi will surface a hero insight here once your data syncs. Keep your accounts connected to see live highlights.
+        </div>
+      )}
     </div>
   );
 }

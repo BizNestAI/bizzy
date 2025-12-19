@@ -1,9 +1,11 @@
 // File: /src/components/Accounting/FinancialKPICards.jsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { TrendingDown, TrendingUp } from "lucide-react";
-import AskBizzyInsightButton from "../Bizzy/AskBizzyInsightButton";
 import { usePeriod } from "../../context/PeriodContext";
-import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
+import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
+import { useBizzyChatContext } from "../../context/BizzyChatContext";
+import { Brain as PhBrain } from "@phosphor-icons/react";
+import { useBusiness } from "../../context/BusinessContext";
 
 const API_BASE = import.meta.env?.VITE_API_BASE || "";
 
@@ -28,8 +30,8 @@ function TrendPill({ trend, change }) {
     ? "text-emerald-300 bg-emerald-400/10 ring-emerald-400/25"
     : "text-rose-300 bg-rose-400/10 ring-rose-400/25";
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ring-1 ${cls}`}>
-      <Icon size={14} />
+    <span className={`inline-flex items-center gap-1 px-1.5 py-[4px] rounded-full text-[11px] font-medium ring-1 ${cls}`}>
+      <Icon size={12} />
       {change}
     </span>
   );
@@ -41,11 +43,17 @@ export default function FinancialKPICards({
 }) {
   const [kpis, setKpis] = useState([]);
   const [loading, setLoading] = useState(true);
+  const { sendMessage, openCanvas } = useBizzyChatContext();
+  const { currentBusiness } = useBusiness?.() || {};
 
   const userId = userIdProp || localStorage.getItem("user_id");
   const businessId = businessIdProp || localStorage.getItem("currentBusinessId");
   const { period } = usePeriod();
-  const usingDemo = useMemo(() => shouldUseDemoData(), [businessId]);
+  const forceLive = shouldForceLiveData();
+  const usingDemo = useMemo(
+    () => !forceLive && shouldUseDemoData(currentBusiness),
+    [currentBusiness, forceLive]
+  );
 
   const populateDemoKpis = useCallback(() => {
     const demo = getDemoData();
@@ -91,7 +99,7 @@ export default function FinancialKPICards({
       }
       if (!userId || !businessId || !period?.year || !period?.month) {
         setLoading(false);
-        populateDemoKpis();
+        setKpis([]);
         return;
       }
 
@@ -138,14 +146,14 @@ export default function FinancialKPICards({
         const priorMargin = prior.profitMargin ?? prior.profit_margin;
         const priorTopCategory = prior.topSpendingCategory ?? prior.top_spending_category;
 
-        if (
+        const allNull =
           totalRevenue == null &&
           totalExpenses == null &&
           netProfit == null &&
           profitMargin == null &&
-          !topSpendingCategory
-        ) {
-          populateDemoKpis();
+          !topSpendingCategory;
+        if (allNull) {
+          setKpis([]);
           return;
         }
 
@@ -183,7 +191,9 @@ export default function FinancialKPICards({
 
         if (!cancelled) setKpis(formatted);
       } catch (err) {
-        if (!cancelled) populateDemoKpis();
+        if (!cancelled) {
+          setKpis([]);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -194,6 +204,22 @@ export default function FinancialKPICards({
     fetchKPIs();
     return () => { cancelled = true; };
   }, [userId, businessId, period?.year, period?.month, usingDemo, populateDemoKpis]);
+
+  const handleAsk = useCallback(
+    async (kpi) => {
+      if (!kpi) return;
+      const prompt = kpi.previousValue
+        ? `Explain why ${kpi.label} is ${kpi.value} this month compared to ${kpi.previousValue} last month. Suggest 1–2 actions to improve.`
+        : `Explain why ${kpi.label} is ${kpi.value} this month. Suggest 1–2 actions to improve.`;
+      openCanvas("accounting");
+      window.dispatchEvent(new Event("bizzy:open-chat"));
+      await sendMessage(prompt, { openCanvas: true, module: "accounting" });
+      requestAnimationFrame(() =>
+        window.dispatchEvent(new CustomEvent("bizzy:scrollCanvasBottom"))
+      );
+    },
+    [openCanvas, sendMessage]
+  );
 
   if (loading) {
     return <div className="text-white/70 text-sm">Loading financial KPIs…</div>;
@@ -219,7 +245,7 @@ export default function FinancialKPICards({
               "transition-all duration-200",
               "hover:border-white/10",        // subtle chrome on hover
               tintRing,
-              "min-h-[152px] sm:min-h-[164px]",
+              "min-h-[168px] sm:min-h-[176px]",
             ].join(" ")}
           >
             {/* Emerald hover frame (dark green) */}
@@ -247,37 +273,47 @@ export default function FinancialKPICards({
               <div className="absolute inset-0 rounded-[1rem] ring-1 ring-inset ring-white/5" />
             </div>
 
-            {/* Ask Bizzi */}
-            <div className="absolute right-3 top-3 z-20 pointer-events-auto">
-              <AskBizzyInsightButton
-                metric={kpi.label}
-                value={kpi.value}
-                previousValue={kpi.previousValue}
-              />
-            </div>
-
             {/* Content */}
-            <div className="relative z-10 p-4 pr-20 pb-5 flex flex-col gap-2">
-              <div className="mb-1 text-[12px] font-medium tracking-wide text-white/65">
+            <div className="relative z-10 h-full p-4 pb-5 flex flex-col gap-2">
+              <div className="text-[12px] font-medium tracking-wide text-white/75 leading-snug">
                 {kpi.label}
               </div>
 
-              <div className="text-[20px] font-semibold leading-tight text-white sm:text-[22px]">
+              <div className="text-[22px] font-semibold leading-tight text-white sm:text-[24px]">
                 {kpi.value}
               </div>
 
-              <div className="mt-auto flex items-center gap-2 pt-1">
+              <div className="flex items-center gap-2 pt-1 leading-tight">
                 <TrendPill trend={kpi.trend} change={kpi.change} />
-                {kpi.previousValue ? (
-                  <div className="text-xs text-white/45">
-                    vs prior&nbsp;•&nbsp;<span className="tabular-nums">{kpi.previousValue}</span>
+                <div className="flex flex-col text-[11px] text-white/72 leading-tight">
+                  <span className="text-center">prior</span>
+                  <div className="flex items-start gap-1">
+                    <span className="text-center leading-tight">month</span>
+                    {kpi.previousValue ? (
+                      <span className="tabular-nums whitespace-normal break-words">{kpi.previousValue}</span>
+                    ) : null}
                   </div>
-                ) : (
-                  <div className="text-xs text-white/45">vs prior</div>
-                )}
+                </div>
+              </div>
+
+              <div className="mt-auto absolute bottom-3 right-3">
+                <button
+                  onClick={() => handleAsk(kpi)}
+                  className="group inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white/85 transition hover:border-white/35 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20"
+                  aria-label={`Ask Bizzi about ${kpi.label}`}
+                >
+                  <PhBrain size={16} />
+                </button>
+                <div
+                  className="pointer-events-none absolute right-[calc(100%+8px)] top-1/2 -translate-y-1/2 rounded-md bg-black/85 px-2 py-1 text-[11px] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                  style={{ whiteSpace: "nowrap" }}
+                >
+                  Ask Bizzi
+                </div>
+              </div>
               </div>
             </div>
-          </div>
+    
         );
       })}
     </div>

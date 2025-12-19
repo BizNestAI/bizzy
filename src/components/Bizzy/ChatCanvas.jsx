@@ -221,6 +221,23 @@ export default function ChatCanvas({
 
   const width = typeof propWidth === "number" ? propWidth : geom.width;
   const top = geom.top;
+  const [barSize, setBarSize] = useState({ width: 0, left: 0 });
+  useLayoutEffect(() => {
+    const el = document.querySelector("[data-bizzy-chatbar]");
+    if (!el) return;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setBarSize({ width: Math.round(r.width), left: Math.round(r.left) });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    window.addEventListener("resize", measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
 
   // Smooth open
   const [appear, setAppear] = useState(false);
@@ -238,6 +255,11 @@ export default function ChatCanvas({
       </div>
     );
   }
+
+  const sharedWidthStyle = barSize.width
+    ? { width: `${barSize.width}px`, maxWidth: `${barSize.width}px`, margin: "0 auto" }
+    : { width: "86vw", maxWidth: 780, margin: "0 auto" };
+  const conversationOffset = 10; // nudge to match visual center
 
   return (
     <div
@@ -257,7 +279,7 @@ export default function ChatCanvas({
       <div style={{ position: "absolute", inset: 0, background: "var(--bg)", backdropFilter: "none" }} />
       <div style={{ position: "relative", height: "100%", display: "flex", flexDirection: "column", width: "100%", padding: "12px 0" }}>
         <div style={{ display: "flex", justifyContent: "center", padding: "4px 0 6px" }}>
-          <div style={{ width: "86vw", maxWidth: 780, display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ ...sharedWidthStyle, display: "flex", justifyContent: "flex-end" }}>
             <button
               onClick={closeCanvas}
               className="bizzy-back-btn inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-white/5"
@@ -269,9 +291,9 @@ export default function ChatCanvas({
             </button>
           </div>
         </div>
-        <MessageStream />
+        <MessageStream contentStyle={sharedWidthStyle} barWidth={barSize.width || 0} offsetPx={conversationOffset} />
         <div style={{ display: "flex", justifyContent: "center" }}>
-          <div style={{ width: "100%", maxWidth: 660 }}>
+          <div style={sharedWidthStyle}>
             <div style={{ height: 140 }} />
           </div>
         </div>
@@ -298,7 +320,7 @@ function TypingIndicator() {
 }
 
 /* ---------------- message stream ---------------- */
-function MessageStream() {
+function MessageStream({ contentStyle, barWidth = 0, offsetPx = 0 }) {
   const { messages = [], isGenerating, activeThreadId, threadId, isCanvasOpen } = useBizzyChatContext();
   const { currentBusiness } = useBusiness?.() || {};
   const scrollerRef = useRef(null);
@@ -528,8 +550,8 @@ function MessageStream() {
 
   return (
     <div ref={scrollerRef} className="bizzy-canvas-scroll" style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingTop: 6, paddingBottom: 0 }}>
-      <div style={{ display: "flex", justifyContent: "center" }}>
-        <div style={{ width: "86vw", maxWidth: 660 }}>
+      <div style={{ display: "flex", justifyContent: "center", paddingLeft: offsetPx }}>
+        <div style={contentStyle}>
           <style>{`
             .bizzy-canvas-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.24) transparent; }
             .bizzy-canvas-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -537,12 +559,12 @@ function MessageStream() {
             .bizzy-canvas-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.24); border-radius: 9999px; border: 2px solid transparent; background-clip: padding-box; }
             .bizzy-canvas-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.32); }
             .chat-row  { margin: 18px 6px; }
-            .row-wrap  { width: 100%; max-width: 100%; gap: 8px; display:flex; flex-direction:column; align-items:flex-start; }
+            .row-wrap  { width: 100%; max-width: 100%; gap: 8px; display:flex; flex-direction:column; align-items:stretch; }
             .row-wrap--user { align-items: flex-end; }
             .bubble-user { background: rgba(255,255,255,0.055); padding: 12px 14px; border-radius: 14px;
-                           color:${WARM_TEXT}; display:inline-block; max-width:100%; border:1px solid rgba(255,255,255,0.08);
-                           word-break: break-word; white-space: normal; text-align:right; }
-            .bubble-assistant { color:${WARM_TEXT}; max-width:100%; margin-top:10px; padding: 4px 0; }
+                           color:${WARM_TEXT}; display:inline-flex; border:1px solid rgba(255,255,255,0.08);
+                           max-width:82%; align-self:flex-end; word-break: break-word; white-space: normal; text-align:right; }
+            .bubble-assistant { color:${WARM_TEXT}; width:100%; margin-top:10px; padding: 4px 0; }
             .actions { opacity:0; transition:opacity .18s ease; display:flex; gap:8px; margin-top:6px; }
             .actions--visible { opacity:.9; }
             .tipwrap{ position:relative; display:inline-flex; align-items:center; }
@@ -646,14 +668,24 @@ function MessageStream() {
           })()}
 
           {showScrollBtn && !isGenerating && (
-            <div className="sticky bottom-0 flex justify-center pointer-events-none z-[9805]">
-              <button
-                onClick={() => scrollToBottom("smooth")}
-                className="pointer-events-auto inline-flex items-center gap-1 rounded-full px-3 py-2 text-[12px] text-white bg-[#1f1f20] border border-white/15 shadow-sm hover:bg-[#242526] hover:border-white/25 transition"
-                aria-label="Jump to latest"
+            <div className="sticky bottom-0 pointer-events-none z-[9805]">
+              <div
+                style={{
+                  width: barWidth ? `${barWidth}px` : contentStyle.width,
+                  maxWidth: barWidth ? `${barWidth}px` : contentStyle.maxWidth,
+                  margin: "0 auto",
+                  display: "flex",
+                  justifyContent: "center",
+                }}
               >
-                ↓
-              </button>
+                <button
+                  onClick={() => scrollToBottom("smooth")}
+                  className="pointer-events-auto inline-flex items-center gap-1 rounded-full px-3 py-2 text-[12px] text-white bg-[#1f1f20] border border-white/15 shadow-sm hover:bg-[#242526] hover:border-white/25 transition"
+                  aria-label="Jump to latest"
+                >
+                  ↓
+                </button>
+              </div>
             </div>
           )}
         </div>

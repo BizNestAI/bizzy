@@ -41,24 +41,29 @@ const Card = ({
   children,
   className = "",
   padded = true,
+  variant = "default",
 }) => {
   const [isHover, setHover] = useState(false);
+  const isBorderless = variant === "borderless";
 
   return (
     <div
       className={[
         "relative rounded-[24px]",
         padded ? "p-4 sm:p-6" : "",
-        "border transition-all duration-300",
+        isBorderless ? "transition-all duration-300" : "border transition-all duration-300",
         className,
       ].join(" ")}
       style={{
-        borderColor: isHover ? BLUE_DARK_BORDER_HOVER : BLUE_DARK_BORDER,
-        background:
-          "linear-gradient(140deg, rgba(12,16,23,0.95), rgba(6,8,13,0.9))",
-        backdropFilter: "blur(26px)",
-        WebkitBackdropFilter: "blur(26px)",
-        boxShadow: isHover
+        borderColor: isBorderless ? "transparent" : isHover ? BLUE_DARK_BORDER_HOVER : BLUE_DARK_BORDER,
+        background: isBorderless
+          ? "transparent"
+          : "linear-gradient(140deg, rgba(12,16,23,0.95), rgba(6,8,13,0.9))",
+        backdropFilter: isBorderless ? "none" : "blur(26px)",
+        WebkitBackdropFilter: isBorderless ? "none" : "blur(26px)",
+        boxShadow: isBorderless
+          ? "none"
+          : isHover
           ? `0 30px 65px rgba(0,0,0,0.55), 0 0 25px rgba(59,130,246,0.15)`
           : "0 24px 52px rgba(0,0,0,0.5)",
       }}
@@ -97,18 +102,6 @@ export default function MarketingDashboard() {
   const { setRightExtras } = useRightExtras();
 
   const [hero, setHero] = useState(null);
-
-  if (loading) {
-    return (
-      <div className={`text-lg p-4 ${theme?.textClass || "text-primary"}`}>
-        Loading marketing dashboard...
-      </div>
-    );
-  }
-  if (!currentBusiness) return <div className="text-rose-400 p-4">No business selected.</div>;
-  if (!shouldUseDemoData(currentBusiness)) {
-    return <LiveModePlaceholder title="Connect your social + reviews to view Marketing insights" />;
-  }
 
   const businessId = useMemo(
     () => currentBusiness?.id || localStorage.getItem("currentBusinessId"),
@@ -151,6 +144,12 @@ export default function MarketingDashboard() {
     return () => { alive = false; };
   }, [businessId]);
 
+  if (loading) return null;
+  if (!currentBusiness) return <div className="text-rose-400 p-4">No business selected.</div>;
+  if (!shouldUseDemoData(currentBusiness)) {
+    return <LiveModePlaceholder title="Connect your social + reviews to view Marketing insights" />;
+  }
+
   /* Graphite tokens */
   const bgColor = theme?.bgClass || "bg-app";
   const textColor = theme?.textClass || "text-primary";
@@ -178,18 +177,18 @@ export default function MarketingDashboard() {
         <div className="grid grid-cols-12 gap-6 items-start">
           {/* Analytics (full width top row) */}
           <div className="col-span-12">
-            <Card>
+            <Card variant="borderless" padded={false}>
               <MarketingAnalyticsDashboard businessId={businessId} summary={summaryData} />
             </Card>
-          </div>
+        </div>
 
-          <div className="col-span-12">
-            <Card>
-              <Cap>
-                <RecentPostsCard businessId={businessId} fullWidth />
-              </Cap>
-            </Card>
-          </div>
+        <div className="col-span-12">
+          <Card variant="borderless" padded={false}>
+            <Cap>
+              <RecentPostsCard businessId={businessId} fullWidth />
+            </Cap>
+          </Card>
+        </div>
 
         </div>
       </div>

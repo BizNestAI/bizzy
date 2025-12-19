@@ -2,11 +2,32 @@ import React, { useMemo, useState, useEffect, useRef } from "react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext.jsx";
 import BookkeepingFeed from "../../components/Accounting/BookkeepingFeed.jsx";
+import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
 
 const MOCK_ACCOUNTS = [
   { id: "acct-cc-1234", name: "Credit Card 1234", type: "Credit Card", balance: -1820.45 },
   { id: "acct-ch-5678", name: "Checking 5678", type: "Checking", balance: 8240.12 },
   { id: "acct-sv-9012", name: "Savings 9012", type: "Savings", balance: 15250.88 },
+];
+const CHART_OF_ACCOUNTS = [
+  // Revenue
+  { id: "coa-income-sales", name: "Income - Sales", type: "income" },
+  { id: "coa-income-services", name: "Income - Services", type: "income" },
+  { id: "coa-income-reimburse", name: "Income - Reimbursements", type: "income" },
+  // Expenses
+  { id: "coa-supplies", name: "Supplies", type: "expense" },
+  { id: "coa-fuel", name: "Fuel", type: "expense" },
+  { id: "coa-tools", name: "Tools & Equipment", type: "expense" },
+  { id: "coa-advertising", name: "Advertising", type: "expense" },
+  { id: "coa-meals", name: "Meals & Entertainment", type: "expense" },
+  { id: "coa-prof-services", name: "Professional Services", type: "expense" },
+  { id: "coa-software", name: "Software", type: "expense" },
+  { id: "coa-travel", name: "Travel", type: "expense" },
+  { id: "coa-rent", name: "Rent", type: "expense" },
+  { id: "coa-other", name: "Other Expenses", type: "expense" },
+  // Equity
+  { id: "coa-equity-draws", name: "Owner Draws", type: "equity" },
+  { id: "coa-equity-retained", name: "Retained Earnings", type: "equity" },
 ];
 
 const DEMO_BOOKKEEPING = getDemoData()?.bookkeeping || {};
@@ -17,7 +38,7 @@ const MOCK_TRANSACTIONS = DEMO_TRANSACTIONS.length ? DEMO_TRANSACTIONS : [
   {
     id: "txn-1",
     accountId: "acct-cc-1234",
-    date: "2025-01-12",
+    date: "2026-01-12",
     vendor: "Shell Fuel",
     location: "Anytown",
     description: "SHELL 2458 ANYTOWN",
@@ -32,7 +53,7 @@ const MOCK_TRANSACTIONS = DEMO_TRANSACTIONS.length ? DEMO_TRANSACTIONS : [
   {
     id: "txn-2",
     accountId: "acct-cc-1234",
-    date: "2025-01-11",
+    date: "2026-01-11",
     vendor: "Home Depot",
     location: "Cleveland",
     description: "HOMEDPOT #445",
@@ -47,7 +68,7 @@ const MOCK_TRANSACTIONS = DEMO_TRANSACTIONS.length ? DEMO_TRANSACTIONS : [
   {
     id: "txn-3",
     accountId: "acct-ch-5678",
-    date: "2025-01-10",
+    date: "2026-01-10",
     vendor: "QuickGas",
     location: "Akron",
     description: "QUICKGAS 8841",
@@ -62,7 +83,7 @@ const MOCK_TRANSACTIONS = DEMO_TRANSACTIONS.length ? DEMO_TRANSACTIONS : [
   {
     id: "txn-4",
     accountId: "acct-ch-5678",
-    date: "2024-12-22",
+    date: "2025-12-22",
     vendor: "Roofing Supply Co",
     location: "Cincinnati",
     description: "ROOFING SUPPLY 3391",
@@ -77,7 +98,7 @@ const MOCK_TRANSACTIONS = DEMO_TRANSACTIONS.length ? DEMO_TRANSACTIONS : [
   {
     id: "txn-5",
     accountId: "acct-sv-9012",
-    date: "2024-12-18",
+    date: "2025-12-18",
     vendor: "American Express",
     location: "Online",
     description: "AMEX PAYMENT",
@@ -92,7 +113,7 @@ const MOCK_TRANSACTIONS = DEMO_TRANSACTIONS.length ? DEMO_TRANSACTIONS : [
   {
     id: "txn-6",
     accountId: "acct-cc-1234",
-    date: "2024-12-15",
+    date: "2025-12-15",
     vendor: "United Rentals",
     location: "Toledo",
     description: "UNITED RENTALS 9912",
@@ -107,11 +128,8 @@ const MOCK_TRANSACTIONS = DEMO_TRANSACTIONS.length ? DEMO_TRANSACTIONS : [
 ];
 
 const TABS = [
-  { key: "all", label: "All" },
   { key: "needs_review", label: "Needs Review" },
-  { key: "uncategorized", label: "Uncategorized" },
   { key: "approved", label: "Approved" },
-  { key: "flagged", label: "Bizzi Flags" },
 ];
 
 const DATE_RANGE_OPTIONS = [
@@ -154,19 +172,19 @@ function AccountCard({ account, selected, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex min-w-[180px] flex-col gap-1 rounded-xl border px-4 py-3 text-left transition hover:border-emerald-400/60"
+      className="flex min-w-[220px] flex-col gap-1.5 rounded-xl border px-5 py-4 text-left transition hover:border-emerald-400/60"
       style={{
         background: PANEL_BG,
         borderColor: selected ? "rgba(16,185,129,0.6)" : PANEL_BORDER,
         boxShadow: selected ? "0 10px 30px rgba(0,0,0,0.35)" : "none",
       }}
     >
-      <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-400">
+      <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-300">
         <span>{account.type}</span>
         <span className="text-emerald-300">{account.toReview} to review</span>
       </div>
-      <div className="text-sm font-semibold text-slate-100">{account.name}</div>
-      <div className="text-xs text-slate-300">Balance {account.balance < 0 ? "-" : ""}${Math.abs(account.balance).toLocaleString()}</div>
+      <div className="text-base font-semibold text-slate-50">{account.name}</div>
+      <div className="text-sm text-slate-300">Balance {account.balance < 0 ? "-" : ""}${Math.abs(account.balance).toLocaleString()}</div>
     </button>
   );
 }
@@ -175,12 +193,55 @@ function BookkeepingCleanup() {
   const { currentBusiness } = useBusiness?.() || {};
   const usingDemo = shouldUseDemoData(currentBusiness);
   const accounts = usingDemo ? ACCOUNT_LIST : [];
-  const transactions = usingDemo ? TXN_DATA : [];
+  const chartAccounts = useMemo(() => {
+    if (!usingDemo) return [];
+    const byType = {
+      income: [],
+      expense: [],
+      equity: [],
+    };
+    CHART_OF_ACCOUNTS.forEach((acct) => {
+      byType[acct.type]?.push(acct);
+    });
+    return [...byType.income, ...byType.expense, ...byType.equity];
+  }, [usingDemo]);
+  const rawTransactions = React.useMemo(() => (usingDemo ? TXN_DATA : []), [usingDemo]);
+  const [transactions, setTransactions] = useState([]);
+
+  const guessAccountId = React.useCallback((txn) => {
+    const text = `${txn.description || ""} ${txn.vendor || ""}`.toLowerCase();
+    const keywordMap = [
+      { id: "coa-fuel", keys: ["fuel", "gas", "shell", "quickgas"] },
+      { id: "coa-tools", keys: ["home depot", "roof", "tool", "rental", "supply"] },
+      { id: "coa-prof-services", keys: ["accountant", "legal", "consult", "express"] },
+      { id: "coa-advertising", keys: ["ads", "advert", "marketing"] },
+      { id: "coa-software", keys: ["software", "saas", "subscription"] },
+      { id: "coa-meals", keys: ["restaurant", "cafe", "food", "meal"] },
+      { id: "coa-travel", keys: ["hotel", "air", "uber", "lyft"] },
+      { id: "coa-income-sales", keys: ["invoice", "payment", "deposit", "sale", "received", "income"] },
+    ];
+    for (const entry of keywordMap) {
+      if (entry.keys.some((k) => text.includes(k))) return entry.id;
+    }
+    return txn.amount > 0 ? "coa-income-sales" : "coa-other";
+  }, []);
+
+  useEffect(() => {
+    const mapped = rawTransactions.map((t) => {
+      const suggestedAccountId = t.suggestedAccountId || guessAccountId(t);
+      return {
+        ...t,
+        suggestedAccountId,
+        glAccountId: t.glAccountId || suggestedAccountId,
+      };
+    });
+    setTransactions(mapped);
+  }, [rawTransactions, guessAccountId]);
 
   const [autoApprove, setAutoApprove] = useState(false);
   const [activeTab, setActiveTab] = useState("needs_review");
   const [dateRange, setDateRange] = useState("this_month");
-  const [accountFilter, setAccountFilter] = useState("all");
+  const [accountFilter, setAccountFilter] = useState(null);
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkCategory, setBulkCategory] = useState("Materials");
@@ -189,10 +250,13 @@ function BookkeepingCleanup() {
   const [page, setPage] = useState(1);
 
   useEffect(() => {
-    if (accountFilter !== "all" && !accounts.find((a) => a.id === accountFilter)) {
-      setAccountFilter("all");
-    }
-  }, [accounts, accountFilter]);
+    if (!accounts.length) return;
+    setAccountFilter((prev) => {
+      if (!prev) return accounts[0].id;
+      const exists = accounts.some((a) => a.id === prev);
+      return exists ? prev : accounts[0].id;
+    });
+  }, [accounts]);
 
   const accountCards = useMemo(() => {
     const counts = transactions.reduce((acc, txn) => {
@@ -203,6 +267,19 @@ function BookkeepingCleanup() {
   }, [accounts, transactions]);
   const totalToReview = useMemo(() => transactions.filter((t) => t.status !== "approved").length, [transactions]);
   const estimatedImpact = useMemo(() => transactions.reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0), [transactions]);
+  const selectedTransactions = useMemo(
+    () => transactions.filter((t) => selectedIds.has(t.id)),
+    [transactions, selectedIds]
+  );
+
+  const groupedChartAccounts = useMemo(() => {
+    const byType = { income: [], expense: [], equity: [], other: [] };
+    chartAccounts.forEach((a) => {
+      if (byType[a.type]) byType[a.type].push(a);
+      else byType.other.push(a);
+    });
+    return [...byType.income, ...byType.expense, ...byType.equity, ...byType.other];
+  }, [chartAccounts]);
 
   function Select({ value, onChange, options, className = "" }) {
     const [open, setOpen] = useState(false);
@@ -321,7 +398,34 @@ function BookkeepingCleanup() {
   };
 
   const handleApprove = (id) => {
-    console.log("Approve txn", id, "with autoApprove", autoApprove);
+    setTransactions((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, status: "approved" } : t))
+    );
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    // TODO: Push status + account to QuickBooks via backend integration
+  };
+
+  const handleUndo = (id) => {
+    setTransactions((prev) =>
+      prev.map((t) => {
+        if (t.id !== id) return t;
+        const suggestedId = t.suggestedAccountId || guessAccountId(t);
+        const suggestedName = chartAccounts.find((a) => a.id === suggestedId)?.name || suggestedId;
+        return {
+          ...t,
+          status: "needs_review",
+          glAccountId: suggestedId,
+          glAccountName: suggestedName,
+          // reset UI selection to suggestion
+          accountId: suggestedId,
+        };
+      })
+    );
+    // TODO: Push status rollback to QuickBooks via backend integration
   };
 
   const handleBulkApprove = () => {
@@ -349,15 +453,30 @@ function BookkeepingCleanup() {
     }
   }, [usingDemo]);
 
+  const handleAccountChange = (txnId, accountId) => {
+    const accountName = chartAccounts.find((a) => a.id === accountId)?.name || accountId;
+    setTransactions((prev) =>
+      prev.map((t) =>
+        t.id === txnId
+          ? {
+              ...t,
+              glAccountId: accountId,
+              glAccountName: accountName,
+              suggestedAccountId: t.suggestedAccountId, // keep original suggestion
+            }
+          : t
+      )
+    );
+  };
+
   return (
     <div className="p-5 text-slate-100 min-h-screen">
-      <div className="flex items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-semibold text-slate-50">Bookkeeping Cleanup</h1>
-          <p className="text-sm text-slate-400">Bizzi helps clean your uncategorized transactions so your insights are accurate.</p>
-        </div>
-      </div>
-      <div className="border-b border-white/5 mt-4 mb-4" />
+      <ModuleHeader
+        module="financials"
+        title="Books Review"
+        subtitle="Bizzi helps clean your uncategorized transactions so your insights are accurate."
+        className="mb-4"
+      />
 
       <div className="flex gap-3 overflow-x-auto pb-2">
         {accountCards.map((acct) => (
@@ -389,12 +508,6 @@ function BookkeepingCleanup() {
             <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />
             {autoApprove ? "On" : "Off"}
           </button>
-          <button
-            onClick={() => setShowCategorized((v) => !v)}
-            className="ml-3 inline-flex items-center rounded-full border border-slate-600 px-3 py-1.5 text-xs text-slate-200 hover:border-emerald-400"
-          >
-            {showCategorized ? "View Uncategorized" : "View Categorized"}
-          </button>
         </div>
       </div>
 
@@ -408,8 +521,10 @@ function BookkeepingCleanup() {
                 setActiveTab(tab.key);
                 setSelectedIds(new Set());
               }}
-              className={`rounded-full px-3 py-1.5 transition ${
-                active ? "bg-slate-900 text-emerald-300 border border-emerald-500/60" : "text-slate-400 hover:bg-slate-900/70"
+              className={`rounded-full px-3 py-1.5 transition border ${
+                active
+                  ? "bg-[var(--panel)] text-emerald-300 border-[var(--accent-line)] shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
+                  : "text-slate-400 border-transparent hover:bg-[var(--panel)] hover:border-[var(--accent-line)]"
               }`}
             >
               {tab.label}
@@ -435,10 +550,18 @@ function BookkeepingCleanup() {
 
       {selectedIds.size > 0 && (
         <div
-          className="mb-2 flex items-center justify-between rounded-lg border px-3 py-2 text-xs sm:text-sm text-slate-200"
+          className="mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs sm:text-sm text-slate-200"
           style={{ background: PANEL_BG, borderColor: PANEL_BORDER }}
         >
-          <span>Selected: {selectedIds.size} transactions</span>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 text-[12px] text-slate-300">
+            <span className="font-semibold text-slate-100">Selected: {selectedIds.size} {selectedIds.size === 1 ? "transaction" : "transactions"}</span>
+            {selectedTransactions[0] ? (
+              <span className="text-slate-400">
+                {selectedTransactions[0].description || selectedTransactions[0].vendor} • {selectedTransactions[0].vendor || "—"} •{" "}
+                {Number(selectedTransactions[0].amount || 0) < 0 ? "-" : "+"}${Math.abs(Number(selectedTransactions[0].amount || 0)).toFixed(2)}
+              </span>
+            ) : null}
+          </div>
           <div className="flex items-center gap-2">
             <Select value={bulkCategory} onChange={handleBulkSetCategory} options={CATEGORY_OPTIONS.map((c) => ({ value: c, label: c }))} />
             <Select value={bulkJob} onChange={handleBulkSetJob} options={JOB_OPTIONS.map((j) => ({ value: j, label: j }))} />
@@ -468,6 +591,9 @@ function BookkeepingCleanup() {
           toggleSelectAll={toggleSelectAll}
           toggleRow={toggleRow}
           onApprove={handleApprove}
+          onUndo={handleUndo}
+          accounts={groupedChartAccounts}
+          onAccountChange={handleAccountChange}
           page={page}
           pageCount={pageCount}
           pageSize={rowsPerPage}

@@ -2,20 +2,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import classNames from "classnames";
-import { RefreshCw, ArrowRight } from "lucide-react";
+import { RefreshCw, ArrowRight, ChevronDown } from "lucide-react";
 import { apiUrl, safeFetch } from "../../utils/safeFetch";
 import { supabase } from "../../services/supabaseClient";
+import { getDemoMode } from "../../services/demo/demoClient";
 
 const CHROME_HEX  = "#BFBFBF";
-const MOCK_ITEMS = [
-  { title: "Kitchen walkthrough",           offsetDays: 1,  hour: 9,   minute: 30, durationMin: 45 },
-  { title: "Payroll submission",            offsetDays: 2,  hour: 11,  minute: 0,  durationMin: 45 },
-  { title: "Tile delivery follow-ups",      offsetDays: 3,  hour: 14,  minute: 0,  durationMin: 30 },
-  { title: "AR follow-ups",                 offsetDays: 4,  hour: 10,  minute: 0,  durationMin: 40 },
-  { title: "Marketing review",              offsetDays: 5,  hour: 15,  minute: 0,  durationMin: 60 },
-  { title: "Crew standup",                  offsetDays: 0,  hour: 8,   minute: 30, durationMin: 30, all_day: false },
-  { title: "Tax prep consult",              offsetDays: 6,  hour: 13,  minute: 0,  durationMin: 45 },
-];
 
 function hexToRgba(hex, a = 1) {
   let c = hex?.replace("#", "") || "94a3b8";
@@ -25,27 +17,48 @@ function hexToRgba(hex, a = 1) {
   return `rgba(${r}, ${g}, ${b}, ${a})`;
 }
 
+// Mock agenda used only when demo/mock mode is active
+const MOCK_ITEMS = [
+  {
+    id: "kitchen-walkthrough",
+    title: "Kitchen walkthrough",
+    start_ts: dayjs().add(1, "day").hour(9).minute(30).toISOString(),
+    end_ts: dayjs().add(1, "day").hour(10).minute(15).toISOString(),
+  },
+  {
+    id: "payroll-submission",
+    title: "Payroll submission",
+    start_ts: dayjs().add(2, "day").hour(11).minute(0).toISOString(),
+    end_ts: dayjs().add(2, "day").hour(11).minute(45).toISOString(),
+  },
+  {
+    id: "tile-delivery-followups",
+    title: "Tile delivery follow-ups",
+    start_ts: dayjs().add(3, "day").hour(14).minute(0).toISOString(),
+    end_ts: dayjs().add(3, "day").hour(14).minute(30).toISOString(),
+  },
+  {
+    id: "ar-followups",
+    title: "AR follow-ups",
+    start_ts: dayjs().add(4, "day").hour(10).minute(0).toISOString(),
+    end_ts: dayjs().add(4, "day").hour(10).minute(40).toISOString(),
+  },
+  {
+    id: "marketing-review",
+    title: "Marketing review",
+    start_ts: dayjs().add(5, "day").hour(15).minute(0).toISOString(),
+    end_ts: dayjs().add(5, "day").hour(16).minute(0).toISOString(),
+  },
+  {
+    id: "tax-prep-consult",
+    title: "Tax prep consult",
+    start_ts: dayjs().add(6, "day").hour(13).minute(0).toISOString(),
+    end_ts: dayjs().add(6, "day").hour(13).minute(45).toISOString(),
+  },
+];
+
 function buildMockAgenda() {
-  const now = dayjs();
-  return MOCK_ITEMS.map((item, idx) => {
-    const start = now
-      .startOf("day")
-      .add(item.offsetDays || 0, "day")
-      .add(item.hour || 0, "hour")
-      .add(item.minute || 0, "minute");
-    const end = start.add(item.durationMin || 45, "minute");
-    return {
-      id: `mock-agenda-${idx}`,
-      module: "ops",
-      type: "task",
-      title: item.title,
-      when: {
-        start: start.toISOString(),
-        end: end.toISOString(),
-        all_day: !!item.all_day,
-      },
-    };
-  });
+  return MOCK_ITEMS;
 }
 
 /** Build headers with Supabase session + ids */
@@ -140,6 +153,7 @@ function AgendaWidget({
   const [data, setData] = useState({ today: [], next: [] });
   const [loading, setLoading] = useState(false);   // true only for first load of a *business*
   const [err, setErr] = useState("");
+  const [isOpen, setIsOpen] = useState(false);     // collapsed by default
 
   const lastBizRef = useRef(null);
   const mountedRef = useRef(false);
@@ -206,7 +220,7 @@ function AgendaWidget({
 
     if (!effectiveBizId) {
       setErr("Could not load agenda.");
-      setData(buildFromEvents(buildMockAgenda()));
+      setData(isLiveMode ? { today: [], next: [] } : buildFromEvents(buildMockAgenda()));
       if (withSpinner) setLoading(false);
       return;
     }
@@ -230,15 +244,16 @@ function AgendaWidget({
       const json = await safeFetch(url.toString(), { headers, cache: "no-store" });
       if (!mountedRef.current) return;
       const payload = Array.isArray(json) ? json : json?.events || json;
-      const finalEvents =
-        Array.isArray(payload) && payload.length ? payload : buildMockAgenda();
+      const finalEvents = Array.isArray(payload) && payload.length
+        ? payload
+        : (isLiveMode ? [] : buildMockAgenda());
       setData(buildFromEvents(finalEvents));
       lastBizRef.current = effectiveBizId;
     } catch (e) {
       if (!mountedRef.current) return;
       console.error("[AgendaWidget] load failed", e);
       setErr("Could not load agenda.");
-      setData(buildFromEvents(buildMockAgenda()));
+      setData(isLiveMode ? { today: [], next: [] } : buildFromEvents(buildMockAgenda()));
     } finally {
       if (isNewBusiness && mountedRef.current) setLoading(false);
     }
@@ -281,6 +296,24 @@ function AgendaWidget({
     );
   }, [displayData]);
 
+  const firstNext = useMemo(() => {
+    const combined = Array.isArray(displayData.next) ? displayData.next : [];
+    return combined.length ? combined[0] : null;
+  }, [displayData]);
+
+  const todayList = useMemo(() => displayData.today || [], [displayData]);
+  const nextList = useMemo(
+    () => (isOpen ? displayData.next || [] : firstNext ? [firstNext] : []),
+    [displayData, isOpen, firstNext]
+  );
+  const isLiveMode = useMemo(
+    () => (getDemoMode?.() || "").toLowerCase() === "live",
+    []
+  );
+  const COLLAPSED_MAX = 150;
+  const EXPANDED_MAX  = 480;
+  const targetHeight  = isOpen ? EXPANDED_MAX : COLLAPSED_MAX;
+
   return (
     <div
       className={classNames(
@@ -290,6 +323,9 @@ function AgendaWidget({
       style={{
         border: `1px solid ${styles.cardBorder}`,
         boxShadow: styles.cardGlow || "none",
+        overflow: "hidden",
+        transition: "height 320ms ease-in-out, padding 220ms ease-in-out",
+        paddingBottom: isOpen ? 12 : 6,
       }}
     >
       {/* Header — no module suffix */}
@@ -331,30 +367,55 @@ function AgendaWidget({
         </div>
       </div>
 
-      {/* Body */}
-      {loading ? (
-        <Skeleton border={styles.itemBorder} />
-      ) : err ? (
-        <div className="text-sm text-red-300">{err}</div>
-      ) : (
-        <>
-          <Section
-            title="Today"
-            list={displayData.today}
-            itemBorder={styles.itemBorder}
-            hoverBg={styles.hoverBg}
-            condensed={condensed}
+      {/* Body (collapsible) */}
+      <div
+        style={{
+          maxHeight: targetHeight,
+          opacity: isOpen ? 1 : 0.97,
+          overflow: "hidden",
+          transition: "max-height 350ms ease-in-out, opacity 320ms ease-in-out, margin 250ms ease-in-out",
+          marginBottom: isOpen ? 12 : 2,
+        }}
+      >
+        {loading ? (
+          <Skeleton border={styles.itemBorder} />
+        ) : err ? (
+          <div className="text-sm text-red-300">{err}</div>
+        ) : (
+          <>
+            <Section
+              title="Today"
+              list={todayList}
+              itemBorder={styles.itemBorder}
+              hoverBg={styles.hoverBg}
+              condensed={condensed}
+            />
+            <div className="h-2" />
+            <Section
+              title="Next 7 days"
+              list={nextList}
+              itemBorder={styles.itemBorder}
+              hoverBg={styles.hoverBg}
+              condensed={condensed}
+            />
+          </>
+        )}
+      </div>
+
+      <div className="mt-2 mb-1 flex justify-center">
+        <button
+          type="button"
+          onClick={() => setIsOpen((p) => !p)}
+          className="h-7 w-7 grid place-items-center rounded-md text-white/80 hover:text-white hover:bg-white/8 transition"
+          title={isOpen ? "Minimize agenda" : "Expand agenda"}
+        >
+          <ChevronDown
+            size={16}
+            className={`transition-transform ${isOpen ? "rotate-180" : ""}`}
+            aria-hidden
           />
-          <div className="h-3" />
-          <Section
-            title="Next 7 days"
-            list={displayData.next}
-            itemBorder={styles.itemBorder}
-            hoverBg={styles.hoverBg}
-            condensed={condensed}
-          />
-        </>
-      )}
+        </button>
+      </div>
     </div>
   );
 }

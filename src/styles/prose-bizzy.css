@@ -1,0 +1,124 @@
+/* /src/styles/prose-bizzy.css */
+
+.prose-bizzy {
+  /* literal colors—no theme() calls */
+  --tw-prose-body:      rgba(244,244,245,1);   /* zinc-100 */
+  --tw-prose-headings:  rgba(255,255,255,1);
+  --tw-prose-bullets:   rgba(228,228,231,1);   /* zinc-200 */
+  --tw-prose-links:     rgba(255,255,255,1);
+  --tw-prose-bold:      rgba(255,255,255,1);
+  --tw-prose-counters:  rgba(212,212,216,1);   /* zinc-300 */
+
+  font-size: 1.025rem;
+  line-height: 1.6;
+}
+
+
+/* Headings feel like “report” */
+.prose-bizzy :where(h1,h2,h3){
+  font-weight: 700;
+  line-height: 1.25;
+  margin-top: .85rem;
+  margin-bottom: .35rem;
+}
+.prose-bizzy h1 { font-size: 1.35rem; }
+.prose-bizzy h2 { font-size: 1.18rem; }
+.prose-bizzy h3 { font-size: 1.05rem; }
+
+/* Tables */
+.prose-bizzy table {
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+  border-collapse: collapse;
+  margin: .25rem 0 .75rem;
+}
+.prose-bizzy th,
+.prose-bizzy td {
+  padding: .22rem .4rem;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.prose-bizzy th { text-align: left; }
+.prose-bizzy td:last-child,
+.prose-bizzy th:last-child { text-align: right; }
+
+/* Subtle rules for totals/separators (used by formatter) */
+.prose-bizzy hr.bizzy-hr-thin {
+  border: 0; border-top: 1px solid rgba(255,255,255,.28);
+  margin: .35rem 0;
+}
+.prose-bizzy hr.bizzy-hr-thick {
+  border: 0; border-top: 3px solid rgba(255,255,255,.48);
+  margin: .45rem 0;
+}
+
+/* Centered title block (we inject <div align="center"> around first block) */
+.prose-bizzy [align="center"] {
+  text-align: center;
+}
+.prose-bizzy [align="center"] > div {
+  font-weight: 700;
+  letter-spacing: .2px;
+}
+.prose-bizzy [align="center"] > div:first-child { font-size: 1.6rem; }
+.prose-bizzy [align="center"] > div:nth-child(2) { font-size: 1.25rem; }
+.prose-bizzy [align="center"] > div:nth-child(3) { font-size: 1.05rem; }
+
+/* Bold emphasis pops a bit more in docs */
+.prose-bizzy strong { font-weight: 800; }
+
+.bizzy-prose h1,
+.bizzy-prose h2,
+.bizzy-prose .bizzy-center {
+  text-align: center;
+  margin-top: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+/* A faint “rule” used by totals blocks (we output '---' lines) */
+.bizzy-prose p:has(> .bizzy-rule),
+.bizzy-prose .bizzy-rule {
+  display: block;
+  border-bottom: 2px solid rgba(255,255,255,0.15);
+  height: 0;
+  margin: .25rem 0 .75rem 0;
+}
+
+/* amount wrapper from the plugin — push to the far right */
+.bizzy-prose .bizzy-amount {
+  float: right;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- print/export helpers ---- */
+
+/* When we are exporting, make sure text is dark on white */
+.bizzy-exporting,
+.bizzy-print-surface,
+.bizzy-print-surface * {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+  color: #111 !important;
+  background: #fff !important;
+  box-shadow: none !important;
+  border-color: rgba(0,0,0,0.15) !important;
+}
+
+/* Keep tables / list items from splitting badly */
+.bizzy-print-surface table,
+.bizzy-print-surface tr,
+.bizzy-print-surface td,
+.bizzy-print-surface th {
+  page-break-inside: avoid;
+  break-inside: avoid-page;
+}
+
+/* Markdown block spacing for print looks better with a hair more line height */
+.bizzy-print-surface .prose-bizzy {
+  line-height: 1.55;
+}
+
+/* Optional: a thin container max width for the clone. We also set this in JS. */
+.bizzy-print-surface {
+  max-width: 794pt; /* A4 width */
+}

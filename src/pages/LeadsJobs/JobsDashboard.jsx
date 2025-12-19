@@ -25,6 +25,7 @@ export default function JobsDashboard() {
   const [pipeline, setPipeline] = useState(null);
   const [topUnpaid, setTopUnpaid] = useState([]);
   const [activity, setActivity] = useState([]);
+  const [hero, setHero] = useState(null);
 
   const integrationManager = useIntegrationManager({ businessId });
   const { getStatus, markStatus } = integrationManager;
@@ -75,10 +76,27 @@ export default function JobsDashboard() {
     [usingDemo, businessId, hasSummaryData, hasPipelineData, hasUnpaidData]
   );
 
+  // Mock hero insight (jobs)
+  useEffect(() => {
+    if (usingMock) {
+      setHero({
+        id: "mock-jobs-hero",
+        title: "Lock dates on your hottest leads this week",
+        summary:
+          "Three referral leads are idle. Slot them and assign crews to lift your win rate above 30% and pull cash forward.",
+        metric: "+12% win rate",
+        severity: "good",
+        dismissible: true,
+      });
+    } else {
+      setHero(null);
+    }
+  }, [usingMock]);
+
   // If we fall back to sample data, clear any stale "connected" badges for ops providers
   useEffect(() => {
     if (!usingMock) return;
-    ["jobber", "housecall"].forEach((provider) => {
+    ["jobber"].forEach((provider) => {
       const status = getStatus(provider);
       if (status?.status === "connected") {
         markStatus(provider, "disconnected");
@@ -99,7 +117,9 @@ export default function JobsDashboard() {
       <ModuleHeader
         module="jobs"
         subtitle="Manage your job flow from new leads to paid projects."
-        right={<SyncButton label="Sync Jobs" providers={["jobber", "housecall"]} forceDisconnected={usingMock} />}
+        hero={hero}
+        onDismissHero={() => setHero(null)}
+        right={<SyncButton label="Sync Jobs" providers={["jobber"]} forceDisconnected={usingMock} />}
       />
 
       <div className="grid gap-4 mt-4">

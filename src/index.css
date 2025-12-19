@@ -1,68 +1,278 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap');
+@import "tailwindcss";
+
+/* =========================
+   Bizzi Graphite Theme Vars
+   ========================= */
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+  /* Core palette */
+  --bg:        #12100F;     /* Primary Background (app & chat canvas) */
+  --panel:     #1A1816;     /* Secondary Panels / Cards */
+  --sidebar:   #151312;     /* Sidebar */
+  --text:      #f7f1e8;     /* Primary Text (warm off-white) */
+  --text-2:    rgba(247,241,232,0.72); /* Secondary Text (muted warm) */
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+  /* NEW Default Accent — Chrome Silver */
+  --accent:         #BFBFBF;           /* main app accent */
+  --accent-soft:    rgba(191,191,191,.50); /* 50% opacity for hover/active glows */
+  --accent-line:    rgba(191,191,191,.25); /* subtle 1px rails/dividers/borders */
+  --accent-contrast:#D9D9D9;           /* for soft gradient tips on focus rings */
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* Emotional micro-accent (keep pink for typing dots / mascot highlights) */
+  --emo:       #FF4EEB;
+
+  /* Legacy / misc */
+  --card-shadow: 0px 0px 8px rgba(191, 191, 191, 0.08);
+
+  /* Layout */
+  --nav-w: 180px;
+  --insights-w: 360px;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
+/* Optional theme switch hook */
+[data-theme="graphite"] {
+  --bg: #12100F;
+  --panel: #1A1816;
+  --sidebar: #151312;
+  --text: #f7f1e8;
+  --text-2: rgba(247,241,232,0.72);
+
+  /* Chrome Silver as default accent */
+  --accent: #BFBFBF;
+  --accent-soft: rgba(191,191,191,.50);
+  --accent-line: rgba(191,191,191,.25);
+  --accent-contrast: #D9D9D9;
+
+  --emo: #FF4EEB;
+  --card-shadow: 0px 0px 8px rgba(191, 191, 191, 0.08);
 }
 
+/* === Generic helpers for chrome-accented UI === */
+.ui-border        { border-color: var(--accent-line) !important; } /* thin 1px line */
+.ui-accent-border { border-color: var(--accent) !important; }      /* strong chrome outline */
+.ui-rail-border   { border-color: var(--accent-line) !important; } /* nav/rail dividers */
+.ui-accent-glow   { box-shadow: 0 0 10px var(--accent-soft) !important; }
+
+/* ✅ Full-height root so the center column can own scrolling */
+html, body, #root { height: 100%; }
+
+/* Base */
 body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+
+  min-height: 100%;
+  min-height: -webkit-fill-available; /* iOS 100vh fix */
+  -webkit-overflow-scrolling: touch;  /* momentum on iOS (for inner scrollers) */
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+html { scroll-behavior: smooth; }
+
+/* Accent/glow helpers (now use chrome accent) */
+.glow-bottom-accent { box-shadow: 0 2px 12px var(--accent-soft); }
+/* Backward compatibility for existing references */
+.glow-bottom-pink { box-shadow: 0 2px 12px var(--accent-soft); }
+
+/* 🧠 Single scroll owner */
+html, body {
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+#root > div {
+  overflow: hidden;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
-  }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
-  }
+/* Selection (tuned for graphite) */
+::selection { background-color: rgba(255,255,255,0.14); color: var(--text); }
+
+/* Animations */
+@keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+.animate-spin-slow { animation: spin-slow 2.5s linear infinite; }
+
+/* Momentum + hidden tracks */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.touch-scroll { -webkit-overflow-scrolling: touch; }
+
+/* ✅ Use this on the element that SHOULD scroll (the rail wrapper) */
+.rail-scroll {
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.rail-scroll::-webkit-scrollbar { display: none; }
+
+/* 🔑 Critical in flex columns/rows so children can actually shrink */
+.min-h-0 { min-height: 0 !important; } /* reinforce Tailwind’s utility */
+
+/* ===== Brand headline (kept, uses pink as “emo” accent) ===== */
+.font-bizzi {
+  font-family: 'Poppins', 'Nunito Sans', system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--emo) 25%, transparent);
+  animation: bizziPulse 6s ease-in-out infinite;
+  background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.85));
+  -webkit-background-clip: text;
+  color: transparent;
+}
+@keyframes bizziPulse {
+  0%, 100% { text-shadow: 0 0 6px color-mix(in srgb, var(--emo) 15%, transparent); }
+  50%      { text-shadow: 0 0 10px color-mix(in srgb, var(--emo) 35%, transparent); }
+}
+
+/* Markdown typography */
+.bizzy-md { line-height: 1.7; font-size: 15px; }
+.bizzy-md h2, .bizzy-md h3 { font-weight: 600; margin-top: .25rem; margin-bottom: .25rem; }
+.bizzy-md h2 { font-size: 1.05rem; }
+.bizzy-md h3 { font-size: 1rem; }
+.bizzy-md p { margin: .6rem 0; }
+.bizzy-md ul, .bizzy-md ol { margin: .6rem 0; padding-left: 1.25rem; }
+.bizzy-md li { margin: .25rem 0; }
+.bizzy-md strong { font-weight: 600; }
+.bizzy-md code { background: rgba(255,255,255,.06); padding: 0 .25rem; border-radius: 4px; }
+.bizzy-md table { width: 100%; border-collapse: collapse; margin: .6rem 0; }
+.bizzy-md th, .bizzy-md td { border-bottom: 1px solid rgba(255,255,255,.08); padding: .4rem .5rem; }
+.bizzy-md blockquote { border-left: 2px solid rgba(255,255,255,.15); margin: .6rem 0; padding-left: .75rem; opacity: .9; }
+.bizzy-md > :first-child { margin-top: 0 !important; }
+
+/* Quick prompts — keep neutral frame, adopt chrome accent when component sets --qp-frame */
+.bizzy-qprompts { /* receives --qp-frame and --qp-accent from the component */ }
+.bizzy-qprompts :where(button, .chip, .pill, [role="button"]) {
+  border: 1px solid rgba(191,191,191,0.22);
+  color: var(--text);
+  background: transparent;
+  border-radius: 9999px;
+  box-shadow: none;
+  transition: background-color .18s ease, color .18s ease, border-color .18s ease;
+}
+.bizzy-qprompts :where(button, .chip, .pill, [role="button"]):hover {
+  background: rgba(18,19,21,0.88);
+  border-color: rgba(191,191,191,0.28);
+  box-shadow: none !important;
+  color: var(--text);
+}
+.bizzy-qprompts :where(button, .chip, .pill, [role="button"]):active {
+  background: rgba(17,18,19,0.94);
+  border-color: rgba(191,191,191,0.24);
+  box-shadow: none !important;
+}
+.bizzy-qprompts :where(button, .chip, .pill, [role="button"]) * {
+  color: var(--text);
+}
+
+/* === Business / header switcher — chrome border, graphite bg === */
+.bizzy-switcher-quiet { /* parent may override --accent at runtime if needed */ }
+.bizzy-switcher-quiet :where(button,[role="button"],.btn) {
+  background: rgba(20,21,22,0.55);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: none;
+  outline: none;
+  text-shadow: none !important;
+  transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+.bizzy-switcher-quiet :where(button,[role="button"],.btn) * { color: var(--text); text-shadow: none !important; }
+.bizzy-switcher-quiet :where(button,[role="button"],.btn):hover {
+  background: rgba(26,27,28,0.65);
+  border-color: var(--accent);
+}
+.bizzy-switcher-quiet :where(button,[role="button"],.btn):active {
+  background: rgba(18,19,20,0.60);
+  border-color: var(--accent);
+}
+.bizzy-switcher-quiet :where(button,[role="button"],.btn):focus-visible {
+  box-shadow:
+    0 0 0 2px rgba(255,255,255,0.06),
+    0 0 0 3px var(--accent-soft);
+}
+
+/* Dropdowns */
+.bizzy-switcher-quiet :where(.dropdown,.menu,[role="listbox"],[data-popover]) {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--accent-line);
+  box-shadow: 0 14px 28px rgba(0,0,0,0.45);
+}
+.bizzy-switcher-quiet :where(.dropdown .item,.menu .item,[role="option"]) {
+  background: transparent;
+  color: var(--text);
+}
+.bizzy-switcher-quiet :where(.dropdown .item,.menu .item,[role="option"]):hover {
+  background-color: rgba(255,255,255,0.06);
+}
+
+/* Generated caption scrollbars */
+.generated-caption-field {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.4) transparent;
+}
+.generated-caption-field::-webkit-scrollbar {
+  width: 6px;
+}
+.generated-caption-field::-webkit-scrollbar-track {
+  background: transparent;
+}
+.generated-caption-field::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.45);
+  border-radius: 999px;
+}
+
+/* Ensure the Insights rail glass covers the entire column,
+   and no inner host paints a dark background. */
+.insights-rail {
+  /* root of the rail */
+  position: relative;
+  isolation: isolate;          /* new stacking context → glass layers render predictably */
+  contain: layout paint style; /* perf + stop bleed from ancestors */
+  background: transparent !important;
+}
+
+/* scroll host (the element with Agenda + cards) must stay transparent */
+.insights-rail .rail-content {
+  background: transparent !important;
+}
+
+/* (Optional but safe) If any bg-* sneaks on the direct children of the scroller, neutralize it */
+.insights-rail .rail-content > [class*="bg-"] {
+  background: transparent !important;
+}
+
+/* ---- Insights rail layout & transparency (fix the black band) ---- */
+
+/* Make the rail root stretch the whole sticky column and create a new
+   stacking context so the absolute glass layers in the component can
+   cover the entire column.  */
+.insights-rail {
+  height: 100%;
+  min-height: 0;
+  isolation: isolate;         /* glass layers sit under content */
+  background: transparent !important;
+}
+
+/* The scroll host inside the rail must be transparent and able to shrink.
+   (This is the element that holds Agenda + the insight cards.) */
+.insights-rail .rail-content {
+  min-height: 0;
+  height: 100%;
+  background: transparent !important;
+}
+
+/* Tooltip scroll styling */
+.history-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.2) transparent;
+}
+.history-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.history-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.history-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.2);
+  border-radius: 999px;
 }

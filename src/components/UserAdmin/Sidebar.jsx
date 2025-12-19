@@ -4,8 +4,10 @@ import { ChevronRight } from 'lucide-react';
 import {
   Brain, DollarSign, Rocket, FileText, TrendingUp,
   Calendar as CalendarIcon, Briefcase, BookOpen, Settings, Mail,
+  Activity as ActivityIcon, HeartPulse, Landmark,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { createPortal } from 'react-dom';
 
 import { subSidebarConfig } from '../../utils/subSidebarConfig';
 import { useInsightsUnread } from '../../insights/InsightsUnreadContext';
@@ -14,12 +16,12 @@ import { useInsightsUnread } from '../../insights/InsightsUnreadContext';
 const tabs = [
   { label: 'Pulse', path: '/dashboard/bizzy' },
   { label: 'Financials', path: '/dashboard/accounting' },
-  { label: 'Marketing', path: '/dashboard/marketing' },
+  { label: 'Growth', path: '/dashboard/marketing' },
   { label: 'Jobs', path: '/dashboard/leads-jobs' },
   { label: 'Tax', path: '/dashboard/tax' },
-  { label: 'Investments', path: '/dashboard/investments' },
   { label: 'Email', path: '/dashboard/email' },
   { label: 'Calendar', path: '/dashboard/calendar' },
+  { label: 'Activity', path: '/dashboard/activity', tooltip: 'Coming Soon!', disableNavigate: true },
   { label: 'Bizzi Docs', path: '/dashboard/bizzy-docs' },
   { label: 'Meet Bizzi', path: '/dashboard/companion' },
   { label: 'Settings/Sync', path: '/dashboard/settings' },
@@ -34,6 +36,7 @@ const accentHexMap = {
   investments: '#B388FF',
   email:       '#3CF2FF',
   calendar:    '#94a3b8',
+  activity:    '#94a3b8',
   ops:         '#94a3b8',
 };
 
@@ -41,7 +44,7 @@ function moduleKeyFromLabel(label) {
   const k = label.toLowerCase();
   if (k === 'financials') return 'accounting';
   if (k === 'bizzi') return 'bizzy';
-  if (k === 'marketing') return 'marketing';
+  if (k === 'growth') return 'marketing';
   if (k === 'tax') return 'tax';
   if (k === 'investments') return 'investments';
   if (k === 'email') return 'email';
@@ -49,6 +52,7 @@ function moduleKeyFromLabel(label) {
   if (k === 'meet bizzi') return 'companion';
   if (k === 'settings/sync' || k === 'settings' || k === 'sync') return 'settings';
   if (k === 'calendar') return 'calendar';
+  if (k === 'activity') return 'activity';
   if (k === 'jobs') return 'ops';
   return 'bizzy';
 }
@@ -57,11 +61,12 @@ function moduleKeyFromLabel(label) {
 function moduleKeyFromPath(pathname = '') {
   const seg = (pathname.split('/')[2] || '').toLowerCase();
   if (seg === 'financials' || seg === 'accounting') return 'accounting';
-  if (seg === 'marketing') return 'marketing';
+  if (seg === 'growth') return 'marketing';
   if (seg === 'tax') return 'tax';
   if (seg === 'investments') return 'investments';
   if (seg === 'email' || seg === 'inbox') return 'email';
   if (seg === 'calendar' || seg === 'sch') return 'calendar';
+  if (seg === 'activity') return 'activity';
   if (seg === 'leads-jobs' || seg === 'jobs') return 'ops';
   if (seg === 'bizzy-docs' || seg === 'docs') return 'docs';
   if (seg === 'companion') return 'companion';
@@ -82,7 +87,7 @@ function normalizeUnreadMap(raw = {}) {
   return totals;
 }
 
-const CHROME_TABS = new Set(['Pulse', 'Jobs', 'Bizzi Docs', 'Meet Bizzi', 'Settings/Sync', 'Calendar']);
+const CHROME_TABS = new Set(['Pulse', 'Jobs', 'Bizzi Docs', 'Meet Bizzi', 'Settings/Sync', 'Calendar', 'Activity']);
 const CHROME_HEX  = '#BFBFBF';
 const CHROME_SOFT = 'rgba(191,191,191,0.50)';
 
@@ -129,21 +134,25 @@ function getHoverClass(label) {
   }
 }
 
-function renderIcon(label, size, colorHex) {
+function renderIcon(label, size, colorHex, options = {}) {
   const style = colorHex ? { color: colorHex } : undefined;
+  const marginClass = options.collapsed ? '' : 'mr-2';
+  const dim = Math.max(14, size - 2); // slightly smaller icons for a tighter rail
   switch (label) {
-    case 'Bizzi':         return <Brain size={size} className="mr-2" style={style} />;
-    case 'Email':         return <Mail size={size} className="mr-2" style={style} />;
-    case 'Calendar':      return <CalendarIcon size={size} className="mr-2" style={style} />;
-    case 'Financials':    return <DollarSign size={size} className="mr-2" style={style} />;
-    case 'Marketing':     return <Rocket size={size} className="mr-2" style={style} />;
-    case 'Jobs':          return <Briefcase size={size} className="mr-2" style={style} />;
-    case 'Tax':           return <FileText size={size} className="mr-2" style={style} />;
-    case 'Investments':   return <TrendingUp size={size} className="mr-2" style={style} />;
-    case 'Bizzi Docs':    return <BookOpen size={size} className="mr-2" style={style} />;
-    case 'Settings/Sync': return <Settings size={size} className="mr-2" style={style} />;
-    case 'Meet Bizzi':    return <Brain size={size} className="mr-2" style={style} />;
-    default:              return <Brain size={size} className="mr-2" style={style} />;
+    case 'Pulse':         return <HeartPulse size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Bizzi':         return <Brain size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Email':         return <Mail size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Calendar':      return <CalendarIcon size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Financials':    return <DollarSign size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Growth':        return <Rocket size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Jobs':          return <Briefcase size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Tax':           return <Landmark size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Investments':   return <TrendingUp size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Activity':      return <ActivityIcon size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Bizzi Docs':    return <FileText size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Settings/Sync': return <Settings size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Meet Bizzi':    return <Brain size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    default:              return <Brain size={dim} className={`${marginClass} transition-colors`} style={style} />;
   }
 }
 
@@ -160,12 +169,14 @@ const DOCS_PATH = '/dashboard/bizzy-docs';
 const PureSidebar = React.memo(function PureSidebar({
   className = '',
   compact = false,
+  collapsed = false,
   activePath,
   unreadByModule = {},
   markModuleAsRead,
 }) {
   const navigate = useNavigate();
   const [hoveredTab, setHoveredTab] = useState(null);
+  const [tooltip, setTooltip] = useState({ label: null, x: 0, y: 0 });
 
   const SUPPRESS_BADGE_LABELS = useMemo(
     () => new Set(['Bizzi Docs','Meet Bizzi','Settings/Sync']),
@@ -173,17 +184,21 @@ const PureSidebar = React.memo(function PureSidebar({
   );
 
   // ⬇️ Navigate ONLY. Do not clear here; badges clear when leaving via the effect below.
-  const onNavigate = useCallback((path /*, moduleKey */) => {
-    navigate(path);
-  }, [navigate]);
+  const onNavigate = useCallback((path) => {
+    if (pathActive(path, activePath)) {
+      navigate('/chat');
+    } else {
+      navigate(path);
+    }
+  }, [navigate, activePath]);
 
   const sz = useMemo(() => ({
-    outerPad:  compact ? 'p-3' : 'p-4',
-    groupGap:  compact ? 'space-y-2' : 'space-y-4',
-    itemPx:    compact ? 'px-2' : 'px-4',
-    itemPy:    compact ? 'py-1.5' : 'py-2',
-    itemText:  compact ? 'text-sm' : 'text-base',
-    groupMb:   compact ? 'mb-2' : 'mb-4',
+    outerPad:  compact ? 'p-3' : 'pl-3 pr-2',
+    groupGap:  compact ? 'space-y-2' : 'space-y-3',
+    itemPx:    compact ? 'px-2.5' : 'px-3',
+    itemPy:    compact ? 'py-1.25' : 'py-1.25',
+    itemText:  compact ? 'text-sm' : 'text-sm',
+    groupMb:   compact ? 'mb-2' : 'mb-3',
     subMl:     compact ? 'ml-4' : 'ml-6',
     subText:   compact ? 'text-xs' : 'text-sm',
     icon:      compact ? 16 : 18,
@@ -197,8 +212,14 @@ const PureSidebar = React.memo(function PureSidebar({
     return pathActive(tab.path, p);
   }, [activePath]);
 
+  const navSpacing = collapsed ? 'pl-2 pr-1 space-y-2' : `${sz.outerPad} ${sz.groupGap}`;
+
   return (
-    <nav data-sidebar className={`w-full ${sz.outerPad} ${sz.groupGap} ${className} text-secondary`} aria-label="Primary navigation">
+    <nav
+      data-sidebar
+      className={`w-full ${navSpacing} ${className} text-secondary`}
+      aria-label="Primary navigation"
+    >
       {tabs.map((tab) => {
         const moduleKey = moduleKeyFromLabel(tab.label);
         const accentHex = accentHexMap[moduleKey] || accentHexMap.bizzy;
@@ -206,7 +227,9 @@ const PureSidebar = React.memo(function PureSidebar({
         const subItems = subSidebarConfig[tab.label.toLowerCase()];
         const isActive = isModuleActive(tab);
         const isHovered = hoveredTab === tab.label;
-        const shouldShowDropdown = subItems && (isHovered || isActive);
+        const shouldShowDropdown = !collapsed && subItems && (isHovered || isActive);
+        const hoverTooltip = tab.tooltip || tab.label;
+        const disableNavigate = !!tab.disableNavigate;
 
         const isChromeTab = CHROME_TABS.has(tab.label);
         const iconColor = isChromeTab
@@ -230,39 +253,105 @@ const PureSidebar = React.memo(function PureSidebar({
         const showColoredBadge = !isChromeTab && (isActive || isHovered);
         const badgeStyle = showColoredBadge ? coloredBadgeStyle(accentHex) : neutralBadgeStyle;
 
+          const containerClass = collapsed ? 'mb-1.5 flex justify-start pl-0.5' : sz.groupMb;
+          const collapsedBtnClass =
+          "group relative flex items-center justify-center h-[32px] w-[32px] rounded-xl transition text-secondary";
+
         return (
           <div
             key={tab.path}
-            className={sz.groupMb}
-            onMouseEnter={() => setHoveredTab(tab.label)}
-            onMouseLeave={() => setHoveredTab(null)}
+            className={containerClass}
+            onMouseEnter={(e) => {
+              setHoveredTab(tab.label);
+              if (collapsed) {
+                const btn = e.currentTarget.querySelector('button');
+                const icon = btn?.querySelector('svg');
+                const targetRect =
+                  icon?.getBoundingClientRect() ||
+                  btn?.getBoundingClientRect() ||
+                  e.currentTarget.getBoundingClientRect();
+                const yCenter = targetRect.top + targetRect.height / 2;
+                setTooltip({
+                  label: hoverTooltip,
+                  x: targetRect.right + 10,
+                  y: yCenter - 13,
+                });
+              }
+            }}
+            onMouseLeave={() => {
+              setHoveredTab(null);
+              setTooltip({ label: null, x: 0, y: 0 });
+            }}
           >
             <button
-              onClick={() => onNavigate(tab.path, moduleKey)}
-              className={classNameForButton}
-              style={styleForButton}
+              onClick={(event) => {
+                if (disableNavigate) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+                onNavigate(tab.path, moduleKey);
+              }}
+              className={[
+                collapsed ? collapsedBtnClass : classNameForButton,
+                disableNavigate ? 'cursor-not-allowed focus:outline-none' : '',
+              ].join(' ')}
+              style={
+                collapsed
+                  ? {
+                      color: 'var(--text)',
+                      background: isActive
+                        ? 'rgba(255,255,255,0.12)'
+                        : (isHovered ? 'rgba(255,255,255,0.08)' : 'transparent'),
+                      border: 'none',
+                      boxShadow: 'none',
+                      transition: 'background 150ms ease',
+                    }
+                  : {
+                      ...(styleForButton || {}),
+                      background: isActive
+                        ? (isChromeTab ? 'rgba(32,33,35,1)' : styleForButton?.background || 'rgba(32,33,35,1)')
+                        : (isHovered ? 'rgba(32,33,35,0.6)' : (styleForButton?.background || 'transparent')),
+                      transition: 'background 150ms ease',
+                    }
+              }
+              title={tab.tooltip || (collapsed ? tab.label : undefined)}
+              aria-label={
+                collapsed
+                  ? tab.tooltip
+                    ? `${tab.label} – ${tab.tooltip}`
+                    : tab.label
+                  : undefined
+              }
+              aria-disabled={disableNavigate ? 'true' : undefined}
             >
-              <span className="flex items-center min-w-0 whitespace-nowrap overflow-hidden text-ellipsis pr-2">
-                {renderIcon(tab.label, sz.icon, iconColor)}
-                <span className="truncate">{tab.label}</span>
+              <span className={`flex items-center min-w-0 ${collapsed ? 'justify-center' : 'whitespace-nowrap overflow-hidden text-ellipsis pr-2'}`}>
+                {renderIcon(tab.label, collapsed ? 18 : sz.icon, iconColor, { collapsed })}
+                {!collapsed && (
+                  <>
+                    <span className="truncate">{tab.label}</span>
 
-                {showBadge && (
-                  <span
-                    aria-label={`${unreadCount} unread insights`}
-                    title={`${unreadCount} unread insights`}
-                    className="ml-2 inline-flex items-center justify-center rounded-full text-[10px] px-[6px] py-[1px] leading-none"
-                    style={badgeStyle}
-                  >
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </span>
+                    {showBadge && (
+                      <span
+                        aria-label={`${unreadCount} unread insights`}
+                        title={`${unreadCount} unread insights`}
+                        className="ml-2 inline-flex items-center justify-center rounded-full text-[10px] px-[6px] py-[1px] leading-none"
+                        style={badgeStyle}
+                      >
+                        {unreadCount > 9 ? '9+' : unreadCount}
+                      </span>
+                    )}
+                  </>
                 )}
               </span>
 
-              <ChevronRight
-                className="flex-shrink-0"
-                size={sz.chevron}
-                style={isChromeTab && (isActive || isHovered) ? { color: CHROME_HEX } : undefined}
-              />
+              {!collapsed && (
+                <ChevronRight
+                  className="flex-shrink-0"
+                  size={sz.chevron}
+                  style={isChromeTab && (isActive || isHovered) ? { color: CHROME_HEX } : undefined}
+                />
+              )}
             </button>
 
             <AnimatePresence initial={false}>
@@ -280,8 +369,10 @@ const PureSidebar = React.memo(function PureSidebar({
                       key={`${tab.path}|${item.path}|${i}`}
                       to={item.path}
                       className={({ isActive }) =>
-                        `block ${sz.subText} px-2 py-1 rounded-md ${
-                          isActive ? 'text-primary font-semibold' : 'text-secondary hover:text-primary'
+                        `block ${sz.subText} px-2 py-1 rounded-md transition-colors ${
+                          isActive
+                            ? 'text-primary font-semibold'
+                            : 'text-secondary hover:text-primary hover:bg-[rgba(255,255,255,0.08)]'
                         }`
                       }
                       // ⛔️ DO NOT clear on subnav click; clear happens on LEAVE via effect.
@@ -296,6 +387,23 @@ const PureSidebar = React.memo(function PureSidebar({
           </div>
         );
       })}
+      {collapsed && tooltip.label &&
+        createPortal(
+          <AnimatePresence>
+            <motion.div
+              initial={{ opacity: 0, x: -6, scale: 0.95 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: -4, scale: 0.95 }}
+              transition={{ duration: 0.18 }}
+              className="pointer-events-none fixed z-[9999] px-3 py-1 rounded-lg text-[12px] text-white bg-[rgba(28,28,30,0.92)] shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+              style={{ top: tooltip.y, left: tooltip.x, transform: 'translateY(-50%)' }}
+            >
+              {tooltip.label}
+            </motion.div>
+          </AnimatePresence>,
+          document.body
+        )
+      }
     </nav>
   );
 }, areEqual);
@@ -315,6 +423,7 @@ function areEqual(prev, next) {
   return (
     prev.className === next.className &&
     prev.compact === next.compact &&
+    prev.collapsed === next.collapsed &&
     prev.activePath === next.activePath &&
     prevSig === nextSig
   );

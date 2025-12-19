@@ -7,6 +7,10 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+<<<<<<< HEAD
+=======
+# Environment variables
+>>>>>>> 1b30995 (Add core Bizzy app structure and dashboards)
 .env
 .env.*
 
@@ -19,6 +23,7 @@ dist-ssr
 .vscode/*
 !.vscode/extensions.json
 .idea
+.vercel
 .DS_Store
 *.suo
 *.ntvs*

@@ -15,9 +15,7 @@ import KPIDashboardPanel from "../../components/Accounting/KPIDashboardPanel.jsx
 import RecentCashActivity from "../../components/Bizzy/RecentCashActivity.jsx";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
-
-const panelClass = "rounded-xl bg-app/60 backdrop-blur";
-const pad = "px-4 py-4 sm:px-5 sm:py-5";
+import useIntegrationManager from "../../hooks/useIntegrationManager.js";
 
 export default function BizzyPanel() {
   const { user } = useAuth();
@@ -28,8 +26,16 @@ export default function BizzyPanel() {
   const businessId = localStorage.getItem("currentBusinessId") || "";
   const userId = user?.id || localStorage.getItem("user_id") || "";
   const usingDemo = shouldUseDemoData(currentBusiness);
+  const integrationManager = useIntegrationManager({ businessId });
+  const qbStatus = integrationManager?.getStatus?.("quickbooks")?.status || "disconnected";
+  const allowLive = qbStatus === "connected";
+  const marketingConnected = useMemo(() => {
+    if (usingDemo) return true;
+    const social = ["facebook", "instagram", "linkedin"];
+    return social.some((p) => (integrationManager?.getStatus?.(p)?.status || "").toLowerCase() === "connected");
+  }, [integrationManager, usingDemo]);
   const demoData = useMemo(() => (usingDemo ? getDemoData() : null), [usingDemo]);
-  if (!usingDemo) {
+  if (!usingDemo && !allowLive) {
     return <LiveModePlaceholder title="Connect your tools to unlock Bizzi Pulse" />;
   }
 
@@ -41,7 +47,6 @@ export default function BizzyPanel() {
       summary: "Connect QuickBooks and Plaid so Bizzi can replace mock cards with your revenue, expenses, and cashflow.",
       metric: "Finish setup",
       severity: "warn",
-      cta: { label: "Open Integrations", href: "/dashboard/settings?tab=Integrations" },
     };
   }, [usingDemo]);
 
@@ -85,10 +90,11 @@ export default function BizzyPanel() {
         : null;
     return {
       profitability: fin?.mtdProfit != null ? `$${Number(fin.mtdProfit).toLocaleString()}` : undefined,
-      marketingReach: marketingReachValue != null ? marketingReachValue.toLocaleString() : undefined,
+      marketingReach: marketingConnected && marketingReachValue != null ? marketingReachValue.toLocaleString() : "—",
+      marketingReachSuffix: marketingConnected ? "views" : "",
       taxReadiness: readiness != null ? `${readiness}%` : undefined,
     };
-  }, [demoData]);
+  }, [demoData, marketingConnected]);
 
   const recentCash = useMemo(() => {
     if (demoData?.financials?.recentCash) return demoData.financials.recentCash;
@@ -110,34 +116,25 @@ export default function BizzyPanel() {
         right={<SyncButton label="Sync Accounts" providers={["quickbooks", "jobber", "gmail"]} />}
       />
 
-      <div className="grid gap-4 mt-2">
-        {/* Snapshot + Pulse/Alerts */}
-        <section className={`${panelClass} ${pad}`} aria-label="Snapshot">
-
-          {/* Ensure BizzySnapshot is the lightweight stat tiles component (no imports of BizzyPanel) */}
+      <div className="grid gap-6 mt-2">
+        <section className="space-y-4" aria-label="Snapshot">
           <BizzySnapshot
             profitability={snapshotProps.profitability}
             marketingReach={snapshotProps.marketingReach}
             taxReadiness={snapshotProps.taxReadiness}
           />
 
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="rounded-lg border border-white/10 bg-black/20 p-3 sm:p-4">
-              <BizzyPulse businessId={businessId} demoPulse={demoData?.pulse} />
-            </div>
-            <div className="rounded-lg border border-white/10 bg-black/20 p-3 sm:p-4">
-              <BizzyAlerts businessId={businessId} demoAlerts={demoData?.pulse?.alerts} />
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <BizzyPulse businessId={businessId} demoPulse={demoData?.pulse} />
+            <BizzyAlerts businessId={businessId} demoAlerts={demoData?.pulse?.alerts} />
           </div>
         </section>
 
-        {/* KPIs */}
-        <section className={`${panelClass} ${pad}`} aria-label="KPIs">
+        <section aria-label="KPIs">
           <KPIDashboardPanel userId={userId} businessId={businessId} />
         </section>
 
-        {/* Recent Cash Activity */}
-        <section className={`${panelClass} ${pad}`} aria-label="Recent Cash Activity">
+        <section aria-label="Recent Cash Activity">
           <RecentCashActivity items={recentCash} currency="$" />
         </section>
       </div>

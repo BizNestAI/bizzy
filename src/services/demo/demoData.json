@@ -1,0 +1,2434 @@
+{
+  "meta": {
+    "businessName": "Mike's Remodeling",
+    "period": "Nov 2025",
+    "currency": "USD",
+    "timezone": "America/New_York"
+  },
+  "pulse": {
+    "summary": "Steady last 7 days \u2014 watch cash timing + AR follow-up.",
+    "risks": [
+      "Two small overdue invoices; nudge this week",
+      "Labor + materials concentrated next 10 days"
+    ],
+    "opportunities": [
+      "Referrals close well\u2014lean in with 3 partner asks",
+      "Kitchen/bath keywords trending; test higher CPC cap"
+    ],
+    "score": 74,
+    "status": "healthy",
+    "breakdown": {
+      "base": {
+        "points": 50
+      },
+      "revenue": {
+        "value": 0.18
+      },
+      "expense": {
+        "value": -0.04
+      },
+      "margin": {
+        "value": 0.32
+      },
+      "cashflow": {
+        "value": 0.21
+      }
+    },
+    "alerts": [
+      {
+        "id": "alert-ar",
+        "module": "accounting",
+        "title": "$18.6k receivables now 7-23 days late",
+        "severity": "medium",
+        "cta": "/dashboard/accounting"
+      },
+      {
+        "id": "alert-labor",
+        "module": "jobs",
+        "title": "Labor spend next 10 days is 45% above plan",
+        "severity": "high",
+        "cta": "/dashboard/jobs"
+      },
+      {
+        "id": "alert-tax",
+        "module": "tax",
+        "title": "Quarterly estimate of $6.2k due in 37 days",
+        "severity": "medium",
+        "cta": "/dashboard/tax"
+      }
+    ]
+  },
+  "financials": {
+    "mtdRevenue": 48200,
+    "mtdExpenses": 32500,
+    "mtdProfit": 15700,
+    "profitMarginPct": 32.5,
+    "prevMonth": {
+      "revenue": 41800,
+      "expenses": 30900,
+      "profit": 10900,
+      "profitMarginPct": 26.1
+    },
+    "arOutstanding": 18600,
+    "overdueInvoices": [
+      {
+        "client": "Hawthorne Builders",
+        "amount": 4200,
+        "daysLate": 14
+      },
+      {
+        "client": "Greenway HOA",
+        "amount": 2300,
+        "daysLate": 7
+      }
+    ],
+    "unpaidCustomers": [
+      {
+        "name": "Hawthorne Builders",
+        "invoiceId": "INV-1042",
+        "amount": 4200,
+        "dueDate": "2025-10-27",
+        "daysLate": 14,
+        "contact": "amy@hawthornebuild.com"
+      },
+      {
+        "name": "Greenway HOA",
+        "invoiceId": "INV-1051",
+        "amount": 2300,
+        "dueDate": "2025-11-03",
+        "daysLate": 7,
+        "contact": "board@greenwayhoa.com"
+      },
+      {
+        "name": "North Ridge Custom Homes",
+        "invoiceId": "INV-1037",
+        "amount": 7400,
+        "dueDate": "2025-10-18",
+        "daysLate": 23,
+        "contact": "cfo@northridgehomes.com"
+      }
+    ],
+    "cashOnHand": 24200,
+    "forecastNext30d": {
+      "cashIn": 68500,
+      "cashOut": 51200,
+      "net": 17300
+    },
+    "topCostDrivers": [
+      {
+        "name": "Labor",
+        "amount": 14500
+      },
+      {
+        "name": "Materials",
+        "amount": 9600
+      }
+    ],
+    "kpis": {
+      "laborPct": 34.2,
+      "overheadPct": 26.5,
+      "avgJobSize": 1850,
+      "clientConcentrationPct": 58,
+      "jobsCompleted": 28,
+      "topSpendingCategory": "Labor"
+    },
+    "monthlyRevenue": [
+      {
+        "month": "2024-12",
+        "revenue": 40200
+      },
+      {
+        "month": "2025-01",
+        "revenue": 41800
+      },
+      {
+        "month": "2025-02",
+        "revenue": 43600
+      },
+      {
+        "month": "2025-03",
+        "revenue": 45200
+      },
+      {
+        "month": "2025-04",
+        "revenue": 46800
+      },
+      {
+        "month": "2025-05",
+        "revenue": 44500
+      },
+      {
+        "month": "2025-06",
+        "revenue": 47200
+      },
+      {
+        "month": "2025-07",
+        "revenue": 48900
+      },
+      {
+        "month": "2025-08",
+        "revenue": 45800
+      },
+      {
+        "month": "2025-09",
+        "revenue": 47100
+      },
+      {
+        "month": "2025-10",
+        "revenue": 46300
+      },
+      {
+        "month": "2025-11",
+        "revenue": 48200
+      }
+    ],
+    "monthlyProfit": [
+      {
+        "month": "2024-12",
+        "profit": 9800
+      },
+      {
+        "month": "2025-01",
+        "profit": 10400
+      },
+      {
+        "month": "2025-02",
+        "profit": 11100
+      },
+      {
+        "month": "2025-03",
+        "profit": 12200
+      },
+      {
+        "month": "2025-04",
+        "profit": 12700
+      },
+      {
+        "month": "2025-05",
+        "profit": 10100
+      },
+      {
+        "month": "2025-06",
+        "profit": 13300
+      },
+      {
+        "month": "2025-07",
+        "profit": 14600
+      },
+      {
+        "month": "2025-08",
+        "profit": 12200
+      },
+      {
+        "month": "2025-09",
+        "profit": 13400
+      },
+      {
+        "month": "2025-10",
+        "profit": 12800
+      },
+      {
+        "month": "2025-11",
+        "profit": 15700
+      }
+    ],
+    "expenseBreakdown": [
+      {
+        "name": "Labor",
+        "value": 14500
+      },
+      {
+        "name": "Materials",
+        "value": 9600
+      },
+      {
+        "name": "Software",
+        "value": 3300
+      },
+      {
+        "name": "Marketing",
+        "value": 2200
+      },
+      {
+        "name": "Vehicle & Fuel",
+        "value": 1800
+      },
+      {
+        "name": "Other",
+        "value": 3100
+      }
+    ],
+    "suggestedMoves": [
+      {
+        "title": "Collect on Hawthorne + Greenway invoices",
+        "rationale": "Follow up on the $6.5k past due before payroll hits.",
+        "timeframe": "Immediate",
+        "month": "Nov 2025"
+      },
+      {
+        "title": "Pre-buy tile for Elm St job",
+        "rationale": "Supplier discount disappears after Nov 20; save ~8%",
+        "timeframe": "This Week",
+        "month": "Nov 2025"
+      },
+      {
+        "title": "Shift 10% of ad spend to referrals",
+        "rationale": "Referral leads have 2x close rate and zero CAC.",
+        "timeframe": "This Month",
+        "month": "Nov 2025"
+      }
+    ],
+    "pulse": {
+      "revenueSummary": "Revenue is pacing $48.2k for November, +15% vs October from two kitchen projects.",
+      "spendingTrend": "Labor is elevated the next 10 days while both crews overlap; materials normalize after the Elm St delivery.",
+      "varianceFromForecast": "Cash is ~$7k ahead of forecast thanks to a $12k invoice that landed early.",
+      "businessInsights": [
+        "Collect the two overdue invoices before the 15th payroll run.",
+        "Lock in the quartz supplier discount now\u2014lead time is creeping up.",
+        "Keep margin above 30% by pushing change orders on Hawthorne's scope creep."
+      ],
+      "motivationalMessage": "You\u2019re on track for your best November yet. Keep AR tight so the cash shows up."
+    },
+    "recentCash": [
+      {
+        "id": "cash-1",
+        "label": "Invoice paid \u2014 Hawthorne Builders",
+        "amount": 4200,
+        "date": "2025-11-07"
+      },
+      {
+        "id": "cash-2",
+        "label": "ACH received \u2014 Kitchen refresh",
+        "amount": 9600,
+        "date": "2025-11-06"
+      },
+      {
+        "id": "cash-3",
+        "label": "Materials payout \u2014 Elm St tile",
+        "amount": -5400,
+        "date": "2025-11-05"
+      },
+      {
+        "id": "cash-4",
+        "label": "Payroll run \u2014 Crew A",
+        "amount": -8900,
+        "date": "2025-11-04"
+      }
+    ],
+    "forecast": {
+      "editor": [
+        {
+          "month": "2025-01",
+          "month_label": "Jan 2025",
+          "revenue": 19000,
+          "expenses": 12360,
+          "cash_in": 20200,
+          "cash_out": 13160,
+          "net_cash": 7040,
+          "ending_cash": 43040,
+          "source": "demo"
+        },
+        {
+          "month": "2025-02",
+          "month_label": "Feb 2025",
+          "revenue": 19900,
+          "expenses": 12112,
+          "cash_in": 21100,
+          "cash_out": 12912,
+          "net_cash": 8188,
+          "ending_cash": 51228,
+          "source": "demo"
+        },
+        {
+          "month": "2025-03",
+          "month_label": "Mar 2025",
+          "revenue": 20559,
+          "expenses": 11700,
+          "cash_in": 21759,
+          "cash_out": 12500,
+          "net_cash": 9259,
+          "ending_cash": 60487,
+          "source": "demo"
+        },
+        {
+          "month": "2025-04",
+          "month_label": "Apr 2025",
+          "revenue": 20800,
+          "expenses": 11234,
+          "cash_in": 22000,
+          "cash_out": 12034,
+          "net_cash": 9966,
+          "ending_cash": 70453,
+          "source": "demo"
+        },
+        {
+          "month": "2025-05",
+          "month_label": "May 2025",
+          "revenue": 20559,
+          "expenses": 10840,
+          "cash_in": 21759,
+          "cash_out": 11640,
+          "net_cash": 10119,
+          "ending_cash": 80572,
+          "source": "demo"
+        },
+        {
+          "month": "2025-06",
+          "month_label": "Jun 2025",
+          "revenue": 19900,
+          "expenses": 10622,
+          "cash_in": 21100,
+          "cash_out": 11422,
+          "net_cash": 9678,
+          "ending_cash": 90250,
+          "source": "demo"
+        },
+        {
+          "month": "2025-07",
+          "month_label": "Jul 2025",
+          "revenue": 19000,
+          "expenses": 10640,
+          "cash_in": 20200,
+          "cash_out": 11440,
+          "net_cash": 8760,
+          "ending_cash": 99010,
+          "source": "demo"
+        },
+        {
+          "month": "2025-08",
+          "month_label": "Aug 2025",
+          "revenue": 18100,
+          "expenses": 10888,
+          "cash_in": 19300,
+          "cash_out": 11688,
+          "net_cash": 7612,
+          "ending_cash": 106622,
+          "source": "demo"
+        },
+        {
+          "month": "2025-09",
+          "month_label": "Sep 2025",
+          "revenue": 17441,
+          "expenses": 11300,
+          "cash_in": 18641,
+          "cash_out": 12100,
+          "net_cash": 6541,
+          "ending_cash": 113163,
+          "source": "demo"
+        },
+        {
+          "month": "2025-10",
+          "month_label": "Oct 2025",
+          "revenue": 17200,
+          "expenses": 11766,
+          "cash_in": 18400,
+          "cash_out": 12566,
+          "net_cash": 5834,
+          "ending_cash": 118997,
+          "source": "demo"
+        },
+        {
+          "month": "2025-11",
+          "month_label": "Nov 2025",
+          "revenue": 17441,
+          "expenses": 12160,
+          "cash_in": 18641,
+          "cash_out": 12960,
+          "net_cash": 5681,
+          "ending_cash": 124678,
+          "source": "demo"
+        },
+        {
+          "month": "2025-12",
+          "month_label": "Dec 2025",
+          "revenue": 18100,
+          "expenses": 12378,
+          "cash_in": 19300,
+          "cash_out": 13178,
+          "net_cash": 6122,
+          "ending_cash": 130800,
+          "source": "demo"
+        }
+      ],
+      "accuracy": [
+        {
+          "month": "2025-05-01",
+          "month_label": "May 2025",
+          "actualRevenue": 20783,
+          "forecastRevenue": 20559,
+          "actualExpenses": 11084,
+          "forecastExpenses": 10840,
+          "actualProfit": 9699,
+          "forecastProfit": 9719
+        },
+        {
+          "month": "2025-06-01",
+          "month_label": "Jun 2025",
+          "actualRevenue": 20340,
+          "forecastRevenue": 19900,
+          "actualExpenses": 10624,
+          "forecastExpenses": 10622,
+          "actualProfit": 9716,
+          "forecastProfit": 9278
+        },
+        {
+          "month": "2025-07-01",
+          "month_label": "Jul 2025",
+          "actualRevenue": 19385,
+          "forecastRevenue": 19000,
+          "actualExpenses": 10384,
+          "forecastExpenses": 10640,
+          "actualProfit": 9001,
+          "forecastProfit": 8360
+        },
+        {
+          "month": "2025-08-01",
+          "month_label": "Aug 2025",
+          "actualRevenue": 17729,
+          "forecastRevenue": 18100,
+          "actualExpenses": 11102,
+          "forecastExpenses": 10888,
+          "actualProfit": 6627,
+          "forecastProfit": 7212
+        },
+        {
+          "month": "2025-09-01",
+          "month_label": "Sep 2025",
+          "actualRevenue": 17550,
+          "forecastRevenue": 17441,
+          "actualExpenses": 11533,
+          "forecastExpenses": 11300,
+          "actualProfit": 6017,
+          "forecastProfit": 6141
+        },
+        {
+          "month": "2025-10-01",
+          "month_label": "Oct 2025",
+          "actualRevenue": 17003,
+          "forecastRevenue": 17200,
+          "actualExpenses": 11910,
+          "forecastExpenses": 11766,
+          "actualProfit": 5093,
+          "forecastProfit": 5434
+        }
+      ]
+    }
+  },
+  "marketing": {
+    "summary": {
+      "total_reach": 12400,
+      "total_engagements": 2100,
+      "avg_engagement_rate": "6.7%",
+      "best_post": "Before/After Kitchen Remodel",
+      "change": "+14% vs last week",
+      "best_post_delta": "+14% vs last week"
+    },
+    "leadsMTD": 62,
+    "closeRatePct": 28,
+    "channels": [
+      {
+        "name": "Google Ads",
+        "leads": 24,
+        "cpa": 38,
+        "notes": "Kitchen/bath keywords trending"
+      },
+      {
+        "name": "Referrals",
+        "leads": 18,
+        "cpa": 0,
+        "notes": "High close rate"
+      },
+      {
+        "name": "Facebook",
+        "leads": 12,
+        "cpa": 19
+      },
+      {
+        "name": "Instagram",
+        "leads": 8,
+        "cpa": 16
+      }
+    ],
+    "reviews": {
+      "newThisWeek": 3,
+      "avgRating": 4.7
+    },
+    "recentPosts": [
+      {
+        "platform": "Instagram",
+        "post_type": "Before/After",
+        "date": "2025-11-05",
+        "caption": "Before/After: Elm St kitchen soaked in natural light.",
+        "reach": 1124,
+        "likes": 92,
+        "comments": 14,
+        "shares": 6,
+        "clicks": 25,
+        "gpt_insight": "This before/after has 2x engagement \u2014 schedule a carousel follow up.",
+        "imageIdea": "Before/after kitchen split"
+      },
+      {
+        "platform": "Facebook",
+        "post_type": "Promo",
+        "date": "2025-11-01",
+        "caption": "Customer spotlight: The Millers\u2019 bathroom upgrade came out amazing!",
+        "reach": 814,
+        "likes": 45,
+        "comments": 10,
+        "shares": 4,
+        "clicks": 12,
+        "gpt_insight": "Promo copy underperformed \u2014 refresh CTA and add client quote.",
+        "imageIdea": "Bathroom vanity close-up"
+      },
+      {
+        "platform": "Instagram",
+        "post_type": "Tips",
+        "date": "2025-10-28",
+        "caption": "3 ways to extend roof life before replacement.",
+        "reach": 605,
+        "likes": 38,
+        "comments": 6,
+        "shares": 5,
+        "clicks": 9,
+        "gpt_insight": "Educational posts keep saves high; test the same format on Reels.",
+        "imageIdea": "Roof tips carousel cover"
+      },
+      {
+        "platform": "Facebook",
+        "post_type": "Field update",
+        "date": "2025-10-25",
+        "caption": "Crew is finishing a siding refresh on Oak Street.",
+        "reach": 512,
+        "likes": 27,
+        "comments": 4,
+        "shares": 3,
+        "clicks": 6,
+        "gpt_insight": "Behind-the-scenes posts build trust; repurpose into a short video.",
+        "imageIdea": "Crew working photo"
+      }
+    ],
+    "playbook": [
+      {
+        "title": "Repurpose hero before/after into carousel",
+        "detail": "Carousel posts averaged 18% more taps last quarter.",
+        "impact": "+12% reach"
+      },
+      {
+        "title": "Schedule a promo email remix",
+        "detail": "Reuse the best-performing CTA from Tuesday's send.",
+        "impact": "+6% CTR"
+      },
+      {
+        "title": "Record a 30s onsite walkthrough",
+        "detail": "Short-form video drives 2x engagement on Instagram Reels.",
+        "impact": "2x comments"
+      }
+    ],
+    "reviewsData": {
+      "items": [
+        {
+          "id": "demo_rev_1",
+          "source": "google",
+          "rating": 5,
+          "author_name": "John S.",
+          "body": "Crew was fast and cleaned up perfectly.",
+          "created_at_utc": "2025-11-08T15:32:00Z",
+          "owner_replied": false,
+          "themes": [
+            "cleanup",
+            "punctuality"
+          ]
+        },
+        {
+          "id": "demo_rev_2",
+          "source": "facebook",
+          "rating": 5,
+          "author_name": "Emily R.",
+          "body": "Very professional and the communication was great!",
+          "created_at_utc": "2025-11-04T12:15:00Z",
+          "owner_replied": false,
+          "themes": [
+            "communication",
+            "quality"
+          ]
+        },
+        {
+          "id": "demo_rev_3",
+          "source": "google",
+          "rating": 4,
+          "author_name": "Miguel P.",
+          "body": "Good price and quick turnaround. Happy with the results.",
+          "created_at_utc": "2025-10-29T09:42:00Z",
+          "owner_replied": true,
+          "themes": [
+            "price",
+            "timeliness"
+          ]
+        },
+        {
+          "id": "demo_rev_4",
+          "source": "google",
+          "rating": 3,
+          "author_name": "Dana K.",
+          "body": "Work quality was solid but crew arrived late.",
+          "created_at_utc": "2025-10-21T18:05:00Z",
+          "owner_replied": true,
+          "themes": [
+            "punctuality"
+          ]
+        }
+      ],
+      "stats": {
+        "range": "30d",
+        "avg_rating": 4.4,
+        "count_reviews": 4,
+        "unreplied_count": 2,
+        "response_median_hours": 16,
+        "pos_pct": 75,
+        "neg_pct": 0
+      }
+    }
+  },
+  "jobs": {
+    "summary": {
+      "leads_7d": 9,
+      "scheduled_next_14d": 7,
+      "win_rate_30d": 28,
+      "outstanding_ar": 18600
+    },
+    "pipeline": {
+      "scheduled": [
+        {
+          "id": "mock-sch-1",
+          "title": "Tile delivery \u2014 Elm St",
+          "external_source": "Calendar",
+          "invoice_status": "none",
+          "amount_estimated": 3200,
+          "start_date": null,
+          "due_date": "2025-11-09"
+        },
+        {
+          "id": "mock-sch-2",
+          "title": "Design consult \u2014 Kitchen remodel",
+          "external_source": "Google Ads",
+          "invoice_status": "none",
+          "amount_estimated": 2100,
+          "start_date": null,
+          "due_date": "2025-11-12"
+        },
+        {
+          "id": "mock-sch-3",
+          "title": "Window replacement \u2014 Greenway HOA",
+          "external_source": "Referral",
+          "invoice_status": "none",
+          "amount_estimated": 5400,
+          "start_date": "2025-11-15",
+          "due_date": "2025-11-18"
+        },
+        {
+          "id": "mock-sch-4",
+          "title": "Bathroom refresh \u2014 Hawthorne Builders",
+          "external_source": "Jobber",
+          "invoice_status": "none",
+          "amount_estimated": 4800,
+          "start_date": "2025-11-14",
+          "due_date": "2025-11-20"
+        },
+        {
+          "id": "mock-sch-5",
+          "title": "Exterior paint \u2014 Lakeside",
+          "external_source": "Facebook",
+          "invoice_status": "none",
+          "amount_estimated": 3600,
+          "start_date": null,
+          "due_date": "2025-11-24"
+        }
+      ],
+      "in_progress": [
+        {
+          "id": "mock-ip-1",
+          "title": "Kitchen remodel \u2014 Mike's Remodeling HQ",
+          "external_source": "Referral",
+          "invoice_status": "partial",
+          "amount_contracted": 12800,
+          "start_date": "2025-11-05",
+          "due_date": "2025-11-21",
+          "amount_invoiced": 6400
+        },
+        {
+          "id": "mock-ip-2",
+          "title": "Deck resurfacing \u2014 Chen",
+          "external_source": "Housecall",
+          "invoice_status": "none",
+          "amount_contracted": 9800,
+          "start_date": "2025-11-03",
+          "due_date": "2025-11-19",
+          "amount_invoiced": 0
+        },
+        {
+          "id": "mock-ip-3",
+          "title": "HVAC replacement \u2014 Patel",
+          "external_source": "Jobber",
+          "invoice_status": "partial",
+          "amount_contracted": 14200,
+          "start_date": "2025-11-02",
+          "due_date": "2025-11-17",
+          "amount_invoiced": 7100
+        }
+      ],
+      "completed": [
+        {
+          "id": "mock-comp-1",
+          "title": "Roof repair \u2014 McConnell",
+          "external_source": "Housecall",
+          "invoice_status": "none",
+          "amount_contracted": 6200,
+          "start_date": "2025-10-18",
+          "due_date": "2025-11-06",
+          "amount_invoiced": 0
+        },
+        {
+          "id": "mock-comp-2",
+          "title": "Exterior paint \u2014 Jacobs",
+          "external_source": "Manual",
+          "invoice_status": "partial",
+          "amount_contracted": 5400,
+          "start_date": "2025-10-09",
+          "due_date": "2025-10-30",
+          "amount_invoiced": 2700
+        },
+        {
+          "id": "mock-comp-3",
+          "title": "Kitchen demo \u2014 Ali",
+          "external_source": "Housecall",
+          "invoice_status": "partial",
+          "amount_contracted": 8800,
+          "start_date": "2025-10-01",
+          "due_date": "2025-10-22",
+          "amount_invoiced": 4400
+        },
+        {
+          "id": "mock-comp-4",
+          "title": "Retaining wall \u2014 Vega",
+          "external_source": "QuickBooks",
+          "invoice_status": "none",
+          "amount_contracted": 7400,
+          "start_date": "2025-10-05",
+          "due_date": "2025-10-25",
+          "amount_invoiced": 0
+        }
+      ]
+    },
+    "topUnpaid": [
+      {
+        "id": "mock-unpaid-1",
+        "title": "Hawthorne Builders",
+        "external_source": "QuickBooks",
+        "external_id": "INV-1042",
+        "invoice_status": "unpaid",
+        "amount_due": 4200
+      },
+      {
+        "id": "mock-unpaid-2",
+        "title": "Greenway HOA",
+        "external_source": "QuickBooks",
+        "external_id": "INV-1051",
+        "invoice_status": "unpaid",
+        "amount_due": 2300
+      },
+      {
+        "id": "mock-unpaid-3",
+        "title": "North Ridge Custom Homes",
+        "external_source": "QuickBooks",
+        "external_id": "INV-1037",
+        "invoice_status": "partial",
+        "amount_due": 7400
+      },
+      {
+        "id": "mock-unpaid-4",
+        "title": "Redwood Interiors",
+        "external_source": "Manual",
+        "external_id": "INV-1054",
+        "invoice_status": "unpaid",
+        "amount_due": 4700
+      }
+    ],
+    "activity": [
+      {
+        "id": "act-1",
+        "type": "estimate_sent",
+        "title": "Estimate sent to Hawthorne",
+        "timestamp": "2025-11-03T09:12:00-05:00"
+      },
+      {
+        "id": "act-2",
+        "type": "job_completed",
+        "title": "Deck resurfacing wrapped",
+        "timestamp": "2025-11-05T16:45:00-05:00"
+      },
+      {
+        "id": "act-3",
+        "type": "payment_received",
+        "title": "$12k payment posted",
+        "timestamp": "2025-11-06T13:18:00-05:00"
+      }
+    ]
+  },
+  "tax": {
+    "quarter": "Q4",
+    "nextEstimatedPaymentDueDays": 37,
+    "estPaymentAmount": 6200,
+    "notes": "Payment schedule steady; consider safe-harbor check",
+    "trend": [
+      {
+        "month": "2025-07",
+        "estTax": 4200
+      },
+      {
+        "month": "2025-08",
+        "estTax": 4300
+      },
+      {
+        "month": "2025-09",
+        "estTax": 4450
+      },
+      {
+        "month": "2025-10",
+        "estTax": 4680
+      },
+      {
+        "month": "2025-11",
+        "estTax": 5100
+      }
+    ],
+    "cashFlowOverlay": [
+      {
+        "month": "2025-07",
+        "netCash": 15200
+      },
+      {
+        "month": "2025-08",
+        "netCash": 14700
+      },
+      {
+        "month": "2025-09",
+        "netCash": 16100
+      },
+      {
+        "month": "2025-10",
+        "netCash": 15800
+      },
+      {
+        "month": "2025-11",
+        "netCash": 17300
+      }
+    ],
+    "quarterly": [
+      {
+        "quarter": "Q1",
+        "due": "2025-04-15",
+        "amount": 5800,
+        "paid": 5800,
+        "remaining": 0
+      },
+      {
+        "quarter": "Q2",
+        "due": "2025-06-15",
+        "amount": 6100,
+        "paid": 6100,
+        "remaining": 0
+      },
+      {
+        "quarter": "Q3",
+        "due": "2025-09-15",
+        "amount": 6200,
+        "paid": 1500,
+        "remaining": 4700
+      },
+      {
+        "quarter": "Q4",
+        "due": "2025-01-15",
+        "amount": 6200,
+        "paid": 0,
+        "remaining": 6200
+      }
+    ],
+    "summary": {
+      "annualEstimate": 24800,
+      "ytdEstimated": 18600,
+      "ytdPaid": 12400,
+      "balanceDue": 6200
+    },
+    "safeHarbor": {
+      "method": "prior_year",
+      "requiredAnnual": 24000
+    },
+    "monthlySnapshot": {
+      "metrics": {
+        "estimatedTaxDue": 18600,
+        "profitYTD": 312000,
+        "topDeductions": [
+          {
+            "category": "Labor",
+            "amount": 14500,
+            "percentRevenue": 34
+          },
+          {
+            "category": "Materials",
+            "amount": 9600,
+            "percentRevenue": 22
+          },
+          {
+            "category": "Vehicles",
+            "amount": 1800,
+            "percentRevenue": 4
+          }
+        ]
+      },
+      "summary": "Tax liability is pacing ahead of last year because profit is up 18%. Staying on your quarterly cadence keeps you safe-harbor compliant.",
+      "actionSteps": [
+        "Record the September catch-up payment in QuickBooks",
+        "Upload receipts for the Elm St material pre-buy",
+        "Book 30 minutes to confirm safe-harbor projections"
+      ],
+      "urgency": [
+        {
+          "step": 1,
+          "urgency": "High",
+          "deadline": "2025-11-12"
+        },
+        {
+          "step": 2,
+          "urgency": "Medium",
+          "deadline": "2025-11-20"
+        },
+        {
+          "step": 3,
+          "urgency": "Low",
+          "deadline": "2025-11-30"
+        }
+      ]
+    },
+    "insights": [
+      {
+        "tip": "Pre-pay $8k of labor before year-end to pull deductions into 2025.",
+        "urgency": "High",
+        "estimated_savings": 1800,
+        "deadline": "Dec 29",
+        "reasoning": "Safe-harbor allows a partial acceleration and softens the Q1 cash hit."
+      },
+      {
+        "tip": "Document the Elm St material bulk buy as Section 179 eligible.",
+        "urgency": "Medium",
+        "estimated_savings": 900,
+        "deadline": "Nov 30",
+        "reasoning": "Keeps the larger deduction tied to this tax year."
+      },
+      {
+        "tip": "Schedule a quick safe-harbor check before Dec 15.",
+        "urgency": "Medium",
+        "estimated_savings": 0,
+        "deadline": "Dec 15",
+        "reasoning": "Confirms you won't overpay when profit finishes the year strong."
+      }
+    ],
+    "deductionsMatrix": {
+      "meta": {
+        "year": 2025,
+        "generatedAt": "2025-11-01T08:00:00Z",
+        "source": "demo",
+        "month_list": [
+          "2025-01",
+          "2025-02",
+          "2025-03",
+          "2025-04",
+          "2025-05",
+          "2025-06",
+          "2025-07",
+          "2025-08",
+          "2025-09",
+          "2025-10",
+          "2025-11",
+          "2025-12"
+        ],
+        "current_month": "2025-11"
+      },
+      "categories": [
+        "Contractors",
+        "Vehicle Expenses",
+        "Materials & Supplies",
+        "Insurance & Licenses",
+        "Meals & Entertainment"
+      ],
+      "grid": [
+        {
+          "category": "Contractors",
+          "monthly": {
+            "2025-01": 3200,
+            "2025-02": 3400,
+            "2025-03": 3600,
+            "2025-04": 3800,
+            "2025-05": 3900,
+            "2025-06": 4100,
+            "2025-07": 4200,
+            "2025-08": 4300,
+            "2025-09": 4400,
+            "2025-10": 4500,
+            "2025-11": 4600,
+            "2025-12": 4700
+          },
+          "ytdTotal": 48700
+        },
+        {
+          "category": "Vehicle Expenses",
+          "monthly": {
+            "2025-01": 800,
+            "2025-02": 820,
+            "2025-03": 780,
+            "2025-04": 760,
+            "2025-05": 810,
+            "2025-06": 830,
+            "2025-07": 840,
+            "2025-08": 860,
+            "2025-09": 880,
+            "2025-10": 900,
+            "2025-11": 910,
+            "2025-12": 920
+          },
+          "ytdTotal": 10110
+        },
+        {
+          "category": "Materials & Supplies",
+          "monthly": {
+            "2025-01": 2100,
+            "2025-02": 2200,
+            "2025-03": 2300,
+            "2025-04": 2400,
+            "2025-05": 2500,
+            "2025-06": 2600,
+            "2025-07": 2700,
+            "2025-08": 2800,
+            "2025-09": 2900,
+            "2025-10": 3000,
+            "2025-11": 3100,
+            "2025-12": 3200
+          },
+          "ytdTotal": 31800
+        },
+        {
+          "category": "Insurance & Licenses",
+          "monthly": {
+            "2025-01": 950,
+            "2025-02": 950,
+            "2025-03": 950,
+            "2025-04": 950,
+            "2025-05": 950,
+            "2025-06": 950,
+            "2025-07": 950,
+            "2025-08": 950,
+            "2025-09": 950,
+            "2025-10": 950,
+            "2025-11": 950,
+            "2025-12": 950
+          },
+          "ytdTotal": 11400
+        },
+        {
+          "category": "Meals & Entertainment",
+          "monthly": {
+            "2025-01": 320,
+            "2025-02": 310,
+            "2025-03": 330,
+            "2025-04": 300,
+            "2025-05": 340,
+            "2025-06": 360,
+            "2025-07": 350,
+            "2025-08": 370,
+            "2025-09": 360,
+            "2025-10": 355,
+            "2025-11": 365,
+            "2025-12": 375
+          },
+          "ytdTotal": 4135
+        }
+      ],
+      "totals": {
+        "monthly": {
+          "2025-01": 7370,
+          "2025-02": 7680,
+          "2025-03": 7960,
+          "2025-04": 8210,
+          "2025-05": 8500,
+          "2025-06": 8840,
+          "2025-07": 9040,
+          "2025-08": 9280,
+          "2025-09": 9490,
+          "2025-10": 9705,
+          "2025-11": 9925,
+          "2025-12": 10145
+        },
+        "ytdTotal": 106145
+      },
+      "series": [
+        {
+          "category": "Contractors",
+          "data": [
+            3200,
+            3400,
+            3600,
+            3800,
+            3900,
+            4100,
+            4200,
+            4300,
+            4400,
+            4500,
+            4600,
+            4700
+          ]
+        },
+        {
+          "category": "Vehicle Expenses",
+          "data": [
+            800,
+            820,
+            780,
+            760,
+            810,
+            830,
+            840,
+            860,
+            880,
+            900,
+            910,
+            920
+          ]
+        },
+        {
+          "category": "Materials & Supplies",
+          "data": [
+            2100,
+            2200,
+            2300,
+            2400,
+            2500,
+            2600,
+            2700,
+            2800,
+            2900,
+            3000,
+            3100,
+            3200
+          ]
+        },
+        {
+          "category": "Insurance & Licenses",
+          "data": [
+            950,
+            950,
+            950,
+            950,
+            950,
+            950,
+            950,
+            950,
+            950,
+            950,
+            950,
+            950
+          ]
+        },
+        {
+          "category": "Meals & Entertainment",
+          "data": [
+            320,
+            310,
+            330,
+            300,
+            340,
+            360,
+            350,
+            370,
+            360,
+            355,
+            365,
+            375
+          ]
+        }
+      ]
+    }
+  },
+  "investments": {
+    "balance": 63500,
+    "ytdReturnPct": 5.4,
+    "notes": "Tech overweight; rebalance drift ~6%",
+    "accounts": [
+      {
+        "id": "acct-schwab",
+        "account_name": "Schwab Brokerage",
+        "institution": "Schwab",
+        "balance_usd": 35500,
+        "value_series": [
+          {
+            "m": "Dec",
+            "v": 31200
+          },
+          {
+            "m": "Jan",
+            "v": 31800
+          },
+          {
+            "m": "Feb",
+            "v": 32900
+          },
+          {
+            "m": "Mar",
+            "v": 34100
+          },
+          {
+            "m": "Apr",
+            "v": 33300
+          },
+          {
+            "m": "May",
+            "v": 34600
+          },
+          {
+            "m": "Jun",
+            "v": 35100
+          },
+          {
+            "m": "Jul",
+            "v": 35800
+          },
+          {
+            "m": "Aug",
+            "v": 34700
+          },
+          {
+            "m": "Sep",
+            "v": 35400
+          },
+          {
+            "m": "Oct",
+            "v": 34900
+          },
+          {
+            "m": "Nov",
+            "v": 35500
+          }
+        ]
+      },
+      {
+        "id": "acct-fidelity",
+        "account_name": "Fidelity SEP IRA",
+        "institution": "Fidelity",
+        "balance_usd": 18000,
+        "value_series": [
+          {
+            "m": "Dec",
+            "v": 15200
+          },
+          {
+            "m": "Jan",
+            "v": 15500
+          },
+          {
+            "m": "Feb",
+            "v": 15900
+          },
+          {
+            "m": "Mar",
+            "v": 16500
+          },
+          {
+            "m": "Apr",
+            "v": 17000
+          },
+          {
+            "m": "May",
+            "v": 17200
+          },
+          {
+            "m": "Jun",
+            "v": 17400
+          },
+          {
+            "m": "Jul",
+            "v": 17600
+          },
+          {
+            "m": "Aug",
+            "v": 17800
+          },
+          {
+            "m": "Sep",
+            "v": 17900
+          },
+          {
+            "m": "Oct",
+            "v": 18000
+          },
+          {
+            "m": "Nov",
+            "v": 18000
+          }
+        ]
+      },
+      {
+        "id": "acct-mercury",
+        "account_name": "Mercury Treasury",
+        "institution": "Mercury",
+        "balance_usd": 10000,
+        "value_series": [
+          {
+            "m": "Dec",
+            "v": 9200
+          },
+          {
+            "m": "Jan",
+            "v": 9400
+          },
+          {
+            "m": "Feb",
+            "v": 9550
+          },
+          {
+            "m": "Mar",
+            "v": 9700
+          },
+          {
+            "m": "Apr",
+            "v": 9850
+          },
+          {
+            "m": "May",
+            "v": 9900
+          },
+          {
+            "m": "Jun",
+            "v": 9950
+          },
+          {
+            "m": "Jul",
+            "v": 10000
+          },
+          {
+            "m": "Aug",
+            "v": 10050
+          },
+          {
+            "m": "Sep",
+            "v": 10100
+          },
+          {
+            "m": "Oct",
+            "v": 10150
+          },
+          {
+            "m": "Nov",
+            "v": 10200
+          }
+        ]
+      }
+    ],
+    "allocation": {
+      "equities": 56,
+      "fixed_income": 24,
+      "cash": 10,
+      "alternatives": 6,
+      "real_estate": 4
+    },
+    "positions": [
+      {
+        "ticker": "MSFT",
+        "name": "Microsoft",
+        "account": "Schwab Brokerage",
+        "asset_class": "Equity",
+        "quantity": 60,
+        "price": 345.12,
+        "market_value": 20707,
+        "cost_basis_total": 16800,
+        "unrealized_pl": 3907,
+        "unrealized_pl_pct": 0.23,
+        "weight_pct": 32.0,
+        "currency": "USD",
+        "price_as_of": "2025-11-08T16:00:00Z"
+      },
+      {
+        "ticker": "AAPL",
+        "name": "Apple",
+        "account": "Schwab Brokerage",
+        "asset_class": "Equity",
+        "quantity": 80,
+        "price": 210.44,
+        "market_value": 16835,
+        "cost_basis_total": 14800,
+        "unrealized_pl": 2035,
+        "unrealized_pl_pct": 0.14,
+        "weight_pct": 26.5,
+        "currency": "USD",
+        "price_as_of": "2025-11-08T16:00:00Z"
+      },
+      {
+        "ticker": "VTI",
+        "name": "Vanguard Total Market",
+        "account": "Fidelity SEP IRA",
+        "asset_class": "Equity",
+        "quantity": 110,
+        "price": 242.1,
+        "market_value": 26631,
+        "cost_basis_total": 23100,
+        "unrealized_pl": 3521,
+        "unrealized_pl_pct": 0.15,
+        "weight_pct": 42.0,
+        "currency": "USD",
+        "price_as_of": "2025-11-08T16:00:00Z"
+      },
+      {
+        "ticker": "BND",
+        "name": "Vanguard Total Bond",
+        "account": "Fidelity SEP IRA",
+        "asset_class": "Fixed Income",
+        "quantity": 90,
+        "price": 74.5,
+        "market_value": 6705,
+        "cost_basis_total": 6900,
+        "unrealized_pl": -195,
+        "unrealized_pl_pct": -0.028,
+        "weight_pct": 10.5,
+        "currency": "USD",
+        "price_as_of": "2025-11-08T16:00:00Z"
+      },
+      {
+        "ticker": "SGOV",
+        "name": "iShares 0-3 Month T-Bill",
+        "account": "Mercury Treasury",
+        "asset_class": "Fixed Income",
+        "quantity": 190,
+        "price": 100.1,
+        "market_value": 19019,
+        "cost_basis_total": 18900,
+        "unrealized_pl": 119,
+        "unrealized_pl_pct": 0.006,
+        "weight_pct": 30.0,
+        "currency": "USD",
+        "price_as_of": "2025-11-08T16:00:00Z"
+      }
+    ],
+    "wealthPulse": {
+      "headline": "Portfolio up 5.4% this year, led by Microsoft and total market funds.",
+      "metrics": {
+        "net_worth_change_usd": 3200,
+        "net_worth_change_pct": 0.054
+      },
+      "observations": [
+        {
+          "category": "allocation",
+          "text": "Tech names are now 10% over target \u2014 consider trimming into strength."
+        },
+        {
+          "category": "cash",
+          "text": "$10k sits in Mercury Treasury; laddering half into 6-month T-Bills lifts yield."
+        },
+        {
+          "category": "fees",
+          "text": "IRA cash drag costs ~$40/mo; auto-invest dividends monthly."
+        }
+      ],
+      "ctas": [
+        {
+          "text": "Book a rebalance for the SEP IRA",
+          "kind": "calendar",
+          "due_at": "2025-11-14T15:30:00-05:00"
+        },
+        {
+          "text": "Ask Bizzi how to hedge tech concentration",
+          "kind": "insights"
+        },
+        {
+          "text": "Open Mercury ladder builder",
+          "kind": "link",
+          "route": "/dashboard/investments",
+          "params": {
+            "panel": "ladder"
+          }
+        }
+      ]
+    },
+    "wealthMoves": {
+      "month": "2025-11",
+      "moves": [
+        {
+          "move_title": "Shift 5% from cash into 6-month T-Bills",
+          "description": "Earn ~5.1% on idle cash while keeping liquidity in early Q2.",
+          "estimated_impact": "+$210 interest",
+          "urgency": "Medium",
+          "tags": [
+            "cash",
+            "treasury"
+          ],
+          "scenario_context": "Keeps 2 months of payroll liquid.",
+          "cta": {
+            "text": "Open cash ladder",
+            "kind": "link"
+          }
+        },
+        {
+          "move_title": "Trim Microsoft by 10 shares and rebalance into VTI",
+          "description": "Locks in gains and brings tech back to target weight.",
+          "estimated_impact": "Reduces concentration by 4%",
+          "urgency": "High",
+          "tags": [
+            "rebalance",
+            "allocation"
+          ],
+          "scenario_context": "Keeps diversification score above 70.",
+          "cta": {
+            "text": "Review rebalance plan",
+            "kind": "link"
+          }
+        },
+        {
+          "move_title": "Auto-invest SEP IRA dividends monthly",
+          "description": "Avoids $40/month cash drag and compounds faster.",
+          "estimated_impact": "+$480 over 12 months",
+          "urgency": "This Month",
+          "tags": [
+            "automation"
+          ],
+          "scenario_context": "Set-and-forget via Fidelity auto-invest.",
+          "cta": {
+            "text": "Turn on auto-invest",
+            "kind": "link"
+          }
+        }
+      ],
+      "meta": {
+        "generated_at": "2025-11-08T08:45:00-05:00"
+      }
+    },
+    "retirement": {
+      "inputs": {
+        "current_age": 38,
+        "retirement_age": 65,
+        "current_savings": 210000,
+        "annual_contribution": 15000,
+        "expected_return_pct": 6.5,
+        "inflation_pct": 2.6,
+        "target_income_today": 72000,
+        "lifestyle": "comfortable",
+        "business_sale_value": 200000,
+        "business_sale_age": 60,
+        "contribution_grows_with_inflation": true,
+        "return_volatility_pct": 11,
+        "monte_carlo_trials": 600
+      },
+      "results": {
+        "projected_balance": 2502552,
+        "surplus": 702552,
+        "surplus_pct": 39.03065935866995,
+        "required_monthly_adjustment": -2168.3699643705527,
+        "probability_of_success": 0.647576648396675,
+        "status": "surplus"
+      },
+      "series": [
+        {
+          "age": 38,
+          "balance": 210000
+        },
+        {
+          "age": 39,
+          "balance": 232982
+        },
+        {
+          "age": 40,
+          "balance": 256839
+        },
+        {
+          "age": 41,
+          "balance": 281601
+        },
+        {
+          "age": 42,
+          "balance": 307306
+        },
+        {
+          "age": 43,
+          "balance": 333987
+        },
+        {
+          "age": 44,
+          "balance": 361682
+        },
+        {
+          "age": 45,
+          "balance": 390430
+        },
+        {
+          "age": 46,
+          "balance": 420271
+        },
+        {
+          "age": 47,
+          "balance": 451246
+        },
+        {
+          "age": 48,
+          "balance": 483399
+        },
+        {
+          "age": 49,
+          "balance": 516774
+        },
+        {
+          "age": 50,
+          "balance": 551417
+        },
+        {
+          "age": 51,
+          "balance": 587378
+        },
+        {
+          "age": 52,
+          "balance": 624705
+        },
+        {
+          "age": 53,
+          "balance": 663451
+        },
+        {
+          "age": 54,
+          "balance": 703670
+        },
+        {
+          "age": 55,
+          "balance": 745418
+        },
+        {
+          "age": 56,
+          "balance": 788752
+        },
+        {
+          "age": 57,
+          "balance": 833734
+        },
+        {
+          "age": 58,
+          "balance": 880426
+        },
+        {
+          "age": 59,
+          "balance": 928892
+        },
+        {
+          "age": 60,
+          "balance": 979201
+        },
+        {
+          "age": 61,
+          "balance": 1031422
+        },
+        {
+          "age": 62,
+          "balance": 1085628
+        },
+        {
+          "age": 63,
+          "balance": 1141895
+        },
+        {
+          "age": 64,
+          "balance": 1200300
+        },
+        {
+          "age": 65,
+          "balance": 1260925
+        },
+        {
+          "age": 66,
+          "balance": 1323855
+        },
+        {
+          "age": 67,
+          "balance": 1389177
+        },
+        {
+          "age": 68,
+          "balance": 1456982
+        },
+        {
+          "age": 69,
+          "balance": 1527365
+        },
+        {
+          "age": 70,
+          "balance": 1600422
+        },
+        {
+          "age": 71,
+          "balance": 1676257
+        },
+        {
+          "age": 72,
+          "balance": 1754974
+        },
+        {
+          "age": 73,
+          "balance": 1836684
+        },
+        {
+          "age": 74,
+          "balance": 1921499
+        },
+        {
+          "age": 75,
+          "balance": 2009539
+        },
+        {
+          "age": 76,
+          "balance": 2100925
+        },
+        {
+          "age": 77,
+          "balance": 2195785
+        },
+        {
+          "age": 78,
+          "balance": 2294250
+        },
+        {
+          "age": 79,
+          "balance": 2396458
+        },
+        {
+          "age": 80,
+          "balance": 2502552
+        }
+      ],
+      "targetSeries": [
+        {
+          "age": 38,
+          "target": 0
+        },
+        {
+          "age": 39,
+          "target": 66667
+        },
+        {
+          "age": 40,
+          "target": 133333
+        },
+        {
+          "age": 41,
+          "target": 200000
+        },
+        {
+          "age": 42,
+          "target": 266667
+        },
+        {
+          "age": 43,
+          "target": 333333
+        },
+        {
+          "age": 44,
+          "target": 400000
+        },
+        {
+          "age": 45,
+          "target": 466667
+        },
+        {
+          "age": 46,
+          "target": 533333
+        },
+        {
+          "age": 47,
+          "target": 600000
+        },
+        {
+          "age": 48,
+          "target": 666667
+        },
+        {
+          "age": 49,
+          "target": 733333
+        },
+        {
+          "age": 50,
+          "target": 800000
+        },
+        {
+          "age": 51,
+          "target": 866667
+        },
+        {
+          "age": 52,
+          "target": 933333
+        },
+        {
+          "age": 53,
+          "target": 1000000
+        },
+        {
+          "age": 54,
+          "target": 1066667
+        },
+        {
+          "age": 55,
+          "target": 1133333
+        },
+        {
+          "age": 56,
+          "target": 1200000
+        },
+        {
+          "age": 57,
+          "target": 1266667
+        },
+        {
+          "age": 58,
+          "target": 1333333
+        },
+        {
+          "age": 59,
+          "target": 1400000
+        },
+        {
+          "age": 60,
+          "target": 1466667
+        },
+        {
+          "age": 61,
+          "target": 1533333
+        },
+        {
+          "age": 62,
+          "target": 1600000
+        },
+        {
+          "age": 63,
+          "target": 1666667
+        },
+        {
+          "age": 64,
+          "target": 1733333
+        },
+        {
+          "age": 65,
+          "target": 1800000
+        },
+        {
+          "age": 66,
+          "target": 1800000
+        },
+        {
+          "age": 67,
+          "target": 1800000
+        },
+        {
+          "age": 68,
+          "target": 1800000
+        },
+        {
+          "age": 69,
+          "target": 1800000
+        },
+        {
+          "age": 70,
+          "target": 1800000
+        },
+        {
+          "age": 71,
+          "target": 1800000
+        },
+        {
+          "age": 72,
+          "target": 1800000
+        },
+        {
+          "age": 73,
+          "target": 1800000
+        },
+        {
+          "age": 74,
+          "target": 1800000
+        },
+        {
+          "age": 75,
+          "target": 1800000
+        },
+        {
+          "age": 76,
+          "target": 1800000
+        },
+        {
+          "age": 77,
+          "target": 1800000
+        },
+        {
+          "age": 78,
+          "target": 1800000
+        },
+        {
+          "age": 79,
+          "target": 1800000
+        },
+        {
+          "age": 80,
+          "target": 1800000
+        }
+      ],
+      "bandSeries": [
+        {
+          "age": 38,
+          "p10": 210000,
+          "p50": 210000,
+          "p90": 210000
+        },
+        {
+          "age": 39,
+          "p10": 221432,
+          "p50": 232982,
+          "p90": 244532
+        },
+        {
+          "age": 40,
+          "p10": 232671,
+          "p50": 256839,
+          "p90": 282277
+        },
+        {
+          "age": 41,
+          "p10": 243718,
+          "p50": 281601,
+          "p90": 323532
+        },
+        {
+          "age": 42,
+          "p10": 254578,
+          "p50": 307306,
+          "p90": 368624
+        },
+        {
+          "age": 43,
+          "p10": 265253,
+          "p50": 333987,
+          "p90": 417910
+        },
+        {
+          "age": 44,
+          "p10": 275747,
+          "p50": 361682,
+          "p90": 471781
+        },
+        {
+          "age": 45,
+          "p10": 286062,
+          "p50": 390430,
+          "p90": 530662
+        },
+        {
+          "age": 46,
+          "p10": 296202,
+          "p50": 420271,
+          "p90": 595020
+        },
+        {
+          "age": 47,
+          "p10": 306170,
+          "p50": 451246,
+          "p90": 665364
+        },
+        {
+          "age": 48,
+          "p10": 315969,
+          "p50": 483399,
+          "p90": 742250
+        },
+        {
+          "age": 49,
+          "p10": 325601,
+          "p50": 516774,
+          "p90": 826288
+        },
+        {
+          "age": 50,
+          "p10": 335070,
+          "p50": 551417,
+          "p90": 918143
+        },
+        {
+          "age": 51,
+          "p10": 344378,
+          "p50": 587378,
+          "p90": 1018541
+        },
+        {
+          "age": 52,
+          "p10": 353527,
+          "p50": 624705,
+          "p90": 1128277
+        },
+        {
+          "age": 53,
+          "p10": 362521,
+          "p50": 663451,
+          "p90": 1248220
+        },
+        {
+          "age": 54,
+          "p10": 371363,
+          "p50": 703670,
+          "p90": 1379319
+        },
+        {
+          "age": 55,
+          "p10": 380054,
+          "p50": 745418,
+          "p90": 1522612
+        },
+        {
+          "age": 56,
+          "p10": 388598,
+          "p50": 788752,
+          "p90": 1679233
+        },
+        {
+          "age": 57,
+          "p10": 396996,
+          "p50": 833734,
+          "p90": 1850421
+        },
+        {
+          "age": 58,
+          "p10": 405252,
+          "p50": 880426,
+          "p90": 2037532
+        },
+        {
+          "age": 59,
+          "p10": 413367,
+          "p50": 928892,
+          "p90": 2242046
+        },
+        {
+          "age": 60,
+          "p10": 421345,
+          "p50": 979201,
+          "p90": 2465583
+        },
+        {
+          "age": 61,
+          "p10": 429187,
+          "p50": 1031422,
+          "p90": 2709911
+        },
+        {
+          "age": 62,
+          "p10": 436896,
+          "p50": 1085628,
+          "p90": 2976964
+        },
+        {
+          "age": 63,
+          "p10": 444473,
+          "p50": 1141895,
+          "p90": 3268856
+        },
+        {
+          "age": 64,
+          "p10": 451923,
+          "p50": 1200300,
+          "p90": 3587898
+        },
+        {
+          "age": 65,
+          "p10": 459245,
+          "p50": 1260925,
+          "p90": 3936615
+        },
+        {
+          "age": 66,
+          "p10": 466443,
+          "p50": 1323855,
+          "p90": 4317766
+        },
+        {
+          "age": 67,
+          "p10": 473519,
+          "p50": 1389177,
+          "p90": 4734369
+        },
+        {
+          "age": 68,
+          "p10": 480475,
+          "p50": 1456982,
+          "p90": 5189720
+        },
+        {
+          "age": 69,
+          "p10": 487313,
+          "p50": 1527365,
+          "p90": 5687425
+        },
+        {
+          "age": 70,
+          "p10": 494034,
+          "p50": 1600422,
+          "p90": 6231422
+        },
+        {
+          "age": 71,
+          "p10": 500641,
+          "p50": 1676257,
+          "p90": 6826017
+        },
+        {
+          "age": 72,
+          "p10": 507136,
+          "p50": 1754974,
+          "p90": 7475917
+        },
+        {
+          "age": 73,
+          "p10": 513521,
+          "p50": 1836684,
+          "p90": 8186265
+        },
+        {
+          "age": 74,
+          "p10": 519797,
+          "p50": 1921499,
+          "p90": 8962683
+        },
+        {
+          "age": 75,
+          "p10": 525966,
+          "p50": 2009539,
+          "p90": 9811317
+        },
+        {
+          "age": 76,
+          "p10": 532031,
+          "p50": 2100925,
+          "p90": 10738884
+        },
+        {
+          "age": 77,
+          "p10": 537993,
+          "p50": 2195785,
+          "p90": 11752726
+        },
+        {
+          "age": 78,
+          "p10": 543853,
+          "p50": 2294250,
+          "p90": 12860867
+        },
+        {
+          "age": 79,
+          "p10": 549614,
+          "p50": 2396458,
+          "p90": 14072078
+        },
+        {
+          "age": 80,
+          "p10": 555277,
+          "p50": 2502552,
+          "p90": 15395946
+        }
+      ]
+    }
+  },
+  "calendar": {
+    "upcoming": [
+      {
+        "title": "Tile delivery \u2014 Elm St",
+        "date": "2025-11-09T08:30:00"
+      },
+      {
+        "title": "Client walkthrough \u2014 Kitchen remodel",
+        "date": "2025-11-11T15:00:00"
+      },
+      {
+        "title": "Quarterly tax packet prep",
+        "date": "2025-11-18T10:00:00"
+      }
+    ]
+  },
+  "bookkeeping": {
+    "accounts": [
+      { "id": "acct-cc-1234", "name": "Credit Card 1234", "type": "Credit Card", "balance": -1820.45 },
+      { "id": "acct-ch-5678", "name": "Checking 5678", "type": "Checking", "balance": 8240.12 },
+      { "id": "acct-sv-9012", "name": "Savings 9012", "type": "Savings", "balance": 15250.88 }
+    ],
+    "transactions": [
+      {
+        "id": "txn-1",
+        "accountId": "acct-cc-1234",
+        "date": "2026-01-12",
+        "vendor": "Shell Fuel",
+        "location": "Anytown",
+        "description": "SHELL 2458 ANYTOWN",
+        "amount": -54.23,
+        "currentAccount": "Credit Card 1234",
+        "suggestedCategory": "Fuel",
+        "reason": "Recurring gas station charges.",
+        "confidence": "high",
+        "status": "needs_review",
+        "flagged": false
+      },
+      {
+        "id": "txn-2",
+        "accountId": "acct-cc-1234",
+        "date": "2026-01-11",
+        "vendor": "Home Depot",
+        "location": "Cleveland",
+        "description": "HOMEDPOT #445",
+        "amount": -182.5,
+        "currentAccount": "Credit Card 1234",
+        "suggestedCategory": "Materials",
+        "reason": "Home improvement store similar to past materials purchases.",
+        "confidence": "medium",
+        "status": "needs_review",
+        "flagged": true
+      },
+      {
+        "id": "txn-3",
+        "accountId": "acct-ch-5678",
+        "date": "2026-01-10",
+        "vendor": "QuickGas",
+        "location": "Akron",
+        "description": "QUICKGAS 8841",
+        "amount": -36.9,
+        "currentAccount": "Checking 5678",
+        "suggestedCategory": "Fuel",
+        "reason": "Looks like prior fuel transactions.",
+        "confidence": "high",
+        "status": "approved",
+        "flagged": false
+      },
+      {
+        "id": "txn-4",
+        "accountId": "acct-ch-5678",
+        "date": "2025-12-22",
+        "vendor": "Roofing Supply Co",
+        "location": "Cincinnati",
+        "description": "ROOFING SUPPLY 3391",
+        "amount": -482.75,
+        "currentAccount": "Checking 5678",
+        "suggestedCategory": "Materials",
+        "reason": "Matches prior roofing material purchases.",
+        "confidence": "medium",
+        "status": "needs_review",
+        "flagged": false
+      },
+      {
+        "id": "txn-5",
+        "accountId": "acct-sv-9012",
+        "date": "2025-12-18",
+        "vendor": "American Express",
+        "location": "Online",
+        "description": "AMEX PAYMENT",
+        "amount": 1250,
+        "currentAccount": "Savings 9012",
+        "suggestedCategory": "Transfer",
+        "reason": "Transfer between internal accounts.",
+        "confidence": "low",
+        "status": "uncategorized",
+        "flagged": true
+      },
+      {
+        "id": "txn-6",
+        "accountId": "acct-cc-1234",
+        "date": "2025-12-15",
+        "vendor": "United Rentals",
+        "location": "Toledo",
+        "description": "UNITED RENTALS 9912",
+        "amount": -210,
+        "currentAccount": "Credit Card 1234",
+        "suggestedCategory": "Tools",
+        "reason": "Equipment rental similar to past jobs.",
+        "confidence": "high",
+        "status": "needs_review",
+        "flagged": false
+      }
+    ]
+  },
+  "bizzyDocs": {
+    "facets": {
+      "all": 2,
+      "financials": 1,
+      "tax": 0,
+      "marketing": 0,
+      "investments": 0,
+      "general": 1
+    },
+    "documents": [
+      {
+        "id": "demo-doc-kitchen-playbook",
+        "title": "Kitchen Estimate Playbook",
+        "category": "general",
+        "author": "Mike's Remodeling",
+        "created_at": "2025-10-02T16:30:00-04:00",
+        "filename": "KitchenEstimatePlaybook.pdf",
+        "mime_type": "application/pdf",
+        "size": 18240,
+        "tags": ["kitchen", "estimate", "process"],
+        "summary": "Step-by-step template the crew uses when scoping a mid-range kitchen remodel, including quick pricing ranges and the exact questions Mike asks during the first visit.",
+        "content": {
+          "format": "sections",
+          "sections": [
+            {
+              "heading": "Walkthrough checklist",
+              "body": "- Photograph electrical, plumbing, and appliance runs\n- Confirm ceiling height + bulkheads\n- Capture cabinet linear feet + island footage\n- Ask for flooring transition preference"
+            },
+            {
+              "heading": "Pricing guardrails",
+              "body": "| Scope | Typical Range | Notes |\n| :--- | ---: | :--- |\n| Essential refresh | $38k - $45k | Stock cabinets + quartz |\n| Premium upgrade | $52k - $68k | Custom fronts, panel-ready appliances |\n| Gut + layout move | $72k+ | Requires structural review |"
+            },
+            {
+              "heading": "Client script",
+              "body": "\"What is the one thing you never want to touch again after we hand over keys?\"\n\"How long can you be without a kitchen before it impacts the family too much?\""
+            }
+          ],
+          "plain_excerpt": "Template Mike's Remodeling uses to baseline every kitchen opportunity, with photos to capture, price ranges, and the discovery script that keeps expectations aligned."
+        },
+        "search_blob": "kitchen remodel estimate template mike's remodeling discovery questions pricing guardrails"
+      },
+      {
+        "id": "demo-doc-cash-flow-bridge",
+        "title": "Q1 Cash Flow Bridge",
+        "category": "financials",
+        "author": "Bizzi Assistant",
+        "created_at": "2025-10-06T08:15:00-04:00",
+        "filename": "Q1_CashFlowBridge.pdf",
+        "mime_type": "application/pdf",
+        "size": 26624,
+        "tags": ["cash", "forecast", "jobs"],
+        "summary": "Bizzi pulled this bridge to explain how Q1 cash will move across receivables, payroll, material deposits, and tax savings for Mike's Remodeling.",
+        "content": {
+          "format": "sections",
+          "sections": [
+            {
+              "heading": "Starting point",
+              "body": "Cash on hand 1/1/25: $24.2k\nBacklog deposits collected: $18.5k"
+            },
+            {
+              "heading": "Major movements",
+              "body": "| Driver | Impact | Timing |\n| :--- | ---: | :--- |\n| AR from Elm + Hawthorne | +$32.6k | Jan 18 - Feb 2 |\n| Payroll (12 carpenters) | -$46.8k | Bi-weekly |\n| Custom cabinets deposits | -$14.4k | Feb 6 |\n| Tax set-aside (quarterly) | -$6.2k | Mar 15 |"
+            },
+            {
+              "heading": "What to watch",
+              "body": "- Keep $15k buffer for overlapping tile installs\n- Collect final draw on Greenway HOA before new marketing spend\n- If AR slips two weeks, push the Ford Transit upgrade to May"
+            }
+          ],
+          "plain_excerpt": "Bridge shows cash dipping to $11k mid-February if Hawthorne lags, so Bizzi flags the need to chase receivables and stagger cabinet deposits."
+        },
+        "search_blob": "cash flow bridge q1 2025 mike's remodeling ar payroll deposits tax buffer"
+      }
+    ]
+  }
+}

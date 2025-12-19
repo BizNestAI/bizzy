@@ -1,0 +1,293 @@
+// Shared mock insights used in dev/demo mode
+const MOCK_INSIGHTS = [
+  // Pulse / Bizzy module
+  {
+    id: 'mock-pulse-1',
+    module: 'bizzy',
+    severity: 'warn',
+    title: 'Bizzi Pulse 44/100 (At risk)',
+    body: 'Cash is tight and payroll is heavy. Collect AR and trim labor 5–10% to stabilize margins.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'Open Pulse', route: '/dashboard/bizzy' },
+  },
+  {
+    id: 'mock-pulse-2',
+    module: 'bizzy',
+    severity: 'info',
+    title: 'Profit margin steady at 32.5%',
+    body: 'Solid margin, but payroll is the main lever. A 5% reduction pushes you toward 35%.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'See Financials', route: '/dashboard/financials' },
+  },
+  {
+    id: 'mock-pulse-3',
+    module: 'bizzy',
+    severity: 'warn',
+    title: 'Cash on hand: $24.2K',
+    body: 'Collecting 50% of AR keeps you above a two-month runway.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+  {
+    id: 'mock-pulse-4',
+    module: 'bizzy',
+    severity: 'info',
+    title: 'Top priority this week',
+    body: 'Focus on AR follow-ups and payroll renegotiation.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+
+  // Financials / Accounting
+  {
+    id: 'mock-fin-1',
+    module: 'accounting',
+    severity: 'info',
+    title: 'Revenue $48.2K vs. Expenses $32.5K',
+    body: 'Margin is 32.5%. Payroll is still the biggest lever for savings.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'Open Financials', route: '/dashboard/financials' },
+  },
+  {
+    id: 'mock-fin-2',
+    module: 'accounting',
+    severity: 'warn',
+    title: 'Labor costs are 39% of spend',
+    body: 'A 5% trim adds roughly $1,600 profit.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+  {
+    id: 'mock-fin-3',
+    module: 'accounting',
+    severity: 'warn',
+    title: 'AR outstanding: $18.6K',
+    body: 'Collect half to add $9.3K cash this month.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+
+  // Marketing
+  {
+    id: 'mock-mkt-1',
+    module: 'marketing',
+    severity: 'info',
+    title: '62 new leads this month',
+    body: '70% from Google Ads with the highest close rate.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'Open Marketing', route: '/dashboard/marketing' },
+  },
+  {
+    id: 'mock-mkt-2',
+    module: 'marketing',
+    severity: 'info',
+    title: 'Boost Google Ads budget',
+    body: 'A 10% increase could add 8–10 qualified leads.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+  {
+    id: 'mock-mkt-3',
+    module: 'marketing',
+    severity: 'warn',
+    title: 'Follow-ups lagging',
+    body: '20% of leads are untouched — roughly $12K potential revenue.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+
+  // Tax
+  {
+    id: 'mock-tax-1',
+    module: 'tax',
+    severity: 'warn',
+    title: 'Tax payment due in 3 days',
+    body: 'Estimated $6,200 for Q3 — pay early to avoid penalties.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'Open Tax', route: '/dashboard/tax' },
+  },
+  {
+    id: 'mock-tax-2',
+    module: 'tax',
+    severity: 'info',
+    title: 'Tax readiness: 83%',
+    body: 'Missing two receipts (~$600). Upload to keep records clean.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+
+  // Investments
+  {
+    id: 'mock-inv-1',
+    module: 'investments',
+    severity: 'info',
+    title: 'Portfolio up 5.4%',
+    body: 'Tech ETFs are driving gains.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'Open Investments', route: '/dashboard/investments' },
+  },
+  {
+    id: 'mock-inv-2',
+    module: 'investments',
+    severity: 'warn',
+    title: 'Equity drift at 68% (target 60%)',
+    body: 'Rebalance to lock in ~$2.2K gains.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+
+  // Jobs / Ops
+  {
+    id: 'mock-jobs-1',
+    module: 'jobs',
+    severity: 'info',
+    title: '9 new leads this week',
+    body: 'Most from Google Ads; lock dates for top 3 to lift your win rate above 30%.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'Review pipeline', route: '/dashboard/leads-jobs' },
+  },
+  {
+    id: 'mock-jobs-2',
+    module: 'jobs',
+    severity: 'warn',
+    title: '3 overdue invoices — $13.0K',
+    body: 'Hawthorne, Greenway, and North Ridge are past due. Collect half to add ~$6.5K cash.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'Open unpaid list', route: '/dashboard/leads-jobs' },
+  },
+  {
+    id: 'mock-jobs-3',
+    module: 'jobs',
+    severity: 'info',
+    title: 'Schedule two hot leads',
+    body: 'Kitchen remodel consult (Google Ads) and window replacement (Greenway HOA) are unscheduled—slot them this week.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+
+  // Calendar
+  {
+    id: 'mock-cal-1',
+    module: 'calendar',
+    severity: 'info',
+    title: 'No meetings scheduled',
+    body: 'Add payroll + AR follow-ups by Wednesday to stay on track.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+  {
+    id: 'mock-cal-2',
+    module: 'calendar',
+    severity: 'warn',
+    title: 'Tile delivery & walkthrough due Thursday',
+    body: 'Confirm crew assignments by Tuesday morning.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+  {
+    id: 'mock-cal-3',
+    module: 'calendar',
+    severity: 'info',
+    title: 'Add Weekly Bizzi Review',
+    body: 'Fridays at 8 a.m.—recap finances and pipeline.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+
+  // Email
+  {
+    id: 'mock-email-1',
+    module: 'email',
+    severity: 'warn',
+    title: '2 urgent emails pending',
+    body: 'Both from John Smith confirming project start.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'Open Inbox', route: '/dashboard/email' },
+    account_id: 'mock-email-acct',
+  },
+  {
+    id: 'mock-email-2',
+    module: 'email',
+    severity: 'info',
+    title: 'Avg reply time: 19 hours',
+    body: 'Target under six hours to keep close rates up.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+
+  // Jobs / Ops
+  {
+    id: 'mock-ops-1',
+    module: 'ops',
+    severity: 'info',
+    title: '3 active jobs ($92K total)',
+    body: 'All on track with no delays reported.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: { action: 'open_route', label: 'Open Jobs', route: '/dashboard/leads-jobs' },
+  },
+  {
+    id: 'mock-ops-2',
+    module: 'ops',
+    severity: 'warn',
+    title: 'Labor utilization 86%',
+    body: 'Healthy now, but overtime risk if another job starts.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+  {
+    id: 'mock-ops-3',
+    module: 'ops',
+    severity: 'warn',
+    title: 'Tile delivery Wednesday',
+    body: 'Any delay could push November revenue into December.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+];
+
+function countMockInsights({ suppress } = {}) {
+  const skip = suppress ? new Set([...suppress].map((x) => String(x || '').toLowerCase())) : null;
+  return MOCK_INSIGHTS.reduce((acc, item) => {
+    const key = String(item.module || '').toLowerCase();
+    if (skip && skip.has(key)) return acc;
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+export { MOCK_INSIGHTS, countMockInsights };

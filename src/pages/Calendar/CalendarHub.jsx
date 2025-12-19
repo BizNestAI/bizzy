@@ -627,16 +627,16 @@ export default function CalendarHub({ businessId, defaultModule = "all" }) {
       <section
         className="rounded-[32px] border shadow-[0_35px_70px_rgba(0,0,0,0.55)] flex flex-col"
         style={{
-          background: "linear-gradient(150deg, rgba(38,34,30,0.95), rgba(26,24,22,0.97))",
-          borderColor: "rgba(255,255,255,0.12)",
+          background: "linear-gradient(160deg, #0f141b 0%, #0b1119 55%, #0a1017 100%)",
+          borderColor: "rgba(255,255,255,0.08)",
         }}
       >
         <div className="flex flex-col gap-5 p-5 h-full">
           <div
             className="space-y-4 pt-2 pb-2 sticky top-0 z-30 backdrop-blur"
             style={{
-              background: "linear-gradient(145deg, rgba(38,34,30,0.96), rgba(26,24,22,0.98))",
-              borderBottom: "1px solid rgba(255,255,255,0.05)",
+              background: "linear-gradient(180deg, #0f141b 0%, #0b1119 100%)",
+              borderBottom: "1px solid rgba(255,255,255,0.08)",
             }}
           >
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -653,7 +653,7 @@ export default function CalendarHub({ businessId, defaultModule = "all" }) {
                           onClick={prev}
                           aria-label="Previous period"
                           className="rounded-xl border px-1.5 py-0.5"
-                          style={{ borderColor: "rgba(255,255,255,0.15)", color: TEXT_MAIN, background: "rgba(15,18,24,0.85)" }}
+                          style={{ borderColor: "rgba(255,255,255,0.14)", color: TEXT_MAIN, background: "rgba(12,16,22,0.9)" }}
                         >
                           <ChevronLeft size={12} />
                         </button>
@@ -662,7 +662,7 @@ export default function CalendarHub({ businessId, defaultModule = "all" }) {
                           onClick={next}
                           aria-label="Next period"
                           className="rounded-xl border px-1.5 py-0.5"
-                          style={{ borderColor: "rgba(255,255,255,0.15)", color: TEXT_MAIN, background: "rgba(15,18,24,0.85)" }}
+                          style={{ borderColor: "rgba(255,255,255,0.14)", color: TEXT_MAIN, background: "rgba(12,16,22,0.9)" }}
                         >
                           <ChevronRight size={12} />
                         </button>
@@ -841,7 +841,7 @@ export default function CalendarHub({ businessId, defaultModule = "all" }) {
                 <button
                   onClick={() => setQuickOpen(true)}
                   className="rounded-2xl border px-2.5 py-1.5 text-sm font-semibold flex items-center justify-center gap-2"
-                  style={{ color: TEXT_MAIN, borderColor: "rgba(255,255,255,0.12)", background: "linear-gradient(145deg, rgba(34,31,28,0.94), rgba(24,22,20,0.96))" }}
+                  style={{ color: TEXT_MAIN, borderColor: "rgba(255,255,255,0.14)", background: "linear-gradient(145deg, rgba(17,21,29,0.96), rgba(11,15,23,0.96))" }}
                 >
                   <Plus size={15} /> Quick Create
                 </button>
@@ -854,12 +854,12 @@ export default function CalendarHub({ businessId, defaultModule = "all" }) {
               className="rounded-[28px] border p-4 mt-2"
               style={{
                 borderColor: "rgba(255,255,255,0.08)",
-                background: "linear-gradient(150deg, rgba(38,34,30,0.96), rgba(26,24,22,0.98))",
+                background: "linear-gradient(150deg, #0f141b 0%, #0b1119 100%)",
               }}
             >
           <div
             className="min-h-[420px] border border-white/5 rounded-3xl p-4 overflow-hidden relative"
-            style={{ background: "linear-gradient(150deg, rgba(34,31,28,0.95), rgba(24,22,20,0.96))" }}
+            style={{ background: "linear-gradient(150deg, #0f141b 0%, #0b1119 100%)" }}
           >
                 {view === "week" && (
                   <div
@@ -1044,74 +1044,78 @@ function MonthOrWeekGrid({
   }
 
   return (
-    <div className="grid grid-cols-7 gap-1">
-      {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d) => (
-        <div key={d} className="text-center text-xs" style={{ color: TEXT_MUTED }}>{d}</div>
-      ))}
-      {days.map((d, idx) => {
-        const key = d.format("YYYY-MM-DD");
-        const list = eventsByDay[key] || [];
-        const isToday = d.isSame(dayjs(), "day");
-        return (
-          <div
-            key={idx}
-            className="min-h-[110px] rounded-md p-1 relative group"
-            style={{ background: "linear-gradient(145deg, rgba(16,19,24,0.9), rgba(9,11,15,0.9))", border: `1px solid ${NEUTRAL_BORDER_SOFT}` }}
-            ref={(el) => {
-              if (!monthCellRefs.current) monthCellRefs.current = {};
-              if (el) monthCellRefs.current[key] = el;
-            }}
-          >
+    <div className="rounded-3xl border border-white/6 bg-[#0b1119] p-3">
+      <div className="grid grid-cols-7 gap-1">
+        {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d) => (
+          <div key={d} className="text-center text-xs py-1 rounded-md" style={{ color: TEXT_MUTED, background: "rgba(255,255,255,0.02)" }}>
+            {d}
+          </div>
+        ))}
+        {days.map((d, idx) => {
+          const key = d.format("YYYY-MM-DD");
+          const list = eventsByDay[key] || [];
+          const isToday = d.isSame(dayjs(), "day");
+          return (
             <div
-              className="text-xs"
-              style={{
-                color: isToday ? TEXT_MAIN : TEXT_MUTED,
-                fontWeight: isToday ? 600 : 400,
+              key={idx}
+              className="min-h-[110px] rounded-md p-1 relative group"
+              style={{ background: "linear-gradient(180deg, rgba(17,21,29,0.95), rgba(12,16,24,0.97))", border: `1px solid rgba(255,255,255,0.07)` }}
+              ref={(el) => {
+                if (!monthCellRefs.current) monthCellRefs.current = {};
+                if (el) monthCellRefs.current[key] = el;
               }}
             >
-              {d.date()}
-            </div>
+              <div
+                className="text-xs"
+                style={{
+                  color: isToday ? TEXT_MAIN : TEXT_MUTED,
+                  fontWeight: isToday ? 600 : 400,
+                }}
+              >
+                {d.date()}
+              </div>
 
-            <div className="mt-1 space-y-1 overflow-hidden">
-              {list.slice(0, 4).map((e) => (
-                <button
-                  key={e.id}
-                  onPointerDown={(ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    const start = dayjs(e.start_ts);
-                    const end = dayjs(e.end_ts);
-                    const durationMinutes = Math.max(30, end.diff(start, "minute"));
-                    setMonthDragging({ event: e, dayKey: key, durationMinutes });
-                  }}
-                  onClick={(ev) => {
-                    if (monthDragging) { ev.preventDefault(); return; }
-                    onEdit(e);
-                  }}
-                  title={e.title}
-                  className="w-full text-left text-[11px] leading-tight px-1 py-0.5 rounded-md truncate cursor-grab active:cursor-grabbing"
-                  style={{ backgroundColor: `${MODULE_COLORS[e.module]}33`, color: "#e5e7eb" }}
-                >
-                  <span className="opacity-90">{e.title}</span>
-                </button>
-              ))}
-              {list.length > 4 && (
-                <div className="text-[10px]" style={{ color: TEXT_MUTED }}>
-                  +{list.length - 4} more
-                </div>
-              )}
-            </div>
+              <div className="mt-1 space-y-1 overflow-hidden">
+                {list.slice(0, 4).map((e) => (
+                  <button
+                    key={e.id}
+                    onPointerDown={(ev) => {
+                      ev.preventDefault();
+                      ev.stopPropagation();
+                      const start = dayjs(e.start_ts);
+                      const end = dayjs(e.end_ts);
+                      const durationMinutes = Math.max(30, end.diff(start, "minute"));
+                      setMonthDragging({ event: e, dayKey: key, durationMinutes });
+                    }}
+                    onClick={(ev) => {
+                      if (monthDragging) { ev.preventDefault(); return; }
+                      onEdit(e);
+                    }}
+                    title={e.title}
+                    className="w-full text-left text-[11px] leading-tight px-1 py-0.5 rounded-md truncate cursor-grab active:cursor-grabbing"
+                    style={{ backgroundColor: `${MODULE_COLORS[e.module]}33`, color: "#e5e7eb" }}
+                  >
+                    <span className="opacity-90">{e.title}</span>
+                  </button>
+                ))}
+                {list.length > 4 && (
+                  <div className="text-[10px]" style={{ color: TEXT_MUTED }}>
+                    +{list.length - 4} more
+                  </div>
+                )}
+              </div>
 
-            <button
-              onClick={() => onCreate(d.toISOString())}
-              className="absolute bottom-1 right-1 text-[11px] opacity-0 group-hover:opacity-100 transition"
-              style={{ color: TEXT_MUTED }}
-            >
-              + Add
-            </button>
-          </div>
-        );
-      })}
+              <button
+                onClick={() => onCreate(d.toISOString())}
+                className="absolute bottom-1 right-1 text-[11px] opacity-0 group-hover:opacity-100 transition"
+                style={{ color: TEXT_MUTED }}
+              >
+                + Add
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1147,8 +1151,8 @@ const DAY_START = 6;
 const DAY_END = 22;
 const DEFAULT_SCROLL_HOUR = 8;
 const HOUR_HEIGHT = 64; // px
-const HOUR_LINE = "rgba(255,255,255,0.07)";
-const HALF_LINE = "rgba(255,255,255,0.03)";
+const HOUR_LINE = "rgba(255,255,255,0.08)";
+const HALF_LINE = "rgba(255,255,255,0.04)";
 const NOW_POLL_MS = 30000;
 const SCROLLER_PAD_PX = 240; // extra scroll height to allow full travel without hitting page
 
@@ -1410,7 +1414,7 @@ useEffect(() => {
   return (
     <div className="space-y-2">
       <div
-        className="relative"
+        className="relative rounded-3xl border border-white/6 bg-[#0b1119]"
         ref={scrollerRef}
         style={{ overflowY: "auto", height: `${columnHeight + SCROLLER_PAD_PX}px`, maxHeight: `${columnHeight + SCROLLER_PAD_PX}px` }}
       >
@@ -1421,7 +1425,7 @@ useEffect(() => {
           textMain={TEXT_MAIN}
           textMuted={TEXT_MUTED}
         />
-        <div className="grid grid-cols-[80px_repeat(7,minmax(0,1fr))] gap-2 relative">
+        <div className="grid grid-cols-[80px_repeat(7,minmax(0,1fr))] gap-2 relative px-2 pb-2">
           <div
             className="flex flex-col text-[11px]"
             style={{
@@ -1443,7 +1447,7 @@ useEffect(() => {
               <div
                 key={key}
                 className="rounded-2xl relative p-2"
-                style={{ background: "linear-gradient(165deg, rgba(36,33,30,0.95), rgba(24,22,20,0.95))" }}
+                style={{ background: "linear-gradient(180deg, rgba(17,21,29,0.95), rgba(12,16,24,0.97))", border: "1px solid rgba(255,255,255,0.07)" }}
                 ref={(el) => {
                   if (el) dayColumnRefs.current[key] = el;
                 }}
