@@ -1,0 +1,5 @@
+[build]
+cmd = "npm install"
+
+[deploy]
+startCommand = "node src/server.js"
