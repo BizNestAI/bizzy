@@ -10,7 +10,7 @@ import ResetPassword from "./pages/UserAdmin/ResetPassword";
 import BusinessWizard from "./pages/UserAdmin/BusinessWizard";
 import SettingsHome from "./pages/Settings/SettingsHome";
 
-import AccountingDashboard from "./pages/Accounting/AccountingDashboard";
+import AccountingDashboard from "./pages/accounting/AccountingDashboard";
 import MarketingDashboard from "./pages/Marketing/MarketingDashboard";
 import TaxDashboard from "./pages/Tax/TaxDashboard";
 import BizzyPanel from "./pages/Bizzy/BizzyPanel";
@@ -45,8 +45,8 @@ import SocialCaptionPage from "./pages/Marketing/SocialCaptionPage.jsx";
 import CompanionPage from "./pages/companion/CompanionPage.jsx";
 import JobsDashboard from "./pages/LeadsJobs/JobsDashboard.jsx";
 
-const AffordabilityPage = React.lazy(() => import("./pages/Accounting/Affordability.jsx"));
-const ScenariosPage = React.lazy(() => import("./pages/Accounting/Scenarios.jsx"));
+const AffordabilityPage = React.lazy(() => import("./pages/accounting/Affordability.jsx"));
+const ScenariosPage = React.lazy(() => import("./pages/accounting/Scenarios.jsx"));
 
 /* -------------------------- Helpers / Wrappers -------------------------- */
 function WithUnreadProvider({ children }) {
