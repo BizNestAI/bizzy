@@ -33,8 +33,8 @@ import { InsightsUnreadProvider } from "./insights/InsightsUnreadContext"; // â¬
 import FullDashboardLayout from "./layout/FullDashboardLayout";
 import "./index.css";
 
-import CalendarHub from "./pages/calendar/CalendarHub.jsx";
-import EmailPage from "./pages/email/EmailPage.jsx";
+import CalendarHub from "./pages/Calendar/CalendarHub.jsx";
+import EmailPage from "./pages/Email/EmailPage.jsx";
 import ActivityHub from "./pages/Activity/ActivityHub.jsx";
 
 import DocsLibraryPage from "./pages/Docs/DocsLibraryPage.jsx";
@@ -42,7 +42,7 @@ import DocDetail from "./pages/Docs/DocDetail.jsx";
 
 import ReviewsPage from "./pages/Marketing/ReviewsPage.jsx";
 import SocialCaptionPage from "./pages/Marketing/SocialCaptionPage.jsx";
-import CompanionPage from "./pages/companion/CompanionPage.jsx";
+import CompanionPage from "./pages/Companion/CompanionPage.jsx";
 import JobsDashboard from "./pages/LeadsJobs/JobsDashboard.jsx";
 
 const AffordabilityPage = React.lazy(() => import("./pages/accounting/Affordability.jsx"));
