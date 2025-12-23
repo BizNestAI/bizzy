@@ -18,7 +18,7 @@ import SyncButton from "../../components/Integrations/SyncButton.jsx";
 // import { getHeroInsight } from "../../services/heroInsights/getHeroInsight";
 
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../../pages/calendar/AgendaWidget.jsx";
+import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
 import { useLocation } from "react-router-dom";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";

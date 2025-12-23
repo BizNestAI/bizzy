@@ -3,7 +3,7 @@ import React, { lazy, Suspense, useMemo, useEffect, useState } from 'react';
 import { useBusiness } from '../../context/BusinessContext';
 import useModuleTheme from '../../hooks/useModuleTheme';
 import { useNavigate } from 'react-router-dom';
-import AgendaWidget from '../calendar/AgendaWidget.jsx';
+import AgendaWidget from '../Calendar/AgendaWidget.jsx';
 
 import ModuleHeader from '../../components/layout/ModuleHeader/ModuleHeader';
 import SyncButton from '../../components/Integrations/SyncButton.jsx';

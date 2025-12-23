@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { useBusiness } from "../../context/BusinessContext";
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../../pages/calendar/AgendaWidget.jsx";
+import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
 
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
 import SyncButton from "../../components/Integrations/SyncButton.jsx";

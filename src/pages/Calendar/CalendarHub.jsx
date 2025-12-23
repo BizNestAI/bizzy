@@ -6,7 +6,7 @@ import classNames from "classnames";
 import EventModal from "./EventModal";
 import CalendarQuickOpen from "./CalendarQuickOpen";
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../calendar/AgendaWidget.jsx";
+import AgendaWidget from "../Calendar/AgendaWidget.jsx";
 import { useNavigate } from "react-router-dom";
 import useDemoMode from "../../hooks/useDemoMode";
 import { useBusiness } from "../../context/BusinessContext";

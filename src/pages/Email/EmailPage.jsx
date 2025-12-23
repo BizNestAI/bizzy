@@ -14,7 +14,7 @@ import useEmailSummary from "../../hooks/email/useEmailSummary";
 import { apiUrl, safeFetch } from "../../utils/safeFetch";
 import { supabase } from "../../services/supabaseClient";
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../calendar/AgendaWidget.jsx";
+import AgendaWidget from "../Calendar/AgendaWidget.jsx";
 import SyncButton from "../../components/Integrations/SyncButton.jsx";
 import { useNavigate } from "react-router-dom";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";

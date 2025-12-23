@@ -6,7 +6,7 @@ import ForecastEditorChart from "../../components/Accounting/ForecastEditorChart
 import ForecastVsActualChart from "../../components/Accounting/ForecastVsActualChart";
 import { LifeBuoy } from "lucide-react";
 import { useBusiness } from "../../context/BusinessContext";
-import AgendaWidget from "../calendar/AgendaWidget.jsx";
+import AgendaWidget from "../Calendar/AgendaWidget.jsx";
 import { useRightExtras } from "../../insights/RightExtrasContext";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";

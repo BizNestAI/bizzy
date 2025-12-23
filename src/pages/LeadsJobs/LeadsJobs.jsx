@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Calendar as CalendarIcon, Plus, Upload, Filter, ChevronRight } from 'lucide-react';
 
 import { useRightExtras } from '../../insights/RightExtrasContext.jsx';
-import AgendaWidget from '../calendar/AgendaWidget.jsx';
+import AgendaWidget from '../Calendar/AgendaWidget.jsx';
 
 // ⬇️ NEW: bring in your existing profitability table
 import JobProfitabilityTable from '../../components/Accounting/JobProfitabilityTable.jsx';

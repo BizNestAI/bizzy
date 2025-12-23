@@ -14,7 +14,7 @@ import { marketingSummaryFallback } from "../../components/Marketing/marketingSu
 
 import { useNavigate } from "react-router-dom";
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../../pages/calendar/AgendaWidget.jsx";
+import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 

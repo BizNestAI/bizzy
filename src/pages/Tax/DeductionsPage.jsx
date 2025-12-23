@@ -7,7 +7,7 @@ import DeductionsHeaderKpis from "../../components/Tax/DeductionsHeaderKpis";
 import DeductionsMatrix from "../../components/Tax/DeductionsMatrix";
 import { RefreshCw, Download, ShieldCheck } from "lucide-react";
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../../pages/calendar/AgendaWidget.jsx";
+import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
 import { supabase } from "../../services/supabaseClient";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";

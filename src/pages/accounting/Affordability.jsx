@@ -7,7 +7,7 @@ import { ArrowRight, Loader2, ShieldAlert } from "lucide-react";
 import AffordabilityInputForm from "../../components/Accounting/AffordabilityInputForm.jsx";
 import AffordabilityInsightCard from "../../components/Accounting/AffordabilityInsightCard.jsx"; 
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../../pages/calendar/AgendaWidget.jsx";
+import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
 
 /* ---------------------------- helpers ---------------------------- */
 

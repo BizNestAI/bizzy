@@ -3,7 +3,7 @@ import React, { useMemo, useEffect } from "react";
 import { Bot, ArrowUpRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../calendar/AgendaWidget.jsx";
+import AgendaWidget from "../Calendar/AgendaWidget.jsx";
 
 import RetirementSimulator from "../../components/Investments/RetirementSimulator";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";

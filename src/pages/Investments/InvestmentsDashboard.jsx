@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Bot } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../calendar/AgendaWidget.jsx";
+import AgendaWidget from "../Calendar/AgendaWidget.jsx";
 
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader";
 import SyncButton from "../../components/Integrations/SyncButton.jsx";

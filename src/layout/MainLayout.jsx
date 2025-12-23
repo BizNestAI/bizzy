@@ -8,7 +8,7 @@ import BusinessWizard from '../pages/UserAdmin/BusinessWizard';
 import useModuleTheme from '../hooks/useModuleTheme';
 import { useBizzyChatContext, BizzyChatProvider } from '../context/BizzyChatContext';
 import { Calendar, Menu } from 'lucide-react';
-import CalendarQuickOpen from '../pages/calendar/CalendarQuickOpen.jsx';
+import CalendarQuickOpen from '../pages/Calendar/CalendarQuickOpen.jsx';
 import ToastPortal from '../insights/ToastPortal';
 import NavRail from './NavRail';
 import { InsightsUnreadProvider } from '../insights/InsightsUnreadContext';
