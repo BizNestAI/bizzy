@@ -5,7 +5,6 @@ import SearchBar from "../../components/email/SearchBar";
 import InboxList from "../../components/email/InboxList";
 import ThreadView from "../../components/email/ThreadView";
 import ReplyComposer from "../../components/email/ReplyComposer";
-import AutoResponderDrawer from "../../components/email/AutoResponderDrawer";
 
 import useGmailConnect from "../../hooks/email/useGmailConnect";
 import useEmailThreads from "../../hooks/email/useEmailThreads";

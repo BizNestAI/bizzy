@@ -5,7 +5,7 @@ import Sidebar from '../components/UserAdmin/Sidebar';
 import ChatDrawer from '../components/Bizzy/ChatDrawer';
 import { useBizzyChatContext } from '../context/BizzyChatContext';
 import { useBusiness } from '../context/BusinessContext';
-import bizzyLogo from '../assets/Bizzy-Logo.png';
+import bizzyLogo from '../assets/bizzy-logo.png';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
 const accentHexMap = {
