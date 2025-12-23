@@ -5,7 +5,7 @@ import { createBusinessProfile, updateBusinessProfile } from '../../services/bus
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../services/supabaseClient.js';
 import { Check, ArrowRight, ArrowLeft, Info } from 'lucide-react';
-import bizzyLogo from '../../assets/Bizzy-Logo.png';
+import bizzyLogo from '../../assets/bizzy-logo.png';
 
 // ----- Options (expandable later) -----
 const INDUSTRIES = [

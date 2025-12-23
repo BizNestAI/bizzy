@@ -1,9 +1,9 @@
-// src/pages/auth/Login.jsx
+// src/pages/UserAdmin/Login.jsx
 import React, { useState } from "react";
 import { login } from "../../services/authService";
 import { useNavigate, Link } from "react-router-dom";
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
-import bizzyLogo from "../../assets/Bizzy-Logo.png";
+import bizzyLogo from "../../assets/bizzy-logo.png";
 
 const BG =
   "radial-gradient(circle at 20% 20%, rgba(68,123,255,0.22), transparent 45%)," +

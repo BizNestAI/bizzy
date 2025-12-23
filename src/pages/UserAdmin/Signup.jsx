@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Eye, EyeOff, ArrowRight, CheckCircle2 } from "lucide-react";
 import { signUp } from "../../services/authService";
-import bizzyLogo from "../../assets/Bizzy-Logo.png";
+import bizzyLogo from "../../assets/bizzy-logo.png";
 
 const BG =
   "radial-gradient(circle at 20% 20%, rgba(68,123,255,0.22), transparent 45%)," +
