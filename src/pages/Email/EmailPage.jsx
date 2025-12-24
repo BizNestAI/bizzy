@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { Inbox, Send, FileText, MailQuestion, Mail, Loader2 } from "lucide-react";
 
-import SearchBar from "../../components/email/SearchBar";
-import InboxList from "../../components/email/InboxList";
-import ThreadView from "../../components/email/ThreadView";
-import ReplyComposer from "../../components/email/ReplyComposer";
+import SearchBar from "../../components/Email/SearchBar";
+import InboxList from "../../components/Email/InboxList";
+import ThreadView from "../../components/Email/ThreadView";
+import ReplyComposer from "../../components/Email/ReplyComposer";
 
 import useGmailConnect from "../../hooks/email/useGmailConnect";
 import useEmailThreads from "../../hooks/email/useEmailThreads";
