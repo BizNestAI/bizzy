@@ -2,8 +2,8 @@
 import React, { useEffect, useState } from "react";
 import { useUser } from "@supabase/auth-helpers-react";
 import { useNavigate } from "react-router-dom";
-import CardHeader from "../ui/CardHeader";
-import Banner from "../ui/Banner";
+import CardHeader from "../UI/CardHeader";
+import Banner from "../UI/Banner";
 import SampleDataRibbon from "../ui/SampleDataRibbon";
 import { getRecentPosts, __MOCK_POSTS__ } from "../../services/getRecentPosts";
 

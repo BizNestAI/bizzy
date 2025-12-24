@@ -5,7 +5,7 @@ import {
 } from "recharts";
 import { usePeriod } from "../../context/PeriodContext";
 import { supabase } from "../../services/supabaseClient";
-import CardHeader from "../ui/CardHeader"; // ⬅️ shared header
+import CardHeader from "../UI/CardHeader"; // ⬅️ shared header
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 
 const API_BASE = import.meta.env?.VITE_API_BASE || "";

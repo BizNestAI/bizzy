@@ -10,7 +10,7 @@ import {
   Play,
 } from "lucide-react";
 import { apiFetch } from "../../utils/api";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 import { useUser } from "@supabase/auth-helpers-react";
 import { supabase } from "../../services/supabaseClient";
 import { getMarketingSummary } from "./marketingSummaryData";

@@ -2,7 +2,7 @@
 import React from "react";
 import { useMonthlySnapshot } from "../../hooks/useMonthlySnapshot";
 import { AlertTriangle, CheckCircle2, MinusCircle } from "lucide-react";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 
 const GOLD_MUTED = "rgba(227, 194, 92, 1)"; // softer gold accent
 

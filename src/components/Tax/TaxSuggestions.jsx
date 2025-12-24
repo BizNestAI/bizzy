@@ -1,7 +1,7 @@
 // src/components/Tax/TaxSuggestions.jsx
 import React, { useState } from "react";
 import { Info, RefreshCw, MessageCircle } from "lucide-react";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 import { useTaxInsights } from "../../hooks/useTaxInsights";
 
 const GOLD_MUTED = "rgba(227,194,92,1)";

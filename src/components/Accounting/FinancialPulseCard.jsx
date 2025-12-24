@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { usePeriod } from "../../context/PeriodContext";
 import { RefreshCw, MessageCircle } from "lucide-react";
-import CardHeader from "../ui/CardHeader"; // ⬅️ unify header style
+import CardHeader from "../UI/CardHeader"; // ⬅️ unify header style
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 
 const API_BASE = import.meta.env?.VITE_API_BASE || "";

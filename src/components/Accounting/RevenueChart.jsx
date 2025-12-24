@@ -12,7 +12,7 @@ import {
 } from "recharts";
 import { usePeriod } from "../../context/PeriodContext";
 import { supabase } from "../../services/supabaseClient";
-import CardHeader from "../ui/CardHeader"; // shared header (Pulse style)
+import CardHeader from "../UI/CardHeader"; // shared header (Pulse style)
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext";
 

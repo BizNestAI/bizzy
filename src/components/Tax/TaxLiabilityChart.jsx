@@ -1,6 +1,6 @@
 // /src/components/Tax/TaxLiabilityChart.jsx
 import React, { useMemo, useRef, useState } from "react";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 import { RefreshCw } from "lucide-react";
 
 /**

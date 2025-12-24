@@ -5,7 +5,7 @@ import {
   Bot, RefreshCcw,
   ArrowUpRight, CalendarPlus, CalendarClock, Route as RouteIcon, MessageSquare,
 } from "lucide-react";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 
 // ✅ use API helpers so Authorization + ids are always attached via safeFetch
 import {

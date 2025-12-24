@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { usePeriod } from "../../context/PeriodContext";
 import { supabase } from "../../services/supabaseClient";
-import CardHeader from "../ui/CardHeader"; // ⬅️ use the shared header
+import CardHeader from "../UI/CardHeader"; // ⬅️ use the shared header
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 
 const API_BASE = import.meta.env?.VITE_API_BASE || "";

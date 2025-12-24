@@ -1,6 +1,6 @@
 // /src/components/Investments/HoldingsTable.jsx
 import React, { useMemo, useState, useEffect } from "react";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 import Portal from "./Portal";
 
 const NEON = "#C084FC";

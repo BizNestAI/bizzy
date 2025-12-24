@@ -1,7 +1,7 @@
 // /src/components/Tax/TaxMonthlySnapshot.jsx
 import React from "react";
 import { Download, Share2, AlertTriangle, CheckCircle2, MinusCircle, MessageCircle, ListChecks } from "lucide-react";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 import { useMonthlySnapshot } from "../../hooks/useMonthlySnapshot";
 
 // Normalize API base once

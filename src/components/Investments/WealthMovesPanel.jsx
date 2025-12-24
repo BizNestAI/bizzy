@@ -12,7 +12,7 @@ import {
   ExternalLink,
   X,
 } from "lucide-react";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 
 // ✅ API helpers (go through safeFetch with Authorization + ids)
 import { getWealthMoves, refreshWealthMoves } from "../../services/investmentsApi";

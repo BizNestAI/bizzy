@@ -6,9 +6,9 @@ import { savePostToGallery } from "../../services/savePostToGallery";
 import { supabase } from "../../services/supabaseClient";
 import { safeFetch } from "../../utils/safeFetch";
 import { toTitleCasePlatform } from "../../utils/formatters";
-import Banner from "../ui/Banner";
+import Banner from "../UI/Banner";
 import SampleDataRibbon from "../ui/SampleDataRibbon";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 
 /* ------------ Bizzy hard cap + helper ------------- */
 const BIZZY_CAP = 500;

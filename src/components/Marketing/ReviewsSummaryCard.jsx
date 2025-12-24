@@ -1,7 +1,7 @@
 // src/components/Marketing/ReviewsSummaryCard.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../../utils/api";
-import CardHeader from "../ui/CardHeader";
+import CardHeader from "../UI/CardHeader";
 import ReputationStar from "./ReputationStar";
 import starGoldJson from "../../assets/animations/star-gold.json";
 
