@@ -2,7 +2,7 @@
 import React, { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useBusiness } from '../../context/BusinessContext';
-import PNLArchiveViewer from '../../components/accounting/PNLArchiveViewer';
+import PNLArchiveViewer from '../../components/Accounting/PNLArchiveViewer';
 import AgendaWidget from '../Calendar/AgendaWidget.jsx';
 import { useRightExtras } from '../../insights/RightExtrasContext';
 import LiveModePlaceholder from '../../components/common/LiveModePlaceholder.jsx';

@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight, Loader2, ShieldAlert, RefreshCw } from "lucide-react";
 import ScenarioModeler from "../../components/Accounting/ScenarioModeler.jsx";
-import AgendaWidget from '../calendar/AgendaWidget.jsx';
+import AgendaWidget from '../Calendar/AgendaWidget.jsx';
 import { useRightExtras } from '../../insights/RightExtrasContext';
 
 /* ---------------------------- helpers ---------------------------- */
