@@ -4,7 +4,7 @@ import ReviewsFilters from './ReviewsFilters.jsx';
 import ReviewItem from './ReviewItem.jsx';
 import ReplyDrawer from './ReplyDrawer.jsx';
 import CSVImportDialog from './ReviewsCsvImport.jsx';
-import Banner from '../../components/ui/Banner';
+import Banner from '../../components/UI/Banner';
 import { apiFetch } from '../../utils/api';
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import { useBusiness } from "../../context/BusinessContext";
