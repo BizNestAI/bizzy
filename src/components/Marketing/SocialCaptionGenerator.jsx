@@ -7,7 +7,7 @@ import { supabase } from "../../services/supabaseClient";
 import { safeFetch } from "../../utils/safeFetch";
 import { toTitleCasePlatform } from "../../utils/formatters";
 import Banner from "../UI/Banner";
-import SampleDataRibbon from "../ui/SampleDataRibbon";
+import SampleDataRibbon from "../UI/SampleDataRibbon";
 import CardHeader from "../UI/CardHeader";
 
 /* ------------ Bizzy hard cap + helper ------------- */
