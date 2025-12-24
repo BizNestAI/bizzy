@@ -5,7 +5,7 @@ import useModuleTheme from "../../hooks/useModuleTheme";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader";
 import SocialCaptionGenerator from "../../components/Marketing/SocialCaptionGenerator";
 import { useRightExtras } from "../../insights/RightExtrasContext";
-import AgendaWidget from "../calendar/AgendaWidget.jsx";
+import AgendaWidget from "../Calendar/AgendaWidget.jsx";
 import SyncButton from "../../components/Integrations/SyncButton.jsx";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
