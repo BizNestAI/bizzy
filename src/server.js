@@ -64,13 +64,29 @@ app.post(
 );
 
 /* ---------------------------------------- CORS ---------------------------------------- */
-app.use(
-  cors({
-    origin: process.env.CORS_ORIGIN || true,
-    credentials: false,
-  })
-);
-app.options("*", cors());
+const rawCorsOrigins = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || "";
+const allowlist = rawCorsOrigins
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+const allowAll = allowlist.length === 0 && !process.env.CORS_ORIGINS;
+
+console.info("[CORS] Allowlist:", allowAll ? "(all origins)" : allowlist);
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // server-to-server or health checks
+    if (allowAll || allowlist.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS: Origin ${origin} not allowed`), false);
+  },
+  credentials: true,
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-user-id", "x-business-id"],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 /* --------------------------------------- Logging -------------------------------------- */
 if (process.env.NODE_ENV !== "test") app.use(morgan("tiny"));

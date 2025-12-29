@@ -8,7 +8,6 @@ import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
 
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
 import SyncButton from "../../components/Integrations/SyncButton.jsx";
-import BizzySnapshot from "../../components/Bizzy/BizzySnapshot.jsx";
 import BizzyPulse from "../../components/Bizzy/BizzyPulse.jsx";
 import BizzyAlerts from "../../components/Bizzy/BizzyAlerts.jsx";
 import KPIDashboardPanel from "../../components/Accounting/KPIDashboardPanel.jsx";
@@ -29,11 +28,6 @@ export default function BizzyPanel() {
   const integrationManager = useIntegrationManager({ businessId });
   const qbStatus = integrationManager?.getStatus?.("quickbooks")?.status || "disconnected";
   const allowLive = qbStatus === "connected";
-  const marketingConnected = useMemo(() => {
-    if (usingDemo) return true;
-    const social = ["facebook", "instagram", "linkedin"];
-    return social.some((p) => (integrationManager?.getStatus?.(p)?.status || "").toLowerCase() === "connected");
-  }, [integrationManager, usingDemo]);
   const demoData = useMemo(() => (usingDemo ? getDemoData() : null), [usingDemo]);
   if (!usingDemo && !allowLive) {
     return <LiveModePlaceholder title="Connect your tools to unlock Bizzi Pulse" />;
@@ -74,28 +68,6 @@ export default function BizzyPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId, navigate]);
 
-  const snapshotProps = useMemo(() => {
-    if (!demoData) return {};
-    const fin = demoData.financials || {};
-    const marketingReachValue = demoData?.marketing?.summary?.total_reach;
-    const tax = demoData.tax || {};
-    const readiness =
-      tax?.summary?.annualEstimate
-        ? Math.max(
-            0,
-            Math.round(
-              (1 - (tax.summary.balanceDue || 0) / tax.summary.annualEstimate) * 100
-            )
-          )
-        : null;
-    return {
-      profitability: fin?.mtdProfit != null ? `$${Number(fin.mtdProfit).toLocaleString()}` : undefined,
-      marketingReach: marketingConnected && marketingReachValue != null ? marketingReachValue.toLocaleString() : "—",
-      marketingReachSuffix: marketingConnected ? "views" : "",
-      taxReadiness: readiness != null ? `${readiness}%` : undefined,
-    };
-  }, [demoData, marketingConnected]);
-
   const recentCash = useMemo(() => {
     if (demoData?.financials?.recentCash) return demoData.financials.recentCash;
     return [
@@ -113,17 +85,11 @@ export default function BizzyPanel() {
         module="bizzy"
         hero={heroInsight}
         heroVariant="minimal"
-        right={<SyncButton label="Sync Accounts" providers={["quickbooks", "jobber", "gmail"]} />}
+      right={<SyncButton label="Sync Accounts" providers={["quickbooks", "jobber", "gmail"]} />}
       />
 
       <div className="grid gap-6 mt-2">
-        <section className="space-y-4" aria-label="Snapshot">
-          <BizzySnapshot
-            profitability={snapshotProps.profitability}
-            marketingReach={snapshotProps.marketingReach}
-            taxReadiness={snapshotProps.taxReadiness}
-          />
-
+        <section className="space-y-4" aria-label="Pulse overview">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <BizzyPulse businessId={businessId} demoPulse={demoData?.pulse} />
             <BizzyAlerts businessId={businessId} demoAlerts={demoData?.pulse?.alerts} />

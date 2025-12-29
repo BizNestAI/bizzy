@@ -206,6 +206,9 @@ router.get("/quickbooks", (req, res) => {
   const url = `${authUrl}?client_id=${client_id}&redirect_uri=${encodeURIComponent(
     redirect_uri
   )}&response_type=code&scope=${encodeURIComponent(scopes)}&state=${state}&prompt=${prompt}`;
+  if (process.env.QB_DEBUG === "true" || process.env.NODE_ENV !== "production") {
+    console.info("[QBO Auth] Using redirect_uri:", redirect_uri);
+  }
   console.info("[QBO ENV]", { env: qboEnvName, qbApiBase });
   res.redirect(url);
 });

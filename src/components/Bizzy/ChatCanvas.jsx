@@ -259,7 +259,21 @@ export default function ChatCanvas({
   const sharedWidthStyle = barSize.width
     ? { width: `${barSize.width}px`, maxWidth: `${barSize.width}px`, margin: "0 auto" }
     : { width: "86vw", maxWidth: 780, margin: "0 auto" };
-  const conversationOffset = 10; // nudge to match visual center
+  const [conversationOffset, setConversationOffset] = useState(10);
+
+  // Keep the conversation column aligned to the chat bar even when the center column shifts (e.g. side nav open)
+  useLayoutEffect(() => {
+    const updateOffset = () => {
+      if (!barSize.width) return setConversationOffset(10);
+      const viewportW = window.innerWidth || 0;
+      const centeredLeft = Math.max(0, Math.round((viewportW - barSize.width) / 2));
+      const delta = Math.round((barSize.left || 0) - centeredLeft);
+      setConversationOffset(10 + delta);
+    };
+    updateOffset();
+    window.addEventListener("resize", updateOffset);
+    return () => window.removeEventListener("resize", updateOffset);
+  }, [barSize.left, barSize.width]);
 
   return (
     <div
