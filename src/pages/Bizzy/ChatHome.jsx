@@ -76,7 +76,8 @@ function ChatHomeInner() {
   }, [measure]);
 
   const lastDash = localStorage.getItem("bizzy:lastDashboard");
-  const hasDashHistory = !!(lastDash && !lastDash.startsWith("/dashboard/bizzy/chat"));
+  const visitedDash = (() => { try { return sessionStorage.getItem("bizzy:visitedDash") === "1"; } catch { return false; } })();
+  const hasDashHistory = !!(visitedDash && lastDash && !lastDash.startsWith("/dashboard/bizzy/chat"));
   const goToDashboard = () => {
     const target = hasDashHistory ? lastDash : "/dashboard/bizzy";
     navigate(target);

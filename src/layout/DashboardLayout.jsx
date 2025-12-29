@@ -70,6 +70,7 @@ const DashboardContent = ({ children }) => {
     const inChatHome = location.pathname.startsWith("/dashboard/bizzy/chat");
     if (location.pathname.startsWith("/dashboard/") && !inChatHome) {
       localStorage.setItem("bizzy:lastDashboard", location.pathname);
+      try { sessionStorage.setItem("bizzy:visitedDash", "1"); } catch {}
     }
   }, [location.pathname]);
 
