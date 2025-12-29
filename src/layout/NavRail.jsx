@@ -56,7 +56,7 @@ export default function NavRail({
   const location = useLocation();
   const navigate = useNavigate();
 
-  const isChatHome = location.pathname.startsWith('/dashboard/bizzy') || location.pathname.startsWith('/chat');
+  const isChatHome = location.pathname.startsWith('/dashboard/bizzy/chat') || location.pathname.startsWith('/chat');
   const moduleKey = useMemo(() => moduleFromPath(location.pathname), [location.pathname]);
   const useChrome = isChromeRoute(location.pathname);
 
@@ -103,7 +103,7 @@ export default function NavRail({
       className={[
         "fixed left-0 px-2 top-0 h-[100svh] md:h-screen z-40",
         "bg-sidebar/95 text-primary",
-        "transition-[width,transform,border-color,box-shadow] duration-200 ease-in-out",
+        "transition-[width,transform,padding,border-color,box-shadow] duration-350 ease-[cubic-bezier(.22,1,.36,1)]",
         "w-[--nav-w]",
         open ? "translate-x-0" : "-translate-x-full md:translate-x-0",
         "flex flex-col min-h-0 overflow-y-auto no-scrollbar",
@@ -114,9 +114,11 @@ export default function NavRail({
         '--accent-soft': accentSoft,
         '--chat-clearance': '112px',
         borderRight: '1px solid rgba(255,255,255,0.08)',
-        boxShadow: collapsed ? `2px 0 8px rgba(0,0,0,0.35)` : `0 0 4px ${accentSoft}`,
+        boxShadow: collapsed
+          ? `2px 0 8px rgba(0,0,0,0.35)`
+          : `2px 0 8px rgba(0,0,0,0.35)`,
         willChange: "width, transform",
-        transition: "width 200ms cubic-bezier(0.22,1,0.36,1), transform 200ms cubic-bezier(0.22,1,0.36,1), border-color 180ms ease, box-shadow 180ms ease",
+        transition: "width 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1), padding 320ms cubic-bezier(0.22,1,0.36,1), border-color 220ms ease, box-shadow 320ms cubic-bezier(0.22,1,0.36,1)",
       }}
       >
         {/* Rail header */}

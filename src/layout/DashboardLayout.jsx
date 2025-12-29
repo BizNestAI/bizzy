@@ -67,7 +67,8 @@ const DashboardContent = ({ children }) => {
   const { quickPromptMode } = useOnboardingStatus();
   const { setExtras } = useRightExtras();   // <-- publish descriptor from here
   useEffect(() => {
-    if (location.pathname.startsWith("/dashboard/")) {
+    const inChatHome = location.pathname.startsWith("/dashboard/bizzy/chat");
+    if (location.pathname.startsWith("/dashboard/") && !inChatHome) {
       localStorage.setItem("bizzy:lastDashboard", location.pathname);
     }
   }, [location.pathname]);
@@ -108,7 +109,7 @@ const DashboardContent = ({ children }) => {
   const textColor = theme?.textClass || "text-primary";
 
   const onDashboard = location.pathname.startsWith("/dashboard/");
-  const isChatHome  = location.pathname.startsWith("/dashboard/bizzy") || location.pathname.startsWith("/chat");
+  const isChatHome  = location.pathname.startsWith("/dashboard/bizzy/chat") || location.pathname.startsWith("/chat");
   const hideCenter  = isChatHome && isCanvasOpen;
   const showPortalBar =
     (!isChatHome && (onDashboard || inSettings || inMeetBizzi || inDocs)) ||
@@ -119,7 +120,7 @@ const DashboardContent = ({ children }) => {
   const inDocs      = location.pathname.includes("bizzy-docs");
 
   const disableRails = inSettings || inMeetBizzi || inDocs;
-  const showRail = onDashboard && !disableRails;
+  const showRail = onDashboard && !disableRails && !isChatHome;
   const showChat = onDashboard || isChatHome || inSettings || inMeetBizzi || inDocs;
 
   const railStateRef = useRef(railOpen);
@@ -206,7 +207,7 @@ const DashboardContent = ({ children }) => {
 
   // Reset scroll when landing on ChatHome so it never inherits a scrolled dashboard position.
   useEffect(() => {
-    if (location.pathname.startsWith("/dashboard/bizzy") || location.pathname.startsWith("/chat")) {
+    if (location.pathname.startsWith("/dashboard/bizzy/chat") || location.pathname.startsWith("/chat")) {
       window.scrollTo({ top: 0, behavior: "auto" });
       if (contentRef.current) contentRef.current.scrollTo({ top: 0, behavior: "auto" });
     }

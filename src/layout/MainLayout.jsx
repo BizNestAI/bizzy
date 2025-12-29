@@ -50,7 +50,7 @@ const MainLayoutCore = ({ children }) => {
 
   const { usageCount } = useBizzyChatContext?.() || {};
   const textColor = theme?.textClass || 'text-primary';
-  const isChatHome = location.pathname.startsWith('/dashboard/bizzy') || location.pathname.startsWith('/chat');
+  const isChatHome = location.pathname.startsWith('/dashboard/bizzy/chat') || location.pathname.startsWith('/chat');
 
   const [currentBusiness, setCurrentBusiness] = useState(null);
   const [isProfileComplete, setIsProfileComplete] = useState(null);

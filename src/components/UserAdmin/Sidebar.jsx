@@ -20,7 +20,7 @@ const tabs = [
   { label: 'Jobs', path: '/dashboard/leads-jobs' },
   { label: 'Tax', path: '/dashboard/tax' },
   { label: 'Email', path: '/dashboard/email' },
-  { label: 'Calendar', path: '/dashboard/calendar' },
+  { label: 'Scheduling', path: '/dashboard/calendar' },
   { label: 'Activity', path: '/dashboard/activity', tooltip: 'Coming Soon!', disableNavigate: true },
   { label: 'Bizzi Docs', path: '/dashboard/bizzy-docs' },
   { label: 'Meet Bizzi', path: '/dashboard/companion' },
@@ -35,7 +35,8 @@ const accentHexMap = {
   tax:         '#FFD700',
   investments: '#B388FF',
   email:       '#3CF2FF',
-  calendar:    '#94a3b8',
+  calendar:    '#BFBFBF',
+  scheduling:  '#94a3b8',
   activity:    '#94a3b8',
   ops:         '#94a3b8',
 };
@@ -51,7 +52,7 @@ function moduleKeyFromLabel(label) {
   if (k === 'bizzi docs') return 'docs';
   if (k === 'meet bizzi') return 'companion';
   if (k === 'settings/sync' || k === 'settings' || k === 'sync') return 'settings';
-  if (k === 'calendar') return 'calendar';
+  if (k === 'scheduling') return 'calendar';
   if (k === 'activity') return 'activity';
   if (k === 'jobs') return 'ops';
   return 'bizzy';
@@ -65,7 +66,7 @@ function moduleKeyFromPath(pathname = '') {
   if (seg === 'tax') return 'tax';
   if (seg === 'investments') return 'investments';
   if (seg === 'email' || seg === 'inbox') return 'email';
-  if (seg === 'calendar' || seg === 'sch') return 'calendar';
+  if (seg === 'scheduling' || seg === 'sch') return 'calendar';
   if (seg === 'activity') return 'activity';
   if (seg === 'leads-jobs' || seg === 'jobs') return 'ops';
   if (seg === 'bizzy-docs' || seg === 'docs') return 'docs';
@@ -87,7 +88,7 @@ function normalizeUnreadMap(raw = {}) {
   return totals;
 }
 
-const CHROME_TABS = new Set(['Pulse', 'Jobs', 'Bizzi Docs', 'Meet Bizzi', 'Settings/Sync', 'Calendar', 'Activity']);
+const CHROME_TABS = new Set(['Pulse', 'Jobs', 'Bizzi Docs', 'Meet Bizzi', 'Settings/Sync', 'Calendar', 'Scheduling', 'Activity']);
 const CHROME_HEX  = '#BFBFBF';
 const CHROME_SOFT = 'rgba(191,191,191,0.50)';
 
@@ -114,23 +115,26 @@ const neutralBadgeStyle = {
 };
 
 function renderActiveClass(label) {
+  const glow = 'shadow-[0_0_6px_1px_rgba(255,255,255,0.18)]'; // softer outer glow
   switch (label) {
-    case 'Financials':  return 'text-neon-green  shadow-[0_0_8px_1px_#00FFB2] font-semibold bg-black';
-    case 'Marketing':   return 'text-neon-blue   shadow-[0_0_8px_1px_#3B82F6] font-semibold bg-black';
-    case 'Tax':         return 'text-neon-gold   shadow-[0_0_8px_1px_#FFD700] font-semibold bg-black';
-    case 'Investments': return 'text-neon-purple shadow-[0_0_8px_1px_#B388FF] font-semibold bg-black';
-    case 'Email':       return 'text-white shadow-[0_0_8px_1px_#3CF2FF] font-semibold bg-black';
-    default:            return 'text-white font-semibold bg-black';
+    case 'Financials':  return `text-neon-green  ${glow} font-semibold bg-black`;
+    case 'Marketing':   return `text-neon-blue   shadow-[0_0_6px_1px_#3B82F6] font-semibold bg-black`;
+    case 'Tax':         return `text-neon-gold   ${glow} font-semibold bg-black`;
+    case 'Investments': return `text-neon-purple ${glow} font-semibold bg-black`;
+    case 'Email':       return `text-white ${glow} font-semibold bg-black`;
+    case 'Scheduling':  return `text-white ${glow} font-semibold bg-black`;
+    default:            return `text-white ${glow} font-semibold bg-black`;
   }
 }
 function getHoverClass(label) {
   switch (label) {
-    case 'Financials':  return 'hover:shadow-[0_0_8px_1px_#00FFB2]';
-    case 'Marketing':   return 'hover:shadow-[0_0_8px_1px_#3B82F6]';
-    case 'Tax':         return 'hover:shadow-[0_0_8px_1px_#FFD700]';
-    case 'Investments': return 'hover:shadow-[0_0_8px_1px_#B388FF]';
-    case 'Email':       return 'hover:shadow-[0_0_8px_1px_#3CF2FF]';
-    default:            return '';
+    case 'Financials':  return 'hover:shadow-[0_0_5px_1px_#00FFB2]';
+    case 'Growth':   return 'hover:shadow-[0_0_5px_1px_#3B82F6]';
+    case 'Tax':         return 'hover:shadow-[0_0_5px_1px_#FFD700]';
+    case 'Investments': return 'hover:shadow-[0_0_5px_1px_#B388FF]';
+    case 'Email':       return 'hover:shadow-[0_0_5px_1px_#3CF2FF]';
+    case 'Scheduling':  return 'hover:shadow-[0_0_5px_1px_rgba(191,191,191,0.45)]';
+    default:            return 'hover:shadow-[0_0_5px_1px_rgba(255,255,255,0.20)]';
   }
 }
 
@@ -142,7 +146,7 @@ function renderIcon(label, size, colorHex, options = {}) {
     case 'Pulse':         return <HeartPulse size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Bizzi':         return <Brain size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Email':         return <Mail size={dim} className={`${marginClass} transition-colors`} style={style} />;
-    case 'Calendar':      return <CalendarIcon size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Scheduling':    return <CalendarIcon size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Financials':    return <DollarSign size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Growth':        return <Rocket size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Jobs':          return <Briefcase size={dim} className={`${marginClass} transition-colors`} style={style} />;
@@ -185,11 +189,17 @@ const PureSidebar = React.memo(function PureSidebar({
 
   // ⬇️ Navigate ONLY. Do not clear here; badges clear when leaving via the effect below.
   const onNavigate = useCallback((path) => {
-    if (pathActive(path, activePath)) {
+    // From ChatHome, clicking Pulse should go to the Pulse dashboard, not stay on chat
+    if (path === '/dashboard/bizzy' && activePath.startsWith('/dashboard/bizzy/chat')) {
       navigate('/dashboard/bizzy');
-    } else {
-      navigate(path);
+      return;
     }
+    // From any dashboard view, clicking the active icon should bounce back to ChatHome
+    if (activePath.startsWith('/dashboard/') && !activePath.startsWith('/dashboard/bizzy/chat') && pathActive(path, activePath)) {
+      navigate('/dashboard/bizzy/chat');
+      return;
+    }
+    navigate(path);
   }, [navigate, activePath]);
 
   const sz = useMemo(() => ({
@@ -207,6 +217,8 @@ const PureSidebar = React.memo(function PureSidebar({
 
   const isModuleActive = useCallback((tab) => {
     const p = activePath;
+    // Do not highlight Pulse when sitting on ChatHome
+    if (tab.label === 'Pulse' && p.startsWith('/dashboard/bizzy/chat')) return false;
     if (tab.label === 'Leads & Jobs') return /\/(leads|jobs)\b/i.test(p);
     if (tab.label === 'Bizzi Docs Library') return p === DOCS_PATH || p.startsWith(DOCS_PATH + '/');
     return pathActive(tab.path, p);
@@ -445,7 +457,7 @@ export default function SidebarContainer(props) {
     if (typeof markModuleAsRead !== "function") return;
 
     const isChatHome =
-      activePath.startsWith("/dashboard/bizzy") ||
+      activePath.startsWith("/dashboard/bizzy/chat") ||
       activePath === "/chat" ||
       activePath.startsWith("/chat/");
     const prev = prevModuleRef.current;

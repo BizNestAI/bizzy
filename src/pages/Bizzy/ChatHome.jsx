@@ -75,9 +75,11 @@ function ChatHomeInner() {
     };
   }, [measure]);
 
+  const lastDash = localStorage.getItem("bizzy:lastDashboard");
+  const hasDashHistory = !!(lastDash && !lastDash.startsWith("/dashboard/bizzy/chat"));
   const goToDashboard = () => {
-    const last = localStorage.getItem("bizzy:lastDashboard") || "/dashboard/bizzy";
-    navigate(last);
+    const target = hasDashHistory ? lastDash : "/dashboard/bizzy";
+    navigate(target);
   };
 
 return (
@@ -85,16 +87,18 @@ return (
     {/* CENTER column wrapper */}
     <section className="relative flex flex-col min-h-[calc(100vh-64px)] bg-app text-primary overflow-hidden">
         {/* Top-right: single Dashboard button for ChatHome */}
-        <div className="absolute right-10 top-[0px] z-[9050]">
-          <button
-            onClick={goToDashboard}
-            className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm hover:bg-white/5"
-            style={{ borderColor: "rgba(165,167,169,0.22)", color: "var(--text-2)" }}
-            title="Back to Dashboard"
-          >
-            ← Dashboard
-          </button>
-        </div>
+        {hasDashHistory && (
+          <div className="absolute right-10 top-[0px] z-[9050]">
+            <button
+              onClick={goToDashboard}
+              className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm hover:bg-white/5"
+              style={{ borderColor: "rgba(165,167,169,0.22)", color: "var(--text-2)" }}
+              title="Back to Dashboard"
+            >
+              ← Dashboard
+            </button>
+          </div>
+        )}
 
         {/* Anchor for pinning canvas below header */}
         <div className="absolute left-0 right-0 top-[64px]" data-chat-top-anchor />

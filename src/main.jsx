@@ -86,9 +86,9 @@ function ChatRedirect() {
   const search = location?.search || "";
   if (import.meta.env?.DEV) {
     // eslint-disable-next-line no-console
-    console.log("[Router] redirecting /chat -> /dashboard/bizzy", search);
+    console.log("[Router] redirecting /chat -> /dashboard/bizzy/chat", search);
   }
-  return <Navigate to={`/dashboard/bizzy${search}`} replace />;
+  return <Navigate to={`/dashboard/bizzy/chat${search}`} replace />;
 }
 
 function AffordabilityPageWrapper() {
@@ -121,7 +121,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <PeriodProvider syncUrl writeUrl autoSnapToCurrentMonth>
           <Routes>
             {/* Public / auth */}
-            <Route path="/" element={<Navigate to="/dashboard/bizzy" replace />} />
+            <Route path="/" element={<Navigate to="/dashboard/bizzy/chat" replace />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/reset-password" element={<ResetPassword />} />
@@ -164,8 +164,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               }
             >
               {/* children render inside <Outlet/> */}
-              <Route index element={<Navigate to="bizzy" replace />} />
+              <Route index element={<Navigate to="bizzy/chat" replace />} />
               <Route path="bizzy" element={<BizzyPanel />} />
+              <Route path="bizzy/chat" element={<ChatHome />} />
               <Route path="companion" element={<CompanionPage />} />
               <Route path="leads-jobs" element={<JobsDashboard />} />
               <Route path="jobs" element={<JobsDashboard />} />
