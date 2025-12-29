@@ -3,13 +3,10 @@ import React from "react";
 import { Download, Share2, AlertTriangle, CheckCircle2, MinusCircle, MessageCircle, ListChecks } from "lucide-react";
 import CardHeader from "../UI/CardHeader";
 import { useMonthlySnapshot } from "../../hooks/useMonthlySnapshot";
+import apiBaseUrl from "../../utils/apiBase.js";
 
 // Normalize API base once
-const API_BASE = (() => {
-  const raw = (import.meta.env?.VITE_API_BASE || "").replace(/\/+$/, "");
-  if (!raw) return "/api";
-  return /(^|\/)api$/.test(raw) ? raw : `${raw}/api`;
-})();
+const API_BASE = apiBaseUrl ? `${apiBaseUrl.replace(/\/+$/, "")}/api` : "/api";
 
 async function getAccessToken() {
   try {

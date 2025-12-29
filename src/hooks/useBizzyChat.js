@@ -1,6 +1,7 @@
 // File: /src/hooks/useBizzyChat.js
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { supabase } from '../services/supabaseClient.js';
+import apiBaseUrl from '../utils/apiBase.js';
 
 /**
  * useBizzyChat
@@ -21,7 +22,7 @@ export const useBizzyChat = (user_id) => {
   const lastInputRef = useRef('');              // same text for clarifier resend
   const defaultDepthRef = useRef('standard');
 
-  const API_BASE = import.meta.env?.VITE_API_BASE || '';
+  const API_BASE = apiBaseUrl || '';
 
   /* ────────────────────────────── Usage tracking ───────────────────────────── */
   const fetchUsage = async () => {

@@ -1,21 +1,14 @@
 // /src/utils/safeFetch.js
 import { supabase } from '../services/supabaseClient';
+import apiBaseUrl from './apiBase.js';
 
 // --- Base resolver -----------------------------------------------------------
 function resolveApiBase() {
-  const env = (typeof import.meta !== "undefined" && import.meta.env) || {};
-  const candidates = [
-    env.VITE_API_BASE_URL,
-    env.VITE_API_BASE,
-    env.BACKEND_URL,
-    typeof process !== "undefined" && process.env?.VITE_API_BASE_URL,
-    typeof process !== "undefined" && process.env?.VITE_API_BASE,
-    typeof process !== "undefined" && process.env?.BACKEND_URL,
-  ].filter(Boolean);
-
-  let base = candidates.find((v) => typeof v === "string" && v.trim().length) || "";
-  if (!base) base = "http://localhost:5050"; // sensible dev default
-  return base.replace(/\/+$/, "");
+  const base = apiBaseUrl || "";
+  if (base) return base.replace(/\/+$/, "");
+  // Fallback to same-origin when no env var is set (lets Vite proxy handle dev)
+  if (typeof window !== "undefined") return window.location.origin;
+  return "";
 }
 const BASE = resolveApiBase();
 

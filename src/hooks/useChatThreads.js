@@ -1,5 +1,6 @@
 // File: /src/hooks/useChatThreads.js
 import { useEffect, useRef, useState, useCallback } from 'react';
+import apiBaseUrl from '../utils/apiBase.js';
 
 const DEBOUNCE_MS        = 300;
 const INITIAL_PAGE_SIZE  = 20;   // first page
@@ -22,7 +23,7 @@ export default function useChatThreads(businessId) {
   const effectiveTotal = Math.min(total || Infinity, SOFT_CAP);
   const hasMore = threads.length < effectiveTotal;
 
-  const API_BASE = import.meta.env?.VITE_API_BASE || '';
+  const API_BASE = apiBaseUrl || '';
   const userIdRef = useRef(localStorage.getItem('user_id') || '');
   const abortRef = useRef(null);
   const debounceRef = useRef(null);

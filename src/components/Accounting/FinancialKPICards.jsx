@@ -6,8 +6,9 @@ import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../servi
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
 import { Brain as PhBrain } from "@phosphor-icons/react";
 import { useBusiness } from "../../context/BusinessContext";
+import apiBaseUrl from "../../utils/apiBase.js";
 
-const API_BASE = import.meta.env?.VITE_API_BASE || "";
+const API_BASE = apiBaseUrl || "";
 
 function fmtCurrency(n) {
   const v = Number(n ?? 0);

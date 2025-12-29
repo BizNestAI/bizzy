@@ -2,8 +2,9 @@ import React, { useEffect, useMemo, useState } from "react";
 import { usePeriod } from "../../context/PeriodContext";
 import { CalendarDays, MessageCircle, CheckCircle2, RefreshCw, Zap, CalendarClock, TrendingUp } from "lucide-react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
+import apiBaseUrl from "../../utils/apiBase.js";
 
-const API_BASE = import.meta.env?.VITE_API_BASE || "";
+const API_BASE = apiBaseUrl || "";
 
 const TF_STYLES = {
   Immediate: {

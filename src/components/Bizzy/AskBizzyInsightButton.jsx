@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useOutsideClick from '../../hooks/useOutsideClick';
 import { useAuth } from '../../context/AuthContext';
 import MarkdownRenderer from './MarkdownRenderer';
+import apiBaseUrl from '../../utils/apiBase.js';
 
 /**
  * Backward compatible AskBizzy button with two modes:
@@ -51,7 +52,7 @@ const AskBizzyInsightButton = ({
 
   useOutsideClick(panelRef, () => setOpen(false));
 
-  const API_BASE = import.meta.env?.VITE_API_BASE || ''; // use Vite proxy if empty
+  const API_BASE = apiBaseUrl || ''; // use Vite proxy if empty
   const businessId = localStorage.getItem('currentBusinessId') || null;
 
   const btnSize =

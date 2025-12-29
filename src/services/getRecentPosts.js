@@ -1,6 +1,8 @@
 import { getDemoData, shouldUseDemoData } from "./demo/demoClient.js";
 
-const API_BASE = import.meta.env?.VITE_API_BASE || "";
+import apiBaseUrl from "../utils/apiBase.js";
+
+const API_BASE = apiBaseUrl;
 
 function buildDemoPosts() {
   const demo = getDemoData();

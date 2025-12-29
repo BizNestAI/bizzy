@@ -15,8 +15,9 @@ import { supabase } from "../../services/supabaseClient";
 import CardHeader from "../UI/CardHeader"; // shared header (Pulse style)
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext";
+import apiBaseUrl from "../../utils/apiBase.js";
 
-const API_BASE = import.meta.env?.VITE_API_BASE || "";
+const API_BASE = apiBaseUrl || "";
 
 /* ---------------- helpers ---------------- */
 function monthShortLabel(y, m) {

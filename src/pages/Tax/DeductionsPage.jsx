@@ -11,6 +11,7 @@ import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
 import { supabase } from "../../services/supabaseClient";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
+import apiBaseUrl from "../../utils/apiBase.js";
 
 // Reliable token getter: Supabase first, then localStorage fallback
   async function getAccessToken() {
@@ -47,7 +48,7 @@ export default function DeductionsPage() {
   const currentYear = new Date().getFullYear(); 
   const [year, setYear] = useState(currentYear);
 
-  const RAW = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
+  const RAW = (apiBaseUrl || "").replace(/\/+$/, "");
   const API_HOST = RAW || "";
   const ASK_ROUTE = "/api/gpt/brain/bizzyInsight";
 

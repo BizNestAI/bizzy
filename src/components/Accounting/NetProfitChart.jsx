@@ -7,8 +7,9 @@ import { usePeriod } from "../../context/PeriodContext";
 import { supabase } from "../../services/supabaseClient";
 import CardHeader from "../UI/CardHeader"; // ⬅️ shared header
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
+import apiBaseUrl from "../../utils/apiBase.js";
 
-const API_BASE = import.meta.env?.VITE_API_BASE || "";
+const API_BASE = apiBaseUrl || "";
 
 /* ---------- helpers ---------- */
 function monthShortLabel(y,m){ return new Date(y, m-1, 1).toLocaleString(undefined,{month:"short"});}

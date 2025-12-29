@@ -1,13 +1,9 @@
 // /src/hooks/useTaxInsights.js
 import { useEffect, useState } from "react";
 import { getDemoData, shouldUseDemoData } from "../services/demo/demoClient.js";
+import apiBaseUrl from "../utils/apiBase.js";
 
-/** Always resolve to ".../api" even if VITE_API_BASE is "http://localhost:5050" */
-const API_BASE = (() => {
-  const raw = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
-  if (!raw) return "/api";
-  return /(^|\/)api$/.test(raw) ? raw : `${raw}/api`;
-})();
+const API_BASE = apiBaseUrl ? `${apiBaseUrl.replace(/\/+$/, "")}/api` : "/api";
 
 async function getAccessToken() {
   try {

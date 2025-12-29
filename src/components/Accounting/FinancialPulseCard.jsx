@@ -4,8 +4,9 @@ import { usePeriod } from "../../context/PeriodContext";
 import { RefreshCw, MessageCircle } from "lucide-react";
 import CardHeader from "../UI/CardHeader"; // ⬅️ unify header style
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
+import apiBaseUrl from "../../utils/apiBase.js";
 
-const API_BASE = import.meta.env?.VITE_API_BASE || "";
+const API_BASE = apiBaseUrl || "";
 
 // normalize either camelCase or snake_case into a consistent shape
 function normalizePulse(pulse) {

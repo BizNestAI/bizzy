@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../services/supabaseClient";
 import { CalendarDays, Check, AlertTriangle, ArrowRight, RefreshCw, Loader2 } from "lucide-react";
+import apiBaseUrl from "../../utils/apiBase.js";
 
 export default function TaxLiabilityPanel({ businessId, year: yearProp, onAskBizzy, prefetched, onRefetch }) {
   const year = yearProp ?? new Date().getFullYear();
@@ -13,11 +14,7 @@ export default function TaxLiabilityPanel({ businessId, year: yearProp, onAskBiz
   const [payForm, setPayForm] = useState({});
   const [savingQuarter, setSavingQuarter] = useState(null);
 
-  const API_BASE = (() => {
-    const raw = (import.meta.env.VITE_API_BASE || "").replace(/\/+$/, "");
-    if (!raw) return "/api";
-    return /(^|\/)api$/.test(raw) ? raw : `${raw}/api`;
-  })();
+  const API_BASE = apiBaseUrl ? `${apiBaseUrl.replace(/\/+$/, "")}/api` : "/api";
 
   const endpoint = `${API_BASE}/tax/calculate-tax-liability`;
 
