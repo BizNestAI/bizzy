@@ -18,10 +18,10 @@ export default function ChatSwitchToggle({
   if (isCanvasOpen) return null;
 
   const lastDash = localStorage.getItem("bizzy:lastDashboard") || "/dashboard/bizzy";
-  const isChatHome = location.pathname.startsWith("/chat");
+  const isChatHome = location.pathname.startsWith("/dashboard/bizzy") || location.pathname.startsWith("/chat");
 
   const goToDash = () => navigate(lastDash, { replace: false });
-  const goToChat = () => navigate("/chat", { replace: false });
+  const goToChat = () => navigate("/dashboard/bizzy", { replace: false });
 
   const label = context === "chat" ? "Dashboard" : "Chat";
   const onClick = context === "chat" ? goToDash : goToChat;

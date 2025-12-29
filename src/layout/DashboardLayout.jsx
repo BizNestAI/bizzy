@@ -108,7 +108,7 @@ const DashboardContent = ({ children }) => {
   const textColor = theme?.textClass || "text-primary";
 
   const onDashboard = location.pathname.startsWith("/dashboard/");
-  const isChatHome  = location.pathname.startsWith("/chat");
+  const isChatHome  = location.pathname.startsWith("/dashboard/bizzy") || location.pathname.startsWith("/chat");
   const hideCenter  = isChatHome && isCanvasOpen;
   const showPortalBar =
     (!isChatHome && (onDashboard || inSettings || inMeetBizzi || inDocs)) ||
@@ -206,7 +206,7 @@ const DashboardContent = ({ children }) => {
 
   // Reset scroll when landing on ChatHome so it never inherits a scrolled dashboard position.
   useEffect(() => {
-    if (location.pathname.startsWith("/chat")) {
+    if (location.pathname.startsWith("/dashboard/bizzy") || location.pathname.startsWith("/chat")) {
       window.scrollTo({ top: 0, behavior: "auto" });
       if (contentRef.current) contentRef.current.scrollTo({ top: 0, behavior: "auto" });
     }

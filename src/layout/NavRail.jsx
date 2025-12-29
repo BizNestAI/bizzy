@@ -42,7 +42,7 @@ const isChromeRoute = (path) =>
   path.startsWith('/dashboard/leads-jobs') ||
   path.startsWith('/dashboard/calendar') ||
   path.startsWith('/dashboard/activity') ||
-  path === '/chat';
+  path.startsWith('/chat');
 
 export default function NavRail({
   businessId,
@@ -56,7 +56,7 @@ export default function NavRail({
   const location = useLocation();
   const navigate = useNavigate();
 
-  const isChatHome = location.pathname.startsWith('/chat');
+  const isChatHome = location.pathname.startsWith('/dashboard/bizzy') || location.pathname.startsWith('/chat');
   const moduleKey = useMemo(() => moduleFromPath(location.pathname), [location.pathname]);
   const useChrome = isChromeRoute(location.pathname);
 

@@ -186,7 +186,7 @@ const PureSidebar = React.memo(function PureSidebar({
   // ⬇️ Navigate ONLY. Do not clear here; badges clear when leaving via the effect below.
   const onNavigate = useCallback((path) => {
     if (pathActive(path, activePath)) {
-      navigate('/chat');
+      navigate('/dashboard/bizzy');
     } else {
       navigate(path);
     }
@@ -444,7 +444,10 @@ export default function SidebarContainer(props) {
   useEffect(() => {
     if (typeof markModuleAsRead !== "function") return;
 
-    const isChatHome = activePath === "/chat" || activePath.startsWith("/chat/");
+    const isChatHome =
+      activePath.startsWith("/dashboard/bizzy") ||
+      activePath === "/chat" ||
+      activePath.startsWith("/chat/");
     const prev = prevModuleRef.current;
 
     // Clear previous module when leaving it

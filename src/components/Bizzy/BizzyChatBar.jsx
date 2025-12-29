@@ -37,7 +37,7 @@ function hexToRgba(hex, alpha = 1) {
 
 function routeAllowsBar(pathname) {
   if (!pathname) return false;
-  return pathname.startsWith("/dashboard/") || pathname === "/chat" || pathname.startsWith("/chat/");
+  return pathname.startsWith("/dashboard/") || pathname.startsWith("/chat");
 }
 
 function getModuleFromPath(path) {
@@ -71,7 +71,7 @@ export default function BizzyChatBar({
   const location = useLocation();
   const pathname = location?.pathname || "";
   const currentModule = getModuleFromPath(pathname);
-  const isChatHome = pathname.startsWith("/chat");
+  const isChatHome = pathname.startsWith("/dashboard/bizzy") || pathname.startsWith("/chat");
 
   const { isCanvasOpen, sendMessage, isLoading, startQuickPrompt, openCanvas } =
     useBizzyChatContext();

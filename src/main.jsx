@@ -1,7 +1,7 @@
 // /src/main.jsx
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import "./styles/prose-bizzy.css";
 
 import Login from "./pages/UserAdmin/Login";
@@ -81,6 +81,16 @@ function DocDetailWrapper() {
   return <DocDetail businessId={businessId} />;
 }
 
+function ChatRedirect() {
+  const location = useLocation();
+  const search = location?.search || "";
+  if (import.meta.env?.DEV) {
+    // eslint-disable-next-line no-console
+    console.log("[Router] redirecting /chat -> /dashboard/bizzy", search);
+  }
+  return <Navigate to={`/dashboard/bizzy${search}`} replace />;
+}
+
 function AffordabilityPageWrapper() {
   const { currentBusiness } = useBusiness();
   const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId") || "";
@@ -111,7 +121,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <PeriodProvider syncUrl writeUrl autoSnapToCurrentMonth>
           <Routes>
             {/* Public / auth */}
-            <Route path="/" element={<Navigate to="/chat" replace />} />
+            <Route path="/" element={<Navigate to="/dashboard/bizzy" replace />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/reset-password" element={<ResetPassword />} />
@@ -128,26 +138,15 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               }
             />
 
-            {/* Legacy /dashboard -> /chat */}
-            <Route path="/dashboard" element={<Navigate to="/chat" replace />} />
-
-            {/* Chat (protected) */}
+            {/* Legacy /chat redirect */}
             <Route
               path="/chat"
               element={
                 <ProtectedRoute>
-                  <BusinessProvider>
-                    <WithUnreadProvider>
-                      <BizzyChatProvider>
-                        <FullDashboardLayout />
-                      </BizzyChatProvider>
-                    </WithUnreadProvider>
-                  </BusinessProvider>
+                  <ChatRedirect />
                 </ProtectedRoute>
               }
-            >
-              <Route index element={<ChatHome />} />
-            </Route>
+            />
 
             {/* Dashboards (protected) */}
             <Route
@@ -165,6 +164,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               }
             >
               {/* children render inside <Outlet/> */}
+              <Route index element={<Navigate to="bizzy" replace />} />
               <Route path="bizzy" element={<BizzyPanel />} />
               <Route path="companion" element={<CompanionPage />} />
               <Route path="leads-jobs" element={<JobsDashboard />} />
