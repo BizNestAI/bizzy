@@ -63,11 +63,11 @@ const TEXT_MUTED = "var(--text-2)";
 
 /* event chip colors by module (kept) */
 const MODULE_COLORS = {
-  financials: "#22d16b",
-  tax: "#ffc73d",
-  marketing: "#5aa5ff",
-  investments: "#b889ff",
-  ops: "#8aa5b8",
+  financials: "rgb(var(--accent-rgb))",
+  tax: "rgb(var(--accent-rgb))",
+  marketing: "rgb(var(--accent-rgb))",
+  investments: "rgb(var(--accent-rgb))",
+  ops: "rgb(var(--accent-rgb))",
 };
 
 const VIEW_TABS = ["month", "week", "agenda"];

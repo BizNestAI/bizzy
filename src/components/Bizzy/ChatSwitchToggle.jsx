@@ -16,28 +16,29 @@ export default function ChatSwitchToggle({
 
   // Don't render if a conversation is active; ChatCanvas has its own back button.
   if (isCanvasOpen) return null;
+  // Hide on ChatHome entirely
+  const isChatHome = location.pathname.startsWith("/dashboard/bizzy/chat") || location.pathname.startsWith("/chat");
+  if (isChatHome) return null;
 
   const lastDash = localStorage.getItem("bizzy:lastDashboard") || "/dashboard/bizzy";
-  const isChatHome = location.pathname.startsWith("/dashboard/bizzy/chat") || location.pathname.startsWith("/chat");
 
   const goToDash = () => navigate(lastDash, { replace: false });
   const goToChat = () => navigate("/dashboard/bizzy/chat", { replace: false });
 
   const label = context === "chat" ? "Dashboard" : "Chat";
   const onClick = context === "chat" ? goToDash : goToChat;
+  const defaultStyle = { ...style };
 
   return (
     <button
       onClick={onClick}
       className={[
-        "absolute top-3 right-3 md:top-0 md:right-5",
-        "inline-flex items-center gap-2 rounded-md",
-        "px-3 py-1.5 text-sm",
-        "hover:bg-white/10",
-        "text-white/75 hover:text-white transition",
+        "inline-flex items-center gap-2 rounded-md border border-transparent bg-transparent hover:bg-white/6",
+        "px-2.5 py-1 text-sm",
+        "text-white/75 hover:text-white transition-colors",
         className,
       ].join(" ")}
-      style={style}
+      style={defaultStyle}
       title={label}
       aria-label={label}
     >

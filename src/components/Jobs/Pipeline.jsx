@@ -6,8 +6,11 @@ const formatMoney = (val) => {
 };
 
 const Column = ({ title, items = [] }) => (
-  <div className="rounded-[22px] border border-white/12 bg-gradient-to-b from-white/[0.08] via-white/[0.03] to-white/[0.01] flex flex-col backdrop-blur-2xl shadow-[0_25px_55px_rgba(0,0,0,0.45)]">
-    <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 text-sm font-semibold text-white/90">
+  <div
+    className="rounded-[18px] bg-white/[0.05] flex flex-col shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl"
+    style={{ boxShadow: "0 18px 40px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04), 0 0 0 1px rgba(var(--accent-rgb),0.08)" }}
+  >
+    <div className="flex items-center justify-between px-4 py-2 text-sm font-semibold text-white/90">
       <span>{title}</span>
       <span className="text-[11px] text-white/55">{items.length}</span>
     </div>

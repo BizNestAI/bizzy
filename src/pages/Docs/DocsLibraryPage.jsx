@@ -28,10 +28,10 @@ const CATEGORY_META = [
 ];
 const CATEGORY_LABEL = Object.fromEntries(CATEGORY_META.map(c => [c.key, c.label]));
 const CATEGORY_ACCENTS = {
-  financials: { border: 'rgba(34,197,94,0.45)', soft: 'rgba(34,197,94,0.14)', glow: 'rgba(34,197,94,0.08)' },
-  tax:         { border: 'rgba(255,215,0,0.42)', soft: 'rgba(255,215,0,0.12)', glow: 'rgba(255,215,0,0.08)' },
-  marketing:   { border: 'rgba(59,130,246,0.40)', soft: 'rgba(59,130,246,0.14)', glow: 'rgba(59,130,246,0.08)' },
-  investments: { border: 'rgba(147,51,234,0.42)', soft: 'rgba(147,51,234,0.12)', glow: 'rgba(147,51,234,0.08)' },
+  financials: { border: 'rgba(var(--accent-rgb),0.45)', soft: 'rgba(var(--accent-rgb),0.14)', glow: 'rgba(var(--accent-rgb),0.08)' },
+  tax:         { border: 'rgba(var(--accent-rgb),0.45)', soft: 'rgba(var(--accent-rgb),0.14)', glow: 'rgba(var(--accent-rgb),0.08)' },
+  marketing:   { border: 'rgba(var(--accent-rgb),0.45)', soft: 'rgba(var(--accent-rgb),0.14)', glow: 'rgba(var(--accent-rgb),0.08)' },
+  investments: { border: 'rgba(var(--accent-rgb),0.45)', soft: 'rgba(var(--accent-rgb),0.14)', glow: 'rgba(var(--accent-rgb),0.08)' },
   general:     { border: NEUTRAL_BORDER, soft: 'rgba(255,255,255,0.08)', glow: 'rgba(255,255,255,0.04)' },
   all:         { border: NEUTRAL_BORDER, soft: 'rgba(255,255,255,0.06)', glow: 'rgba(255,255,255,0.03)' },
 };
@@ -225,209 +225,104 @@ export default function DocsLibraryPage(props) {
   }
 
   return (
-    <div className="w-full mx-auto px-4 pt-0 pb-28 bg-app text-primary min-h-screen">
-      {/* Header (calm, professional) */}
-      <div
-        className="relative overflow-hidden rounded-2xl shadow-bizzi border p-5 md:p-7"
-        style={{
-          background: 'linear-gradient(145deg, rgba(16,18,24,0.95), rgba(9,11,15,0.92))',
-          borderColor: NEUTRAL_BORDER
-        }}
-      >
-        <div
-          className="pointer-events-none absolute -inset-1 rounded-2xl opacity-25 blur-2xl"
-          style={{
-            background: 'radial-gradient(55% 55% at 20% 20%, rgba(255,255,255,.08), transparent 65%)'
-          }}
-        />
-        <div className="relative flex items-center justify-between gap-4">
+    <div className="w-full px-4 pt-0 pb-28 bg-app text-primary min-h-screen">
+      {/* Full-width header */}
+      <div className="relative overflow-hidden rounded-2xl p-5 md:p-7">
+        <div className="relative flex items-start justify-start gap-4">
           <div>
-            <h1 className="text-3xl md:text-4xl font-semibold leading-tight tracking-[0.18em] text-[color:var(--text)]">
+            <h1 className="text-3xl md:text-4xl font-semibold leading-tight tracking-[0.18em] text-[color:var(--text)] text-left">
               Bizzi Docs Library
             </h1>
-            <p className="mt-2 text-sm" style={{ color: TEXT_MUTED }}>
+            <p className="mt-2 text-sm text-left" style={{ color: "rgba(var(--accent-rgb),0.78)" }}>
               Your summaries, uploads, and references—searchable and organized.
             </p>
           </div>
-          <div className="shrink-0 text-sm">
-            <span
-              className="inline-flex items-center gap-2 rounded-full px-3 py-1 border backdrop-blur"
-              style={{ borderColor: NEUTRAL_BORDER, background: 'rgba(255,255,255,0.04)', color: TEXT_MAIN }}
+        </div>
+      </div>
+
+      <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6">
+        {/* Controls bar */}
+        <div className="mt-6 mb-6">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-2 top-2.5 h-4 w-4" style={{ color: TEXT_MUTED }} />
+              <input
+                value={q}
+                onChange={(e)=>setQ(e.target.value)}
+                placeholder="Search title or content…"
+                className="pl-8 pr-7 py-2 rounded-lg text-sm outline-none shadow-inner"
+                style={{
+                  background: 'rgba(24,26,31,0.9)',
+                  border: `1px solid ${NEUTRAL_BORDER}`,
+                  color: TEXT_MAIN
+                }}
+                onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
+                aria-label="Search documents"
+              />
+              {q && (
+                <button
+                  aria-label="Clear search"
+                  className="absolute right-1.5 top-1.5 p-1 rounded hover:bg-white/10"
+                  onClick={()=>setQ('')}
+                  style={{ color: TEXT_MUTED }}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+
+            {/* New (compact menu) */}
+            <div className="relative" ref={newMenuRef}>
+              <button
+                onClick={() => setShowNewMenu(v => !v)}
+                className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition shadow-[0_10px_28px_rgba(0,0,0,0.35)]"
+                style={{
+                  background: 'rgba(255,255,255,0.02)',
+                  border: `1px solid rgba(var(--accent-rgb),0.16)`,
+                  boxShadow: '0 0 0 1px rgba(var(--accent-rgb),0.06), 0 10px 28px rgba(0,0,0,0.35)',
+                  color: TEXT_MAIN
+                }}
+              >
+                <PlusCircle className="h-4 w-4" />
+                New
+                <MoreVertical className="h-4 w-4 opacity-70" />
+              </button>
+              {showNewMenu && (
+                <div
+                  className="absolute right-0 mt-2 w-44 rounded-lg p-1 shadow-2xl z-10 border transition-all duration-150 ease-out"
+                  style={{ background: PANEL_BG, borderColor: `rgba(var(--accent-rgb),0.16)`, boxShadow: '0 0 0 1px rgba(var(--accent-rgb),0.06), 0 18px 40px rgba(0,0,0,0.45)', transformOrigin: 'top right' }}
+                >
+                  <button
+                    onClick={() => { closeNewMenu(); setShowUpload(true); }}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
+                    style={{ color: TEXT_MAIN }}
+                  >
+                    <FileUp className="h-4 w-4" /> Upload file
+                  </button>
+                  <button
+                    onClick={() => { closeNewMenu(); createBlankNote(true); }}
+                    className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
+                    style={{ color: TEXT_MAIN }}
+                  >
+                    <FileText className="h-4 w-4" /> New note
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Content states */}
+        <div className="mt-4">
+          {!effectiveBusinessId && (
+            <div
+              className="rounded-xl p-5"
+              style={{ background: PANEL_BG, border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MUTED }}
             >
-              <FileText className="h-4 w-4" />
-              {count ? `${count.toLocaleString()} document${count === 1 ? '' : 's'}` : 'No documents yet'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Controls bar */}
-      <div className="mt-6 mb-6">
-        <div
-          className="rounded-2xl shadow-bizzi border p-3 backdrop-blur"
-          style={{
-            background: 'linear-gradient(145deg, rgba(18,20,24,0.92), rgba(12,13,16,0.9))',
-            borderColor: NEUTRAL_BORDER,
-            boxShadow: '0 20px 50px rgba(0,0,0,0.48)',
-          }}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Category pills */}
-            <div className="flex flex-wrap gap-2" role="tablist" aria-label="Document categories">
-              {CATEGORY_META.map((c) => {
-                const pillCount =
-                  c.key === 'all' ? facets?.all :
-                  c.key === 'financials' ? facets?.financials :
-                  c.key === 'tax' ? facets?.tax :
-                  c.key === 'marketing' ? facets?.marketing :
-                  c.key === 'investments' ? facets?.investments :
-                  facets?.general;
-
-                const active = category === c.key;
-                const accent = CATEGORY_ACCENTS[c.key] || CATEGORY_ACCENTS.general;
-                return (
-                  <button
-                    key={c.key}
-                    onClick={() => setCategory(c.key)}
-                    role="tab"
-                    aria-selected={active}
-                    className={classNames(
-                      'px-3 py-1.5 rounded-full text-sm border transition focus:outline-none shadow-[0_6px_18px_rgba(0,0,0,0.28)]',
-                      active
-                        ? 'text-[color:var(--text)]'
-                        : 'text-[color:var(--text-2)] hover:text-[color:var(--text)]'
-                    )}
-                    style={{
-                      background: active ? accent.soft : 'transparent',
-                      border: `1px solid ${active ? accent.border : NEUTRAL_BORDER}`,
-                      boxShadow: active ? `0 0 0 1px ${accent.border}` : undefined,
-                    }}
-                  >
-                    {c.label}{typeof pillCount === 'number' ? ` (${pillCount})` : ''}
-                  </button>
-                );
-              })}
+              No business selected. Choose a business to see its documents.
             </div>
-
-            <div className="flex items-center gap-2">
-              {/* Sort */}
-              <div className="relative" ref={sortMenuRef}>
-                <button
-                  onClick={() => setShowSortMenu((v) => !v)}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition shadow-[0_10px_28px_rgba(0,0,0,0.35)]"
-                  style={{
-                    background: 'rgba(24,26,31,0.9)',
-                    border: `1px solid ${NEUTRAL_BORDER}`,
-                    color: TEXT_MAIN
-                  }}
-                >
-                  <ArrowUpDown className="h-4 w-4" style={{ color: TEXT_MUTED }} />
-                  {SORT_LABEL[sort] || 'Sort'}
-                </button>
-                {showSortMenu && (
-                  <div
-                    className="absolute left-0 mt-2 w-44 rounded-lg p-1 shadow-2xl z-10 border transition-all duration-150 ease-out"
-                    style={{
-                      background: PANEL_BG,
-                      borderColor: NEUTRAL_BORDER,
-                      transformOrigin: 'top left',
-                    }}
-                  >
-                    {SORT_CHOICES.map((s) => (
-                      <button
-                        key={s.key}
-                        onClick={() => { setSort(s.key); closeSortMenu(); }}
-                        className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
-                        style={{ color: TEXT_MAIN }}
-                      >
-                        <span>{s.label}</span>
-                        {sort === s.key ? <span style={{ color: TEXT_MUTED }}>•</span> : null}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Search */}
-              <div className="relative">
-                <Search className="absolute left-2 top-2.5 h-4 w-4" style={{ color: TEXT_MUTED }} />
-                <input
-                  value={q}
-                  onChange={(e)=>setQ(e.target.value)}
-                  placeholder="Search title or content…"
-                  className="pl-8 pr-7 py-2 rounded-lg text-sm outline-none shadow-inner"
-                  style={{
-                    background: 'rgba(24,26,31,0.9)',
-                    border: `1px solid ${NEUTRAL_BORDER}`,
-                    color: TEXT_MAIN
-                  }}
-                  onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
-                  aria-label="Search documents"
-                />
-                {q && (
-                  <button
-                    aria-label="Clear search"
-                    className="absolute right-1.5 top-1.5 p-1 rounded hover:bg-white/10"
-                    onClick={()=>setQ('')}
-                    style={{ color: TEXT_MUTED }}
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-
-              {/* New (compact menu) */}
-              <div className="relative" ref={newMenuRef}>
-                <button
-                  onClick={() => setShowNewMenu(v => !v)}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition shadow-[0_10px_28px_rgba(0,0,0,0.35)]"
-                  style={{
-                    background: 'rgba(255,255,255,0.02)',
-                    border: `1px solid ${NEUTRAL_BORDER}`,
-                    color: TEXT_MAIN
-                  }}
-                >
-                  <PlusCircle className="h-4 w-4" />
-                  New
-                  <MoreVertical className="h-4 w-4 opacity-70" />
-                </button>
-                {showNewMenu && (
-                  <div
-                    className="absolute right-0 mt-2 w-44 rounded-lg p-1 shadow-2xl z-10 border transition-all duration-150 ease-out"
-                    style={{ background: PANEL_BG, borderColor: NEUTRAL_BORDER, transformOrigin: 'top right' }}
-                  >
-                    <button
-                      onClick={() => { closeNewMenu(); setShowUpload(true); }}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
-                      style={{ color: TEXT_MAIN }}
-                    >
-                      <FileUp className="h-4 w-4" /> Upload file
-                    </button>
-                    <button
-                      onClick={() => { closeNewMenu(); createBlankNote(true); }}
-                      className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
-                      style={{ color: TEXT_MAIN }}
-                    >
-                      <FileText className="h-4 w-4" /> New note
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Content states */}
-      <div className="mt-4">
-        {!effectiveBusinessId && (
-          <div
-            className="rounded-xl p-5"
-            style={{ background: PANEL_BG, border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MUTED }}
-          >
-            No business selected. Choose a business to see its documents.
-          </div>
-        )}
+          )}
 
             {effectiveBusinessId && loading && (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -505,18 +400,18 @@ export default function DocsLibraryPage(props) {
                   <li key={d.id ?? d.doc_id ?? `${title}-${i}`}>
                     <Link
                       to={href}
-                      className="group block rounded-2xl shadow-bizzi border transition p-4"
+                      className="group block rounded-2xl border transition p-4 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(0,0,0,0.48)] hover:border-white/30 hover:bg-white/5"
                       style={{
                         background: 'linear-gradient(150deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))',
-                        borderColor: accent.border,
-                        boxShadow: `0 20px 50px rgba(0,0,0,0.45), 0 0 0 1px ${accent.glow}`,
+                        borderColor: NEUTRAL_BORDER,
+                        boxShadow: '0 18px 45px rgba(0,0,0,0.38)',
                       }}
                     >
                       <div className="flex items-center justify-between">
                         <span className="inline-flex items-center gap-2 text-xs" style={{ color: TEXT_MUTED }}>
                           <span
                             className="grid place-items-center h-6 w-6 rounded-md"
-                            style={{ border: `1px solid ${accent.border}`, background: accent.soft }}
+                            style={{ border: `1px solid ${NEUTRAL_BORDER}`, background: 'rgba(255,255,255,0.04)' }}
                           >
                             {fileIcon(extOrMime)}
                           </span>
@@ -536,7 +431,7 @@ export default function DocsLibraryPage(props) {
                       <div className="mt-1 text-xs flex items-center gap-2" style={{ color: TEXT_MUTED }}>
                         <span
                           className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
-                          style={{ background: accent.soft, border: `1px solid ${accent.border}`, color: TEXT_MAIN }}
+                          style={{ background: 'rgba(255,255,255,0.06)', border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
                         >
                           <File className="h-3 w-3" />
                           {categoryLabel}
@@ -563,6 +458,7 @@ export default function DocsLibraryPage(props) {
             )}
           </>
         )}
+      </div>
       </div>
 
       {/* Upload modal lives at page root */}

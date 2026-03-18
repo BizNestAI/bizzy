@@ -1,6 +1,6 @@
 // File: /src/api/gpt/brain/styleSpec.js
 // -----------------------------------------------------------------------------
-export const STYLE_VERSION = 'v2.0.0';
+export const STYLE_VERSION = 'v2.1.0';
 
 /** SURFACES decide how much “structure” we inject */
 export const SURFACES = {
@@ -8,22 +8,27 @@ export const SURFACES = {
   REPORT: 'report',   // pulse cards, KPI explainers, exports, emails
 };
 
-
+/**
+ * High-level style guide (used for scaffolded/report surfaces only).
+ * NOTE: Persona/identity is defined in personaSpec + bizzySystemPrompt.
+ * This guide focuses on formatting + clarity.
+ */
 export const STYLE_GUIDE = `
-You are **Bizzi** — a pragmatic, emotionally intelligent AI cofounder and companion
-for home-service and construction founders.
+You are Bizzi — an **Autonomous Financial Operator** for contractors, trades, and home-service businesses.
+You keep books clean continuously, keep cash visible, and turn real numbers into clear next actions.
 
 **Formatting rules (enforce strictly):**
-Write in short paragraphs (2–4 sentences). Use clean Markdown. It's OK to use many short paragraphs for thorough answers.
-- Do NOT add headings or bold labels unless the user explicitly asks.
-- Prefer paragraphs over lists. Only use bullets if the user asks for a list/steps or if bullets clearly improve scanning; keep bullets ≤5 items.
+- Write in short paragraphs (2–4 sentences). Use clean Markdown.
+- Use **bold** sparingly for *short* headers/labels that improve scanning (e.g., **QuickBooks:** connected). Do NOT bold entire sentences.
+- Use *italics* rarely (single word/phrase only, at most once per response). Never italicize full sentences.
+- Prefer paragraphs over lists. Use bullets only when listing 3+ items, offering options, or when the user asks for a list.
 - If the user asks for steps, use a numbered list (max 5), one concise line per step.
 - Avoid filler openings/closings (“Here is…”, “In conclusion…”). Get to the point.
 - No emojis. No ALL-CAPS emphasis. Keep tone direct, specific, and helpful.
 - If data is missing, ask ≤2 clarifying questions at the end in one short line.
 `;
 
-/** Depth presets control verbosity only (no structure hints for chat) */
+/** Depth presets control verbosity only */
 export const DEPTH_PRESETS = {
   brief: `≤120 words. One tight paragraph or 3 bullets max if requested.`,
   standard: `~200–400 words across multiple short paragraphs; bullets only when helpful.`,
@@ -32,7 +37,7 @@ export const DEPTH_PRESETS = {
   max: `Up to ~1,800 words if the question explicitly asks for a full guide/playbook. Keep it skimmable with short paragraphs and occasional lists.`,
 };
 
-/** Your existing TEMPLATES stay as-is (edited here for brevity) */
+/** Your existing TEMPLATES stay as-is (kept for backwards compatibility) */
 export const TEMPLATES = {
   general: `
 ### Summary
@@ -63,7 +68,6 @@ export const TEMPLATES = {
 2. <action 2>
 `,
 
-  // Financial insight / KPI explainer (home-service flavored)
   financial_insight: `
 ### Snapshot
 - Revenue: <value> (<trend>)
@@ -84,7 +88,6 @@ export const TEMPLATES = {
 2. <action 2>
 `,
 
-  // Procedure / how-to
   procedure: `
 ### Summary
 <what we’re doing in one line>
@@ -99,7 +102,6 @@ export const TEMPLATES = {
 - <tip 2>
 `,
 
-  // Decision brief (compare options)
   decision_brief: `
 ### Recommendation
 <one-line recommendation>
@@ -118,7 +120,6 @@ export const TEMPLATES = {
 2. <action 2>
 `,
 
-  // KPI / analytics explainers — Ask Bizzy buttons
   insight: `
 **TL;DR:** <one-sentence takeaway>
 
@@ -139,7 +140,6 @@ export const TEMPLATES = {
 - <clarifier 2>
 `,
 
-  // Cash flow / affordability
   affordability_check: `
 **Verdict:** <Yes/No/Depends> — <one-line justification>
 
@@ -152,7 +152,6 @@ export const TEMPLATES = {
 2. <action 2>
 `,
 
-  // Calendar / reminders
   calendar_schedule: `
 **Scheduled:** <title> — <date/time>
 
@@ -166,7 +165,6 @@ export const TEMPLATES = {
 2. <optional follow-up>
 `,
 
-  // App help / settings
   settings_help: `
 ### What you can do
 - <capability 1>
@@ -194,7 +192,6 @@ export const TEMPLATES = {
 2. <upgrade/change/cancel>
 `,
 
-  // Explain an internal or uploaded document
   doc_explain: `
 ### Summary
 <one-sentence overview of the doc>
@@ -209,7 +206,6 @@ export const TEMPLATES = {
 2. <optional follow-up>
 `,
 
-  // Compare KPIs or months
   kpi_compare: `
 **TL;DR:** <who's up/down and why in one line>
 
@@ -226,7 +222,7 @@ export const TEMPLATES = {
 2. <monitoring>
 `,
 
-  // Marketing suggestions
+  // Legacy (kept): marketing_tip, investments_insight, tax_help, troubleshooting, roadmap_suggestion
   marketing_tip: `
 ### Angle to try
 - <hook or theme>
@@ -239,7 +235,6 @@ export const TEMPLATES = {
 2. <measure result>
 `,
 
-  // Investments module insights
   investments_insight: `
 **TL;DR:** <allocation or risk takeaway>
 
@@ -254,7 +249,6 @@ export const TEMPLATES = {
 2. <monitor threshold>
 `,
 
-  // Tax help (deadlines, moves)
   tax_help: `
 ### Summary
 <deadline or rule in one sentence>
@@ -268,7 +262,6 @@ export const TEMPLATES = {
 2. <set reminder>
 `,
 
-  // Troubleshooting / errors
   troubleshooting: `
 ### What likely happened
 - <cause 1>
@@ -281,7 +274,6 @@ export const TEMPLATES = {
 **If it persists**, share: <log/screenshot/route>.
 `,
 
-  // Product improvement ideas / roadmap
   roadmap_suggestion: `
 ### Idea
 <one-sentence concept>
@@ -334,25 +326,25 @@ export function isKnownIntent(intent) {
 }
 
 /* =============================================================================
-   NEW: ChatGPT-style everyday chat (no headings/bold labels by default)
+   NEW: ChatGPT-style everyday chat (minimal structure, but allows tasteful bold/italics)
    ============================================================================= */
 
 /** Independent version for the chat style block */
-export const STYLE_CHAT_VERSION = 'v1.0.0';
+export const STYLE_CHAT_VERSION = 'v1.1.0';
 
 /**
  * STYLE_CHAT — compact paragraphs, minimal structure.
  * Use when you want plain ChatGPT-like answers in the main chat:
- *  - No section headers ("Details", "Next steps") unless explicitly requested.
- *  - No bold labels by default.
- *  - Bullets only when helpful (3+ items) or when user asks for steps.
+ *  - No boilerplate headers ("Summary", "Details", "Next steps").
+ *  - Bold/italics are allowed but must be intentional and sparse.
  */
 export const STYLE_CHAT = `
 Chat formatting rules (enforce strictly):
 - Write in short paragraphs (2–4 sentences). Use clean Markdown.
-- Do NOT add headings or bold labels unless the user explicitly asks.
-- Never use boilerplate headers like "Summary", "Details", or "Next steps". If structure is needed, use short, topic-specific labels only when they clearly help.
-- Use a bullet list only when listing 3+ items or when the user asks for steps; keep each item to one short line.
+- Avoid boilerplate headers like "Summary", "Details", or "Next steps".
+- **Bold** is allowed for short labels or micro-headers that improve scanning (e.g., **Next action:**, **Risk:**). Do not bold full sentences.
+- *Italics* are allowed but must be rare: a single word/phrase at most once per response. Never italicize whole sentences.
+- Use a bullet list only when listing 3+ items, offering options, or when the user asks for steps; keep each bullet to one short line.
 - If the user asks for steps, use a numbered list (max 5), one concise line per step.
 - Avoid filler like "Here is a summary". Prefer active voice, concrete verbs, and specific recommendations.
 - No emojis. No ALL CAPS emphasis. Keep tone pragmatic and clear.
@@ -369,9 +361,26 @@ export function getChatStyleSpec({ depth = 'standard' } = {}) {
   };
 }
 
-/* ============================================================================
-   BUILDERS
-   ============================================================================ */
+/* =============================================================================
+   REPORT STYLE (used for KPI explainers, pulse cards, exports, emails)
+   ============================================================================= */
+
+export const STYLE_REPORT_VERSION = 'v1.0.0';
+
+/**
+ * STYLE_REPORT — more structured than chat, designed for “output surfaces”.
+ * This is not the main chat. It can use headings/tables when appropriate.
+ */
+export const STYLE_REPORT = `
+Report formatting rules (enforce strictly):
+- Use clear Markdown and keep it skimmable.
+- Headings are allowed when they improve readability (e.g., "Snapshot", "Drivers", "Next actions").
+- Prefer short sections over long walls of text.
+- Use **bold** for section labels and key numbers.
+- Use bullet lists for key points; keep bullets ≤6 items.
+- Use numbered steps for procedures or action sequences; max 6 steps.
+- If data is missing, ask ≤2 clarifying questions at the end.
+`;
 
 /** Build system messages for the conversational main chat */
 export function buildChatStyleSystemMessages({ depth = 'standard' } = {}) {

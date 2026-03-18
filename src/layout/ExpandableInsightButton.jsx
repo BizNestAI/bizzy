@@ -6,9 +6,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 const moduleConfig = {
   accounting: { icon: '💵', color: 'text-emerald-400' },
-  marketing: { icon: '🚀', color: 'text-blue-400' },
-  tax: { icon: '📄', color: 'text-yellow-400' },
-  investments: { icon: '📈', color: 'text-purple-400' },
+  marketing: { icon: '🚀', color: 'text-emerald-400' },
+  tax: { icon: '📄', color: 'text-emerald-400' },
+  investments: { icon: '📈', color: 'text-emerald-400' },
 };
 
 const ExpandableInsightButton = ({ variant = 'mobile' }) => {

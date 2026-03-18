@@ -26,7 +26,7 @@ function StatusChip({ status, label }) {
   );
 }
 
-export default function BizzyPulse({ businessId, accent = "var(--accent, #FF4EEB)", demoPulse = null }) {
+export default function BizzyPulse({ businessId, accent = "var(--accent, #34d399)", demoPulse = null }) {
   const [loading, setLoading] = useState(true);
   const [score, setScore] = useState(50);
   const [status, setStatus] = useState("watch"); // healthy | at_risk | watch

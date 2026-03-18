@@ -33,7 +33,7 @@ export default function BizzySubmitButton({
       title={title ?? (isLoading ? "Bizzi is thinking…" : "Send to Bizzi")}
       className={[
         "relative inline-flex items-center justify-center rounded-full",
-        "bg-black/80 border border-white/20 backdrop-blur",
+        "bg-white/8 border border-white/20 backdrop-blur",
         "transition-transform duration-200",
         disabled || isLoading ? "opacity-90 cursor-not-allowed" : "hover:scale-105 cursor-pointer",
         className,
@@ -53,18 +53,17 @@ export default function BizzySubmitButton({
       <div
         aria-hidden
         className="absolute inset-[2px] rounded-full"
-        style={{ boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.28)" }}
+        style={{ boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.24)" }}
       />
 
-      {/* Inner canvas */}
+      {/* Inner canvas (flat, no blur) */}
       <div
         aria-hidden
         className="absolute rounded-full"
         style={{
           inset: "3px",
-          background: "#0b0b0c",
-          boxShadow:
-            "inset 0 0 0 1px rgba(255,255,255,0.06), inset 0 -6px 14px rgba(0,0,0,0.35), inset 0 8px 22px rgba(255,255,255,0.05)",
+          background: "transparent",
+          boxShadow: "none",
         }}
       />
 

@@ -4,6 +4,8 @@ import { getDemoData, shouldUseDemoData } from "../services/demo/demoClient.js";
 import apiBaseUrl from "../utils/apiBase.js";
 
 const API_BASE = apiBaseUrl ? `${apiBaseUrl.replace(/\/+$/, "")}/api` : "/api";
+const TODAY_ISO = new Date().toISOString().slice(0, 7);
+const TODAY_YEAR = new Date().getFullYear();
 
 async function getAccessToken() {
   try {
@@ -45,9 +47,10 @@ export function useDeductionsMatrix({ businessId, year }) {
     if (!businessId && !useDemo) return;
     if (useDemo) {
       const demo = getDemoData()?.tax?.deductionsMatrix || null;
+      const demoMonths = demo?.meta?.month_list || [];
       setData(demo);
-      setMonths(demo?.meta?.month_list || []);
-      setCurrentMonth(demo?.meta?.current_month || "");
+      setMonths(demoMonths);
+      setCurrentMonth(resolveCurrentMonth({ monthList: demoMonths, reported: demo?.meta?.current_month }));
       setLoading(false);
       setError("");
       return;
@@ -77,8 +80,9 @@ export function useDeductionsMatrix({ businessId, year }) {
       const json = txt ? JSON.parse(txt) : { ok: true, data: null };
       if (!json?.ok) throw new Error(json?.error || "Failed to load");
       setData(json.data || null);
-      setMonths(json.data?.meta?.month_list || []);
-      setCurrentMonth(json.data?.meta?.current_month || "");
+      const monthList = json.data?.meta?.month_list || [];
+      setMonths(monthList);
+      setCurrentMonth(resolveCurrentMonth({ monthList, reported: json.data?.meta?.current_month }));
     } catch (e) {
       setError(e?.message || "Failed to load");
       setData(null);
@@ -170,4 +174,18 @@ export function useDeductionsMatrix({ businessId, year }) {
     refetch: fetchMatrix,
     exportCsv,
   };
+}
+
+function resolveCurrentMonth({ monthList = [], reported = "" }) {
+  const firstYear = Number(String(monthList?.[0] || "").slice(0, 4));
+  // Only highlight when viewing the current year
+  if (firstYear && firstYear !== TODAY_YEAR) return "";
+
+  if (monthList.includes(TODAY_ISO)) return TODAY_ISO;
+
+  const closest = monthList.filter((m) => typeof m === "string" && m <= TODAY_ISO).pop();
+  if (closest) return closest;
+
+  if (reported && monthList.includes(reported)) return reported;
+  return monthList[monthList.length - 1] || "";
 }

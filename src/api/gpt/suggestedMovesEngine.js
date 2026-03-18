@@ -312,11 +312,9 @@ export async function generateSuggestedMoves({
   }));
   if (rows.length > 0) {
     try {
-      await supabase.from("financial_moves")
-        .delete()
-        .eq("business_id", business_id)
-        .eq("month", monthText);
-      const { error } = await supabase.from("financial_moves").insert(rows);
+      const { error } = await supabase
+        .from("financial_moves")
+        .upsert(rows, { onConflict: "business_id,month,title" });
       if (error) console.error("❌ Failed to insert financial_moves:", error);
     } catch (e) {
       console.error("❌ Failed to save financial_moves:", e?.message || e);

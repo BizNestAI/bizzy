@@ -1,5 +1,5 @@
 // /src/components/Tax/DeductionsMatrix.jsx
-import React, { useEffect, useMemo, useRef, useCallback } from "react";
+import React, { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import AskBizzyInsightButton from "../../components/Bizzy/AskBizzyInsightButton";
 
 /**
@@ -11,6 +11,8 @@ import AskBizzyInsightButton from "../../components/Bizzy/AskBizzyInsightButton"
  * - onExport: () => void
  * - onAdd?: () => void
  * - onAskBizzy?: (text: string, payload?: any) => void
+ * - onRowClick?: (row) => void
+ * - showTotals?: boolean
  * - hideHeader?: boolean
  */
 export default function DeductionsMatrix({
@@ -21,12 +23,25 @@ export default function DeductionsMatrix({
   onExport,
   onAdd,
   onAskBizzy,
+  onRowClick,
+  showTotals = true,
   title = "Deductions",
   subtitle = "Review your categorized business deductions to ensure all expenses are accurately accounted for.",
   hideHeader = false,
 }) {
   const monthLabels = useMemo(() => months.map(m => shortMonth(m)), [months]);
 const STICKY_WIDTH = 180; // width of category column we want always visible
+  const MONTH_COL_WIDTH = 130;
+  const YTD_WIDTH = 150;
+  const columnTemplate = useMemo(
+    () => `minmax(${STICKY_WIDTH}px, ${STICKY_WIDTH}px) repeat(${months?.length || 12}, minmax(120px,0.65fr)) minmax(140px,0.7fr)`,
+    [months?.length]
+  );
+  const computedMinWidth = useMemo(() => {
+    const count = months?.length || 12;
+    return STICKY_WIDTH + count * MONTH_COL_WIDTH + YTD_WIDTH + 24; // small buffer
+  }, [months?.length]);
+  const [isOverflowing, setIsOverflowing] = useState(false);
 
   // Refs for auto-centering current month
   const scrollRef = useRef(null);
@@ -45,8 +60,14 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
   }, [currentMonth]);
 
   useEffect(() => {
-    scrollToHighlightedMonth();
-  }, [scrollToHighlightedMonth, months.length]);
+    if (!currentMonth) {
+      scrollRef.current?.scrollTo({ left: 0, behavior: "auto" });
+      return;
+    }
+    scrollToHighlightedMonth("auto");
+    const id = requestAnimationFrame(() => scrollToHighlightedMonth("auto"));
+    return () => cancelAnimationFrame(id);
+  }, [scrollToHighlightedMonth, months.length, currentMonth]);
 
   useEffect(() => {
     let t;
@@ -54,6 +75,9 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
       clearTimeout(t);
       t = setTimeout(() => {
         scrollToHighlightedMonth("auto");
+        if (scrollRef.current) {
+          setIsOverflowing(scrollRef.current.scrollWidth > scrollRef.current.clientWidth + 4);
+        }
       }, 120);
     }
     window.addEventListener("resize", onResize);
@@ -63,11 +87,17 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
     };
   }, [scrollToHighlightedMonth, months.length]);
 
+  useEffect(() => {
+    if (scrollRef.current) {
+      setIsOverflowing(scrollRef.current.scrollWidth > scrollRef.current.clientWidth + 4);
+    }
+  }, [grid, months]);
+
   return (
     <div
       className="rounded-[32px] p-2 md:p-3"
       style={{
-        background: "var(--panel)",
+        background: "linear-gradient(180deg, rgba(12,12,14,0.92), rgba(14,14,16,0.94))",
         border: "1px solid rgba(191,191,191,0.16)",
         boxShadow: "0 32px 80px rgba(0,0,0,0.55)",
       }}
@@ -75,13 +105,13 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
       {!hideHeader && (
         <>
           <h2 className="text-3xl md:text-4xl font-semibold tracking-tight">{title}</h2>
-          <p className="mt-2 text-sm text-yellow-200/80">{subtitle}</p>
+          <p className="mt-2 text-sm text-[rgba(var(--accent-rgb),0.85)]">{subtitle}</p>
         </>
       )}
 
       <div
         className="mt-4 rounded-[32px] border overflow-hidden"
-        style={{ borderColor: "rgba(191,191,191,0.16)", background: "var(--panel)" }}
+        style={{ borderColor: "rgba(191,191,191,0.16)", background: "rgba(10,10,12,0.96)" }}
       >
         <div
           ref={scrollRef}
@@ -91,13 +121,29 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
             [&::-webkit-scrollbar]:hidden
           "
         >
+          {isOverflowing && (
+            <div className="pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l from-[rgba(10,10,12,0.95)] via-[rgba(10,10,12,0.7)] to-transparent" />
+          )}
           {/* Slightly wider min-width to accommodate YTD column */}
-          <div className="w-full min-w-[1100px] md:min-w-[1300px] text-white/90" style={{ "--sticky-bg": "var(--panel)", minWidth: '100%' }}>
+          <div
+            className="w-full text-white/90"
+            style={{ "--sticky-bg": "var(--panel)", minWidth: computedMinWidth }}
+          >
             {/* Header row with sticky Category & YTD at end */}
-            <div className="grid grid-cols-[minmax(165px,0.65fr)_repeat(12,minmax(120px,0.65fr))_minmax(140px,0.7fr)] gap-x-1 md:gap-x-2 items-center px-3 py-0.5 text-[12px] md:text-xs text-white/70 border-b border-white/10">
+            <div
+              className="grid gap-x-1 md:gap-x-2 items-center px-3 py-0.5 text-[12px] md:text-xs text-white/70 border-b border-white/10 sticky top-0 z-20"
+              style={{ background: "rgba(10,10,12,0.98)", gridTemplateColumns: columnTemplate }}
+            >
               <div
                 className="font-medium sticky left-0 z-30 pr-2 py-1 text-center"
-                style={{ background: "var(--panel)", borderRight: "1px solid rgba(255,255,255,0.08)" }}
+                style={{
+                  background: "rgba(10,10,12,0.96)",
+                  borderRight: "1px solid rgba(255,255,255,0.08)",
+                  boxShadow: "8px 0 24px rgba(0,0,0,0.28)",
+                  width: STICKY_WIDTH,
+                  minWidth: STICKY_WIDTH,
+                  maxWidth: STICKY_WIDTH,
+                }}
               >
                 Category
               </div>
@@ -108,7 +154,7 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
                   <div
                     key={iso}
                     ref={el => (monthRefs.current[iso] = el || monthRefs.current[iso])}
-                    className={`text-center ${isNow ? "text-yellow-200" : ""}`}
+                    className={`text-center rounded-md px-1 py-0.5 ${isNow ? "text-[rgba(var(--accent-rgb),0.95)] bg-[rgba(var(--accent-rgb),0.08)]" : ""}`}
                     title={iso}
                   >
                     {ml}
@@ -120,28 +166,26 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
 
             {/* Body rows */}
             <div className="divide-y divide-white/5">
-              {grid.map((row, ri) => (
-                <div
-                  key={row.category + ri}
-                  className="group grid grid-cols-[minmax(165px,0.65fr)_repeat(12,minmax(120px,0.65fr))_minmax(140px,0.7fr)] gap-x-1 md:gap-x-2 items-center px-3 py-0.5"
-                >
-                  {/* Sticky first column with Ask Bizzy; fully opaque so no bleed-through */}
+              {grid.map((row, ri) => {
+                return (
+                  <div
+                    key={row.category + ri}
+                    className="group relative grid gap-x-1 md:gap-x-2 items-center px-3 py-1 transition-colors hover:bg-white/[0.02] hover:border-white/10 border border-transparent cursor-pointer"
+                    style={{ gridTemplateColumns: columnTemplate }}
+                    onClick={() => onRowClick?.(row)}
+                  >
+                  {/* Sticky first column; fully opaque so no bleed-through */}
                   <div
                     className="sticky left-0 z-30 pr-2 flex min-h-[72px] flex-col items-center justify-center text-center border-r border-white/10 relative py-1"
-                    style={{ background: "rgba(16,18,22,0.98)" }}
+                    style={{
+                      background: "rgba(10,10,12,0.96)",
+                      boxShadow: "8px 0 24px rgba(0,0,0,0.28)",
+                      width: STICKY_WIDTH,
+                      minWidth: STICKY_WIDTH,
+                      maxWidth: STICKY_WIDTH,
+                    }}
                   >
                     <span className="text-sm font-medium truncate"><span className="inline-block align-middle">{row.category}</span></span>
-                    <AskBizzyInsightButton
-                      variant="inline"
-                      size="xs"
-                      label="Ask Bizzi"
-                      showIcon={false}
-                      labelAlwaysVisible
-                      className="absolute bottom-1 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 pointer-events-none group-hover:pointer-events-auto transition hidden sm:inline-flex"
-                      message={`Explain how ${row.category} expenses can potentially reduce my tax bill.`}
-                      context={{ category: row.category }}
-                      onAskExternal={(text, payload) => onAskBizzy?.(text, payload)}
-                    />
                   </div>
 
                   {/* Monthly amounts */}
@@ -150,7 +194,7 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
                     return (
                       <div
                         key={iso}
-                        className={`text-right font-mono tabular-nums whitespace-nowrap text-[12px] md:text-sm ${isNow ? "text-yellow-200" : "text-yellow-100/90"}`}
+                        className={`text-right font-mono tabular-nums whitespace-nowrap text-[12px] md:text-sm rounded-sm px-1 py-0.5 ${isNow ? "text-[rgba(var(--accent-rgb),0.95)] bg-[rgba(var(--accent-rgb),0.06)]" : "text-white/85"}`}
                       >
                         {fmtUSD(row.monthly?.[iso])}
                       </div>
@@ -161,33 +205,45 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
                   <div className="text-right font-mono tabular-nums whitespace-nowrap text-[12px] md:text-sm text-white/80">
                     {fmtUSD(row.ytdTotal)}
                   </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Totals row */}
-            <div className="grid grid-cols-[minmax(165px,0.65fr)_repeat(12,minmax(120px,0.65fr))_minmax(140px,0.7fr)] gap-x-1 md:gap-x-2 items-center px-3 py-1 border-t border-white/10 mt-1">
-              <div
-                className="text-sm font-medium sticky left-0 z-30 pr-2 flex min-h-[72px] items-center justify-center text-center"
-                style={{ background: "var(--panel)", borderRight: "1px solid rgba(255,255,255,0.08)" }}
-              >
-                TOTAL
-              </div>
-              {months.map((iso) => {
-                const isNow = currentMonth && iso === currentMonth;
-                return (
-                  <div
-                    key={iso}
-                    className={`text-right font-mono tabular-nums whitespace-nowrap text-[12px] md:text-sm ${isNow ? "text-yellow-200" : "text-yellow-100/90"}`}
-                  >
-                    {fmtUSD(totals?.monthly?.[iso])}
                   </div>
                 );
               })}
-              <div className="text-right font-mono tabular-nums whitespace-nowrap text-[12px] md:text-sm text-yellow-100/90">
-                {fmtUSD(totals?.ytdTotal)}
-              </div>
             </div>
+
+            {/* Totals row */}
+            {showTotals ? (
+              <div
+                className="grid gap-x-1 md:gap-x-2 items-center px-3 py-1 border-t border-white/10 mt-1"
+                style={{ gridTemplateColumns: columnTemplate }}
+              >
+                <div
+                  className="text-sm font-medium sticky left-0 z-30 pr-2 flex min-h-[72px] items-center justify-center text-center"
+                  style={{
+                    background: "var(--panel)",
+                    borderRight: "1px solid rgba(255,255,255,0.08)",
+                    width: STICKY_WIDTH,
+                    minWidth: STICKY_WIDTH,
+                    maxWidth: STICKY_WIDTH,
+                  }}
+                >
+                  TOTAL
+                </div>
+                {months.map((iso) => {
+                  const isNow = currentMonth && iso === currentMonth;
+                  return (
+                    <div
+                      key={iso}
+                      className={`text-right font-mono tabular-nums whitespace-nowrap text-[12px] md:text-sm rounded-sm px-1 py-0.5 ${isNow ? "text-[rgba(var(--accent-rgb),0.95)] bg-[rgba(var(--accent-rgb),0.06)]" : "text-white/85"}`}
+                    >
+                      {fmtUSD(totals?.monthly?.[iso])}
+                    </div>
+                  );
+                })}
+                <div className="text-right font-mono tabular-nums whitespace-nowrap text-[12px] md:text-sm text-white/85">
+                  {fmtUSD(totals?.ytdTotal)}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
 

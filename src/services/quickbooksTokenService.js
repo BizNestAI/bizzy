@@ -1,7 +1,7 @@
 // File: /src/services/quickbooksTokenService.js
 import fetch from "node-fetch";
 import { supabase } from "./supabaseAdmin.js";
-import { qbClientId, qbClientSecret } from "../utils/qboEnv.js";
+import { qbClientId, qbClientSecret, qboEnvName } from "../utils/qboEnv.js";
 
 const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const ONE_MINUTE_MS = 60 * 1000;
@@ -15,6 +15,9 @@ async function getLatestTokenRow(business_id) {
     .from("quickbooks_tokens")
     .select("*")
     .eq("business_id", business_id)
+    .eq("qbo_env", qboEnvName)
+    .eq("is_active", true)
+    .eq("status", "active")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -61,8 +64,9 @@ function is401(err) {
  * Persists the rotated refresh token to Supabase.
  */
 export async function refreshQuickBooksTokens(business_id, currentRefreshToken = null) {
-  if (refreshLocks.has(business_id)) {
-    return refreshLocks.get(business_id);
+  const lockKey = `${business_id}:${qboEnvName}`;
+  if (refreshLocks.has(lockKey)) {
+    return refreshLocks.get(lockKey);
   }
 
   const refreshPromise = (async () => {
@@ -127,6 +131,7 @@ export async function refreshQuickBooksTokens(business_id, currentRefreshToken =
 
   const payload = {
     business_id,
+    qbo_env: qboEnvName,
     access_token,
     refresh_token: nextRefresh,
     expires_in,
@@ -149,17 +154,17 @@ export async function refreshQuickBooksTokens(business_id, currentRefreshToken =
     payload.connected_at = existing?.connected_at || null;
   }
 
-  await supabase.from("quickbooks_tokens").upsert(payload, { onConflict: "business_id" });
+  await supabase.from("quickbooks_tokens").upsert(payload, { onConflict: "business_id,qbo_env" });
 
   console.info("[qboTokens] refresh succeeded", { business_id, status: res.status });
   return { ...payload };
   })();
 
-  refreshLocks.set(business_id, refreshPromise);
+  refreshLocks.set(lockKey, refreshPromise);
   try {
     return await refreshPromise;
   } finally {
-    refreshLocks.delete(business_id);
+    refreshLocks.delete(lockKey);
   }
 }
 

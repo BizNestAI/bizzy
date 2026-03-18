@@ -60,7 +60,6 @@ export default function EmailPage() {
   const [accountsError, setAccountsError] = useState(null);
   const [accountId, setAccountId] = useState(null);
   const [accountEmail, setAccountEmail] = useState("");
-  const [autoDrawerOpen, setAutoDrawerOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const accountMenuRef = useRef(null);
   const navigate = useNavigate();
@@ -402,7 +401,6 @@ export default function EmailPage() {
                         participantsText: thread ? buildParticipants(thread) : "",
                         unread: !!getUnreadFlag(threads, selectedThreadId),
                         onMarkRead: markThreadRead,
-                        onOpenAutoPanel: () => setAutoDrawerOpen(true),
                       }
                     : undefined
                 }
@@ -425,12 +423,6 @@ export default function EmailPage() {
           <aside className="hidden md:block lg:col-span-0 xl:hidden h-full min-h-0" />
         </div>
       </div>
-
-      <AutoResponderDrawer
-        open={autoDrawerOpen}
-        onClose={() => setAutoDrawerOpen(false)}
-        accountId={accountId}
-      />
     </div>
   );
 }

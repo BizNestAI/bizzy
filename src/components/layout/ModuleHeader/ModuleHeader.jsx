@@ -1,7 +1,7 @@
 // src/components/layout/ModuleHeader/ModuleHeader.jsx
 import React from "react";
 import { moduleTheme } from "./moduleTheme";
-import HeroInsightCard from "./HeroInsightCard";
+// import HeroInsightCard from "./HeroInsightCard";
 
 /**
  * Props
@@ -33,9 +33,9 @@ export default function ModuleHeader({
   const base = moduleTheme[module] || moduleTheme.financials || {};
 
   // Chrome/silver tokens
-  const CHROME_HEX  = "#BFBFBF";
-  const CHROME_SOFT = "rgba(191,191,191,0.45)"; // glow/line soft
-  const CHROME_FADE = "rgba(191,191,191,0.22)";
+  const CHROME_HEX  = base.accent || "var(--accent)";
+  const CHROME_SOFT = "rgba(52,211,153,0.45)"; // glow/line soft
+  const CHROME_FADE = "rgba(52,211,153,0.22)";
 
   // Accent palette
   // For bizzy/jobs we want chrome by default (per your request), not pink.
@@ -86,23 +86,7 @@ export default function ModuleHeader({
         <p className="mt-3 text-[13px] text-white/70">{subtitle}</p>
       ) : null}
 
-      {hero ? (
-        <div className="mt-4" aria-live="polite">
-          <HeroInsightCard
-            insight={hero}
-            accent={accentForLine}
-            onDismiss={onDismissHero}
-            variant={heroVariant}
-          />
-        </div>
-      ) : (
-        <div
-          className="mt-4 rounded-lg border border-white/10 bg-black/40 px-4 py-3 text-sm text-white/60"
-          aria-live="polite"
-        >
-          Bizzi will surface a hero insight here once your data syncs. Keep your accounts connected to see live highlights.
-        </div>
-      )}
+      {/* Hero insight intentionally suppressed on Financials page per request */}
     </div>
   );
 }

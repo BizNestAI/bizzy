@@ -37,9 +37,9 @@ export default function ChatCanvasToggle({ accent = "#22c55e", onClose }) {
         }}
         onMouseEnter={e => e.currentTarget.style.background = `${accent}14`}
         onMouseLeave={e => e.currentTarget.style.background = "transparent"}
-        title="Back to dashboard"
+        title="Dashboard"
       >
-        ↩ Back to Dashboard
+        ↩ Dashboard
       </button>
     </div>
   );

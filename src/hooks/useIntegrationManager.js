@@ -69,6 +69,7 @@ const DEFAULT_STATE = Object.fromEntries(
       status: key === "gmail" ? STATUS.CONNECTED : STATUS.DISCONNECTED,
       lastSync: key === "gmail" ? Date.now() : null,
       error: null,
+      info: null,
     },
   ])
 );
@@ -134,7 +135,8 @@ function toast(_detail) {
 
 let plaidScriptPromise = null;
 function loadPlaidScript() {
-  if (typeof window === "undefined") return Promise.reject(new Error("window unavailable"));
+  if (typeof window === "undefined")
+    return Promise.reject(new Error("window unavailable"));
   if (window.Plaid) return Promise.resolve(window.Plaid);
   if (plaidScriptPromise) return plaidScriptPromise;
   plaidScriptPromise = new Promise((resolve, reject) => {
@@ -154,7 +156,7 @@ function loadPlaidScript() {
   return plaidScriptPromise;
 }
 
-async function openPlaidLink(linkToken) {
+async function openPlaidLink(linkToken, businessId) {
   if (typeof window === "undefined") throw new Error("Plaid unavailable in SSR");
   const Plaid = await loadPlaidScript();
   return new Promise((resolve, reject) => {
@@ -162,16 +164,29 @@ async function openPlaidLink(linkToken) {
       token: linkToken,
       onSuccess: async (public_token, metadata) => {
         try {
-          await safeFetch(apiUrl("/api/investments/plaid/exchange-public-token"), {
+          const exchangeRes = await safeFetch(apiUrl("/api/integrations/plaid/exchange"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: { public_token, institution_name: metadata?.institution?.name },
+            body: JSON.stringify({
+              business_id: businessId,
+              public_token,
+              metadata: metadata || null,
+            }),
           });
-          await safeFetch(apiUrl("/api/investments/sync"), {
+          await safeFetch(apiUrl("/api/integrations/plaid/sync"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ business_id: businessId }),
           });
-          resolve({ connected: true });
+          resolve({
+            connected: true,
+            info: {
+              institution_name:
+                metadata?.institution?.name ||
+                exchangeRes?.institution_name ||
+                null,
+            },
+          });
         } catch (err) {
           reject(err);
         } finally {
@@ -229,11 +244,67 @@ export default function useIntegrationManager(options = {}) {
     [resolvedBusinessId]
   );
 
+  // Unified source of truth: fetch /auth/status for QuickBooks
+  useEffect(() => {
+    let cancelled = false;
+    async function loadQbStatus() {
+      if (!resolvedBusinessId) return;
+      try {
+        const res = await safeFetch(apiUrl(`/auth/status?business_id=${resolvedBusinessId}`));
+        if (cancelled) return;
+        const status = res?.connected ? STATUS.CONNECTED : res?.needs_setup || res?.has_row ? STATUS.AWAITING : STATUS.DISCONNECTED;
+        updateProvider("quickbooks", {
+          status,
+          lastSync: res?.connected ? Date.now() : null,
+          info: {
+            env: res?.env || res?.qbo_env || null,
+            companyName: res?.company_name || null,
+            realmId: res?.realm_id || null,
+          },
+        });
+        if (status === STATUS.CONNECTED) {
+          try {
+            window.dispatchEvent(new Event("bizzy:qbo-connected"));
+          } catch {
+            /* ignore */
+          }
+        }
+        if (status === STATUS.CONNECTED) {
+          try {
+            if (typeof window !== "undefined") {
+              window.localStorage.setItem("bizzy:qb_connected", "true");
+            }
+          } catch { /* ignore */ }
+          try {
+            if (getDemoMode() !== "demo") setDemoMode("live");
+          } catch {
+            /* ignore */
+          }
+        } else if (status === STATUS.DISCONNECTED) {
+          try {
+            if (typeof window !== "undefined") {
+              window.localStorage.removeItem("bizzy:qb_connected");
+            }
+          } catch { /* ignore */ }
+        }
+      } catch {
+        if (cancelled) return;
+        updateProvider("quickbooks", { status: STATUS.ERROR, error: "Unable to load QuickBooks status." });
+      }
+    }
+    loadQbStatus();
+    const id = setInterval(loadQbStatus, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [resolvedBusinessId, updateProvider]);
+
   // Parse OAuth callback query params (e.g., qb=connected) and mark status
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search || "");
     const qbFlag = (params.get("qb") || "").toLowerCase();
+    const qbError = (params.get("qb_error") || "").toLowerCase();
+    const qbMessage = params.get("message") || null;
+    const qbRealmId = params.get("realmId") || null;
     const integrationParam = (params.get("integration") || "").toLowerCase();
     const paramBusinessId = params.get("business_id") || params.get("businessId") || null;
 
@@ -252,11 +323,21 @@ export default function useIntegrationManager(options = {}) {
         }
       } else if (qbFlag === "callback_failed") {
         updateProvider("quickbooks", { status: STATUS.ERROR, error: "QuickBooks connect failed." });
+      } else if (qbError === "company_mismatch") {
+        updateProvider("quickbooks", {
+          status: STATUS.DISCONNECTED,
+          error: "company_mismatch",
+          info: {
+            companyMismatch: true,
+            message: qbMessage || "You connected a different QuickBooks company. Switching may affect posting destinations. Confirm switch?",
+            realmId: qbRealmId || null,
+          },
+        });
       }
 
       // Clean query params from the URL to avoid stale status on refresh
       if (window.history?.replaceState) {
-        ["qb", "integration", "business_id", "businessId"].forEach((k) => params.delete(k));
+        ["qb", "qb_error", "message", "realmId", "integration", "business_id", "businessId"].forEach((k) => params.delete(k));
         const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}${window.location.hash || ""}`;
         window.history.replaceState({}, "", next);
       }
@@ -275,11 +356,14 @@ export default function useIntegrationManager(options = {}) {
   }, [qbStatus]);
 
   const runAction = useCallback(
-    async (provider) => {
+    async (provider, options = {}) => {
       switch (provider) {
         case "quickbooks": {
           const urlObj = new URL(apiUrl("/auth/quickbooks"));
           urlObj.searchParams.set("business_id", resolvedBusinessId || "default");
+          if (options?.forceSwitchCompany) {
+            urlObj.searchParams.set("forceSwitchCompany", "true");
+          }
           const url = urlObj.toString();
           if (typeof window !== "undefined") {
             window.location.assign(url); // keep same tab to avoid duplicate Bizzi tabs
@@ -295,9 +379,10 @@ export default function useIntegrationManager(options = {}) {
           return { status: STATUS.AWAITING };
         }
         case "plaid": {
-          const tokenResp = await safeFetch(apiUrl("/api/investments/plaid/create-link-token"), {
+          const tokenResp = await safeFetch(apiUrl("/api/integrations/plaid/link-token"), {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ business_id: resolvedBusinessId }),
           });
           const linkToken =
             tokenResp?.link_token || tokenResp?.linkToken || tokenResp?.token;
@@ -306,7 +391,33 @@ export default function useIntegrationManager(options = {}) {
             toast({ title: "Plaid demo connected", body: "Using mock investment data." });
             return { connected: true };
           }
-          return openPlaidLink(linkToken);
+          const linkResult = await openPlaidLink(linkToken, resolvedBusinessId);
+          if (linkResult?.connected) {
+            try {
+              const statusRes = await safeFetch(
+                apiUrl(
+                  `/api/integrations/plaid/status?business_id=${encodeURIComponent(
+                    resolvedBusinessId
+                  )}`
+                ),
+                { method: "GET" }
+              );
+              return {
+                connected: true,
+                info: {
+                  institutions_count: statusRes?.institutions_count || 0,
+                  accounts_count: statusRes?.accounts_count || 0,
+                  institution_name:
+                    statusRes?.institutions_count === 1 && Array.isArray(statusRes?.institutions)
+                      ? statusRes.institutions[0]?.institution_name || null
+                      : null,
+                },
+              };
+            } catch {
+              return { connected: true };
+            }
+          }
+          return linkResult;
         }
         case "jobber": {
           await safeFetch("/api/jobs/integrations/jobber/sync", {
@@ -351,16 +462,17 @@ export default function useIntegrationManager(options = {}) {
   );
 
   const connect = useCallback(
-    async (provider) => {
+    async (provider, options = {}) => {
       if (!INTEGRATION_META[provider]) return null;
       updateProvider(provider, { status: STATUS.CONNECTING, error: null });
       try {
-        const result = await runAction(provider);
+        const result = await runAction(provider, options);
         if (result?.connected) {
           updateProvider(provider, {
             status: STATUS.CONNECTED,
             lastSync: Date.now(),
             error: null,
+            info: result?.info || null,
           });
         } else if (result?.status) {
           updateProvider(provider, { status: result.status, error: null });
@@ -390,11 +502,25 @@ export default function useIntegrationManager(options = {}) {
             headers: { "Content-Type": "application/json" },
             body: { business_id: resolvedBusinessId },
           });
+          try {
+            if (typeof window !== "undefined") {
+              window.localStorage.setItem("bizzy:qb_connected", "false");
+              window.dispatchEvent(new Event("bizzy:onboarding-flags-updated"));
+            }
+          } catch {
+            /* ignore */
+          }
+        } else if (provider === "plaid") {
+          await safeFetch(apiUrl("/api/integrations/plaid/disconnect"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: { business_id: resolvedBusinessId },
+          });
         }
       } catch (e) {
         console.warn(`[integrations] ${provider} disconnect failed`, e?.message || e);
       } finally {
-        updateProvider(provider, { status: STATUS.DISCONNECTED, error: null });
+        updateProvider(provider, { status: STATUS.DISCONNECTED, lastSync: null, error: null, info: null });
       }
     },
     [resolvedBusinessId, updateProvider]
@@ -417,6 +543,62 @@ export default function useIntegrationManager(options = {}) {
       updateProvider(provider, { status, error: null });
     },
     [updateProvider]
+  );
+
+  const refresh = useCallback(
+    async (provider) => {
+      if (!INTEGRATION_META[provider]) return;
+      if (provider === "quickbooks") return;
+      if (provider === "plaid") {
+        if (!resolvedBusinessId) return;
+        try {
+          const res = await safeFetch(
+            apiUrl(
+              `/api/integrations/plaid/status?business_id=${encodeURIComponent(
+                resolvedBusinessId
+              )}`
+            ),
+            { method: "GET" }
+          );
+          const instCount = res?.institutions_count || 0;
+          const acctCount = res?.accounts_count || 0;
+          const status =
+            instCount > 0 || acctCount > 0
+              ? STATUS.CONNECTED
+              : res?.status === "reauth_required"
+              ? STATUS.AWAITING
+              : res?.status === "error"
+              ? STATUS.ERROR
+              : STATUS.DISCONNECTED;
+
+          const lastSyncCandidates = (res?.institutions || [])
+            .map((i) => (i?.last_sync_at ? Date.parse(i.last_sync_at) : null))
+            .filter((ts) => Number.isFinite(ts));
+          const parsedTs =
+            lastSyncCandidates.length > 0
+              ? Math.max(...lastSyncCandidates)
+              : null;
+
+          const institutionName =
+            instCount === 1 && Array.isArray(res?.institutions) && res.institutions[0]
+              ? res.institutions[0].institution_name || null
+              : null;
+
+          updateProvider("plaid", {
+            status,
+            lastSync: Number.isFinite(parsedTs) ? parsedTs : null,
+            info: {
+              institutions_count: instCount,
+              accounts_count: acctCount,
+              institution_name: institutionName,
+            },
+          });
+        } catch (err) {
+          console.warn("[integrations] plaid status refresh failed", err);
+        }
+      }
+    },
+    [resolvedBusinessId, updateProvider]
   );
 
   const isConnecting = useCallback(
@@ -445,5 +627,6 @@ export default function useIntegrationManager(options = {}) {
     businessId: resolvedBusinessId,
     markConnected,
     markStatus,
+    refresh,
   };
 }

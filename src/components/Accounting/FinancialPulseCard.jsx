@@ -1,12 +1,10 @@
 // File: /src/components/Accounting/FinancialPulseCard.jsx
 import React, { useEffect, useMemo, useState } from "react";
-import { usePeriod } from "../../context/PeriodContext";
+import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { RefreshCw, MessageCircle } from "lucide-react";
 import CardHeader from "../UI/CardHeader"; // ⬅️ unify header style
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
-import apiBaseUrl from "../../utils/apiBase.js";
-
-const API_BASE = apiBaseUrl || "";
+import { apiFetch } from "../../utils/apiBase.js";
 
 // normalize either camelCase or snake_case into a consistent shape
 function normalizePulse(pulse) {
@@ -44,7 +42,7 @@ function timeAgo(ts) {
 }
 
 export default function FinancialPulseCard({ userId, businessId }) {
-  const { period } = usePeriod(); // { year, month }
+  const { year, month } = useFinancialPeriod(businessId);
   const [pulse, setPulse] = useState(null);
   const [loading, setLoading] = useState(!!(userId && businessId));
   const [error, setError] = useState(null);
@@ -57,8 +55,8 @@ export default function FinancialPulseCard({ userId, businessId }) {
   }, [usingDemo]);
 
   const label = useMemo(
-    () => monthLabel(period?.year, period?.month),
-    [period?.year, period?.month]
+    () => monthLabel(year, month),
+    [year, month]
   );
 
   async function fetchPulse(signal) {
@@ -67,7 +65,7 @@ export default function FinancialPulseCard({ userId, businessId }) {
       setLoading(false);
       return;
     }
-    if (!userId || !businessId || !period?.year || !period?.month) {
+    if (!userId || !businessId || !year || !month) {
       setPulse(null);
       setLoading(false);
       return;
@@ -76,13 +74,13 @@ export default function FinancialPulseCard({ userId, businessId }) {
     setError(null);
     try {
       const url =
-        `${API_BASE}/api/accounting/pulse` +
+        `/api/accounting/pulse` +
         `?user_id=${encodeURIComponent(userId)}` +
         `&business_id=${encodeURIComponent(businessId)}` +
-        `&year=${encodeURIComponent(period.year)}` +
-        `&month=${encodeURIComponent(period.month)}`;
+        `&year=${encodeURIComponent(year)}` +
+        `&month=${encodeURIComponent(month)}`;
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: "GET",
         headers: {
           "Content-Type": "application/json",
@@ -117,11 +115,11 @@ export default function FinancialPulseCard({ userId, businessId }) {
       setError(null);
       return;
     }
-    if (!userId || !businessId || !period?.year || !period?.month) return;
+    if (!userId || !businessId || !year || !month) return;
     setGenerating(true);
     setError(null);
     try {
-      await fetch(`${API_BASE}/api/accounting/pulse/generate`, {
+      await apiFetch(`/api/accounting/pulse/generate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -131,8 +129,8 @@ export default function FinancialPulseCard({ userId, businessId }) {
         body: JSON.stringify({
           user_id: userId,
           business_id: businessId,
-          year: period.year,
-          month: period.month,
+          year,
+          month,
         }),
       });
       await fetchPulse(); // refresh after generation
@@ -148,7 +146,7 @@ export default function FinancialPulseCard({ userId, businessId }) {
     const ac = new AbortController();
     fetchPulse(ac.signal);
     return () => ac.abort();
-  }, [userId, businessId, period?.year, period?.month, demoPulse]);
+  }, [userId, businessId, year, month, demoPulse]);
 
   // UI
   const monthPill = (

@@ -57,6 +57,10 @@ export default function InsightCard({
           ? `0 0 12px ${hoverGlow}, inset 0 1px 0 ${innerEdge}`
           : `0 0 10px ${outerGlow}, inset 0 1px 0 ${innerEdge}`,
         backgroundClip: "padding-box",
+        transform: hovered ? "translateY(-3px) scale(1.02)" : "translateY(0) scale(1)",
+        transition: "transform 200ms cubic-bezier(0.22,1,0.36,1), box-shadow 200ms ease, border-color 200ms ease",
+        transformOrigin: "center center",
+        willChange: "transform",
       }}
       role="note"
       aria-live="off"

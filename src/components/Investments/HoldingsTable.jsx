@@ -146,7 +146,7 @@ export default function HoldingsTable({
                 }
                 className={`text-[12px] px-2.5 py-1.5 rounded-full outline-none ring-1 ring-inset ${
                   active
-                    ? "ring-[#B388FF]/50 text-[#B388FF] bg-[#B388FF]/10"
+                    ? "ring-[rgb(var(--accent-rgb))]/50 text-[rgb(var(--accent-rgb))] bg-[rgb(var(--accent-rgb))]/10"
                     : "ring-white/12 text-white/70 bg-white/5 hover:bg-white/10"
                 }`}
                 aria-pressed={active}
@@ -233,7 +233,7 @@ export default function HoldingsTable({
                     <td className="py-2 pr-2">
                       <span className="inline-flex items-center gap-2">
                         <span
-                          className="px-2 py-0.5 rounded-md ring-1 ring-inset ring-[#B388FF]/40 bg-[#B388FF]/10 text-[#B388FF] font-medium"
+                          className="px-2 py-0.5 rounded-md ring-1 ring-inset ring-[rgb(var(--accent-rgb))]/40 bg-[rgb(var(--accent-rgb))]/10 text-[rgb(var(--accent-rgb))] font-medium"
                           aria-label="Ticker"
                         >
                           {r.ticker}

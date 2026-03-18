@@ -25,7 +25,7 @@ import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 
 /* ---------- Graphite + Investments accent ---------- */
-const PURPLE = "#B388FF";
+const PURPLE = "rgb(var(--accent-rgb))";
 const PANEL_BG = "#0f1012";                         // flatter, like Financials
 const NEUTRAL_BORDER = "rgba(165,167,169,0.18)";
 const RING_PURPLE = "rgba(179,136,255,0.20)";       

@@ -1,9 +1,9 @@
 // themeMap.js
 export const dashboardThemeMap = {
-  bizzy: 'pink',
+  bizzy: 'green',
   financials: 'green',
   accounting: 'green',
-  marketing: 'blue',
-  tax: 'gold',
-  investments: 'purple',
+  marketing: 'green',
+  tax: 'green',
+  investments: 'green',
 };

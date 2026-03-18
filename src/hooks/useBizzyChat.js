@@ -3,6 +3,30 @@ import { useCallback, useEffect, useState, useRef } from 'react';
 import { supabase } from '../services/supabaseClient.js';
 import apiBaseUrl from '../utils/apiBase.js';
 
+// Lightweight intent/trigger detectors (frontend safeguards)
+const SAVE_INTENT_RE = /\b(save (this|it)?|save to docs|add to docs|put this in docs|remember this decision|keep this decision|document this)\b/i;
+const NAV_INTENT_RE = /\b(open|go to|navigate|take me to|show me)\b.*\b(forecast|forecasts|report|reports|jobs|tax|taxes|invoices?|unpaid|receivables|accounts receivable)\b/i;
+const WHERE_TO_SEE_RE = /\bwhere (can|do) i (see|view)\b/i;
+const PNL_RE = /\b(p&l|pnl|profit and loss|profit & loss|income statement|financial report|report pdf|p and l)\b/i;
+const INVOICE_RE = /\b(invoice|invoices|ar|accounts receivable|unpaid|overdue|who owes|payment due)\b/i;
+
+const detectSaveIntent = (text = '') => SAVE_INTENT_RE.test(text);
+const detectNavigationIntent = (text = '') => NAV_INTENT_RE.test(text) || WHERE_TO_SEE_RE.test(text);
+const detectPnlContext = (text = '') => PNL_RE.test(text);
+const detectInvoiceContext = (text = '') => INVOICE_RE.test(text);
+
+const normalizeDocSuggestion = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const { should_show, shouldShow, reason, suggested_title, suggestedTitle } = raw;
+  const show = should_show ?? shouldShow ?? false;
+  const title = suggested_title || suggestedTitle || undefined;
+  return {
+    should_show: !!show,
+    reason: reason || undefined,
+    ...(title ? { suggested_title: title } : {}),
+  };
+};
+
 /**
  * useBizzyChat
  * Handles client-side message flow, hydration, clarifiers, and usage tracking.
@@ -16,18 +40,43 @@ export const useBizzyChat = (user_id) => {
   const [followUpPrompt, setFollowUpPrompt] = useState(null);
   const [error, setError] = useState(null);
   const [usageCount, setUsageCount] = useState(0);
+  const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
+  const hasValidUser = user_id && user_id !== 'undefined';
 
   // Clarifier support
   const [clarify, setClarify] = useState(null); // { question, options, note }
   const lastInputRef = useRef('');              // same text for clarifier resend
   const defaultDepthRef = useRef('standard');
+  const assistantCountRef = useRef(0);          // track assistant turns for rate-limiting
+  const lastDocSuggestionAssistantIdxRef = useRef(-Infinity);
+  const userRequestedSaveRef = useRef(false);
+  const userRequestedNavigationRef = useRef(false);
+  const lastUserMessageRef = useRef('');
 
   const API_BASE = apiBaseUrl || '';
 
   /* ────────────────────────────── Usage tracking ───────────────────────────── */
+  const ensureUsageRow = async () => {
+    if (!hasValidUser) return null;
+    const currentMonth = getCurrentMonth();
+    return supabase
+      .from('gpt_usage')
+      .upsert(
+        {
+          user_id,
+          month: currentMonth,
+          query_count: 0,
+          last_used: new Date().toISOString(),
+        },
+        { onConflict: 'user_id,month' }
+      );
+  };
+
   const fetchUsage = async () => {
+    if (!hasValidUser) return;
+    const currentMonth = getCurrentMonth();
     try {
-      const currentMonth = new Date().toISOString().slice(0, 7);
+      await ensureUsageRow();
       const { data, error } = await supabase
         .from('gpt_usage')
         .select('query_count')
@@ -37,14 +86,41 @@ export const useBizzyChat = (user_id) => {
       if (error && error.code !== 'PGRST116') throw error;
       setUsageCount(data?.query_count || 0);
     } catch (err) {
-      console.warn('[useBizzyChat] Failed to fetch usage:', err.message);
+      if (import.meta?.env?.DEV) {
+        console.warn('[useBizzyChat] Failed to fetch usage:', err.message);
+      }
+    }
+  };
+
+  const incrementUsage = async () => {
+    if (!hasValidUser) return;
+    const currentMonth = getCurrentMonth();
+    const nextCount = (usageCount || 0) + 1;
+    setUsageCount(nextCount);
+    try {
+      await ensureUsageRow();
+      await supabase
+        .from('gpt_usage')
+        .upsert(
+          {
+            user_id,
+            month: currentMonth,
+            query_count: nextCount,
+            last_used: new Date().toISOString(),
+          },
+          { onConflict: 'user_id,month' }
+        );
+    } catch (err) {
+      if (import.meta?.env?.DEV) {
+        console.warn('[useBizzyChat] Failed to increment usage:', err.message);
+      }
     }
   };
 
   useEffect(() => {
-    if (user_id) fetchUsage();
+    if (hasValidUser) fetchUsage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user_id]);
+  }, [hasValidUser, user_id]);
 
   /* ────────────────────────────── Utilities ───────────────────────────── */
   const parseJsonOrThrow = async (res) => {
@@ -67,7 +143,13 @@ export const useBizzyChat = (user_id) => {
    * @param {Array<{id:string|number, sender:'user'|'assistant', text:string, created_at?:string}>} msgs
    */
   const hydrate = (msgs) => {
-    setMessages(Array.isArray(msgs) ? msgs : []);
+    const next = Array.isArray(msgs) ? msgs : [];
+    setMessages(next);
+    assistantCountRef.current = next.filter((m) => m?.sender === 'assistant').length;
+    lastDocSuggestionAssistantIdxRef.current = -Infinity;
+    userRequestedSaveRef.current = false;
+    userRequestedNavigationRef.current = false;
+    lastUserMessageRef.current = '';
     setClarify(null);
     setSuggestedActions([]);
     setFollowUpPrompt(null);
@@ -92,6 +174,108 @@ export const useBizzyChat = (user_id) => {
     });
   }, []);
 
+  // ────────────────────────────── Client-side guards ─────────────────────────────
+  const normalizeArtifacts = useCallback((raw = [], assistantText = '') => {
+    const allowed = Array.isArray(raw) ? raw : [];
+    if (!allowed.length) return [];
+
+    const lastUserText = lastUserMessageRef.current || '';
+    const textForHeuristics = `${assistantText} ${lastUserText}`.toLowerCase();
+    const maybePnl = detectPnlContext(textForHeuristics);
+    const maybeInvoice = detectInvoiceContext(textForHeuristics);
+
+    const mapped = allowed
+      .map((a) => ({
+        type: a?.type,
+        title: a?.title || '',
+        subtitle: a?.subtitle || '',
+        url: a?.url || '',
+        meta: a?.meta,
+      }))
+      .filter((a) => a.type && a.title && a.url);
+
+    const filtered = mapped.filter((a) => {
+      if (a.type === 'pnl_pdf') return maybePnl || detectPnlContext(lastUserText);
+      if (a.type === 'invoice') return maybeInvoice || detectInvoiceContext(lastUserText);
+      return false;
+    });
+
+    return filtered.slice(0, 2);
+  }, []);
+
+  const normalizeActions = useCallback((raw = []) => {
+    const allowNav = userRequestedNavigationRef.current || detectNavigationIntent(lastUserMessageRef.current || '');
+    if (!allowNav) return [];
+    const allowed = Array.isArray(raw) ? raw : [];
+    return allowed
+      .filter((a) => a?.type === 'navigate' && a?.payload?.to && a?.label)
+      .map((a) => ({
+        type: 'navigate',
+        label: a.label,
+        payload: { to: a.payload.to },
+      }));
+  }, []);
+
+  const normalizeAssistantMessage = useCallback(
+    (data = {}) => {
+      const incomingText =
+        typeof data.responseText === 'string'
+          ? data.responseText
+          : typeof data.content === 'string'
+            ? data.content
+            : '';
+
+      const assistantIdx = (assistantCountRef.current || 0) + 1;
+      const userAskedToSave = userRequestedSaveRef.current;
+      const docSuggestionRaw = normalizeDocSuggestion(data?.doc_suggestion || data?.docSuggestion);
+      let docSuggestion = docSuggestionRaw || null;
+      let shouldShow = docSuggestion?.should_show || false;
+      let reason = docSuggestion?.reason;
+
+      if (userAskedToSave) {
+        shouldShow = true;
+        reason = 'user_requested';
+      }
+
+      const strategic = reason === 'strategic_decision';
+      const lastIdx = Number.isFinite(lastDocSuggestionAssistantIdxRef.current)
+        ? lastDocSuggestionAssistantIdxRef.current
+        : -Infinity;
+      const withinCooldown = assistantIdx - lastIdx < 10;
+      if (strategic && !userAskedToSave && withinCooldown) {
+        shouldShow = false;
+      }
+
+      if (shouldShow) {
+        lastDocSuggestionAssistantIdxRef.current = assistantIdx;
+      }
+
+      if (shouldShow || reason) {
+        docSuggestion = { ...(docSuggestion || {}), should_show: shouldShow };
+        if (reason) docSuggestion.reason = reason;
+      } else {
+        docSuggestion = null;
+      }
+
+      const artifacts = normalizeArtifacts(data?.artifacts, incomingText);
+      const actions = normalizeActions(data?.actions);
+
+      assistantCountRef.current = assistantIdx;
+      userRequestedSaveRef.current = false;
+      userRequestedNavigationRef.current = false;
+
+      return {
+        id: Date.now() + 1,
+        sender: 'assistant',
+        text: incomingText || 'No response generated.',
+        artifacts,
+        actions,
+        doc_suggestion: docSuggestion,
+      };
+    },
+    [normalizeActions, normalizeArtifacts]
+  );
+
   /* ────────────────────────────── Message sending ───────────────────────────── */
   /**
    * Send a user message to Bizzy (handles new + existing threads)
@@ -109,15 +293,22 @@ export const useBizzyChat = (user_id) => {
   ) => {
     if (!userInput?.trim() || isLoading) return;
 
+    const trimmedInput = userInput.trim();
+    lastUserMessageRef.current = trimmedInput;
+    const userRequestedSave = detectSaveIntent(trimmedInput);
+    const userRequestedNavigation = detectNavigationIntent(trimmedInput);
+    userRequestedSaveRef.current = userRequestedSave;
+    userRequestedNavigationRef.current = userRequestedNavigation;
+
     const newUserMessage = {
       id: Date.now(),
       sender: 'user',
-      text: userInput.trim(),
+      text: trimmedInput,
     };
 
     // Optimistic UI: show user message immediately
     setMessages((prev) => [...prev, newUserMessage]);
-    lastInputRef.current = userInput;
+    lastInputRef.current = trimmedInput;
     setIsLoading(true);
     setIsGenerating(true);
     setError(null);
@@ -131,9 +322,13 @@ export const useBizzyChat = (user_id) => {
       const payload = {
         user_id: user_id ?? localStorage.getItem('user_id') ?? undefined,
         business_id: bizId,
-        message: userInput.trim(),
+        message: trimmedInput,
         intent,
-        context,
+        context: {
+          ...(context || {}),
+          userRequestedNavigation,
+          userRequestedSave,
+        },
         opts: { depth },
         thread_id: threadId || null,
       };
@@ -168,11 +363,7 @@ export const useBizzyChat = (user_id) => {
         triggerSuggestedActions(data.suggestedActions);
       }
 
-      const newBizzyMessage = {
-        id: Date.now() + 1,
-        sender: 'assistant',
-        text: data.responseText || 'No response generated.',
-      };
+      const newBizzyMessage = normalizeAssistantMessage(data);
 
       // Append assistant message
       setMessages((prev) => [...prev, newBizzyMessage]);
@@ -184,11 +375,13 @@ export const useBizzyChat = (user_id) => {
         setFollowUpPrompt(data.followUpPrompt || null);
       }
 
-      fetchUsage();
+      incrementUsage();
     } catch (err) {
       console.error('🔥 Bizzy chat error:', err);
       setError(err.message || 'Something went wrong. Please try again.');
     } finally {
+      userRequestedSaveRef.current = false;
+      userRequestedNavigationRef.current = false;
       setIsLoading(false);
       setIsGenerating(false);
     }

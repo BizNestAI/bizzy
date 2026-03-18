@@ -25,7 +25,7 @@ const moduleInsights = {
       { label: 'Top Post', value: '"Before & After Kitchen Remodel"' },
       { label: 'CTR', value: '6.8%' },
     ],
-    themeColor: 'text-blue-400',
+    themeColor: 'text-emerald-400',
   },
   tax: {
     title: '📄 Tax Snapshot',
@@ -35,7 +35,7 @@ const moduleInsights = {
       { label: 'Next Filing', value: 'Sep 15, 2025' },
       { label: 'Quarterly Status', value: '✅ On Track' },
     ],
-    themeColor: 'text-yellow-400',
+    themeColor: 'text-emerald-400',
   },
   investments: {
     title: '📈 Investment Pulse',
@@ -45,7 +45,7 @@ const moduleInsights = {
       { label: '1-Mo ROI', value: '+4.3%' },
       { label: 'Top Performer', value: 'S&P 500 ETF' },
     ],
-    themeColor: 'text-purple-400',
+    themeColor: 'text-emerald-400',
   },
 };
 

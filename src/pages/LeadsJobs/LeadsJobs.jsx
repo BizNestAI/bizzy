@@ -9,7 +9,7 @@ import AgendaWidget from '../Calendar/AgendaWidget.jsx';
 // ⬇️ NEW: bring in your existing profitability table
 import JobProfitabilityTable from '../../components/Accounting/JobProfitabilityTable.jsx';
 
-const ACCENT = '#FF4EEB'; // Use bizzy pink for now; you can theme "ops" later
+const ACCENT = '#34d399'; // Unified Books green accent
 
 export default function LeadsJobs() {
   const navigate = useNavigate();

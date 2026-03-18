@@ -30,7 +30,7 @@ export default function ReplyDrawer({ open, review, onClose, onSent, businessId 
         <div className="font-semibold mb-2">Reply to Review</div>
         <textarea value={draft} onChange={(e)=>setDraft(e.target.value)} className="w-full h-40 bg-white/5 border border-white/10 rounded p-2 text-sm" />
         <div className="mt-2 flex items-center gap-2">
-          <button onClick={send} className="px-3 py-1.5 rounded border border-[color:#3B82F6] text-[color:#3B82F6] text-sm">Send via Email</button>
+          <button onClick={send} className="px-3 py-1.5 rounded border border-[color:rgb(var(--accent-rgb))] text-[color:rgb(var(--accent-rgb))] text-sm">Send via Email</button>
           <button onClick={onClose} className="px-3 py-1.5 rounded border border-white/15 text-sm">Cancel</button>
         </div>
       </div>

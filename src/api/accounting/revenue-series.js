@@ -1,5 +1,6 @@
 import express from "express";
 import { supabase } from "../../services/supabaseAdmin.js";
+import { qboEnvName } from "../../utils/qboEnv.js";
 
 const router = express.Router();
 
@@ -14,6 +15,7 @@ function useMockAccounting(req) {
 
 function pad2(n) { return String(n).padStart(2, "0"); }
 function monthKey(y, m) { return `${y}-${pad2(m)}-01`; }
+function monthKeyShort(y, m) { return `${y}-${pad2(m)}`; }
 
 function seqLastNMonths({ year, month, n = 12 }) {
   const out = [];
@@ -55,11 +57,7 @@ router.get("/", async (req, res) => {
       return res.status(400).json({ error: "Missing business_id" });
     }
 
-    const windowMonths = seqLastNMonths({
-      year: end_year,
-      month: end_month,
-      n: window,
-    });
+    let windowMonths = seqLastNMonths({ year: end_year, month: end_month, n: window });
 
     // Mock path if allowed
     if (useMockAccounting(req)) {
@@ -68,7 +66,11 @@ router.get("/", async (req, res) => {
     }
 
     // Supabase path
-    const keys = windowMonths.map(({ year, month }) => monthKey(year, month));
+    const keyPairs = windowMonths.flatMap(({ year, month }) => [
+      monthKey(year, month),
+      monthKeyShort(year, month),
+    ]);
+    const keys = Array.from(new Set(keyPairs));
     const { data: fmRows, error: fmErr } = await supabase
       .from("financial_metrics")
       .select("month,total_revenue")
@@ -82,11 +84,55 @@ router.get("/", async (req, res) => {
     const fmMap = new Map();
     (fmRows || []).forEach((r) => fmMap.set(r.month, Number(r.total_revenue ?? 0)));
 
-    const rows = windowMonths.map(({ year, month }) => {
-      const key = monthKey(year, month);
-      const val = fmMap.get(key);
-      return { year, month, revenue: val == null ? 0 : Number(val) };
+    const rowsRaw = windowMonths.map(({ year, month }) => {
+      const keyA = monthKey(year, month);
+      const keyB = monthKeyShort(year, month);
+      const val = fmMap.has(keyA) ? fmMap.get(keyA) : fmMap.get(keyB);
+      const found = fmMap.has(keyA) || fmMap.has(keyB);
+      return { year, month, revenue: val == null ? 0 : Number(val), found };
     });
+
+    // Sandbox/dev fallback: if latest month has no data, shift window back to last month with data
+    const isSandbox = qboEnvName === "sandbox" || process.env.NODE_ENV !== "production";
+    let rows = rowsRaw;
+    if (isSandbox && rowsRaw.length) {
+      const latest = rowsRaw[rowsRaw.length - 1];
+      const latestHasData = latest.found && Number(latest.revenue || 0) !== 0;
+      if (!latestHasData) {
+        const lastWithData = [...rowsRaw].reverse().find(r => r.found && Number(r.revenue || 0) !== 0);
+        if (lastWithData) {
+          windowMonths = seqLastNMonths({
+            year: lastWithData.year,
+            month: lastWithData.month,
+            n: window,
+          });
+          const updatedPairs = windowMonths.flatMap(({ year, month }) => [
+            monthKey(year, month),
+            monthKeyShort(year, month),
+          ]);
+          const updatedKeys = Array.from(new Set(updatedPairs));
+          const { data: refetched } = await supabase
+            .from("financial_metrics")
+            .select("month,total_revenue")
+            .eq("business_id", business_id)
+            .in("month", updatedKeys);
+          const refetchMap = new Map();
+          (refetched || fmRows || []).forEach((r) => refetchMap.set(r.month, Number(r.total_revenue ?? 0)));
+          rows = windowMonths.map(({ year, month }) => {
+            const keyA = monthKey(year, month);
+            const keyB = monthKeyShort(year, month);
+            const val = refetchMap.has(keyA) ? refetchMap.get(keyA) : refetchMap.get(keyB);
+            return { year, month, revenue: val == null ? 0 : Number(val) };
+          });
+        } else {
+          rows = rowsRaw.map(({ year, month, revenue }) => ({ year, month, revenue }));
+        }
+      } else {
+        rows = rowsRaw.map(({ year, month, revenue }) => ({ year, month, revenue }));
+      }
+    } else {
+      rows = rowsRaw.map(({ year, month, revenue }) => ({ year, month, revenue }));
+    }
 
     return res.json({ rows, source: "supabase" });
   } catch (err) {

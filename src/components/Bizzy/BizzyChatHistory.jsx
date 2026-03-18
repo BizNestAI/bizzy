@@ -9,17 +9,18 @@ import { useAuth } from '../../context/AuthContext';
 import { createDoc } from '../../services/bizzyDocs/docsService';
 import MarkdownRenderer from './MarkdownRenderer';
 import ChatMessage from './ChatMessage';
+import { ACCENT_HEX } from '../../config/accent';
 
 /* ---------- constants / helpers ---------- */
 const USER_MAX_W = 'max-w-[80%] sm:max-w-[65%] md:max-w-[55%]';
 const BIZZY_MAX_W = 'max-w-[98%] sm:max-w-[96%] md:max-w-[95%]';
 
 const accentHexMap = {
-  bizzy: '#FF4EEB',
-  accounting: '#00FFB2',
-  marketing: '#3B82F6',
-  tax: '#FFD700',
-  investments: '#B388FF',
+  bizzy: ACCENT_HEX,
+  accounting: ACCENT_HEX,
+  marketing: ACCENT_HEX,
+  tax: ACCENT_HEX,
+  investments: ACCENT_HEX,
 };
 function hexToRgba(hex, alpha = 1) {
   let c = hex.replace('#', '');
@@ -297,7 +298,11 @@ const BizzyChatHistory = ({ inline = false }) => {
       document.querySelector('[data-bizzy-sidebar-top]');
     setPanelTop(Math.max(8, Math.round(topAnchor?.getBoundingClientRect().top ?? 80)));
 
-    const chatBar = document.querySelector('[data-bizzy-chatbar]');
+    const chatBar =
+      document.querySelector('[data-bizzy-chatbar-form]') ||
+      document.querySelector('[data-bizzy-chatbar-measured]') ||
+      document.querySelector('[data-bizzy-chatbar-shell]') ||
+      document.querySelector('[data-bizzy-chatbar]');
     if (chatBar) {
       const chatRect = chatBar.getBoundingClientRect();
       setPanelBottom(Math.max(12, Math.round(window.innerHeight - chatRect.top) + 12));
@@ -313,7 +318,7 @@ const BizzyChatHistory = ({ inline = false }) => {
   const location = useLocation();
   const currentModule = getModuleFromPath(location.pathname);
   useModuleTheme(currentModule);
-  const accentHex = useMemo(() => accentHexMap[currentModule] || '#FF4EEB', [currentModule]);
+  const accentHex = useMemo(() => accentHexMap[currentModule] || ACCENT_HEX, [currentModule]);
   const { fill, border } = bgFromAccent(accentHex);
 
   useEffect(() => {
@@ -324,7 +329,12 @@ const BizzyChatHistory = ({ inline = false }) => {
     window.addEventListener('resize', onResize);
     window.addEventListener('scroll', onScroll, { passive: true });
     const ro = new ResizeObserver(recompute);
-    const chatBar = document.querySelector('[data-bizzy-chatbar]'); if (chatBar) ro.observe(chatBar);
+    const chatBar =
+      document.querySelector('[data-bizzy-chatbar-form]') ||
+      document.querySelector('[data-bizzy-chatbar-measured]') ||
+      document.querySelector('[data-bizzy-chatbar-shell]') ||
+      document.querySelector('[data-bizzy-chatbar]');
+    if (chatBar) ro.observe(chatBar);
     const topAnchor =
       document.querySelector('[data-chat-top-anchor]') || document.querySelector('[data-bizzy-sidebar-top]');
     if (topAnchor) ro.observe(topAnchor);

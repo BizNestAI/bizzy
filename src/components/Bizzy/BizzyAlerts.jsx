@@ -3,13 +3,14 @@ import React, { useEffect, useState, useMemo } from "react";
 import { apiUrl, safeFetch } from "../../utils/safeFetch";
 import { useNavigate } from "react-router-dom";
 import { DollarSign, Landmark, TrendingUp, AlertCircle } from "lucide-react";
+import { ACCENT_HEX } from "../../config/accent";
 
 const MODULE_STYLE = {
-  accounting: { hex: "#00FFB2", icon: DollarSign,  label: "Accounting", to: "/dashboard/accounting" },
-  tax:        { hex: "#FFD700", icon: Landmark,    label: "Tax",        to: "/dashboard/tax" },
-  marketing:  { hex: "#3B82F6", icon: TrendingUp,  label: "Marketing",  to: "/dashboard/marketing" },
-  bizzy:      { hex: "#FF4EEB", icon: AlertCircle, label: "Bizzi",      to: "/dashboard/bizzy" },
-  default:    { hex: "#FF4EEB", icon: AlertCircle, label: "Bizzi",      to: "/dashboard/bizzy" },
+  accounting: { hex: ACCENT_HEX, icon: DollarSign,  label: "Accounting", to: "/dashboard/accounting" },
+  tax:        { hex: ACCENT_HEX, icon: Landmark,    label: "Tax",        to: "/dashboard/tax" },
+  marketing:  { hex: ACCENT_HEX, icon: TrendingUp,  label: "Marketing",  to: "/dashboard/marketing" },
+  bizzy:      { hex: ACCENT_HEX, icon: AlertCircle, label: "Bizzi",      to: "/dashboard/bizzy" },
+  default:    { hex: ACCENT_HEX, icon: AlertCircle, label: "Bizzi",      to: "/dashboard/bizzy" },
 };
 
 function sevDot(sev) {

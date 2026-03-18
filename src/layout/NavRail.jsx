@@ -1,22 +1,13 @@
 // File: /src/components/layout/NavRail.jsx
-import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useMemo, useRef, useLayoutEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from '../components/UserAdmin/Sidebar';
 import ChatDrawer from '../components/Bizzy/ChatDrawer';
 import { useBizzyChatContext } from '../context/BizzyChatContext';
 import { useBusiness } from '../context/BusinessContext';
 import bizzyLogo from '../assets/bizzy-logo.png';
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-
-const accentHexMap = {
-  bizzy: '#FF4EEB',        // fallback (not used for chrome pages)
-  accounting: '#00FFB2',
-  marketing: '#3B82F6',
-  tax: '#FFD700',
-  investments: '#B388FF',
-  email: '#3CF2FF',
-  activity: '#BFBFBF',
-};
+import { ACCENT_HEX, ACCENT_SOFT } from '../config/accent';
+import NavRailBusinessBadge from './NavRailBusinessBadge';
 
 function moduleFromPath(path) {
   const seg = path.split('/')[2] || 'bizzy';
@@ -30,7 +21,6 @@ function hexToRgba(hex, alpha = 1) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-const DEFAULT_NAV_W = 256;
 const COLLAPSED_NAV_W = 115;
 
 /** Bizzi/chrome routes */
@@ -66,15 +56,12 @@ export default function NavRail({
     [accentOverride, isChatHome]
   );
 
-  // pick the “base” accent for this route (chrome for bizzi-family, else module color)
-  const baseAccent = useMemo(() => {
-    if (useChrome) return '#BFBFBF'; // chrome silver
-    return accentHexMap[moduleKey] || '#FF4EEB';
-  }, [useChrome, moduleKey]);
+  // pick the “base” accent for this route (unified Books green everywhere)
+  const baseAccent = useMemo(() => ACCENT_HEX, []);
 
   // expose tokens for children (Sidebar, etc.)
   const accentToken = baseAccent;
-  const accentSoft  = useMemo(() => (useChrome ? 'rgba(191,191,191,.50)' : hexToRgba(baseAccent, 0.40)), [useChrome, baseAccent]);
+  const accentSoft  = useMemo(() => ACCENT_SOFT, []);
 
   const effectiveBusinessId = useMemo(() => (
     currentBusiness?.id ||
@@ -84,14 +71,14 @@ export default function NavRail({
   ), [currentBusiness?.id, businessId]);
 
   const asideRef = useRef(null);
-
-  const [collapsed, setCollapsed] = useState(true);
+  const chatDrawerRef = useRef(null);
+  const collapsed = true;
 
   useLayoutEffect(() => {
-    const width = `${collapsed ? COLLAPSED_NAV_W : DEFAULT_NAV_W}px`;
+    const width = `${COLLAPSED_NAV_W}px`;
     document.documentElement.style.setProperty("--nav-w", width);
-    document.documentElement.style.setProperty("--nav-collapsed", String(collapsed ? 1 : 0));
-  }, [collapsed]);
+    document.documentElement.style.setProperty("--nav-collapsed", "1");
+  }, []);
 
   return (
     <>
@@ -101,91 +88,110 @@ export default function NavRail({
         aria-label="Navigation rail"
         data-collapsed={collapsed ? 'true' : 'false'}
       className={[
-        "fixed left-0 px-2 top-0 h-[100svh] md:h-screen z-40",
-        "bg-sidebar/95 text-primary",
+        `fixed left-0 ${collapsed ? "px-1" : "px-2"} top-0 h-[100svh] md:h-screen z-40`,
+        "text-primary",
         "transition-[width,transform,padding,border-color,box-shadow] duration-350 ease-[cubic-bezier(.22,1,.36,1)]",
         "w-[--nav-w]",
         open ? "translate-x-0" : "-translate-x-full md:translate-x-0",
-        "flex flex-col min-h-0 overflow-y-auto no-scrollbar",
+        "flex flex-col min-h-0",
         className
       ].join(' ')}
       style={{
         '--accent': accentToken,
         '--accent-soft': accentSoft,
         '--chat-clearance': '112px',
-        borderRight: '1px solid rgba(255,255,255,0.08)',
-        boxShadow: collapsed
-          ? `2px 0 8px rgba(0,0,0,0.35)`
-          : `2px 0 8px rgba(0,0,0,0.35)`,
+        borderRight: '1px solid rgba(255,255,255,0.06)',
+        boxShadow: 'none',
+        backgroundColor: 'transparent',
         willChange: "width, transform",
         transition: "width 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1), padding 320ms cubic-bezier(0.22,1,0.36,1), border-color 220ms ease, box-shadow 320ms cubic-bezier(0.22,1,0.36,1)",
       }}
       >
-        {/* Rail header */}
+        {/* Dedicated grain layer for the rail */}
         <div
-          className="sticky top-0 z-10 pl-2 pr-3 pt-3 pb-2"
-          style={{
-            background: 'rgba(18,16,15,0.9)',
-          }}
+          aria-hidden
+          className="bizzy-bg-textured"
+          style={{ position: "absolute", inset: 0, backgroundColor: "var(--bg)", pointerEvents: "none", zIndex: 0 }}
+        />
+
+        <div
+          className="flex-1 min-h-0 flex flex-col overflow-y-auto no-scrollbar relative"
+          style={{ zIndex: 1, paddingBottom: "76px" }}
         >
-          <div className="flex items-center min-w-0 gap-3">
-            <div className="flex items-center gap-3 min-w-0 flex-shrink-0">
-              <button
-                onClick={() => navigate('/dashboard/bizzy')}
+          {/* Rail header */}
+          <div
+            className="sticky top-0 z-10 pl-2 pr-3 pt-3 pb-2"
+            style={{ background: "transparent" }}
+          >
+            <div className="flex items-center min-w-0 gap-3">
+              <div className="flex items-center gap-3 min-w-0 flex-shrink-0">
+                <button
+                onClick={() => navigate('/dashboard/bizzy/chat')}
                 className="group relative h-9 w-9 rounded-full overflow-hidden shrink-0 outline-none"
-                aria-label="Go to Bizzi Dashboard"
-                title="Go to Bizzi Dashboard"
-                style={{
-                  border: `1px solid ${hexToRgba(baseAccent, 0.55)}`,
-                  boxShadow: `0 0 0 1px ${hexToRgba(baseAccent, 0.22)}, 0 0 10px ${accentSoft}`
-                }}
-              >
-                <img
-                  src={bizzyLogo}
-                  alt="Bizzi logo"
-                  className="h-full w-full object-contain rounded-full bg-panel p-[2px] select-none"
-                  draggable="false"
-                  loading="eager"
-                  decoding="async"
-                />
-              </button>
+                aria-label="Go to ChatHome"
+                title="Go to ChatHome"
+                  style={{
+                    border: `1px solid ${hexToRgba(baseAccent, 0.55)}`,
+                    boxShadow: `0 0 0 1px ${hexToRgba(baseAccent, 0.22)}, 0 0 10px ${accentSoft}`
+                  }}
+                >
+                  <img
+                    src={bizzyLogo}
+                    alt="Bizzi logo"
+                    className="h-full w-full object-contain rounded-full bg-panel p-[2px] select-none"
+                    draggable="false"
+                    loading="eager"
+                    decoding="async"
+                  />
+                </button>
 
-              {!collapsed && (
-                <span className="text-lg leading-none truncate text-primary">Bizzi</span>
-              )}
+                {!collapsed && (
+                  <span className="text-lg leading-none truncate text-primary">Bizzi</span>
+                )}
+              </div>
             </div>
+          </div>
 
-            {/* Collapse/Expand button */}
-            <div className="flex-1 flex justify-end">
-              <button
-                onClick={() => setCollapsed(v => !v)}
-                className="inline-flex h-6 w-6 items-center justify-center rounded-full transition hover:bg-white/8"
-                title={collapsed ? "Expand" : "Collapse"}
-                aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
-                style={{ color: 'var(--text)' }}
-              >
-                {collapsed ? <PanelLeftOpen size={11} /> : <PanelLeftClose size={11} />}
-              </button>
-            </div>
+          {/* Main nav list */}
+          <div className="shrink-0 mt-3">
+            <Sidebar
+              compact
+              collapsed={collapsed}
+              onChatHistoryHover={(anchor) => chatDrawerRef.current?.openHistory(anchor, { align: 'bottom' })}
+              onChatHistoryLeave={() => chatDrawerRef.current?.closeHistory()}
+              onChatHistoryClick={(anchor) => chatDrawerRef.current?.openHistory(anchor, { align: 'bottom' })}
+            />
+          </div>
+
+          {/* Chat threads list (scrolls with rail) */}
+          <div className="mt-2 px-0">
+            <ChatDrawer
+              businessId={effectiveBusinessId}
+              onOpenThread={openThread}
+              refreshKey={threadsRefreshKey}
+              className="h-auto"
+              collapsed={collapsed}
+              ref={chatDrawerRef}
+              showHistoryTrigger={false}
+              scrollRootRef={asideRef}
+            />
           </div>
         </div>
 
-        {/* Main nav list */}
-        <div className="shrink-0 mt-3">
-          <Sidebar compact collapsed={collapsed} />
-        </div>
-
-        {/* Chat threads list (scrolls with rail) */}
-        <div className="mt-2 px-0">
-          <ChatDrawer
-            businessId={effectiveBusinessId}
-            onOpenThread={openThread}
-            refreshKey={threadsRefreshKey}
-            className="h-auto"
-            collapsed={collapsed}
-            onToggle={() => setCollapsed(v => !v)}
-            scrollRootRef={asideRef}
-          />
+        {/* Bottom badge */}
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 22,
+            display: "flex",
+            justifyContent: "center",
+            pointerEvents: "auto",
+            zIndex: 5,
+          }}
+        >
+          <NavRailBusinessBadge />
         </div>
       </aside>
 

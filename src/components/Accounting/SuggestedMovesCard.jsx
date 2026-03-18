@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { usePeriod } from "../../context/PeriodContext";
+import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { CalendarDays, MessageCircle, CheckCircle2, RefreshCw, Zap, CalendarClock, TrendingUp } from "lucide-react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
-import apiBaseUrl from "../../utils/apiBase.js";
-
-const API_BASE = apiBaseUrl || "";
+import { apiFetch } from "../../utils/apiBase.js";
 
 const TF_STYLES = {
   Immediate: {
@@ -48,7 +46,7 @@ export default function SuggestedMovesCard({
   onAddToCalendar,
   onComplete,
 }) {
-  const { period } = usePeriod();
+  const { year, month } = useFinancialPeriod(businessId);
   const [moves, setMoves] = useState([]);
   const [loading, setLoading] = useState(!!(userId && businessId));
   const [error, setError] = useState(null);
@@ -60,7 +58,7 @@ export default function SuggestedMovesCard({
     return demo?.financials?.suggestedMoves || [];
   }, [usingDemo]);
 
-  const label = useMemo(() => monthLabel(period?.year, period?.month), [period?.year, period?.month]);
+  const label = useMemo(() => monthLabel(year, month), [year, month]);
 
   async function fetchMoves(signal) {
     if (demoMoves) {
@@ -68,7 +66,7 @@ export default function SuggestedMovesCard({
       setLoading(false);
       return;
     }
-    if (!userId || !businessId || !period?.year || !period?.month) {
+    if (!userId || !businessId || !year || !month) {
       setMoves([]);
       setLoading(false);
       return;
@@ -76,13 +74,13 @@ export default function SuggestedMovesCard({
     setLoading(true); setError(null);
     try {
       const url =
-        `${API_BASE}/api/accounting/moves` +
+        `/api/accounting/moves` +
         `?user_id=${encodeURIComponent(userId)}` +
         `&business_id=${encodeURIComponent(businessId)}` +
-        `&year=${encodeURIComponent(period.year)}` +
-        `&month=${encodeURIComponent(period.month)}`;
+        `&year=${encodeURIComponent(year)}` +
+        `&month=${encodeURIComponent(month)}`;
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         headers: { "Content-Type": "application/json", "x-user-id": userId, "x-business-id": businessId },
         signal,
       });
@@ -112,17 +110,17 @@ export default function SuggestedMovesCard({
     }
     fetchMoves(ac.signal);
     return () => ac.abort();
-  }, [userId, businessId, period?.year, period?.month, demoMoves]);
+  }, [userId, businessId, year, month, demoMoves]);
 
   async function handleRegenerate() {
     if (demoMoves) return;
-    if (!userId || !businessId || !period?.year || !period?.month) return;
+    if (!userId || !businessId || !year || !month) return;
     setIsGenerating(true); setError(null);
     try {
-      await fetch(`${API_BASE}/api/accounting/moves/generate`, {
+      await apiFetch(`/api/accounting/moves/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-user-id": userId, "x-business-id": businessId },
-        body: JSON.stringify({ user_id: userId, business_id: businessId, year: period.year, month: period.month }),
+        body: JSON.stringify({ user_id: userId, business_id: businessId, year, month }),
       });
       await fetchMoves();
     } catch (e) {

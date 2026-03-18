@@ -21,14 +21,17 @@ const SubSidebar = () => {
   return (
     <>
       {/* Desktop SubSidebar */}
-      <aside className="hidden md:flex flex-col w-48 bg-black border-r border-gray-800 text-white px-4 py-6 space-y-2">
+      <aside
+        className="hidden md:flex flex-col w-48 text-white px-4 py-6 space-y-2 border-r"
+        style={{ background: "var(--bg)", borderColor: "var(--divider)" }}
+      >
         {tabs.map((tab) => (
           <NavLink
             key={tab.path}
             to={tab.path}
             className={({ isActive }) =>
               `block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                isActive ? 'bg-gray-800 text-neon-green' : 'hover:bg-[rgba(255,255,255,0.08)] hover:text-white'
+                isActive ? 'bg-white/10 text-white' : 'hover:bg-white/8 hover:text-white'
               }`
             }
           >
@@ -44,7 +47,10 @@ const SubSidebar = () => {
         </button>
 
         {isMobileOpen && (
-          <div className="absolute top-14 left-0 w-48 h-full bg-black z-50 border-r border-gray-800 p-4 space-y-2">
+          <div
+            className="absolute top-14 left-0 w-48 h-full z-50 p-4 space-y-2 border-r"
+            style={{ background: "var(--bg)", borderColor: "var(--divider)" }}
+          >
             {tabs.map((tab) => (
               <NavLink
                 key={tab.path}
@@ -52,7 +58,7 @@ const SubSidebar = () => {
                 onClick={() => setIsMobileOpen(false)}
                 className={({ isActive }) =>
                   `block px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                    isActive ? 'bg-gray-800 text-neon-green' : 'hover:bg-[rgba(255,255,255,0.08)] hover:text-white'
+                    isActive ? 'bg-white/10 text-white' : 'hover:bg-white/8 hover:text-white'
                   }`
                 }
               >

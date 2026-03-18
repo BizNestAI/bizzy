@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 
 const Card = ({ title, desc, meta, actionLabel, onAction }) => (
-  <div className="rounded-[22px] border border-white/12 bg-[rgba(18,19,23,0.86)] p-3 sm:p-4 shadow-[0_30px_60px_rgba(0,0,0,0.45)] backdrop-blur-2xl">
+  <div className="rounded-[18px] bg-white/[0.05] p-3 sm:p-4 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl">
     <div className="text-sm font-semibold text-white mb-1">{title}</div>
     <p className="text-xs text-white/65 leading-relaxed">{desc}</p>
     {meta?.length ? (
@@ -40,16 +40,25 @@ export default function NextActionsPanel({ topUnpaid = [], pipeline = {}, hasQbo
     <div className="space-y-3">
       <h4 className="text-sm font-semibold text-white/80">Next actions</h4>
 
-      {hasQbo && overdue.length > 0 ? (
-        <Card
-          title="Follow up on unpaid jobs"
-          desc="Nudge clients before the week ends so cash keeps flowing."
-          meta={overdue.map((job) => `${job.title || 'Untitled'} — $${Number(job.amount_due || 0).toLocaleString()}`)}
-          actionLabel="Open reminders"
-        />
+      {hasQbo ? (
+        overdue.length > 0 ? (
+          <Card
+            title="Follow up on unpaid jobs"
+            desc="Nudge clients before the week ends so cash keeps flowing."
+            meta={overdue.map((job) => `${job.title || 'Untitled'} — $${Number(job.amount_due || 0).toLocaleString()}`)}
+            actionLabel="Open reminders"
+          />
+        ) : (
+          <Card
+            title="No unpaid jobs right now"
+            desc="You're up to date on collections. Check again after new invoices are issued."
+            meta={null}
+            actionLabel={null}
+          />
+        )
       ) : (
         <Card
-          title="Connect QuickBooks or Housecall Pro"
+          title="Connect QuickBooks"
           desc="Bring in live invoice status so Bizzi can watch cash for you."
           actionLabel="Connect accounting"
         />

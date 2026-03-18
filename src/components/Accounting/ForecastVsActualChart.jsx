@@ -11,7 +11,6 @@ import {
   CartesianGrid,
   LabelList,
 } from 'recharts';
-import AskBizzyInsightButton from '../Bizzy/AskBizzyInsightButton';
 import { safeFetch } from '../../utils/safeFetch';
 import { getDemoData, shouldUseDemoData } from '../../services/demo/demoClient.js';
 import { Loader2, AlertTriangle } from 'lucide-react';
@@ -158,7 +157,6 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
               </button>
             ))}
           </div>
-          <AskBizzyInsightButton metric={`Forecast Accuracy: ${metric}`} value="forecast vs actual chart" previousValue="financial projections" />
         </div>
       </div>
 
@@ -171,8 +169,12 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
 
       <div className="mt-6 rounded-3xl border border-white/10 bg-black/25 p-4">
         {loading ? (
-          <div className="flex h-64 items-center justify-center text-white/70">
-            <Loader2 className="mr-2 animate-spin" /> Loading comparison…
+          <div className="h-64 w-full rounded-2xl bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 animate-pulse">
+            <div className="space-y-3">
+              <div className="h-3 w-32 bg-white/15 rounded-full" />
+              <div className="h-5 w-48 bg-white/18 rounded-md" />
+              <div className="h-[140px] w-full bg-white/8 rounded-lg" />
+            </div>
           </div>
         ) : !rows.length ? (
           <div className="flex h-64 items-center justify-center text-white/60">No data available yet.</div>

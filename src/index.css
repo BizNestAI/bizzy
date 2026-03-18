@@ -6,17 +6,29 @@
    ========================= */
 :root {
   /* Core palette */
-  --bg:        #12100F;     /* Primary Background (app & chat canvas) */
-  --panel:     #1A1816;     /* Secondary Panels / Cards */
-  --sidebar:   #151312;     /* Sidebar */
-  --text:      #f7f1e8;     /* Primary Text (warm off-white) */
-  --text-2:    rgba(247,241,232,0.72); /* Secondary Text (muted warm) */
+  --bg:        #111313;     /* Single app background shade (warm graphite) */
+  --panel:     #151717;     /* Secondary Panels / Cards */
+  --panel-2:   #1A1D1C;     /* Hover / secondary */
+  --header-overlay: transparent;
+  --sidebar:   #0c1117;     /* Sidebar */
+  --input-bg:  #16181b;     /* Chat/input surfaces (neutral charcoal, less blue) */
+  --input-border: rgba(255,255,255,0.10);
+  --surface-graphite: rgba(20, 20, 22, 0.72);
+  --surface-graphite-2: rgba(28, 28, 30, 0.78);
+  --surface-border: rgba(255, 255, 255, 0.10);
+  --surface-border-strong: rgba(255, 255, 255, 0.16);
+  --surface-glow-green: rgba(0, 255, 178, 0.14);
+  --divider: rgba(255,255,255,0.08);
+  --text:      #f5f7fb;     /* Primary Text (brighter white) */
+  --text-2:    rgba(245,247,251,0.78); /* Secondary Text */
 
-  /* NEW Default Accent — Chrome Silver */
-  --accent:         #BFBFBF;           /* main app accent */
-  --accent-soft:    rgba(191,191,191,.50); /* 50% opacity for hover/active glows */
-  --accent-line:    rgba(191,191,191,.25); /* subtle 1px rails/dividers/borders */
-  --accent-contrast:#D9D9D9;           /* for soft gradient tips on focus rings */
+  /* NEW Default Accent — unified Books green (global) */
+  --accent:         #34d399;              /* main app accent (Books green) */
+  --accent-rgb:     52,211,153;           /* for alpha-based utilities */
+  --accent-2:       #10b981;              /* secondary accent for subtle gradients */
+  --accent-soft:    rgba(52,211,153,.50); /* 50% opacity for hover/active glows */
+  --accent-line:    rgba(52,211,153,.25); /* subtle 1px rails/dividers/borders */
+  --accent-contrast:#6ee7b7;           /* for soft gradient tips on focus rings */
 
   /* Emotional micro-accent (keep pink for typing dots / mascot highlights) */
   --emo:       #FF4EEB;
@@ -24,24 +36,50 @@
   /* Legacy / misc */
   --card-shadow: 0px 0px 8px rgba(191, 191, 191, 0.08);
 
+  /* AI signal green */
+  --accent-green: #22c55e;
+  --accent-green-soft: rgba(34,197,94,0.18);
+  --accent-green-softer: rgba(34,197,94,0.12);
+  --accent-green-faint: rgba(34,197,94,0.08);
+  --accent-green-border: rgba(34,197,94,0.35);
+  --accent-green-border-strong: rgba(34,197,94,0.55);
+  --pulse-shadow-a: 0 0 0 rgba(34,197,94,0.0);
+  --pulse-shadow-b: 0 0 18px rgba(34,197,94,0.18);
+  --pulse-shadow-c: 0 0 28px rgba(34,197,94,0.12);
+
   /* Layout */
   --nav-w: 180px;
   --insights-w: 360px;
+  /* Chat column alignment */
+  --chat-col-max: 820px;
+  --chat-col-pad: 18px;
+
+  /* Grain noise (SVG data URI) — tighter, higher-octave for finer speckle */
+  --grain-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='90' viewBox='0 0 90 90'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.15' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='90' height='90' filter='url(%23n)' opacity='0.85'/%3E%3C/svg%3E");
+}
+
+@media (max-width: 768px) {
+  :root {
+    --chat-col-max: 100%;
+    --chat-col-pad: 16px;
+  }
 }
 
 /* Optional theme switch hook */
 [data-theme="graphite"] {
   --bg: #12100F;
   --panel: #1A1816;
+  --header-overlay: transparent;
   --sidebar: #151312;
-  --text: #f7f1e8;
-  --text-2: rgba(247,241,232,0.72);
+  --text: #f5f7fb;
+  --text-2: rgba(245,247,251,0.78);
 
-  /* Chrome Silver as default accent */
-  --accent: #BFBFBF;
-  --accent-soft: rgba(191,191,191,.50);
-  --accent-line: rgba(191,191,191,.25);
-  --accent-contrast: #D9D9D9;
+  /* Unified Books green accent */
+  --accent: #34d399;
+  --accent-2: #10b981;
+  --accent-soft: rgba(52,211,153,.50);
+  --accent-line: rgba(52,211,153,.25);
+  --accent-contrast: #6ee7b7;
 
   --emo: #FF4EEB;
   --card-shadow: 0px 0px 8px rgba(191, 191, 191, 0.08);
@@ -58,7 +96,7 @@ html, body, #root { height: 100%; }
 
 /* Base */
 body {
-  background-color: var(--bg);
+  position: relative;
   color: var(--text);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
 
@@ -67,12 +105,123 @@ body {
   -webkit-overflow-scrolling: touch;  /* momentum on iOS (for inner scrollers) */
 }
 
+/* Subtle textured graphite background applied to main shells */
+html,
+body {
+  background-color: var(--bg);
+}
+
+/* Reusable texture helper for inline blocks (headers, panels) */
+.bizzy-bg-textured {
+  background-image:
+    radial-gradient(circle at 20% 18%, rgba(255,255,255,0.028), transparent 30%),
+    radial-gradient(circle at 78% -6%, rgba(255,255,255,0.018), transparent 24%),
+    radial-gradient(circle at 48% 102%, rgba(255,255,255,0.026), transparent 32%),
+    var(--grain-noise);
+  background-blend-mode: normal, normal, normal, soft-light;
+  background-size: auto, auto, auto, 120px 120px;
+}
+
+#root, #root > div, main, header, section {
+  position: relative;
+  z-index: 1;
+}
+
 html { scroll-behavior: smooth; }
 
 /* Accent/glow helpers (now use chrome accent) */
 .glow-bottom-accent { box-shadow: 0 2px 12px var(--accent-soft); }
 /* Backward compatibility for existing references */
 .glow-bottom-pink { box-shadow: 0 2px 12px var(--accent-soft); }
+
+/* ----------------------- AI micro-signals ----------------------- */
+.bizzy-chat-history-panel {
+  border: 1px solid var(--surface-border);
+  box-shadow: 0 18px 40px rgba(0,0,0,0.45);
+}
+.bizzy-chat-history-panel.bizzy-chat-history-tooltip {
+  border-color: var(--surface-border);
+}
+.bizzy-chat-history-panel.bizzy-chat-history-tooltip:hover {
+  border-color: var(--accent-green-faint);
+  box-shadow: 0 0 0 1px var(--accent-green-faint), 0 12px 30px rgba(0,0,0,0.45);
+}
+.bizzy-chat-history-panel:focus-within {
+  border-color: var(--accent-green-border) !important;
+  box-shadow: 0 0 0 1px var(--accent-green-faint), 0 0 12px rgba(34,197,94,0.12);
+}
+.bizzy-chat-thread-row {
+  position: relative;
+  transition: box-shadow 180ms ease, border-color 180ms ease, background-color 180ms ease;
+}
+.bizzy-chat-history-panel .bizzy-chat-thread-row:hover {
+  border-color: rgba(255,255,255,0.18) !important;
+  box-shadow: 0 0 0 1px rgba(34,197,94,0.06), 0 8px 18px rgba(34,197,94,0.06) !important;
+}
+.bizzy-chat-thread-row.is-active {
+  border-color: rgba(34,197,94,0.22);
+}
+.bizzy-chat-thread-row.is-active::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--accent-green);
+  box-shadow: 0 0 10px rgba(34,197,94,0.35);
+}
+.bizzy-chat-history-search:focus {
+  border-color: var(--accent-green-border) !important;
+  box-shadow: 0 0 10px rgba(34,197,94,0.12) !important;
+}
+
+.bizzy-operator-card {
+  position: relative;
+  border-color: rgba(255,255,255,0.08);
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+  overflow: hidden;
+}
+.bizzy-operator-card.bizzy-operator-attn {
+  border-color: rgba(34,197,94,0.22);
+  box-shadow: 0 0 20px rgba(34,197,94,0.12), 0 20px 60px rgba(0,0,0,0.45);
+}
+.bizzy-operator-card.bizzy-ai-pulse {
+  animation: bizzyAIPulse 4.2s ease-in-out infinite;
+}
+.bizzy-operator-card.bizzy-operator-attn::before {
+  content: "";
+  position: absolute;
+  inset: -40px;
+  background: radial-gradient(circle at 50% 40%, rgba(34,197,94,0.12), rgba(34,197,94,0.0) 60%);
+  filter: blur(18px);
+  opacity: 0.55;
+  pointer-events: none;
+}
+.bizzy-operator-label {
+  color: rgba(34,197,94,0.75);
+}
+.bizzy-operator-dot {
+  color: var(--accent-green);
+  margin-right: 6px;
+}
+.bizzy-operator-divider {
+  width: 100%;
+  height: 1px;
+  margin: 6px 0 4px;
+  background: linear-gradient(90deg, rgba(34,197,94,0.55), rgba(34,197,94,0.0));
+}
+.bizzy-operator-input:focus {
+  border-color: rgba(34,197,94,0.60);
+  box-shadow: 0 0 10px rgba(34,197,94,0.18);
+}
+
+/* Dark dropdown options (for themed selects like Deductions Year) */
+.dark-dropdown option {
+  background-color: #0b0d11;
+  color: #fff;
+}
 
 /* 🧠 Single scroll owner */
 html, body {
@@ -84,12 +233,42 @@ html, body {
   overflow: hidden;
 }
 
+[data-bizzy-header],
+[data-bizzy-header] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  filter: none !important;
+}
+
 /* Selection (tuned for graphite) */
 ::selection { background-color: rgba(255,255,255,0.14); color: var(--text); }
+
+/* Remove default focus rings (browser blue outlines) from all UI, including charts/buttons */
+*:focus,
+*:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+.recharts-wrapper:focus,
+.recharts-responsive-container:focus,
+.recharts-surface:focus,
+.recharts-surface > svg:focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
 
 /* Animations */
 @keyframes spin-slow { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 .animate-spin-slow { animation: spin-slow 2.5s linear infinite; }
+
+@keyframes bizzyAIPulse {
+  0%, 100% { box-shadow: var(--pulse-shadow-a); filter: saturate(1); }
+  50% { box-shadow: var(--pulse-shadow-b), var(--pulse-shadow-c); filter: saturate(1.02); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bizzy-ai-pulse { animation: none !important; }
+}
 
 /* Momentum + hidden tracks */
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -141,26 +320,34 @@ html, body {
 /* Quick prompts — keep neutral frame, adopt chrome accent when component sets --qp-frame */
 .bizzy-qprompts { /* receives --qp-frame and --qp-accent from the component */ }
 .bizzy-qprompts :where(button, .chip, .pill, [role="button"]) {
-  border: 1px solid rgba(191,191,191,0.22);
+  border: 1px solid rgba(191,191,191,0.14);
   color: var(--text);
-  background: transparent;
+  background-color: var(--input-bg); /* fully opaque to hide grain */
+  background-image: none;
   border-radius: 9999px;
   box-shadow: none;
   transition: background-color .18s ease, color .18s ease, border-color .18s ease;
 }
 .bizzy-qprompts :where(button, .chip, .pill, [role="button"]):hover {
-  background: rgba(18,19,21,0.88);
-  border-color: rgba(191,191,191,0.28);
+  background-color: #1f2124;
+  border-color: rgba(191,191,191,0.18);
   box-shadow: none !important;
   color: var(--text);
 }
 .bizzy-qprompts :where(button, .chip, .pill, [role="button"]):active {
-  background: rgba(17,18,19,0.94);
-  border-color: rgba(191,191,191,0.24);
+  background-color: #18191b;
+  border-color: rgba(191,191,191,0.18);
   box-shadow: none !important;
 }
 .bizzy-qprompts :where(button, .chip, .pill, [role="button"]) * {
   color: var(--text);
+}
+
+/* Hide chat UI when PDF modal is open */
+body.pdf-modal-open [data-bizzy-chatbar],
+body.pdf-modal-open [data-bizzy-curtain],
+body.pdf-modal-open .bizzy-qprompts {
+  display: none !important;
 }
 
 /* === Business / header switcher — chrome border, graphite bg === */
@@ -191,6 +378,25 @@ html, body {
 }
 
 /* Dropdowns */
+
+/* Custom scrollbars for inner panels (dark, no white track) */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.28) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.28);
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.4);
+}
 .bizzy-switcher-quiet :where(.dropdown,.menu,[role="listbox"],[data-popover]) {
   background: var(--panel);
   color: var(--text);
@@ -275,4 +481,442 @@ html, body {
 .history-scroll::-webkit-scrollbar-thumb {
   background: rgba(255,255,255,0.2);
   border-radius: 999px;
+}
+
+/* =======================
+   Bizzy ChatHome polish
+   ======================= */
+.bizzy-chathome{
+  /* Quick prompt buttons */
+  --qp-bg: rgba(255,255,255,0.075);
+  --qp-bg-2: rgba(255,255,255,0.055);
+  --qp-border: rgba(80, 255, 180, 0.22);
+  --qp-border-2: rgba(255,255,255,0.14);
+  --qp-text: rgba(255,255,255,0.92);
+  --qp-shadow: 0 12px 30px rgba(0,0,0,0.35);
+  --qp-inset: inset 0 1px 0 rgba(255,255,255,0.10);
+
+  /* Chat input bar surface */
+  --bar-bg: rgba(255,255,255,0.06);
+  --bar-bg-2: rgba(255,255,255,0.035);
+  --bar-border: rgba(255,255,255,0.16);
+  --bar-border-2: rgba(80, 255, 180, 0.18);
+  --bar-inset: inset 0 1px 0 rgba(255,255,255,0.10), inset 0 -10px 18px rgba(0,0,0,0.28);
+  --bar-shadow: 0 18px 46px rgba(0,0,0,0.45);
+
+  /* Gentle pulse/glow for chips */
+  --qp-glow-a: 0 0 0 rgba(80,255,180,0.0);
+  --qp-glow-b: 0 0 18px rgba(80,255,180,0.10);
+}
+
+@keyframes bizzyChipGlow {
+  0%, 100% { box-shadow: var(--qp-shadow), var(--qp-inset), var(--qp-glow-a); }
+  50%      { box-shadow: var(--qp-shadow), var(--qp-inset), var(--qp-glow-b); }
+}
+
+@keyframes bizzyBarSheen {
+  0%,100% { transform: translateX(-6%) translateY(0); opacity: .10; }
+  50%     { transform: translateX(6%) translateY(0); opacity: .16; }
+}
+
+/* Loading dot bounce (staggered) */
+@keyframes dot-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.3; }
+  40%          { transform: translateY(-4px); opacity: 1; }
+}
+.animate-dot-bounce {
+  animation: dot-bounce 1s infinite ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce){
+  .bizzy-chathome .bizzy-quickprompt{ animation: none !important; }
+  .bizzy-chathome .bizzy-chatbar-sheen{ display:none !important; }
+}
+
+/* =========================================================
+   ChatHome polish — localized halo + chip pulse
+   ========================================================= */
+
+.bizzy-chathome-root{
+  min-height: 100vh;
+}
+
+/* Center wrapper should be relatively positioned so halo can sit behind */
+.bizzy-chathome-center{
+  position: relative;
+  z-index: 1;
+}
+
+/* LOCALIZED HALO (not full screen):
+   - lives behind the greeting/chips/bar
+   - multiple blobs
+   - heavy blur + strong feathered mask so edges never read rectangular
+*/
+.bizzy-chathome-halo{
+  position: absolute;
+  left: 50%;
+  top: 54%;
+  transform: translate(-50%, -50%);
+  width: min(920px, 90vw);
+  height: 420px;
+
+  pointer-events: none;
+  z-index: 0;
+
+  /* Disabled glow */
+  opacity: 0;
+  background: none;
+  filter: none;
+  mix-blend-mode: normal;
+  -webkit-mask-image: none;
+  mask-image: none;
+  animation: none;
+  transform-origin: center;
+}
+
+@keyframes bizzyHaloDrift{
+  0%   { transform: translate(-50%, -50%) scale(1.00); opacity: 0.14; }
+  50%  { transform: translate(-50%, -50%) scale(1.05); opacity: 0.22; }
+  100% { transform: translate(-50%, -50%) scale(1.00); opacity: 0.14; }
+}
+
+/* Ensure actual content sits above halo */
+.bizzy-chathome-center > *:not(.bizzy-chathome-halo){
+  position: relative;
+  z-index: 1;
+}
+
+/* Headline: ~5–8% brighter */
+.bizzy-chathome-headline{
+  filter: brightness(1.07);
+}
+
+.bizzy-chathome-barhalo{
+  position: absolute;
+  inset: -42px 0 28px 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(60% 120% at 50% 40%, rgba(46,255,170,0.18), rgba(46,255,170,0.0) 72%),
+    radial-gradient(70% 120% at 48% 65%, rgba(34,197,94,0.12), rgba(34,197,94,0.0) 78%);
+  filter: blur(46px);
+  opacity: 0.68;
+  mix-blend-mode: screen;
+}
+
+/* -------------------------------
+   ChatHome prompt chip glow pulse
+   ------------------------------- */
+
+[data-bizzy-chip]{
+  /* remove wink behavior */
+  opacity: 1 !important;
+  transform: none !important;
+
+  /* baseline chip look remains yours; we only add subtle life */
+  position: relative;
+  transition: box-shadow .22s ease, border-color .22s ease;
+}
+
+/* Add a soft glow layer behind each chip so we can pulse it cleanly */
+[data-bizzy-chip]::after{
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  pointer-events: none;
+
+  opacity: 0;
+  filter: blur(8px);
+  background: radial-gradient(
+    60% 120% at 50% 50%,
+    rgba(34,197,94,0.35),
+    rgba(34,197,94,0.00) 70%
+  );
+
+  animation: bizzyChipGlow 4.2s ease-in-out infinite;
+}
+
+/* Gentle border/shadow pulse */
+[data-bizzy-chip]{
+  animation: bizzyChipBorder 4.2s ease-in-out infinite;
+}
+
+/* Pause on hover (chip row OR chip itself) */
+[data-bizzy-chip-row]:hover [data-bizzy-chip],
+[data-bizzy-chip-row]:hover [data-bizzy-chip]::after,
+[data-bizzy-chip]:hover,
+[data-bizzy-chip]:hover::after{
+  animation-play-state: paused !important;
+}
+
+@keyframes bizzyChipGlow{
+  0%, 100% { opacity: 0.08; }
+  50%      { opacity: 0.22; }
+}
+
+@keyframes bizzyChipBorder{
+  0%, 100% {
+    box-shadow: 0 0 0 rgba(34,197,94,0.0);
+    border-color: rgba(255,255,255,0.14);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(34,197,94,0.12);
+    border-color: rgba(34,197,94,0.22);
+  }
+}
+
+/* Reduced motion guard */
+@media (prefers-reduced-motion: reduce){
+  .bizzy-chathome-halo{ animation: none !important; }
+  [data-bizzy-chip],
+  [data-bizzy-chip]::after{
+    animation: none !important;
+  }
+}
+
+/* -----------------------------------------
+   ChatHome Quick Prompt Buttons (Filled)
+------------------------------------------ */
+
+[data-bizzy-chip] {
+  background: linear-gradient(
+    180deg,
+    rgba(20, 24, 22, 0.92),
+    rgba(14, 18, 16, 0.92)
+  );
+
+  border: 1px solid rgba(34, 197, 94, 0.18);
+  color: rgba(255, 255, 255, 0.92);
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    0 0 0 rgba(34,197,94,0);
+
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+
+  transition:
+    background 0.25s ease,
+    border-color 0.25s ease,
+    box-shadow 0.25s ease,
+    transform 0.15s ease;
+}
+
+[data-bizzy-chip]:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(24, 30, 26, 0.95),
+    rgba(18, 24, 21, 0.95)
+  );
+
+  border-color: rgba(34,197,94,0.32);
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.06),
+    0 0 18px rgba(34,197,94,0.14);
+
+  transform: translateY(-1px);
+}
+
+[data-bizzy-chip]:active {
+  transform: translateY(0);
+  box-shadow:
+    inset 0 2px 6px rgba(0,0,0,0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-bizzy-chip] {
+    transition: none;
+  }
+}
+
+/* =================================================
+   Bizzy Quick Prompts — Solid Fill (FINAL)
+================================================== */
+
+.bizzy-quick-prompt {
+  background-color: rgba(18, 18, 18, 0.94) !important;
+  background-image: linear-gradient(
+    180deg,
+    rgba(26, 28, 29, 0.98),
+    rgba(14, 15, 16, 0.98)
+  ) !important;
+
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+
+  color: rgba(255, 255, 255, 0.92);
+
+  padding: 6px 14px;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    0 0 0 rgba(34,197,94,0);
+
+  backdrop-filter: none !important;
+
+  transition:
+    background 0.25s ease,
+    box-shadow 0.25s ease,
+    transform 0.15s ease;
+}
+
+.bizzy-quick-prompt:hover {
+  background-image: linear-gradient(
+    180deg,
+    rgba(38, 42, 44, 1),
+    rgba(24, 26, 28, 1)
+  ) !important;
+
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.07),
+    0 0 18px rgba(34,197,94,0.12);
+
+  transform: translateY(-1px);
+}
+
+.bizzy-quick-prompt:active {
+  transform: translateY(0);
+  box-shadow:
+    inset 0 2px 6px rgba(0,0,0,0.35);
+}
+
+.bizzy-quick-prompt::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: inherit;
+
+  background: radial-gradient(
+    circle,
+    rgba(34,197,94,0.25),
+    transparent 70%
+  );
+
+  opacity: 0;
+  animation: bizzyPromptPulse 4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes bizzyPromptPulse {
+  0%, 100% { opacity: 0.05; }
+  50% { opacity: 0.18; }
+}
+
+/* ChatHome-scoped quick prompt polish */
+.bizzy-chathome .bizzy-quickprompt{
+  background: linear-gradient(180deg, var(--qp-bg), var(--qp-bg-2));
+  border: 1px solid var(--qp-border-2);
+  color: var(--qp-text);
+  border-radius: 9999px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--qp-shadow), var(--qp-inset);
+  transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease, opacity .16s ease;
+  position: relative;
+}
+
+.bizzy-chathome .bizzy-quickprompt:hover{
+  border-color: var(--qp-border);
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.065));
+  box-shadow: 0 18px 46px rgba(0,0,0,0.46), inset 0 1px 0 rgba(255,255,255,0.12), 0 0 18px rgba(80,255,180,0.10);
+}
+
+.bizzy-chathome .bizzy-quickprompt:active{
+  transform: translateY(0px);
+  box-shadow: 0 10px 26px rgba(0,0,0,0.40), inset 0 1px 0 rgba(255,255,255,0.10);
+}
+
+.bizzy-chathome .bizzy-quickprompt.bizzy-quickprompt--pulse{
+  animation: bizzyChipGlow 4.2s ease-in-out infinite, bizzyChipBorder 4.2s ease-in-out infinite;
+  will-change: box-shadow, border-color;
+}
+
+/* ChatHome-scoped chat bar polish */
+.bizzy-chathome .bizzy-chatbar{
+  background: linear-gradient(180deg, var(--bar-bg), var(--bar-bg-2));
+  border: 1px solid var(--bar-border);
+  box-shadow: var(--bar-shadow), var(--bar-inset);
+  border-radius: 9999px;
+  position: relative;
+  overflow: hidden;
+}
+
+.bizzy-chathome .bizzy-chatbar::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  border-radius:9999px;
+  pointer-events:none;
+  box-shadow: inset 0 0 0 1px rgba(80,255,180,0.10);
+}
+
+.bizzy-chathome .bizzy-chatbar-sheen{
+  position:absolute;
+  inset:-40% -30%;
+  background: radial-gradient(circle at 30% 40%, rgba(80,255,180,0.14), rgba(80,255,180,0.0) 60%);
+  filter: blur(18px);
+  opacity: .12;
+  animation: bizzyBarSheen 9s ease-in-out infinite;
+  pointer-events:none;
+}
+
+.bizzy-chathome .bizzy-chatbar input,
+.bizzy-chathome .bizzy-chatbar textarea{
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+}
+
+/* Sidebar business badge accent + scoped tooltip */
+.bizzy-business-badge {
+  position: relative;
+  overflow: visible !important; /* allow tooltip to escape rail bounds */
+  pointer-events: auto;
+  z-index: 20000; /* sit above rail content */
+}
+.bizzy-business-badge-avatar {
+  position: relative;
+  border: 2px solid rgba(80,255,180,0.95);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.12),
+    0 0 0 2px rgba(80,255,180,0.45),
+    0 0 0 4px rgba(80,255,180,0.28),
+    0 0 14px rgba(80,255,180,0.32),
+    0 6px 16px rgba(0,0,0,0.32);
+  background: radial-gradient(circle at 30% 20%, rgba(80,255,180,0.25), transparent 60%), linear-gradient(180deg, rgba(34,197,94,0.30), rgba(16,185,129,0.16));
+  color: #f8fafc;
+}
+.bizzy-business-badge-avatar::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  border: 2px solid rgba(80,255,180,0.45);
+  box-shadow: 0 0 12px rgba(80,255,180,0.35);
+  pointer-events: none;
+}
+.bizzy-business-badge-tooltip {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 240ms ease, transform 280ms cubic-bezier(0.22, 0.68, 0.4, 1);
+  z-index: 999999; /* above chat bar + quick prompts */
+}
+.bizzy-business-badge:hover .bizzy-business-badge-tooltip {
+  opacity: 1 !important;
+  transform: translateY(0);
+}
+
+/* Shared tooltip fade-in (chat threads, etc.) */
+.bizzy-tooltip-fade {
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+  animation: bizzyTooltipIn 280ms cubic-bezier(0.22, 0.68, 0.4, 1) forwards;
+}
+@keyframes bizzyTooltipIn {
+  0% { opacity: 0; transform: translateY(6px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
 }

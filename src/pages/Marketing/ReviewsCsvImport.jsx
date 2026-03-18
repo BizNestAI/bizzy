@@ -24,7 +24,7 @@ export default function CSVImportDialog({ open, onClose, businessId }) {
         <textarea className="w-full h-56 bg-white/5 border border-white/10 rounded p-2 text-sm"
                   value={text} onChange={(e)=>setText(e.target.value)} />
         <div className="mt-2 flex gap-2">
-          <button onClick={onImport} className="px-3 py-1.5 rounded border border-[color:#3B82F6] text-[color:#3B82F6] text-sm">Import</button>
+          <button onClick={onImport} className="px-3 py-1.5 rounded border border-[color:rgb(var(--accent-rgb))] text-[color:rgb(var(--accent-rgb))] text-sm">Import</button>
           <button onClick={onClose} className="px-3 py-1.5 rounded border border-white/15 text-sm">Cancel</button>
         </div>
       </div>

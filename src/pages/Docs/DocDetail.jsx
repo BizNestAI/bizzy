@@ -390,26 +390,26 @@ export default function DocDetail() {
             </div>
           </div>
 
-          <div className="flex gap-2 shrink-0">
+          <div className="flex gap-2 shrink-0 text-sm">
             {!editing ? (
               <>
                 <button
                   onClick={() => setEditing(true)}
-                  className="px-3 py-2 rounded-lg transition"
+                  className="px-3 py-1.5 rounded-lg transition"
                   style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
                 >
                   Edit
                 </button>
                 <button
                   onClick={exportPDF}
-                  className="px-3 py-2 rounded-lg transition"
+                  className="px-3 py-1.5 rounded-lg transition"
                   style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
                 >
                   Export PDF
                 </button>
                 <button
                   onClick={() => setShowDelete(true)}
-                  className="px-3 py-2 rounded-lg transition"
+                  className="px-3 py-1.5 rounded-lg transition"
                   style={{ border: '1px solid rgba(244,63,94,0.55)', color: 'rgb(252,165,165)' }}
                 >
                   Delete
@@ -426,14 +426,14 @@ export default function DocDetail() {
                       <div className="mt-4 flex justify-end gap-2">
                         <button
                           onClick={() => setShowDelete(false)}
-                          className="px-3 py-2 rounded-lg transition"
+                          className="px-3 py-1.5 rounded-lg transition text-sm"
                           style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
                         >
                           Cancel
                         </button>
                         <button
                           onClick={async () => { setShowDelete(false); await handleDelete(); }}
-                          className="px-3 py-2 rounded-lg transition"
+                          className="px-3 py-1.5 rounded-lg transition text-sm"
                           style={{ border: '1px solid rgba(244,63,94,0.55)', color: 'rgb(252,165,165)', background: 'rgba(244,63,94,0.12)' }}
                         >
                           Delete

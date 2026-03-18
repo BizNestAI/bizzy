@@ -2,13 +2,11 @@
 // (green shades palette + responsive radius + center label)
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
-import { usePeriod } from "../../context/PeriodContext";
+import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { supabase } from "../../services/supabaseClient";
 import CardHeader from "../UI/CardHeader"; // ⬅️ use the shared header
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
-import apiBaseUrl from "../../utils/apiBase.js";
-
-const API_BASE = apiBaseUrl || "";
+import { apiFetch } from "../../utils/apiBase.js";
 
 // --- Generate tasteful emerald/teal greens for Financials ---
 function greenShade(i, n) {
@@ -33,9 +31,11 @@ const MOCK = [
 function toChartRows(rows) {
   const map = new Map();
   (rows || []).forEach((r) => {
-    if ((r.account_type || "").toLowerCase() !== "expense") return;
-    const name = r.account_name || "Other";
-    const amt = Math.max(0, Number(r.balance ?? 0));
+    const type = r.account_type;
+    if (type && String(type || "").toLowerCase() !== "expense") return;
+    const name = r.category || r.account_name || "Other";
+    const amt = Math.max(0, Number(r.amount ?? r.balance ?? 0));
+    if (!(amt > 0)) return;
     map.set(name, (map.get(name) || 0) + (Number.isFinite(amt) ? amt : 0));
   });
 
@@ -96,7 +96,7 @@ export default function ExpenseBreakdownChart({
   compact = false,
   className = "",
 }) {
-  const { period } = usePeriod();
+  const { year, month } = useFinancialPeriod(businessIdProp || localStorage.getItem("currentBusinessId"));
   const userId = userIdProp || localStorage.getItem("user_id");
   const businessId = businessIdProp || localStorage.getItem("currentBusinessId");
   const forceLive = shouldForceLiveData();
@@ -104,13 +104,13 @@ export default function ExpenseBreakdownChart({
   const demoData = useMemo(() => (usingDemo ? getDemoData() : null), [usingDemo]);
 
   const [data, setData] = useState(null);
-  const [status, setStatus] = useState("idle");
+  const [status, setStatus] = useState("idle"); // idle | loading | success | empty
   const [source, setSource] = useState(null);
 
-  const month = useMemo(() => {
-    if (!period?.year || !period?.month) return null;
-    return monthKey(period.year, period.month);
-  }, [period?.year, period?.month]);
+  const monthKeySelected = useMemo(() => {
+    if (!year || !month) return null;
+    return monthKey(year, month);
+  }, [year, month]);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,40 +121,75 @@ export default function ExpenseBreakdownChart({
         setStatus("success");
         return;
       }
-      if (!businessId || !month) {
+      if (!businessId || !monthKeySelected) {
         const fallback = forceLive ? [] : demoData?.financials?.expenseBreakdown || MOCK;
         setData(fallback);
         setSource(forceLive ? null : "mock");
-        setStatus("success");
+        setStatus(fallback?.length ? "success" : "empty");
         return;
       }
       setStatus("loading");
       try {
+        const url =
+          `/api/accounting/expense-breakdown` +
+          `?business_id=${encodeURIComponent(businessId)}` +
+          (userId ? `&user_id=${encodeURIComponent(userId)}` : "") +
+          `&year=${encodeURIComponent(year)}` +
+          `&month=${encodeURIComponent(month)}` +
+          `&data_mode=live&live_only=true`;
+        if (process.env.NODE_ENV !== "production") {
+          // eslint-disable-next-line no-console
+          console.log("[ExpenseBreakdown] fetch monthly totals", { year, month, url });
+        }
+        const resp = await apiFetch(url, {
+          headers: { "Content-Type": "application/json", "x-user-id": userId || "", "x-business-id": businessId },
+        });
+        if (resp.ok) {
+          const payload = await resp.json();
+          const rows = payload?.rows || [];
+          const chartRows = toChartRows(rows);
+          const sum = (chartRows || []).reduce((s, r) => s + Number(r.value || 0), 0);
+          if (!cancelled && sum > 0) {
+            setData(chartRows);
+            setSource(payload?.source || "expense_totals_monthly");
+            setStatus("success");
+            return;
+          }
+        }
+      } catch {}
+
+      try {
         const { data: rows, error } = await supabase
-          .from("account_breakdown")
-          .select("account_name,account_type,balance,month")
+          .from("expense_totals_monthly")
+          .select("category,amount,month,source")
           .eq("business_id", businessId)
-          .eq("month", month);
+          .eq("month", monthKeySelected);
         if (error) throw error;
 
         const chartRows = toChartRows(rows);
         const sum = (chartRows || []).reduce((s, r) => s + Number(r.value || 0), 0);
         if (!cancelled && sum > 0) {
           setData(chartRows);
-          setSource("quickbooks");
+          setSource(rows?.[0]?.source || "expense_totals_monthly");
           setStatus("success");
           return;
         }
+        if (!cancelled) setStatus("empty");
       } catch {}
 
       try {
         const url =
-          `${API_BASE}/api/accounting/metrics` +
+          `/api/accounting/metrics` +
           `?business_id=${encodeURIComponent(businessId)}` +
           (userId ? `&user_id=${encodeURIComponent(userId)}` : "") +
-          `&year=${encodeURIComponent(period.year)}` +
-          `&month=${encodeURIComponent(period.month)}`;
-        const resp = await fetch(url, {
+          `&year=${encodeURIComponent(year)}` +
+          `&month=${encodeURIComponent(month)}` +
+          `&data_mode=live&live_only=true`;
+        if (process.env.NODE_ENV !== "production") {
+          // eslint-disable-next-line no-console
+          console.log("[ExpenseBreakdown] fetch fallback metrics", { year, month, url });
+        }
+        const resp = await apiFetch(url, {
           headers: { "Content-Type": "application/json", "x-user-id": userId || "", "x-business-id": businessId },
         });
         if (resp.ok) {
@@ -168,6 +203,7 @@ export default function ExpenseBreakdownChart({
             setStatus("success");
             return;
           }
+          if (!cancelled) setStatus("empty");
         }
       } catch {}
 
@@ -175,13 +211,13 @@ export default function ExpenseBreakdownChart({
         const fallback = forceLive ? [] : demoData?.financials?.expenseBreakdown || MOCK;
         setData(fallback);
         setSource(forceLive ? null : demoData ? "demo" : "mock");
-        setStatus("success");
+        setStatus(fallback?.length ? "success" : "empty");
       }
     }
 
     load();
     return () => { cancelled = true; };
-  }, [businessId, userId, month, period?.year, period?.month, demoData, forceLive]);
+  }, [businessId, userId, monthKeySelected, year, month, demoData, forceLive]);
 
   const total = useMemo(() => (data || []).reduce((s, d) => s + Number(d.value || 0), 0), [data]);
   const top = useMemo(() => (data || []).slice().sort((a, b) => b.value - a.value)[0], [data]);
@@ -191,12 +227,22 @@ export default function ExpenseBreakdownChart({
 
   if (status === "loading") {
     return (
-      <div className={`bg-zinc-900 border border-white/10 rounded-xl p-4 text-white/70 ${className}`}>
-        Loading expenses…
+      <div className={`rounded-xl bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 ${className} animate-pulse`}>
+        <div className="space-y-3">
+          <div className="h-3 w-28 bg-white/15 rounded-full" />
+          <div className="h-5 w-44 bg-white/18 rounded-md" />
+          <div className="h-[160px] w-full bg-white/8 rounded-lg" />
+        </div>
       </div>
     );
   }
-  if (!data || data.length === 0) return null;
+  if (status === "empty" || !data || data.length === 0) {
+    return (
+      <div className={`bg-zinc-900 border border-white/10 rounded-xl p-4 text-white/70 ${className}`}>
+        No expense breakdown yet — run Backfill to populate data.
+      </div>
+    );
+  }
 
   const isMock = source === "mock";
   const badgeClass =

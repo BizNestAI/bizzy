@@ -67,13 +67,11 @@ export const BizzyChatProvider = ({ children }) => {
     if (mod) setCanvasModule(mod);
     setCanvasOpen(true);
     console.log('[Canvas] openCanvas() called; module =', mod);
-    try { document.body.style.overflow = 'hidden'; } catch {}
   }, []);
 
   const closeCanvas = useCallback(() => {
     setCanvasOpen(false);
     console.log('[Canvas] closeCanvas() called');
-    try { document.body.style.overflow = ''; } catch {}
   }, []);
 
   // lifecycle log when the flag flips

@@ -2,17 +2,16 @@ const FALLBACK = "Morning, legend. Let's make this week count.";
 
 const LINES = [
   "Morning, legend. Let's make this week count.",
-  "Fresh pot, clear head, clean slate—let's get after it.",
+  "Fresh pot, clear head. Clean slate. Let's get after it.",
   "Still early enough to change the whole tone of the week.",
-  "Dial in the top priority, then let momentum carry the rest.",
+  "Pick the next win, then keep the line moving.",
   "Today’s the day you tighten every loose screw.",
-  "It’s quiet. Perfect time to move first.",
   "Stack one more win before the competition wakes up.",
-  "Let’s keep the pipeline warm and the cash steady.",
-  "No noise, no drama—just sharp execution today.",
+  "Keep the pipeline warm, keep the cash steady.",
+  "No noise, no drama. Just sharp execution today.",
   "You already know the lever to pull. Let’s move it.",
   "Control the controllables. Everything else follows.",
-  "Small consistent actions beat heroic catch-up every time.",
+  "Small steps today, big calm by Friday.",
 ];
 
 function seededRandom(seed) {
@@ -20,13 +19,15 @@ function seededRandom(seed) {
   return x - Math.floor(x);
 }
 
-export function getDailyGreeting(date = new Date()) {
+export function getDailyGreeting(date = new Date(), firstName = "") {
   try {
     const stamp =
       typeof date === "string" ? date : date?.toISOString?.() || new Date().toISOString();
     const daySeed = Math.floor(new Date(stamp).setHours(0, 0, 0, 0) / 86400000);
     const idx = Math.floor(seededRandom(daySeed) * LINES.length);
-    return LINES[idx] || FALLBACK;
+    const base = LINES[idx] || FALLBACK;
+    const clean = (firstName || "").trim();
+    return clean ? `Hello, ${clean}. ${base}` : base;
   } catch {
     return FALLBACK;
   }

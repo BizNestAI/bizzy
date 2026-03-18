@@ -4,7 +4,6 @@ import { useBusiness } from "../../context/BusinessContext";
 import useModuleTheme from "../../hooks/useModuleTheme";
 
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader";
-import SyncButton from "../../components/Integrations/SyncButton.jsx";
 // import { getHeroInsight } from "../../services/heroInsights/getHeroInsight";
 
 import MarketingAnalyticsDashboard from "../../components/Marketing/MarketingAnalyticsDashboard";
@@ -17,9 +16,10 @@ import { useRightExtras } from "../../insights/RightExtrasContext";
 import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
+import { ACCENT_HEX } from "../../config/accent";
 
 /* ---- Marketing accent + graphite helpers ---- */
-const MARKETING_ACCENT = "#3B82F6"; // base blue
+const MARKETING_ACCENT = ACCENT_HEX;
 const PANEL_BG = "var(--panel)";
 
 function hexToRgba(hex, alpha = 1) {
@@ -153,7 +153,6 @@ export default function MarketingDashboard() {
   /* Graphite tokens */
   const bgColor = theme?.bgClass || "bg-app";
   const textColor = theme?.textClass || "text-primary";
-
   const summaryData = marketingSummaryFallback;
 
   return (
@@ -165,7 +164,6 @@ export default function MarketingDashboard() {
         hero={hero}
         onDismissHero={() => setHero(null)}
         className="mb-6"
-        right={<SyncButton label="Sync Socials" providers={["facebook", "instagram", "linkedin"]} />}
       />
 
       {/* Middle column constrained between sidebar and insights rail */}

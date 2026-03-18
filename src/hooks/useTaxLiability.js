@@ -31,12 +31,16 @@ export function useTaxLiability(businessId, { year = new Date().getFullYear() } 
   const buildDemoPayload = () => {
     const demo = getDemoData();
     const tax = demo?.tax || {};
+    // Clamp trend to the most recent 12 months (inclusive)
+    const trend = Array.isArray(tax.trend) ? tax.trend.slice(-12) : [];
+    const overlay = Array.isArray(tax.cashFlowOverlay) ? tax.cashFlowOverlay.slice(-12) : [];
     return {
-      trend: tax.trend || [],
+      trend,
       quarterly: tax.quarterly || [],
-      cashFlowOverlay: tax.cashFlowOverlay || [],
+      cashFlowOverlay: overlay,
       summary: tax.summary || {},
       safeHarbor: tax.safeHarbor || {},
+      monthlySnapshot: tax.monthlySnapshot || {},
       meta: { source: "demo" },
     };
   };

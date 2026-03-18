@@ -5,13 +5,6 @@ import { dashboardThemeMap as externalMap } from '../utils/themeMap.js';
 
 // Tailwind class bundles for each neon theme
 const THEME_CLASSES = {
-  pink: {
-    textClass: 'text-neon-pink',
-    bgClass: 'bg-app',
-    borderColorClass: 'border-neon-pink',
-    shadowClass: 'shadow-neon-pink',
-    ringClass: 'ring-neon-pink',
-  },
   green: {
     textClass: 'text-neon-green',
     bgClass: 'bg-app',
@@ -19,28 +12,6 @@ const THEME_CLASSES = {
     shadowClass: 'shadow-neon-green',
     ringClass: 'ring-neon-green',
   },
-  blue: {
-    textClass: 'text-neon-blue',
-    bgClass: 'bg-app',
-    borderColorClass: 'border-neon-blue',
-    shadowClass: 'shadow-neon-blue',
-    ringClass: 'ring-neon-blue',
-  },
-  gold: {
-    textClass: 'text-neon-gold',
-    bgClass: 'bg-app',
-    borderColorClass: 'border-neon-gold',
-    shadowClass: 'shadow-neon-gold',
-    ringClass: 'ring-neon-gold',
-  },
-  purple: {
-    textClass: 'text-neon-purple',
-    bgClass: 'bg-app',
-    borderColorClass: 'border-neon-purple',
-    shadowClass: 'shadow-neon-purple',
-    ringClass: 'ring-neon-purple',
-  },
-  // fallback (rare)
   neutral: {
     textClass: 'text-white',
     bgClass: 'bg-app',
@@ -50,14 +21,14 @@ const THEME_CLASSES = {
   },
 };
 
-// Local default route → theme mapping
+// Local default route → unified theme
 const LOCAL_ROUTE_TO_THEME = {
-  bizzy: 'pink',
+  bizzy: 'green',
   accounting: 'green',
-  financials: 'green', // alias → accounting
-  marketing: 'blue',
-  tax: 'gold',
-  investments: 'purple',
+  financials: 'green',
+  marketing: 'green',
+  tax: 'green',
+  investments: 'green',
 };
 
 // Normalize whatever we receive (pathname or module key) into a module key
@@ -80,7 +51,7 @@ export default function useModuleTheme(explicitModule = null) {
     const themeKey =
       (externalMap && externalMap[normalized]) ||
       LOCAL_ROUTE_TO_THEME[normalized] ||
-      'pink';
+      'green';
 
     return THEME_CLASSES[themeKey] || THEME_CLASSES.neutral;
   }, [explicitModule, location.pathname]);

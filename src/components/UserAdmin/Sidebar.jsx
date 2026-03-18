@@ -1,49 +1,53 @@
-import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, MessageSquare } from 'lucide-react';
 import {
   Brain, DollarSign, Rocket, FileText, TrendingUp,
   Calendar as CalendarIcon, Briefcase, BookOpen, Settings, Mail,
-  Activity as ActivityIcon, HeartPulse, Landmark,
+  Activity as ActivityIcon, Landmark,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { createPortal } from 'react-dom';
 
 import { subSidebarConfig } from '../../utils/subSidebarConfig';
 import { useInsightsUnread } from '../../insights/InsightsUnreadContext';
+import { ACCENT_HEX, ACCENT_SOFT } from '../../config/accent';
 
 /* ------------------------------ Tabs ------------------------------ */
 const tabs = [
-  { label: 'Pulse', path: '/dashboard/bizzy' },
-  { label: 'Financials', path: '/dashboard/accounting' },
-  { label: 'Growth', path: '/dashboard/marketing' },
-  { label: 'Jobs', path: '/dashboard/leads-jobs' },
+  { label: 'Financials', path: '/dashboard/accounting/bookkeeping' },
   { label: 'Tax', path: '/dashboard/tax' },
-  { label: 'Email', path: '/dashboard/email' },
-  { label: 'Scheduling', path: '/dashboard/calendar' },
-  { label: 'Activity', path: '/dashboard/activity', tooltip: 'Coming Soon!', disableNavigate: true },
+  { label: 'Jobs: Coming Soon!', path: '/dashboard/leads-jobs', disableNavigate: true },
+  // Temporarily hidden modules: Growth/Marketing, Calendar, Email
+  // { label: 'Growth', path: '/dashboard/marketing' },
+  // { label: 'Scheduling', path: '/dashboard/calendar' },
+  // { label: 'Email', path: '/dashboard/email' },
+  { label: 'Activity', path: '/dashboard/activity', tooltip: 'Activity: Coming Soon!', disableNavigate: true },
   { label: 'Bizzi Docs', path: '/dashboard/bizzy-docs' },
-  { label: 'Meet Bizzi', path: '/dashboard/companion' },
   { label: 'Settings/Sync', path: '/dashboard/settings' },
 ];
 
 /* -------------------------- Accent palette ------------------------- */
 const accentHexMap = {
-  bizzy:       '#FF4EEB',
-  accounting:  '#00FFB2',
-  marketing:   '#3B82F6',
-  tax:         '#FFD700',
-  investments: '#B388FF',
-  email:       '#3CF2FF',
-  calendar:    '#BFBFBF',
-  scheduling:  '#94a3b8',
-  activity:    '#94a3b8',
-  ops:         '#94a3b8',
+  bizzy:       ACCENT_HEX,
+  accounting:  ACCENT_HEX,
+  marketing:   ACCENT_HEX,
+  tax:         ACCENT_HEX,
+  investments: ACCENT_HEX,
+  email:       ACCENT_HEX,
+  calendar:    ACCENT_HEX,
+  scheduling:  ACCENT_HEX,
+  activity:    ACCENT_HEX,
+  ops:         ACCENT_HEX,
+  docs:        ACCENT_HEX,
+  companion:   ACCENT_HEX,
+  settings:    ACCENT_HEX,
 };
 
 function moduleKeyFromLabel(label) {
   const k = label.toLowerCase();
   if (k === 'financials') return 'accounting';
+  if (k.startsWith('jobs')) return 'ops';
   if (k === 'bizzi') return 'bizzy';
   if (k === 'growth') return 'marketing';
   if (k === 'tax') return 'tax';
@@ -88,9 +92,9 @@ function normalizeUnreadMap(raw = {}) {
   return totals;
 }
 
-const CHROME_TABS = new Set(['Pulse', 'Jobs', 'Bizzi Docs', 'Meet Bizzi', 'Settings/Sync', 'Calendar', 'Scheduling', 'Activity']);
-const CHROME_HEX  = '#BFBFBF';
-const CHROME_SOFT = 'rgba(191,191,191,0.50)';
+const CHROME_TABS = new Set(['Jobs', 'Bizzi Docs', 'Settings/Sync', 'Calendar', 'Scheduling', 'Activity']);
+const CHROME_HEX  = ACCENT_HEX;
+const CHROME_SOFT = ACCENT_SOFT;
 
 function hexToRgba(hex, alpha = 1) {
   let c = (hex || '').replace('#', '');
@@ -114,28 +118,11 @@ const neutralBadgeStyle = {
   color: '#e5e7eb',
 };
 
-function renderActiveClass(label) {
-  const glow = 'shadow-[0_0_6px_1px_rgba(255,255,255,0.18)]'; // softer outer glow
-  switch (label) {
-    case 'Financials':  return `text-neon-green  ${glow} font-semibold bg-black`;
-    case 'Marketing':   return `text-neon-blue   shadow-[0_0_6px_1px_#3B82F6] font-semibold bg-black`;
-    case 'Tax':         return `text-neon-gold   ${glow} font-semibold bg-black`;
-    case 'Investments': return `text-neon-purple ${glow} font-semibold bg-black`;
-    case 'Email':       return `text-white ${glow} font-semibold bg-black`;
-    case 'Scheduling':  return `text-white ${glow} font-semibold bg-black`;
-    default:            return `text-white ${glow} font-semibold bg-black`;
-  }
+function renderActiveClass(_label) {
+  return `text-white font-semibold`;
 }
-function getHoverClass(label) {
-  switch (label) {
-    case 'Financials':  return 'hover:shadow-[0_0_5px_1px_#00FFB2]';
-    case 'Growth':   return 'hover:shadow-[0_0_5px_1px_#3B82F6]';
-    case 'Tax':         return 'hover:shadow-[0_0_5px_1px_#FFD700]';
-    case 'Investments': return 'hover:shadow-[0_0_5px_1px_#B388FF]';
-    case 'Email':       return 'hover:shadow-[0_0_5px_1px_#3CF2FF]';
-    case 'Scheduling':  return 'hover:shadow-[0_0_5px_1px_rgba(191,191,191,0.45)]';
-    default:            return 'hover:shadow-[0_0_5px_1px_rgba(255,255,255,0.20)]';
-  }
+function getHoverClass() {
+  return ""; // glow removed per design
 }
 
 function renderIcon(label, size, colorHex, options = {}) {
@@ -143,13 +130,14 @@ function renderIcon(label, size, colorHex, options = {}) {
   const marginClass = options.collapsed ? '' : 'mr-2';
   const dim = Math.max(14, size - 2); // slightly smaller icons for a tighter rail
   switch (label) {
-    case 'Pulse':         return <HeartPulse size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Bizzi':         return <Brain size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Email':         return <Mail size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Scheduling':    return <CalendarIcon size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Financials':    return <DollarSign size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Growth':        return <Rocket size={dim} className={`${marginClass} transition-colors`} style={style} />;
-    case 'Jobs':          return <Briefcase size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Jobs':          
+    case 'Jobs: Coming Soon!':
+      return <Briefcase size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Tax':           return <Landmark size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Investments':   return <TrendingUp size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Activity':      return <ActivityIcon size={dim} className={`${marginClass} transition-colors`} style={style} />;
@@ -177,10 +165,14 @@ const PureSidebar = React.memo(function PureSidebar({
   activePath,
   unreadByModule = {},
   markModuleAsRead,
+  onChatHistoryHover,
+  onChatHistoryLeave,
+  onChatHistoryClick,
 }) {
   const navigate = useNavigate();
   const [hoveredTab, setHoveredTab] = useState(null);
   const [tooltip, setTooltip] = useState({ label: null, x: 0, y: 0 });
+  const historyBtnRef = useRef(null);
 
   const SUPPRESS_BADGE_LABELS = useMemo(
     () => new Set(['Bizzi Docs','Meet Bizzi','Settings/Sync']),
@@ -217,14 +209,39 @@ const PureSidebar = React.memo(function PureSidebar({
 
   const isModuleActive = useCallback((tab) => {
     const p = activePath;
+    const currentModule = moduleKeyFromPath(p);
+    const tabModule = moduleKeyFromLabel(tab.label);
     // Do not highlight Pulse when sitting on ChatHome
     if (tab.label === 'Pulse' && p.startsWith('/dashboard/bizzy/chat')) return false;
     if (tab.label === 'Leads & Jobs') return /\/(leads|jobs)\b/i.test(p);
     if (tab.label === 'Bizzi Docs Library') return p === DOCS_PATH || p.startsWith(DOCS_PATH + '/');
+    if (tabModule && currentModule && tabModule === currentModule) return true;
     return pathActive(tab.path, p);
   }, [activePath]);
 
   const navSpacing = collapsed ? 'pl-2 pr-1 space-y-2' : `${sz.outerPad} ${sz.groupGap}`;
+  const historyContainerClass = collapsed ? 'mb-1.5 flex justify-start pl-0.5' : sz.groupMb;
+  const historyButtonClasses = collapsed
+    ? "group relative flex items-center justify-center h-[32px] w-[32px] rounded-xl transition text-secondary hover:bg-white/8"
+    : `w-full text-left flex items-center justify-between ${sz.itemPx} ${sz.itemPy} rounded-lg transition ${sz.itemText} hover:bg-white/10`;
+  const historyIconSize = Math.max(14, (collapsed ? 18 : sz.icon) - 2);
+
+  const handleHistoryHover = useCallback((e) => {
+    const anchor = e?.currentTarget || historyBtnRef.current;
+    setTooltip({ label: null, x: 0, y: 0 });
+    onChatHistoryHover?.(anchor);
+  }, [onChatHistoryHover]);
+
+  const handleHistoryLeave = useCallback(() => {
+    setHoveredTab(null);
+    setTooltip({ label: null, x: 0, y: 0 });
+    onChatHistoryLeave?.();
+  }, [onChatHistoryLeave]);
+
+  const handleHistoryClick = useCallback((e) => {
+    const anchor = e?.currentTarget || historyBtnRef.current;
+    onChatHistoryClick?.(anchor);
+  }, [onChatHistoryClick]);
 
   return (
     <nav
@@ -244,9 +261,10 @@ const PureSidebar = React.memo(function PureSidebar({
         const disableNavigate = !!tab.disableNavigate;
 
         const isChromeTab = CHROME_TABS.has(tab.label);
+        const idleIcon = 'rgba(247,241,232,0.9)'; // slightly brighter for Grok-level contrast
         const iconColor = isChromeTab
-          ? ((isActive || isHovered) ? CHROME_HEX : 'var(--text-2)')
-          : ((isActive || isHovered) ? accentHex : 'var(--text-2)');
+          ? ((isActive || isHovered) ? CHROME_HEX : idleIcon)
+          : ((isActive || isHovered) ? accentHex : idleIcon);
 
         const unreadCount = unreadByModule[moduleKey] || 0;
         const showBadge = unreadCount > 0 && !SUPPRESS_BADGE_LABELS.has(tab.label);
@@ -254,19 +272,26 @@ const PureSidebar = React.memo(function PureSidebar({
         const baseBtn = `w-full text-left flex items-center justify-between ${sz.itemPx} ${sz.itemPy}
                          rounded-lg transition ${sz.itemText}`;
 
-        const classNameForButton = isChromeTab
-          ? `${baseBtn} ${isActive ? 'bg-black' : 'hover:bg-[#202123]'}`
-          : `${baseBtn} ${isActive ? renderActiveClass(tab.label) : `text-secondary hover:bg-[#202123] ${getHoverClass(tab.label)}`}`;
+        const activeBg = 'rgba(255,255,255,0.10)'; // neutral shade (no green fill)
+        const hoverBg = 'rgba(255,255,255,0.08)';
+        const idleBg = 'transparent';
+        const borderCol = 'rgba(255,255,255,0.12)';
+        const hoverBorder = 'rgba(255,255,255,0.10)';
+        const classNameForButton = `${baseBtn} ${isActive ? 'text-white' : 'text-secondary'} ${getHoverClass(tab.label)}`;
 
-        const styleForButton = isChromeTab
-          ? { boxShadow: (isActive || isHovered) ? `0 0 8px ${CHROME_SOFT}` : 'none', color: 'var(--text)' }
-          : undefined;
+        const styleForButton = {
+          background: isActive ? activeBg : (isHovered ? hoverBg : idleBg),
+          border: isActive ? `1px solid ${borderCol}` : (isHovered ? `1px solid ${hoverBorder}` : '1px solid transparent'),
+          borderLeft: isActive ? `2px solid ${borderCol}` : undefined,
+          boxShadow: 'none',
+          color: isChromeTab ? 'var(--text)' : (isActive ? 'var(--text)' : undefined),
+        };
 
         const showColoredBadge = !isChromeTab && (isActive || isHovered);
         const badgeStyle = showColoredBadge ? coloredBadgeStyle(accentHex) : neutralBadgeStyle;
 
-          const containerClass = collapsed ? 'mb-1.5 flex justify-start pl-0.5' : sz.groupMb;
-          const collapsedBtnClass =
+        const containerClass = collapsed ? 'mb-1.5 flex justify-start pl-0.5' : sz.groupMb;
+        const collapsedBtnClass =
           "group relative flex items-center justify-center h-[32px] w-[32px] rounded-xl transition text-secondary";
 
         return (
@@ -311,9 +336,9 @@ const PureSidebar = React.memo(function PureSidebar({
               style={
                 collapsed
                   ? {
-                      color: 'var(--text)',
+                      color: idleIcon,
                       background: isActive
-                        ? 'rgba(255,255,255,0.12)'
+                        ? 'rgba(255,255,255,0.10)'
                         : (isHovered ? 'rgba(255,255,255,0.08)' : 'transparent'),
                       border: 'none',
                       boxShadow: 'none',
@@ -383,8 +408,8 @@ const PureSidebar = React.memo(function PureSidebar({
                       className={({ isActive }) =>
                         `block ${sz.subText} px-2 py-1 rounded-md transition-colors ${
                           isActive
-                            ? 'text-primary font-semibold'
-                            : 'text-secondary hover:text-primary hover:bg-[rgba(255,255,255,0.08)]'
+                            ? 'text-white bg-[rgba(255,255,255,0.06)] border border-[rgba(255,255,255,0.12)] font-semibold'
+                            : 'text-secondary hover:text-white hover:bg-[rgba(255,255,255,0.06)] hover:border-[rgba(255,255,255,0.08)] border border-transparent'
                         }`
                       }
                       // ⛔️ DO NOT clear on subnav click; clear happens on LEAVE via effect.
@@ -399,16 +424,62 @@ const PureSidebar = React.memo(function PureSidebar({
           </div>
         );
       })}
-      {collapsed && tooltip.label &&
+      <div
+        className={historyContainerClass}
+        onMouseEnter={handleHistoryHover}
+        onMouseLeave={handleHistoryLeave}
+      >
+        <button
+          ref={historyBtnRef}
+          onClick={handleHistoryClick}
+          onMouseEnter={handleHistoryHover}
+          onMouseLeave={handleHistoryLeave}
+          className={historyButtonClasses}
+          style={
+            collapsed
+              ? {
+                  color: 'var(--text)',
+                  background: 'transparent',
+                  border: 'none',
+                  boxShadow: 'none',
+                  transition: 'background 150ms ease',
+                }
+              : {
+                  background: 'transparent',
+                  border: '1px solid transparent',
+                  boxShadow: 'none',
+                }
+          }
+          aria-label="Chat history"
+        >
+          <span className={`flex items-center min-w-0 ${collapsed ? 'justify-center' : 'whitespace-nowrap overflow-hidden text-ellipsis pr-2'}`}>
+            <MessageSquare
+              size={historyIconSize}
+              strokeWidth={1.5}
+              className="transition-colors"
+              style={{ color: 'var(--text-2)' }}
+            />
+            {!collapsed && <span className="truncate">Chat history</span>}
+          </span>
+        </button>
+      </div>
+      {tooltip.label &&
         createPortal(
           <AnimatePresence>
             <motion.div
-              initial={{ opacity: 0, x: -6, scale: 0.95 }}
-              animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, x: -4, scale: 0.95 }}
-              transition={{ duration: 0.18 }}
-              className="pointer-events-none fixed z-[9999] px-3 py-1 rounded-lg text-[12px] text-white bg-[rgba(28,28,30,0.92)] shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
-              style={{ top: tooltip.y, left: tooltip.x, transform: 'translateY(-50%)' }}
+              initial={{ opacity: 0, x: -4, y: -4, scale: 0.96 }}
+              animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
+              exit={{ opacity: 0, x: -2, y: -2, scale: 0.96 }}
+              transition={{ duration: 0.2, ease: [0.22, 0.1, 0.25, 1] }}
+              className="pointer-events-none fixed z-[9999] px-3 py-1 rounded-lg text-[12px] text-white shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+              style={{
+                top: tooltip.y,
+                left: tooltip.x,
+                background: "rgba(20,22,26,0.95)",
+                border: "1px solid rgba(var(--accent-rgb),0.28)",
+                boxShadow: "0 0 0 1px rgba(var(--accent-rgb),0.12), 0 12px 30px rgba(0,0,0,0.45), 0 0 12px rgba(var(--accent-rgb),0.2)",
+                color: "rgba(245,247,251,0.95)",
+              }}
             >
               {tooltip.label}
             </motion.div>
@@ -437,7 +508,10 @@ function areEqual(prev, next) {
     prev.compact === next.compact &&
     prev.collapsed === next.collapsed &&
     prev.activePath === next.activePath &&
-    prevSig === nextSig
+    prevSig === nextSig &&
+    prev.onChatHistoryHover === next.onChatHistoryHover &&
+    prev.onChatHistoryLeave === next.onChatHistoryLeave &&
+    prev.onChatHistoryClick === next.onChatHistoryClick
   );
 }
 

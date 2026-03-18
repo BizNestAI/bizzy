@@ -1,14 +1,11 @@
 // /src/utils/safeFetch.js
-import { supabase } from '../services/supabaseClient';
-import apiBaseUrl from './apiBase.js';
+import { supabase } from "../services/supabaseClient";
+import apiBaseUrl, { getApiBase } from "./apiBase.js";
 
 // --- Base resolver -----------------------------------------------------------
 function resolveApiBase() {
-  const base = apiBaseUrl || "";
-  if (base) return base.replace(/\/+$/, "");
-  // Fallback to same-origin when no env var is set (lets Vite proxy handle dev)
-  if (typeof window !== "undefined") return window.location.origin;
-  return "";
+  const base = getApiBase?.() || apiBaseUrl || "";
+  return base ? base.replace(/\/+$/, "") : "";
 }
 const BASE = resolveApiBase();
 
@@ -84,9 +81,10 @@ export async function safeFetch(input, init = {}) {
     'x-data-mode': (typeof localStorage !== 'undefined' && (localStorage.getItem('bizzy:dataMode') || localStorage.getItem('bizzy:demo'))) || 'auto',
     'Accept': 'application/json',
   };
-  if (token) defaultHeaders.Authorization = `Bearer ${token}`;
-
   const headers = mergeHeaders(defaultHeaders, init.headers);
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
   const body = normalizeBodyAndHeaders(init, headers);
 
   let fetchInit = {

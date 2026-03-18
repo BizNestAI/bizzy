@@ -13,7 +13,9 @@ export const updateBusinessProfile = async (businessId, updates) => {
   const { data, error } = await supabase
     .from('business_profiles')
     .update(updates)
-    .eq('id', businessId);
+    .eq('id', businessId)
+    .select('id, owner_name, owner_role, founded_year')
+    .single();
 
   return { data, error };
 };

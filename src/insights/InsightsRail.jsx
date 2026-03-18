@@ -3,10 +3,10 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useInsightsStore } from './useInsightsStore';
 import InsightCard from './InsightCard';
-import AgendaWidget from '../pages/Calendar/AgendaWidget';
 import { useRightExtras } from './RightExtrasContext';
 import { MOCK_INSIGHTS } from './mockInsights';
 import useDemoMode from '../hooks/useDemoMode.js';
+import { ACCENT_HEX } from '../config/accent';
 
 /* ----------------------- small helpers ----------------------- */
 function moduleFromPath(path) {
@@ -20,18 +20,18 @@ function moduleFromPath(path) {
 }
 
 const accentHexMap = {
-  bizzy:       '#FF4EEB',
-  accounting:  '#00FFB2',
-  marketing:   '#3B82F6',
-  tax:         '#FFD700',
-  investments: '#B388FF',
-  email:       '#3CF6FF',
-  calendar:    '#94a3b8',
-  activity:    '#94a3b8',
-  ops:         '#94a3b8',
+  bizzy:       ACCENT_HEX,
+  accounting:  ACCENT_HEX,
+  marketing:   ACCENT_HEX,
+  tax:         ACCENT_HEX,
+  investments: ACCENT_HEX,
+  email:       ACCENT_HEX,
+  calendar:    ACCENT_HEX,
+  activity:    ACCENT_HEX,
+  ops:         ACCENT_HEX,
 };
 
-const CHROME_HEX = '#BFBFBF';
+const CHROME_HEX = ACCENT_HEX;
 const isChromeRoute = (p = '') =>
   p.startsWith('/dashboard/bizzy') ||
   p.startsWith('/dashboard/leads-jobs') ||
@@ -74,18 +74,12 @@ export default function InsightsRail({
   const descriptorModule = extras?.type === 'agenda' ? extras.props?.module : undefined;
   const moduleKey        = descriptorModule || routeModule;
 
-  /* ---- Agenda props (stable scalars; no object creation) ---- */
-  const agendaBusinessId =
-    (extras?.type === 'agenda' && extras.props?.businessId) ? extras.props.businessId : businessId;
-  const agendaModule =
-    (extras?.type === 'agenda' && extras.props?.module) ? extras.props.module : routeModule;
-
   const demoMode = useDemoMode();
   const usingDemoInsights = demoMode === 'demo';
 
   /* ---- Accent for rail glass & dividers ---- */
   const accentHex = useMemo(
-    () => (chrome ? CHROME_HEX : (accentHexMap[moduleKey] || '#FF4EEB')),
+    () => (chrome ? CHROME_HEX : (accentHexMap[moduleKey] || ACCENT_HEX)),
     [chrome, moduleKey]
   );
 
@@ -228,24 +222,14 @@ export default function InsightsRail({
       <div className="relative w-full flex-1 min-h-0 pb-3 z-10 flex flex-col">
         <div
           ref={listRef}
-          className="rail-content flex-1 min-h-0 px-2 pt-7 pb-10 space-y-5 overflow-y-auto touch-scroll no-scrollbar"
+          className="rail-content flex-1 min-h-0 px-2 pt-12 pb-10 space-y-6 overflow-y-auto touch-scroll no-scrollbar"
           style={{
             background: 'transparent',
             scrollbarWidth: 'none',
           }}
         >
-          {/* Agenda */}
-          <div className="ml-2">
-            <div
-              className="rounded-2xl p-3 transition-[transform,opacity,box-shadow] duration-600 ease-[cubic-bezier(0.22,1,0.36,1)]"
-              style={{ background: 'transparent', border: '1px solid transparent' }}
-            >
-              <AgendaWidget businessId={agendaBusinessId} module={agendaModule} />
-            </div>
-          </div>
-
           {/* Header */}
-          <div className="ml-4 mt-1 pr-2">
+          <div className="ml-4 mt-3 pr-2">
             <div className="font-semibold text-primary">
               Live Alerts <span className="text-[12px] text-white/50">(sorted by most recent)</span>
             </div>

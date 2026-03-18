@@ -10,14 +10,12 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
-import { usePeriod } from "../../context/PeriodContext";
+import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { supabase } from "../../services/supabaseClient";
 import CardHeader from "../UI/CardHeader"; // shared header (Pulse style)
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext";
-import apiBaseUrl from "../../utils/apiBase.js";
-
-const API_BASE = apiBaseUrl || "";
+import { apiFetch } from "../../utils/apiBase.js";
 
 /* ---------------- helpers ---------------- */
 function monthShortLabel(y, m) {
@@ -110,7 +108,7 @@ export default function RevenueChart({
   className = "",
   showGrid = false,        // default: no grid
 }) {
-  const { period } = usePeriod();
+  const { year, month } = useFinancialPeriod(businessIdProp || localStorage.getItem("currentBusinessId"));
   const userId = userIdProp || localStorage.getItem("user_id");
   const businessId = businessIdProp || localStorage.getItem("currentBusinessId");
   const forceLive = shouldForceLiveData();
@@ -122,9 +120,9 @@ export default function RevenueChart({
   const [source, setSource] = useState(null);
 
   const windowMonths = useMemo(() => {
-    if (!period?.year || !period?.month) return [];
-    return seqLastNMonths({ year: period.year, month: period.month, n: 12 });
-  }, [period?.year, period?.month]);
+    if (!year || !month) return [];
+    return seqLastNMonths({ year, month, n: 12 });
+  }, [year, month]);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,14 +162,14 @@ export default function RevenueChart({
       // Strategy 1: consolidated API (if present)
       try {
         const url =
-          `${API_BASE}/api/accounting/revenue-series` +
+          `/api/accounting/revenue-series` +
           `?business_id=${encodeURIComponent(businessId)}` +
           `&user_id=${encodeURIComponent(userId)}` +
-          `&end_year=${encodeURIComponent(period.year)}` +
-          `&end_month=${encodeURIComponent(period.month)}` +
+          `&end_year=${encodeURIComponent(year)}` +
+          `&end_month=${encodeURIComponent(month)}` +
           `&window=12` +
           `&data_mode=live&live_only=true`;
-        const resp = await fetch(url, {
+        const resp = await apiFetch(url, {
           headers: {
             "Content-Type": "application/json",
             "x-user-id": userId,
@@ -229,14 +227,14 @@ export default function RevenueChart({
         const rows = await Promise.all(
           windowMonths.map(async ({ year, month }) => {
             const url =
-              `${API_BASE}/api/accounting/metrics` +
+              `/api/accounting/metrics` +
               `?business_id=${encodeURIComponent(businessId)}` +
               `&user_id=${encodeURIComponent(userId)}` +
               `&year=${encodeURIComponent(year)}` +
               `&month=${encodeURIComponent(month)}` +
               `&data_mode=live&live_only=true`;
             try {
-              const r = await fetch(url, {
+              const r = await apiFetch(url, {
                 headers: {
                   "Content-Type": "application/json",
                   "x-user-id": userId,
@@ -276,15 +274,19 @@ export default function RevenueChart({
 
     fetchSeries();
     return () => { cancelled = true; };
-  }, [userId, businessId, period?.year, period?.month, windowMonths.length, demoData, forceLive]);
+  }, [userId, businessId, year, month, windowMonths.length, demoData, forceLive]);
 
   // Measure container to tune margins/ticks/dots responsively
   const [measureRef, { width: w }] = useMeasure();
 
   if (status === "loading") {
     return (
-      <div className={`bg-zinc-900 border border-white/10 rounded-xl p-4 text-white/70 ${className}`}>
-        Loading revenue…
+      <div className={`rounded-xl bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 ${className} animate-pulse`}>
+        <div className="space-y-3">
+          <div className="h-3 w-32 bg-white/15 rounded-full" />
+          <div className="h-5 w-48 bg-white/18 rounded-md" />
+          <div className="h-[180px] w-full bg-white/8 rounded-lg" />
+        </div>
       </div>
     );
   }
@@ -306,11 +308,15 @@ export default function RevenueChart({
   const topMargin = 8;
   const bottomMargin = small ? 60 : 48;
 
+  const lineColor = "#3BE6C7";
+  const lineColorSoft = "rgba(59,230,199,0.28)";
+  const axisColor = "rgba(255,255,255,0.38)";
+  const tickColor = "rgba(255,255,255,0.70)";
   const dotR = small ? 2.5 : 3;
   const activeDotR = small ? 5 : 6;
-  const strokeW = small ? 2 : 2.5;
+  const strokeW = small ? 1.75 : 2.25;
 
-  const xTickStyle = { fill: "#9aa0a6", fontSize: small ? 11 : 12, dy: 6 };
+  const xTickStyle = { fill: tickColor, fontSize: small ? 11 : 12, dy: 6 };
 
   return (
     <div className={`bg-zinc-900 border border-white/10 rounded-xl p-4 ${className}`}>
@@ -332,17 +338,17 @@ export default function RevenueChart({
           >
             <defs>
               <linearGradient id="revenueArea" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="45%" stopColor="#00FFB2" stopOpacity={0.28} />
-                <stop offset="100%" stopColor="#00FFB2" stopOpacity={0} />
+                <stop offset="35%" stopColor={lineColor} stopOpacity={0.22} />
+                <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
               </linearGradient>
             </defs>
 
             {/* Grid hidden by default */}
-            {showGrid && <CartesianGrid strokeDasharray="3 3" stroke="#2a2a2a" />}
+            {showGrid && <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />}
 
             <XAxis
               dataKey="month"
-              stroke="#9aa0a6"
+              stroke={axisColor}
               tickLine={false}
               axisLine={false}
               interval={0}
@@ -352,11 +358,12 @@ export default function RevenueChart({
               tick={xTickStyle}
             />
             <YAxis
-              stroke="#9aa0a6"
+              stroke={axisColor}
               tickLine={false}
               axisLine={false}
               tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
               width={leftMargin + 4}
+              tick={{ fill: tickColor }}
             />
             <Tooltip content={<RevenueTooltip />} wrapperStyle={{ zIndex: 30 }} />
 
@@ -373,10 +380,10 @@ export default function RevenueChart({
             <Line
               type="monotone"
               dataKey="revenue"
-              stroke="#00FFB2"
+              stroke={lineColor}
               strokeWidth={strokeW}
-              dot={{ r: dotR, stroke: "#00FFB2", fill: "#00FFB2" }}
-              activeDot={{ r: activeDotR }}
+              dot={{ r: dotR, stroke: lineColor, fill: lineColorSoft }}
+              activeDot={{ r: activeDotR, stroke: lineColor, fill: lineColor }}
               isAnimationActive={false}
             />
           </ComposedChart>

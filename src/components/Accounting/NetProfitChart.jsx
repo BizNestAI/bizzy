@@ -3,13 +3,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { usePeriod } from "../../context/PeriodContext";
+import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { supabase } from "../../services/supabaseClient";
 import CardHeader from "../UI/CardHeader"; // ⬅️ shared header
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
-import apiBaseUrl from "../../utils/apiBase.js";
-
-const API_BASE = apiBaseUrl || "";
+import { apiFetch } from "../../utils/apiBase.js";
 
 /* ---------- helpers ---------- */
 function monthShortLabel(y,m){ return new Date(y, m-1, 1).toLocaleString(undefined,{month:"short"});}
@@ -60,7 +58,7 @@ export default function NetProfitChart({
   className = "",
   showGrid = false,        // off by default to remove dotted lines
 }) {
-  const { period } = usePeriod();
+  const { year, month } = useFinancialPeriod(businessIdProp || localStorage.getItem("currentBusinessId"));
   const userId = userIdProp || localStorage.getItem("user_id");
   const businessId = businessIdProp || localStorage.getItem("currentBusinessId");
   const forceLive = shouldForceLiveData();
@@ -72,9 +70,9 @@ export default function NetProfitChart({
   const [source, setSource] = useState(null); // "quickbooks" | "supabase" | "mock"
 
   const windowMonths = useMemo(()=>{
-    if(!period?.year || !period?.month) return [];
-    return seqLastNMonths({ year: period.year, month: period.month, n: 12 });
-  }, [period?.year, period?.month]);
+    if(!year || !month) return [];
+    return seqLastNMonths({ year, month, n: 12 });
+  }, [year, month]);
 
   useEffect(()=>{
     let cancelled=false;
@@ -106,14 +104,14 @@ export default function NetProfitChart({
       // 1) Try consolidated API
       try{
         const url =
-          `${API_BASE}/api/accounting/profit-series` +
+          `/api/accounting/profit-series` +
           `?business_id=${encodeURIComponent(businessId)}` +
           `&user_id=${encodeURIComponent(userId)}` +
-          `&end_year=${encodeURIComponent(period.year)}` +
-          `&end_month=${encodeURIComponent(period.month)}` +
+          `&end_year=${encodeURIComponent(year)}` +
+          `&end_month=${encodeURIComponent(month)}` +
           `&window=12` +
           `&data_mode=live&live_only=true`;
-        const r = await fetch(url, {
+        const r = await apiFetch(url, {
           headers: {"Content-Type":"application/json","x-user-id":userId,"x-business-id":businessId,"x-data-mode":"live"}
         });
         if(r.ok){
@@ -163,14 +161,14 @@ export default function NetProfitChart({
       try{
         const rows = await Promise.all(windowMonths.map(async ({year,month})=>{
           const url =
-            `${API_BASE}/api/accounting/metrics` +
+            `/api/accounting/metrics` +
             `?business_id=${encodeURIComponent(businessId)}` +
             `&user_id=${encodeURIComponent(userId)}` +
             `&year=${encodeURIComponent(year)}` +
             `&month=${encodeURIComponent(month)}` +
             `&data_mode=live&live_only=true`;
           try{
-            const r = await fetch(url, { headers:{"Content-Type":"application/json","x-user-id":userId,"x-business-id":businessId,"x-data-mode":"live"} });
+            const r = await apiFetch(url, { headers:{"Content-Type":"application/json","x-user-id":userId,"x-business-id":businessId,"x-data-mode":"live"} });
             if(!r.ok) throw new Error(`HTTP ${r.status}`);
             const payload = await r.json();
             const profit = coalesceProfit(payload);
@@ -201,13 +199,21 @@ export default function NetProfitChart({
 
     fetchSeries();
     return ()=>{ cancelled=true; };
-  }, [userId, businessId, period?.year, period?.month, windowMonths.length, demoData, forceLive]);
+  }, [userId, businessId, year, month, windowMonths.length, demoData, forceLive]);
 
   // Measure container to tune margins / bar size responsively
   const [measureRef, { width: w }] = useMeasure();  // keep above returns
 
   if(status==="loading"){
-    return <div className={`bg-zinc-900 border border-white/10 rounded-xl p-4 text-white/70 ${className}`}>Loading profit…</div>;
+    return (
+      <div className={`rounded-xl bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 ${className} animate-pulse`}>
+        <div className="space-y-3">
+          <div className="h-3 w-28 bg-white/15 rounded-full" />
+          <div className="h-5 w-44 bg-white/18 rounded-md" />
+          <div className="h-[160px] w-full bg-white/8 rounded-lg" />
+        </div>
+      </div>
+    );
   }
   if(!series || !series.length) return null;
 

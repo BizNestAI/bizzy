@@ -83,35 +83,8 @@ export async function getQuickPromptsForModule(userId, mod, { max = 4, ttlHours 
     } catch {}
   }
 
-  // Pull usage from Supabase (if available)
+  // Usage tracking disabled (prompt_usage table not available)
   let usage = [];
-  try {
-    const { data } = await supabase
-      .from('prompt_usage')
-      .select('prompt_text, module, used_at')
-      .eq('user_id', userId)
-      .eq('module', module)
-      .order('used_at', { ascending: false })
-      .limit(200);
-
-    // Aggregate counts by text + track latest usage time
-    const map = new Map();
-    (data || []).forEach((row) => {
-      const key = row.prompt_text.trim();
-      if (!key) return;
-      const ex = map.get(key);
-      if (!ex) {
-        map.set(key, { text: key, count: 1, last_used_at: row.used_at });
-      } else {
-        ex.count += 1;
-        if (new Date(row.used_at) > new Date(ex.last_used_at)) ex.last_used_at = row.used_at;
-      }
-    });
-    usage = Array.from(map.values()).sort((a, b) => scoreUsage(b) - scoreUsage(a));
-  } catch (e) {
-    // if Supabase isn’t configured for this user/session, usage stays empty
-    // console.warn('[quickPromptService] usage query failed:', e?.message || e);
-  }
 
   // Build candidate pool:
   //  - keep 1–2 pinned curated first

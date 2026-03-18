@@ -5,10 +5,12 @@ import OpenAI from "openai";
 import { generateFinancialPulseSnapshot } from "./monthlyFinancialPulse.js";
 import { generateSuggestedMoves } from "../gpt/suggestedMovesEngine.js";
 import { supabase } from "../../services/supabaseAdmin.js";
+import { upsertExpenseTotalsMonthly } from "../../services/expenseTotalsMonthly.js";
 import { getQBOClient } from "../../utils/qboClient.js";
 import { getQuickBooksAccessToken } from "../../services/quickbooksTokenService.js";
 import fetch from "node-fetch";
-import { qbApiBase } from "../../utils/qboEnv.js";
+import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
+import { monthKeyFromParts } from "../../utils/monthKey.js";
 
 const PNL_CACHE = new Map(); // key => { report, ts }
 const PNL_TTL_MS = 60 * 1000;
@@ -20,6 +22,32 @@ const router = express.Router();
 const ENV_MOCK = String(process.env.USE_MOCK_ACCOUNTING || "").toLowerCase() === "true";
 const MOCK_GEN = String(process.env.MOCK_GENERATE_MOVES || "").toLowerCase() === "true";
 const EMBED_ACCOUNTS = String(process.env.EMBED_ACCOUNTS || "").toLowerCase() === "true";
+
+// Latest available month helper for initializing period selection
+router.get("/latest-month", async (req, res) => {
+  try {
+    const business_id =
+      req.query?.business_id ||
+      req.query?.businessId ||
+      req.headers["x-business-id"] ||
+      null;
+    if (!business_id) return res.status(400).json({ error: "missing_business_id" });
+    const { data, error } = await supabase
+      .from("financial_metrics")
+      .select("month")
+      .eq("business_id", business_id)
+      .order("month", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) return res.status(500).json({ error: error.message || "query_failed" });
+    const month = data?.month || null;
+    if (!month) return res.status(200).json({ month: null });
+    const text = /^\d{4}-\d{2}$/.test(month) ? `${month}-01` : month;
+    return res.status(200).json({ month: text });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || "latest_month_failed" });
+  }
+});
 
 function useMockAccounting(req) {
   const mode = (req.headers["x-data-mode"] || req.query?.data_mode || "").toLowerCase();
@@ -46,6 +74,7 @@ const ymd = (d) => d.toISOString().split("T")[0];
 const startOfMonth = (d) => new Date(d.getFullYear(), d.getMonth(), 1);
 const endOfMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0);
 const prevMonthDate = (d) => new Date(d.getFullYear(), d.getMonth() - 1, 1);
+const normalizeMonth = (m) => /^\d{4}-\d{2}$/.test(m) ? `${m}-01` : m;
 function isCurrentMonth(date) {
   const now = new Date();
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
@@ -74,6 +103,17 @@ function calcProfitMargin(revenue, profit) {
   if (!r) return 0;
   return Number(((p / r) * 100).toFixed(2));
 }
+
+const formatPrior = (prior) => {
+  if (!prior) return null;
+  return {
+    totalRevenue: prior.total_revenue ?? null,
+    totalExpenses: prior.total_expenses ?? null,
+    netProfit: prior.net_profit ?? null,
+    profitMargin: prior.profit_margin ?? null,
+    topSpendingCategory: prior.top_spending_category ?? null,
+  };
+};
 
 function hasNoReportData(report) {
   const opts = report?.Header?.Option || [];
@@ -147,6 +187,9 @@ async function fetchProfitAndLossReportDirect({ business_id, start, end, forceRe
     .from("quickbooks_tokens")
     .select("realm_id")
     .eq("business_id", business_id)
+    .eq("qbo_env", qboEnvName)
+    .eq("is_active", true)
+    .eq("status", "active")
     .maybeSingle();
 
   if (error || !tok?.realm_id) {
@@ -375,12 +418,15 @@ async function getPrevMonthMetrics({ business_id, fetchReport, prevStart, prevEn
       const expenses = Number(accPrev.expense || 0);
       const profit = Number(revenue - expenses);
       const margin = calcProfitMargin(revenue, profit);
+      const topExpensePrev = accPrev.lines
+        .filter((l) => l.account_type === "Expense")
+        .sort((a, b) => Number(b.balance || 0) - Number(a.balance || 0))[0];
       return {
         total_revenue: revenue,
         total_expenses: expenses,
         net_profit: profit,
         profit_margin: margin,
-        top_spending_category: null
+        top_spending_category: topExpensePrev?.account_name || null
       };
     } catch {
       // swallow; we'll return nulls
@@ -395,7 +441,7 @@ async function getCachedMetrics({ business_id, monthText }) {
     .from("financial_metrics")
     .select("*")
     .eq("business_id", business_id)
-    .eq("month", monthText)
+    .eq("month", monthKeyFromParts(new Date(monthText).getFullYear(), new Date(monthText).getMonth() + 1))
     .maybeSingle();
   if (!fmRow) return null;
 
@@ -438,22 +484,41 @@ router.get("/", async (req, res) => {
   if (!user_id || !business_id) {
     return res.status(400).json({ error: "Missing userId or businessId" });
   }
-  const today = new Date();
   const liveOnly = String(req.query?.live_only || req.query?.liveOnly || "").toLowerCase() === "true";
   const forceRaw = req.query?.force_refresh ?? req.query?.force ?? "";
   const forceParam = String(forceRaw).toLowerCase();
   const forceRefresh = forceParam === "true" || forceParam === "1";
 
-  const requestedYear = Number(req.query?.year || new Date().getFullYear());
-  const requestedMonth = Number(req.query?.month || (new Date().getMonth() + 1));
+  const today = new Date();
+  const hasYear = req.query?.year != null && String(req.query.year).trim() !== "";
+  const hasMonth = req.query?.month != null && String(req.query.month).trim() !== "";
+  const hasExplicitPeriod = hasYear || hasMonth;
+
+  let effectiveDate = today;
+  if (!hasExplicitPeriod && qboEnvName === "sandbox") {
+    effectiveDate = new Date(today.getFullYear(), today.getMonth() - 1, 1); // last full month
+  }
+
+  const requestedYear = hasYear ? Number(req.query.year) : effectiveDate.getFullYear();
+  const requestedMonth = hasMonth ? Number(req.query.month) : (effectiveDate.getMonth() + 1);
 
   const targetDate = new Date(requestedYear, requestedMonth - 1, 1);
   const curStart = startOfMonth(targetDate);
   const curEnd = endOfMonth(targetDate);
   const prevStart = prevMonthDate(curStart);
   const prevEnd = endOfMonth(prevStart);
-  const monthText = ymd(curStart);
-  const currentMonthText = ymd(startOfMonth(new Date()));
+  const monthText = monthKeyFromParts(curStart.getFullYear(), curStart.getMonth() + 1);
+  const currentMonthText = monthKeyFromParts(new Date().getFullYear(), new Date().getMonth() + 1);
+  const isCurrent = isCurrentMonth(curStart);
+
+  console.log("[metrics] effective period", {
+    qboEnvName,
+    requestedYear,
+    requestedMonth,
+    monthText,
+    forceRefresh,
+    isCurrent,
+  });
 
   const cacheKey = `${business_id}:${ymd(curStart)}:${ymd(curEnd)}`;
 
@@ -472,6 +537,7 @@ router.get("/", async (req, res) => {
       margin_mom_pct: null,
     },
     accountBreakdown: [],
+    priorMonth: null,
     source: "quickbooks",
   };
 
@@ -484,6 +550,7 @@ router.get("/", async (req, res) => {
         prevStart,
         prevEnd,
       });
+      const priorMonth = formatPrior(prior);
       const deltas = {
         revenue_mom_pct: pctDelta(cached.metrics.totalRevenue, prior?.total_revenue),
         expenses_mom_pct: pctDelta(cached.metrics.totalExpenses, prior?.total_expenses),
@@ -494,6 +561,7 @@ router.get("/", async (req, res) => {
         metrics: cached.metrics,
         deltas,
         accountBreakdown: cached.accountBreakdown || [],
+        priorMonth,
         source: cached.source || "cache",
       });
     }
@@ -502,15 +570,41 @@ router.get("/", async (req, res) => {
 
   const cached = await getCachedMetrics({ business_id, monthText });
 
-  // Historical months: always serve cache (or zeros) and skip QBO even if liveOnly
-  if (!isCurrentMonth(curStart) && !forceRefresh) {
-    if (cached && isFresh(cached.meta, { current: false })) {
+  if (cached && !forceRefresh && isFresh(cached.meta, { current: isCurrent })) {
+    const prior = await getPrevMonthMetrics({
+      business_id,
+      fetchReport: null,
+      prevStart,
+      prevEnd,
+    });
+    const priorMonth = formatPrior(prior);
+    const deltas = {
+      revenue_mom_pct: pctDelta(cached.metrics.totalRevenue, prior?.total_revenue),
+      expenses_mom_pct: pctDelta(cached.metrics.totalExpenses, prior?.total_expenses),
+      profit_mom_pct: pctDelta(cached.metrics.netProfit, prior?.net_profit),
+      margin_mom_pct: pctDelta(cached.metrics.profitMargin, prior?.profit_margin),
+    };
+    console.info("[metrics] serving cache", { business_id, monthText, source: cached.source || "cache" });
+    return res.status(200).json({
+      metrics: cached.metrics,
+      deltas,
+      accountBreakdown: cached.accountBreakdown || [],
+      priorMonth,
+      source: cached.source || "cache",
+    });
+  }
+
+  // Historical months: serve cache/zeros unless explicitly forced
+  if (!isCurrent && !forceRefresh) {
+    console.info("[metrics] historical month cache/zero", { business_id, monthText, source: cached ? "cache" : "cache_miss" });
+    if (cached) {
       const prior = await getPrevMonthMetrics({
         business_id,
         fetchReport: null,
         prevStart,
         prevEnd,
       });
+      const priorMonth = formatPrior(prior);
       const deltas = {
         revenue_mom_pct: pctDelta(cached.metrics.totalRevenue, prior?.total_revenue),
         expenses_mom_pct: pctDelta(cached.metrics.totalExpenses, prior?.total_expenses),
@@ -521,33 +615,11 @@ router.get("/", async (req, res) => {
         metrics: cached.metrics,
         deltas,
         accountBreakdown: cached.accountBreakdown || [],
+        priorMonth,
         source: cached.source || "cache",
       });
     }
-    // No cache: return zeros (no QBO)
     return res.status(200).json({ ...zeroMetricsPayload, source: "cache_miss" });
-  }
-
-  // Serve cache for current month if fresh enough and not forced
-  if (isCurrentMonth(curStart) && cached && !forceRefresh && isFresh(cached.meta, { current: true })) {
-    const prior = await getPrevMonthMetrics({
-      business_id,
-      fetchReport: null,
-      prevStart,
-      prevEnd,
-    });
-    const deltas = {
-      revenue_mom_pct: pctDelta(cached.metrics.totalRevenue, prior?.total_revenue),
-      expenses_mom_pct: pctDelta(cached.metrics.totalExpenses, prior?.total_expenses),
-      profit_mom_pct: pctDelta(cached.metrics.netProfit, prior?.net_profit),
-      margin_mom_pct: pctDelta(cached.metrics.profitMargin, prior?.profit_margin),
-    };
-    return res.status(200).json({
-      metrics: cached.metrics,
-      deltas,
-      accountBreakdown: cached.accountBreakdown || [],
-      source: cached.source || "cache",
-    });
   }
 
   const runProfitAndLoss = async (start, end) => {
@@ -589,6 +661,7 @@ router.get("/", async (req, res) => {
     // ===== LIVE PATH =====
     let report;
     try {
+      console.info("[metrics] fetching via QBO", { business_id, monthText, forceRefresh, isCurrent });
       report = await runProfitAndLoss(curStart, curEnd);
       if (!report) {
         // cooldown/path returned null → try cache or zeros
@@ -600,19 +673,21 @@ router.get("/", async (req, res) => {
             prevStart,
             prevEnd,
           });
-          const deltas = {
-            revenue_mom_pct: pctDelta(cachedRow.metrics.totalRevenue, prior?.total_revenue),
-            expenses_mom_pct: pctDelta(cachedRow.metrics.totalExpenses, prior?.total_expenses),
-            profit_mom_pct: pctDelta(cachedRow.metrics.netProfit, prior?.net_profit),
-            margin_mom_pct: pctDelta(cachedRow.metrics.profitMargin, prior?.profit_margin),
-          };
-          return res.status(200).json({
-            metrics: cachedRow.metrics,
-            deltas,
-            accountBreakdown: cachedRow.accountBreakdown || [],
-            source: cachedRow.source || "cache",
-          });
-        }
+      const priorMonth = formatPrior(prior);
+      const deltas = {
+        revenue_mom_pct: pctDelta(cachedRow.metrics.totalRevenue, prior?.total_revenue),
+        expenses_mom_pct: pctDelta(cachedRow.metrics.totalExpenses, prior?.total_expenses),
+        profit_mom_pct: pctDelta(cachedRow.metrics.netProfit, prior?.net_profit),
+        margin_mom_pct: pctDelta(cachedRow.metrics.profitMargin, prior?.profit_margin),
+      };
+      return res.status(200).json({
+        metrics: cachedRow.metrics,
+        deltas,
+        accountBreakdown: cachedRow.accountBreakdown || [],
+        priorMonth,
+        source: cachedRow.source || "cache",
+      });
+    }
         return res.status(200).json({ ...zeroMetricsPayload, source: "quickbooks_throttled" });
       }
       if (forceRefresh) {
@@ -686,8 +761,17 @@ router.get("/", async (req, res) => {
       throw err;
     }
 
+    const prior =
+      (await getPrevMonthMetrics({
+        business_id,
+        fetchReport: async (start, end) =>
+          fetchProfitAndLossReportDirect({ business_id, start, end, forceRefresh: false }),
+        prevStart,
+        prevEnd,
+      })) || null;
+    const priorMonth = formatPrior(prior);
+
     if (hasNoReportData(report)) {
-      const monthText = ymd(curStart);
       const zeroMetrics = {
         totalRevenue: 0,
         totalExpenses: 0,
@@ -704,10 +788,12 @@ router.get("/", async (req, res) => {
           margin_mom_pct: null
         },
         accountBreakdown: [],
+        priorMonth,
         source: "quickbooks"
       });
 
-      if (liveOnly) return;
+      // Persist zeros only when explicitly forced; otherwise avoid polluting stored metrics
+      if (liveOnly || !forceRefresh) return;
       void (async () => {
         try {
           await supabase.from("financial_metrics").upsert(
@@ -740,7 +826,6 @@ router.get("/", async (req, res) => {
       acc.lines.filter(l => l.account_type === "Expense").sort((a, b) => b.balance - a.balance)?.[0]?.account_name || "N/A";
 
     // Build account breakdown rows
-    const monthText = ymd(curStart);
     const accountBreakdown = acc.lines.map(l => ({
       business_id,
       month: monthText,
@@ -750,14 +835,6 @@ router.get("/", async (req, res) => {
       embedding_text: `${l.account_type} account ${l.account_name} has balance $${Number(l.balance).toFixed(2)} for ${monthText}`,
       embedding: null
     }));
-
-    // Fetch prior month for MoM deltas
-    const prior = await getPrevMonthMetrics({
-      business_id,
-      fetchReport: runProfitAndLoss,
-      prevStart,
-      prevEnd
-    });
 
     const deltas = {
       revenue_mom_pct: pctDelta(totalRevenue, prior?.total_revenue),
@@ -777,6 +854,7 @@ router.get("/", async (req, res) => {
       },
       deltas,
       accountBreakdown,
+      priorMonth,
       source: "quickbooks"
     });
 
@@ -796,13 +874,44 @@ router.get("/", async (req, res) => {
           embedding_text: `For ${monthText}, total revenue $${totalRevenue}, expenses $${totalExpenses}, net profit $${netProfit}, margin ${profitMargin}%`
         }], { onConflict: "business_id,month" });
 
-        // account_breakdown: delete-then-insert (no composite unique key available)
-        await supabase.from("account_breakdown")
-          .delete()
-          .eq("business_id", business_id)
-          .eq("month", monthText);
-        if (accountBreakdown.length > 0) {
-          await supabase.from("account_breakdown").insert(accountBreakdown);
+        // account_breakdown: idempotent upsert on (business_id,month,account_type,account_name)
+        const normalizeType = (t) => (String(t || "").toLowerCase().includes("expense") ? "Expense" : "Income");
+        const normalizeName = (n) => (n || "").replace(/\s+/g, " ").trim();
+        const rows = accountBreakdown.map((l) => ({
+          ...l,
+          account_name: normalizeName(l.account_name),
+          account_type: normalizeType(l.account_type),
+        }));
+        if (rows.length > 0) {
+          await supabase.from("account_breakdown").upsert(rows, {
+            onConflict: "business_id,month,account_type,account_name",
+          });
+          if (process.env.NODE_ENV !== "production") {
+            console.log("[metrics] account_breakdown upsert", {
+              month: monthText,
+              count: rows.length,
+              sample: rows.slice(0, 3).map(r => ({ account_name: r.account_name, account_type: r.account_type, balance: r.balance })),
+            });
+          }
+        }
+
+        // expense_totals_monthly aggregation (one row per expense category)
+        try {
+          const { rows: expRows, sum } = await upsertExpenseTotalsMonthly({
+            business_id,
+            monthText,
+            expenseLines: rows,
+          });
+          if (process.env.NODE_ENV !== "production") {
+            console.log("[metrics] expense_totals_monthly upsert", {
+              month: monthText,
+              categories: expRows.length,
+              sum,
+              totalExpenses,
+            });
+          }
+        } catch (e) {
+          console.warn("[metrics] expense_totals_monthly upsert failed", e?.message || e);
         }
 
         // Optional: batch embeddings for breakdown rows

@@ -4,7 +4,7 @@ import BrokerageValueChart from "./BrokerageValueChart";
 import AllocationDonut from "./AllocationDonut";
 
 // darker/muted purple ring for Investments
-const RING_PURPLE = "rgba(179,136,255,0.20)"; // #B388FF @20%
+const RING_PURPLE = "rgba(179,136,255,0.20)"; // rgb(var(--accent-rgb)) @20%
 
 /**
  * AccountCards (compact, no CardHeader)

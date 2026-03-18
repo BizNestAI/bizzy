@@ -19,6 +19,9 @@ import ChatHome from "./pages/Bizzy/ChatHome.jsx";
 import Forecasts from "./pages/accounting/Forecasts";
 import Reports from "./pages/accounting/Reports";
 import BookkeepingCleanup from "./pages/accounting/BookkeepingCleanup.jsx";
+import ReconciledTransactions from "./pages/accounting/ReconciledTransactions.jsx";
+import Reconciliations from "./pages/accounting/Reconciliations.jsx";
+import AccountingRules from "./pages/accounting/Rules.jsx";
 
 import DeductionsPage from "./pages/Tax/DeductionsPage";
 
@@ -169,11 +172,18 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               <Route path="bizzy/chat" element={<ChatHome />} />
               <Route path="companion" element={<CompanionPage />} />
               <Route path="leads-jobs" element={<JobsDashboard />} />
+              <Route path="leads-jobs/estimates" element={<JobsDashboard />} />
+              <Route path="leads-jobs/change-orders" element={<JobsDashboard />} />
               <Route path="jobs" element={<JobsDashboard />} />
+              <Route path="jobs/estimates" element={<JobsDashboard />} />
+              <Route path="jobs/change-orders" element={<JobsDashboard />} />
 
               {/* Accounting */}
               <Route path="accounting" element={<AccountingDashboard />} />
               <Route path="accounting/bookkeeping" element={<BookkeepingCleanup />} />
+              <Route path="accounting/rules" element={<AccountingRules />} />
+              <Route path="accounting/reconciled" element={<ReconciledTransactions />} />
+              <Route path="accounting/reconciliations" element={<Reconciliations />} />
               <Route path="accounting/forecasts" element={<Forecasts />} />
               <Route path="accounting/reports" element={<Reports />} />
               <Route

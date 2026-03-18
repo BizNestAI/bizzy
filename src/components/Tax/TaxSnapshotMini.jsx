@@ -4,7 +4,7 @@ import { useMonthlySnapshot } from "../../hooks/useMonthlySnapshot";
 import { AlertTriangle, CheckCircle2, MinusCircle } from "lucide-react";
 import CardHeader from "../UI/CardHeader";
 
-const GOLD_MUTED = "rgba(227, 194, 92, 1)"; // softer gold accent
+const GOLD_MUTED = "rgb(var(--accent-rgb))"; // unified Books green accent
 
 export default function TaxSnapshotMini({
   businessId,
@@ -96,8 +96,8 @@ export default function TaxSnapshotMini({
 function MiniKPI({ label, value, severity = "ok" }) {
   const color =
     severity === "high" ? "text-rose-300"
-    : severity === "med" ? "text-[rgba(227,194,92,.95)]"
-    : "text-emerald-400";
+    : severity === "med" ? "text-[rgba(var(--accent-rgb),.95)]"
+    : "text-[rgba(var(--accent-rgb),.95)]";
 
   const Icon =
     severity === "high" ? AlertTriangle
@@ -106,7 +106,7 @@ function MiniKPI({ label, value, severity = "ok" }) {
 
   return (
     <div className="rounded-lg p-3 bg-white/4 ring-1 ring-inset ring-white/10 min-h-[84px] flex flex-col justify-between">
-      <div className="text-[11px] uppercase tracking-wide" style={{ color: "rgba(227,194,92,.85)" }}>
+      <div className="text-[11px] uppercase tracking-wide" style={{ color: "rgba(var(--accent-rgb),.85)" }}>
         {label}
       </div>
       <div className={`mt-1 flex items-center justify-end gap-1 ${color}`}>
@@ -123,7 +123,7 @@ function MiniKPI({ label, value, severity = "ok" }) {
 function MiniKPIList({ title, itemLabel, itemValue }) {
   return (
     <div className="rounded-lg p-3 bg-white/4 ring-1 ring-inset ring-white/10 min-h-[84px] flex flex-col justify-between">
-      <div className="text-[11px] uppercase tracking-wide" style={{ color: "rgba(227,194,92,.85)" }}>
+      <div className="text-[11px] uppercase tracking-wide" style={{ color: "rgba(var(--accent-rgb),.85)" }}>
         {title}
       </div>
       <div className="mt-1 flex items-center justify-between gap-2">

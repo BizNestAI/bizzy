@@ -1,9 +1,11 @@
 // File: /src/components/Bizzy/ChatDrawer.jsx
-import React from 'react';
+import React, { useState, forwardRef, useImperativeHandle } from 'react';
 import { useLocation } from 'react-router-dom';
 import { createPortal } from 'react-dom';
+import { MessageSquare } from 'lucide-react';
 import useChatThreads from '../../hooks/useChatThreads';
 import { useBizzyChatContext } from '../../context/BizzyChatContext';
+import { ACCENT_HEX } from '../../config/accent';
 
 /* ------------------------------- */
 /* Small helpers / portal elements */
@@ -11,14 +13,14 @@ import { useBizzyChatContext } from '../../context/BizzyChatContext';
 
 // --- soft accent helpers (same feel as InsightCards) ---
 const THREAD_ACCENT = {
-  chrome:      '#BFBFBF',  // ← universal chrome/silver
-  bizzy:       '#FF4EEB',
-  accounting:  '#00FFB2',
-  financials:  '#00FFB2',
-  marketing:   '#3B82F6',
-  tax:         '#FFD700',
-  investments: '#B388FF',
-  email:       '#3CF2FF',
+  chrome:      ACCENT_HEX,
+  bizzy:       ACCENT_HEX,
+  accounting:  ACCENT_HEX,
+  financials:  ACCENT_HEX,
+  marketing:   ACCENT_HEX,
+  tax:         ACCENT_HEX,
+  investments: ACCENT_HEX,
+  email:       ACCENT_HEX,
 };
 
 function hexToRgba(hex, alpha = 1) {
@@ -51,7 +53,7 @@ function ConfirmDialog({
         )}
         <div className="flex items-center justify-end gap-2">
           <button
-            className="px-3 py-1.5 text-sm rounded-md border border-white/12 hover:bg-white/10"
+            className="px-3 py-0.5 text-sm rounded-md border border-white/12 hover:bg-white/10"
             onClick={onCancel}
           >
             {cancelLabel}
@@ -67,6 +69,10 @@ function ConfirmDialog({
     </div>
   );
 }
+
+const ChatHistoryIcon = ({ size = 14 }) => (
+  <MessageSquare size={size} strokeWidth={1.5} />
+);
 
 function MenuPortal({ anchorEl, width = 128, children }) {
   if (!anchorEl) return null;
@@ -135,10 +141,10 @@ function ChatDrawerBody({
         return (
           <div
             key={t.id}
-            className={`
-              relative group rounded-xl border mr-2 transition shadow-[0_0_6px_rgba(0,0,0,0.25)]
-              ${active ? 'bg-white/[0.06]' : 'border-white/10 bg-white/[0.04] hover:bg-white/[0.06]'}
-            `}
+            className={[
+              "bizzy-chat-thread-row relative group rounded-xl border mr-2 transition shadow-[0_0_6px_rgba(0,0,0,0.25)]",
+              active ? "is-active bg-white/[0.06]" : "border-white/10 bg-white/[0.04] hover:bg-white/[0.06]",
+            ].join(" ")}
             style={active ? {
               borderColor: borderCol,
               boxShadow: `0 0 0 1px ${borderCol}, 0 0 10px ${glowCol}, 0 0 6px rgba(0,0,0,0.25)`
@@ -148,7 +154,7 @@ function ChatDrawerBody({
             <div
               role="button"
               tabIndex={0}
-              className="w-full text-left px-3 py-2 rounded-xl focus:outline-none cursor-pointer"
+              className="w-full text-left px-3 py-1 rounded-xl focus:outline-none cursor-pointer"
               onClick={(e) => {
                 if (e.target instanceof Element && e.target.closest('[data-menu]')) return;
                 handleOpenThread?.(t.id, isEditing, t.module);
@@ -197,7 +203,7 @@ function ChatDrawerBody({
                 {/* Kebab menu */}
                 <div className="relative shrink-0" data-menu>
                   <button
-                    className="hidden group-hover:inline-block text-white/60 hover:text-white text-sm px-1 py-0.5 rounded"
+                    className="inline-flex items-center justify-center text-white/60 hover:text-white text-sm px-1 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto"
                     onClick={(e) => { e.stopPropagation(); toggleMenu?.(t.id, e.currentTarget); }}
                     title="More"
                   >
@@ -205,7 +211,7 @@ function ChatDrawerBody({
                   </button>
 
                   {menuFor === t.id && (
-                    <MenuPortal anchorEl={menuAnchor} width={128}>
+                    <MenuPortal anchorEl={menuAnchor} width={128} side="right">
                       <div className="rounded-md border border-white/10 bg-black/90 shadow-lg" onClick={(e) => e.stopPropagation()}>
                         <button
                           className="block w-full text-left text-xs px-3 py-2 hover:bg-white/10"
@@ -257,61 +263,152 @@ function CollapsedHistoryTooltip({
   canViewMore,
   onViewMore,
   loadingMore,
+  onRename,
+  onDelete,
+  menuFor,
+  toggleMenu,
 }) {
+  const [viewMoreAttempted, setViewMoreAttempted] = useState(false);
+  const [filter, setFilter] = useState('');
   if (!anchor) return null;
-  const rect = anchor.getBoundingClientRect();
+  const anchorEl = anchor?.el || anchor;
+  if (!anchorEl?.getBoundingClientRect) return null;
+  const rect = anchorEl.getBoundingClientRect();
   const width = 260;
+  const alignBottom = anchor?.align === 'bottom';
+  const top = alignBottom ? rect.top : Math.max(24, rect.top - 220);
+  const bottomPadding = 12;
+  const availableHeight = Math.max(200, (window.innerHeight || 800) - top - bottomPadding);
   const style = {
     position: 'fixed',
-    left: rect.right + 10,
-    top: Math.max(24, rect.top - 220),
+    left: rect.right + 28, // nudge further clear of the NavRail border
+    top,
     zIndex: 30000,
     width,
+    height: availableHeight,
+    maxHeight: availableHeight,
   };
+
+  const filteredThreads = filter
+    ? threads.filter((t) =>
+        (t.title || '').toLowerCase().includes(filter.trim().toLowerCase())
+      )
+    : threads;
+  const limitedThreads = filteredThreads.slice(0, 20);
 
   return createPortal(
     <div
-      style={style}
-      onMouseEnter={onHover}
-      onMouseLeave={onLeave}
-      className="rounded-2xl border border-white/12 bg-[#0F1114] shadow-[0_20px_45px_rgba(0,0,0,0.55)] p-3 text-white/80"
+      className="bizzy-chat-history-panel bizzy-chat-history-tooltip rounded-2xl border shadow-[0_28px_70px_rgba(0,0,0,0.65)] backdrop-blur-lg p-3 text-white/85 flex flex-col bizzy-tooltip-fade"
+      onMouseEnter={() => onHover?.(anchorEl)}
+      onMouseLeave={() => {
+        onLeave?.();
+        toggleMenu?.(null, null);
+      }}
+      style={{
+        ...style,
+        backgroundColor: "var(--surface-graphite)",
+      }}
     >
-      <div className="max-h-[360px] overflow-y-auto pr-1 space-y-2 text-sm history-scroll">
+      <div className="mb-2">
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Search chats"
+          className="bizzy-chat-history-search w-full rounded-lg bg-white/6 border border-white/14 px-2 py-2 text-[13px] text-white/90 placeholder-white/40 focus:outline-none focus:border-white/30 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+        />
+      </div>
+      <div className="overflow-y-auto pr-1 space-y-2 text-sm history-scroll flex-1 min-h-0">
         {loading && <div className="text-xs text-white/50">Loading…</div>}
         {!loading && error && (
           <div className="text-xs text-rose-400">{error}</div>
         )}
-        {!loading && !error && threads.length === 0 && (
+        {!loading && !error && limitedThreads.length === 0 && (
           <div className="text-xs text-white/50">No chats yet.</div>
         )}
-        {threads.map((t) => (
-          <button
+        {limitedThreads.map((t) => (
+          <div
             key={t.id}
-            onClick={() => {
-              onOpenThread(t);
-              onLeave?.();
-            }}
-            className="w-full text-left px-3 py-2 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] transition text-[13px]"
+            className="bizzy-chat-thread-row group relative rounded-xl bg-white/[0.04] hover:bg-white/[0.08] transition text-[13px] border border-white/6 shadow-[0_4px_14px_rgba(0,0,0,0.35)]"
           >
-            <div className="truncate font-medium">{t.title}</div>
-            <div className="text-[10px] text-white/45 mt-0.5">
-              {new Date(t.updated_at || t.created_at).toLocaleString([], {
-                month: 'short',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </div>
-          </button>
+            <button
+              onClick={() => {
+                onOpenThread(t);
+                onLeave?.();
+              }}
+              className="w-full text-left px-3 py-2 rounded-xl"
+            >
+              <div className="truncate font-medium">{t.title}</div>
+              <div className="text-[10px] text-white/45 mt-0.5">
+                {new Date(t.updated_at || t.created_at).toLocaleString([], {
+                  month: 'short',
+                  day: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </div>
+            </button>
+            {(onRename || onDelete) && (
+              <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleMenu?.(t.id, e.currentTarget);
+                    }}
+                    className="inline-flex items-center justify-center w-7 h-7 rounded-md text-white/80 hover:text-white"
+                    title="Rename or delete"
+                  >
+                    …
+                  </button>
+                  {menuFor === t.id && (
+                    <div className="absolute right-0 mt-1 w-28 rounded-md bg-black/90 border border-white/12 shadow-lg p-1 z-50">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleMenu?.(null, null);
+                          if (onRename) onRename(t);
+                        }}
+                        className="w-full text-left px-2 py-1 rounded text-white/85 hover:bg-white/10 text-[12px]"
+                      >
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleMenu?.(null, null);
+                          if (onDelete) onDelete(t);
+                        }}
+                        className="w-full text-left px-2 py-1 rounded text-rose-200 hover:bg-rose-500/10 text-[12px]"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         ))}
-        {canViewMore && (
-          <button
-            onClick={onViewMore}
-            disabled={loadingMore}
-            className="w-full text-center text-xs text-white/60 hover:text-white py-1 disabled:opacity-50"
-          >
-            {loadingMore ? "Loading…" : "View more"}
-          </button>
+        {!viewMoreAttempted ? (
+          <div className="pt-2">
+            <button
+              onClick={() => {
+                setViewMoreAttempted(true);
+                onViewMore?.();
+              }}
+              disabled={loadingMore}
+              className="w-full text-center text-xs text-white/70 hover:text-white py-1 disabled:opacity-50"
+            >
+              {loadingMore ? "Loading…" : "View more"}
+            </button>
+          </div>
+        ) : (
+          <div className="pt-3 text-center text-[11px] text-white/45">
+            Max: 20 threads right now.
+          </div>
         )}
       </div>
     </div>,
@@ -334,14 +431,15 @@ const isChromeRoute = (p = '') =>
    p.includes('/dashboard/leads-jobs') ||
    p.includes('/dashboard/jobs');
 
-export default function ChatDrawer({
+const ChatDrawer = forwardRef(function ChatDrawer({
   businessId,
   onOpenThread,
   className = '',
   collapsed = false,
   onToggle,
   refreshKey,
-}) {
+  showHistoryTrigger = true,
+}, ref) {
   const location = useLocation();
 
   // Map pathname to either 'chrome' or the module key
@@ -395,7 +493,9 @@ export default function ChatDrawer({
   React.useEffect(() => {
     setShownCount((prev) => {
       if (threads.length === 0) return prev;
-      return Math.min(prev, threads.length);
+      // Only clamp downward if the list shrank; do not reset when more threads arrive
+      if (threads.length < prev) return threads.length;
+      return prev;
     });
   }, [threads.length]);
   React.useEffect(() => { hasMoreRef.current = hasMore; }, [hasMore]);
@@ -449,16 +549,18 @@ export default function ChatDrawer({
 
   const visibleThreads = threads.filter((t) => !t.archived);
   visibleThreadsRef.current = visibleThreads;
-  const displayThreads = visibleThreads.slice(0, Math.min(shownCount, 100));
+  const displayThreads = visibleThreads.slice(0, shownCount);
   const collapsedPreview = visibleThreads.slice(0, Math.min(shownCount, visibleThreads.length));
 
   const historyAnchorRef = React.useRef(null);
   const [historyAnchor, setHistoryAnchor] = React.useState(null);
   const historyTimer = React.useRef(null);
-  const handleHistoryHover = (anchor) => {
+  const handleHistoryHover = (anchor, opts = {}) => {
     if (!collapsed) return;
     if (historyTimer.current) clearTimeout(historyTimer.current);
-    setHistoryAnchor(anchor);
+    const anchorEl = anchor || historyAnchor || historyAnchorRef.current;
+    // Allow optional alignment override
+    setHistoryAnchor(anchorEl ? { el: anchorEl, align: opts.align || null } : null);
   };
   const handleHistoryLeave = () => {
     if (!collapsed) return;
@@ -466,22 +568,29 @@ export default function ChatDrawer({
     historyTimer.current = setTimeout(() => setHistoryAnchor(null), 80);
   };
 
+  useImperativeHandle(ref, () => ({
+    openHistory: (anchorEl, opts) => handleHistoryHover(anchorEl, opts),
+    closeHistory: handleHistoryLeave,
+    setHistoryAnchor: (anchorEl) => setHistoryAnchor(anchorEl || null),
+  }));
+
   const handleViewMore = async () => {
     if (paging) return;
     setPaging(true);
-    const target = Math.min(shownCount + 10, 100);
+    const target = shownCount + 10;
     let guard = 0;
     while (
       visibleThreadsRef.current.length < target &&
       hasMoreRef.current &&
-      guard < 6
+      guard < 10
     ) {
       await loadMore();
       await new Promise((r) => setTimeout(r, 60));
       guard++;
     }
-    const finalShown = Math.min(target, visibleThreadsRef.current.length || target);
-    setShownCount(finalShown);
+    // Always advance the visible window to the requested target; if data is still loading,
+    // it will fill as threads arrive (and clamp only if list shrinks).
+    setShownCount(target);
     setPaging(false);
   };
 
@@ -502,32 +611,36 @@ export default function ChatDrawer({
 
   const canViewMore =
     hasMore ||
-    visibleThreadsRef.current.length > Math.min(shownCount, 100);
+    visibleThreadsRef.current.length > shownCount;
 
   return (
-    <aside className={`text-white/90 ${className} h-full flex flex-col overflow-hidden`}>
-      {/* Header */}
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/10 shrink-0">
-        <button
-          onClick={onToggle}
-          className="text-xs text-white/60 hover:text-white"
-          title={collapsed ? 'Expand chats' : 'Collapse chats'}
-          ref={historyAnchorRef}
-          onMouseEnter={() => handleHistoryHover(historyAnchorRef.current)}
-          onMouseLeave={handleHistoryLeave}
-        >
-          {collapsed ? '›' : '‹'} Chats
-        </button>
-        {!collapsed && (
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search chats"
-            className="bg-black/30 border border-white/10 rounded px-2 py-1 text-xs w-40"
-            aria-label="Search chats"
-          />
-        )}
-      </div>
+    <aside className={`text-white/90 ${className} h-full flex flex-col overflow-hidden${collapsed && !showHistoryTrigger ? '' : ' bizzy-chat-history-panel'}`}>
+      {/* Header (omitted when an external trigger is provided) */}
+      {(showHistoryTrigger || !collapsed) && (
+        <div className="flex items-center justify-between gap-2 px-3 py-2 shrink-0">
+          {showHistoryTrigger && (
+            <button
+              onClick={onToggle}
+              className="text-xs text-white/60 hover:text-white flex items-center gap-1"
+              title={collapsed ? 'Expand chats' : 'Collapse chats'}
+              ref={historyAnchorRef}
+              onMouseEnter={() => handleHistoryHover(historyAnchorRef.current)}
+              onMouseLeave={handleHistoryLeave}
+            >
+              <ChatHistoryIcon size={18} />
+            </button>
+          )}
+          {!collapsed && (
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search chats"
+              className="bizzy-chat-history-search bg-black/30 border border-white/10 rounded px-2 py-1 text-xs w-40"
+              aria-label="Search chats"
+            />
+          )}
+        </div>
+      )}
 
       {/* Body */}
       {!collapsed && (
@@ -563,12 +676,24 @@ export default function ChatDrawer({
           loading={loading}
           error={error}
           threads={collapsedPreview}
-          onHover={() => handleHistoryHover(historyAnchorRef.current)}
+          onHover={(el) => handleHistoryHover(el || (historyAnchor?.el || historyAnchorRef.current), { align: 'bottom' })}
           onLeave={handleHistoryLeave}
           onOpenThread={(thread) => handleOpenThread(thread.id, false, thread.module)}
           canViewMore={collapsedPreview.length < Math.min(visibleThreads.length, shownCount + 10)}
           onViewMore={handleViewMore}
           loadingMore={paging}
+          onRename={(t) => beginRename(t.id)}
+          onDelete={(t) => requestDelete(t)}
+          menuFor={menuFor}
+          toggleMenu={(id, el) => {
+            if (!id) {
+              setMenuAnchor(null);
+              setMenuFor(null);
+              return;
+            }
+            setMenuAnchor(el || null);
+            setMenuFor(id);
+          }}
         />
       )}
 
@@ -586,4 +711,6 @@ export default function ChatDrawer({
       />
     </aside>
   );
-}
+});
+
+export default ChatDrawer;

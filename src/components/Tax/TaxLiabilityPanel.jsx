@@ -143,8 +143,8 @@ useEffect(() => { if (prefetched) setData(prefetched); }, [prefetched]);
     <div className="space-y-6">
       {/* Status Row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card glow>
-          <div className="text-xs text-yellow-200/80">Annual Estimated Tax ({year})</div>
+        <Card>
+          <div className="text-xs text-[rgba(var(--accent-rgb),0.85)]">Annual Estimated Tax ({year})</div>
           <div className="mt-1 text-3xl font-semibold">
             {loading ? <Skeleton className="h-8 w-40" /> : fmt(data?.summary?.annualEstimate)}
           </div>
@@ -154,8 +154,8 @@ useEffect(() => { if (prefetched) setData(prefetched); }, [prefetched]);
           </div>
         </Card>
 
-        <Card glow>
-          <div className="text-xs text-yellow-200/80">YTD Estimated vs Paid</div>
+        <Card>
+          <div className="text-xs text-[rgba(var(--accent-rgb),0.85)]">YTD Estimated vs Paid</div>
           {loading ? (
             <>
               <Skeleton className="h-6 w-28 mt-1" />
@@ -170,91 +170,33 @@ useEffect(() => { if (prefetched) setData(prefetched); }, [prefetched]);
                 YTD Paid: <span className="font-semibold">{fmt(data?.summary?.ytdPaid)}</span>
               </div>
               <div className="text-sm mt-1">
-                Balance Due: <span className="font-semibold text-yellow-300">{fmt(data?.summary?.balanceDue)}</span>
+                Balance Due: <span className="font-semibold text-[rgba(var(--accent-rgb),0.9)]">{fmt(data?.summary?.balanceDue)}</span>
               </div>
             </div>
           )}
         </Card>
 
-        <Card glow>
+        <Card>
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-xs text-yellow-200/80">Actions</div>
+              <div className="text-xs text-[rgba(var(--accent-rgb),0.85)]">Actions</div>
               <div className="mt-1 text-sm text-white/80">Run a quick scenario or ask Bizzi for help.</div>
             </div>
             <button
               onClick={askBizzy}
-              className="px-3 py-2 rounded-xl border border-yellow-500/40 hover:border-yellow-300 transition inline-flex items-center gap-2"
+              className="px-3 py-2 rounded-xl border border-[rgba(var(--accent-rgb),0.4)] hover:border-[rgba(var(--accent-rgb),0.7)] transition inline-flex items-center gap-2"
             >
-              <ArrowRight className="h-4 w-4 text-yellow-300" />
+              <ArrowRight className="h-4 w-4 text-[rgba(var(--accent-rgb),0.9)]" />
               Ask Bizzi
             </button>
           </div>
 
-          <div className="mt-3 text-xs text-yellow-200/80">Scenario (override next month profit)</div>
+          <div className="mt-3 text-xs text-[rgba(var(--accent-rgb),0.85)]">Scenario (override next month profit)</div>
           <ScenarioControls year={year} overrides={overrides} setOverrides={setOverrides} />
         </Card>
       </div>
 
-      {/* Quarterly payments */}
-      <Card glow>
-        <div className="text-lg font-semibold mb-3">Quarterly Estimated Payments</div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {(data?.quarterly || [1, 2, 3, 4].map((i) => ({ quarter: `Q${i}` }))).map((q, idx) => (
-            <div key={idx} className="rounded-xl p-3 bg-white/5 border border-yellow-500/15">
-              <div className="flex items-center justify-between">
-                <div className="font-medium">{q.quarter || `Q${idx + 1}`}</div>
-                <div className="text-[11px] text-white/70 inline-flex items-center gap-1">
-                  <CalendarDays className="h-3.5 w-3.5" />
-                  {q.due ? new Date(q.due).toLocaleDateString() : "—"}
-                </div>
-              </div>
-              <div className="mt-2 text-sm">
-                Required: <span className="font-semibold">{fmt(q.amount)}</span>
-              </div>
-              <div className="text-sm">
-                Paid: <span className="font-semibold">{fmt(q.paid)}</span>
-              </div>
-              <div className="text-sm">
-                Remaining: <span className="font-semibold text-yellow-300">{fmt(q.remaining)}</span>
-              </div>
-
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <input
-                  type="date"
-                  className="px-2 py-1 rounded-lg bg-white/5 border border-yellow-500/20 text-xs"
-                  value={payForm[idx + 1]?.date || ""}
-                  onChange={(e) =>
-                    setPayForm((s) => ({ ...s, [idx + 1]: { ...(s[idx + 1] || {}), date: e.target.value } }))
-                  }
-                />
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="Amount"
-                  className="px-2 py-1 rounded-lg bg-white/5 border border-yellow-500/20 text-xs"
-                  value={payForm[idx + 1]?.amount || ""}
-                  onChange={(e) =>
-                    setPayForm((s) => ({ ...s, [idx + 1]: { ...(s[idx + 1] || {}), amount: e.target.value } }))
-                  }
-                />
-                <button
-                  onClick={() => handleMarkPaid(idx + 1)}
-                  disabled={savingQuarter === idx + 1}
-                  className="col-span-2 inline-flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg border border-yellow-500/40 hover:border-yellow-300 transition text-xs"
-                >
-                  {savingQuarter === idx + 1 ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Check className="h-3.5 w-3.5 text-yellow-300" />
-                  )}
-                  Mark as Paid
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Card>
+      {/* Quarterly payments intentionally hidden per request */}
 
       {error ? (
         <div className="rounded-xl p-3 border border-red-500/30 bg-red-500/10 text-sm text-red-200 inline-flex items-center gap-2">
@@ -270,8 +212,8 @@ function Card({ children, glow = false, className = "" }) {
   return (
     <div
       className={[
-        "rounded-2xl p-4 md:p-5 bg-white/5 border border-yellow-500/20",
-        glow ? "shadow-[0_0_32px_rgba(255,215,0,0.06)]" : "",
+        "rounded-2xl p-4 md:p-5 bg-white/5 border border-[rgba(var(--accent-rgb),0.15)]",
+        glow ? "" : "",
         className,
       ].join(" ")}
     >
@@ -297,7 +239,7 @@ function ScenarioControls({ year, overrides, setOverrides }) {
       <input
         type="number"
         placeholder="Override profit ($)"
-        className="px-2 py-1 rounded-lg bg-white/5 border border-yellow-500/20 text-xs"
+        className="px-2 py-1 rounded-lg bg-white/5 border border-[rgba(var(--accent-rgb),0.18)] text-xs"
         value={currentVal}
         onChange={(e) =>
           setOverrides((s) => ({
@@ -306,7 +248,7 @@ function ScenarioControls({ year, overrides, setOverrides }) {
           }))
         }
       />
-      <button onClick={() => setOverrides({})} className="text-xs px-2 py-1 rounded-lg border border-yellow-500/30 hover:border-yellow-300">
+      <button onClick={() => setOverrides({})} className="text-xs px-2 py-1 rounded-lg border border-[rgba(var(--accent-rgb),0.3)] hover:border-[rgba(var(--accent-rgb),0.6)]">
         Clear
       </button>
     </div>

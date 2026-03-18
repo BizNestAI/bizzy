@@ -37,14 +37,17 @@ const ACCOUNTING_STACK = ['QuickBooks Online', 'QuickBooks Desktop', 'Xero', 'Wa
 const OPS_PLATFORMS = ['Jobber', 'Housecall Pro', 'ServiceTitan', 'HubSpot', 'None yet'];
 const OWNER_ROLES = ['Owner / CEO', 'COO / Operations', 'Finance lead', 'Office manager'];
 const revenueBands = ['$0-100k','$100-250k','$250-500k','$500k-1M','$1-2M','$2-5M','$5M+'];
-const CTA_BG = '#E1E7F5';
-const CTA_TEXT = '#05070B';
-const CTA_GLOW = 'rgba(186,198,255,0.45)';
+const ACCENT_HEX = '#34d399'; // app financials green (Books)
+const ACCENT_SOFT = 'rgba(52,211,153,0.20)';
+const ACCENT_LINE = 'rgba(52,211,153,0.22)';
+const CTA_BG = 'linear-gradient(90deg, rgba(52,211,153,0.28), rgba(52,211,153,0.18))';
+const CTA_TEXT = '#f5f7fb';
+const CTA_GLOW = '0 0 18px rgba(52,211,153,0.25)';
 
 // ----- Small UI helpers -----
-const PANEL_BG = 'rgba(20,22,27,0.92)';
-const BORDER = 'rgba(191,191,191,0.25)';
-const TEXT_MUTED = 'rgba(229,235,245,0.75)';
+const PANEL_BG = 'rgba(18,18,20,0.92)';
+const BORDER = 'rgba(255,255,255,0.12)';
+const TEXT_MUTED = 'rgba(245,247,251,0.78)';
 
 function hexToChromeGlow(hex, alpha = 0.45) {
   const clean = hex.replace('#', '');
@@ -87,12 +90,12 @@ const Input = ({ value, ...props }) => (
   <input
     {...props}
     value={value ?? ''}
-    className={`w-full px-3 py-2 rounded-xl bg-[#0F1115] border border-white/10 outline-none text-white placeholder:text-white/40
-                focus:ring-2 focus:ring-[rgba(191,191,191,0.65)] ${props.className||''}`}
+    className={`w-full px-3 py-2 rounded-xl bg-[var(--input-bg)] border border-white/12 outline-none text-white placeholder:text-white/40
+                focus:ring-2 focus:ring-[rgba(52,211,153,0.45)] focus:border-[rgba(52,211,153,0.35)] ${props.className||''}`}
   />
 );
 const dropdownBaseClass =
-  'w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#0F1115] border border-white/10 text-sm text-white focus:outline-none transition shadow-[0_6px_20px_rgba(0,0,0,0.35)]';
+  'w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[var(--input-bg)] border border-white/12 text-sm text-white focus:outline-none transition shadow-[0_6px_20px_rgba(0,0,0,0.35)]';
 
 const Dropdown = ({ value, onChange, options, placeholder = 'Select…', className = '', maxHeight = 240 }) => {
   const [open, setOpen] = useState(false);
@@ -119,7 +122,7 @@ const Dropdown = ({ value, onChange, options, placeholder = 'Select…', classNa
     <div className={`relative ${className}`} ref={containerRef}>
       <button
         type="button"
-        className={`${dropdownBaseClass} ${open ? 'border-white/30' : ''}`}
+        className={`${dropdownBaseClass} ${open ? 'border-[rgba(52,211,153,0.45)] ring-1 ring-[rgba(52,211,153,0.28)]' : ''}`}
         onClick={() => setOpen((o) => !o)}
       >
         <span className={`truncate ${selected ? 'text-white' : 'text-white/40'}`}>
@@ -173,8 +176,10 @@ const Toggle = ({ checked, onChange, label }) => (
   <button
     type="button"
     onClick={() => onChange(!checked)}
-    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm border
-               ${checked ? 'border-[var(--accent)] text-[var(--accent)] shadow-[0_0_12px_var(--accent)]' : 'border-white/15 text-white/80'}`}
+    className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-sm border transition
+               ${checked
+                 ? 'border-[rgba(52,211,153,0.35)] bg-[rgba(52,211,153,0.12)] text-[var(--accent)]'
+                 : 'border-white/15 text-white/80 hover:border-white/25'}`}
   >
     {checked ? <Check size={14}/> : <Info size={14}/>} {label}
   </button>
@@ -217,7 +222,7 @@ const BusinessWizard = () => {
   });
   const [existingBusinessId, setExistingBusinessId] = useState(null);
 
-  const accent = useMemo(() => '#C6D3FF', []);
+  const accent = useMemo(() => ACCENT_HEX, []);
   const ctaStyle = useMemo(
     () => ({ background: CTA_BG, color: CTA_TEXT, boxShadow: `0 0 24px ${CTA_GLOW}` }),
     []
@@ -225,9 +230,9 @@ const BusinessWizard = () => {
   // subtle pulse used by the header dot
   const pulseCSS = `
     @keyframes bizzy-pulse {
-      0%   { transform: scale(1);   box-shadow: 0 0 12px rgba(198,211,255,0.45); }
-      50%  { transform: scale(1.08); box-shadow: 0 0 26px rgba(198,211,255,0.85); }
-      100% { transform: scale(1);   box-shadow: 0 0 12px rgba(198,211,255,0.45); }
+      0%   { transform: scale(1);   box-shadow: 0 0 12px rgba(52,211,153,0.35); }
+      50%  { transform: scale(1.08); box-shadow: 0 0 24px rgba(52,211,153,0.65); }
+      100% { transform: scale(1);   box-shadow: 0 0 12px rgba(52,211,153,0.35); }
     }
   `;
 
@@ -335,10 +340,16 @@ const BusinessWizard = () => {
         ...profileRow
       } = formData;
 
+      const foundedYearInt =
+        founded_year === "" || founded_year === null || founded_year === undefined
+          ? null
+          : Number.parseInt(String(founded_year), 10);
+      const founded_year_safe = Number.isFinite(foundedYearInt) ? foundedYearInt : null;
+
       const profileMeta = {
         owner_name,
         owner_role,
-        founded_year,
+        founded_year: founded_year_safe,
         website_url,
         service_radius,
         average_job_size,
@@ -355,10 +366,13 @@ const BusinessWizard = () => {
         user_id: user.id,
         team_size: parseInt(formData.team_size || '0', 10),
         profile_meta: profileMeta,
+        owner_name,
+        owner_role,
+        founded_year: founded_year_safe,
       };
       let businessId = existingBusinessId;
       if (existingBusinessId) {
-        const { error: updateErr } = await updateBusinessProfile(existingBusinessId, payload);
+        const { error: updateErr, data: updated } = await updateBusinessProfile(existingBusinessId, payload);
         if (updateErr) throw updateErr;
       } else {
         const { data: createdBusiness, error: businessError } = await createBusinessProfile(payload);
@@ -373,6 +387,18 @@ const BusinessWizard = () => {
       if (businessId) {
         localStorage.setItem('isProfileComplete', 'true');
         localStorage.setItem('currentBusinessId', businessId);
+        localStorage.setItem('bizzy:business_name', payload.business_name || '');
+        localStorage.setItem('bizzy:industry', payload.industry || '');
+        if (import.meta?.env?.DEV) {
+          console.log("[BusinessWizard] saved profile", { businessId, payload });
+          const { data: check, error: checkErr } = await supabase
+            .from('business_profiles')
+            .select('id, owner_name, owner_role, founded_year')
+            .eq('id', businessId)
+            .single();
+          console.log("[BusinessWizard] verify business_profiles", check, checkErr);
+        }
+        try { window.dispatchEvent(new Event('bizzy:onboarding-flags-updated')); } catch { /* ignore */ }
         setExistingBusinessId(businessId);
       }
       navigate('/dashboard');
@@ -389,7 +415,7 @@ const BusinessWizard = () => {
     const prevOverflow = body.style.overflow;
     const prevBg = body.style.background;
     body.style.overflow = 'hidden';
-    body.style.background = '#03060C';
+    body.style.background = 'var(--bg)';
     return () => {
       body.style.overflow = prevOverflow;
       body.style.background = prevBg;
@@ -409,12 +435,12 @@ const BusinessWizard = () => {
       `}</style>
       <div
         aria-hidden
-        className="pointer-events-none fixed inset-0"
+        className="pointer-events-none fixed inset-0 bizzy-bg-textured"
         style={{
           background:
-            'radial-gradient(900px circle at 18% 8%, rgba(79,133,255,0.2), transparent 45%), ' +
-            'radial-gradient(700px circle at 80% 85%, rgba(135,255,223,0.15), transparent 55%), ' +
-            'linear-gradient(135deg, rgba(6,9,16,0.95), rgba(3,4,8,1))'
+            'radial-gradient(900px 900px at 16% 12%, rgba(255,255,255,0.05), transparent 55%), ' +
+            'radial-gradient(720px 720px at 78% 88%, rgba(52,211,153,0.08), transparent 50%), ' +
+            'linear-gradient(135deg, rgba(6,8,12,0.96), rgba(10,12,16,0.98))'
         }}
       />
 
@@ -424,7 +450,7 @@ const BusinessWizard = () => {
             className="relative w-full max-w-5xl mx-auto rounded-[32px] border backdrop-blur-xl p-6 md:p-10 space-y-7"
             style={{
               borderColor: BORDER,
-              background: 'linear-gradient(145deg, rgba(24,27,34,0.9), rgba(8,10,15,0.96))',
+              background: 'linear-gradient(145deg, rgba(24,27,34,0.92), rgba(8,10,15,0.98))',
               boxShadow: '0 80px 140px rgba(0,0,0,0.65)',
             }}
           >
@@ -432,8 +458,8 @@ const BusinessWizard = () => {
               <button
                 type="button"
                 onClick={() => navigate('/dashboard/settings')}
-                className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm hover:bg-white/5"
-                style={{ border: '1px solid rgba(165,167,169,0.22)', color: 'var(--text-2)' }}
+            className="inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm hover:bg-white/5"
+            style={{ border: '1px solid rgba(255,255,255,0.16)', color: 'var(--text-2)' }}
               >
                 ← Settings
               </button>
@@ -442,8 +468,8 @@ const BusinessWizard = () => {
           <div
             className="h-14 w-14 rounded-full p-[6px]"
             style={{
-              border: `1px solid ${hexToChromeGlow('#BFBFBF', 0.35)}`,
-              boxShadow: `0 0 20px rgba(191,191,191,0.35)`
+              border: `1px solid ${hexToChromeGlow(ACCENT_HEX, 0.45)}`,
+              boxShadow: `0 0 16px rgba(52,211,153,0.30)`
             }}
           >
             <img src={bizzyLogo} alt="Bizzi logo" className="h-full w-full rounded-full object-contain bg-[#0F1115]" />
@@ -461,9 +487,9 @@ const BusinessWizard = () => {
           {[1,2,3].map((n) => (
             <div
               key={n}
-              className={`h-2 w-20 rounded-full transition-all ${
-                n <= step ? 'bg-white shadow-[0_0_12px_rgba(255,255,255,0.45)]' : 'bg-white/15'
-              }`}
+            className={`h-2 w-20 rounded-full transition-all ${
+              n <= step ? 'bg-[var(--accent)] shadow-[0_0_10px_rgba(52,211,153,0.30)]' : 'bg-white/15'
+            }`}
             />
           ))}
         </div>

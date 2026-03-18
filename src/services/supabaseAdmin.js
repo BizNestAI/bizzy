@@ -41,7 +41,31 @@ function makeBrowserStub() {
 // ──────────────────────────────────────────────────────────────────────────────
 // Build a single server-side admin client
 // ──────────────────────────────────────────────────────────────────────────────
+export function assertSupabaseAdminEnv() {
+  const hasUrl =
+    Boolean(process.env.SUPABASE_URL) ||
+    Boolean(process.env.VITE_SUPABASE_URL);
+  const hasServiceRole =
+    Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY) ||
+    Boolean(process.env.SUPABASE_SERVICE_KEY);
+
+  if (process.env.NODE_ENV !== 'production') {
+    // eslint-disable-next-line no-console
+    console.log('[supabaseAdmin] env check', {
+      hasUrl,
+      hasServiceRoleKey: hasServiceRole,
+    });
+  }
+
+  if (!hasUrl || !hasServiceRole) {
+    console.error('❌ [supabaseAdmin] Service role key missing; storage uploads will fail in local dev.');
+    throw new Error('Supabase admin missing env. Expected SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.');
+  }
+}
+
 function buildAdminClient() {
+  assertSupabaseAdminEnv();
+
   const url =
     process.env.SUPABASE_URL ||
     process.env.VITE_SUPABASE_URL || // optional fallback if reused envs
@@ -51,12 +75,6 @@ function buildAdminClient() {
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.SUPABASE_SERVICE_KEY || // common alt name
     '';
-
-  if (!url || !serviceKey) {
-    throw new Error(
-      'Supabase admin missing env. Expected SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.'
-    );
-  }
 
   return createClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },

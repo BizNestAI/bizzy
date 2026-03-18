@@ -78,9 +78,18 @@ router.get('/', tenantGuard, async (req, res) => {
     const offset = Math.max (Number(req.query.offset || 0), 0);
     const pinnedOnly = req.query.pinned   === 'true';
     const archived   = req.query.archived === 'true';
+    const before     = req.query.before ? new Date(req.query.before) : null;
 
-    const { data, error, count } = await buildThreadQuery({ business_id, archived, q, pinnedOnly })
-      .range(offset, offset + limit - 1);
+    let query = buildThreadQuery({ business_id, archived, q, pinnedOnly });
+
+    // If a cursor (`before`) is provided, prefer it to avoid duplicate first-page results.
+    if (before && !Number.isNaN(before.getTime())) {
+      query = query.lt('updated_at', before.toISOString()).limit(limit);
+    } else {
+      query = query.range(offset, offset + limit - 1);
+    }
+
+    const { data, error, count } = await query;
     if (error) throw error;
 
     res.json({ threads: data || [], total: count ?? 0, limit, offset });

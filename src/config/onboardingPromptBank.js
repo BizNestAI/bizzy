@@ -1,6 +1,8 @@
+// File: /src/config/onboardingPromptBank.js
+
 const toneLines = [
   "Global onboarding tone:",
-  "- Sound like a calm, experienced cofounder who understands busy tradespeople.",
+  "- Sound like a calm, experienced financial operator (ex-bookkeeper vibe) for busy tradespeople.",
   "- Avoid jargon. Use short paragraphs, bullets, and concrete examples.",
   "- Offer to do the task with them (say \"Let's do it now together\") instead of only explaining.",
   "- Never promise features that do not exist; if it is a roadmap idea, say \"over time we'll add...\" instead of guaranteeing it today.",
@@ -14,80 +16,136 @@ const promptBank = [
   {
     id: "setup_biz",
     title: "Set up my business in Bizzi",
-    canonicalPrompt: "How do I set up my business in Bizzi?",
+    canonicalPrompt: "How do I set up my business?",
     matchers: [
       /how (do|should) i (set up|setup).*bizzi/i,
       /set up my business.*bizzi/i,
+      /how (do|should) i (set up|setup) my business\b/i,
+      /\bset up my business\b/i,
       /\bgetting started with bizzi\b/i,
     ],
-    response: `Great question. Let's get Bizzi set up as your cofounder in a few quick steps:
+    response: `Great question. Let’s get Bizzi wired up as your **Autonomous Financial Operator** so it can keep your books clean without you babysitting it.
 
-1. Fill in your business profile
-- Company name
-- What trade you are in (HVAC, roofing, remodeling, etc.)
-- Rough team size
-- Service area
-Tell them this lets Bizzi talk like a real partner.
+**1) Link bank accounts through Plaid (bank feed / transactions in)**
+- Go to **Settings → Sync → Connect Plaid**
+- Add the **checking + credit card** accounts used for this business
+Bizzi pulls your transactions from Plaid, reviews them, and prepares them for clean posting.
 
-2. Connect QuickBooks (if they use it)
-- Explain that Bizzi can then answer "How did we do this month?" and "Where is our money going?"
+**2) Connect QuickBooks next (ledger / posting destination)**
+- Still in **Settings → Sync**, click **Connect QuickBooks**
+- Sign in with Intuit and select the correct company file
+This is where Bizzi posts the approved transactions so your books stay tax-ready.
 
-3. Connect calendar and email
-- Mention staying ahead of jobs, walkthroughs, and follow-ups.
+**3) Turn off QuickBooks bank feeds (important)**
+- In QuickBooks Online: **Transactions → Bank transactions**
+- For each connected bank/credit card, click **pencil / Edit** (or account tile settings)
+- Choose **Disconnect account** (or “Disconnect this account on save”)
+- Repeat for each account (checking + cards)
+Your QuickBooks ledger stays intact — this only stops QBO from importing the bank feed since Bizzi pulls via Plaid.
 
-4. Connect a job management tool (Jobber or Housecall Pro if they use one)
-- Then Bizzi can see their pipeline.
+**4) Invite Bizzi to QuickBooks (monthly review)**
+- Invite **books@bizzi.ai.com** as an **Accountant** so we can review your books monthly.
 
-Close by saying that once those are connected they can ask Bizzi anything in plain English based on real data and offer to walk through it right now.`,
+**After that: Do your first Books Review pass (5–10 minutes)**
+- Go to **Financials → Books Review**
+- Approve/edit the first batch (Bizzi learns vendor defaults fast)
+- After a short grace window, Bizzi posts into QuickBooks automatically
+
+**Optional: Finish your Business Profile**
+Trade + team size helps Bizzi talk like an operator, but Bizzi can still run without it.
+
+One clear next action: open **Settings → Sync** and connect **Plaid**, then **QuickBooks**.`,
     followUps: [
       "What trade are you in?",
-      "Roughly how many people are on your team?",
+      "Roughly how many transactions per month?",
       "Do you already use QuickBooks Online?",
+      "Do you currently have your bank accounts connected in QuickBooks Bank Transactions?",
     ],
-    followUpPrompt: "Want me to walk you through setup while we are here? (yes or no)",
+    followUpPrompt: "Want me to walk you through setup step-by-step (yes or no)?",
     nextStep: "Offer to walk them through the checklist step by step.",
     devNotes: [
-      "Mention the checklist items (business profile, QuickBooks, calendar, email, job tool) with their current status.",
-      "Use their answers to update the business profile whenever possible.",
+      "Mention the checklist items with their current status (Plaid, QuickBooks, bank feeds off, QBO invite, profile).",
+      "Plaid is always first: Bizzi ingests transactions via Plaid, then posts to QuickBooks.",
+      "Remind the user to disconnect QuickBooks bank feeds to avoid duplicates; Bizzi uses Plaid as the bank feed.",
+      "Have them invite books@bizzi.ai.com as an Accountant for monthly review once QBO is connected and bank feeds are off.",
+      "Do NOT mention calendar/email/job tools in Phase 1 onboarding unless they exist again.",
     ],
-    suggestedActions: [
-      { type: "show_checklist", checklistId: "bizzy_onboarding" },
-    ],
+    suggestedActions: [{ type: "show_checklist", checklistId: "bizzy_onboarding" }],
   },
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // UPDATED: Sync prompt (Plaid first, then QuickBooks)
+  // Keep old matchers so existing users typing the old phrase still hit this entry.
+  // ────────────────────────────────────────────────────────────────────────────
   {
-    id: "sync_quickbooks",
-    title: "Sync QuickBooks and other accounts",
-    canonicalPrompt: "How do I sync QuickBooks and other accounts?",
+    id: "sync_quickbooks_plaid",
+    title: "Sync Plaid and QuickBooks",
+    canonicalPrompt: "How do I sync Plaid and QuickBooks?",
     matchers: [
+      // New phrasing (Plaid first)
+      /sync plaid and quickbooks/i,
+      /connect plaid and quickbooks/i,
+
+      // Alternate ordering users might type
+      /sync quickbooks and plaid/i,
+      /connect quickbooks and plaid/i,
+      /link quickbooks and plaid/i,
+
+      // Plaid-only phrasing
+      /connect plaid/i,
+      /sync plaid/i,
+      /connect bank/i,
+      /connect my bank/i,
+
+      // Backward compatibility (old quick prompt text)
       /sync quickbooks/i,
       /connect quickbooks/i,
       /link quickbooks/i,
       /connect other accounts/i,
     ],
-    response: `Syncing your accounts turns Bizzi from a chatbot into a real cofounder.
+    response: `Syncing **Plaid → QuickBooks** is the core Bizzi workflow:
+- **Plaid** = live bank/credit feed (transactions in)
+- **QuickBooks** = accounting ledger (clean results posted out)
 
-1. Go to Settings -> Sync to see every integration in one place.
+**Step 1 — Link bank accounts through Plaid (required)**
+- Go to **Settings → Sync → Connect Plaid**
+- Add the accounts used for this business (checking + cards)
+Bizzi will start pulling transactions and staging them in **Books Review**.
 
-2. Connect QuickBooks Online
-- Click "Connect QuickBooks"
-- Sign in with Intuit and pick the right company file
-- Explain that Bizzi can then see revenue, expenses, profit, top spend categories, and MoM trends.
+**Step 2 — Connect QuickBooks (required for posting)**
+- In **Settings → Sync**, click **Connect QuickBooks**
+- Sign in with Intuit and pick the correct company file
+Bizzi uses this to post approved transactions into your books.
 
-3. Connect other tools
-- Email & Calendar (Google) to help with follow-ups and events
-- Jobber / Housecall Pro to understand jobs and pipeline
-- Plaid if they want to surface investment accounts
+**Step 3 — Turn off QuickBooks bank feeds (important)**
+- In QuickBooks Online: **Transactions → Bank transactions**
+- For each connected bank/credit card, click **pencil / Edit** (or account tile settings)
+- Choose **Disconnect account** (or “Disconnect this account on save”)
+- Repeat for each account (checking + cards)
+Your QuickBooks ledger stays intact — this only stops QBO from importing the bank feed since Bizzi pulls via Plaid.
 
-Emphasize QuickBooks is the most important starting point. Offer to open the Sync page right now.`,
+**Step 4 — Invite Bizzi to QuickBooks (monthly review)**
+- Invite **books@bizzi.ai.com** as an **Accountant** so we can review your books monthly.
+
+**After that — First cleanup pass**
+- Go to **Financials → Books Review**
+- Approve/edit categories (Bizzi learns vendor defaults so it gets quieter fast)
+
+One clear next action: open **Settings → Sync** and connect **Plaid**, then **QuickBooks**.`,
     followUps: [
-      "Do you already use QuickBooks Online for this business?",
+      "Do you want to connect checking or credit cards first?",
+      "Is QuickBooks already set up for this business?",
+      "Do you currently have your bank accounts connected in QuickBooks Bank Transactions?",
     ],
-    followUpPrompt: "Should I open the Sync page for you now? (yes or no)",
-    nextStep: "If QuickBooks is not connected, invite them to click Connect QuickBooks and stay available.",
+    followUpPrompt: "Want me to open Settings → Sync for you now (yes or no)?",
+    nextStep:
+      "Guide them through connecting Plaid first, then QuickBooks, then turning off bank feeds, then inviting books@bizzi.ai.com, then a first Books Review pass.",
     devNotes: [
-      "If QuickBooks is not connected, call that out explicitly.",
-      "If they answer yes, deep link or instruct them to click Connect QuickBooks.",
-      "If they say they do not use QuickBooks, reassure them Bizzi can still help with planning and job flow.",
+      "Plaid is always step 1: Bizzi needs Plaid to see transactions.",
+      "QuickBooks is step 2: Bizzi needs QBO connected to post approved transactions.",
+      "Remind the user to disconnect QuickBooks bank feeds to avoid duplicates; Bizzi uses Plaid as the bank feed.",
+      "Have them invite books@bizzi.ai.com as an Accountant for monthly review after bank feeds are off.",
+      "If user does not use QuickBooks: reassure them Bizzi can still help with cash/spend visibility via Plaid, but posting + tax readiness is best with QuickBooks.",
     ],
     suggestedActions: [
       {
@@ -97,6 +155,7 @@ Emphasize QuickBooks is the most important starting point. Offer to open the Syn
       },
     ],
   },
+
   {
     id: "daily_use",
     title: "Best way to use Bizzi day-to-day",
@@ -106,539 +165,492 @@ Emphasize QuickBooks is the most important starting point. Offer to open the Syn
       /how to use bizzi (every|each) day/i,
       /day[- ]to[- ]day bizzi/i,
     ],
-    response: `Encourage them to treat Bizzi like a cofounder they can text anytime.
+    response: `Think of Bizzi like your always-on financial operator — you do tiny approvals, and the books stay clean automatically.
 
-1. Morning check-in (2-3 minutes)
-- Ask "What should I focus on today?"
-- Ask "Any jobs or invoices I'm forgetting?"
-- Ask "How did we do last week?"
+**Daily (1–2 minutes)**
+- Open **Financials → Books Review**
+- Approve anything flagged
+- Ask: “Anything urgent in my books today?”
 
-2. During the day
-- Drop ad-hoc tasks like drafting replies, summarizing jobs, or asking why profit is down.
+**Weekly (5 minutes)**
+- Ask: “Give me a cash + profit snapshot.”
+- Ask: “What changed since last week?”
 
-3. End-of-week review
-- Ask for a quick snapshot, what changed since last month, or the top three risks.
+**Monthly (10–15 minutes)**
+- Do one cleanup pass
+- Ask: “Top 3 cost drivers this month?”
+- Ask: “Any tax surprises building up?”
 
-Tell them that over time they will build the habit of asking Bizzi first instead of digging through apps.`,
+The goal is consistency: small approvals beat month-end catch-up.`,
     followUps: [
-      "Do you spend more time in the field or in the office?",
-      "Are you more worried about cash flow, your jobs pipeline, or admin overload right now?",
+      "Do you run mostly card spend or mostly checking?",
+      "What matters more right now: profit, cash flow, or tax surprises?",
     ],
-    followUpPrompt: "Want me to suggest a simple Bizzi routine for you? (yes or no)",
-    nextStep: "Offer to tailor a simple Bizzi routine once they answer the quick questions.",
+    followUpPrompt: "Want a simple Bizzi routine tailored to your workflow (yes or no)?",
+    nextStep: "Offer to tailor a routine once they answer the quick questions.",
     devNotes: [
-      "Use their answers later to bias future nudges toward the area they care about most.",
+      "Keep this focused on financial ops (books, cash, tax readiness).",
+      "Avoid mentioning jobs/email/calendar modules.",
     ],
     suggestedActions: [],
   },
+
   {
     id: "bizzi_value",
     title: "How Bizzi helps run the business",
     canonicalPrompt: "How does Bizzi help me run my business?",
-    matchers: [
-      /how does bizzi help/i,
-      /what does bizzi do/i,
-      /why should i use bizzi/i,
-    ],
-    response: `Explain that Bizzi reduces mental load by giving visibility and acting as a thinking partner.
+    matchers: [/how does bizzi help/i, /what does bizzi do/i, /why should i use bizzi/i],
+    response: `Bizzi is an **Autonomous Financial Operator** for trades & home services. It removes the “I should probably do my books…” mental load.
 
-- Visibility: quick snapshots of revenue, expenses, profit, and changes month-to-month.
-- Jobs & schedule clarity: summaries of upcoming jobs and nudges about follow-ups.
-- Thinking partner: compare options ("buy vs lease"), turn messy info into next steps, highlight risks.
+**What Bizzi owns**
+- **Bookkeeping flow:** Plaid pulls transactions → Bizzi categorizes → you approve edge cases → Bizzi posts to QuickBooks
+- **Clean books signal:** keeps you aware of what’s still “Needs Review” so reports aren’t lying
+- **Cash + profit clarity:** explains what changed and what’s driving spend
+- **Tax readiness:** keeps deductions visible and flags surprises early (planning, not filing)
+- Reminder: if you use QuickBooks, turn off its bank feeds (Transactions → Bank transactions → disconnect) so Bizzi is the single feed via Plaid; your ledger stays intact.
 
-Remind them Bizzi is not a replacement for a bookkeeper or CPA but acts like a second brain.`,
+If you want: Bizzi can be strict and opinionated — “Here’s what matters this week, and why.”`,
     followUps: [
-      "What is stressing you out most right now? Cash and bills, too many jobs, admin overload, or something else?",
+      "What’s the biggest pain right now: bookkeeping, cash surprises, or tax stress?",
     ],
-    followUpPrompt: "Want me to walk through that problem with you now? (yes or no)",
-    nextStep: "Offer concrete help on the stressor they mention.",
+    followUpPrompt: "Want me to diagnose that in 2 minutes (yes or no)?",
+    nextStep: "Offer concrete help on the pain area they mention.",
     devNotes: [
-      "Use their stressor answer to personalize future insights.",
+      "No cofounder framing; emphasize operator + books + tax readiness + cash clarity.",
     ],
     suggestedActions: [],
   },
+
   {
     id: "first_step",
     title: "What to do first to get set up",
     canonicalPrompt: "What should I do first to get set up?",
-    matchers: [
-      /what should i do first/i,
-      /first step to get set up/i,
-      /where do i start/i,
-    ],
-    response: `Keep it simple and frame the first 10-15 minutes:
+    matchers: [/what should i do first/i, /first step to get set up/i, /where do i start/i],
+    response: `Start with the shortest path to value:
 
-Step 1 - Finish the business profile (2-3 minutes) so Bizzi can tailor insights.
-Step 2 - Connect QuickBooks (5-7 minutes) so Bizzi can answer "How are we doing?" with real numbers.
-Step 3 - Connect the calendar (2-3 minutes) so Bizzi can see jobs, walkthroughs, and reminders.
+**Step 1 — Link bank accounts through Plaid (transactions in)**
+Bizzi can’t help until it can see your real bank/credit activity.
 
-Offer to run a short Bizzi check-in once those are done.`,
-    followUps: [
-      "Do you want to start with QuickBooks or with your business profile?",
-    ],
-    followUpPrompt: "Ready to start that first step now? (yes or no)",
-    nextStep: "Branch depending on their choice and guide them through that step.",
+**Step 2 — Connect QuickBooks (posting destination)**
+So Bizzi can write the cleaned-up results into your ledger for tax season.
+
+**Step 3 — Turn off QuickBooks bank feeds (important)**
+- In QuickBooks: **Transactions → Bank transactions → pencil/Edit → Disconnect account** for each connected bank/card
+
+**Step 4 — Invite Bizzi to QuickBooks (monthly review)**
+- Invite **books@bizzi.ai.com** as an **Accountant** so we can review your books monthly.
+
+After that, do your first Books Review pass:
+Approve/edit a handful of transactions so Bizzi learns your vendor defaults and stops asking.
+
+One clear next action: open **Settings → Sync** and connect **Plaid**, then **QuickBooks**.`,
+    followUps: ["Do you want to connect checking or credit cards first?"],
+    followUpPrompt: "Ready to do that first step now (yes or no)?",
+    nextStep:
+      "Guide them through Plaid first; then QuickBooks; then turning off bank feeds; then inviting books@bizzi.ai.com; then Books Review.",
     devNotes: [
-      "If they pick QuickBooks, restate the Sync steps.",
-      "If they pick business profile, ask for name, trade, and team size and update Supabase.",
+      "This must always recommend Plaid first.",
     ],
-    suggestedActions: [
-      { type: "show_checklist", checklistId: "bizzy_onboarding" },
-    ],
+    suggestedActions: [{ type: "show_checklist", checklistId: "bizzy_onboarding" }],
   },
-  {
-    id: "connect_jobs_email_calendar",
-    title: "Connect jobs, email, and calendar",
-    canonicalPrompt: "How do I connect my jobs, email, and calendar?",
-    matchers: [
-      /connect (my )?(jobs|jobber|housecall) .*email.*calendar/i,
-      /hook up .*calendar/i,
-      /connect email and calendar/i,
-    ],
-    response: `Explain how to hook up the tools they already use:
 
-Jobs (Jobber / Housecall Pro)
-- Settings -> Sync -> Connect Jobber or Housecall Pro -> approve access.
-- Then Bizzi can see jobs, statuses, and pipeline.
+  // ────────────────────────────────────────────────────────────────────────────
+  // REMOVED:
+  // connect_jobs_email_calendar (no longer active in product right now)
+  // ────────────────────────────────────────────────────────────────────────────
 
-Email
-- From Settings -> Sync connect a Google account.
-- Clarify Bizzi only reads email content when they ask for summaries or drafts.
-
-Calendar
-- Connect Google Calendar via Settings -> Sync so Bizzi can pull upcoming events.
-
-Reassure them they can connect everything over time and ask which tools they actually use so Bizzi can prioritize.`,
-    followUps: [
-      "Which tools are you using right now: Jobber, Housecall Pro, Google Calendar, Gmail, or something else?",
-    ],
-    followUpPrompt: "Want me to open the Sync page so you can connect these? (yes or no)",
-    nextStep: "Queue the right nudge once you know which tools they rely on.",
-    devNotes: [
-      "If they mention a tool that is not connected, plan to remind them later.",
-    ],
-    suggestedActions: [
-      {
-        type: "navigate",
-        label: "Open Sync settings",
-        target: "/dashboard/settings?tab=Integrations",
-      },
-    ],
-  },
   {
     id: "what_is_bizzi",
     title: "What is Bizzi?",
     canonicalPrompt: "What exactly is Bizzi?",
-    matchers: [
-      /what (is|exactly is) bizzi/i,
-      /explain bizzi/i,
-      /who are you bizzi/i,
-    ],
-    response: `Explain that Bizzi is an AI cofounder built for home-service and construction businesses.
+    matchers: [/what (is|exactly is) bizzi/i, /explain bizzi/i, /who are you bizzi/i],
+    response: `Bizzi is an **Autonomous Financial Operator** for contractors and home service businesses.
 
-- Once tools are connected, Bizzi acts as a single place to ask questions, see numbers clearly, and get insights without digging through QuickBooks, emails, or calendars.
-- Stress that Bizzi does not replace a bookkeeper, office manager, or CPA — it provides an always-on, data-aware brain the owner can talk to any time.`,
+In plain terms:
+- **Plaid pulls** your bank/credit transactions
+- Bizzi **categorizes + learns** your vendor defaults
+- You approve what needs review
+- Bizzi **posts to QuickBooks** after a short grace window
+- Turn off QuickBooks bank feeds (in QBO: **Transactions → Bank transactions → pencil/Edit → Disconnect account**) so Bizzi is the single source; your ledger stays intact.
+
+So your books stay clean continuously — not just at month-end — and you can ask Bizzi “Where did my profit go?” and get an answer in plain English.`,
     followUps: [],
     followUpPrompt: "",
-    nextStep: "Invite them to learn more about setup by connecting their tools.",
-    devNotes: [
-      "Mention that Bizzi works best when accounting, calendar, email, and job tools are connected.",
-    ],
+    nextStep: "Invite them to connect Plaid + QuickBooks for full value.",
+    devNotes: ["Keep it concrete: Plaid → Review → Post to QuickBooks."],
     suggestedActions: [],
   },
+
   {
     id: "who_is_bizzi_for",
     title: "Who is Bizzi for?",
     canonicalPrompt: "Who is Bizzi for?",
-    matchers: [
-      /who is bizzi for/i,
-      /bizzi.*for (what|which) businesses/i,
-    ],
-    response: `Describe Bizzi's target audience:
-
-- Primarily home-service and construction founders (HVAC, roofing, remodeling/GCs, plumbing, electrical, landscaping, cleaning, pressure washing, similar trades).
-- Anyone running jobs, managing crews, sending invoices, and worrying about cash flow can benefit.`,
+    matchers: [/who is bizzi for/i, /bizzi.*for (what|which) businesses/i],
+    response: `Bizzi is for trades + home services owners who want their books handled without babysitting software:
+- HVAC, plumbing, electrical, roofing, remodeling/GCs, landscaping, cleaning, pressure washing, etc.
+- Especially useful if you hate categorizing transactions or only open QuickBooks at tax time.`,
     followUps: [],
     followUpPrompt: "",
-    nextStep: "Ask what trade they are in so Bizzi can tailor language.",
+    nextStep: "Ask what trade they’re in so Bizzi can tailor categories and examples.",
     devNotes: [],
     suggestedActions: [],
   },
+
   {
     id: "what_can_bizzi_do_now",
     title: "Current Bizzi capabilities",
     canonicalPrompt: "What can Bizzi help me with right now?",
-    matchers: [
-      /what can bizzi help.*now/i,
-      /what does bizzi do right now/i,
-    ],
-    response: `Frame the current strengths:
+    matchers: [/what can bizzi help.*now/i, /what does bizzi do right now/i],
+    response: `Right now Bizzi is strongest as a financial operator:
 
-1. Clarity on numbers (after QuickBooks connect) — revenue/expense/profit trends, where money is going, month comparisons.
-2. Single brain for operations (calendar + jobs + email) — summarize upcoming jobs, remind about important dates, turn messy info into next steps.
-3. Decision support — answer questions like “How did we do this month?”, “What changed?”, “Where are the risks?” using real data.`,
+1) **Books Review + posting to QuickBooks**
+- Pulls transactions via Plaid
+- Suggests categories + vendor defaults
+- After approval, posts to QuickBooks automatically
+
+2) **Clarity on your numbers**
+- Revenue/expense/profit trends
+- “What changed?” and “What’s driving spend?” answers
+
+3) **Tax readiness basics**
+- Deduction visibility
+- Early warnings (planning, not filing)
+
+If you connect Plaid + QuickBooks, Bizzi stops guessing and starts using your real numbers. If you use QBO, disable its bank feeds (Transactions → Bank transactions → disconnect) to avoid duplicates because Bizzi pulls via Plaid.`,
     followUps: [],
-    followUpPrompt: "Want help connecting those tools so I can start answering with real data? (yes or no)",
-    nextStep: "Guide them toward connecting QuickBooks or other integrations.",
-    devNotes: [],
+    followUpPrompt: "Want me to help you connect Plaid + QuickBooks (yes or no)?",
+    nextStep: "Guide them toward Settings → Sync.",
+    devNotes: ["Do not mention calendar/email/job tools here."],
     suggestedActions: [],
   },
+
   {
     id: "future_capabilities",
     title: "Future of Bizzi",
     canonicalPrompt: "What will Bizzi be able to do in the future?",
-    matchers: [
-      /what will bizzi.*future/i,
-      /future plans for bizzi/i,
-    ],
-    response: `Set realistic expectations:
+    matchers: [/what will bizzi.*future/i, /future plans for bizzi/i],
+    response: `The direction is “more autonomy, fewer questions,” without losing correctness.
 
-- Over time the goal is to move from insights into more automation.
-- Examples: helping clean up bookkeeping, drafting more follow-ups, highlighting and eventually automating repeat workflows.
-- Reassure them Bizzi will never make big changes without approval.`,
+Over time we’ll add things like:
+- Deeper job costing/profitability workflows
+- More automated follow-ups and “financial hygiene” tasks
+- Stronger reconciliation signals and alerts
+
+Bizzi will stay conservative about changes that affect your ledger — you’ll always have visibility and control.`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
-    devNotes: [],
+    devNotes: ["Future wording only. Don’t promise specific integrations unless they exist."],
     suggestedActions: [],
   },
+
   {
     id: "what_to_do_first",
     title: "What should I do first after signing up?",
     canonicalPrompt: "What should I do first after signing up?",
-    matchers: [
-      /what should i do first after signing up/i,
-      /first steps after sign up/i,
-    ],
-    response: `Recommend the first actions:
+    matchers: [/what should i do first after signing up/i, /first steps after sign up/i],
+    response: `Do these in order:
 
-1. Complete the business profile (name, trade, basics) so Bizzi can tailor insights.
-2. Connect QuickBooks if they use it.
-3. Connect calendar and email so Bizzi can help with jobs, follow-ups, and events.
+1) Link bank accounts through **Plaid** (so Bizzi can see your transactions)
+2) Connect **QuickBooks** (so Bizzi can post clean results)
+3) Turn off QuickBooks bank feeds
+   - In QBO: **Transactions → Bank transactions → pencil/Edit → Disconnect account** for each connected bank/card (prevents duplicate feeds; Bizzi pulls via Plaid)
+4) Invite **books@bizzi.ai.com** as an **Accountant** to review your books monthly
 
-Explain that once those are done they can start asking questions and Bizzi will respond using real data.`,
+After that, open **Books Review** and approve the first batch.
+(Optional) Complete your business profile when you have a minute.
+
+That first approval pass teaches Bizzi how your vendors map to your accounts.`,
     followUps: [],
-    followUpPrompt: "Want me to help with one of these right now? (yes or no)",
-    nextStep: "If yes, guide them through the chosen step.",
-    devNotes: [],
+    followUpPrompt: "Want me to walk you through those steps right now (yes or no)?",
+    nextStep:
+      "If yes, guide them through Plaid, then QuickBooks, then turning off bank feeds, then inviting books@bizzi.ai.com, then Books Review.",
+    devNotes: ["Always Plaid first."],
     suggestedActions: [],
   },
+
   {
     id: "connect_quickbooks_faq",
     title: "How do I connect QuickBooks?",
     canonicalPrompt: "How do I connect QuickBooks?",
-    matchers: [
-      /how do i connect quickbooks/i,
-      /connect qb online/i,
-    ],
-    response: `Give the specific instructions:
-
-- Settings -> Sync -> Connect QuickBooks.
-- Sign in with Intuit, select the correct company file, approve access.
-- Bizzi then reads revenue, expenses, profit, and basic metrics to answer financial questions accurately.`,
+    matchers: [/how do i connect quickbooks/i, /connect qb online/i],
+    response:
+      "To connect QuickBooks (so Bizzi can post into your ledger):\n\n" +
+      "- Go to **Settings → Sync**\n" +
+      "- Click **Connect QuickBooks**\n" +
+      "- Sign in with Intuit\n" +
+      "- Select the correct company file for this business\n\n" +
+      "QuickBooks is the destination — Bizzi still pulls transactions from Plaid.\n\n" +
+      "After you connect, turn off QuickBooks bank feeds to prevent duplicates:\n" +
+      "- In QBO: **Transactions → Bank transactions → pencil/Edit → Disconnect account** for each connected bank/card\n" +
+      "This keeps your ledger intact and avoids double-imports because Bizzi pulls via Plaid.\n\n" +
+      "Then invite **books@bizzi.ai.com** as an **Accountant** so we can review your books monthly.",
     followUps: [],
-    followUpPrompt: "Want me to open Settings -> Sync for you? (yes or no)",
+    followUpPrompt: "Want me to open Settings → Sync for you (yes or no)?",
     nextStep: "Use the navigate action to open Sync when they agree.",
-    devNotes: [],
+    devNotes: [
+      "Keep it clear: Plaid = bank feed, QuickBooks = ledger. Remind them to disconnect QBO bank feeds after connecting to avoid duplicates.",
+      "Have them invite books@bizzi.ai.com as an Accountant for monthly review.",
+    ],
     suggestedActions: [
-      {
-        type: "navigate",
-        label: "Open Sync settings",
-        target: "/dashboard/settings?tab=Integrations",
-      },
+      { type: "navigate", label: "Open Sync settings", target: "/dashboard/settings?tab=Integrations" },
     ],
   },
-  {
-    id: "connect_calendar_email_faq",
-    title: "How do I connect calendar and email?",
-    canonicalPrompt: "How do I connect my calendar and email?",
-    matchers: [
-      /how do i connect (my )?(calendar|email)/i,
-      /connect google calendar/i,
-      /connect gmail/i,
-    ],
-    response: `Explain the process:
 
-- Settings -> Sync -> Connect Google.
-- Approve the permissions.
-- After that Bizzi can see upcoming events and summarize/draft emails when asked.
-- Reassure them Bizzi only analyzes email content on demand.`,
-    followUps: [],
-    followUpPrompt: "Need me to open the Sync page for that? (yes or no)",
-    nextStep: "Navigate to Settings -> Sync when they agree.",
-    devNotes: [],
-    suggestedActions: [
-      {
-        type: "navigate",
-        label: "Open Sync settings",
-        target: "/dashboard/settings?tab=Integrations",
-      },
-    ],
-  },
   {
-    id: "connect_job_tools_faq",
-    title: "How do I connect Jobber or Housecall Pro?",
-    canonicalPrompt: "How do I connect Jobber, Housecall Pro, or ServiceTitan?",
+    id: "connect_plaid_faq",
+    title: "How do I connect Plaid?",
+    canonicalPrompt: "How do I connect Plaid?",
     matchers: [
-      /connect (jobber|housecall|service ?titan)/i,
-      /job management tool integration/i,
+      /how do i connect plaid/i,
+      /connect plaid/i,
+      /link plaid/i,
+      /sync plaid/i,
+      /connect bank/i,
+      /connect my bank/i,
     ],
-    response: `Explain:
+    response: `To connect Plaid (so Bizzi can pull transactions automatically):
 
-- Settings -> Sync -> choose Jobber or Housecall Pro -> Connect -> approve access.
-- Once connected, Bizzi sees job lists, statuses, and pipeline info for better answers about workload.
-- ServiceTitan support is on the roadmap.`,
+- Go to **Settings → Sync**
+- Click **Connect Plaid**
+- Select your bank and sign in securely through Plaid
+- Choose the accounts you want Bizzi to monitor (checking + cards)
+
+After that, Bizzi starts pulling transactions into Books Review so you can approve and keep everything clean.
+
+After you connect Plaid (and QuickBooks), turn off QuickBooks bank feeds to avoid duplicates:
+- In QBO: **Transactions → Bank transactions → pencil/Edit → Disconnect account** for each connected bank/card
+This just stops QBO importing the feed; Bizzi pulls through Plaid instead.
+
+Once QuickBooks is connected and bank feeds are off, invite **books@bizzi.ai.com** as an **Accountant** so we can review your books monthly.`,
     followUps: [],
-    followUpPrompt: "Want me to open the Sync page so you can connect those? (yes or no)",
-    nextStep: "If yes, navigate to Settings -> Sync.",
-    devNotes: [],
+    followUpPrompt: "Want me to open Settings → Sync now (yes or no)?",
+    nextStep: "Navigate to Settings → Sync when they agree.",
+    devNotes: ["Plaid is always the first integration for Bizzi."],
     suggestedActions: [
-      {
-        type: "navigate",
-        label: "Open Sync settings",
-        target: "/dashboard/settings?tab=Integrations",
-      },
+      { type: "navigate", label: "Open Sync settings", target: "/dashboard/settings?tab=Integrations" },
     ],
   },
+
   {
     id: "no_quickbooks",
     title: "What if I don't use QuickBooks?",
     canonicalPrompt: "What if I don’t use QuickBooks or these tools yet?",
-    matchers: [
-      /what if i don't use quickbooks/i,
-      /i don't use qb/i,
-      /no quickbooks/i,
-    ],
-    response: `Reassure them:
+    matchers: [/what if i don't use quickbooks/i, /i don't use qb/i, /no quickbooks/i],
+    response: `You can still use Bizzi with **Plaid-only** to understand cash flow and spending.
 
-- They can still use Bizzi for planning and decision support, but answers will be less precise without real data.
-- They will get the most value if accounting is in QuickBooks or a similar system Bizzi can plug into.`,
+But for clean books + tax readiness, QuickBooks is the easiest ledger for most trades businesses:
+- Bizzi pulls transactions via Plaid
+- Bizzi posts into QuickBooks
+- Your CPA can file year-end taxes cleanly
+
+If you want, tell me your trade + rough revenue, and I’ll recommend the simplest setup that won’t become a mess at tax time.`,
     followUps: [],
-    followUpPrompt: "Want help deciding which integration to start with? (yes or no)",
-    nextStep: "Recommend at least one integration to connect next.",
+    followUpPrompt: "Want help deciding whether you should use QuickBooks (yes or no)?",
+    nextStep: "If yes, ask trade + team size + how they invoice today.",
     devNotes: [],
     suggestedActions: [],
   },
+
   {
     id: "best_daily_routine",
     title: "How to use Bizzi every day",
     canonicalPrompt: "What’s the best way to use Bizzi every day?",
-    matchers: [
-      /best way to use bizzi every day/i,
-      /daily routine for bizzi/i,
-    ],
-    response: `Lay out a simple rhythm:
+    matchers: [/best way to use bizzi every day/i, /daily routine for bizzi/i],
+    response: `Here’s the simple routine that keeps your books clean with minimal effort:
 
-- Morning (2-3 minutes): ask what to focus on, check invoices/jobs.
-- During the day: drop messy questions, ask for summaries, drafts, explanations.
-- End of week: ask for snapshots and changes.
-Emphasize building the habit of asking Bizzi first.`,
+- **2 minutes/day:** open Books Review → approve what’s flagged  
+- **5 minutes/week:** ask “What changed?” + “Anything urgent?”  
+- **10 minutes/month:** quick cleanup pass + tax-ready check
+
+Small consistent actions beat heroic month-end catch-up.`,
     followUps: [],
-    followUpPrompt: "Want me to outline a routine tailored to your workflow? (yes or no)",
-    nextStep: "If yes, ask about their schedule and focus areas.",
+    followUpPrompt: "Want me to tailor that routine to your transaction volume (yes or no)?",
+    nextStep: "If yes, ask how many transactions/month they typically have.",
     devNotes: [],
     suggestedActions: [],
   },
+
   {
     id: "question_examples",
     title: "What questions can I ask?",
     canonicalPrompt: "What kinds of questions can I ask Bizzi?",
-    matchers: [
-      /what (kind|types) of questions can i ask/i,
-      /what can i ask bizzi/i,
-    ],
-    response: `Provide examples:
+    matchers: [/what (kind|types) of questions can i ask/i, /what can i ask bizzi/i],
+    response: `Examples that Bizzi is built for:
 
-- “How did we do financially this month?”
-- “What changed since last month?”
-- “Where is most of my money going?”
-- “What are my top 3 risks?”
-- “Summarize upcoming jobs/events.”
-- “Draft a reply to this customer email.”
-Explain that if data exists Bizzi will answer in plain English.`,
+- “What’s my cash situation this week?”
+- “Why is profit down this month?”
+- “What’s my top spending category right now?”
+- “Anything in my books that looks wrong?”
+- “What transactions still need review?”
+- “What should I clean up before tax time?”
+
+If Plaid + QuickBooks are connected, Bizzi answers using your actual numbers (not generic advice).`,
     followUps: [],
-    followUpPrompt: "Want to try one together? (yes or no)",
-    nextStep: "Prompt them to ask a real question.",
+    followUpPrompt: "Want to try one on your real data (yes or no)?",
+    nextStep: "If yes, suggest they connect Plaid + QuickBooks if not already.",
     devNotes: [],
     suggestedActions: [],
   },
+
   {
     id: "can_bizzi_take_actions",
     title: "Can Bizzi take actions automatically?",
     canonicalPrompt: "Can Bizzi take actions for me automatically?",
-    matchers: [
-      /can bizzi take actions/i,
-      /does bizzi automate/i,
-    ],
-    response: `Clarify current scope:
+    matchers: [/can bizzi take actions/i, /does bizzi automate/i],
+    response: `Bizzi automates the bookkeeping flow in a controlled way:
 
-- Bizzi focuses on insights, suggestions, and drafting, not fully automated actions.
-- Examples: drafting messages, highlighting risks, summarizing.
-- Automation of repetitive workflows is planned, but the user will always review/approve.`,
+- Pulls transactions via Plaid
+- Suggests categories and learns vendor defaults
+- Posts to QuickBooks after approval and a grace window
+
+Bizzi won’t silently make big ledger changes without you having visibility.`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
     devNotes: [],
     suggestedActions: [],
   },
+
   {
     id: "bookkeeper_question",
     title: "Does Bizzi replace my bookkeeper?",
     canonicalPrompt: "Does Bizzi replace my bookkeeper or accountant?",
-    matchers: [
-      /replace my bookkeeper/i,
-      /replace my accountant/i,
-    ],
-    response: `Make it clear:
+    matchers: [/replace my bookkeeper/i, /replace my accountant/i],
+    response: `Bizzi can replace a monthly bookkeeper for many small trades businesses — and your CPA can still handle year-end taxes.
 
-- Bizzi does not replace a bookkeeper, accountant, or CPA.
-- It provides clarity and context: explains numbers, shows trends, answers “what/why” using data.
-- It does not file taxes, issue statements, or give regulated financial/legal advice.`,
+Typical setup:
+- Bizzi runs day-to-day categorization + posting
+- You approve edge cases
+- A CPA reviews at year-end and files
+
+Bizzi does not “act as a CPA,” and it does not file taxes — but it can keep your books clean so tax time is painless.`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
     devNotes: [],
     suggestedActions: [],
   },
+
   {
     id: "data_access_faq",
     title: "What data does Bizzi access?",
     canonicalPrompt: "What data do you access from my tools?",
-    matchers: [
-      /what data do.*access/i,
-      /what data does bizzi see/i,
-    ],
-    response: `Detail the access model:
+    matchers: [/what data do.*access/i, /what data does bizzi see/i],
+    response: `Bizzi only accesses data from integrations you connect.
 
-- Bizzi only accesses data from integrations you connect.
-- QuickBooks: revenue, expenses, profit, transaction metadata, account metrics.
-- Jobber/Housecall: jobs, statuses, basic customer/work order info.
-- Calendar: event titles, times, attendees.
-- Gmail: email content only when you ask for summaries/drafts.
-- Plaid: balances/positions if linked.
-- Bizzi does not sell data or automatically read all emails.`,
+- **Plaid:** transaction metadata, amounts, dates, merchant info (categorization)
+- **QuickBooks:** chart of accounts + the ledger where Bizzi posts
+
+You control connections. Disconnect any time in Settings.`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
-    devNotes: [],
+    devNotes: ["Keep this aligned with current active integrations (Plaid + QuickBooks)."],
     suggestedActions: [],
   },
+
   {
     id: "data_security_faq",
     title: "How is data stored and protected?",
     canonicalPrompt: "How does Bizzi store and protect my data?",
-    matchers: [
-      /how does bizzi store/i,
-      /data security/i,
-    ],
-    response: `Summarize security posture:
+    matchers: [/how does bizzi store/i, /data security/i],
+    response: `Bizzi is built with “bank-grade” practices in mind:
 
-- All connections use HTTPS.
-- Data at rest is encrypted.
-- Row-level security ensures businesses only see their own data.
-- Internal access limited to authorized personnel.
-- Security continues to strengthen as the product grows.`,
+- HTTPS in transit
+- Encrypted storage at rest
+- Row-level security so businesses only see their own records
+- OAuth integrations (Bizzi never asks for your QuickBooks password)
+
+You can disconnect integrations any time, and you can request deletion per the Privacy Policy.`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
     devNotes: [],
     suggestedActions: [],
   },
+
   {
     id: "model_training_faq",
     title: "Does Bizzi train models on my data?",
     canonicalPrompt: "Does Bizzi train the AI model on my data?",
-    matchers: [
-      /train.*model.*data/i,
-      /do you train on my data/i,
-    ],
-    response: `Clarify:
+    matchers: [/train.*model.*data/i, /do you train on my data/i],
+    response: `No — your identifiable business data is not used to train public AI models.
 
-- The underlying AI model is provided by a third party.
-- Identifiable business data is not used to train public models.
-- Bizzi may use anonymized/aggregated info to improve features, but not in a way that identifies a business.`,
+Bizzi uses AI to generate responses, but your connected data is used only to answer your questions and run your bookkeeping workflows.`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
-    devNotes: [],
+    devNotes: [
+      "Keep this conservative. Do not claim anything about vendor training programs beyond what you are confident about.",
+    ],
     suggestedActions: [],
   },
+
   {
     id: "pricing_faq",
     title: "How much does Bizzi cost?",
     canonicalPrompt: "How much does Bizzi cost?",
-    matchers: [
-      /how much does bizzi cost/i,
-      /what's the price/i,
-    ],
-    response: `Explain pricing:
+    matchers: [/how much does bizzi cost/i, /what's the price/i],
+    response: `Bizzi is a monthly subscription. Pricing is shown on the Pricing page and inside the app.
 
-- Bizzi is offered on a simple monthly subscription.
-- Current pricing lives on the Pricing page and inside the app.
-- No long-term commitment; cancel anytime.
-- Mention current promotional pricing if applicable.`,
+If you tell me your rough monthly transaction volume (low / medium / high), I can also tell you whether Bizzi is a good fit right now.`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
-    devNotes: [],
+    devNotes: ["Don’t hardcode pricing unless your pricing is finalized in-product."],
     suggestedActions: [],
   },
+
   {
     id: "trial_faq",
     title: "Is there a free trial?",
     canonicalPrompt: "Is there a free trial?",
-    matchers: [
-      /is there a free trial/i,
-      /trial for bizzi/i,
-    ],
-    response: `Describe the current trial flow:
+    matchers: [/is there a free trial/i, /trial for bizzi/i],
+    response: `If a free trial is active in your account, you’ll see it in Billing.
 
-- Early access period includes a limited-time trial.
-- Recommend connecting QuickBooks and calendar during the trial to see full value.
-- Adjust wording once trial mechanics are finalized.`,
+Best way to use a trial:
+- Connect Plaid + QuickBooks
+- Do one Books Review pass
+- Ask Bizzi 2–3 questions about profit, cash, and spending
+
+That’s when the value becomes obvious.`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
-    devNotes: [],
+    devNotes: ["Keep generic; trial mechanics may change."],
     suggestedActions: [],
   },
+
   {
     id: "cancel_faq",
     title: "Can I cancel anytime?",
     canonicalPrompt: "Can I cancel my subscription anytime?",
-    matchers: [
-      /can i cancel.*anytime/i,
-      /cancel subscription/i,
-    ],
-    response: `Clarify:
-
-- Yes, cancellations are allowed at any time via account or billing settings.
-- Billing stops at the end of the current period.`,
+    matchers: [/can i cancel.*anytime/i, /cancel subscription/i],
+    response: `Yes — you can cancel any time via Billing settings. Billing stops at the end of the current period.`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
     devNotes: [],
     suggestedActions: [],
   },
+
   {
     id: "data_after_cancel",
     title: "What happens to my data if I leave?",
     canonicalPrompt: "What happens to my data if I stop using Bizzi?",
-    matchers: [
-      /what happens to my data/i,
-      /data.*after cancel/i,
-    ],
-    response: `Explain:
-
-- Once integrations are disconnected and the account is canceled, Bizzi stops pulling data.
-- Some records may be retained temporarily for security/audit/legal reasons.
-- Users can request deletion per the Privacy Policy.`,
+    matchers: [/what happens to my data/i, /data.*after cancel/i],
+    response: `Once you disconnect integrations and cancel:
+- Bizzi stops pulling new data
+- Existing records may be retained temporarily for security/audit/legal reasons
+- You can request deletion per the Privacy Policy`,
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
     devNotes: [],
     suggestedActions: [],
   },
+
   {
     id: "fallback_guardrail",
     title: "Fallback for unsupported requests",
@@ -648,16 +660,20 @@ Explain that if data exists Bizzi will answer in plain English.`,
       /do .* in quickbooks/i,
       /not supported yet/i,
     ],
-    response: `Provide the guardrail answer:
-
-- Acknowledge the idea and say it's something Bizzi would love to help with over time.
-- Emphasize current focus: understanding numbers/jobs, giving clear summaries, drafting plans.
-- State clearly that Bizzi does not yet [requested action], but can help think through it using available data and highlight related patterns.`,
+    response:
+      "I get why you’d want that — and over time we’ll expand automation. But I won’t pretend something exists when it doesn’t.\n\n" +
+      "Right now Bizzi focuses on:\n" +
+      "- Keeping books clean via Plaid → review → posting to QuickBooks\n" +
+      "- Translating your numbers into clear next steps\n" +
+      "- Tax readiness and cash/profit clarity\n\n" +
+      "If you tell me what you’re trying to accomplish, I can either:\n" +
+      "1) walk you through the best current workflow, or\n" +
+      "2) tell you what’s realistic to automate next.",
     followUps: [],
     followUpPrompt: "",
     nextStep: "",
     devNotes: [
-      "Examples of unsupported actions: file taxes, run payroll, fully automate invoicing, push transactions directly into QuickBooks, etc.",
+      "Examples of unsupported actions: file taxes, run payroll, fully automate invoicing, etc.",
     ],
     suggestedActions: [],
   },
@@ -699,6 +715,9 @@ export function buildOnboardingGuide(entry, context = {}) {
   if (!entry) return "";
   const parts = [];
   parts.push(`### Onboarding Script: ${entry.title}`);
+  parts.push(
+    "Use the script below as the response. Keep numbered steps in order and do not omit any required onboarding steps."
+  );
   parts.push(entry.response.trim());
   if (context.checklist) {
     parts.push(`Current checklist snapshot:\n${context.checklist}`);

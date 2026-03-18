@@ -1,5 +1,5 @@
 // src/components/Settings/SettingsHome.jsx
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { useBusiness } from "../../context/BusinessContext";
 import { supabase } from "../../services/supabaseClient";
@@ -8,20 +8,36 @@ import { updateBusinessProfile } from "../../services/businessService";
 import { getUserProfile, updateUserProfile } from "../../services/profileService";
 import {
   User, Building2, PlugZap, CreditCard, Mail, Shield, Link as LinkIcon,
-  LogOut, AlertTriangle
+  LogOut, AlertTriangle, ChevronDown, Check
 } from "lucide-react";
 import BillingCard from "../../pages/Settings/BillingCard.jsx";
+import useBillingStatus from "../../hooks/useBillingStatus.js";
 import { useNavigate } from "react-router-dom";
 import { useSearchParams } from "react-router-dom";
 import useIntegrationManager, { INTEGRATION_META } from "../../hooks/useIntegrationManager";
 import { getDemoMode, setDemoMode, isTestingMode, setTestingMode } from "../../services/demo/demoClient.js";
 import { logout as performLogout } from "../../services/authService";
 import { markIntegrationsPageViewed } from "../../hooks/useOnboardingStatus";
+import { useBizzyChatContext } from "../../context/BizzyChatContext";
+import BusinessSwitcher from "../../components/UserAdmin/BusinessSwitcher.jsx";
+import {
+  getPlaidStatus,
+  createPlaidLinkToken,
+  exchangePlaidPublicToken,
+  triggerPlaidSync,
+  disconnectPlaid,
+  disconnectPlaidItem,
+  getAccountMappings,
+  updateAccountMapping,
+  getQboPaymentAccounts,
+  ensureQboPaymentAccount,
+} from "../../services/bookkeeping/bookkeepingClient";
 
 /** Graphite neutrals (tokens) */
 const NEUTRAL_BORDER = "rgba(165,167,169,0.18)";
 const TEXT_MUTED = "var(--text-2)";
 const PANEL_BG = "var(--panel)";
+const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
 
 /** Tabs visible for MVP */
 const tabs = [
@@ -31,18 +47,57 @@ const tabs = [
   { key: "Billing",      icon: CreditCard },
 ];
 
+const CREDITS_CAP = 300;
+
 export default function SettingsHome() {
+  const SHOW_MARKETING_COMMS = false;
   const { user } = useAuth();
-  const { currentBusiness } = useBusiness();
+  const { currentBusiness, setCurrentBusiness } = useBusiness();
+  const { usageCount = 0 } = useBizzyChatContext() || {};
   const navigate = useNavigate();
   const userId = user?.id || localStorage.getItem("user_id");
   const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId");
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [billingRefresh, setBillingRefresh] = useState(0);
+  const [billingToast, setBillingToast] = useState("");
 
-  const [billingStatus, setBillingStatus] = useState(null);
-  const [loadingBilling, setLoadingBilling] = useState(false);
-
-  const [activeTab, setActiveTab] = useState("Profile");
+  const activeTab = useMemo(() => {
+    const tabParam = (searchParams.get("tab") || "").toLowerCase();
+    const focus = (searchParams.get("integration") || "").toLowerCase();
+    if (focus) return "Integrations";
+    if (tabParam) {
+      const match = tabs.find((t) => t.key.toLowerCase() === tabParam);
+      if (match) return match.key;
+    }
+    try {
+      const storedTab = (window.localStorage?.getItem("bizzy:settingsActiveTab") || "").toLowerCase();
+      const match = storedTab && tabs.find((t) => t.key.toLowerCase() === storedTab);
+      if (match) return match.key;
+    } catch {
+      /* ignore */
+    }
+    return "Profile";
+  }, [searchParams]);
+  const shouldLoadBilling = activeTab === "Billing" && Boolean(businessId);
+  const { status: billingStatus, loading: loadingBilling } = useBillingStatus(
+    shouldLoadBilling ? businessId : null,
+    shouldLoadBilling ? userId : null,
+    billingRefresh
+  );
+  const setActiveTab = useCallback((nextTab) => {
+    if (!nextTab) return;
+    try {
+      window.localStorage?.setItem("bizzy:settingsActiveTab", nextTab);
+    } catch {
+      /* ignore */
+    }
+    const next = new URLSearchParams(searchParams);
+    if ((next.get("tab") || "").toLowerCase() !== nextTab.toLowerCase()) {
+      next.set("tab", nextTab);
+    }
+    if (next.has("integration")) next.delete("integration");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const [pendingIntegrationFocus, setPendingIntegrationFocus] = useState(null);
   const [dataMode, setDataMode] = useState(() => getDemoMode());
   const [testingMode, setTestingModeState] = useState(() => isTestingMode());
@@ -71,6 +126,7 @@ export default function SettingsHome() {
   const [bizSuccessMsg, setBizSuccessMsg] = useState("");
   const [bizErrorMsg, setBizErrorMsg] = useState("");
   const hasMarkedIntegrationsRef = useRef(false);
+  const plaidRefreshOnceRef = useRef(false);
 
   /* ---------------- Effects ---------------- */
   useEffect(() => {
@@ -95,26 +151,24 @@ export default function SettingsHome() {
   }, [currentBusiness]);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadStatus() {
-      if (!businessId) return;
-      setLoadingBilling(true);
-      try {
-        const url = new URL(apiUrl("/api/billing/status"));
-        url.searchParams.set("business_id", businessId);
-        const data = await safeFetch(url.toString(), {
-          headers: { "x-business-id": businessId, "x-user-id": userId || "" },
-        });
-        if (!cancelled) setBillingStatus(data || null);
-      } catch {
-        if (!cancelled) setBillingStatus(null);
-      } finally {
-        if (!cancelled) setLoadingBilling(false);
-      }
+    const checkout = searchParams.get("checkout");
+    if (!checkout) return;
+    if (checkout === "success") {
+      setBillingToast("Bizzi is active. You can manage billing anytime.");
+      setBillingRefresh((v) => v + 1);
+    } else if (checkout === "cancel") {
+      setBillingToast("Checkout canceled.");
     }
-    loadStatus();
-    return () => { cancelled = true; };
-  }, [businessId, userId]);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("checkout");
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (!billingToast) return;
+    const t = setTimeout(() => setBillingToast(""), 4000);
+    return () => clearTimeout(t);
+  }, [billingToast]);
 
   /* ---------------- Handlers ---------------- */
   const handleResetPassword = async () => {
@@ -180,16 +234,9 @@ export default function SettingsHome() {
   const integrationManager = useIntegrationManager({ businessId });
 
   useEffect(() => {
-    const tabParam = (searchParams.get("tab") || "").toLowerCase();
-    if (tabParam) {
-      const match = tabs.find((t) => t.key.toLowerCase() === tabParam);
-      if (match) setActiveTab(match.key);
-    }
     const focus = (searchParams.get("integration") || "").toLowerCase();
-    if (focus) {
-      setActiveTab("Integrations");
-      setPendingIntegrationFocus(focus);
-    }
+    if (!focus) return;
+    setPendingIntegrationFocus(focus);
   }, [searchParams]);
 
   useEffect(() => {
@@ -212,11 +259,26 @@ export default function SettingsHome() {
     if (activeTab !== "Integrations") return;
     if (!businessId || hasMarkedIntegrationsRef.current) return;
     hasMarkedIntegrationsRef.current = true;
-    markIntegrationsPageViewed({ businessId });
+    markIntegrationsPageViewed({ businessId }).finally(() => {
+      try {
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem("bizzy:has_viewed_integrations_page", "true");
+          window.localStorage.setItem("bizzy:visitedIntegrations", "true");
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        window.dispatchEvent(new Event("bizzy:onboarding-flags-updated"));
+      } catch {
+        /* ignore */
+      }
+    });
   }, [activeTab, businessId]);
 
   // Fetch QuickBooks company name for display
   useEffect(() => {
+    if (activeTab !== "Integrations") return;
     let alive = true;
     async function loadCompany() {
       if (!businessId) {
@@ -236,39 +298,36 @@ export default function SettingsHome() {
     return () => {
       alive = false;
     };
-  }, [businessId]);
+  }, [activeTab, businessId]);
+
+useEffect(() => {
+  if (activeTab !== "Integrations") {
+    plaidRefreshOnceRef.current = false;
+    return;
+  }
+  if (!businessId) return;
+  if (plaidRefreshOnceRef.current) return;
+  plaidRefreshOnceRef.current = true;
+  integrationManager.refresh?.("plaid").catch(() => {});
+}, [activeTab, businessId, integrationManager]);
 
   /* ---------------- Render ---------------- */
   return (
     <div className="w-full px-3 md:px-4 pb-12 pt-0 bg-app text-primary" style={{ "--accent": "var(--accent)" }}>
-      {/* Header */}
-      <div
-        className="relative overflow-hidden rounded-3xl shadow-bizzi border p-5 md:p-7 mb-5"
-        style={{
-          background: "linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), rgba(20,21,22,0.92))",
-          borderColor: NEUTRAL_BORDER
-        }}
-      >
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -inset-8 rounded-[32px] opacity-30 blur-3xl"
-          style={{ background: "radial-gradient(60% 60% at 15% 15%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 60%)" }}
-        />
-        <div className="relative flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl md:text-3xl font-semibold tracking-[0.18em] text-[color:var(--text)]">
-              Control Center
-            </h1>
-            <p className="mt-1 text-sm" style={{ color: TEXT_MUTED }}>
-              Profile, business identity, integrations, and billing — all in one place.
-            </p>
-          </div>
-        </div>
+      {/* Header (aligned with page content) */}
+      <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6 mb-5">
+        <h1 className="text-2xl md:text-3xl font-semibold tracking-[0.18em] text-[color:var(--text)] text-left">
+          Settings
+        </h1>
+        <p className="mt-1 text-sm text-left" style={{ color: "rgba(var(--accent-rgb),0.78)" }}>
+          Profile, business identity, integrations, and billing — all in one place.
+        </p>
       </div>
 
+      <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6">
       <section
-        className="mb-5 rounded-3xl border px-4 py-5"
-        style={{ borderColor: NEUTRAL_BORDER, background: PANEL_BG }}
+        className="mb-5 rounded-3xl px-4 py-5 border border-[rgba(var(--accent-rgb),0.14)]"
+        style={{ background: PANEL_BG, boxShadow: "0 0 0 1px rgba(var(--accent-rgb),0.05), 0 22px 60px rgba(0,0,0,0.35)" }}
       >
         <div className="flex flex-col gap-4">
           <div>
@@ -278,30 +337,6 @@ export default function SettingsHome() {
             </p>
           </div>
           <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-3">
-              <Badge>Testing (QB Sandbox)</Badge>
-              <ModeToggle
-                active={testingMode}
-                labelOn="Testing On"
-                labelOff="Testing Off"
-                disabled={modeUpdating}
-                onChange={(value) => {
-                  if (modeUpdating) return;
-                  setModeUpdating(true);
-                  setTestingModeState(value);
-                  setTestingMode(value);
-                  // Testing always forces live data (no demo)
-                  if (value) {
-                    setDemoMode("live");
-                    setDataMode("live");
-                  }
-                  setTimeout(() => window.location.reload(), 150);
-                }}
-              />
-              <p className="text-xs text-white/55">
-                Use QuickBooks sandbox (QB_CLIENT_ID/SECRET) for dev testing without touching production data.
-              </p>
-            </div>
             <div className="flex items-center gap-4">
             <ModeToggle
               active={dataMode !== "live"}
@@ -331,10 +366,7 @@ export default function SettingsHome() {
       </section>
 
       {/* Tab pills */}
-      <div
-        className="rounded-2xl shadow-bizzi border p-2.5 mb-5 backdrop-blur"
-        style={{ background: "rgba(20,21,22,0.85)", borderColor: NEUTRAL_BORDER }}
-      >
+      <div className="p-2.5 mb-5">
         <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Settings tabs">
           <div className="flex flex-wrap gap-1.5 sm:gap-2">
             {tabs.map(({ key, icon: Icon }) => {
@@ -344,19 +376,23 @@ export default function SettingsHome() {
                   key={key}
                   onClick={() => setActiveTab(key)}
                   aria-selected={active}
-                  className="group inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm border transition"
+                  className="group inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 active:outline-none active:ring-0"
                   style={
                     active
                       ? {
+                          outline: "none",
+                          transition: "none",
                           color: "var(--accent)",
-                          border: `1px solid var(--accent)`,
-                          boxShadow: "0 0 14px 0 var(--accent)",
+                          border: `1px solid rgba(var(--accent-rgb),0.4)`,
+                          boxShadow: "0 0 0 1px rgba(var(--accent-rgb),0.12), 0 10px 24px rgba(0,0,0,0.35)",
                           background: "rgba(255,255,255,0.06)",
                         }
                       : {
+                          outline: "none",
+                          transition: "none",
                           color: "var(--text)",
                           border: `1px solid ${NEUTRAL_BORDER}`,
-                          background: "transparent",
+                          background: "rgba(255,255,255,0.02)",
                         }
                   }
                 >
@@ -398,23 +434,12 @@ export default function SettingsHome() {
                 <Field label="Full Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" /></Field>
                 <Field label="Email"><Input value={email} disabled /></Field>
                 <div className="flex flex-wrap gap-3 pt-2">
-                  <AccentButton onClick={handleSaveProfile} disabled={savingProfile}>
+                  <AccentButton onClick={handleSaveProfile} disabled={savingProfile} className="focus-visible:outline-none">
                     {savingProfile ? "Saving…" : "Save Changes"}
                   </AccentButton>
-                  <GhostButton onClick={handleResetPassword}>Send Reset Email</GhostButton>
+                  <GhostButton onClick={handleResetPassword} className="focus-visible:outline-none">Send Reset Email</GhostButton>
                 </div>
                 <InlineMsg ok={profileSuccess} err={profileError} />
-              </Section>
-
-              <Section
-                className="col-start-1 md:col-start-7 col-span-12 md:col-span-6"
-                title="Security"
-                subtitle="2FA and device history are coming soon."
-                icon={Shield}
-              >
-                <p className="text-sm" style={{ color: TEXT_MUTED }}>
-                  Protect your account with additional verification. We’ll notify you when security upgrades are available.
-                </p>
               </Section>
 
               <Section
@@ -441,30 +466,20 @@ export default function SettingsHome() {
                     </div>
                   </button>
                 ) : (
-                  <div
-                    className="rounded-2xl p-4 sm:p-5"
-                    style={{
-                      border: "1px solid rgba(248,113,113,0.4)",
-                      background: "linear-gradient(135deg, rgba(24,12,15,0.95), rgba(54,16,29,0.9))",
-                      boxShadow: "0 25px 50px rgba(0,0,0,0.55)",
-                    }}
-                  >
-                    <div className="flex items-start gap-3">
-                      <div
-                        className="h-12 w-12 rounded-2xl border grid place-items-center"
-                        style={{
-                          borderColor: "rgba(248,113,113,0.5)",
-                          background: "rgba(248,113,113,0.08)",
-                          color: "rgb(248,113,113)",
-                        }}
-                      >
-                        <AlertTriangle className="h-5 w-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold" style={{ color: "var(--text)" }}>
-                          Ready to sign out?
-                        </p>
-                        <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>
+                <div
+                  className="rounded-2xl p-4 sm:p-5"
+                  style={{
+                    border: "1px solid rgba(255,255,255,0.08)",
+                    background: "rgba(20,21,22,0.9)",
+                    boxShadow: "none",
+                  }}
+                >
+                  <div className="flex items-start gap-3">
+                    <div>
+                      <p className="text-sm font-semibold" style={{ color: "var(--text)" }}>
+                        Ready to sign out?
+                      </p>
+                      <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>
                           You’ll need to re-enter your credentials to get back into Bizzi.
                         </p>
                       </div>
@@ -476,9 +491,9 @@ export default function SettingsHome() {
                         disabled={loggingOut}
                         className="mt-4 px-4 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-60"
                         style={{
-                          background: "linear-gradient(120deg, rgba(248,113,113,0.9), rgba(127,29,29,0.85))",
+                          background: "linear-gradient(120deg, rgba(80,82,86,0.95), rgba(45,47,52,0.9))",
                           color: "white",
-                          boxShadow: "0 15px 40px rgba(248,113,113,0.25)",
+                          boxShadow: "none",
                         }}
                       >
                         {loggingOut ? "Signing out…" : "Confirm sign out"}
@@ -499,6 +514,28 @@ export default function SettingsHome() {
             <>
               <Section
                 className="col-start-1 col-span-12 md:col-span-6"
+                title="Active Business"
+                subtitle="Switch which business you are viewing in Bizzi."
+                icon={Building2}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex flex-col gap-1">
+                    <p className="text-sm text-white/80">
+                      {currentBusiness?.business_name || "No business selected"}
+                    </p>
+                    <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                      Select a business to update dashboards and integrations.
+                    </p>
+                  </div>
+                  <BusinessSwitcher
+                    currentBusiness={currentBusiness}
+                    setCurrentBusiness={setCurrentBusiness}
+                  />
+                </div>
+              </Section>
+
+              <Section
+                className="col-start-1 col-span-12 md:col-span-6"
                 title="Business Profile"
                 subtitle="This info helps Bizzi personalize insights and reports."
                 icon={Building2}
@@ -511,22 +548,11 @@ export default function SettingsHome() {
                   <Field label="Timezone"><Input name="timezone" value={businessForm.timezone} onChange={handleBusinessChange} /></Field>
                 </div>
                 <div className="pt-2">
-                  <AccentButton onClick={handleSaveBusiness} disabled={savingBusiness}>
+                  <AccentButton onClick={handleSaveBusiness} disabled={savingBusiness} className="focus-visible:outline-none">
                     {savingBusiness ? "Saving…" : "Save Changes"}
                   </AccentButton>
                   <InlineMsg ok={bizSuccessMsg} err={bizErrorMsg} className="mt-3" />
                 </div>
-              </Section>
-
-              <Section
-                className="col-start-1 md:col-start-7 col-span-12 md:col-span-6"
-                title="Brand Basics"
-                subtitle="Logo and accent color controls are on the roadmap."
-                icon={Building2}
-              >
-                <p className="text-sm" style={{ color: TEXT_MUTED }}>
-                  Soon you’ll be able to upload a logo and match Bizzi to your brand colors.
-                </p>
               </Section>
             </>
           )}
@@ -538,24 +564,26 @@ export default function SettingsHome() {
                 className="col-start-1 col-span-12"
                 title="Accounting & Banking"
                 subtitle="Connect your books and bank data."
-                icon={PlugZap}
-              >
-                <IntegrationRow provider="quickbooks" manager={integrationManager} companyName={qbCompanyName} businessId={businessId} />
-                <IntegrationRow provider="plaid" manager={integrationManager} />
+              icon={PlugZap}
+            >
+              <IntegrationRow provider="quickbooks" manager={integrationManager} companyName={qbCompanyName} businessId={businessId} />
+                <PlaidIntegrationCard businessId={businessId} />
               </Section>
 
-              <Section
-                className="col-start-1 col-span-12"
-                title="Marketing & Comms"
-                subtitle="Bring in communications and social data."
-                icon={Mail}
-              >
-                <IntegrationRow provider="gmail" manager={integrationManager} />
-                <IntegrationRow name="Slack" description="Team notifications and workflows." disabled />
-                <IntegrationRow provider="facebook" manager={integrationManager} />
-                <IntegrationRow provider="instagram" manager={integrationManager} />
-                <IntegrationRow provider="linkedin" manager={integrationManager} />
-              </Section>
+              {SHOW_MARKETING_COMMS ? (
+                <Section
+                  className="col-start-1 col-span-12"
+                  title="Marketing & Comms"
+                  subtitle="Bring in communications and social data."
+                  icon={Mail}
+                >
+                  <IntegrationRow provider="gmail" manager={integrationManager} />
+                  <IntegrationRow name="Slack" description="Team notifications and workflows." disabled />
+                  <IntegrationRow provider="facebook" manager={integrationManager} />
+                  <IntegrationRow provider="instagram" manager={integrationManager} />
+                  <IntegrationRow provider="linkedin" manager={integrationManager} />
+                </Section>
+              ) : null}
 
               <Section
                 className="col-start-1 col-span-12"
@@ -563,24 +591,64 @@ export default function SettingsHome() {
                 subtitle="Jobber and field ops data."
                 icon={PlugZap}
               >
-                <IntegrationRow provider="jobber" manager={integrationManager} />
+                <IntegrationRow provider="jobber" manager={integrationManager} disabled />
               </Section>
             </>
           )}
 
           {/* -------- Billing -------- */}
-          {activeTab === "Billing" && (
+      {activeTab === "Billing" && (
             <Section
               className="col-start-1 col-span-12"
-              title="Subscription & Billing"
-              subtitle="Manage your plan and invoices."
-              icon={CreditCard}
-            >
-              <BillingCard userId={userId} businessId={businessId} status={billingStatus} />
-              {loadingBilling && <p className="text-xs mt-2" style={{ color: TEXT_MUTED }}>Loading billing status…</p>}
+          title="Subscription & Billing"
+          subtitle="Manage your plan, invoices, and credits."
+          icon={CreditCard}
+        >
+          {billingToast ? (
+            <div className="mb-3 rounded-lg border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
+              {billingToast}
+            </div>
+          ) : null}
+          {!businessId ? (
+            <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/60">
+              Select a business to manage billing.
+            </div>
+          ) : (
+            <BillingCard
+              userId={userId}
+              businessId={businessId}
+              status={billingStatus}
+              onBillingRefresh={() => setBillingRefresh((v) => v + 1)}
+            />
+          )}
+          {activeTab === "Billing" && loadingBilling ? (
+            <p className="text-xs mt-2" style={{ color: TEXT_MUTED }}>Loading billing status…</p>
+          ) : null}
+
+              <div className="mt-4 rounded-xl border px-4 py-3"
+                style={{ borderColor: NEUTRAL_BORDER, background: "rgba(255,255,255,0.04)" }}>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-white/90">Bizzi credits usage</p>
+                    <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                      Track how many Bizzi credits you’ve used this month.
+                    </p>
+                  </div>
+                  <span className="text-sm font-semibold text-white/85">
+                    {Math.min(usageCount || 0, CREDITS_CAP)}/{CREDITS_CAP}
+                  </span>
+                </div>
+                <div className="mt-3 h-2 w-full rounded-full bg-white/5 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-emerald-400/70 transition-all"
+                    style={{ width: `${Math.min((usageCount || 0) / CREDITS_CAP * 100, 100)}%` }}
+                  />
+                </div>
+              </div>
             </Section>
           )}
         </div>
+      </div>
       </div>
     </div>
   );
@@ -592,14 +660,14 @@ function ModeToggle({ active, onChange, disabled, labelOn = "On", labelOff = "Of
       type="button"
       onClick={() => !disabled && onChange(!active)}
       className={[
-        "relative inline-flex items-center rounded-full border border-white/15 bg-black/30 p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30",
-        disabled ? "opacity-50 cursor-not-allowed" : "hover:border-white/30",
+        "relative inline-flex items-center rounded-full border border-white/15 bg-black/30 p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(var(--accent-rgb),0.4)]",
+        disabled ? "opacity-50 cursor-not-allowed" : "hover:border-[rgba(var(--accent-rgb),0.4)]",
       ].join(" ")}
       style={{ width: 210, height: 52 }}
     >
       <span
         className={[
-          "absolute inset-1 rounded-full bg-emerald-400/12 transition-all duration-300",
+          "absolute inset-1 rounded-full bg-[rgba(var(--accent-rgb),0.14)] transition-all duration-300",
           active ? "translate-x-0 opacity-100" : "translate-x-[calc(100%-2px)] opacity-0",
         ].join(" ")}
         aria-hidden
@@ -619,16 +687,672 @@ function ModeToggle({ active, onChange, disabled, labelOn = "On", labelOff = "Of
   );
 }
 
+function loadPlaidScript() {
+  if (typeof window === "undefined") return Promise.reject(new Error("window unavailable"));
+  if (window.Plaid) return Promise.resolve(window.Plaid);
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = PLAID_LINK_SCRIPT;
+    script.async = true;
+    script.onload = () => {
+      if (window.Plaid) resolve(window.Plaid);
+      else reject(new Error("Plaid script loaded without Plaid"));
+    };
+    script.onerror = () => reject(new Error("Failed to load Plaid Link"));
+    document.head.appendChild(script);
+  });
+}
+
+function StatusBadge({ label = "Unknown", tone = "slate" }) {
+  const toneMap = {
+    ok: "bg-emerald-500/15 text-emerald-200 border-emerald-500/30",
+    warning: "bg-amber-500/15 text-amber-200 border-amber-500/30",
+    slate: "bg-white/10 text-white/70 border-white/15",
+  };
+  const cls = toneMap[tone] || toneMap.slate;
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
+function PlaidIntegrationCard({ businessId }) {
+  const mappingOverrideStorageKey = useMemo(
+    () => (businessId ? `bizzy:plaid-mapping-overrides:${businessId}` : null),
+    [businessId]
+  );
+  const [loading, setLoading] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const [disconnectingItem, setDisconnectingItem] = useState(null);
+  const [disconnectingAll, setDisconnectingAll] = useState(false);
+  const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
+  const [confirmDisconnectByAccount, setConfirmDisconnectByAccount] = useState({});
+  const [institutions, setInstitutions] = useState([]);
+  const [counts, setCounts] = useState({ institutions: 0, accounts: 0 });
+  const [statusError, setStatusError] = useState("");
+  const [hasDisconnected, setHasDisconnected] = useState(false);
+  const [mappingRows, setMappingRows] = useState([]);
+  const [mappingLoading, setMappingLoading] = useState(false);
+  const [mappingError, setMappingError] = useState("");
+  const [qboPaymentAccounts, setQboPaymentAccounts] = useState([]);
+  const [mappingSaving, setMappingSaving] = useState({});
+  const [mappingOverrides, setMappingOverrides] = useState({});
+
+  const fetchStatus = useCallback(async () => {
+    if (!businessId) return;
+    setLoading(true);
+    try {
+      const res = await getPlaidStatus(businessId);
+      if (res?.ok === false) {
+        console.warn("[plaid][status] backend error", res?.error || res?.message);
+        setStatusError("Plaid status unavailable. Try syncing again.");
+        setInstitutions(res?.institutions || []);
+        setCounts({ institutions: 0, accounts: 0 });
+        setHasDisconnected(false);
+      } else {
+        setStatusError("");
+        const acctCount = res?.accounts_count || 0;
+        const instCount = acctCount > 0 ? res?.institutions_count || 0 : 0;
+        setInstitutions(acctCount > 0 ? res?.institutions || [] : []);
+        setCounts({
+          institutions: instCount,
+          accounts: acctCount,
+        });
+        setHasDisconnected(Boolean(res?.has_disconnected));
+      }
+    } catch (err) {
+      console.warn("[plaid][status] failed", err);
+      setStatusError("Plaid status unavailable. Try syncing again.");
+      setHasDisconnected(false);
+    } finally {
+      setLoading(false);
+    }
+  }, [businessId]);
+
+  useEffect(() => {
+    fetchStatus();
+  }, [fetchStatus]);
+
+  const refreshMappings = useCallback(async () => {
+    if (!businessId) return;
+    setMappingLoading(true);
+    try {
+      const [mappingsRes, qboRes] = await Promise.all([
+        getAccountMappings(businessId),
+        getQboPaymentAccounts(businessId),
+      ]);
+      setMappingRows(mappingsRes?.accounts || []);
+      setQboPaymentAccounts(qboRes?.accounts || []);
+      setMappingError("");
+    } catch (err) {
+      console.warn("[plaid][mapping] fetch failed", err?.message || err);
+      setMappingError("Mapping status unavailable.");
+    } finally {
+      setMappingLoading(false);
+    }
+  }, [businessId]);
+
+  useEffect(() => {
+    refreshMappings();
+  }, [refreshMappings]);
+
+  useEffect(() => {
+    if (!mappingOverrideStorageKey) {
+      setMappingOverrides({});
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(mappingOverrideStorageKey);
+      const parsed = raw ? JSON.parse(raw) : {};
+      setMappingOverrides(parsed && typeof parsed === "object" ? parsed : {});
+    } catch {
+      setMappingOverrides({});
+    }
+  }, [mappingOverrideStorageKey]);
+
+  useEffect(() => {
+    if (!mappingOverrideStorageKey) return;
+    try {
+      const entries = Object.entries(mappingOverrides || {}).filter(([, value]) => value === "__none__");
+      if (!entries.length) {
+        window.localStorage.removeItem(mappingOverrideStorageKey);
+        return;
+      }
+      window.localStorage.setItem(mappingOverrideStorageKey, JSON.stringify(Object.fromEntries(entries)));
+    } catch {
+      /* ignore */
+    }
+  }, [mappingOverrideStorageKey, mappingOverrides]);
+
+  const openPlaid = useCallback(async () => {
+    if (!businessId) return;
+    setLinking(true);
+    try {
+      const tokenResp = await createPlaidLinkToken(businessId);
+      const linkToken =
+        tokenResp?.link_token || tokenResp?.linkToken || tokenResp?.token;
+      if (!linkToken) throw new Error("Link token unavailable");
+      const Plaid = await loadPlaidScript();
+      await new Promise((resolve, reject) => {
+        const handler = Plaid.create({
+          token: linkToken,
+          onSuccess: async (public_token, metadata) => {
+            try {
+              await exchangePlaidPublicToken(businessId, public_token, metadata);
+              await triggerPlaidSync(businessId);
+              await fetchStatus();
+              await refreshMappings();
+              resolve();
+            } catch (e) {
+              reject(e);
+            } finally {
+              handler?.destroy?.();
+            }
+          },
+          onExit: (err) => {
+            handler?.destroy?.();
+            if (err) reject(err);
+            else resolve();
+          },
+        });
+        handler.open();
+      });
+    } catch (err) {
+      console.warn("[plaid][link] failed", err?.message || err);
+    } finally {
+      setLinking(false);
+    }
+  }, [businessId, fetchStatus, refreshMappings]);
+
+  const handleDisconnectAll = useCallback(async () => {
+    if (!businessId) return;
+    setDisconnectingAll(true);
+    try {
+      await disconnectPlaid(businessId);
+      try {
+        window.localStorage.setItem("bizzy:plaid_connected", "false");
+        window.dispatchEvent(new Event("bizzy:onboarding-flags-updated"));
+      } catch {
+        /* ignore */
+      }
+      setConfirmDisconnectAll(false);
+      await fetchStatus();
+      await refreshMappings();
+    } catch (err) {
+      console.warn("[plaid][disconnect] failed", err);
+    } finally {
+      setDisconnectingAll(false);
+    }
+  }, [businessId, fetchStatus, refreshMappings]);
+
+  const toggleDisconnectConfirm = useCallback((acctId) => {
+    setConfirmDisconnectByAccount((prev) => ({
+      ...prev,
+      [acctId]: !prev[acctId],
+    }));
+  }, []);
+
+  const handleDisconnectItem = useCallback(async (plaidItemId) => {
+    if (!businessId || !plaidItemId) return;
+    setDisconnectingItem(plaidItemId);
+    try {
+      await disconnectPlaidItem(businessId, plaidItemId);
+      try {
+        window.localStorage.setItem("bizzy:plaid_connected", "false");
+        window.dispatchEvent(new Event("bizzy:onboarding-flags-updated"));
+      } catch {
+        /* ignore */
+      }
+      setConfirmDisconnectByAccount({});
+      await fetchStatus();
+      await refreshMappings();
+    } catch (err) {
+      console.warn("[plaid][disconnect-item] failed", err);
+    } finally {
+      setDisconnectingItem(null);
+    }
+  }, [businessId, fetchStatus, refreshMappings]);
+
+  const latestSyncAt = useMemo(() => {
+    const timestamps = institutions
+      .map((inst) => (inst.last_sync_at ? Date.parse(inst.last_sync_at) : null))
+      .filter(Boolean);
+    if (!timestamps.length) return null;
+    return new Date(Math.max(...timestamps));
+  }, [institutions]);
+
+  const isConnected = counts.accounts > 0;
+  const isDisconnected = !isConnected && hasDisconnected;
+  const isEmpty = !isConnected && !hasDisconnected;
+  const mappingById = useMemo(() => {
+    const map = new Map();
+    (mappingRows || []).forEach((row) => {
+      if (row?.plaid_account_id) map.set(row.plaid_account_id, row);
+    });
+    return map;
+  }, [mappingRows]);
+  const hasMappingNeeds = useMemo(
+    () => isConnected && (mappingRows || []).some((row) => row?.requires_mapping && !row?.mapped),
+    [isConnected, mappingRows]
+  );
+
+  const handleMappingChange = useCallback(async (plaidAccountId, value) => {
+    if (!businessId || !plaidAccountId) return;
+    setMappingSaving((prev) => ({ ...prev, [plaidAccountId]: true }));
+    try {
+      if (value === "__create__") {
+        const ensured = await ensureQboPaymentAccount(businessId, plaidAccountId);
+        const qboId = ensured?.account?.id || null;
+        if (qboId) {
+          await updateAccountMapping(businessId, {
+            plaid_account_id: plaidAccountId,
+            qbo_account_id: qboId,
+          });
+          setMappingOverrides((prev) => {
+            const next = { ...prev };
+            delete next[plaidAccountId];
+            return next;
+          });
+          setMappingRows((prev) =>
+            prev.map((row) =>
+              row.plaid_account_id === plaidAccountId
+                ? {
+                    ...row,
+                    mapped: true,
+                    qbo_account_id: String(qboId),
+                    qbo_account_name: ensured?.account?.name || row.qbo_account_name || null,
+                  }
+                : row
+            )
+          );
+        }
+      } else if (value === "__none__" || value === "") {
+        await updateAccountMapping(businessId, {
+          plaid_account_id: plaidAccountId,
+          qbo_account_id: "__none__",
+        });
+        setMappingOverrides((prev) => ({ ...prev, [plaidAccountId]: "__none__" }));
+        setMappingRows((prev) =>
+          prev.map((row) =>
+            row.plaid_account_id === plaidAccountId
+              ? {
+                  ...row,
+                  mapped: false,
+                  qbo_account_id: null,
+                  qbo_account_name: null,
+                }
+              : row
+          )
+        );
+      } else {
+        await updateAccountMapping(businessId, {
+          plaid_account_id: plaidAccountId,
+          qbo_account_id: value,
+        });
+        setMappingOverrides((prev) => {
+          const next = { ...prev };
+          delete next[plaidAccountId];
+          return next;
+        });
+        setMappingRows((prev) =>
+          prev.map((row) =>
+            row.plaid_account_id === plaidAccountId
+              ? {
+                  ...row,
+                  mapped: true,
+                  qbo_account_id: String(value),
+                  qbo_account_name:
+                    qboPaymentAccounts.find((opt) => String(opt.id) === String(value))?.name || row.qbo_account_name || null,
+                }
+              : row
+          )
+        );
+      }
+      await refreshMappings();
+    } catch (err) {
+      console.warn("[plaid][mapping] update failed", err?.message || err);
+    } finally {
+      setMappingSaving((prev) => ({ ...prev, [plaidAccountId]: false }));
+    }
+  }, [businessId, refreshMappings]);
+
+  return (
+    <div
+      className="mt-2 rounded-xl border border-white/10 bg-white/5 p-3"
+      style={{ backdropFilter: "blur(4px)" }}
+    >
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold">Plaid (Bank Sync)</span>
+          </div>
+          <p className="text-xs text-white/60">
+            {isDisconnected
+              ? "Status: Disconnected"
+              : `Connected: ${counts.institutions} institution${counts.institutions === 1 ? "" : "s"} · ${counts.accounts} account${counts.accounts === 1 ? "" : "s"}`}
+          </p>
+          {latestSyncAt ? (
+            <p className="text-[11px] text-white/50">Last sync {formatRelative(latestSyncAt.getTime())}</p>
+          ) : null}
+        </div>
+        {isConnected ? (
+          <div className="flex items-center gap-2">
+            <GhostButton onClick={openPlaid} disabled={linking} className="text-xs">
+              {linking ? "Opening…" : "Add another bank"}
+            </GhostButton>
+            {confirmDisconnectAll ? (
+              <>
+                <GhostButton
+                  onClick={handleDisconnectAll}
+                  disabled={disconnectingAll}
+                  className="text-xs text-rose-200 border-rose-400/40 hover:border-rose-300/60"
+                >
+                  {disconnectingAll ? "Disconnecting…" : "Confirm disconnect"}
+                </GhostButton>
+                <GhostButton
+                  onClick={() => setConfirmDisconnectAll(false)}
+                  className="text-xs"
+                >
+                  Cancel
+                </GhostButton>
+              </>
+            ) : (
+              <GhostButton
+                onClick={() => setConfirmDisconnectAll(true)}
+                className="text-xs text-rose-200 border-rose-400/40 hover:border-rose-300/60"
+              >
+                Disconnect Plaid
+              </GhostButton>
+            )}
+          </div>
+        ) : isDisconnected ? (
+          <div className="flex items-center gap-2">
+            <AccentButton onClick={openPlaid} disabled={linking} className="text-xs">
+              {linking ? "Opening…" : "Reconnect Plaid"}
+            </AccentButton>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <AccentButton onClick={openPlaid} disabled={linking} className="text-xs">
+              {linking ? "Opening…" : "Connect Plaid"}
+            </AccentButton>
+          </div>
+        )}
+      </div>
+      {statusError ? (
+        <p className="mt-1 text-[11px] text-white/50">{statusError}</p>
+      ) : null}
+      {mappingError ? (
+        <p className="mt-1 text-[11px] text-white/50">{mappingError}</p>
+      ) : null}
+      {hasMappingNeeds ? (
+        <div className="mt-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
+          Bizzi can’t post until these are mapped. Please select the appropriate account or create a new one for each unmapped account.
+        </div>
+      ) : null}
+
+      <div className="mt-3 space-y-2">
+        {loading ? (
+          <p className="text-xs text-white/60">Loading institutions…</p>
+        ) : isDisconnected ? (
+          <div className="rounded-lg border border-emerald-400/20 bg-emerald-500/5 px-3 py-3 text-xs text-emerald-100">
+            Disconnected — your historical data is still saved.
+            <div className="mt-1 text-[11px] text-emerald-200/80">
+              Disconnect stops new transactions from syncing. Your historical transactions and categorizations stay saved.
+            </div>
+          </div>
+        ) : isEmpty ? (
+          <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-xs text-white/70">
+            No banks connected yet. Add a bank to start syncing transactions.
+          </div>
+        ) : (
+          institutions.map((inst) => (
+            <div
+              key={inst.plaid_item_id}
+              className="rounded-lg border border-white/10 bg-black/30 px-3 py-3"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-white/90">
+                    {inst.institution_name || "Institution"}
+                  </span>
+                  {inst.status === "connected" ? (
+                    <StatusPill state="connected" />
+                  ) : (
+                    <StatusBadge
+                      tone="warning"
+                      label={inst.status || "Unknown"}
+                    />
+                  )}
+                </div>
+                {inst.last_sync_at ? (
+                  <span className="text-[11px] text-white/50">
+                    Last sync {formatRelative(Date.parse(inst.last_sync_at))}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-1 text-[11px] text-white/50">
+                Disconnect stops new transactions from syncing. Your historical transactions and categorizations stay saved.
+              </div>
+              <div className="mt-2 space-y-1">
+                {(inst.accounts || []).map((acct) => {
+                  const mappingInfo = mappingById.get(acct.plaid_account_id) || null;
+                  const overrideValue = mappingOverrides?.[acct.plaid_account_id];
+                  const mappedFlag = overrideValue === "__none__"
+                    ? false
+                    : overrideValue
+                      ? true
+                      : (mappingInfo?.mapped ?? acct.mapped_to_qbo);
+                  const dismissedFlag = overrideValue === "__none__";
+                  const suggested = mappingInfo?.suggested || null;
+                  const typeNeeded = mappingInfo?.qbo_options_hint?.type_needed || null;
+                  const postingCategory = mappingInfo?.posting_category || null;
+                  const requiresMapping = mappingInfo?.requires_mapping;
+                  const qboOptions = typeNeeded
+                    ? qboPaymentAccounts.filter((opt) => opt?.type === typeNeeded)
+                    : qboPaymentAccounts;
+                  const optionIds = new Set(qboOptions.map((o) => String(o.id)));
+                  const selectedValueRaw = overrideValue
+                    ? overrideValue
+                    : mappedFlag
+                      ? mappingInfo?.qbo_account_id || ""
+                      : dismissedFlag
+                        ? "__none__"
+                        : suggested?.qbo_account_id || "";
+                  const selectedValue =
+                    selectedValueRaw === "__none__"
+                      ? "__none__"
+                      : selectedValueRaw && optionIds.has(String(selectedValueRaw))
+                      ? String(selectedValueRaw)
+                      : "";
+                  const saving = Boolean(mappingSaving?.[acct.plaid_account_id]);
+                  const suggestionLabel =
+                    suggested?.qbo_account_name ||
+                    qboOptions.find((opt) => String(opt.id) === String(suggested?.qbo_account_id))?.name ||
+                    null;
+
+                  return (
+                    <div
+                      key={acct.plaid_account_id}
+                      className="flex items-center justify-between rounded-md border border-white/5 bg-white/5 px-2 py-2"
+                    >
+                      <div className="flex flex-col">
+                        <span className="text-sm text-white/90">
+                          {acct.name || acct.official_name || "Account"} {acct.mask ? `••${acct.mask}` : ""}
+                        </span>
+                        <span className="text-[11px] text-white/60">
+                          {acct.type || "—"} {acct.subtype ? `· ${acct.subtype}` : ""}
+                        </span>
+                        {postingCategory === "NotUsed" ? (
+                          <span className="mt-1 text-[10px] text-white/45">Not used for posting.</span>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <div className="flex items-center gap-2">
+                          <StatusBadge
+                            tone={mappedFlag ? "ok" : requiresMapping ? "warning" : "slate"}
+                            label={mappedFlag ? "Mapped" : requiresMapping ? "Needs mapping" : "Not used"}
+                          />
+                          {suggested && !mappedFlag && !dismissedFlag ? (
+                            <StatusBadge tone="warning" label="Suggested review" />
+                          ) : null}
+                          <StatusBadge
+                            tone={acct.is_active ? "ok" : "warning"}
+                            label={acct.is_active ? "Active" : "Inactive"}
+                          />
+                        </div>
+                        {postingCategory !== "NotUsed" ? (
+                          <DarkMappingDropdown
+                            value={selectedValue}
+                            onChange={(nextValue) => handleMappingChange(acct.plaid_account_id, nextValue)}
+                            disabled={mappingLoading || saving}
+                            placeholder="Select QuickBooks account..."
+                            options={[
+                              { value: "__none__", label: "None / remove mapping" },
+                              ...qboOptions.map((opt) => ({
+                                value: String(opt.id),
+                                label:
+                                  `${opt.name}${
+                                    suggested && !mappedFlag && !dismissedFlag && String(suggested.qbo_account_id) === String(opt.id)
+                                      ? " (Suggested)"
+                                      : ""
+                                  }`,
+                              })),
+                              { value: "__create__", label: "Create matching account in QuickBooks..." },
+                            ]}
+                          />
+                        ) : null}
+                        {suggested && !mappedFlag && !dismissedFlag ? (
+                          <div className="max-w-[18rem] text-right text-[10px] text-amber-100/85">
+                            Suggested match{suggestionLabel ? `: ${suggestionLabel}` : ""}. Review before confirming.
+                          </div>
+                        ) : null}
+                        {acct.plaid_item_id && acct.plaid_item_id !== "unknown" ? (
+                          confirmDisconnectByAccount[acct.plaid_account_id] ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleDisconnectItem(acct.plaid_item_id)}
+                                disabled={disconnectingItem === acct.plaid_item_id}
+                                className="px-2 py-1 text-[11px] rounded-md border border-rose-400/40 text-rose-200 hover:border-rose-300/70 hover:text-rose-100 transition disabled:opacity-50"
+                              >
+                                {disconnectingItem === acct.plaid_item_id ? "Disconnecting…" : "Confirm"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => toggleDisconnectConfirm(acct.plaid_account_id)}
+                                className="px-2 py-1 text-[11px] rounded-md border border-white/15 text-white/60 hover:text-white/80 transition"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => toggleDisconnectConfirm(acct.plaid_account_id)}
+                              className="px-2 py-1 text-[11px] rounded-md border border-white/15 text-white/60 hover:text-white/80 hover:border-white/30 transition"
+                            >
+                              Disconnect
+                            </button>
+                          )
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- UI helpers ---------------- */
 
 function Badge({ children }) {
   return (
     <span
       className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
-      style={{ background: "rgba(255,255,255,0.06)", border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MUTED }}
+      style={{ background: "rgba(255,255,255,0.06)", border: `1px solid rgba(var(--accent-rgb),0.22)`, color: TEXT_MUTED, boxShadow: "0 0 0 1px rgba(var(--accent-rgb),0.06)" }}
     >
       {children}
     </span>
+  );
+}
+
+function DarkMappingDropdown({
+  value,
+  onChange,
+  options = [],
+  placeholder = "Select...",
+  disabled = false,
+}) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const handlePointerDown = (event) => {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  const selected = useMemo(
+    () => (options || []).find((opt) => String(opt.value) === String(value)) || null,
+    [options, value]
+  );
+
+  return (
+    <div className="relative w-[22rem] max-w-full" ref={containerRef}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((prev) => !prev)}
+        className="inline-flex w-full items-center justify-between gap-2 rounded-md border border-white/10 bg-[rgba(18,18,20,0.92)] px-3 py-2 text-[11px] text-white/90 shadow-[0_8px_18px_rgba(0,0,0,0.32)] backdrop-blur-md transition-all duration-150 ease-out hover:bg-[rgba(28,28,32,0.98)] hover:border-white/30 focus:outline-none focus:ring-2 focus:ring-white/14 disabled:opacity-60"
+      >
+        <span className={`truncate text-left ${selected ? "text-white/90" : "text-white/55"}`}>
+          {selected?.label || placeholder}
+        </span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-white/65 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      <div
+        className={`absolute right-0 z-40 mt-2 w-full overflow-hidden rounded-xl border border-[rgba(var(--accent-rgb),0.22)] bg-[rgba(10,12,16,0.98)] shadow-[0_20px_50px_rgba(0,0,0,0.58)] backdrop-blur-xl transition-all duration-150 ${
+          open ? "pointer-events-auto translate-y-0 opacity-100" : "pointer-events-none -translate-y-1 opacity-0"
+        }`}
+      >
+        <div className="max-h-72 overflow-y-auto py-1">
+          {(options || []).map((opt) => {
+            const active = String(opt.value) === String(value);
+            return (
+              <button
+                key={String(opt.value)}
+                type="button"
+                onClick={() => {
+                  onChange?.(opt.value);
+                  setOpen(false);
+                }}
+                className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition ${
+                  active
+                    ? "bg-white/8 text-white"
+                    : "text-white/80 hover:bg-white/6 hover:text-white"
+                }`}
+              >
+                <span className="truncate">{opt.label}</span>
+                {active ? <Check className="h-4 w-4 shrink-0 text-emerald-300" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -636,7 +1360,7 @@ function Section({ title, subtitle, icon: Icon, children, className = "" }) {
   return (
     <div
       className={`m-0 w-full rounded-2xl shadow-bizzi border p-4 sm:p-5 ${className}`}
-      style={{ background: PANEL_BG, border: `1px solid ${NEUTRAL_BORDER}` }}
+      style={{ background: PANEL_BG, border: `1px solid rgba(var(--accent-rgb),0.16)`, boxShadow: "0 0 0 1px rgba(var(--accent-rgb),0.05), 0 18px 50px rgba(0,0,0,0.3)" }}
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2">
@@ -705,61 +1429,68 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
   const connecting = state === "connecting";
   const awaiting = state === "awaiting";
   const lastSync = status?.lastSync ? formatRelative(status.lastSync) : null;
-  const [qbStatus, setQbStatus] = useState(null);
-
-  const fetchQbStatus = useCallback(async () => {
-    if (provider !== "quickbooks" || !businessId) return;
-    try {
-      const res = await safeFetch(apiUrl(`/auth/status?business_id=${businessId}`));
-      setQbStatus(res || null);
-      if (res) {
-        if (res.connected) {
-          manager?.markStatus?.("quickbooks", "connected");
-        } else if (res.needs_setup || res.has_row) {
-          manager?.markStatus?.("quickbooks", "awaiting");
-        } else {
-          manager?.markStatus?.("quickbooks", "disconnected");
-        }
-      }
-    } catch {
-      setQbStatus(null);
-    }
-  }, [businessId, manager, provider]);
-
-  useEffect(() => {
-    fetchQbStatus();
-  }, [fetchQbStatus]);
-
-  useEffect(() => {
-    if (provider !== "quickbooks") return;
-    const handler = () => fetchQbStatus();
-    const visHandler = () => {
-      if (document.visibilityState === "visible") fetchQbStatus();
-    };
-    window.addEventListener("focus", handler);
-    document.addEventListener("visibilitychange", visHandler);
-    return () => {
-      window.removeEventListener("focus", handler);
-      document.removeEventListener("visibilitychange", visHandler);
-    };
-  }, [fetchQbStatus, provider]);
+  const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const disconnectLabel =
+    provider === "quickbooks"
+      ? "QuickBooks"
+      : provider === "plaid"
+      ? "Plaid"
+      : meta?.label || label || "integration";
+  const qbStatus = provider === "quickbooks" ? status?.info || null : null;
+  const qbCompanyFile =
+    provider === "quickbooks"
+      ? companyName || qbStatus?.company_name || qbStatus?.companyName || ""
+      : "";
+  const [showCompanyMismatch, setShowCompanyMismatch] = useState(false);
+  const mismatchDismissedRef = useRef(false);
+  const [backfillStatus, setBackfillStatus] = useState(null);
+  const [backfillLoading, setBackfillLoading] = useState(false);
+  const backfillTimestamp = useMemo(() => {
+    if (!backfillStatus) return null;
+    const ts = backfillStatus?.finished_at || backfillStatus?.started_at || null;
+    if (!ts) return null;
+    const parsed = Date.parse(ts);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [backfillStatus]);
+  const backfillAgo = useMemo(
+    () => (backfillTimestamp ? formatRelative(backfillTimestamp) : null),
+    [backfillTimestamp]
+  );
 
   const handleConnect = () => {
     if (!provider || !manager) return;
     manager.connect(provider);
   };
+  const handleForceReconnect = () => {
+    if (!provider || !manager) return;
+    manager.connect(provider, { forceSwitchCompany: true });
+    setShowCompanyMismatch(false);
+    mismatchDismissedRef.current = true;
+  };
   const handleDisconnect = async () => {
     if (!provider || !manager) return;
     await manager.disconnect(provider);
-    await fetchQbStatus();
+    setConfirmDisconnect(false);
   };
+
+  useEffect(() => {
+    setConfirmDisconnect(false);
+  }, [provider, state]);
+
+  useEffect(() => {
+    if (provider !== "quickbooks") return;
+    if (mismatchDismissedRef.current) return;
+    if (status?.error === "company_mismatch" || status?.info?.companyMismatch) {
+      setShowCompanyMismatch(true);
+    }
+  }, [provider, status?.error, status?.info?.companyMismatch]);
 
   const ctaLabel = () => {
     if (provider === "quickbooks") {
       if (connecting) return "Connecting…";
-      if (qbStatus?.connected) return "Manage";
-      if (qbStatus?.needs_setup) return "Finish setup";
-      if (qbStatus && qbStatus.connected === false && qbStatus.needs_setup === false) return "Connect QuickBooks";
+      if (state === "connected") return "Disconnect QuickBooks";
+      if (state === "awaiting") return "Finish setup";
+      if (state === "disconnected") return "Reconnect QuickBooks";
     }
     if (state === "connected") return "Disconnect";
     if (state === "error") return "Retry";
@@ -768,10 +1499,50 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
     return meta?.cta || "Connect";
   };
 
+  const fetchBackfillStatus = useCallback(async () => {
+    if (provider !== "quickbooks" || !businessId) return;
+    try {
+      const res = await safeFetch(apiUrl(`/api/qbo/backfill/status?business_id=${encodeURIComponent(businessId)}`));
+      setBackfillStatus(res || null);
+    } catch {
+      setBackfillStatus(null);
+    }
+  }, [businessId, provider]);
+
+  useEffect(() => {
+    if (provider !== "quickbooks") return undefined;
+    fetchBackfillStatus();
+    let id = null;
+    const status = backfillStatus?.status;
+    if (status === "running") {
+      id = setInterval(fetchBackfillStatus, 4000);
+    }
+    return () => {
+      if (id) clearInterval(id);
+    };
+  }, [provider, fetchBackfillStatus, backfillStatus?.status]);
+
+  const startBackfill = useCallback(async (force = false) => {
+    if (!businessId) return;
+    setBackfillLoading(true);
+    try {
+      await safeFetch(apiUrl("/api/qbo/backfill/start"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { business_id: businessId, months: 12, mode: "cash", force },
+      });
+      setBackfillStatus({ status: "running", months_done: 0, months_total: 12 });
+    } catch (e) {
+      console.warn("[backfill] start failed", e?.message || e);
+    } finally {
+      setBackfillLoading(false);
+    }
+  }, [businessId]);
+
   return (
     <div
       data-integration={provider || undefined}
-      className="flex items-center justify-between rounded-xl px-3 py-3 mb-2 transition"
+      className="relative flex items-center justify-between rounded-xl px-3 py-3 mb-2 transition"
       style={{
         background: "rgba(255,255,255,0.06)",
         border: `1px solid ${NEUTRAL_BORDER}`,
@@ -788,26 +1559,133 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
             {detail}
           </p>
         ) : null}
-        {provider === "quickbooks" && state === "connected" ? (
+        {provider === "quickbooks" && (state === "connected" || state === "disconnected") ? (
           <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.55)" }}>
-            Company: {companyName || "Unknown"}
+            Status: {state === "connected" ? "Connected" : "Disconnected"}
           </p>
         ) : null}
-        {lastSync ? (
+        {provider === "quickbooks" && state === "connected" && qbCompanyFile ? (
+          <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.55)" }}>
+            Company file: {qbCompanyFile}
+          </p>
+        ) : null}
+        {provider === "quickbooks" && state === "disconnected" ? (
+          <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.55)" }}>
+            Your historical data is still saved. Reconnect to resume posting.
+          </p>
+        ) : null}
+        {provider === "quickbooks" && state === "connected" ? (
+          <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.55)" }}>
+            Disconnect pauses posting to QuickBooks. Bizzi keeps your historical transactions, categorizations, and audit trail.
+          </p>
+        ) : null}
+        {lastSync && state === "connected" ? (
           <p className="text-[11px] text-white/50">Last synced {lastSync}</p>
+        ) : null}
+        {provider === "quickbooks" && state === "connected" ? (
+          <div className="flex flex-col gap-2 mt-2">
+            <div className="flex gap-2 flex-wrap">
+              <AccentButton onClick={() => startBackfill(false)} disabled={backfillLoading}>
+                {backfillLoading ? "Starting..." : "Backfill last 12 months"}
+              </AccentButton>
+              <GhostButton
+                onClick={() => startBackfill(true)}
+                disabled={backfillLoading}
+                className="border-rose-500/50 text-rose-200 hover:border-rose-400/80"
+              >
+                Force re-sync
+              </GhostButton>
+            </div>
+            {backfillStatus?.status === "running" ? (
+              <span className="text-[11px] text-white/70">
+                Backfill running… ({backfillStatus?.months_done || 0}/{backfillStatus?.months_total || 12}
+                {backfillStatus?.current_month ? ` • ${backfillStatus.current_month}` : ""})
+              </span>
+            ) : null}
+            {backfillAgo ? (
+              <span className="text-[11px] text-white/50">
+                {backfillStatus?.status === "running" ? "Backfill started" : "Backfilled"} {backfillAgo}
+              </span>
+            ) : null}
+          </div>
         ) : null}
       </div>
       <div className="flex gap-2">
         {disabled ? (
           <GhostButton disabled>Coming soon</GhostButton>
         ) : state === "connected" ? (
-          <GhostButton onClick={handleDisconnect}>{ctaLabel()}</GhostButton>
+          <div className="relative">
+            <GhostButton
+              onClick={() => setConfirmDisconnect((p) => !p)}
+              className="transition"
+            >
+              {ctaLabel()}
+            </GhostButton>
+            {confirmDisconnect ? (
+              <div
+                className="absolute right-0 mt-2 w-48 rounded-lg border border-white/10 bg-[rgba(12,12,14,0.9)] shadow-lg p-3 text-xs text-white/80"
+                style={{ backdropFilter: "blur(6px)" }}
+              >
+                <div className="mb-2 text-white/90">Disconnect {disconnectLabel}?</div>
+                {provider === "quickbooks" ? (
+                  <div className="mb-2 text-[11px] text-white/60">
+                    Disconnect pauses posting to QuickBooks. Bizzi keeps your historical transactions, categorizations, and audit trail.
+                  </div>
+                ) : null}
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDisconnect(false)}
+                    className="px-2 py-1 rounded bg-white/5 text-white/80 hover:bg-white/10 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDisconnect}
+                    className="px-2 py-1 rounded bg-rose-600/80 text-white hover:bg-rose-600 transition"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
         ) : (
           <AccentButton onClick={handleConnect} disabled={connecting}>
             {ctaLabel()}
           </AccentButton>
         )}
       </div>
+      {provider === "quickbooks" && showCompanyMismatch ? (
+        <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-xl border border-white/10 bg-[rgba(12,12,14,0.95)] p-4 text-sm text-white/80 shadow-lg">
+            <div className="text-base font-semibold text-white">Switch QuickBooks company?</div>
+            <p className="mt-2 text-xs text-white/60">
+              {qbStatus?.message || status?.info?.message || "You connected a different QuickBooks company. Switching may affect posting destinations. Confirm switch?"}
+            </p>
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCompanyMismatch(false);
+                  mismatchDismissedRef.current = true;
+                }}
+                className="px-3 py-1.5 rounded bg-white/5 text-white/80 hover:bg-white/10 transition text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleForceReconnect}
+                className="px-3 py-1.5 rounded bg-emerald-500/80 text-emerald-50 hover:bg-emerald-500 transition text-xs"
+              >
+                Confirm switch
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -819,7 +1697,7 @@ function StatusPill({ state }) {
     awaiting: { text: "Awaiting approval", className: "text-amber-300" },
     error: { text: "Needs attention", className: "text-rose-300" },
     "coming-soon": { text: "Soon", className: "text-white/60" },
-    disconnected: { text: "Not synced", className: "text-white/60" },
+    disconnected: { text: "Disconnected", className: "text-white/60" },
   };
   const meta = map[state] || map.disconnected;
   return (

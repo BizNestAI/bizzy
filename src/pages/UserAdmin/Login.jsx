@@ -6,10 +6,10 @@ import { Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
 import bizzyLogo from "../../assets/bizzy-logo.png";
 
 const BG =
-  "radial-gradient(circle at 20% 20%, rgba(68,123,255,0.22), transparent 45%)," +
-  "radial-gradient(circle at 80% 0%, rgba(14,165,233,0.18), transparent 40%)," +
-  "#050608";
-const SHADOW = "0 30px 90px rgba(0,0,0,.55)";
+  "radial-gradient(900px 900px at 16% 12%, rgba(255,255,255,0.06), transparent 55%)," +
+  "radial-gradient(720px 720px at 78% 88%, rgba(255,255,255,0.04), transparent 50%)," +
+  "var(--bg)";
+const SHADOW = "0 28px 80px rgba(0,0,0,.55)";
 
 function pickAccessToken(result) {
   if (!result) return null;
@@ -53,7 +53,8 @@ export default function Login() {
       if (userId) localStorage.setItem("user_id", userId);
       if (businessId) localStorage.setItem("business_id", businessId);
 
-      navigate("/dashboard/bizzy");
+      // Always send users to ChatHome after login
+      navigate("/dashboard/bizzy/chat");
     } catch (err) {
       setError(err?.message || "Login failed. Please try again.");
     } finally {
@@ -62,17 +63,20 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen relative flex items-center justify-center px-4 overflow-hidden" style={{ background: BG }}>
+    <div
+      className="min-h-screen relative flex items-center justify-center px-4 overflow-hidden bizzy-bg-textured"
+      style={{ background: BG, color: "var(--text)" }}
+    >
       {/* Ambient glows */}
       <div
         aria-hidden
-        className="absolute w-[520px] h-[520px] rounded-full blur-[160px] opacity-60"
-        style={{ background: "rgba(59,130,246,0.35)", top: "-120px", left: "-120px" }}
+        className="absolute w-[520px] h-[520px] rounded-full blur-[180px] opacity-50"
+        style={{ background: "rgba(52,211,153,0.20)", top: "-160px", left: "-160px" }}
       />
       <div
         aria-hidden
-        className="absolute w-[460px] h-[460px] rounded-full blur-[180px] opacity-50"
-        style={{ background: "rgba(14,165,233,0.35)", bottom: "-140px", right: "-120px" }}
+        className="absolute w-[460px] h-[460px] rounded-full blur-[190px] opacity-40"
+        style={{ background: "rgba(52,211,153,0.16)", bottom: "-180px", right: "-140px" }}
       />
 
       {/* Subtle vignette */}
@@ -96,37 +100,37 @@ export default function Login() {
           className="pointer-events-none absolute -inset-0.5 rounded-[28px]"
           style={{
             background:
-              "linear-gradient(140deg, rgba(255,255,255,.25), rgba(255,255,255,.04) 35%, rgba(255,255,255,0) 70%)",
+              "linear-gradient(140deg, rgba(52,211,153,.28), rgba(52,211,153,.06) 40%, rgba(52,211,153,0) 70%)",
             filter: "blur(10px)",
-            opacity: 0.65,
+            opacity: 0.8,
           }}
         />
         <div
           className="
             relative rounded-[26px] overflow-hidden
-            bg-gradient-to-b from-white/12 via-white/5 to-white/[0.02]
+            bg-gradient-to-b from-white/[0.06] via-white/[0.03] to-black/[0.35]
             backdrop-blur-2xl text-white
-            ring-1 ring-white/20 shadow-2xl
+            ring-1 ring-[rgba(52,211,153,0.18)] shadow-2xl
           "
           style={{ boxShadow: SHADOW }}
         >
           <div
             aria-hidden
             className="pointer-events-none absolute -bottom-16 inset-x-6 h-32 blur-3xl opacity-35"
-            style={{ background: "linear-gradient(90deg, rgba(59,130,246,0.4), rgba(14,165,233,0.35))" }}
+            style={{ background: "linear-gradient(90deg, rgba(52,211,153,0.32), rgba(16,185,129,0.24))" }}
           />
           {/* Inner top highlight for depth */}
           <div
             aria-hidden
             className="absolute inset-x-0 top-0 h-16 pointer-events-none"
-            style={{ background: "linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,0))" }}
+            style={{ background: "linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,0))" }}
           />
           {/* Content */}
           <div className="p-6 sm:p-8">
             {/* Brand header */}
             <div className="text-center mb-6">
               <div className="inline-flex items-center gap-3">
-                <div className="h-12 w-12 rounded-full bg-white/20 ring-1 ring-white/40 shadow-[0_12px_30px_rgba(0,0,0,.35)] flex items-center justify-center">
+                <div className="h-12 w-12 rounded-full bg-white/10 ring-1 ring-[rgba(52,211,153,0.4)] shadow-[0_12px_30px_rgba(0,0,0,.35)] flex items-center justify-center">
                   <img
                     src={bizzyLogo}
                     alt="Bizzi logo"
@@ -136,7 +140,7 @@ export default function Login() {
                 </div>
                 <span className="text-sm uppercase tracking-[0.5em] font-light text-white/80 drop-shadow">Bizzi</span>
               </div>
-              <p className="mt-2 text-sm text-white/70">Welcome back — let’s get to work.</p>
+              <p className="mt-2 text-sm text-white/70" style={{ color: "rgba(245,247,251,0.78)" }}>Welcome back — let’s get to work.</p>
             </div>
 
             {/* Error */}
@@ -161,9 +165,9 @@ export default function Login() {
                   required
                   className="
                     w-full pl-10 pr-3 py-2.5 rounded-xl text-sm
-                    bg-white/10 ring-1 ring-inset ring-white/15
-                    focus:outline-none focus:ring-white/40 focus:bg-white/[0.12]
-                    placeholder:text-white/40 transition
+                    bg-[var(--input-bg)] ring-1 ring-inset ring-[rgba(255,255,255,0.12)]
+                    focus:outline-none focus:ring-[rgba(52,211,153,0.45)] focus:ring-2 focus:bg-white/[0.06]
+                    placeholder:text-white/45 transition
                   "
                 />
               </div>
@@ -182,9 +186,9 @@ export default function Login() {
                     required
                     className="
                       w-full pl-10 pr-10 py-2.5 rounded-xl text-sm
-                      bg-white/10 ring-1 ring-inset ring-white/15
-                      focus:outline-none focus:ring-white/40 focus:bg-white/[0.12]
-                      placeholder:text-white/40 transition
+                      bg-[var(--input-bg)] ring-1 ring-inset ring-[rgba(255,255,255,0.12)]
+                      focus:outline-none focus:ring-[rgba(52,211,153,0.45)] focus:ring-2 focus:bg-white/[0.06]
+                      placeholder:text-white/45 transition
                     "
                   />
                   <button
@@ -201,7 +205,7 @@ export default function Login() {
               {/* Aux */}
               <div className="flex items-center justify-between text-xs text-white/70">
                 <span />
-                <Link to="/reset-password" className="text-white/85 hover:underline">
+                <Link to="/reset-password" className="text-white/80 hover:text-[var(--accent)]">
                   Forgot password?
                 </Link>
               </div>
@@ -213,9 +217,10 @@ export default function Login() {
                 className="
                   w-full mt-1 inline-flex items-center justify-center gap-2
                   rounded-xl py-2.5 text-sm font-medium
-                  bg-gradient-to-r from-white/30 via-white/15 to-white/5
-                  ring-1 ring-white/20 text-white shadow-[0_18px_45px_rgba(0,0,0,0.55)]
-                  hover:from-white/45 hover:via-white/20 hover:to-white/10 transition disabled:opacity-60
+                  bg-gradient-to-r from-[rgba(52,211,153,0.22)] via-[rgba(52,211,153,0.16)] to-[rgba(52,211,153,0.08)]
+                  ring-1 ring-[rgba(52,211,153,0.45)] text-white shadow-[0_18px_45px_rgba(0,0,0,0.55)]
+                  hover:from-[rgba(52,211,153,0.32)] hover:via-[rgba(52,211,153,0.22)] hover:to-[rgba(52,211,153,0.12)]
+                  transition disabled:opacity-60
                 "
                 aria-busy={loading ? "true" : "false"}
               >
@@ -225,15 +230,15 @@ export default function Login() {
 
             {/* Divider */}
             <div className="my-5 flex items-center gap-3">
-              <div className="flex-1 h-px bg-white/10" />
+              <div className="flex-1 h-px bg-[rgba(255,255,255,0.08)]" />
               <span className="text-xs text-white/50">or</span>
-              <div className="flex-1 h-px bg-white/10" />
+              <div className="flex-1 h-px bg-[rgba(255,255,255,0.08)]" />
             </div>
 
             {/* Social placeholder */}
             <button
               type="button"
-              className="w-full rounded-xl py-2.5 text-sm bg-white/8 hover:bg-white/12 ring-1 ring-inset ring-white/15 text-white transition flex items-center justify-center gap-2"
+              className="w-full rounded-xl py-2.5 text-sm bg-white/[0.06] hover:bg-white/[0.10] ring-1 ring-inset ring-[rgba(255,255,255,0.12)] text-white transition flex items-center justify-center gap-2"
               onClick={() => alert("OAuth coming soon")}
             >
               <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#050608] text-xs font-semibold">
@@ -244,7 +249,7 @@ export default function Login() {
 
             <p className="mt-6 text-sm text-white/70 text-center">
               Don’t have an account?{" "}
-              <Link to="/signup" className="text-white hover:underline">
+              <Link to="/signup" className="text-white hover:text-[var(--accent)]">
                 Create one
               </Link>
             </p>

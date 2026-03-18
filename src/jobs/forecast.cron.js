@@ -1,6 +1,7 @@
 import { supabase } from '../services/supabaseAdmin.js';
 import { generateCashFlowForecast } from '../api/accounting/generateCashFlowForecast.js';
 import { log } from '../utils/reviews/logger.js';
+import { qboEnvName } from '../utils/qboEnv.js';
 
 const DEMO_USER = process.env.DEMO_USER_UUID || '00000000-0000-0000-0000-000000000000';
 
@@ -10,6 +11,9 @@ async function runOnce() {
   const { data, error } = await supabase
     .from('quickbooks_tokens')
     .select('business_id, user_id')
+    .eq('qbo_env', qboEnvName)
+    .eq('is_active', true)
+    .eq('status', 'active')
     .not('business_id', 'is', null);
 
   if (error) {

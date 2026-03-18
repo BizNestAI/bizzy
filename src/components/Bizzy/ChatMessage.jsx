@@ -36,6 +36,13 @@ export default function ChatMessage({
     border: `1px solid ${accentBorder}`,
     boxShadow: `0 0 18px ${accentBorder.replace('0.45', '0.20')}`,
   };
+  const baseTextStyle = {
+    fontFamily:
+      "'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif",
+    fontWeight: 400,
+    letterSpacing: '0.005em',
+    fontStretch: '96%',
+  };
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -44,7 +51,9 @@ export default function ChatMessage({
         style={isUser ? undefined : assistantStyles}
       >
         {/* children should already be Markdown or Typewriter output */}
-        <div className={isUser ? '' : proseTight}>{children}</div>
+        <div className={isUser ? '' : proseTight} style={baseTextStyle}>
+          {children}
+        </div>
       </div>
     </div>
   );

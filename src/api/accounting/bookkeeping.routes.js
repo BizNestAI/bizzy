@@ -7,6 +7,7 @@ import OpenAI from "openai";
 import { getBookkeepingHealth, upsertBookkeepingHealth } from "./bookkeepingHealth.js";
 
 const router = express.Router();
+// DEPRECATED: Legacy QBO-only bookkeeping APIs. Plaid-first flows live under /api/bookkeeping.
 
 // Small helper to hydrate user + business context
 function readCtx(req) {

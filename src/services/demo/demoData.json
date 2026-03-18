@@ -67,7 +67,8 @@
       "revenue": 41800,
       "expenses": 30900,
       "profit": 10900,
-      "profitMarginPct": 26.1
+      "profitMarginPct": 26.1,
+      "topSpendingCategory": "Contractors"
     },
     "arOutstanding": 18600,
     "overdueInvoices": [

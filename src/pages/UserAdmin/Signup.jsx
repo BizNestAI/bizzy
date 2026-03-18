@@ -5,19 +5,21 @@ import { signUp } from "../../services/authService";
 import bizzyLogo from "../../assets/bizzy-logo.png";
 
 const BG =
-  "radial-gradient(circle at 20% 20%, rgba(68,123,255,0.22), transparent 45%)," +
-  "radial-gradient(circle at 80% 0%, rgba(14,165,233,0.18), transparent 40%)," +
-  "#050608";
-const SHADOW = "0 30px 90px rgba(0,0,0,.55)";
+  "radial-gradient(900px 900px at 16% 12%, rgba(255,255,255,0.06), transparent 55%)," +
+  "radial-gradient(720px 720px at 78% 88%, rgba(255,255,255,0.04), transparent 50%)," +
+  "var(--bg)";
+const SHADOW = "0 28px 80px rgba(0,0,0,.55)";
 
 const baseInput =
   "w-full rounded-xl text-sm text-white " +
-  "bg-white/10 ring-1 ring-inset ring-white/15 " +
-  "focus:outline-none focus:ring-white/40 focus:bg-white/[0.12] " +
+  "bg-[var(--input-bg)] ring-1 ring-inset ring-[rgba(255,255,255,0.12)] " +
+  "focus:outline-none focus:ring-[rgba(52,211,153,0.45)] focus:ring-2 focus:bg-white/[0.06] " +
   "placeholder:text-white/45 transition px-4 py-2.5";
 
 const Signup = () => {
   const [email, setEmail] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
@@ -31,6 +33,12 @@ const Signup = () => {
   const handleSignup = async (e) => {
     e.preventDefault();
     setError("");
+    const fn = firstName.trim();
+    const ln = lastName.trim();
+    if (!fn || !ln) {
+      setError("First and last name are required");
+      return;
+    }
     if (password !== confirm) {
       setError("Passwords don't match");
       return;
@@ -38,7 +46,7 @@ const Signup = () => {
 
     try {
       setLoading(true);
-      await signUp(email, password);
+      await signUp(email.trim(), password, { firstName: fn, lastName: ln });
       setPendingEmail(email);
       setConfirmationSent(true);
     } catch (err) {
@@ -53,17 +61,20 @@ const Signup = () => {
   };
 
   return (
-    <div className="min-h-screen relative flex items-center justify-center px-4 overflow-hidden text-white" style={{ background: BG }}>
+    <div
+      className="min-h-screen relative flex items-center justify-center px-4 overflow-hidden text-white bizzy-bg-textured"
+      style={{ background: BG, color: "var(--text)" }}
+    >
       {/* Ambient glows */}
       <div
         aria-hidden
-        className="absolute w-[520px] h-[520px] rounded-full blur-[160px] opacity-60"
-        style={{ background: "rgba(59,130,246,0.35)", top: "-120px", left: "-120px" }}
+        className="absolute w-[520px] h-[520px] rounded-full blur-[180px] opacity-50"
+        style={{ background: "rgba(52,211,153,0.20)", top: "-160px", left: "-160px" }}
       />
       <div
         aria-hidden
-        className="absolute w-[460px] h-[460px] rounded-full blur-[180px] opacity-50"
-        style={{ background: "rgba(14,165,233,0.35)", bottom: "-140px", right: "-120px" }}
+        className="absolute w-[460px] h-[460px] rounded-full blur-[190px] opacity-40"
+        style={{ background: "rgba(52,211,153,0.16)", bottom: "-180px", right: "-140px" }}
       />
 
       <div
@@ -85,33 +96,33 @@ const Signup = () => {
           className="pointer-events-none absolute -inset-0.5 rounded-[28px]"
           style={{
             background:
-              "linear-gradient(140deg, rgba(255,255,255,.25), rgba(255,255,255,.04) 35%, rgba(255,255,255,0) 70%)",
+              "linear-gradient(140deg, rgba(52,211,153,.28), rgba(52,211,153,.06) 40%, rgba(52,211,153,0) 70%)",
             filter: "blur(10px)",
-            opacity: 0.65,
+            opacity: 0.8,
           }}
         />
         <div
           className="
             relative rounded-[26px] overflow-hidden
-            bg-gradient-to-b from-white/12 via-white/5 to-white/[0.02]
+            bg-gradient-to-b from-white/[0.06] via-white/[0.03] to-black/[0.35]
             backdrop-blur-2xl text-white
-            ring-1 ring-white/20 shadow-2xl
+            ring-1 ring-[rgba(52,211,153,0.18)] shadow-2xl
           "
           style={{ boxShadow: SHADOW }}
         >
           <div
             aria-hidden
             className="pointer-events-none absolute -bottom-16 inset-x-6 h-32 blur-3xl opacity-35"
-            style={{ background: "linear-gradient(90deg, rgba(59,130,246,0.4), rgba(14,165,233,0.35))" }}
+            style={{ background: "linear-gradient(90deg, rgba(52,211,153,0.32), rgba(16,185,129,0.24))" }}
           />
           <div className="p-6 sm:p-8">
-            <div className="text-center mb-6 space-y-3">
-              <div className="inline-flex items-center gap-3">
-                <div className="h-12 w-12 rounded-full bg-white/20 ring-1 ring-white/40 shadow-[0_12px_30px_rgba(0,0,0,.35)] flex items-center justify-center">
-                  <img src={bizzyLogo} alt="Bizzi logo" className="h-8 w-8 rounded-full object-cover" />
+              <div className="text-center mb-6 space-y-3">
+                <div className="inline-flex items-center gap-3">
+                  <div className="h-12 w-12 rounded-full bg-white/10 ring-1 ring-[rgba(52,211,153,0.4)] shadow-[0_12px_30px_rgba(0,0,0,.35)] flex items-center justify-center">
+                    <img src={bizzyLogo} alt="Bizzi logo" className="h-8 w-8 rounded-full object-cover" />
+                  </div>
+                  <span className="text-sm uppercase tracking-[0.5em] font-light text-white/80 drop-shadow">Bizzi</span>
                 </div>
-                <span className="text-sm uppercase tracking-[0.5em] font-light text-white/80 drop-shadow">Bizzi</span>
-              </div>
               <div className="space-y-2">
                 <p className="text-[11px] uppercase tracking-[0.45em] text-white/45">Welcome aboard</p>
                 <p className="text-base text-white/80">Create your Bizzi account</p>
@@ -126,6 +137,33 @@ const Signup = () => {
             )}
 
             <form onSubmit={handleSignup} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs uppercase tracking-wide text-white/60">First name</label>
+                  <input
+                    type="text"
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    placeholder="Jane"
+                    autoComplete="given-name"
+                    required
+                    className={baseInput}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs uppercase tracking-wide text-white/60">Last name</label>
+                  <input
+                    type="text"
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    placeholder="Doe"
+                    autoComplete="family-name"
+                    required
+                    className={baseInput}
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs uppercase tracking-wide text-white/60">Work Email</label>
                 <input
@@ -191,9 +229,10 @@ const Signup = () => {
                 className="
                   w-full inline-flex items-center justify-center gap-2
                   rounded-xl py-2.5 text-sm font-medium
-                  bg-gradient-to-r from-white/30 via-white/15 to-white/5
-                  ring-1 ring-white/20 text-white shadow-[0_18px_45px_rgba(0,0,0,0.55)]
-                  hover:from-white/45 hover:via-white/20 hover:to-white/10 transition disabled:opacity-60
+                  bg-gradient-to-r from-[rgba(52,211,153,0.22)] via-[rgba(52,211,153,0.16)] to-[rgba(52,211,153,0.08)]
+                  ring-1 ring-[rgba(52,211,153,0.45)] text-white shadow-[0_18px_45px_rgba(0,0,0,0.55)]
+                  hover:from-[rgba(52,211,153,0.32)] hover:via-[rgba(52,211,153,0.22)] hover:to-[rgba(52,211,153,0.12)]
+                  transition disabled:opacity-60
                 "
                 aria-busy={loading ? "true" : "false"}
               >
@@ -203,7 +242,7 @@ const Signup = () => {
 
             <p className="mt-6 text-sm text-white/70 text-center">
               Already have an account?{" "}
-              <Link to="/login" className="text-white hover:underline">
+              <Link to="/login" className="text-white hover:text-[var(--accent)]">
                 Log in
               </Link>
             </p>
@@ -212,7 +251,7 @@ const Signup = () => {
           {confirmationSent && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 backdrop-blur-sm px-6">
               <div
-                className="w-full max-w-sm rounded-3xl border border-white/15 bg-gradient-to-b from-white/10 via-white/5 to-white/10 p-6 text-center shadow-[0_30px_90px_rgba(0,0,0,0.6)]"
+                className="w-full max-w-sm rounded-3xl border border-[rgba(52,211,153,0.25)] bg-gradient-to-b from-white/12 via-white/6 to-white/10 p-6 text-center shadow-[0_30px_90px_rgba(0,0,0,0.6)]"
               >
                 <CheckCircle2 className="mx-auto h-14 w-14 text-emerald-300 drop-shadow-lg" />
                 <h2 className="mt-4 text-xl font-semibold tracking-tight">Confirm your email</h2>
@@ -227,8 +266,9 @@ const Signup = () => {
                   type="button"
                   className="
                     mt-6 w-full inline-flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium
-                    bg-gradient-to-r from-white/30 via-white/15 to-white/5 ring-1 ring-white/20 text-white
-                    shadow-[0_18px_45px_rgba(0,0,0,0.55)] hover:from-white/45 hover:via-white/20 hover:to-white/10 transition
+                    bg-gradient-to-r from-[rgba(52,211,153,0.22)] via-[rgba(52,211,153,0.16)] to-[rgba(52,211,153,0.08)]
+                    ring-1 ring-[rgba(52,211,153,0.45)] text-white
+                    shadow-[0_18px_45px_rgba(0,0,0,0.55)] hover:from-[rgba(52,211,153,0.32)] hover:via-[rgba(52,211,153,0.22)] hover:to-[rgba(52,211,153,0.12)] transition
                   "
                   onClick={handleGoToLogin}
                 >

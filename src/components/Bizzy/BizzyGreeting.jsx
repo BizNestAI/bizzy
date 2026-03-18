@@ -6,7 +6,7 @@ import { useBizzyChatContext } from '../../context/BizzyChatContext';
 // ⬇️ Use the same Bizzi hero art that’s used in MainLayout
 import bizzyHero from '../../assets/bizzy-hero.png';
 
-const ACCENT_DEFAULT = '#FF4EEB';
+const ACCENT_DEFAULT = '#34d399';
 
 const KIND_META = {
   generic:   { label: 'Bizzi' },
@@ -309,7 +309,7 @@ export default function BizzyGreeting({ businessId, userId, accent = ACCENT_DEFA
               disabled={ctaDisabled}
               aria-label={resolvedLabel}
               className={`inline-flex items-center gap-0 text-xs md:text-sm px-3 py-1 rounded-full border transition
-                          border-white/15 ${ctaDisabled ? 'opacity-60 cursor-not-allowed' : 'hover:border-[var(--accent,#FF4EEB)] hover:text-[var(--accent,#FF4EEB)]'}`}
+                          border-white/15 ${ctaDisabled ? 'opacity-60 cursor-not-allowed' : 'hover:border-[var(--accent,#34d399)] hover:text-[var(--accent,#34d399)]'}`}
               title={resolvedLabel}
               data-intent={resolvedIntent}
             >

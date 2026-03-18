@@ -2,6 +2,7 @@
 import React, { useMemo, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkBreaksLite } from "./remarkBreaks.js";
 
 /* ---------- normalize unchanged ---------- */
 function normalizeMarkdown(raw, { demoteBoldLabels = false, autoLinkify = true } = {}) {
@@ -48,6 +49,16 @@ export default function MarkdownRenderer({
   rehypePlugins = [],
 }) {
   const mergedComponents = useMemo(() => ({
+    strong: ({ children }) => (
+      <strong className="font-semibold text-zinc-100">
+        {children}
+      </strong>
+    ),
+    em: ({ children }) => (
+      <em className="italic text-zinc-200">
+        {children}
+      </em>
+    ),
     a: ({ node, ...props }) => (
       <a
         {...props}
@@ -87,7 +98,7 @@ export default function MarkdownRenderer({
   return (
     <div className={`prose-bizzy max-w-none ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkBreaksLite]}
         rehypePlugins={mergedRehype}
         components={mergedComponents}
       >
@@ -98,29 +109,31 @@ export default function MarkdownRenderer({
       <style>{`
         .prose-bizzy {
           font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
-          color: #F2F3F4;              /* bright text */
-          font-size: 15.5px;
-          line-height: 1.65;
-          letter-spacing: 0.01em;
+          color: #e5e7eb;              /* zinc-200 */
+          font-weight: 400;
+          font-size: 15px;
+          line-height: 1.6;
+          letter-spacing: 0.003em;
         }
         .prose-bizzy p { margin: 0 0 10px; }
-        .prose-bizzy strong { font-weight: 600; color: #FFFFFF; }
-        .prose-bizzy em { color: #E6E7EA; }
-        .prose-bizzy a { color: #B3E5FF; text-decoration: none; }
+        .prose-bizzy strong { font-weight: 600; color: #f8fafc; }
+        .prose-bizzy em { color: #dce0e7; }
+        .prose-bizzy a { color: #bae6fd; text-decoration: none; }
         .prose-bizzy a:hover { text-decoration: underline; }
 
         .prose-bizzy h1, .prose-bizzy h2, .prose-bizzy h3 {
-          color: #FFFFFF;
+          color: #f8fafc;
           font-weight: 600;
-          letter-spacing: 0.005em;
+          letter-spacing: 0.003em;
           margin: 12px 0 8px;
         }
-        .prose-bizzy h1 { font-size: 20px; }
-        .prose-bizzy h2 { font-size: 18px; }
+        .prose-bizzy h1 { font-size: 19px; }
+        .prose-bizzy h2 { font-size: 17px; }
         .prose-bizzy h3 { font-size: 16px; }
 
-        .prose-bizzy ul, .prose-bizzy ol { margin: 8px 0 10px 18px; }
-        .prose-bizzy li { margin: 4px 0; }
+        .prose-bizzy ul { margin: 8px 0 12px 0; padding-left: 18px; list-style: disc; }
+        .prose-bizzy ol { margin: 8px 0 12px 0; padding-left: 18px; list-style: decimal; }
+        .prose-bizzy li { margin: 2px 0; line-height: 1.55; }
 
         .prose-bizzy blockquote {
           margin: 10px 0;
@@ -131,17 +144,21 @@ export default function MarkdownRenderer({
         }
 
         .prose-bizzy code {
-          background: rgba(255,255,255,0.06);
+          background: rgba(255,255,255,0.08);
           border: 1px solid rgba(255,255,255,0.12);
-          padding: 1px 5px;
+          padding: 2px 6px;
           border-radius: 6px;
           font-size: 13px;
+          font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         }
         .prose-bizzy pre code {
           display: block;
           padding: 10px 12px;
           border-radius: 10px;
           line-height: 1.55;
+          background: #0f1115;
+          border: 1px solid rgba(255,255,255,0.08);
+          overflow-x: auto;
         }
 
         .prose-bizzy hr {

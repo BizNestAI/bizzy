@@ -16,7 +16,7 @@ import React, { useState } from "react";
  */
 export default function HeroInsightCard({
   insight,
-  accent = "#00FFB2",
+  accent = "rgb(var(--accent-rgb))",
   onDismiss,
   compact = true,
   variant,

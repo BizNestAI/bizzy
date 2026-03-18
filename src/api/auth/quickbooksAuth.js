@@ -11,7 +11,12 @@ import {
   qbRedirectUri,
   qbApiBase,
   qboEnvName,
+  isSandbox,
+  qbSandboxClientId,
 } from "../../utils/qboEnv.js";
+import { runQboSync } from "../accounting/qbo-sync.js";
+import { backfillLast12Months } from "../../services/qboBackfillRunner.js";
+import { lastFullMonthParts } from "../../utils/monthKey.js";
 
 const router = express.Router();
 
@@ -21,6 +26,7 @@ const redirect_uri = qbRedirectUri;
 
 const authUrl = "https://appcenter.intuit.com/connect/oauth2";
 const tokenUrl = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
+const revokeUrl = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke";
 const frontUrl =
   process.env.APP_URL ||
   process.env.CORS_ORIGIN ||
@@ -96,6 +102,30 @@ async function fetchCompanyInfoDetails({ access_token, realm_id }) {
 }
 
 const scopes = ["com.intuit.quickbooks.accounting"].join(" ");
+const pad2 = (n) => String(n).padStart(2, "0");
+
+async function revokeQuickBooksToken({ token }) {
+  if (!token) return { ok: false, skipped: true };
+  const basic = Buffer.from(`${client_id}:${client_secret}`).toString("base64");
+  try {
+    const res = await fetch(revokeUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${basic}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: new URLSearchParams({ token }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      return { ok: false, status: res.status, body: text?.slice(0, 300) };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || err };
+  }
+}
 
 /* -----------------------------------------------------------------------------
  *  Named utility exports (usable by other modules)
@@ -110,10 +140,13 @@ const scopes = ["com.intuit.quickbooks.accounting"].join(" ");
  */
 export async function getUserAccessTokenAndRealmId(userId = null, businessId = null) {
   try {
-    let query = supabase.from("quickbooks_tokens").select("access_token, realm_id").limit(1);
+    let query = supabase
+      .from("quickbooks_tokens")
+      .select("access_token, realm_id, is_active, status")
+      .limit(1);
 
     if (businessId) {
-      query = query.eq("business_id", businessId);
+      query = query.eq("business_id", businessId).eq("qbo_env", qboEnvName);
     } else {
       return { accessToken: null, realmId: null };
     }
@@ -124,6 +157,9 @@ export async function getUserAccessTokenAndRealmId(userId = null, businessId = n
       return { accessToken: null, realmId: null };
     }
     if (!data) return { accessToken: null, realmId: null };
+
+    const isActive = data?.is_active !== false && (data?.status || "active") === "active";
+    if (!isActive) return { accessToken: null, realmId: null };
 
     const accessToken = data.access_token || null;
     const realmId = data.realm_id || null;
@@ -155,6 +191,7 @@ export async function saveQboTokens({
     access_token,
     refresh_token,
     realm_id,
+    company_id: realm_id || null,
     expires_in,
     x_refresh_token_expires_in,
     token_type,
@@ -162,19 +199,18 @@ export async function saveQboTokens({
     connected_company_name: connected_company_name || company_name || null,
     connected_legal_name: connected_legal_name || null,
     connected_at: connected_at || new Date().toISOString(),
+    last_connected_at: new Date().toISOString(),
+    is_active: true,
+    status: "active",
+    disconnected_at: null,
+    display_name: connected_company_name || company_name || null,
     qbo_env: qbo_env || qboEnvName || null,
+    company_name: company_name || null,
   };
 
-  // Try with company_name if column exists; retry without if it fails, using upsert
-  let { error } = await supabase
+  const { error } = await supabase
     .from("quickbooks_tokens")
-    .upsert(company_name ? { ...basePayload, company_name } : basePayload, { onConflict: "business_id" });
-  if (error && company_name) {
-    console.warn("[QBO tokens] insert with company_name failed, retrying without", error.message || error);
-    ({ error } = await supabase
-      .from("quickbooks_tokens")
-      .upsert(basePayload, { onConflict: "business_id" }));
-  }
+    .upsert(basePayload, { onConflict: "business_id,qbo_env" });
   if (error) throw error;
   return true;
 }
@@ -206,10 +242,26 @@ router.get("/quickbooks", (req, res) => {
   const url = `${authUrl}?client_id=${client_id}&redirect_uri=${encodeURIComponent(
     redirect_uri
   )}&response_type=code&scope=${encodeURIComponent(scopes)}&state=${state}&prompt=${prompt}`;
-  if (process.env.QB_DEBUG === "true" || process.env.NODE_ENV !== "production") {
-    console.info("[QBO Auth] Using redirect_uri:", redirect_uri);
+
+  // Visibility for env + URL generation before redirect (dev-friendly)
+  console.log("[QBO Auth] env:", qboEnvName, "apiBase:", qbApiBase, "redirect:", qbRedirectUri);
+
+  if (isSandbox && qbClientId !== qbSandboxClientId) {
+    const err = new Error("Sandbox env mismatch: qbClientId does not match QB_SANDBOX_CLIENT_ID.");
+    err.status = 500;
+    throw err;
   }
-  console.info("[QBO ENV]", { env: qboEnvName, qbApiBase });
+
+  if (process.env.QB_DEBUG === "true" || process.env.NODE_ENV !== "production") {
+    const maskId = (id) => (id ? id.replace(/.(?=.{4})/g, "*") : "null");
+    console.info("[QBO Auth] redirecting to Intuit", {
+      qboEnvName,
+      qbClientId: maskId(qbClientId),
+      qbRedirectUri,
+      authorizeUrl: url,
+    });
+  }
+  console.info("[QBO ENV]", { env: qboEnvName, qbApiBase, sandbox: isSandbox });
   res.redirect(url);
 });
 
@@ -273,18 +325,49 @@ router.get("/callback", async (req, res) => {
       companyInfo?.LegalName ||
       (await fetchCompanyName({ access_token, realm_id: realmId }).catch(() => null));
 
+    const forceSwitchCompany = ["true", "1", "yes"].includes(
+      String(req.query?.forceSwitchCompany || req.query?.force_switch_company || req.query?.force_switch || "").toLowerCase()
+    );
+
     // detect mismatch with existing connection
     const { data: existingRow } = await supabase
       .from("quickbooks_tokens")
-      .select("connected_company_name, realm_id")
+      .select("connected_company_name, realm_id, company_id")
       .eq("business_id", business_id)
+      .eq("qbo_env", qboEnvName)
       .maybeSingle();
-    if (existingRow && existingRow.connected_company_name && companyInfo?.CompanyName && existingRow.connected_company_name !== companyInfo.CompanyName) {
+    const storedCompanyId = existingRow?.company_id || existingRow?.realm_id || null;
+    if (storedCompanyId && storedCompanyId !== realmId && !forceSwitchCompany) {
+      const message = "You connected a different QuickBooks company. Switching may affect posting destinations. Confirm switch?";
       console.warn("[QBO RECONNECTED TO DIFFERENT COMPANY]", {
         business_id,
-        previous: existingRow.connected_company_name,
-        new: companyInfo.CompanyName,
+        previous: storedCompanyId,
+        new: realmId,
       });
+      const wantsJson =
+        String(req.query?.mode || "").toLowerCase() === "json" ||
+        String(req.headers?.accept || "").toLowerCase().includes("application/json");
+      if (wantsJson) {
+        return res.status(409).json({
+          success: false,
+          error: "quickbooks_company_mismatch",
+          message,
+          previous_company_id: storedCompanyId,
+          new_company_id: realmId,
+        });
+      }
+      try {
+        const dest = new URL(frontUrl);
+        dest.pathname = "/dashboard/settings";
+        dest.searchParams.set("tab", "Integrations");
+        dest.searchParams.set("integration", "quickbooks");
+        dest.searchParams.set("qb_error", "company_mismatch");
+        dest.searchParams.set("message", message);
+        dest.searchParams.set("realmId", realmId);
+        return res.redirect(dest.toString());
+      } catch {
+        return res.status(409).send(message);
+      }
     }
 
     await saveQboTokens({
@@ -302,6 +385,39 @@ router.get("/callback", async (req, res) => {
       connected_at: new Date().toISOString(),
       qbo_env: qboEnvName || null,
     });
+
+    const forceBackfill =
+      String(req.query?.forceBackfill || req.query?.force_backfill || "").toLowerCase() === "1" ||
+      String(req.query?.forceBackfill || req.query?.force_backfill || "").toLowerCase() === "true";
+    const lastFull = lastFullMonthParts();
+    const startWindow = new Date(lastFull.year, lastFull.month - 12, 1);
+    const startIso = `${startWindow.getFullYear()}-${pad2(startWindow.getMonth() + 1)}-01`;
+    const { count: fmCount, error: fmError } = await supabase
+      .from("financial_metrics")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", business_id)
+      .gte("month", startIso);
+    const shouldSkipBackfill = !forceBackfill && fmError == null && (fmCount || 0) > 0;
+    if (shouldSkipBackfill) {
+      console.info("[BACKFILL] skip kickoff (existing metrics within 12m)", { business_id, count: fmCount });
+    } else {
+      console.info("[BACKFILL] kickoff from oauth callback", { business: business_id, env: qboEnvName });
+      setImmediate(() => {
+        backfillLast12Months({
+          business_id,
+          realmId,
+          accessToken: access_token,
+          qboEnv: qboEnvName,
+        }).catch((err) => console.warn("[BACKFILL] kickoff failed", err?.message || err));
+      });
+    }
+
+    try {
+      const syncResult = await runQboSync({ businessId: business_id });
+      console.info("[QBO SYNC] completed after connect", { business_id, month: syncResult?.month });
+    } catch (syncErr) {
+      console.warn("[QBO SYNC] post-connect sync failed", syncErr?.message || syncErr, syncErr?.meta ? JSON.stringify(syncErr.meta, null, 2) : "");
+    }
 
     console.info("[QBO CONNECTED]", {
       business_id,
@@ -366,9 +482,39 @@ router.post("/disconnect", async (req, res) => {
       null;
     if (!business_id) return res.status(400).json({ error: "missing_business_id" });
 
-    const { error } = await supabase.from("quickbooks_tokens").delete().eq("business_id", business_id);
+    const { data: tokenRow, error: tokenError } = await supabase
+      .from("quickbooks_tokens")
+      .select("id, access_token, refresh_token")
+      .eq("business_id", business_id)
+      .eq("qbo_env", qboEnvName)
+      .maybeSingle();
+    if (tokenError) {
+      console.error("[QBO disconnect] lookup failed", tokenError.message || tokenError);
+      return res.status(500).json({ error: "disconnect_failed" });
+    }
+
+    if (tokenRow?.refresh_token || tokenRow?.access_token) {
+      const revokeTarget = tokenRow.refresh_token || tokenRow.access_token;
+      const revokeRes = await revokeQuickBooksToken({ token: revokeTarget });
+      if (!revokeRes?.ok) {
+        console.warn("[QBO disconnect] revoke failed", revokeRes);
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    const { error } = await supabase
+      .from("quickbooks_tokens")
+      .update({
+        is_active: false,
+        status: "disconnected",
+        disconnected_at: nowIso,
+        access_token: null,
+        refresh_token: null,
+      })
+      .eq("business_id", business_id)
+      .eq("qbo_env", qboEnvName);
     if (error) {
-      console.error("[QBO disconnect] delete failed", error.message || error);
+      console.error("[QBO disconnect] update failed", error.message || error);
       return res.status(500).json({ error: "disconnect_failed" });
     }
     return res.json({ ok: true });
@@ -386,24 +532,16 @@ router.get("/status", async (req, res) => {
       req.query?.businessId ||
       req.headers["x-business-id"] ||
       null;
+    const envParam = qboEnvName;
     let data = null;
     let error = null;
 
     if (business_id) {
       const resp = await supabase
         .from("quickbooks_tokens")
-        .select("realm_id, refresh_token, access_token, connected_company_name, company_name, connected_at, created_at")
+        .select("realm_id, refresh_token, access_token, connected_company_name, company_name, connected_at, created_at, scope, qbo_env, is_active, status, disconnected_at")
         .eq("business_id", business_id)
-        .maybeSingle();
-      data = resp.data;
-      error = resp.error;
-    }
-
-    // Fallback: if nothing returned, grab the most recent row
-    if (!data && !error) {
-      const resp = await supabase
-        .from("quickbooks_tokens")
-        .select("realm_id, refresh_token, access_token, connected_company_name, company_name, connected_at, created_at")
+        .eq("qbo_env", envParam)
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -416,17 +554,33 @@ router.get("/status", async (req, res) => {
       return res.status(500).json({ error: "status_failed" });
     }
 
-    const has_row = !!data;
-    const connected = !!(data && data.realm_id && data.refresh_token);
-    const needs_setup = !!(data && (!data.realm_id || !data.refresh_token));
+    const is_active = data?.is_active !== false && (data?.status || "active") === "active";
+    const has_row = !!(data && is_active);
+    const connected = !!(data && is_active && data.access_token && data.refresh_token);
+    const needs_setup = !!(data && is_active && (!data.realm_id || !data.refresh_token));
+
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[auth/status]", {
+        business_id,
+        qbo_env_checked: envParam,
+        connected,
+        has_row,
+      });
+    }
 
     return res.json({
       has_row,
       connected,
       needs_setup,
+      qbo_env: data?.qbo_env || envParam,
+      env: data?.qbo_env || envParam,
+      status: data?.status || (connected ? "active" : "disconnected"),
+      is_active: data?.is_active ?? null,
+      disconnected_at: data?.disconnected_at || null,
       company_name: data?.connected_company_name || data?.company_name || null,
       realm_id: data?.realm_id || null,
       connected_at: data?.connected_at || data?.created_at || null,
+      scope: data?.scope || null,
     });
   } catch (e) {
     console.error("[QBO status] unexpected", e?.message || e);

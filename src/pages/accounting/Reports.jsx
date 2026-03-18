@@ -37,7 +37,7 @@ export default function Reports() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white px-4 py-6">
+    <div className="min-h-screen text-white px-3 md:px-4 pt-0 pb-8 bg-transparent">
       <PNLArchiveViewer />
     </div>
   );

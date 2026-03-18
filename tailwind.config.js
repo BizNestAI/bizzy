@@ -18,13 +18,13 @@ module.exports = {
         space: ['"IBM Plex Sans"','"Space Grotesk"', 'sans-serif'],
       },
 
-      // Keep legacy neon colors for module themes (no change)
       colors: {
-        'neon-pink':   '#FF4EEB',
-        'neon-green':  '#00FFB2',
-        'neon-blue':   '#3B82F6',
-        'neon-gold':   '#FFD700',
-        'neon-purple': '#B388FF',
+        // Unified accent (Books green) for all neon hooks
+        'neon-pink':   'rgb(var(--accent-rgb))',
+        'neon-green':  'rgb(var(--accent-rgb))',
+        'neon-blue':   'rgb(var(--accent-rgb))',
+        'neon-gold':   'rgb(var(--accent-rgb))',
+        'neon-purple': 'rgb(var(--accent-rgb))',
 
         app: {
           DEFAULT: '#12100F',
@@ -46,29 +46,29 @@ module.exports = {
       },
 
       boxShadow: {
-        'neon-pink':   '0 0 12px 4px #FF4EEB',
-        'neon-green':  '0 0 12px 4px #00FFB2',
-        'neon-blue':   '0 0 12px 4px #3B82F6',
-        'neon-gold':   '0 0 12px 4px #FFD700',
-        'neon-purple': '0 0 12px 4px #B388FF',
+        'neon-pink':   '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
+        'neon-green':  '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
+        'neon-blue':   '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
+        'neon-gold':   '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
+        'neon-purple': '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
 
         // Graphite card shadow
         'bizzi-card':  'var(--card-shadow)',
       },
 
       ringColor: {
-        'neon-pink':   '#FF4EEB',
-        'neon-green':  '#00FFB2',
-        'neon-blue':   '#3B82F6',
-        'neon-gold':   '#FFD700',
-        'neon-purple': '#B388FF',
+        'neon-pink':   'rgb(var(--accent-rgb))',
+        'neon-green':  'rgb(var(--accent-rgb))',
+        'neon-blue':   'rgb(var(--accent-rgb))',
+        'neon-gold':   'rgb(var(--accent-rgb))',
+        'neon-purple': 'rgb(var(--accent-rgb))',
       },
       borderColor: {
-        'neon-pink':   '#FF4EEB',
-        'neon-green':  '#00FFB2',
-        'neon-blue':   '#3B82F6',
-        'neon-gold':   '#FFD700',
-        'neon-purple': '#B388FF',
+        'neon-pink':   'rgb(var(--accent-rgb))',
+        'neon-green':  'rgb(var(--accent-rgb))',
+        'neon-blue':   'rgb(var(--accent-rgb))',
+        'neon-gold':   'rgb(var(--accent-rgb))',
+        'neon-purple': 'rgb(var(--accent-rgb))',
       },
 
       backgroundImage: {
@@ -89,7 +89,7 @@ module.exports = {
         '.text-primary':  { color: 'var(--text)' },
         '.text-secondary':{ color: 'var(--text-2)' },
         '.shadow-bizzi':  { boxShadow: 'var(--card-shadow)' },
-        '.glow-accent':   { boxShadow: '0 0 0 0 rgba(255,78,235,0.16), 0 0 20px rgba(255,78,235,0.12)' },
+        '.glow-accent':   { boxShadow: '0 0 0 0 var(--accent-soft), 0 0 20px var(--accent-soft)' },
       });
 
       addComponents({
@@ -99,7 +99,7 @@ module.exports = {
         },
         '.btn-accent-hover:hover': {
           filter: 'brightness(1.03)',
-          boxShadow: '0 0 16px rgba(255,78,235,0.18)',
+          boxShadow: '0 0 16px var(--accent-soft)',
           transform: 'translateY(-0.5px)',
         },
       });

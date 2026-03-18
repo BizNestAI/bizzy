@@ -4,7 +4,7 @@ import { Info, RefreshCw, MessageCircle } from "lucide-react";
 import CardHeader from "../UI/CardHeader";
 import { useTaxInsights } from "../../hooks/useTaxInsights";
 
-const GOLD_MUTED = "rgba(227,194,92,1)";
+const GOLD_MUTED = "rgba(var(--accent-rgb),1)";
 
 export default function TaxSuggestions({ businessId, watchKey, onAskBizzy, title = "BIZZI’S TAX SUGGESTIONS" }) {
   const { tips, loading, error, refetch } = useTaxInsights({ businessId, watchKey });
@@ -124,7 +124,7 @@ function UrgencyPill({ level }) {
   // toned down palette to avoid harsh yellow
   const map = {
     High: "bg-rose-500/15 text-rose-300 ring-rose-400/25",
-    Medium: "bg-[rgba(227,194,92,.12)] text-[rgba(227,194,92,.95)] ring-[rgba(227,194,92,.28)]",
+    Medium: "bg-[rgba(var(--accent-rgb),.12)] text-[rgba(var(--accent-rgb),.95)] ring-[rgba(var(--accent-rgb),.28)]",
     Low: "bg-emerald-500/15 text-emerald-300 ring-emerald-400/25",
   };
   const cls = map[level] || map.Medium;

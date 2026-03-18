@@ -1,14 +1,13 @@
 // File: /src/components/Accounting/FinancialKPICards.jsx
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { TrendingDown, TrendingUp } from "lucide-react";
-import { usePeriod } from "../../context/PeriodContext";
+import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
 import { Brain as PhBrain } from "@phosphor-icons/react";
 import { useBusiness } from "../../context/BusinessContext";
-import apiBaseUrl from "../../utils/apiBase.js";
-
-const API_BASE = apiBaseUrl || "";
+import { apiFetch } from "../../utils/apiBase.js";
+import { ACCENT_LINE } from "../../config/accent";
 
 function fmtCurrency(n) {
   const v = Number(n ?? 0);
@@ -21,6 +20,15 @@ function fmtPct(n) {
   if (!Number.isFinite(v)) return "";
   const s = Math.round(v);
   return `${s > 0 ? "+" : ""}${s}%`;
+}
+function fmtMargin(value) {
+  if (value === null || value === undefined || value === "") return "0.0%";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "0.0%";
+  // If the stored value looks like a ratio (-0.37), scale to percent; otherwise use as-is
+  const pct = Math.abs(num) <= 1 ? num * 100 : num;
+  const rounded = Math.round(pct * 10) / 10; // nearest tenth
+  return `${rounded.toFixed(1)}%`;
 }
 
 function TrendPill({ trend, change }) {
@@ -41,6 +49,9 @@ function TrendPill({ trend, change }) {
 export default function FinancialKPICards({
   userId: userIdProp,
   businessId: businessIdProp,
+  onLiveData,
+  onEmptyData,
+  onLoadingChange,
 }) {
   const [kpis, setKpis] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -49,7 +60,7 @@ export default function FinancialKPICards({
 
   const userId = userIdProp || localStorage.getItem("user_id");
   const businessId = businessIdProp || localStorage.getItem("currentBusinessId");
-  const { period } = usePeriod();
+  const { year, month } = useFinancialPeriod(businessId);
   const forceLive = shouldForceLiveData();
   const usingDemo = useMemo(
     () => !forceLive && shouldUseDemoData(currentBusiness),
@@ -63,31 +74,50 @@ export default function FinancialKPICards({
     const k = fin?.kpis || {};
 
     const revenue = Number(fin.mtdRevenue ?? 0);
-    const revenuePrev = Number(prev.revenue ?? 0);
+    const revenuePrev = fin.revenuePrev ?? fin.prevRevenue ?? prev.revenue ?? null;
     const expenses = Number(fin.mtdExpenses ?? 0);
-    const expensesPrev = Number(prev.expenses ?? 0);
+    const expensesPrev = fin.expensesPrev ?? fin.prevExpenses ?? prev.expenses ?? null;
     const profit = Number(fin.mtdProfit ?? 0);
-    const profitPrev = Number(prev.profit ?? 0);
+    const profitPrev = fin.profitPrev ?? fin.prevProfit ?? prev.profit ?? null;
     const margin = Number(fin.profitMarginPct ?? 0);
-    const marginPrev = Number(prev.profitMarginPct ?? 0);
+    const marginPrev = fin.marginPrev ?? fin.prevMargin ?? prev.profitMarginPct ?? null;
 
-    const revChange = revenuePrev > 0 ? ((revenue - revenuePrev) / revenuePrev) * 100 : null;
-    const expChange = expensesPrev > 0 ? ((expenses - expensesPrev) / expensesPrev) * 100 : null;
-    const profitChange = profitPrev !== 0 ? ((profit - profitPrev) / profitPrev) * 100 : null;
-    const marginChange = Number.isFinite(margin) && Number.isFinite(marginPrev)
-      ? margin - marginPrev
+    const revPrevNum = Number(revenuePrev);
+    const expPrevNum = Number(expensesPrev);
+    const profitPrevNum = Number(profitPrev);
+    const marginPrevNum = Number(marginPrev);
+
+    const revChange = Number.isFinite(revPrevNum) && revPrevNum !== 0 ? ((revenue - revPrevNum) / revPrevNum) * 100 : null;
+    const expChange = Number.isFinite(expPrevNum) && expPrevNum !== 0 ? ((expenses - expPrevNum) / expPrevNum) * 100 : null;
+    const profitChange = Number.isFinite(profitPrevNum) && profitPrevNum !== 0 ? ((profit - profitPrevNum) / profitPrevNum) * 100 : null;
+    const marginChange = Number.isFinite(margin) && Number.isFinite(marginPrevNum)
+      ? margin - marginPrevNum
       : null;
 
+    const topCategoryCurrent = k.topSpendingCategory || "Labor";
+    const topCategoryPrev = fin?.prevMonth?.topSpendingCategory || k.prevTopSpendingCategory || "N/A";
+
     const demoKpis = [
-      { label: "Current Revenue", value: fmtCurrency(revenue), previousValue: revenuePrev ? fmtCurrency(revenuePrev) : "", trend: Number(revChange) >= 0 ? "up" : "down", change: fmtPct(revChange), tint: "emerald" },
-      { label: "Current Expenses", value: fmtCurrency(expenses), previousValue: expensesPrev ? fmtCurrency(expensesPrev) : "", trend: Number(expChange) >= 0 ? "up" : "down", change: fmtPct(expChange), tint: "amber" },
-      { label: "Net Profit", value: fmtCurrency(profit), previousValue: profitPrev ? fmtCurrency(profitPrev) : "", trend: Number(profitChange) >= 0 ? "up" : "down", change: fmtPct(profitChange), tint: "emerald" },
-      { label: "Profit Margin", value: `${Number.isFinite(margin) ? margin.toFixed(1) : "0.0"}%`, previousValue: Number.isFinite(marginPrev) ? `${marginPrev.toFixed(1)}%` : "", trend: Number(marginChange) >= 0 ? "up" : "down", change: fmtPct(marginChange), tint: "rose" },
-      { label: "Top Spending Category", value: k.topSpendingCategory || "Labor", previousValue: "", trend: "up", change: "", tint: "amber" },
+      { label: "Current Revenue", value: fmtCurrency(revenue), previousValue: revenuePrev != null ? fmtCurrency(revPrevNum) : "", trend: Number(revChange) >= 0 ? "up" : "down", change: fmtPct(revChange), tint: "emerald" },
+      { label: "Current Expenses", value: fmtCurrency(expenses), previousValue: expensesPrev != null ? fmtCurrency(expPrevNum) : "", trend: Number(expChange) >= 0 ? "up" : "down", change: fmtPct(expChange), tint: "amber" },
+      { label: "Net Profit", value: fmtCurrency(profit), previousValue: profitPrev != null ? fmtCurrency(profitPrevNum) : "", trend: Number(profitChange) >= 0 ? "up" : "down", change: fmtPct(profitChange), tint: "emerald" },
+      { label: "Profit Margin", value: `${Number.isFinite(margin) ? margin.toFixed(1) : "0.0"}%`, previousValue: Number.isFinite(marginPrevNum) ? `${marginPrevNum.toFixed(1)}%` : "", trend: Number(marginChange) >= 0 ? "up" : "down", change: fmtPct(marginChange), tint: "rose" },
+      {
+        label: "Top Spending Category",
+        value: topCategoryCurrent,
+        previousValue: topCategoryPrev,
+        trend: topCategoryPrev && topCategoryCurrent === topCategoryPrev ? "up" : "down",
+        change: "",
+        tint: "amber",
+      },
     ];
 
     setKpis(demoKpis);
   }, []);
+
+  useEffect(() => {
+    onLoadingChange?.(loading);
+  }, [loading, onLoadingChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,11 +126,13 @@ export default function FinancialKPICards({
       if (usingDemo) {
         populateDemoKpis();
         setLoading(false);
+        onLiveData?.();
         return;
       }
-      if (!userId || !businessId || !period?.year || !period?.month) {
+      if (!userId || !businessId || !year || !month) {
         setLoading(false);
         setKpis([]);
+        onEmptyData?.();
         return;
       }
 
@@ -108,13 +140,19 @@ export default function FinancialKPICards({
       const ac = new AbortController();
       try {
         const url =
-          `${API_BASE}/api/accounting/metrics` +
+          `/api/accounting/metrics` +
           `?user_id=${encodeURIComponent(userId)}` +
           `&business_id=${encodeURIComponent(businessId)}` +
-          `&year=${encodeURIComponent(period.year)}` +
-          `&month=${encodeURIComponent(period.month)}`;
+          `&year=${encodeURIComponent(year)}` +
+          `&month=${encodeURIComponent(month)}` +
+          `&data_mode=live&live_only=true`;
 
-        const res = await fetch(url, {
+        if (process.env.NODE_ENV !== "production") {
+          // eslint-disable-next-line no-console
+          console.log("[FinancialKPICards] fetch", { year, month, url });
+        }
+
+        const res = await apiFetch(url, {
           headers: {
             "Content-Type": "application/json",
             "x-user-id": userId,
@@ -131,30 +169,37 @@ export default function FinancialKPICards({
           throw new Error(`Non-JSON response (${ct}): ${raw.slice(0, 200)}`);
 
         const parsed = JSON.parse(raw) || {};
+        if (process.env.NODE_ENV !== "production") {
+          // eslint-disable-next-line no-console
+          console.log("[FinancialKPICards] raw metrics response", parsed);
+        }
         const m = parsed.metrics || parsed;
         const deltas = parsed.deltas || null;
 
-        const totalRevenue = m.totalRevenue ?? m.total_revenue;
-        const totalExpenses = m.totalExpenses ?? m.total_expenses;
-        const netProfit = m.netProfit ?? m.net_profit;
-        const profitMargin = m.profitMargin ?? m.profit_margin;
-        const topSpendingCategory = m.topSpendingCategory ?? m.top_spending_category;
+        const totalRevenue = m.total_revenue ?? m.totalRevenue ?? null;
+        const totalExpenses = m.total_expenses ?? m.totalExpenses ?? null;
+        const netProfit = m.net_profit ?? m.netProfit ?? null;
+        const rawMargin = m.profit_margin ?? m.profitMargin ?? null;
+        const profitMarginPct = rawMargin == null ? null : (Math.abs(Number(rawMargin)) <= 1 ? Number(rawMargin) * 100 : Number(rawMargin));
+        const topSpendingCategory = m.top_spending_category ?? m.topSpendingCategory ?? null;
 
         const prior = m.priorMonth ?? m.prior_month ?? {};
-        const priorRevenue = prior.totalRevenue ?? prior.total_revenue;
-        const priorExpenses = prior.totalExpenses ?? prior.total_expenses;
-        const priorNet = prior.netProfit ?? prior.net_profit;
-        const priorMargin = prior.profitMargin ?? prior.profit_margin;
-        const priorTopCategory = prior.topSpendingCategory ?? prior.top_spending_category;
+        const priorRevenue = prior.total_revenue ?? prior.totalRevenue ?? null;
+        const priorExpenses = prior.total_expenses ?? prior.totalExpenses ?? null;
+        const priorNet = prior.net_profit ?? prior.netProfit ?? null;
+        const rawPriorMargin = prior.profit_margin ?? prior.profitMargin ?? null;
+        const priorMarginPct = rawPriorMargin == null ? null : (Math.abs(Number(rawPriorMargin)) <= 1 ? Number(rawPriorMargin) * 100 : Number(rawPriorMargin));
+        const priorTopCategory = prior.top_spending_category ?? prior.topSpendingCategory ?? null;
 
         const allNull =
           totalRevenue == null &&
           totalExpenses == null &&
           netProfit == null &&
-          profitMargin == null &&
+          profitMarginPct == null &&
           !topSpendingCategory;
         if (allNull) {
           setKpis([]);
+          onEmptyData?.();
           return;
         }
 
@@ -178,22 +223,50 @@ export default function FinancialKPICards({
 
         const marginChange =
           deltas?.margin_mom_pct ??
-          (Number.isFinite(Number(profitMargin)) && Number.isFinite(Number(priorMargin))
-            ? Number(profitMargin) - Number(priorMargin)
+          (Number.isFinite(Number(profitMarginPct)) && Number.isFinite(Number(priorMarginPct))
+            ? Number(profitMarginPct) - Number(priorMarginPct)
             : null);
 
+        const derivePriorFromChange = (current, pctChange) => {
+          const currNum = Number(current);
+          const pctNum = Number(pctChange);
+          if (!Number.isFinite(currNum) || !Number.isFinite(pctNum)) return null;
+          // pctChange is MoM %, so curr = prev * (1 + pct/100) -> prev = curr / (1 + pct/100)
+          const denom = 1 + pctNum / 100;
+          if (Math.abs(denom) < 1e-6) return null;
+          return currNum / denom;
+        };
+
+        const fallbackPriorRevenue  = priorRevenue  == null ? derivePriorFromChange(totalRevenue, revChange)   : priorRevenue;
+        const fallbackPriorExpenses = priorExpenses == null ? derivePriorFromChange(totalExpenses, expChange) : priorExpenses;
+        const fallbackPriorNet      = priorNet      == null ? derivePriorFromChange(netProfit, profitChange)  : priorNet;
+        const fallbackPriorMargin   = priorMarginPct == null && Number.isFinite(Number(marginChange)) && Number.isFinite(Number(profitMarginPct))
+          ? Number(profitMarginPct) - Number(marginChange)
+          : priorMarginPct;
+
         const formatted = [
-          { label: "Current Revenue", value: fmtCurrency(totalRevenue), previousValue: priorRevenue != null ? fmtCurrency(priorRevenue) : "", trend: Number(revChange) >= 0 ? "up" : "down", change: fmtPct(revChange), tint: "emerald" },
-          { label: "Current Expenses", value: fmtCurrency(totalExpenses), previousValue: priorExpenses != null ? fmtCurrency(priorExpenses) : "", trend: Number(expChange) >= 0 ? "up" : "down", change: fmtPct(expChange), tint: "amber" },
-          { label: "Net Profit", value: fmtCurrency(netProfit), previousValue: priorNet != null ? fmtCurrency(priorNet) : "", trend: Number(profitChange) >= 0 ? "up" : "down", change: fmtPct(profitChange), tint: "emerald" },
-          { label: "Profit Margin", value: `${Number(profitMargin ?? 0).toFixed(1)}%`, previousValue: priorMargin == null ? "" : `${Number(priorMargin).toFixed(1)}%`, trend: Number(marginChange) >= 0 ? "up" : "down", change: fmtPct(marginChange), tint: "rose" },
-          { label: "Top Spending Category", value: topSpendingCategory || "N/A", previousValue: priorTopCategory || "", trend: topSpendingCategory && priorTopCategory && topSpendingCategory === priorTopCategory ? "up" : "down", change: "", tint: "amber" },
+          { label: "Current Revenue", value: fmtCurrency(totalRevenue), previousValue: fallbackPriorRevenue != null ? fmtCurrency(fallbackPriorRevenue) : "", trend: Number(revChange) >= 0 ? "up" : "down", change: fmtPct(revChange), tint: "emerald" },
+          { label: "Current Expenses", value: fmtCurrency(totalExpenses), previousValue: fallbackPriorExpenses != null ? fmtCurrency(fallbackPriorExpenses) : "", trend: Number(expChange) >= 0 ? "up" : "down", change: fmtPct(expChange), tint: "amber" },
+          { label: "Net Profit", value: fmtCurrency(netProfit), previousValue: fallbackPriorNet != null ? fmtCurrency(fallbackPriorNet) : "", trend: Number(profitChange) >= 0 ? "up" : "down", change: fmtPct(profitChange), tint: "emerald" },
+      { label: "Profit Margin", value: fmtMargin(profitMarginPct ?? 0), previousValue: fallbackPriorMargin == null ? "" : fmtMargin(fallbackPriorMargin), trend: Number(marginChange) >= 0 ? "up" : "down", change: fmtPct(marginChange), tint: "rose" },
+          {
+            label: "Top Spending Category",
+            value: topSpendingCategory || "N/A",
+            previousValue: priorTopCategory ?? "N/A",
+            trend: priorTopCategory ? (topSpendingCategory === priorTopCategory ? "up" : "down") : null,
+            change: "",
+            tint: "amber",
+          },
         ];
 
-        if (!cancelled) setKpis(formatted);
+        if (!cancelled) {
+          setKpis(formatted);
+          onLiveData?.();
+        }
       } catch (err) {
         if (!cancelled) {
           setKpis([]);
+          onEmptyData?.();
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -204,7 +277,7 @@ export default function FinancialKPICards({
 
     fetchKPIs();
     return () => { cancelled = true; };
-  }, [userId, businessId, period?.year, period?.month, usingDemo, populateDemoKpis]);
+  }, [userId, businessId, year, month, usingDemo, populateDemoKpis]);
 
   const handleAsk = useCallback(
     async (kpi) => {
@@ -223,7 +296,20 @@ export default function FinancialKPICards({
   );
 
   if (loading) {
-    return <div className="text-white/70 text-sm">Loading financial KPIs…</div>;
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4 w-full">
+        {[1, 2, 3, 4].map((i) => (
+          <div
+            key={i}
+            className="rounded-[18px] bg-white/[0.05] shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 sm:p-5 space-y-3 animate-pulse"
+          >
+            <div className="h-3 w-24 bg-white/[0.15] rounded-full" />
+            <div className="h-6 w-32 bg-white/[0.18] rounded-md" />
+            <div className="h-3 w-20 bg-white/[0.12] rounded-full" />
+          </div>
+        ))}
+      </div>
+    );
   }
 
   return (
@@ -242,12 +328,13 @@ export default function FinancialKPICards({
             className={[
               "group relative overflow-hidden rounded-2xl outline-none",
               "bg-zinc-900/70 backdrop-blur-md",
-              "border border-white/5",        // calm base border
+              "border", // border color set via inline style to match Books accent
               "transition-all duration-200",
-              "hover:border-white/10",        // subtle chrome on hover
+              "hover:border-[rgba(var(--accent-rgb),0.55)] hover:-translate-y-1.5 hover:shadow-[0_16px_38px_rgba(0,0,0,0.45)]", // subtle lift like InsightCards
               tintRing,
-              "min-h-[168px] sm:min-h-[176px]",
+              "min-h-[156px] sm:min-h-[168px]",
             ].join(" ")}
+            style={{ borderColor: ACCENT_LINE }}
           >
             {/* Emerald hover frame (dark green) */}
             <div
@@ -275,46 +362,37 @@ export default function FinancialKPICards({
             </div>
 
             {/* Content */}
-            <div className="relative z-10 h-full p-4 pb-5 flex flex-col gap-2">
-              <div className="text-[12px] font-medium tracking-wide text-white/75 leading-snug">
+            <div className="relative z-10 h-full px-3.5 pt-3.5 pb-4 flex flex-col gap-2">
+              <div className="text-[11px] font-medium tracking-wide text-white/75 leading-snug whitespace-nowrap overflow-hidden text-ellipsis">
                 {kpi.label}
               </div>
 
-              <div className="text-[22px] font-semibold leading-tight text-white sm:text-[24px]">
+              <div className="text-[20px] font-semibold leading-tight text-white sm:text-[21px]">
                 {kpi.value}
               </div>
 
-              <div className="flex items-center gap-2 pt-1 leading-tight">
+              <div className="flex items-center gap-2 leading-tight">
                 <TrendPill trend={kpi.trend} change={kpi.change} />
-                <div className="flex flex-col text-[11px] text-white/72 leading-tight">
-                  <span className="text-center">prior</span>
-                  <div className="flex items-start gap-1">
-                    <span className="text-center leading-tight">month</span>
-                    {kpi.previousValue ? (
-                      <span className="tabular-nums whitespace-normal break-words">{kpi.previousValue}</span>
-                    ) : null}
-                  </div>
+                <div className="flex flex-col text-[10px] text-white/72 leading-tight whitespace-nowrap">
+                  <span className="leading-tight">prior month:</span>
+                  {kpi.previousValue ? (
+                    <span
+                      className={[
+                        "tabular-nums text-white/85",
+                        kpi.label === "Top Spending Category" ? "font-semibold text-white" : ""
+                      ].join(" ").trim()}
+                    >
+                      {kpi.previousValue}
+                    </span>
+                  ) : null}
                 </div>
               </div>
 
-              <div className="mt-auto absolute bottom-3 right-3">
-                <button
-                  onClick={() => handleAsk(kpi)}
-                  className="group inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white/85 transition hover:border-white/35 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/20"
-                  aria-label={`Ask Bizzi about ${kpi.label}`}
-                >
-                  <PhBrain size={16} />
-                </button>
-                <div
-                  className="pointer-events-none absolute right-[calc(100%+8px)] top-1/2 -translate-y-1/2 rounded-md bg-black/85 px-2 py-1 text-[11px] text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-                  style={{ whiteSpace: "nowrap" }}
-                >
-                  Ask Bizzi
-                </div>
-              </div>
-              </div>
+              {/* Ask Bizzi button removed on forecasts page */}
             </div>
-    
+
+          </div>
+
         );
       })}
     </div>

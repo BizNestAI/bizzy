@@ -20,16 +20,49 @@ function getEnv() {
 /* -----------------------------------------------------------
    Signup (kept via Supabase client SDK)
 ----------------------------------------------------------- */
-export async function signUp(email, password) {
-  const { data, error } = await supabase.auth.signUp({ email, password });
+export async function signUp(email, password, names = {}) {
+  const first_name = (names?.firstName || "").trim();
+  const last_name = (names?.lastName || "").trim();
+  const full_name = [first_name, last_name].filter(Boolean).join(" ") || null;
+
+  // Seed auth metadata so future sessions carry the user's name
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        first_name: first_name || null,
+        last_name: last_name || null,
+        full_name,
+      },
+    },
+  });
   if (error) throw error;
 
-  // Best-effort profile record; ignore unique errors
-  await supabase
+  // Best-effort profile record; ensure names land in user_profiles
+  const { data: existing } = await supabase
     .from('user_profiles')
-    .insert([{ id: data.user.id, email, role: 'owner' }])
-    .select('id')
+    .select('first_name,last_name,email,role')
+    .eq('id', data.user.id)
     .maybeSingle();
+
+  const payload = {
+    id: data.user.id,
+    email,
+    role: existing?.role || 'owner',
+    first_name: first_name || existing?.first_name || null,
+    last_name: last_name || existing?.last_name || null,
+    full_name: full_name || existing?.full_name || null,
+  };
+
+  const { error: upsertError } = await supabase
+    .from('user_profiles')
+    .upsert(payload, { onConflict: 'id' });
+
+  if (upsertError) {
+    // Surface meaningful failure so we can alert the user on the frontend
+    throw upsertError;
+  }
 
   return data;
 }

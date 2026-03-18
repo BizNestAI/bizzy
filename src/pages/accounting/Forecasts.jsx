@@ -1,10 +1,11 @@
 // File: /src/pages/accounting/Forecasts.jsx
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import ForecastEditorChart from "../../components/Accounting/ForecastEditorChart";
 import ForecastVsActualChart from "../../components/Accounting/ForecastVsActualChart";
-import { LifeBuoy } from "lucide-react";
+import { LifeBuoy, ChevronDown } from "lucide-react";
+import { Listbox } from "@headlessui/react";
 import { useBusiness } from "../../context/BusinessContext";
 import AgendaWidget from "../Calendar/AgendaWidget.jsx";
 import { useRightExtras } from "../../insights/RightExtrasContext";
@@ -53,12 +54,59 @@ export default function Forecasts() {
   const noBusiness = !userId || !businessId;
   const usingDemo = shouldUseDemoData(currentBusiness);
   const canView = usingDemo || qbStatus === "connected";
-  const selectStyles =
-    "rounded-xl border border-[var(--accent-line)] bg-[var(--panel)] px-3 py-1.5 text-sm text-white/80 focus:outline-none focus:ring-2 focus:ring-emerald-400/40 shadow-[0_8px_24px_rgba(0,0,0,0.35)]";
+  const horizonOptions = useMemo(
+    () => [
+      { value: 6, label: "6 months" },
+      { value: 9, label: "9 months" },
+      { value: 12, label: "12 months" },
+    ],
+    []
+  );
+  const compareOptions = useMemo(
+    () => [
+      { value: 3, label: "3 months" },
+      { value: 6, label: "6 months" },
+      { value: 12, label: "12 months" },
+    ],
+    []
+  );
+
+  const DarkListbox = ({ value, onChange, options }) => {
+    const current = options.find((o) => o.value === value) || options[0];
+    return (
+      <Listbox value={current} onChange={(opt) => onChange(opt.value)}>
+        <div className="relative min-w-[130px]">
+          <Listbox.Button
+            className="w-full rounded-xl border border-white/12 bg-[rgba(13,15,20,0.92)] px-3 py-1.5 text-sm text-white/90 shadow-[0_10px_30px_rgba(0,0,0,0.45)] focus:outline-none focus:ring-2 focus:ring-emerald-400/35 flex items-center justify-between gap-2"
+          >
+            <span className="truncate">{current?.label}</span>
+            <ChevronDown size={16} className="text-white/70 shrink-0" />
+          </Listbox.Button>
+          <Listbox.Options className="absolute z-30 mt-1 w-full rounded-xl border border-white/10 bg-[rgba(10,12,16,0.96)] backdrop-blur-sm shadow-[0_18px_40px_rgba(0,0,0,0.55)] overflow-hidden">
+            {options.map((opt) => (
+              <Listbox.Option
+                key={opt.value}
+                value={opt}
+                className={({ active, selected }) =>
+                  [
+                    "px-3 py-2 text-sm cursor-pointer",
+                    active ? "bg-white/8 text-white" : "text-white/85",
+                    selected ? "bg-[rgba(var(--accent-rgb),0.12)] text-white" : "",
+                  ].join(" ")
+                }
+              >
+                {opt.label}
+              </Listbox.Option>
+            ))}
+          </Listbox.Options>
+        </div>
+      </Listbox>
+    );
+  };
 
   return (
     canView ? (
-    <div className="p-5 text-white space-y-6">
+    <div className="px-3 md:px-4 pt-0 pb-8 text-white space-y-6">
       <ModuleHeader
         module="financials"
         title="Cash Flow Forecasts"
@@ -77,23 +125,19 @@ export default function Forecasts() {
       <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-[var(--accent-line)] bg-[var(--panel)] px-4 py-3 text-sm shadow-[0_16px_36px_rgba(0,0,0,0.35)]">
         <div className="inline-flex items-center gap-2">
           <span className="text-white/70">Editor horizon</span>
-          <select value={editorMonths} onChange={(e) => setEditorMonths(Number(e.target.value))} className={selectStyles}>
-            <option value={6}>6 months</option>
-            <option value={9}>9 months</option>
-            <option value={12}>12 months</option>
-          </select>
+          <DarkListbox
+            value={editorMonths}
+            onChange={(v) => setEditorMonths(Number(v))}
+            options={horizonOptions}
+          />
         </div>
         <div className="inline-flex items-center gap-2">
           <span className="text-white/70">Compare window</span>
-          <select value={compareMonths} onChange={(e) => setCompareMonths(Number(e.target.value))} className={selectStyles}>
-            <option value={3}>3 months</option>
-            <option value={6}>6 months</option>
-            <option value={12}>12 months</option>
-          </select>
-        </div>
-        <div className="inline-flex items-center gap-2 text-white/60">
-          <LifeBuoy size={16} />
-          Need help forecasting? <Link to="/dashboard/bizzy" className="text-white hover:underline">Ask Bizzi</Link>
+          <DarkListbox
+            value={compareMonths}
+            onChange={(v) => setCompareMonths(Number(v))}
+            options={compareOptions}
+          />
         </div>
       </div>
 

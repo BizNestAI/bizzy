@@ -9,20 +9,22 @@ import BizzySubmitButton from "./BizzySubmitButton";
 import { getQuickPromptsForModule } from "../../services/prompts/quickPromptService";
 import { NORMAL_PROMPTS, ONBOARDING_PROMPTS } from "../../config/chatQuickPrompts";
 import { identifyOnboardingPrompt } from "../../config/onboardingPromptBank";
+import { CHAT_BAR_MAX_W, CHAT_BAR_VW } from "../../config/chatLayout";
+import { ACCENT_HEX } from "../../config/accent";
 
 /* -------------------------------------------------- */
 const accentHexMap = {
-  bizzy: "#FF4EEB",
-  accounting: "#00FFB2",
-  marketing: "#3B82F6",
-  tax: "#FFD700",
-  investments: "#B388FF",
-  email: "#3CF2FF",
+  bizzy: ACCENT_HEX,
+  accounting: ACCENT_HEX,
+  marketing: ACCENT_HEX,
+  tax: ACCENT_HEX,
+  investments: ACCENT_HEX,
+  email: ACCENT_HEX,
 };
 
-const CHROME_HEX  = "#BFBFBF";
-const CHROME_SOFT = "rgba(191,191,191,0.50)";
-const CHROME_TOP  = "#D9D9D9";
+const CHROME_HEX  = ACCENT_HEX;
+const CHROME_SOFT = "rgba(52,211,153,0.50)";
+const CHROME_TOP  = "#d0f5e6";
 const DEFAULT_BORDER   = hexToRgba(CHROME_HEX, 0.25);
 const DEFAULT_QP_FRAME = hexToRgba(CHROME_HEX, 0.22);
 const DEFAULT_GLOW     = hexToRgba(CHROME_HEX, 0.24);
@@ -91,7 +93,7 @@ export default function BizzyChatBar({
   const useChromeAccent = CHROME_MODULES.has(currentModule) || isChatHome;
   const brandAccent = useMemo(() => {
     if (useChromeAccent) return CHROME_HEX;
-    return accentHexMap[currentModule] || "#A855F7";
+    return accentHexMap[currentModule] || ACCENT_HEX;
   }, [useChromeAccent, currentModule]);
 
   const neutralFrame = DEFAULT_QP_FRAME;
@@ -168,6 +170,14 @@ export default function BizzyChatBar({
     return () => { alive = false; };
   }, [currentModule, allowedByRoute, forceVisible, isOnboardingMode]);
 
+  useEffect(() => {
+    if (!isChatHome || !shouldRender || isCanvasOpen) return;
+    const el = inputRef.current;
+    if (!el) return;
+    const raf = requestAnimationFrame(() => el.focus());
+    return () => cancelAnimationFrame(raf);
+  }, [isChatHome, shouldRender, isCanvasOpen]);
+
   if (!shouldRender) return null;
 
   // Container positioning
@@ -179,25 +189,66 @@ export default function BizzyChatBar({
   const focusGlow = "none";
   const focusBg = "none";
 
-  // Unified neutral shell (slightly lighter for contrast, subtle border like Grok)
-  const neutralShellBg = "rgba(46,42,40,0.92)";
-  const neutralShellBorder = "1px solid rgba(255,255,255,0.08)";
+  // Unified neutral shell (graphite glass, no blue) shared across ChatHome, dashboards, and Canvas
+  const neutralShellBg = "var(--surface-graphite)";
+  const neutralShellBorder = "1px solid var(--surface-border)";
+  const barShadow = "0 0 0 1px var(--surface-border), 0 10px 24px rgba(0,0,0,0.28)";
 
   // Chrome static pages should stay centered/narrow; dashboards with Canvas open should not.
   const isChromeStaticPage =
     currentModule === "docs" || currentModule === "companion" || currentModule === "settings";
 
-  // Keep chat-home wide, but cap the bar on dashboards for better balance.
-  const widthWrapperStyle = (() => {
-    // When the canvas is open (ChatHome or dashboard), match the capped dashboard width.
-    if (isCanvasOpen) return { maxWidth: "780px", width: "86vw", margin: "0 auto" };
-    if (isChromeStaticPage) return { maxWidth: "900px", width: "88vw", margin: "0 auto" };
-    if (!isChatHome) return { maxWidth: "780px", width: "86vw", margin: "0 auto" };
-    return undefined;
-  })();
+  // Shared chat column width (aligns with conversation width)
+  const widthWrapperStyle = {
+    maxWidth: "var(--chat-col-max)",
+    width: "100%",
+    paddingLeft: "var(--chat-col-pad)",
+    paddingRight: "var(--chat-col-pad)",
+    margin: "0 auto",
+    boxSizing: "border-box",
+  };
 
   const quickPromptAccent = null; // keep quick prompts on the neutral chrome scheme everywhere
   const quickPromptFrame = DEFAULT_QP_FRAME;
+  const promptContainerClass = isChatHome ? "bizzy-chathome-prompts bizzy-chathome-chips" : "";
+  const promptChipClass = isChatHome ? "bizzy-chathome-chip bizzy-chip" : "";
+  const devBizId =
+    import.meta.env?.DEV && typeof window !== "undefined"
+      ? window.localStorage?.getItem("currentBusinessId") ||
+        window.localStorage?.getItem("business_id") ||
+        ""
+      : "";
+  const lastLogRef = useRef({ mode: null, module: null });
+
+  useEffect(() => {
+    if (!import.meta.env?.DEV) return;
+    const prev = lastLogRef.current;
+    if (prev.mode !== quickPromptMode || prev.module !== currentModule) {
+      // eslint-disable-next-line no-console
+      console.log("[BizzyChatBar] mode:", quickPromptMode, "module:", currentModule);
+      lastLogRef.current = { mode: quickPromptMode, module: currentModule };
+    }
+  }, [quickPromptMode, currentModule]);
+
+  // Prefill chat input (e.g., follow-up suggestions)
+  useEffect(() => {
+    const handler = (e) => {
+      const text = (e?.detail?.text || "").toString();
+      const autoSend = !!e?.detail?.autoSend;
+      if (!text) return;
+      setInput(text);
+      if (autoSend && !isLoading) {
+        openCanvas(currentModule);
+        window.dispatchEvent(new Event("bizzy:open-chat"));
+        setTimeout(() => {
+          setInput("");
+          sendMessage(text, { openCanvas: true, module: currentModule });
+        }, 0);
+      }
+    };
+    window.addEventListener("bizzy:prefill-chat", handler);
+    return () => window.removeEventListener("bizzy:prefill-chat", handler);
+  }, [currentModule, isLoading, sendMessage, openCanvas]);
 
   return (
     <div className={[containerClass, className].join(" ")}>
@@ -211,6 +262,7 @@ export default function BizzyChatBar({
               "--qp-accent": accentHex,
               "--qp-frame": quickPromptFrame,
             }}
+            data-bizzy-chatbar-measured
           >
             <AskBizzyGuidedPrompts
               module={currentModule}
@@ -219,35 +271,41 @@ export default function BizzyChatBar({
                   ? ONBOARDING_PROMPTS
                   : quickPrompts?.length
                     ? quickPrompts
-                    : NORMAL_PROMPTS
+                    : undefined
               }
               onPromptClick={handlePromptClick}
               max={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
               accentColor={quickPromptAccent}
+              className={promptContainerClass}
+              chipClassName={promptChipClass}
             />
           </div>
-
           {/* Input bar */}
-          <div style={widthWrapperStyle}>
+          <div
+            style={widthWrapperStyle}
+            data-bizzy-chatbar-shell
+            data-bizzy-chatbar-measured
+          >
             <form onSubmit={handleSubmit} className="mt-1">
               <div
-                className={[
-                  "flex items-center w-full transition rounded-2xl px-4 py-2",
-                  effectiveTone === "neutral" ? "rounded-full" : "rounded-2xl",
-                  shellClassName,
-                ].join(" ")}
+                data-bizzy-chatbar-form
+            className={[
+              "bizzy-chatbar",
+              "flex items-center w-full transition rounded-2xl px-4 py-2",
+              effectiveTone === "neutral" ? "rounded-full" : "rounded-2xl",
+              shellClassName,
+            ].join(" ")}
                 onFocus={() => setIsFocused(true)}
                 onBlur={() => setIsFocused(false)}
                 style={{
-                  border: effectiveTone === "neutral" ? neutralShellBorder : `1px solid ${borderCol}`,
-                  boxShadow: focusGlow,
+                  border: neutralShellBorder,
+                  // Keep focus state flat—no outer glow when the bar is active
+                  boxShadow: isFocused ? barShadow : barShadow,
                   backgroundImage: focusBg,
-                  backgroundColor:
-                    effectiveTone === "neutral"
-                      ? neutralShellBg
-                      : "rgba(18,16,15,0.88)",
+                  backgroundColor: neutralShellBg,
                 }}
               >
+                <div className="bizzy-chatbar-sheen" aria-hidden="true" />
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -258,17 +316,21 @@ export default function BizzyChatBar({
                       handleSubmit(e);
                     }
                   }}
-                  placeholder={placeholder || "Ask Bizzi anything about cash flow, marketing, or taxes..."}
+                  placeholder={placeholder || "Talk to Bizzi about your books, cash flow, jobs, or taxes…"}
                   rows={1}
                   className={[
-                    "flex-1 resize-none px-0 py-2.5 bg-transparent text-white focus:outline-none",
-                    "scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent",
-                    effectiveTone === "neutral" ? "py-1.5" : "",
-                  ].join(" ")}
-                  style={{
-                    minHeight: effectiveTone === "neutral" ? "40px" : "44px",
-                    maxHeight: "160px",
-                  }}
+                  "flex-1 resize-none px-0 py-2 bg-transparent text-white focus:outline-none placeholder:text-white/50",
+                  "scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent",
+                  effectiveTone === "neutral" ? "py-1.25" : "",
+                ].join(" ")}
+                style={{
+                  minHeight: effectiveTone === "neutral" ? "36px" : "40px",
+                  maxHeight: "150px",
+                  color: "var(--text)",
+                  caretColor: "var(--text)",
+                  fontFamily: "'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
+                  fontSize: "15px",
+                }}
                 />
 
                 {/* Mic toggle */}
@@ -277,13 +339,13 @@ export default function BizzyChatBar({
                   tabIndex={0}
                   onClick={() => setIsRecording((p) => !p)}
                   onKeyDown={(e) => e.key === "Enter" && setIsRecording((p) => !p)}
-                  className={[
-                    "ml-3 h-9 w-9 rounded-full flex items-center justify-center select-none",
-                    effectiveTone === "neutral"
-                      ? "bg-transparent text-white/90 border border-white/20"
-                      : "bg-zinc-900/95 text-[var(--accent)] border",
-                  ].join(" ")}
-                  style={{ borderColor: borderCol }}
+                className={[
+                  "ml-3 h-8.5 w-8.5 rounded-full flex items-center justify-center select-none",
+                  effectiveTone === "neutral"
+                    ? "bg-transparent text-white/90 border border-white/20"
+                    : "bg-[#0f141b] text-[var(--accent)] border",
+                ].join(" ")}
+                  style={{ borderColor: borderCol, boxShadow: "none" }}
                   aria-label="Toggle voice"
                   title="Toggle voice"
                 >

@@ -7,11 +7,8 @@ import { useRightExtras } from "../../insights/RightExtrasContext";
 import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
 
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
-import SyncButton from "../../components/Integrations/SyncButton.jsx";
 import BizzyPulse from "../../components/Bizzy/BizzyPulse.jsx";
 import BizzyAlerts from "../../components/Bizzy/BizzyAlerts.jsx";
-import KPIDashboardPanel from "../../components/Accounting/KPIDashboardPanel.jsx";
-import RecentCashActivity from "../../components/Bizzy/RecentCashActivity.jsx";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import useIntegrationManager from "../../hooks/useIntegrationManager.js";
@@ -68,16 +65,6 @@ export default function BizzyPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [businessId, navigate]);
 
-  const recentCash = useMemo(() => {
-    if (demoData?.financials?.recentCash) return demoData.financials.recentCash;
-    return [
-      { id: "a1", label: "Invoice paid", amount: 1200 },
-      { id: "a2", label: "Payment received", amount: 900 },
-      { id: "a3", label: "Invoice paid", amount: 2400 },
-      { id: "a4", label: "Payment received", amount: 1800 },
-    ];
-  }, [demoData]);
-
   return (
     <div className="w-full px-4 pt-2 pb-4">
       {/* Calm, minimal header for Pulse */}
@@ -85,7 +72,6 @@ export default function BizzyPanel() {
         module="bizzy"
         hero={heroInsight}
         heroVariant="minimal"
-      right={<SyncButton label="Sync Accounts" providers={["quickbooks", "jobber", "gmail"]} />}
       />
 
       <div className="grid gap-6 mt-2">
@@ -94,14 +80,6 @@ export default function BizzyPanel() {
             <BizzyPulse businessId={businessId} demoPulse={demoData?.pulse} />
             <BizzyAlerts businessId={businessId} demoAlerts={demoData?.pulse?.alerts} />
           </div>
-        </section>
-
-        <section aria-label="KPIs">
-          <KPIDashboardPanel userId={userId} businessId={businessId} />
-        </section>
-
-        <section aria-label="Recent Cash Activity">
-          <RecentCashActivity items={recentCash} currency="$" />
         </section>
       </div>
     </div>

@@ -86,24 +86,11 @@ export default function AskBizzyQuickPrompts({
   const curated = CURATED[moduleKey] || CURATED.general;
   const list = Array.isArray(prompts) && prompts.length ? prompts : curated;
   const visible = list.slice(0, max);
+  const isChatHomeRow = className.includes("bizzy-chathome");
 
   // best-effort usage logging; non-blocking
-  const logUsage = async (text) => {
-    try {
-      const user_id = localStorage.getItem('user_id');
-      const business_id = localStorage.getItem('currentBusinessId');
-      if (!user_id) return;                    // anonymous session: skip
-    await supabase.from('prompt_usage').insert([{
-      user_id,
-      business_id: business_id || null,
-      module: moduleKey,
-      prompt_text: text,
-      created_at: new Date().toISOString(),  // optional but nice to have
-    }]);
-    } catch {
-      // swallow; we never block the UI on usage logging
-    }
-  };
+  // Usage logging disabled until prompt_usage table is available
+  const logUsage = async () => {};
 
   const handleClick = async (text) => {
     if (!text) return;
@@ -112,6 +99,9 @@ export default function AskBizzyQuickPrompts({
   };
 
   const [hoverIdx, setHoverIdx] = useState(null);
+  const pulseEnabled =
+    (chipClassName || "").includes("bizzy-chathome-chip") ||
+    (className || "").includes("bizzy-chathome");
 
   return (
     <div className={`w-full px-2 py-0 ${className}`}>
@@ -120,7 +110,9 @@ export default function AskBizzyQuickPrompts({
           className={[
             'flex gap-2 pb-1 items-center',
             scrollable ? 'overflow-x-auto no-scrollbar snap-x snap-mandatory' : '',
+            isChatHomeRow ? 'bizzy-chathome-chiprow' : '',
           ].join(' ')}
+          data-bizzy-chip-row={isChatHomeRow ? true : undefined}
           style={{ paddingBottom: 6 }}
         >
           {visible.map((item, idx) => {
@@ -128,6 +120,7 @@ export default function AskBizzyQuickPrompts({
             const tooltip = typeof item === 'string' ? undefined : item.tooltip;
             const isActive = hoverIdx === idx;
             const highlightHex = accentColor || '#f5f6f7';
+            const baseShadow = '0 10px 24px rgba(0,0,0,0.28)';
             return (
               <button
                 key={stableKey(moduleKey, idx, text)}
@@ -137,20 +130,30 @@ export default function AskBizzyQuickPrompts({
                 onMouseEnter={() => setHoverIdx(idx)}
                 onMouseLeave={() => setHoverIdx((prev) => (prev === idx ? null : prev))}
                 className={[
+                  'bizzy-quickprompt',
+                  pulseEnabled ? 'bizzy-quickprompt--pulse' : '',
+                  'bizzy-chip',
                   'inline-flex items-center rounded-full border',
                   'px-3 py-1 text-sm',
                   'transition-all duration-300 ease-out',
                   'snap-start whitespace-nowrap select-none',
-                  chipClassName,
-                ].join(' ')}
-                style={{
-                  color: isActive ? highlightHex : 'rgba(255,255,255,0.85)',
-                  borderColor: isActive
-                    ? hexToRgbaLocal(highlightHex, 0.35)
-                    : 'var(--qp-frame, rgba(255,255,255,0.16))',
-                  background: 'transparent',
-                  boxShadow: 'none',
-                }}
+              chipClassName,
+            ].join(' ')}
+            data-bizzy-chip
+            style={{
+              color: isActive ? highlightHex : 'rgba(255,255,255,0.9)',
+              borderColor: 'var(--surface-border)',
+              background: isActive ? 'var(--surface-graphite-2)' : 'var(--surface-graphite)',
+              boxShadow: pulseEnabled
+                ? `${baseShadow}, 0 0 0 0 var(--surface-glow-green)`
+                : baseShadow,
+              animation: pulseEnabled
+                ? 'bizzyChipGlow 4.2s ease-in-out infinite, bizzyChipBorder 4.2s ease-in-out infinite'
+                : undefined,
+              animationDelay: pulseEnabled ? `${idx * 0.6}s` : undefined,
+              "--qp-glow-a": "0 0 0 0 var(--surface-glow-green)",
+              "--qp-glow-b": "0 0 16px var(--surface-glow-green)",
+            }}
               >
                 {text}
               </button>

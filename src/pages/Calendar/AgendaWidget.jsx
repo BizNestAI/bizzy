@@ -104,6 +104,7 @@ function Skeleton({ border }) {
 }
 
 function Section({ title, list, itemBorder, hoverBg, condensed }) {
+  const [hoveredId, setHoveredId] = useState(null);
   return (
     <div>
       <div className="text-[11px] uppercase tracking-wide mb-1 text-white/65">{title}</div>
@@ -114,12 +115,16 @@ function Section({ title, list, itemBorder, hoverBg, condensed }) {
           {list.map((i) => (
             <li
               key={i.id}
-              className="flex items-start justify-between rounded-lg"
+              className="flex items-start justify-between rounded-lg transition"
               style={{
-                backgroundColor: "rgba(17, 24, 39, 0.55)",
+                backgroundColor: hoveredId === i.id ? hoverBg : "rgba(17, 24, 39, 0.55)",
                 border: `1px solid ${itemBorder}`,
                 padding: condensed ? '8px' : '12px',
+                transform: hoveredId === i.id ? "translateY(-1px)" : "translateY(0)",
+                transition: "background-color 160ms ease, transform 160ms ease, border-color 160ms ease",
               }}
+              onMouseEnter={() => setHoveredId(i.id)}
+              onMouseLeave={() => setHoveredId(null)}
             >
               <div className="flex flex-col">
                 <div className="text-sm text-white font-medium leading-tight">{i.title}</div>

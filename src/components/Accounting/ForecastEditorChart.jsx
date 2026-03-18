@@ -9,8 +9,7 @@ import {
   CartesianGrid,
   ResponsiveContainer,
 } from 'recharts';
-import { Loader2, RefreshCw, Save, Undo2, Info, Pencil, AlertTriangle } from 'lucide-react';
-import AskBizzyInsightButton from '../Bizzy/AskBizzyInsightButton';
+import { Loader2, Save, Undo2, Info, Pencil, AlertTriangle } from 'lucide-react';
 import { safeFetch } from '../../utils/safeFetch';
 import { getDemoData, shouldUseDemoData } from '../../services/demo/demoClient.js';
 
@@ -24,8 +23,11 @@ const clampNonNegative = (v) => Math.max(0, Number.isFinite(+v) ? Math.floor(+v)
 export default function ForecastEditorChart({ userId, businessId, months = 12 }) {
   const [rows, setRows] = useState([]);
   const [draft, setDraft] = useState([]);
+  const [previousRows, setPreviousRows] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+  const [asOfLabel, setAsOfLabel] = useState(formatAsOfDate(new Date()));
   const [error, setError] = useState('');
   const [usingMock, setUsingMock] = useState(false);
   const [edited, setEdited] = useState(new Set());
@@ -45,6 +47,8 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
         );
         setRows(fallback);
         setDraft(fallback);
+        setPreviousRows(null);
+        setLastSavedAt(new Date());
         setEdited(new Set());
         setUsingMock(true);
         setLoading(false);
@@ -55,6 +59,8 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
       if (!userId || !businessId) {
         setRows([]);
         setDraft([]);
+        setPreviousRows(null);
+        setLastSavedAt(null);
         setEdited(new Set());
         setUsingMock(false);
         setLoading(false);
@@ -76,12 +82,16 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
         const normalized = alignForecastHorizon(data, months);
         setRows(normalized);
         setDraft(normalized);
+        setPreviousRows(null);
+        setLastSavedAt(new Date());
         setEdited(new Set());
         setUsingMock(data.some((r) => r.source === 'mock'));
       } catch (err) {
         const fallback = alignForecastHorizon(buildMockForecast(months), months);
         setRows(fallback);
         setDraft(fallback);
+        setPreviousRows(null);
+        setLastSavedAt(new Date());
         setEdited(new Set());
         setUsingMock(true);
         setError('Live forecast unavailable. Showing Bizzi sample data.');
@@ -100,6 +110,13 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
       mounted.current = false;
     };
   }, [fetchForecast]);
+
+  useEffect(() => {
+    const tick = () => setAsOfLabel(formatAsOfDate(new Date()));
+    tick();
+    const id = setInterval(tick, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const headerStats = useMemo(() => {
     if (!draft.length) return null;
@@ -151,18 +168,26 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
   };
 
   const hasEdits = edited.size > 0 && draft.length > 0 && JSON.stringify(draft) !== JSON.stringify(rows);
+  const canRevert = hasEdits || !!previousRows;
 
   const revertChanges = () => {
+    if (previousRows) {
+      setRows(previousRows);
+      setDraft(previousRows);
+      setPreviousRows(null);
+      setEdited(new Set());
+      return;
+    }
     setDraft(rows);
     setEdited(new Set());
   };
 
-  const resetToModel = () => fetchForecast({ forceModel: true });
-
   const saveAll = async () => {
     if (isDemo) {
       if (!hasEdits) return;
+      setPreviousRows(rows);
       setRows(draft);
+      setLastSavedAt(new Date());
       setEdited(new Set());
       return;
     }
@@ -183,7 +208,9 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
         method: 'POST',
         body: { userId, businessId, rows: payload },
       });
+      setPreviousRows(rows);
       setRows(draft);
+      setLastSavedAt(new Date());
       setEdited(new Set());
     } catch (e) {
       console.error('[ForecastEditorChart] save error', e);
@@ -221,12 +248,15 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
     [draft]
   );
 
+  const lastSavedLabel = useMemo(() => (lastSavedAt ? formatTimeAgo(lastSavedAt) : null), [lastSavedAt]);
+
   return (
     <div className="rounded-[32px] border border-white/10 bg-gradient-to-b from-white/6 via-white/2 to-transparent px-5 py-6 text-white shadow-[0_35px_100px_rgba(0,0,0,0.55)]">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.4em] text-white/60">Projection editor</p>
           <h2 className="mt-2 text-2xl font-semibold text-white">Cash flow runway</h2>
+          <p className="text-xs text-white/60 mt-1">As of {asOfLabel}</p>
           {error && (
             <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-rose-400/40 bg-rose-500/10 px-3 py-1 text-xs text-rose-200">
               <AlertTriangle size={14} /> {error}
@@ -237,24 +267,6 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
               Mock data — connect accounting to see live
             </div>
           )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <AskBizzyInsightButton
-            metric="Cash Flow Forecast"
-            value="forecast editor"
-            previousValue="last month's forecast"
-            disabled={noBusinessSelected}
-          />
-          <Button icon={RefreshCw} label="Reset" onClick={resetToModel} disabled={noBusinessSelected || loading} />
-          <Button icon={Undo2} label="Revert" onClick={revertChanges} disabled={!hasEdits} />
-          <Button
-            icon={saving ? Loader2 : Save}
-            spinning={saving}
-            label="Save all"
-            onClick={saveAll}
-            disabled={!hasEdits || saving || noBusinessSelected}
-            variant="primary"
-          />
         </div>
       </div>
 
@@ -290,8 +302,35 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
       </div>
 
       <div className="mt-6 rounded-3xl border border-white/10 bg-black/20">
-        <div className="sticky top-0 rounded-t-3xl bg-white/10 px-4 py-3 text-xs uppercase tracking-wide text-white/60">
-          Editable table
+        <div className="flex flex-col gap-2 bg-white/10 px-4 py-3 text-xs uppercase tracking-wide text-white/60 md:flex-row md:items-center md:justify-between md:gap-3">
+          <div className="flex items-center gap-3">
+            <div>Editable table</div>
+            <div className="text-[11px] uppercase text-white/50">As of {asOfLabel}</div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-[11px] normal-case text-white/70 md:justify-end">
+            <div className="inline-flex items-center gap-1">
+              <Info size={14} />
+              <span>Edits persist only after clicking</span>
+              <Button
+                icon={saving ? Loader2 : Save}
+                spinning={saving}
+                size="sm"
+                label="Save all"
+                onClick={saveAll}
+                disabled={!hasEdits || saving || noBusinessSelected}
+                variant="primary"
+              />
+              {lastSavedLabel && (
+                <span className="ml-2 inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-white/70">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                  <span>Saved · Updated {lastSavedLabel}</span>
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button icon={Undo2} label="Revert" size="sm" onClick={revertChanges} disabled={!canRevert} />
+            </div>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -336,10 +375,6 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
             </tbody>
           </table>
         </div>
-        <div className="flex items-center gap-2 px-4 py-3 text-xs text-white/55">
-          <Info size={14} /> Edits persist only after clicking
-          <span className="mx-1 rounded bg-white/10 px-1 py-0.5 text-white">Save all</span>.
-        </div>
       </div>
     </div>
   );
@@ -347,9 +382,12 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
 
 /* ---------- UI atoms ---------- */
 
-function Button({ icon: Icon, label, onClick, disabled, variant = 'ghost', spinning }) {
-  const base =
-    'inline-flex items-center gap-1 rounded-xl px-3 py-1.5 text-sm transition border';
+function Button({ icon: Icon, label, onClick, disabled, variant = 'ghost', spinning, size = 'md' }) {
+  const base = 'inline-flex items-center gap-1 transition border';
+  const sizes = {
+    sm: 'rounded-lg px-2.5 py-1 text-xs',
+    md: 'rounded-xl px-3 py-1.5 text-sm',
+  };
   const styles = {
     primary: disabled
       ? 'bg-emerald-600/30 text-white/60 border-transparent'
@@ -359,8 +397,12 @@ function Button({ icon: Icon, label, onClick, disabled, variant = 'ghost', spinn
       : 'border-white/10 text-white/90 hover:bg-white/5',
   };
   return (
-    <button onClick={onClick} disabled={disabled} className={`${base} ${styles[variant === 'primary' ? 'primary' : 'ghost']}`}>
-      {Icon && <Icon size={16} className={spinning ? 'animate-spin' : ''} />}
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`${base} ${sizes[size] ?? sizes.md} ${styles[variant === 'primary' ? 'primary' : 'ghost']}`}
+    >
+      {Icon && <Icon size={size === 'sm' ? 14 : 16} className={spinning ? 'animate-spin' : ''} />}
       {label}
     </button>
   );
@@ -398,6 +440,27 @@ function NumberInput({ value, onChange, ariaLabel }) {
       className="w-28 rounded-xl border border-white/15 bg-[#050608]/60 px-2 py-1.5 text-white outline-none ring-emerald-500/30 focus:border-emerald-300/40 focus:ring"
     />
   );
+}
+
+function formatTimeAgo(date) {
+  const now = Date.now();
+  const then = new Date(date).getTime();
+  const diff = Math.max(0, now - then);
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+function formatAsOfDate(date) {
+  try {
+    return new Date(date).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric', year: 'numeric' });
+  } catch (e) {
+    return '';
+  }
 }
 
 /* ---------- mock helpers ---------- */

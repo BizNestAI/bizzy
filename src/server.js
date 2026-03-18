@@ -17,7 +17,16 @@ import movesRoute from "./api/gpt/suggestedMovesEngine.js";
 import revenueSeriesRouter from "./api/accounting/revenue-series.js";
 import profitSeriesRouter from "./api/accounting/profit-series.js";
 import reportsSyncRouter from "./api/accounting/reports-sync.js";
+import pnlPdfRouter from "./api/accounting/pnlPdf.routes.js";
 import bookkeepingRouter from "./api/accounting/bookkeeping.routes.js";
+import expenseBreakdownRouter from "./api/accounting/expense-breakdown.js";
+import qboSyncRouter from "./api/accounting/qbo-sync.js";
+import qboBackfillRouter from "./api/accounting/qbo-backfill.routes.js";
+import arRouter from "./api/ar/ar.routes.js";
+import bookkeepingPlaidRouter from "./api/bookkeeping/bookkeeping.routes.js";
+import { startBooksPostingCron } from "./jobs/booksPost.cron.js";
+import { startPlaidDailySyncCron } from "./cron/plaidSync.cron.js";
+import { startReconciliationCron } from "./cron/reconciliation.cron.js";
 
 // Marketing
 import marketingRouter from "./api/marketing/marketing.routes.js";
@@ -28,6 +37,7 @@ import { startForecastCron } from "./jobs/forecast.cron.js";
 // GPT & chats
 import gptRoutes from "./api/gpt/brain/gpt.routes.js";
 import chatsRoutes from "./api/chats/chats.routes.js";
+import bizzyFollowupsRouter from "./api/bizzy/followups.routes.js";
 
 // Other modules
 import investmentsRouter from "./api/investments/investments.routes.js";
@@ -39,6 +49,7 @@ import insightsRoutes from "./api/insights/insights.routes.js";
 import affordabilityCheckHandler from "./api/accounting/affordabilityCheck.js";
 import emailRouter from "./api/email/gmail.routes.js";
 import { callback as gmailOAuthCallback } from "./api/email/gmail.auth.js";
+import { qboEnvName } from "./utils/qboEnv.js";
 
 // Tax (router)
 import taxRouter from "./api/tax/index.js";
@@ -47,6 +58,7 @@ import taxDeductionsRouter from "./api/tax/deductions.routes.js";
 
 import bizzyInsightRouter from "./api/gpt/brain/bizzyInsight.js";
 import { requireAuth } from "./api/gpt/middlewares/requireAuth.js";
+import plaidIntegrationsRouter from "./api/integrations/plaid.routes.js";
 
 /* 🔹 NEW: Hero insights router */
 import heroInsightsRouter from "./api/hero-insights/router.js";
@@ -56,37 +68,74 @@ const PORT = process.env.PORT || 5050;
 
 app.disable("x-powered-by");
 
+console.info("[QBO] QB_ENVIRONMENT:", qboEnvName);
+
 /* ----------------------------- Stripe webhook FIRST (raw body) ----------------------------- */
 app.post(
   "/api/billing/webhook",
   express.raw({ type: "application/json" }),
   billingWebhookHandler
 );
+if (process.env.NODE_ENV !== "production") {
+  console.log("[billing] webhook mounted", {
+    route: "/api/billing/webhook",
+    hasStripeWebhookSecret: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+  });
+}
 
 /* ---------------------------------------- CORS ---------------------------------------- */
-const rawCorsOrigins = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || "";
-const allowlist = rawCorsOrigins
-  .split(",")
-  .map((o) => o.trim())
-  .filter(Boolean);
-const allowAll = allowlist.length === 0 && !process.env.CORS_ORIGINS;
+const allowlist = (() => {
+  const list = ["https://bizzi-ten.vercel.app"];
+  const raw = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || "";
+  raw
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean)
+    .forEach((o) => {
+      if (!list.includes(o)) list.push(o);
+    });
+  if (process.env.NODE_ENV !== "production") {
+    const local = "http://localhost:5173";
+    if (!list.includes(local)) list.push(local);
+    console.log("[CORS] allowed origins (dev):", list);
+  }
+  return list;
+})();
+const allowAll = allowlist.length === 0;
 
 console.info("[CORS] Allowlist:", allowAll ? "(all origins)" : allowlist);
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (!origin) return callback(null, true); // server-to-server or health checks
-    if (allowAll || allowlist.includes(origin)) return callback(null, true);
-    return callback(new Error(`CORS: Origin ${origin} not allowed`), false);
-  },
-  credentials: true,
-  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization", "x-user-id", "x-business-id"],
-  optionsSuccessStatus: 204,
-};
+const ALLOWED_METHODS = "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD";
 
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+// Explicit preflight guard for /api/* to guarantee headers (before any routes)
+app.use((req, res, next) => {
+  if (!req.path.startsWith("/api/") && !req.path.startsWith("/auth/")) return next();
+  const origin = req.headers.origin;
+  const isAllowedOrigin = allowAll || (origin && allowlist.includes(origin));
+  if (origin && isAllowedOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", ALLOWED_METHODS);
+
+  // Reflect requested headers when provided, else fall back to a safe list
+  const reqHeaders = req.headers["access-control-request-headers"];
+  const headerSet = new Set(
+    (reqHeaders && typeof reqHeaders === "string"
+      ? reqHeaders.split(",").map((h) => h.trim())
+      : ["Content-Type", "Authorization", "x-data-mode", "x-debug", "x-user-id", "x-business-id"]
+    ).filter(Boolean)
+  );
+  headerSet.add("x-data-mode");
+  res.setHeader("Access-Control-Allow-Headers", Array.from(headerSet).join(", "));
+  res.setHeader("Vary", "Access-Control-Request-Headers");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  return next();
+});
 
 /* --------------------------------------- Logging -------------------------------------- */
 if (process.env.NODE_ENV !== "test") app.use(morgan("tiny"));
@@ -116,6 +165,7 @@ app.use((req, _res, next) => {
 /* ---------------------------------- GPT & Chats ---------------------------------- */
 app.use("/api/gpt", gptRoutes);
 app.use("/api/chats", chatsRoutes);
+app.use("/api/bizzy", bizzyFollowupsRouter);
 
 /* ------------------------------------ Accounting ----------------------------------- */
 app.use("/auth", quickbooksAuth);
@@ -123,13 +173,19 @@ app.use("/auth", socialAuthRouter);
 app.use("/api/accounting/metrics", financialMetricsRoute);
 app.use("/api/accounting/pulse", pulseRoute);
 app.use("/api/accounting/moves", movesRoute);
+app.use("/api/accounting/expense-breakdown", expenseBreakdownRouter);
 app.use("/api/accounting/revenue-series", revenueSeriesRouter);
 app.use("/api/accounting/profit-series", profitSeriesRouter);
 app.use("/api/accounting/reports-sync", reportsSyncRouter);
+app.use("/api/accounting/pnl", pnlPdfRouter);
 app.use("/api/accounting/forecast", forecastRouter);
 app.use("/api/accounting/forecast-accuracy", forecastAccuracyRouter);
 app.use("/api/accounting/scenarios", scenariosRouter);
 app.use("/api/accounting", bookkeepingRouter);
+app.use("/api/qbo", qboSyncRouter);
+app.use("/api/qbo/backfill", qboBackfillRouter);
+app.use("/api/ar", arRouter);
+app.use("/api/bookkeeping", bookkeepingPlaidRouter);
 app.post("/api/accounting/affordabilityCheck", affordabilityCheckHandler);
 
 /* ----------------------- Bizzy Insight (requires auth) ----------------------- */
@@ -150,6 +206,10 @@ app.use("/api/jobs", jobsRoutes);
 /* --------------------------- Investments & Calendar --------------------------- */
 app.use("/api/investments", requireAuth, investmentsRouter);
 app.use("/api/calendar", calendarRoutes);
+app.use("/api/integrations/plaid", plaidIntegrationsRouter);
+app.get("/api/integrations/plaid/_ping", (_req, res) =>
+  res.json({ ok: true, at: "plaid_routes_ping" })
+);
 
 /* -------------------------------- Reviews, Docs, Insights ------------------------------- */
 app.use("/api/reviews", reviewsRouter);
@@ -169,6 +229,13 @@ app.use("/api/hero-insights", heroInsightsRouter);
 
 /* ------------------------------- Billing REST (non-webhook) ------------------------------ */
 app.use("/api/billing", express.json(), billingRouter);
+if (process.env.NODE_ENV !== "production") {
+  console.log("[billing] rest mounted", {
+    route: "/api/billing",
+    port: PORT,
+    hasStripeWebhookSecret: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+  });
+}
 
 /* ----------------------------------------- Root ----------------------------------------- */
 app.get("/", (_req, res) => res.send("Bizzy API is running"));
@@ -195,5 +262,12 @@ app.listen(PORT, () => {
 });
 
 startForecastCron();
+startBooksPostingCron();
+startPlaidDailySyncCron();
+if (String(process.env.DISABLE_RECON_CRON || "").toLowerCase() !== "true") {
+  startReconciliationCron();
+} else {
+  console.info("[recon-cron] disabled via env");
+}
 
 export default app;

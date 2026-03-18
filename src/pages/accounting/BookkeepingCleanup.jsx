@@ -1,8 +1,26 @@
-import React, { useMemo, useState, useEffect, useRef } from "react";
+import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext.jsx";
 import BookkeepingFeed from "../../components/Accounting/BookkeepingFeed.jsx";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
+import { AnimatePresence, motion } from "framer-motion";
+import BillingGate, { getBillingAccess, resolveStatusValue } from "../../components/Billing/BillingGate.jsx";
+import {
+  getAccounts as fetchAccounts,
+  getTransactions as fetchTransactions,
+  getQboCoa as fetchQboCoa,
+  approveTransactions,
+  undoTransaction,
+  updateHandledTransaction,
+  suggestTransactions,
+  enrichCounterparties,
+  getMappingStatus,
+  getClarificationRequests,
+} from "../../services/bookkeeping/bookkeepingClient.js";
+import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
+import useBillingStatus from "../../hooks/useBillingStatus.js";
+import { ClarificationModal } from "../../components/Bizzy/OperatorRequestsPanel.jsx";
 
 const MOCK_ACCOUNTS = [
   { id: "acct-cc-1234", name: "Credit Card 1234", type: "Credit Card", balance: -1820.45 },
@@ -129,17 +147,19 @@ const MOCK_TRANSACTIONS = DEMO_TRANSACTIONS.length ? DEMO_TRANSACTIONS : [
 
 const TABS = [
   { key: "needs_review", label: "Needs Review" },
-  { key: "approved", label: "Approved" },
+  { key: "handled", label: "Handled" },
+  { key: "posted", label: "Posted" },
 ];
 
 const DATE_RANGE_OPTIONS = [
   { value: "this_month", label: "This month" },
   { value: "last_30", label: "Last 30 days" },
   { value: "last_90", label: "Last 90 days" },
+  { value: "all", label: "All dates" },
 ];
 
-const ACCOUNT_OPTIONS = [{ value: "all", label: "All Accounts" }, ...DEMO_ACCOUNTS.map((a) => ({ value: a.id, label: a.name }))];
-const ACCOUNT_LIST = DEMO_ACCOUNTS;
+const DEMO_ACCOUNT_OPTIONS = [{ value: "all", label: "All Accounts" }, ...DEMO_ACCOUNTS.map((a) => ({ value: a.id, label: a.name }))];
+const DEMO_ACCOUNT_LIST = DEMO_ACCOUNTS;
 const TXN_DATA = MOCK_TRANSACTIONS;
 
 const PAGE_SIZE_OPTIONS = [
@@ -150,8 +170,8 @@ const PAGE_SIZE_OPTIONS = [
 
 const CATEGORY_OPTIONS = ["Materials", "Fuel", "Tools", "Overhead", "Meals", "Other"];
 const JOB_OPTIONS = ["Elm St. Kitchen", "Greenway Roof", "General Overhead"];
-const PANEL_BG = "var(--panel)";
-const PANEL_BORDER = "var(--accent-line)";
+const PANEL_BG = "#151717";
+const PANEL_BORDER = "rgba(255,255,255,0.06)";
 
 function SummaryCard({ value, label, subtext }) {
   return (
@@ -172,7 +192,7 @@ function AccountCard({ account, selected, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className="flex min-w-[220px] flex-col gap-1.5 rounded-xl border px-5 py-4 text-left transition hover:border-emerald-400/60"
+      className="relative z-0 flex min-w-[220px] flex-col gap-1 rounded-xl border px-5 py-2 text-left transition hover:border-emerald-400/60 hover:scale-[1.015] hover:z-10 focus-visible:z-10"
       style={{
         background: PANEL_BG,
         borderColor: selected ? "rgba(16,185,129,0.6)" : PANEL_BORDER,
@@ -184,29 +204,106 @@ function AccountCard({ account, selected, onClick }) {
         <span className="text-emerald-300">{account.toReview} to review</span>
       </div>
       <div className="text-base font-semibold text-slate-50">{account.name}</div>
-      <div className="text-sm text-slate-300">Balance {account.balance < 0 ? "-" : ""}${Math.abs(account.balance).toLocaleString()}</div>
     </button>
   );
+}
+
+function getAcctKey(a) {
+  return a?.plaid_account_id || a?.plaidAccountId || a?.id || null;
 }
 
 function BookkeepingCleanup() {
   const { currentBusiness } = useBusiness?.() || {};
   const usingDemo = shouldUseDemoData(currentBusiness);
-  const accounts = usingDemo ? ACCOUNT_LIST : [];
-  const chartAccounts = useMemo(() => {
+  const rulesButtonDisabled = false;
+  const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId");
+  const userId = localStorage.getItem("user_id");
+  const { status: billingStatus } = useBillingStatus(businessId, userId);
+  const billingAccess = getBillingAccess(resolveStatusValue(billingStatus));
+  const canRunAI = usingDemo ? true : billingAccess.canRunAI;
+  const [accounts, setAccounts] = useState(usingDemo ? DEMO_ACCOUNT_LIST : []);
+  const [chartAccounts, setChartAccounts] = useState(() => {
     if (!usingDemo) return [];
-    const byType = {
-      income: [],
-      expense: [],
-      equity: [],
-    };
+    const byType = { income: [], expense: [], equity: [], other: [] };
     CHART_OF_ACCOUNTS.forEach((acct) => {
-      byType[acct.type]?.push(acct);
+      if (byType[acct.type]) byType[acct.type].push(acct);
+      else byType.other.push(acct);
     });
-    return [...byType.income, ...byType.expense, ...byType.equity];
-  }, [usingDemo]);
+    return [...byType.income, ...byType.expense, ...byType.equity, ...byType.other];
+  });
   const rawTransactions = React.useMemo(() => (usingDemo ? TXN_DATA : []), [usingDemo]);
   const [transactions, setTransactions] = useState([]);
+  const [totalCount, setTotalCount] = useState(null);
+  const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [loadingAccounts, setLoadingAccounts] = useState(false);
+  const [loadingTxns, setLoadingTxns] = useState(false);
+  const suggestRanRef = useRef(null);
+  const enrichRanRef = useRef(null);
+  const accountOverrides = useRef(new Map());
+  const accountScrollRef = useRef(null);
+  const [showAccountScrollLeft, setShowAccountScrollLeft] = useState(false);
+  const [showAccountScrollRight, setShowAccountScrollRight] = useState(false);
+
+  const { plaidConnected, qbConnected } = useOnboardingStatus({ currentBusiness });
+  const hasLiveAccounts = useMemo(
+    () => !usingDemo && Array.isArray(accounts) && accounts.length > 0,
+    [accounts, usingDemo]
+  );
+  const effectivePlaidConnected = useMemo(
+    () => plaidConnected || hasLiveAccounts,
+    [plaidConnected, hasLiveAccounts]
+  );
+  const hasPlaidHistory = useMemo(() => {
+    if (usingDemo) return false;
+    if (hasLiveAccounts) return true;
+    if (lastSyncAt) return true;
+    if (typeof totalCount === "number" && totalCount > 0) return true;
+    if (Array.isArray(transactions) && transactions.length > 0) return true;
+    return false;
+  }, [usingDemo, hasLiveAccounts, lastSyncAt, totalCount, transactions]);
+
+  const plaidDisconnected = useMemo(() => {
+    if (usingDemo) return false;
+    if (loadingAccounts || loadingTxns) return false;
+    return !effectivePlaidConnected && hasPlaidHistory;
+  }, [usingDemo, loadingAccounts, loadingTxns, effectivePlaidConnected, hasPlaidHistory]);
+
+  const qboDisconnected = useMemo(() => {
+    if (usingDemo) return false;
+    return effectivePlaidConnected && !qbConnected;
+  }, [usingDemo, effectivePlaidConnected, qbConnected]);
+
+  const plaidNeverConnected = useMemo(() => {
+    if (usingDemo) return false;
+    if (loadingAccounts || loadingTxns) return false;
+    return !plaidConnected && !hasPlaidHistory;
+  }, [usingDemo, loadingAccounts, loadingTxns, plaidConnected, hasPlaidHistory]);
+
+  const updateAccountScrollButtons = useCallback(() => {
+    const el = accountScrollRef.current;
+    if (!el) return;
+    setShowAccountScrollLeft(el.scrollLeft > 4);
+    setShowAccountScrollRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 4);
+  }, []);
+
+  const scrollAccountsBy = useCallback((delta) => {
+    const el = accountScrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: delta, behavior: "smooth" });
+  }, []);
+
+  useEffect(() => {
+    updateAccountScrollButtons();
+    const el = accountScrollRef.current;
+    if (!el) return undefined;
+    const onScroll = () => updateAccountScrollButtons();
+    window.addEventListener("resize", updateAccountScrollButtons);
+    el.addEventListener("scroll", onScroll);
+    return () => {
+      window.removeEventListener("resize", updateAccountScrollButtons);
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, [updateAccountScrollButtons]);
 
   const guessAccountId = React.useCallback((txn) => {
     const text = `${txn.description || ""} ${txn.vendor || ""}`.toLowerCase();
@@ -227,20 +324,22 @@ function BookkeepingCleanup() {
   }, []);
 
   useEffect(() => {
-    const mapped = rawTransactions.map((t) => {
-      const suggestedAccountId = t.suggestedAccountId || guessAccountId(t);
-      return {
-        ...t,
-        suggestedAccountId,
-        glAccountId: t.glAccountId || suggestedAccountId,
-      };
-    });
-    setTransactions(mapped);
-  }, [rawTransactions, guessAccountId]);
+    if (usingDemo) {
+      const mapped = rawTransactions.map((t) => {
+        const suggestedAccountId = t.suggestedAccountId || guessAccountId(t);
+        return {
+          ...t,
+          suggestedAccountId,
+          glAccountId: t.glAccountId || suggestedAccountId,
+        };
+      });
+      setTransactions(mapped);
+    }
+  }, [rawTransactions, guessAccountId, usingDemo]);
 
-  const [autoApprove, setAutoApprove] = useState(false);
+  const [disableAutoApprove, setDisableAutoApprove] = useState(false);
   const [activeTab, setActiveTab] = useState("needs_review");
-  const [dateRange, setDateRange] = useState("this_month");
+  const [dateRange, setDateRange] = useState("all");
   const [accountFilter, setAccountFilter] = useState(null);
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [selectedIds, setSelectedIds] = useState(new Set());
@@ -248,28 +347,82 @@ function BookkeepingCleanup() {
   const [bulkJob, setBulkJob] = useState("Elm St. Kitchen");
   const [showCategorized, setShowCategorized] = useState(false);
   const [page, setPage] = useState(1);
+  const [showChecksOnly, setShowChecksOnly] = useState(false);
+  const showPostedToast = () => window.alert("Already posted to QuickBooks.");
+  const [mappingStatus, setMappingStatus] = useState(null);
+  const [loadingMappingStatus, setLoadingMappingStatus] = useState(false);
+  const [clarRequests, setClarRequests] = useState([]);
+  const [clarCount, setClarCount] = useState(null);
+  const [clarOpen, setClarOpen] = useState(false);
+  const navigate = useNavigate();
+
+  const loadMappingStatus = useCallback(async () => {
+    if (!businessId || usingDemo) return;
+    setLoadingMappingStatus(true);
+    try {
+      const res = await getMappingStatus(businessId);
+      setMappingStatus(res || null);
+    } catch (e) {
+      console.warn("[bookkeeping] mapping status fetch failed", e?.message || e);
+    } finally {
+      setLoadingMappingStatus(false);
+    }
+  }, [businessId, usingDemo]);
+
+  const loadClarifications = useCallback(async () => {
+    if (!businessId || usingDemo) return;
+    try {
+      const res = await getClarificationRequests(businessId, { limit: 200 });
+      const rows = Array.isArray(res?.rows) ? res.rows : Array.isArray(res) ? res : [];
+      setClarRequests(rows);
+      setClarCount(rows.length);
+    } catch (e) {
+      setClarCount(null);
+    }
+  }, [businessId, usingDemo]);
 
   useEffect(() => {
-    if (!accounts.length) return;
-    setAccountFilter((prev) => {
-      if (!prev) return accounts[0].id;
-      const exists = accounts.some((a) => a.id === prev);
-      return exists ? prev : accounts[0].id;
-    });
-  }, [accounts]);
+    if (usingDemo) setAccountFilter("all");
+  }, [usingDemo]);
+
+  useEffect(() => {
+    loadClarifications();
+  }, [loadClarifications]);
 
   const accountCards = useMemo(() => {
+    const handledStatuses = new Set(["approved", "auto_approved"]);
     const counts = transactions.reduce((acc, txn) => {
-      acc[txn.accountId] = (acc[txn.accountId] || 0) + (txn.status === "approved" ? 0 : 1);
+      const key = txn.plaid_account_id || txn.plaidAccountId || txn.accountId || txn.account_id;
+      const status = txn.status || "needs_review";
+      const needsReview = !handledStatuses.has(status);
+      acc[key] = (acc[key] || 0) + (needsReview ? 1 : 0);
       return acc;
     }, {});
-    return accounts.map((a) => ({ ...a, toReview: counts[a.id] || 0 }));
+    return accounts.map((a) => {
+      const key = getAcctKey(a);
+      return { ...a, toReview: counts[key] || a.toReview || 0, _key: key };
+    });
   }, [accounts, transactions]);
-  const totalToReview = useMemo(() => transactions.filter((t) => t.status !== "approved").length, [transactions]);
-  const estimatedImpact = useMemo(() => transactions.reduce((sum, t) => sum + Math.abs(Number(t.amount || 0)), 0), [transactions]);
+  const totalToReview = useMemo(
+    () => transactions.filter((t) => !["approved", "auto_approved"].includes(t.status)).length,
+    [transactions]
+  );
+  const estimatedImpact = useMemo(
+    () =>
+      transactions.reduce((sum, t) => {
+        const signed = Number(t.signed_amount ?? t.signedAmount ?? t.amount ?? 0) || 0;
+        return sum + Math.abs(signed);
+      }, 0),
+    [transactions]
+  );
   const selectedTransactions = useMemo(
     () => transactions.filter((t) => selectedIds.has(t.id)),
     [transactions, selectedIds]
+  );
+
+  const needsReviewChecks = useMemo(
+    () => transactions.filter((t) => t.is_check && (t.status === "needs_review" || t.status === "uncategorized")),
+    [transactions]
   );
 
   const groupedChartAccounts = useMemo(() => {
@@ -356,33 +509,64 @@ function BookkeepingCleanup() {
       return true;
     };
 
-    return transactions.filter((txn) => {
+    const accountFilterNormalized = accountFilter === "all" ? null : accountFilter;
+
+    const base = transactions.filter((txn) => {
+      const status = txn.status || "needs_review";
+      const handledStatuses = ["approved", "auto_approved"];
       const matchesTab =
         activeTab === "all" ||
-        (activeTab === "needs_review" && (txn.status === "needs_review" || txn.status === "uncategorized")) ||
-        (activeTab === "uncategorized" && (txn.status === "uncategorized" || txn.currentAccount === "Uncategorized" || txn.currentAccount === "Ask My Accountant")) ||
-        (activeTab === "approved" && txn.status === "approved") ||
+        (activeTab === "needs_review" && (status === "needs_review" || status === "uncategorized")) ||
+        (activeTab === "uncategorized" && (status === "uncategorized" || txn.currentAccount === "Uncategorized" || txn.currentAccount === "Ask My Accountant")) ||
+        (activeTab === "handled" && handledStatuses.includes(status)) ||
         (activeTab === "flagged" && txn.flagged);
 
-      const matchesAccount = accountFilter === "all" || txn.accountId === accountFilter;
+      const txnAcct = txn.plaid_account_id || txn.plaidAccountId || txn.accountId || txn.account_id || null;
+      const matchesAccount = !accountFilterNormalized || txnAcct === accountFilterNormalized;
       const matchesRange = rangeCheck(txn.date);
       return matchesTab && matchesAccount && matchesRange;
     });
-  }, [accountFilter, activeTab, dateRange, transactions, usingDemo]);
+
+    if (showChecksOnly) {
+      return base.filter((t) => t.is_check && (t.status === "needs_review" || t.status === "uncategorized"));
+    }
+    return base;
+  }, [accountFilter, activeTab, dateRange, transactions, usingDemo, showChecksOnly]);
 
   const visibleTransactions = filteredTransactions.slice(0, rowsPerPage);
   const start = (page - 1) * rowsPerPage;
   const paged = filteredTransactions.slice(start, start + rowsPerPage);
   const tableTransactions = paged.length ? paged : (usingDemo ? filteredTransactions.slice(start, start + rowsPerPage) : []);
-  const categorizedTransactions = useMemo(() => transactions.filter((t) => t.status === "approved"), [transactions]);
+  const categorizedTransactions = useMemo(
+    () => transactions.filter((t) => ["approved", "auto_approved", "posted"].includes(t.status)),
+    [transactions]
+  );
   const feedRows = showCategorized ? categorizedTransactions.slice(start, start + rowsPerPage) : tableTransactions;
-  const allVisibleSelected = feedRows.length > 0 && feedRows.every((txn) => selectedIds.has(txn.id));
+  const selectableRows = feedRows.filter((t) => t?.status !== "posted");
+  const selectableIds = selectableRows.map((t) => t.id);
+  const allVisibleSelected = selectableRows.length > 0 && selectableRows.every((txn) => selectedIds.has(txn.id));
   const pageCount = Math.max(1, Math.ceil((showCategorized ? categorizedTransactions.length : filteredTransactions.length) / rowsPerPage));
-  const totalCount = showCategorized ? categorizedTransactions.length : filteredTransactions.length;
+  const isHandledTab = activeTab === "handled";
+  const isEmpty = !loadingTxns && feedRows.length === 0;
+  const showLoadingState = !plaidNeverConnected && (loadingTxns || (!accountFilter && !usingDemo));
+  const pendingCount = useMemo(() => {
+    return transactions.filter(
+      (t) => t.status === "needs_review" || t.status === "uncategorized" || !t.status
+    ).length;
+  }, [transactions]);
+  const hasAnyPending = useMemo(() => {
+    const total = typeof totalCount === "number" ? totalCount : null;
+    const effectivePending = pendingCount || filteredTransactions.length;
+    return total !== null ? total > 0 : effectivePending > 0;
+  }, [totalCount, pendingCount, filteredTransactions.length]);
 
-  const toggleAutoApprove = () => setAutoApprove((v) => !v);
+  const toggleAutoApprove = () => {
+    if (!canRunAI) return;
+    setDisableAutoApprove((v) => !v);
+  };
 
   const toggleRow = (id) => {
+    if (!canRunAI) return;
     const next = new Set(selectedIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
@@ -390,45 +574,117 @@ function BookkeepingCleanup() {
   };
 
   const toggleSelectAll = () => {
+    if (!canRunAI) return;
     if (allVisibleSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(feedRows.map((t) => t.id)));
+      setSelectedIds(new Set(selectableIds));
     }
   };
 
-  const handleApprove = (id) => {
+  const handleApprove = async (id, newAccountId = null) => {
+    if (!canRunAI) return;
+    if (usingDemo) {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                status: "approved",
+                glAccountId: newAccountId ?? t.glAccountId,
+                glAccountName:
+                  chartAccounts.find((a) => a.id === (newAccountId ?? t.glAccountId))?.name ||
+                  t.glAccountName,
+              }
+            : t
+        )
+      );
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      return;
+    }
+    const txn = transactions.find((t) => t.id === id);
+    if (!txn || !businessId) return;
+    if (txn.status === "posted") {
+      showPostedToast();
+      return;
+    }
+    const glAccountId = newAccountId || txn.glAccountId || txn.suggestedAccountId || null;
+    const glAccountName =
+      chartAccounts.find((a) => a.id === glAccountId)?.name || glAccountId || null;
+    const prevStatus = txn.status;
     setTransactions((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, status: "approved" } : t))
+      prev.map((t) =>
+        t.id === id
+          ? { ...t, status: "approved", glAccountId, glAccountName }
+          : t
+      )
     );
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-    // TODO: Push status + account to QuickBooks via backend integration
+    try {
+      await approveTransactions(businessId, [
+        { txnId: id, newAccountId: glAccountId, newAccountName: glAccountName },
+      ]);
+      await reloadAccounts();
+      await reloadTransactions();
+      await loadMappingStatus();
+    } catch (e) {
+      console.warn("[bookkeeping] approve failed", e?.message || e);
+      setTransactions((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, status: prevStatus } : t))
+      );
+    }
   };
 
-  const handleUndo = (id) => {
+  const handleUndo = async (id) => {
+    if (!canRunAI) return;
+    if (usingDemo) {
+      setTransactions((prev) =>
+        prev.map((t) => {
+          if (t.id !== id) return t;
+          const suggestedId = t.suggestedAccountId || guessAccountId(t);
+          const suggestedName = chartAccounts.find((a) => a.id === suggestedId)?.name || suggestedId;
+          return {
+            ...t,
+            status: "needs_review",
+            glAccountId: suggestedId,
+            glAccountName: suggestedName,
+            accountId: suggestedId,
+          };
+        })
+      );
+      return;
+    }
+    if (!businessId) return;
+    const prevStatus = transactions.find((t) => t.id === id)?.status || "approved";
+    if (prevStatus === "posted") {
+      showPostedToast();
+      return;
+    }
     setTransactions((prev) =>
-      prev.map((t) => {
-        if (t.id !== id) return t;
-        const suggestedId = t.suggestedAccountId || guessAccountId(t);
-        const suggestedName = chartAccounts.find((a) => a.id === suggestedId)?.name || suggestedId;
-        return {
-          ...t,
-          status: "needs_review",
-          glAccountId: suggestedId,
-          glAccountName: suggestedName,
-          // reset UI selection to suggestion
-          accountId: suggestedId,
-        };
-      })
+      prev.map((t) =>
+        t.id === id
+          ? { ...t, status: "needs_review" }
+          : t
+      )
     );
-    // TODO: Push status rollback to QuickBooks via backend integration
+    try {
+      await undoTransaction(businessId, id);
+      await reloadAccounts();
+      await reloadTransactions();
+      await loadMappingStatus();
+    } catch (e) {
+      console.warn("[bookkeeping] undo failed", e?.message || e);
+      setTransactions((prev) =>
+        prev.map((t) => (t.id === id ? { ...t, status: prevStatus } : t))
+      );
+    }
   };
 
   const handleBulkApprove = () => {
+    if (!canRunAI) return;
     console.log("Bulk approve", Array.from(selectedIds), "category", bulkCategory, "job", bulkJob);
     setSelectedIds(new Set());
   };
@@ -444,7 +700,13 @@ function BookkeepingCleanup() {
   useEffect(() => {
     setSelectedIds(new Set());
     setPage(1);
-  }, [accountFilter, activeTab, dateRange, showCategorized]);
+    setTotalCount(null);
+    suggestRanRef.current = null;
+    setShowChecksOnly(false);
+    if (!usingDemo && businessId) {
+      loadMappingStatus();
+    }
+  }, [accountFilter, activeTab, dateRange, showCategorized, loadMappingStatus, usingDemo, businessId]);
 
   useEffect(() => {
     if (usingDemo) {
@@ -453,24 +715,320 @@ function BookkeepingCleanup() {
     }
   }, [usingDemo]);
 
-  const handleAccountChange = (txnId, accountId) => {
-    const accountName = chartAccounts.find((a) => a.id === accountId)?.name || accountId;
-    setTransactions((prev) =>
-      prev.map((t) =>
-        t.id === txnId
-          ? {
-              ...t,
-              glAccountId: accountId,
-              glAccountName: accountName,
-              suggestedAccountId: t.suggestedAccountId, // keep original suggestion
-            }
-          : t
+  const handleAccountChange = async (txnId, accountId) => {
+    if (!canRunAI) return;
+    const accountName = chartAccounts.find((a) => a.id === accountId)?.name || accountId || null;
+    const txn = transactions.find((t) => t.id === txnId);
+    if (txn?.status === "posted") {
+      showPostedToast();
+      return;
+    }
+    if (usingDemo) {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === txnId
+            ? { ...t, glAccountId: accountId, glAccountName: accountName }
+            : t
+        )
+      );
+      return;
+    }
+    const prev = txn;
+    accountOverrides.current = new Map(accountOverrides.current).set(txnId, { id: accountId, name: accountName });
+    setTransactions((prevState) =>
+      prevState.map((t) =>
+        t.id === txnId ? { ...t, glAccountId: accountId, glAccountName: accountName } : t
       )
     );
+    try {
+      if (txn && ["approved", "auto_approved", "failed"].includes(txn.status)) {
+        if (txn.canEdit) {
+          await updateHandledTransaction(businessId, txnId, {
+            final_qbo_account_id: accountId,
+            final_qbo_account_name: accountName,
+          });
+          await reloadTransactions();
+        } else {
+          throw new Error("not_in_grace_window");
+        }
+      }
+    } catch (e) {
+      console.warn("[bookkeeping] account change failed", e?.message || e);
+      setTransactions((prevState) =>
+        prevState.map((t) =>
+          t.id === txnId
+            ? {
+                ...t,
+                glAccountId: prev?.glAccountId || prev?.suggestedAccountId || null,
+                glAccountName:
+                  chartAccounts.find((a) => a.id === (prev?.glAccountId || prev?.suggestedAccountId))?.name ||
+                  prev?.glAccountId ||
+                  prev?.suggestedAccountId ||
+                  null,
+              }
+            : t
+        )
+      );
+    }
   };
 
+  const reloadAccounts = useCallback(async () => {
+    if (usingDemo || !businessId) return;
+    setLoadingAccounts(true);
+    try {
+      const res = await fetchAccounts(businessId);
+      const loadedAccounts = res?.accounts || [];
+      setAccounts(loadedAccounts);
+      setLastSyncAt(res?.meta?.last_sync_at || null);
+      // Auto-select a default account (prefer checking) if none selected
+      if (!accountFilter && loadedAccounts.length) {
+        const preferred =
+          loadedAccounts.find(
+            (a) =>
+              String(a.type || "").toLowerCase() === "depository" &&
+              String(a.subtype || "").toLowerCase().includes("checking")
+          ) || loadedAccounts[0];
+        const key = getAcctKey(preferred);
+        if (key) setAccountFilter(key);
+      }
+    } catch (e) {
+      console.warn("[bookkeeping] accounts load failed", e?.message || e);
+    } finally {
+      setLoadingAccounts(false);
+    }
+  }, [accountFilter, businessId, usingDemo]);
+
+  const reloadCoa = useCallback(async () => {
+    if (usingDemo || !businessId) return;
+    try {
+      const res = await fetchQboCoa(businessId);
+      const accountsRes = res?.accounts || res?.chartOfAccounts || res || [];
+      setChartAccounts(accountsRes);
+    } catch (e) {
+      console.warn("[bookkeeping] COA load failed", e?.message || e);
+    }
+  }, [businessId, usingDemo]);
+
+  const reloadTransactions = useCallback(async () => {
+    if (usingDemo || !businessId) return;
+    if (!accountFilter) {
+      // Wait until we know which account to show; avoid loading all accounts by default.
+      setTransactions([]);
+      setTotalCount(0);
+      return;
+    }
+    setLoadingTxns(true);
+    const normalizeTxns = (txns = []) =>
+      txns.map((t) => {
+        const status = t.status || "needs_review";
+        const postAfterTs = t.post_after ? Date.parse(t.post_after) : null;
+        const inGrace =
+          ["approved", "auto_approved"].includes(status) &&
+          postAfterTs &&
+          postAfterTs > Date.now();
+
+        const suggestedId =
+          t.suggestedAccountId ||
+          t.suggested_qbo_account_id ||
+          t.suggested_qbo_accountId ||
+          t.suggested_qbo_account ||
+          null;
+        const suggestedName =
+          t.suggestedAccountName ||
+          t.suggested_qbo_account_name ||
+          t.suggested_qbo_accountName ||
+          null;
+        const finalId =
+          t.finalQboAccountId ||
+          t.final_qbo_account_id ||
+          null;
+        const finalName =
+          t.finalQboAccountName ||
+          t.final_qbo_account_name ||
+          null;
+        const glId = finalId || suggestedId || t.glAccountId || t.accountId || t.plaid_account_id || t.account_id || null;
+        const glName = finalName || suggestedName || t.glAccountName || t.accountName || null;
+        const signed = Number(t.signed_amount ?? t.signedAmount ?? t.amount ?? 0);
+        const dirRaw =
+          t.direction ||
+          (Number.isFinite(signed) ? (signed < 0 ? "outflow" : signed > 0 ? "inflow" : null) : null);
+        const direction = typeof dirRaw === "string" ? dirRaw.toLowerCase() : dirRaw;
+
+        return {
+          ...t,
+          accountId: t.accountId || t.plaid_account_id || t.account_id || null,
+          canEdit: inGrace,
+          suggestedAccountId: suggestedId,
+          suggestedAccountName: suggestedName,
+          glAccountId: glId,
+          glAccountName: glName,
+          signed_amount: Number.isFinite(signed) ? signed : null,
+          direction,
+        };
+      });
+    const extractTxns = (res) =>
+      Array.isArray(res)
+        ? res
+        : Array.isArray(res?.rows)
+        ? res.rows
+        : Array.isArray(res?.items)
+        ? res.items
+        : Array.isArray(res?.transactions)
+        ? res.transactions
+        : [];
+    const computeTotal = (res, normalizedList) =>
+      (typeof res?.totalCount === "number" ? res.totalCount : null) ??
+      (typeof res?.total_count === "number" ? res.total_count : null) ??
+      (typeof res?.meta?.total_count === "number" ? res.meta.total_count : null) ??
+      normalizedList.length;
+
+    try {
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[Books] fetching txns", { accountFilter, activeTab, dateRange, page, rowsPerPage });
+      }
+      const res = await fetchTransactions(businessId, {
+        status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
+        account_id: accountFilter,
+        range: dateRange,
+        page,
+        page_size: rowsPerPage,
+      });
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[Books] transactions response", res);
+      }
+      const txns = extractTxns(res);
+      let normalized = normalizeTxns(txns);
+      // Re-apply any local account overrides so UI stays in sync with user selections
+      normalized = normalized.map((t) => {
+        const override = accountOverrides.current?.get(t.id);
+        return override
+          ? {
+              ...t,
+              glAccountId: override.id,
+              glAccountName: override.name,
+            }
+          : t;
+      });
+      const nextTotal = computeTotal(res, normalized);
+      if (process.env.NODE_ENV !== "production") {
+        console.log("[Books] transactions loaded", {
+          count: normalized.length,
+          sample: normalized[0] || null,
+        });
+      }
+      setTransactions(normalized);
+      setTotalCount(nextTotal);
+
+      const key = `${dateRange}|${accountFilter || "all"}`;
+      if (canRunAI) {
+        const shouldRunSuggest =
+          !suggestRanRef.current ||
+          suggestRanRef.current !== key;
+        const needsReviewOrUncat = normalized.some((t) => {
+          const s = (t.status || "needs_review").toLowerCase();
+          return s === "needs_review" || s === "uncategorized";
+        });
+        let latestNormalized = normalized;
+        if (shouldRunSuggest && needsReviewOrUncat) {
+          suggestRanRef.current = key;
+          if (process.env.NODE_ENV !== "production") {
+            console.info("[Books] running suggest for missing transactions");
+          }
+          try {
+            const suggestPayload = {
+              range: dateRange,
+              account_id: accountFilter,
+            };
+            if (disableAutoApprove === true) suggestPayload.auto_approve = false;
+            await suggestTransactions(businessId, suggestPayload);
+            // refresh to pick up suggestions
+            const res2 = await fetchTransactions(businessId, {
+              status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
+              account_id: accountFilter,
+              range: dateRange,
+              page,
+              page_size: rowsPerPage,
+            });
+            const txns2 = extractTxns(res2);
+            const normalized2 = normalizeTxns(txns2);
+            latestNormalized = normalized2;
+            setTransactions(normalized2);
+            const nextTotal2 = computeTotal(res2, normalized2);
+            setTotalCount(nextTotal2);
+          } catch (errSuggest) {
+            console.warn("[bookkeeping] suggest failed", errSuggest?.message || errSuggest);
+          }
+        }
+
+        const needsEnrichment =
+          (!enrichRanRef.current || enrichRanRef.current !== key) &&
+          latestNormalized.some(
+            (t) =>
+              t.direction &&
+              !t.vendor &&
+              (t.merchant_name || t.merchantName || (Array.isArray(t.counterparties) && t.counterparties.length) || (t.description && t.description.length > 4))
+          );
+        if (needsEnrichment) {
+          try {
+            await enrichCounterparties(businessId, {
+              range: dateRange,
+              account_id: accountFilter,
+            });
+            const res3 = await fetchTransactions(businessId, {
+              status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
+              account_id: accountFilter,
+              range: dateRange,
+              page,
+              page_size: rowsPerPage,
+            });
+            const txns3 = extractTxns(res3);
+            const normalized3 = normalizeTxns(txns3);
+            const nextTotal3 = computeTotal(res3, normalized3);
+            setTransactions(normalized3);
+            setTotalCount(nextTotal3);
+            enrichRanRef.current = key;
+          } catch (errEnrich) {
+            console.warn("[bookkeeping] enrich-counterparties failed", errEnrich?.message || errEnrich);
+            enrichRanRef.current = null;
+          }
+        }
+      }
+      await loadMappingStatus();
+    } catch (e) {
+      console.warn("[bookkeeping] transactions load failed", e?.message || e);
+    } finally {
+      setLoadingTxns(false);
+    }
+  }, [activeTab, accountFilter, businessId, canRunAI, dateRange, disableAutoApprove, page, rowsPerPage, usingDemo, loadMappingStatus]);
+
+  useEffect(() => {
+    if (usingDemo) return;
+    reloadAccounts();
+    reloadCoa();
+  }, [usingDemo, reloadAccounts, reloadCoa]);
+
+  useEffect(() => {
+    if (usingDemo) return;
+    if (accountFilter) reloadTransactions();
+  }, [usingDemo, accountFilter, reloadTransactions]);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+    setPage(1);
+  }, [accountFilter, activeTab, dateRange, showCategorized]);
+
+  useEffect(() => {
+    if (!canRunAI) setSelectedIds(new Set());
+  }, [canRunAI]);
+
   return (
-    <div className="p-5 text-slate-100 min-h-screen">
+    <div className="px-3 md:px-4 pt-0 pb-8 text-slate-100 min-h-screen">
+      <style>
+        {`@keyframes fadeInTab {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+          }`}
+      </style>
       <ModuleHeader
         module="financials"
         title="Books Review"
@@ -478,69 +1036,274 @@ function BookkeepingCleanup() {
         className="mb-4"
       />
 
-      <div className="flex gap-3 overflow-x-auto pb-2">
-        {accountCards.map((acct) => (
-          <AccountCard
-            key={acct.id}
-            account={acct}
-            selected={accountFilter === acct.id}
-            onClick={() => setAccountFilter(acct.id)}
-          />
-        ))}
-      </div>
+      <BillingGate status={billingStatus} businessId={businessId} userId={userId} hideBanner={usingDemo}>
+        {({ gateBanner }) => (
+          <>
+            {gateBanner}
+            <div className="flex items-center gap-3 mb-3 text-xs text-slate-400">
+              <div>
+                {lastSyncAt ? (
+                  <span>Last sync {new Date(lastSyncAt).toLocaleString()}</span>
+                ) : (
+                  <span>Last sync not available</span>
+                )}
+              </div>
+            </div>
 
-      <div
-        className="flex items-center justify-between gap-4 border rounded-xl px-4 py-3 mt-4"
-        style={{ background: PANEL_BG, borderColor: "rgba(16, 185, 129, 0.2)" }}
-      >
-        <div className="flex-1">
-          <div className="text-sm text-slate-200 font-semibold">Bizzi has suggested categories for {transactions.length} transactions.</div>
-          <div className="text-xs text-slate-400">Review and approve below to keep your books clean.</div>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-slate-400">
-          <span>Auto-approve high-confidence matches</span>
+            {!usingDemo && loadingMappingStatus && (activeTab === "handled" || activeTab === "needs_review") ? (
+              <div className="mb-4 rounded-xl border border-[var(--accent-line)] bg-[var(--panel)] px-4 py-3 shadow-lg">
+                <div className="flex items-start gap-3 text-sm text-slate-100">
+                  <span className="mt-[2px]" aria-hidden="true">⏳</span>
+                  <div className="flex-1">
+                    <div className="font-semibold text-slate-100">Checking account mappings…</div>
+                    <div className="text-slate-300 text-[13px]">
+                      Bizzi is verifying your Plaid → QuickBooks account links.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {!usingDemo && !loadingMappingStatus && mappingStatus?.needs_mapping && (activeTab === "handled" || activeTab === "needs_review") ? (
+              <div className="mb-4 rounded-xl border border-[var(--accent-line)] bg-[var(--panel)] px-4 py-3 shadow-lg">
+                <div className="flex items-start gap-3 text-sm text-slate-100">
+                  <span className="mt-[2px]" aria-hidden="true">⚠️</span>
+                  <div className="flex-1">
+                    <div className="font-semibold text-amber-200">Finishing your QuickBooks posting setup.</div>
+                    <div className="text-slate-300 text-[13px]">
+                      Bizzi is auto-mapping {mappingStatus?.unmapped_account_count || 0} bank/credit accounts to QuickBooks
+                      so it can post {mappingStatus?.affected_txn_count || 0} approved transactions.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {qboDisconnected ? (
+              <div className="mb-4 rounded-xl border border-amber-400/20 bg-amber-500/5 px-4 py-3 shadow-lg">
+                <div className="flex items-start gap-3 text-sm text-amber-100">
+                  <span className="mt-[2px]" aria-hidden="true">⚠️</span>
+                  <div className="flex-1">
+                    <div className="font-semibold text-amber-100">QuickBooks disconnected — Bizzi can still categorize, but posting is paused.</div>
+                    <div className="text-amber-200/80 text-[13px]">
+                      Reconnect QuickBooks to resume posting.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-lg border border-amber-400/60 bg-amber-500/15 px-3 py-1.5 text-[12px] font-semibold text-amber-100 hover:bg-amber-500/25"
+                    onClick={() => {
+                      try {
+                        navigate("/dashboard/settings?tab=integrations");
+                      } catch (e) {
+                        window.location.href = "/dashboard/settings?tab=integrations";
+                      }
+                    }}
+                  >
+                    Reconnect QuickBooks
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {plaidDisconnected ? (
+              <div className="mb-4 rounded-xl border border-emerald-400/20 bg-emerald-500/5 px-4 py-3 shadow-lg">
+                <div className="flex items-start gap-3 text-sm text-emerald-100">
+                  <span className="mt-[2px]" aria-hidden="true">🔌</span>
+                  <div className="flex-1">
+                    <div className="font-semibold text-emerald-100">Plaid is disconnected — connect to sync new transactions.</div>
+                    <div className="text-emerald-200/80 text-[13px]">
+                      Your historical transactions and categorizations stay saved.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-lg border border-emerald-400/60 bg-emerald-500/15 px-3 py-1.5 text-[12px] font-semibold text-emerald-100 hover:bg-emerald-500/25"
+                    onClick={() => {
+                      try {
+                        navigate("/dashboard/settings?tab=integrations");
+                      } catch (e) {
+                        window.location.href = "/dashboard/settings?tab=integrations";
+                      }
+                    }}
+                  >
+                    Reconnect Plaid
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Account cards with scroll controls */}
+            <div className="relative" style={{ overflow: "visible" }}>
+              {showAccountScrollLeft ? (
+                <button
+                  type="button"
+                  onClick={() => scrollAccountsBy(-260)}
+                  className="absolute left-0 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/60 border border-white/10 text-white px-2 py-2 shadow-lg hover:bg-black/75"
+                >
+                  ‹
+                </button>
+              ) : null}
+        {showAccountScrollRight ? (
           <button
-            onClick={toggleAutoApprove}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs border ${
-              autoApprove ? "border-emerald-400 bg-emerald-500/10 text-emerald-300" : "border-slate-600 text-slate-400"
-            }`}
+            type="button"
+            onClick={() => scrollAccountsBy(260)}
+            className="absolute right-0 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/60 border border-white/10 text-white px-2 py-2 shadow-lg hover:bg-black/75"
           >
-            <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />
-            {autoApprove ? "On" : "Off"}
+            ›
           </button>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 mt-4 mb-2 text-xs sm:text-sm">
-        {TABS.map((tab) => {
-          const active = tab.key === activeTab;
-          return (
-            <button
-              key={tab.key}
+        ) : null}
+        <div
+          ref={accountScrollRef}
+          className="flex gap-3 overflow-x-auto pb-3 no-scrollbar pr-8"
+          style={{
+            scrollBehavior: "smooth",
+            overflowY: "visible", // allow hover scale to render outside the row
+            overflowX: "auto",
+            paddingLeft: "2px",
+            paddingRight: "2px",
+            paddingTop: "6px", // headroom so hover borders aren't clipped at the top
+          }}
+        >
+          {accountCards.map((acct) => (
+            <AccountCard
+              key={acct._key || acct.id}
+              account={acct}
+              selected={accountFilter === getAcctKey(acct)}
               onClick={() => {
-                setActiveTab(tab.key);
+                const key = getAcctKey(acct);
+                setAccountFilter(key);
+                setPage(1);
                 setSelectedIds(new Set());
               }}
-              className={`rounded-full px-3 py-1.5 transition border ${
-                active
-                  ? "bg-[var(--panel)] text-emerald-300 border-[var(--accent-line)] shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
-                  : "text-slate-400 border-transparent hover:bg-[var(--panel)] hover:border-[var(--accent-line)]"
-              }`}
+            />
+          ))}
+        </div>
+      </div>
+
+      {!plaidNeverConnected && activeTab === "needs_review" ? (
+        <div
+          className="flex items-center justify-between gap-4 border rounded-xl px-4 py-3 mt-4"
+          style={{ background: PANEL_BG, borderColor: "rgba(16, 185, 129, 0.2)" }}
+        >
+          <div className="flex-1">
+            <div className="text-sm text-slate-200 font-semibold">
+              Bizzi has suggested categories for {typeof totalCount === "number" ? totalCount : "—"} transactions.
+            </div>
+            <div className="text-xs text-slate-400">Review and approve below to keep your books clean.</div>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            {needsReviewChecks.length > 0 ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-600/60 bg-white/5 px-3 py-1 text-[12px] text-slate-100 hover:bg-white/10"
+                  onClick={() => setShowChecksOnly(true)}
+                  title="Checks often need one quick clarification before posting."
+                >
+                  Bizzi needs clarification on {needsReviewChecks.length} checks
+                </button>
+                {showChecksOnly ? (
+                  <button
+                    type="button"
+                    className="text-[11px] text-emerald-300 underline underline-offset-2"
+                    onClick={() => setShowChecksOnly(false)}
+                  >
+                    Show all
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <span>Auto-approve high-confidence matches</span>
+            <button
+              onClick={toggleAutoApprove}
+              disabled={!canRunAI}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs border ${
+                disableAutoApprove ? "text-slate-400" : "border-emerald-400 bg-emerald-500/10 text-emerald-300"
+              } ${!canRunAI ? "opacity-50 cursor-not-allowed" : ""}`}
+              style={{ borderColor: disableAutoApprove ? PANEL_BORDER : undefined }}
             >
-              {tab.label}
+              <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />
+              {disableAutoApprove ? "Off" : "On"}
             </button>
-          );
-        })}
+          </div>
+        </div>
+      ) : null}
+
+      {activeTab === "handled" ? (
+        <div className="mt-2 text-xs text-slate-400">
+          Bizzi automatically posts handled transactions to QuickBooks. You can edit here during the grace window if needed.
+        </div>
+      ) : null}
+      {activeTab === "posted" ? (
+        <div className="mt-2 text-xs text-slate-400">
+          These transactions have been posted to QuickBooks by Bizzi (read-only).
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-2 mt-4 mb-2 text-xs sm:text-sm">
+        <div className="flex items-center gap-2">
+          {/** Ensure uniform sizing across all tab buttons */}
+          {TABS.map((tab) => {
+            const active = tab.key === activeTab;
+            return (
+              <button
+                key={tab.key}
+                onClick={() => {
+                  setActiveTab(tab.key);
+                  setSelectedIds(new Set());
+                }}
+                className={`rounded-full px-4 py-1.5 min-w-[120px] text-center transition border ${
+                  active
+                    ? "bg-[var(--panel)] text-emerald-300 border-[var(--accent-line)] shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
+                    : "text-slate-200 border-white/10 hover:bg-[var(--panel)] hover:border-[var(--accent-line)]"
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+          {!usingDemo ? (
+            <>
+              <button
+                type="button"
+                onClick={() => navigate("/dashboard/accounting/reconciliations")}
+                className="rounded-full px-4 py-1.5 min-w-[120px] text-center text-slate-200 border border-white/10 hover:border-[var(--accent-line)] hover:bg-[var(--panel)] transition"
+              >
+                Reconciled
+              </button>
+              <button
+                type="button"
+                disabled={rulesButtonDisabled}
+                onClick={
+                  rulesButtonDisabled
+                    ? undefined
+                    : () => {
+                        try {
+                          navigate("/dashboard/accounting/rules");
+                        } catch {
+                          window.location.href = "/dashboard/accounting/rules";
+                        }
+                      }
+                }
+                className={`rounded-full px-4 py-1.5 min-w-[120px] text-center text-slate-200 border border-white/10 transition ${
+                  rulesButtonDisabled
+                    ? "cursor-not-allowed opacity-60"
+                    : "hover:border-[var(--accent-line)] hover:bg-[var(--panel)]"
+                }`}
+                title={rulesButtonDisabled ? "Rules will be available soon" : undefined}
+              >
+                Rules
+              </button>
+            </>
+          ) : null}
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm mb-2 text-slate-300">
         <label className="flex items-center gap-2">
           <span className="text-slate-400">Date</span>
           <Select value={dateRange} onChange={setDateRange} options={DATE_RANGE_OPTIONS} />
-        </label>
-        <label className="flex items-center gap-2">
-          <span className="text-slate-400">Account</span>
-          <Select value={accountFilter} onChange={setAccountFilter} options={[{ value: "all", label: "All Accounts" }, ...accounts.map((a) => ({ value: a.id, label: a.name }))]} />
         </label>
         <label className="flex items-center gap-2">
           <span className="text-slate-400">Rows</span>
@@ -567,7 +1330,8 @@ function BookkeepingCleanup() {
             <Select value={bulkJob} onChange={handleBulkSetJob} options={JOB_OPTIONS.map((j) => ({ value: j, label: j }))} />
             <button
               onClick={handleBulkApprove}
-              className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400"
+              disabled={!canRunAI}
+              className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Approve Selected
             </button>
@@ -575,34 +1339,104 @@ function BookkeepingCleanup() {
         </div>
       )}
 
-      {(!usingDemo && feedRows.length === 0) ? (
-        <div className="mt-10 flex flex-col items-center justify-center gap-2 text-center text-slate-300">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">✓</div>
-          <p className="text-sm font-medium text-slate-100">You’re all caught up!</p>
-          <p className="max-w-md text-xs text-slate-400">
-            Bizzi will surface new transactions here as your bank and QuickBooks sync. You can relax knowing your books are clean.
-          </p>
-        </div>
-      ) : (
-        <BookkeepingFeed
-          transactions={feedRows}
-          selectedIds={selectedIds}
-          allSelected={allVisibleSelected}
-          toggleSelectAll={toggleSelectAll}
-          toggleRow={toggleRow}
-          onApprove={handleApprove}
-          onUndo={handleUndo}
-          accounts={groupedChartAccounts}
-          onAccountChange={handleAccountChange}
-          page={page}
-          pageCount={pageCount}
-          pageSize={rowsPerPage}
-          totalCount={totalCount}
-          onPageChange={(next) => setPage(next)}
-          panelBg={PANEL_BG}
-          panelBorder={PANEL_BORDER}
-        />
-      )}
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={`${activeTab}:${dateRange}:${rowsPerPage}:${accountFilter || "all"}:${page}`}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.22, ease: [0.22, 0.1, 0.25, 1] }}
+        >
+          {plaidNeverConnected ? (
+            <div className="mt-10 flex flex-col items-center justify-center gap-3 text-center text-slate-300">
+              <p className="text-sm font-medium text-slate-100">Connect Plaid to view your transactions.</p>
+              <p className="max-w-md text-xs text-slate-400">
+                Link your bank or credit accounts so Bizzi can pull transactions into Books Review.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
+                  onClick={() => navigate("/dashboard/settings?tab=integrations")}
+                >
+                  Connect Plaid
+                </button>
+              </div>
+            </div>
+          ) : !usingDemo && showLoadingState ? (
+            <div className="mt-10 flex flex-col items-center justify-center gap-2 text-center text-slate-300">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">
+                <div className="flex gap-[6px]">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-dot-bounce" style={{ animationDelay: "0ms" }} />
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-dot-bounce" style={{ animationDelay: "120ms" }} />
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-dot-bounce" style={{ animationDelay: "240ms" }} />
+                </div>
+              </div>
+              <p className="text-sm font-medium text-slate-100">Loading transactions…</p>
+              <p className="max-w-md text-xs text-slate-400">Fetching the latest for this account.</p>
+            </div>
+          ) : (!usingDemo && isEmpty && !hasAnyPending) ? (
+            activeTab === "posted" ? (
+              <div className="mt-10 flex flex-col items-center justify-center gap-2 text-center text-slate-300">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">⟳</div>
+                <p className="text-sm font-medium text-slate-100">No posted transactions yet.</p>
+                <p className="max-w-md text-xs text-slate-400">Transactions will appear here after Bizzi posts them to QuickBooks.</p>
+              </div>
+            ) : isHandledTab ? (
+              <div className="mt-10 flex flex-col items-center justify-center gap-2 text-center text-slate-300">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">✓</div>
+                <p className="text-sm font-medium text-slate-100">Bizzi will automatically approve transactions for you.</p>
+                <p className="max-w-md text-xs text-slate-400">
+                  Handled items will appear here as they’re prepared for posting to QuickBooks.
+                </p>
+              </div>
+            ) : (
+              <div className="mt-10 flex flex-col items-center justify-center gap-2 text-center text-slate-300">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">✓</div>
+                <p className="text-sm font-medium text-slate-100">No items to review for this account.</p>
+                <p className="max-w-md text-xs text-slate-400">
+                  Try another account or refresh to check for newly synced transactions.
+                </p>
+              </div>
+            )
+          ) : (
+            <BookkeepingFeed
+              transactions={feedRows}
+              selectedIds={selectedIds}
+              allSelected={allVisibleSelected}
+              toggleSelectAll={toggleSelectAll}
+              toggleRow={toggleRow}
+              onApprove={handleApprove}
+              onUndo={handleUndo}
+              accounts={groupedChartAccounts}
+              onAccountChange={handleAccountChange}
+              page={page}
+              pageCount={pageCount}
+              pageSize={rowsPerPage}
+              totalCount={totalCount}
+              onPageChange={(next) => setPage(next)}
+              panelBg={PANEL_BG}
+              panelBorder={PANEL_BORDER}
+              readOnly={!canRunAI}
+            />
+          )}
+        </motion.div>
+      </AnimatePresence>
+          </>
+        )}
+      </BillingGate>
+      <ClarificationModal
+        open={clarOpen}
+        onClose={() => {
+          setClarOpen(false);
+          loadClarifications();
+        }}
+        requests={clarRequests}
+        businessId={businessId}
+        onSubmitted={async () => {
+          await loadClarifications();
+        }}
+      />
     </div>
   );
 }

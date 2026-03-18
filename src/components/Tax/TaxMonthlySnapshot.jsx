@@ -26,7 +26,7 @@ async function getAccessToken() {
   return null;
 }
 
-const GOLD_MUTED = "rgba(227,194,92,1)";
+const GOLD_MUTED = "rgba(var(--accent-rgb),1)";
 
 /** Card with compact header + glass body */
 export default function TaxMonthlySnapshot({ businessId, year, month, onAskBizzy, onOpenDeductions }) {
@@ -84,27 +84,41 @@ export default function TaxMonthlySnapshot({ businessId, year, month, onAskBizzy
                 severity={severity(m?.estimatedTaxDue)}
               />
               <BigNumber label="Profit YTD" value={fmtUSD(m?.profitYTD)} />
-              <div className="rounded-lg p-3 bg-white/4 ring-1 ring-inset ring-white/10">
-                <div className="text-[11px] uppercase tracking-wide" style={{ color: "rgba(227,194,92,.85)" }}>
+              <div className="rounded-lg p-3 bg-white/4 ring-1 ring-inset ring-white/10 flex flex-col">
+                <div className="text-[11px] uppercase tracking-wide" style={{ color: "rgba(var(--accent-rgb),.85)" }}>
                   Top Deductions
                 </div>
-                <div className="mt-1.5 space-y-1.5">
+                <div className="mt-2 space-y-1.5 flex-1">
                   {(m?.topDeductions || []).map((d, i) => (
-                    <div key={i} className="flex items-center justify-between text-[13px]">
-                      <span className="text-white/85 truncate">{d.category}</span>
-                      <span className="text-right whitespace-nowrap" style={{ color: GOLD_MUTED }}>
-                        {fmtUSD(d.amount)} <span className="text-white/60 text-[11px]">({d.percentRevenue}%)</span>
-                      </span>
+                    <div key={i} className="space-y-1">
+                      <div className="flex items-center justify-between text-[13px]">
+                        <span className="text-white/85 truncate">{d.category}</span>
+                        <span className="text-right whitespace-nowrap" style={{ color: GOLD_MUTED }}>
+                          {fmtUSD(d.amount)} <span className="text-white/60 text-[11px]">({d.percentRevenue}%)</span>
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${Math.max(0, Math.min(100, Number(d.percentRevenue) || 0))}%`,
+                            background:
+                              "linear-gradient(90deg, rgba(var(--accent-rgb),0.35), rgba(var(--accent-rgb),0.7))",
+                          }}
+                        />
+                      </div>
                     </div>
                   ))}
                 </div>
-                <button
-                  onClick={onOpenDeductions}
-                  className="mt-2 text-[11px] underline"
-                  style={{ color: GOLD_MUTED }}
-                >
-                  View full list
-                </button>
+                <div className="pt-2">
+                  <button
+                    onClick={onOpenDeductions}
+                    className="text-[12px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-white/12 bg-white/5 hover:bg-white/10 transition"
+                    style={{ color: GOLD_MUTED }}
+                  >
+                    View full list
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -164,7 +178,7 @@ function HeadIconBtn({ icon, label, onClick }) {
     <button
       type="button"
       onClick={onClick}
-      className="text-[12px] inline-flex items-center gap-1.5 px-2 py-1 rounded-md ring-1 ring-inset ring-white/12 hover:bg-white/10"
+      className="text-[12px] inline-flex items-center gap-1.5 px-3 py-1.5 h-9 rounded-full ring-1 ring-inset ring-white/12 hover:bg-white/10"
     >
       {icon} {label}
     </button>
@@ -176,7 +190,7 @@ function BigNumber({ label, value, severity = "low" }) {
     severity === "high"
       ? "text-rose-300"
       : severity === "med"
-      ? "text-[rgba(227,194,92,.95)]"
+      ? "text-[rgba(var(--accent-rgb),.95)]"
       : "text-emerald-400";
   const icon =
     severity === "high" ? (
@@ -189,7 +203,7 @@ function BigNumber({ label, value, severity = "low" }) {
 
   return (
     <div className="rounded-lg p-3 bg-white/4 ring-1 ring-inset ring-white/10">
-      <div className="text-[11px] uppercase tracking-wide" style={{ color: "rgba(227,194,92,.85)" }}>
+      <div className="text-[11px] uppercase tracking-wide" style={{ color: "rgba(var(--accent-rgb),.85)" }}>
         {label}
       </div>
       <div className={`mt-1 text-xl font-semibold inline-flex items-center gap-1.5 ${color}`}>
@@ -203,7 +217,7 @@ function BigNumber({ label, value, severity = "low" }) {
 function UrgencyPill({ level }) {
   const map = {
     High: "bg-rose-500/15 text-rose-300 ring-rose-400/25",
-    Medium: "bg-[rgba(227,194,92,.12)] text-[rgba(227,194,92,.95)] ring-[rgba(227,194,92,.28)]",
+    Medium: "bg-[rgba(var(--accent-rgb),.12)] text-[rgba(var(--accent-rgb),.95)] ring-[rgba(var(--accent-rgb),.28)]",
     Low: "bg-emerald-500/15 text-emerald-300 ring-emerald-400/25",
   };
   const cls = map[level] || map.Medium;

@@ -1,7 +1,7 @@
 // File: /src/utils/qboClient.js
 
 import QuickBooks from "node-quickbooks";
-import { qbClientId, qbClientSecret } from "./qboEnv.js";
+import { qbClientId, qbClientSecret, isSandbox } from "./qboEnv.js";
 import {
   getQuickBooksAccessToken,
   getLatestQuickBooksTokenRow,
@@ -49,7 +49,7 @@ export async function getQBOClient(userOrBusinessId, maybeBusinessId) {
       token.access_token,
       false, // no token secret needed for OAuth2
       String(token.realm_id || realm_id),
-      false, // production mode (sandbox intentionally locked off)
+      isSandbox, // sandbox toggle based on env
       QB_DEBUG, // toggle debug logging
       null,
       "2.0",

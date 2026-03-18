@@ -40,14 +40,22 @@ export async function getJobsPipeline(businessId) {
 
 export async function getJobsTopUnpaid(businessId) {
   if (useDemoData(businessId)) return getDemoJobsTopUnpaid();
-  const url = new URL(apiUrl("/api/jobs/top-unpaid"));
+  const url = new URL(apiUrl("/api/ar/open-items/top"));
   url.searchParams.set("business_id", businessId);
-  return safeFetch(url.toString(), hdr(businessId));
+  const resp = await safeFetch(url.toString(), hdr(businessId));
+  return resp?.rows || [];
 }
 
 export async function getJobsActivity(businessId) {
   if (useDemoData(businessId)) return getDemoJobsActivity();
   const url = new URL(apiUrl("/api/jobs/activity"));
+  url.searchParams.set("business_id", businessId);
+  return safeFetch(url.toString(), hdr(businessId));
+}
+
+export async function getArStatus(businessId) {
+  if (!businessId) return null;
+  const url = new URL(apiUrl("/api/ar/status"));
   url.searchParams.set("business_id", businessId);
   return safeFetch(url.toString(), hdr(businessId));
 }
