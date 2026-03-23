@@ -487,6 +487,23 @@ billingRouter.get("/payment-method", requireAuth, async (req, res) => {
 
 export async function billingWebhookHandler(req, res) {
   const sig = req.headers["stripe-signature"];
+  const activeSecret = STRIPE_WEBHOOK_SECRET_ACTIVE || "";
+  const maskedSecret = activeSecret
+    ? `${activeSecret.slice(0, 8)}...${activeSecret.slice(-6)}`
+    : null;
+
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[billing][webhook] incoming", {
+      stripeMode,
+      hasSignatureHeader: Boolean(sig),
+      signatureHeaderLength: typeof sig === "string" ? sig.length : 0,
+      hasActiveWebhookSecret: Boolean(activeSecret),
+      activeWebhookSecretLength: activeSecret.length,
+      activeWebhookSecretMasked: maskedSecret,
+      contentType: req.headers["content-type"] || null,
+    });
+  }
+
   if (!STRIPE_WEBHOOK_SECRET_ACTIVE) {
     return res.status(500).json({
       ok: false,
@@ -498,7 +515,16 @@ export async function billingWebhookHandler(req, res) {
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET_ACTIVE);
   } catch (err) {
-    console.error("[stripe] bad signature", err.message);
+    console.error("[stripe] bad signature", {
+      message: err.message,
+      stripeMode,
+      hasSignatureHeader: Boolean(sig),
+      signatureHeaderLength: typeof sig === "string" ? sig.length : 0,
+      hasActiveWebhookSecret: Boolean(activeSecret),
+      activeWebhookSecretLength: activeSecret.length,
+      activeWebhookSecretMasked: maskedSecret,
+      contentType: req.headers["content-type"] || null,
+    });
     return res.status(400).json({
       ok: false,
       error: "invalid_signature",
