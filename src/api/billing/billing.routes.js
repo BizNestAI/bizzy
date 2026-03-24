@@ -104,7 +104,15 @@ async function dedupeCustomerCardPaymentMethods(customerId, preferredPaymentMeth
     limit: 100,
   });
   const methods = Array.isArray(pmList?.data) ? pmList.data : [];
-  if (methods.length < 2) return;
+  if (methods.length < 2) {
+    return {
+      customerId,
+      totalMethods: methods.length,
+      duplicateGroups: 0,
+      keptPaymentMethodIds: methods.map((pm) => pm.id).filter(Boolean),
+      detachedPaymentMethodIds: [],
+    };
+  }
 
   const customer = await stripe.customers.retrieve(customerId);
   const customerDefaultPaymentMethodId =
@@ -126,18 +134,25 @@ async function dedupeCustomerCardPaymentMethods(customerId, preferredPaymentMeth
     groups.set(key, group);
   });
 
+  const detachedPaymentMethodIds = [];
+  const keptPaymentMethodIds = [];
+  let duplicateGroups = 0;
+
   for (const group of groups.values()) {
     if (group.length < 2) continue;
+    duplicateGroups += 1;
     const sorted = [...group].sort((a, b) => (b.created || 0) - (a.created || 0));
     const keepId =
       sorted.find((pm) => pm.id === preferredPaymentMethodId)?.id ||
       sorted.find((pm) => pm.id === customerDefaultPaymentMethodId)?.id ||
       sorted[0]?.id ||
       null;
+    if (keepId) keptPaymentMethodIds.push(keepId);
     const duplicates = sorted.filter((pm) => pm.id && pm.id !== keepId);
     for (const duplicate of duplicates) {
       try {
         await stripe.paymentMethods.detach(duplicate.id);
+        detachedPaymentMethodIds.push(duplicate.id);
       } catch (err) {
         console.warn("[billing] failed to detach duplicate payment method", {
           customerId,
@@ -147,6 +162,14 @@ async function dedupeCustomerCardPaymentMethods(customerId, preferredPaymentMeth
       }
     }
   }
+
+  return {
+    customerId,
+    totalMethods: methods.length,
+    duplicateGroups,
+    keptPaymentMethodIds,
+    detachedPaymentMethodIds,
+  };
 }
 
 function readActiveBillingValue(row, key, fallbackValue = null) {
@@ -464,6 +487,73 @@ billingRouter.post("/create-portal-session", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("[billing] create-portal-session error", err);
     return sendError(res, 500, "portal_session_failed", "Failed to open billing portal.");
+  }
+});
+
+billingRouter.post("/cleanup-payment-methods", requireAuth, async (req, res) => {
+  try {
+    const { user_id, business_id } = readIds(req);
+    const { businessId } = req.body || {};
+    const resolvedBusinessId = businessId || business_id;
+    if (!user_id || !resolvedBusinessId) {
+      return sendError(res, 400, "missing_business_id", "User id and business id are required.");
+    }
+    if (!isUuid(user_id) || !isUuid(resolvedBusinessId)) {
+      return sendError(res, 400, "invalid_ids", "Invalid user id or business id.");
+    }
+
+    const owns = await assertBusinessOwnership(user_id, resolvedBusinessId);
+    if (!owns) return sendError(res, 403, "forbidden", "You do not own this business.");
+
+    const { data: billingRow, error } = await supabase
+      .from("business_billing")
+      .select("*")
+      .eq("business_id", resolvedBusinessId)
+      .maybeSingle();
+    const activeBilling = projectBillingRow(billingRow);
+    if (error || !activeBilling.stripe_customer_id) {
+      return sendError(res, 400, "no_billing_customer", "No billing customer found.");
+    }
+
+    let preferredPaymentMethodId = null;
+    if (activeBilling.stripe_subscription_id) {
+      try {
+        const subscription = await stripe.subscriptions.retrieve(activeBilling.stripe_subscription_id);
+        preferredPaymentMethodId =
+          typeof subscription?.default_payment_method === "string"
+            ? subscription.default_payment_method
+            : subscription?.default_payment_method?.id || null;
+      } catch (err) {
+        console.warn("[billing] cleanup-payment-methods failed to load subscription default payment method", {
+          businessId: resolvedBusinessId,
+          subscriptionId: activeBilling.stripe_subscription_id,
+          message: err?.message || err,
+        });
+      }
+    }
+
+    const result = await dedupeCustomerCardPaymentMethods(
+      activeBilling.stripe_customer_id,
+      preferredPaymentMethodId
+    );
+
+    return res.json({
+      ok: true,
+      customer_id: activeBilling.stripe_customer_id,
+      total_methods_before: result?.totalMethods || 0,
+      duplicate_groups: result?.duplicateGroups || 0,
+      detached_count: result?.detachedPaymentMethodIds?.length || 0,
+      detached_payment_method_ids: result?.detachedPaymentMethodIds || [],
+      kept_payment_method_ids: result?.keptPaymentMethodIds || [],
+    });
+  } catch (err) {
+    console.error("[billing] cleanup-payment-methods error", err);
+    return sendError(
+      res,
+      500,
+      "cleanup_payment_methods_failed",
+      "Failed to clean up duplicate payment methods."
+    );
   }
 });
 
