@@ -96,6 +96,59 @@ async function syncBillingFromSubscription(businessId, subscriptionId) {
   return payload;
 }
 
+async function dedupeCustomerCardPaymentMethods(customerId, preferredPaymentMethodId = null) {
+  if (!customerId) return;
+  const pmList = await stripe.paymentMethods.list({
+    customer: customerId,
+    type: "card",
+    limit: 100,
+  });
+  const methods = Array.isArray(pmList?.data) ? pmList.data : [];
+  if (methods.length < 2) return;
+
+  const customer = await stripe.customers.retrieve(customerId);
+  const customerDefaultPaymentMethodId =
+    customer && !customer.deleted ? customer.invoice_settings?.default_payment_method || null : null;
+
+  const groups = new Map();
+  methods.forEach((pm) => {
+    const card = pm?.card || {};
+    const fingerprint = card.fingerprint || "unknown";
+    const key = [
+      fingerprint,
+      card.brand || "",
+      card.last4 || "",
+      String(card.exp_month || ""),
+      String(card.exp_year || ""),
+    ].join(":");
+    const group = groups.get(key) || [];
+    group.push(pm);
+    groups.set(key, group);
+  });
+
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const sorted = [...group].sort((a, b) => (b.created || 0) - (a.created || 0));
+    const keepId =
+      sorted.find((pm) => pm.id === preferredPaymentMethodId)?.id ||
+      sorted.find((pm) => pm.id === customerDefaultPaymentMethodId)?.id ||
+      sorted[0]?.id ||
+      null;
+    const duplicates = sorted.filter((pm) => pm.id && pm.id !== keepId);
+    for (const duplicate of duplicates) {
+      try {
+        await stripe.paymentMethods.detach(duplicate.id);
+      } catch (err) {
+        console.warn("[billing] failed to detach duplicate payment method", {
+          customerId,
+          paymentMethodId: duplicate.id,
+          message: err?.message || err,
+        });
+      }
+    }
+  }
+}
+
 function readActiveBillingValue(row, key, fallbackValue = null) {
   if (!row) return fallbackValue;
   const scopedKey = ACTIVE_BILLING_COLUMNS[key];
@@ -170,6 +223,19 @@ async function getOrCreateStripeCustomer(business) {
 
   await upsertBusinessBilling(business.id, { stripe_customer_id: customer.id });
   return customer.id;
+}
+
+async function syncAndDedupeBillingFromSubscription(businessId, subscriptionId) {
+  if (!businessId || !subscriptionId) return null;
+  const payload = await syncBillingFromSubscription(businessId, subscriptionId);
+  if (!payload?.stripe_customer_id) return payload;
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  const preferredPaymentMethodId =
+    typeof subscription?.default_payment_method === "string"
+      ? subscription.default_payment_method
+      : subscription?.default_payment_method?.id || null;
+  await dedupeCustomerCardPaymentMethods(payload.stripe_customer_id, preferredPaymentMethodId);
+  return payload;
 }
 
 function mapSubStatus(status) {
@@ -605,7 +671,7 @@ export async function billingWebhookHandler(req, res) {
             plan_type: planType,
           });
           if (subId) {
-            await syncBillingFromSubscription(businessId, subId);
+            await syncAndDedupeBillingFromSubscription(businessId, subId);
           }
         }
         break;
@@ -668,7 +734,7 @@ export async function billingWebhookHandler(req, res) {
           last_payment_failed_at: null,
         });
         if (businessId && inv.subscription) {
-          await syncBillingFromSubscription(businessId, inv.subscription);
+          await syncAndDedupeBillingFromSubscription(businessId, inv.subscription);
         }
         break;
       }

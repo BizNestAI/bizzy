@@ -35,18 +35,18 @@ export default function BillingCard({ userId, businessId, status }) {
     return "Custom";
   }, [planTypeKey, status?.plan_label, status?.plan_type, statusValue]);
 
-  const statusBadge = useMemo(() => {
+  const statusTone = useMemo(() => {
     const map = {
-      active: "border-emerald-400/30 bg-emerald-400/15 text-emerald-200",
-      trialing: "border-teal-300/30 bg-teal-400/15 text-teal-200",
-      past_due: "border-amber-300/40 bg-amber-400/15 text-amber-200",
-      unpaid: "border-amber-300/40 bg-amber-400/15 text-amber-200",
-      incomplete: "border-amber-300/40 bg-amber-400/15 text-amber-200",
-      incomplete_expired: "border-white/20 bg-white/10 text-white/60",
-      canceled: "border-white/20 bg-white/10 text-white/60",
-      free: "border-white/15 bg-white/5 text-white/60",
+      active: "text-emerald-200",
+      trialing: "text-teal-200",
+      past_due: "text-amber-200",
+      unpaid: "text-amber-200",
+      incomplete: "text-amber-200",
+      incomplete_expired: "text-white/60",
+      canceled: "text-white/60",
+      free: "text-white/60",
     };
-    return map[statusValue] || "border-white/15 bg-white/5 text-white/70";
+    return map[statusValue] || "text-white/70";
   }, [statusValue]);
 
   const accessLevelLabel = useMemo(() => {
@@ -244,14 +244,14 @@ export default function BillingCard({ userId, businessId, status }) {
         </div>
 
         <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
               <div className="text-sm text-white/60">Plan</div>
               <div className="mt-1 text-lg font-semibold text-white/90">{currentPlanName}</div>
+              <div className={`mt-1 text-sm capitalize ${statusTone}`}>
+                Status: {String(statusValue || "free").replaceAll("_", " ")}
+              </div>
             </div>
-            <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${statusBadge}`}>
-              {statusValue}
-            </span>
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <div className="rounded-xl border border-white/10 bg-black/20 p-3">
@@ -286,7 +286,7 @@ export default function BillingCard({ userId, businessId, status }) {
             className="group w-full rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/8"
           >
             <span className="flex items-center justify-center gap-2">
-              Activate Bizzi
+              <span>{isCurrentPlan ? "Plan Details" : "Activate Bizzi"}</span>
               <span className="text-xs text-white/60">{showPlanDetails ? "Hide details" : "View details"}</span>
               <span className="text-xs text-white/50">{showPlanDetails ? "▲" : "▼"}</span>
             </span>
@@ -296,7 +296,7 @@ export default function BillingCard({ userId, businessId, status }) {
         {showPlanDetails ? (
           <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-6">
             <div className="text-center">
-              <div className="text-lg font-semibold">Activate Bizzi</div>
+              <div className="text-lg font-semibold">{isCurrentPlan ? "Plan Details" : "Activate Bizzi"}</div>
               <p className="text-sm text-white/60">
                 Start Bizzi with full AI workflow automation and a monthly human review layer.
               </p>
@@ -315,28 +315,30 @@ export default function BillingCard({ userId, businessId, status }) {
                       Bizzi automates your bookkeeping workflows, financial visibility, and tax readiness — with a monthly
                       human review layer for added accuracy and confidence.
                     </div>
+                    {isCurrentPlan ? (
+                      <div className="mt-3 text-sm font-medium text-emerald-200">Included in your current subscription</div>
+                    ) : null}
                   </div>
-                  {isCurrentPlan && (
-                    <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-200">
-                      Current plan
-                    </span>
-                  )}
                 </div>
 
-                <button
-                  onClick={planButtonState.action}
-                  disabled={planButtonState.disabled}
-                  className={[
-                    "mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full border px-4 py-2.5 text-sm font-semibold transition disabled:opacity-60",
-                    planButtonState.variant === "activate"
-                      ? "border-emerald-300/60 bg-emerald-300/90 text-black shadow-[0_0_12px_rgba(16,185,129,0.35)] hover:opacity-90"
-                      : planButtonState.variant === "current"
-                        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+                {planButtonState.variant === "current" ? (
+                  <div className="mt-5 border-t border-white/10 pt-4 text-center text-sm font-medium text-white/55">
+                    Current subscription
+                  </div>
+                ) : (
+                  <button
+                    onClick={planButtonState.action}
+                    disabled={planButtonState.disabled}
+                    className={[
+                      "mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full border px-4 py-2.5 text-sm font-semibold transition disabled:opacity-60",
+                      planButtonState.variant === "activate"
+                        ? "border-emerald-300/60 bg-emerald-300/90 text-black shadow-[0_0_12px_rgba(16,185,129,0.35)] hover:opacity-90"
                         : "border-white/15 bg-white/5 text-white/90 hover:bg-white/10",
-                  ].join(" ")}
-                >
-                  {planButtonState.label}
-                </button>
+                    ].join(" ")}
+                  >
+                    {planButtonState.label}
+                  </button>
+                )}
 
                 <ul className="mt-5 grid gap-2 text-sm text-white/75 sm:grid-cols-2">
                   <li className="flex items-start gap-2">
