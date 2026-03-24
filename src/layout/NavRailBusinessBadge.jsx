@@ -2,6 +2,17 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { supabase } from "../services/supabaseClient";
 import { useBusiness } from "../context/BusinessContext";
+import { ACCENT_HEX, ACCENT_SOFT } from "../config/accent";
+
+function hexToRgba(hex, alpha = 1) {
+  let c = (hex || "").replace("#", "");
+  if (c.length === 3) c = c.split("").map((s) => s + s).join("");
+  const n = parseInt(c || "000000", 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 function initialsFromName(name = "") {
   const words = name.trim().split(/\s+/).filter(Boolean);
@@ -93,6 +104,8 @@ export default function NavRailBusinessBadge() {
 
   const initials = initialsFromName(profile.business_name);
   const label = profile.business_name || "Business";
+  const baseAccent = useMemo(() => ACCENT_HEX, []);
+  const accentSoft = useMemo(() => ACCENT_SOFT, []);
   const chips = [
     profile.industry && { label: profile.industry },
     profile.state && { label: profile.state },
@@ -147,17 +160,18 @@ export default function NavRailBusinessBadge() {
   }, [open]);
 
   return (
-    <div className="relative" style={{ pointerEvents: "auto" }}>
+    <div className="relative bizzy-business-badge" style={{ pointerEvents: "auto" }}>
       <button
         type="button"
         ref={badgeRef}
         onClick={() => console.log("Business switcher coming soon")}
-        className="w-8 h-8 rounded-full border border-white/15 backdrop-blur-sm text-white/80 text-[11px] font-semibold tracking-wide flex items-center justify-center transition hover:border-white/25 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/30"
+        className="w-8 h-8 rounded-full backdrop-blur-sm text-[11px] font-semibold tracking-wide flex items-center justify-center transition hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/30"
         title={label}
         aria-label={label}
         style={{
           backgroundColor: "var(--input-bg)",
-          borderColor: "var(--input-border)",
+          border: `1px solid ${hexToRgba(baseAccent, 0.55)}`,
+          boxShadow: `0 0 0 1px ${hexToRgba(baseAccent, 0.22)}, 0 0 10px ${accentSoft}`,
         }}
         onMouseEnter={openTooltip}
         onMouseLeave={closeTooltip}
@@ -168,7 +182,7 @@ export default function NavRailBusinessBadge() {
       </button>
       <div
         role="tooltip"
-        className="absolute left-full bottom-0 ml-3 transition"
+        className="absolute left-full bottom-0 ml-3 transition bizzy-business-badge-tooltip"
         ref={tooltipRef}
         style={{
           transform: tooltipPos?.transform || "translateY(-8px) translateX(-6px)",
@@ -189,14 +203,8 @@ export default function NavRailBusinessBadge() {
           }}
         >
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-400/30 text-emerald-200 font-semibold text-sm flex items-center justify-center">
-              {initials}
-            </div>
             <div className="flex-1 min-w-0">
               <div className="text-[13px] font-semibold text-white truncate">{label}</div>
-              <div className="text-[11px] text-white/60 truncate">
-                {profile.industry || "Business profile"}
-              </div>
             </div>
           </div>
 

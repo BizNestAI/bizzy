@@ -614,18 +614,8 @@ useEffect(() => {
               Select a business to manage billing.
             </div>
           ) : (
-            <BillingCard
-              userId={userId}
-              businessId={businessId}
-              status={billingStatus}
-              onBillingRefresh={() => setBillingRefresh((v) => v + 1)}
-            />
-          )}
-          {activeTab === "Billing" && loadingBilling ? (
-            <p className="text-xs mt-2" style={{ color: TEXT_MUTED }}>Loading billing status…</p>
-          ) : null}
-
-              <div className="mt-4 rounded-xl border px-4 py-3"
+            <>
+              <div className="rounded-xl border px-4 py-3"
                 style={{ borderColor: NEUTRAL_BORDER, background: "rgba(255,255,255,0.04)" }}>
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -645,6 +635,20 @@ useEffect(() => {
                   />
                 </div>
               </div>
+
+              <div className="mt-4">
+                <BillingCard
+                  userId={userId}
+                  businessId={businessId}
+                  status={billingStatus}
+                  onBillingRefresh={() => setBillingRefresh((v) => v + 1)}
+                />
+              </div>
+            </>
+          )}
+          {activeTab === "Billing" && loadingBilling ? (
+            <p className="text-xs mt-2" style={{ color: TEXT_MUTED }}>Loading billing status…</p>
+          ) : null}
             </Section>
           )}
         </div>
