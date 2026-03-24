@@ -209,7 +209,7 @@ function mapPriceIdToPlanType(priceId) {
 }
 
 function mapPlanLabel(planType) {
-  if (planType === "bizzi_human_review") return "Bizzi + Human Review";
+  if (planType === "bizzi_human_review") return "Core";
   return null;
 }
 

@@ -29,32 +29,22 @@ export default function BillingCard({ userId, businessId, status }) {
   const planTypeKey = "bizzi_human_review";
 
   const currentPlanName = useMemo(() => {
+    if (status?.plan_type === planTypeKey) return "Core";
+    if (status?.plan_label === "Bizzi + Human Review") return "Core";
     if (status?.plan_label) return status.plan_label;
-    if (status?.plan_type === planTypeKey) return "Bizzi + Human Review";
     if (statusValue === "free") return "Free";
     return "Custom";
   }, [planTypeKey, status?.plan_label, status?.plan_type, statusValue]);
 
-  const statusTone = useMemo(() => {
-    const map = {
-      active: "text-emerald-200",
-      trialing: "text-teal-200",
-      past_due: "text-amber-200",
-      unpaid: "text-amber-200",
-      incomplete: "text-amber-200",
-      incomplete_expired: "text-white/60",
-      canceled: "text-white/60",
-      free: "text-white/60",
-    };
-    return map[statusValue] || "text-white/70";
+  const accountStateLabel = useMemo(() => {
+    if (statusValue === "active") return "Active";
+    if (statusValue === "trialing") return "Trial active";
+    if (statusValue === "past_due") return "Payment update needed";
+    if (statusValue === "canceled") return "Subscription ended";
+    if (statusValue === "unpaid") return "Payment required";
+    if (statusValue === "incomplete" || statusValue === "incomplete_expired") return "Setup incomplete";
+    return "Activation required";
   }, [statusValue]);
-
-  const accessLevelLabel = useMemo(() => {
-    if (status?.access_level === "full") return "Full access";
-    if (status?.access_level === "limited") return "Limited access";
-    if (status?.access_level === "read_only") return "Read-only access";
-    return "Blocked";
-  }, [status?.access_level]);
 
   function formatDate(dateLike) {
     if (!dateLike) return "—";
@@ -248,9 +238,6 @@ export default function BillingCard({ userId, businessId, status }) {
             <div className="min-w-0">
               <div className="text-sm text-white/60">Plan</div>
               <div className="mt-1 text-lg font-semibold text-white/90">{currentPlanName}</div>
-              <div className={`mt-1 text-sm capitalize ${statusTone}`}>
-                Status: {String(statusValue || "free").replaceAll("_", " ")}
-              </div>
             </div>
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -267,14 +254,8 @@ export default function BillingCard({ userId, businessId, status }) {
               </div>
             </div>
             <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-              <div className="text-xs uppercase tracking-widest text-white/50">Access level</div>
-              <div className="mt-1 text-base font-semibold text-white/90">{accessLevelLabel}</div>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-              <div className="text-xs uppercase tracking-widest text-white/50">Cancellation</div>
-              <div className="mt-1 text-base font-semibold text-white/90">
-                {showCancelScheduled ? "Scheduled" : "—"}
-              </div>
+              <div className="text-xs uppercase tracking-widest text-white/50">Account state</div>
+              <div className="mt-1 text-base font-semibold text-white/90">{accountStateLabel}</div>
             </div>
           </div>
         </div>
@@ -286,7 +267,7 @@ export default function BillingCard({ userId, businessId, status }) {
             className="group w-full rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/8"
           >
             <span className="flex items-center justify-center gap-2">
-              <span>{isCurrentPlan ? "Plan Details" : "Activate Bizzi"}</span>
+              <span>{isCurrentPlan ? "Current Plan" : "Activate Bizzi"}</span>
               <span className="text-xs text-white/60">{showPlanDetails ? "Hide details" : "View details"}</span>
               <span className="text-xs text-white/50">{showPlanDetails ? "▲" : "▼"}</span>
             </span>
@@ -295,28 +276,21 @@ export default function BillingCard({ userId, businessId, status }) {
 
         {showPlanDetails ? (
           <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-6">
-            <div className="text-center">
-              <div className="text-lg font-semibold">{isCurrentPlan ? "Plan Details" : "Activate Bizzi"}</div>
-              <p className="text-sm text-white/60">
-                Start Bizzi with full AI workflow automation and a monthly human review layer.
-              </p>
-            </div>
-
-            <div className="mt-5 flex justify-center">
-              <div className="w-full max-w-2xl rounded-2xl border border-emerald-400/20 bg-black/20 p-6 shadow-[0_0_22px_rgba(16,185,129,0.15)]">
+            <div className="flex justify-center">
+              <div className="w-full rounded-2xl border border-emerald-400/20 bg-black/20 p-6 shadow-[0_0_22px_rgba(16,185,129,0.15)]">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-xl font-semibold">Bizzi + Human Review</div>
+                    <div className="text-xl font-semibold">Core (Bizzi + Human Review)</div>
                     <div className="mt-2 flex items-end gap-2">
                       <span className="text-3xl font-semibold text-white">$169</span>
                       <span className="text-xs uppercase tracking-wide text-white/60">USD / month</span>
                     </div>
                     <div className="mt-3 text-sm text-white/70">
-                      Bizzi automates your bookkeeping workflows, financial visibility, and tax readiness — with a monthly
-                      human review layer for added accuracy and confidence.
+                      Core gives you Bizzi's bookkeeping automation, financial visibility, and tax readiness tools, plus a
+                      monthly human review layer for added accuracy and confidence.
                     </div>
                     {isCurrentPlan ? (
-                      <div className="mt-3 text-sm font-medium text-emerald-200">Included in your current subscription</div>
+                      <div className="mt-3 text-sm font-medium text-emerald-200">This is your current plan</div>
                     ) : null}
                   </div>
                 </div>
@@ -336,11 +310,11 @@ export default function BillingCard({ userId, businessId, status }) {
                         : "border-white/15 bg-white/5 text-white/90 hover:bg-white/10",
                     ].join(" ")}
                   >
-                    {planButtonState.label}
+                    {planButtonState.variant === "activate" ? "Activate Bizzi" : planButtonState.label}
                   </button>
                 )}
 
-                <ul className="mt-5 grid gap-2 text-sm text-white/75 sm:grid-cols-2">
+                <ul className="mt-5 space-y-2 text-sm text-white/75">
                   <li className="flex items-start gap-2">
                     <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300/80" aria-hidden="true" />
                     Automated bookkeeping workflows
@@ -379,10 +353,8 @@ export default function BillingCard({ userId, businessId, status }) {
       <div className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <div className="text-lg font-semibold">Billing Management</div>
-            <p className="text-sm text-white/60">
-              Update payment methods, download invoices, or cancel anytime in the Billing Portal.
-            </p>
+            <div className="text-lg font-semibold">Payment Method</div>
+            <p className="text-sm text-white/60">Card on file used for renewals and billing updates.</p>
           </div>
           {canManagePortal ? (
             <button
@@ -392,21 +364,7 @@ export default function BillingCard({ userId, businessId, status }) {
             >
               {busyAction === "portal" ? "Opening portal…" : "Manage Billing"}
             </button>
-          ) : (
-            <span className="text-xs text-white/50">No billing portal available yet.</span>
-          )}
-        </div>
-        {portalError ? (
-          <p className="mt-3 text-xs text-amber-200/90">{portalError}</p>
-        ) : null}
-      </div>
-
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-lg font-semibold">Payment Method</div>
-            <p className="text-sm text-white/60">Card on file used for renewals.</p>
-          </div>
+          ) : null}
         </div>
         <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white/80">
           {loadingPaymentMethod ? (
@@ -426,6 +384,12 @@ export default function BillingCard({ userId, businessId, status }) {
         </div>
         {paymentMethodError ? (
           <p className="mt-2 text-xs text-amber-200/90">{paymentMethodError}</p>
+        ) : null}
+        {!canManagePortal ? (
+          <p className="mt-2 text-xs text-white/50">No billing portal available yet.</p>
+        ) : null}
+        {portalError ? (
+          <p className="mt-2 text-xs text-amber-200/90">{portalError}</p>
         ) : null}
       </div>
 
