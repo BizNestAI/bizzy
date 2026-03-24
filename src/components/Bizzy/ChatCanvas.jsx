@@ -73,7 +73,8 @@ function chunkWords(str = "") {
     const listMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
     if (listMatch) {
       const [, indent, marker, rest] = listMatch;
-      chunks.push({ text: `${indent}${marker} ${rest}`, atomic: true });
+      chunks.push({ text: `${indent}${marker} `, atomic: true });
+      if (rest) chunks.push(...splitWordsPreserveWhitespace(rest));
     } else if (line.length === 0) {
       chunks.push({ text: "", atomic: true });
     } else {
@@ -83,6 +84,27 @@ function chunkWords(str = "") {
   });
 
   return chunks.length ? chunks : [{ text: "", atomic: true }];
+}
+
+function hideDanglingMarkdownMarkers(str = "") {
+  if (!str) return "";
+
+  const hideLastUnpairedDoubleMarker = (input, marker) => {
+    const positions = [];
+    for (let i = 0; i < input.length - 1; i += 1) {
+      if (input[i] === "\\" || input.slice(i, i + marker.length) !== marker) continue;
+      positions.push(i);
+      i += marker.length - 1;
+    }
+    if (positions.length % 2 === 0) return input;
+    const last = positions[positions.length - 1];
+    return input.slice(0, last) + input.slice(last + marker.length);
+  };
+
+  let safe = str;
+  safe = hideLastUnpairedDoubleMarker(safe, "**");
+  safe = hideLastUnpairedDoubleMarker(safe, "__");
+  return safe;
 }
 
 // Singleton portal target for the scroll-to-bottom button
@@ -154,53 +176,6 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
   useEffect(() => {
     setTypingDone(false);
   }, [id, text]);
-  const rehypeWordFade = useMemo(
-    () =>
-      () =>
-      (tree) => {
-        let wordIndex = 0;
-        const SKIP = new Set(["code", "pre"]);
-        const walk = (node, blocked = false) => {
-          if (!node || typeof node !== "object") return;
-          const tag = node.tagName;
-          const isBlocked = blocked || (tag && SKIP.has(tag));
-          if (!Array.isArray(node.children)) return;
-
-          const next = [];
-          node.children.forEach((child) => {
-            if (child?.type === "text" && !isBlocked) {
-              const parts = String(child.value || "").split(/(\s+)/);
-              parts.forEach((part) => {
-                if (!part) return;
-                const isSpace = /^\s+$/.test(part);
-                if (isSpace) {
-                  next.push({ type: "text", value: part });
-                  return;
-                }
-                const delay = `${(wordIndex * 0.02).toFixed(3)}s`;
-                next.push({
-                  type: "element",
-                  tagName: "span",
-                  properties: {
-                    className: ["bizzy-tw-chunk"],
-                    style: `animation-delay:${delay}`,
-                  },
-                  children: [{ type: "text", value: part }],
-                });
-                wordIndex += 1;
-              });
-              return;
-            }
-            walk(child, isBlocked);
-            next.push(child);
-          });
-          node.children = next;
-        };
-        walk(tree, false);
-        return tree;
-      },
-    []
-  );
 
   useEffect(() => {
     cancelAnimationFrame(rafRef.current || 0);
@@ -271,13 +246,7 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
 
   return (
     <div className="bizzy-tw" data-typing={typingDone ? "false" : "true"}>
-      <MarkdownRenderer rehypePlugins={[rehypeWordFade]}>{shown}</MarkdownRenderer>
-      <style>{`
-        @keyframes bizzyTwFade { from { opacity: 0; transform: translateY(1px); filter: blur(0.25px); } to { opacity: 1; transform: translateY(0); filter: blur(0); } }
-        .bizzy-tw .bizzy-tw-chunk { display: inline-block; opacity: 0; animation: bizzyTwFade .22s ease forwards; }
-        .bizzy-tw[data-typing="true"] ol > li::marker,
-        .bizzy-tw[data-typing="true"] ul > li::marker { opacity: 0; }
-      `}</style>
+      <MarkdownRenderer>{typingDone ? text : hideDanglingMarkdownMarkers(shown)}</MarkdownRenderer>
     </div>
   );
 }
@@ -521,15 +490,15 @@ function TypingIndicator() {
         <div className="bizzy-typing"><span /><span /><span /></div>
       </div>
       <style>{`
-        @keyframes bizzy-bounce{0%,80%,100%{transform:translateY(0);opacity:.7}40%{transform:translateY(-6px);opacity:1}}
+        @keyframes bizzy-bounce{0%,80%,100%{transform:translateY(0);opacity:.58}40%{transform:translateY(-3px);opacity:.82}}
         @keyframes bizzy-glow{
-          0%{background:#f7f1e8;box-shadow:0 0 10px rgba(247,241,232,.24);}
-          50%{background:#dcd6ce;box-shadow:0 0 14px rgba(220,214,206,.36);}
-          100%{background:#f7f1e8;box-shadow:0 0 10px rgba(247,241,232,.24);}
+          0%{background:rgba(247,241,232,.64);box-shadow:0 0 4px rgba(247,241,232,.1);}
+          50%{background:rgba(220,214,206,.78);box-shadow:0 0 6px rgba(220,214,206,.14);}
+          100%{background:rgba(247,241,232,.64);box-shadow:0 0 4px rgba(247,241,232,.1);}
         }
-        .bizzy-typing{display:inline-flex;gap:8px;align-items:center;padding:6px 4px}
+        .bizzy-typing{display:inline-flex;gap:5px;align-items:center;padding:6px 4px}
         .bizzy-typing span{
-          width:8px;height:8px;border-radius:9999px;
+          width:5px;height:5px;border-radius:9999px;
           animation:bizzy-bounce 1s infinite ease-in-out,bizzy-glow 1.6s infinite ease-in-out;
         }
         .bizzy-typing span:nth-child(2){animation-delay:.12s,.12s}
@@ -1488,7 +1457,7 @@ function AssistantRow({
         <Typewriter
           id={id}
           text={text}
-          speed={140}
+          speed={95}
           onProgress={onProgress}
           onDone={() => {
             setIsReady(true);

@@ -75,6 +75,27 @@ async function upsertBusinessBilling(businessId, payload = {}) {
   await supabase.from("business_billing").upsert(row, { onConflict: "business_id" });
 }
 
+async function syncBillingFromSubscription(businessId, subscriptionId) {
+  if (!businessId || !subscriptionId) return null;
+  const sub = await stripe.subscriptions.retrieve(subscriptionId);
+  const priceId = sub.items?.data?.[0]?.price?.id || null;
+  const status = mapSubStatus(sub.status);
+  const metadataPlanType = normalizePlanType(sub?.metadata?.planType || sub?.metadata?.plan_type || null);
+  const payload = {
+    stripe_customer_id: sub.customer || null,
+    stripe_subscription_id: sub.id || subscriptionId,
+    subscription_status: status,
+    current_period_end: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null,
+    trial_end: sub.trial_end ? new Date(sub.trial_end * 1000).toISOString() : null,
+    cancel_at_period_end: Boolean(sub.cancel_at_period_end),
+    plan_price_id: priceId,
+    plan_type: mapPriceIdToPlanType(priceId) || metadataPlanType,
+    canceled_at: status === "canceled" ? new Date().toISOString() : null,
+  };
+  await upsertBusinessBilling(businessId, payload);
+  return payload;
+}
+
 function readActiveBillingValue(row, key, fallbackValue = null) {
   if (!row) return fallbackValue;
   const scopedKey = ACTIVE_BILLING_COLUMNS[key];
@@ -583,6 +604,9 @@ export async function billingWebhookHandler(req, res) {
             stripe_subscription_id: subId,
             plan_type: planType,
           });
+          if (subId) {
+            await syncBillingFromSubscription(businessId, subId);
+          }
         }
         break;
       }
@@ -643,6 +667,9 @@ export async function billingWebhookHandler(req, res) {
           last_invoice_id: inv.id || null,
           last_payment_failed_at: null,
         });
+        if (businessId && inv.subscription) {
+          await syncBillingFromSubscription(businessId, inv.subscription);
+        }
         break;
       }
       case "invoice.payment_failed": {
