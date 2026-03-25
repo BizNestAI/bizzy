@@ -25,7 +25,6 @@ export default function BillingCard({ userId, businessId, status }) {
     : null;
   const showPaymentFailed = status?.last_invoice_status === "payment_failed";
   const showTrialEndingSoon = statusValue === "trialing" && trialDaysRemaining != null && trialDaysRemaining < 5;
-  const showCancelScheduled = Boolean(status?.cancel_at_period_end);
   const planTypeKey = "bizzi_human_review";
 
   const currentPlanName = useMemo(() => {
@@ -37,6 +36,10 @@ export default function BillingCard({ userId, businessId, status }) {
   }, [planTypeKey, status?.plan_label, status?.plan_type, statusValue]);
 
   const accountStateLabel = useMemo(() => {
+    if (statusValue === "active" && status?.cancel_at_period_end) {
+      const activeThrough = formatDate(periodEndsAt);
+      return activeThrough === "—" ? "Canceled" : `Canceled: Active through ${activeThrough}`;
+    }
     if (statusValue === "active") return "Active";
     if (statusValue === "trialing") return "Trial active";
     if (statusValue === "past_due") return "Payment update needed";
@@ -44,7 +47,7 @@ export default function BillingCard({ userId, businessId, status }) {
     if (statusValue === "unpaid") return "Payment required";
     if (statusValue === "incomplete" || statusValue === "incomplete_expired") return "Setup incomplete";
     return "Activation required";
-  }, [statusValue]);
+  }, [periodEndsAt, status?.cancel_at_period_end, statusValue]);
 
   function formatDate(dateLike) {
     if (!dateLike) return "—";
@@ -74,6 +77,10 @@ export default function BillingCard({ userId, businessId, status }) {
   const canStartCheckout = Boolean(status?.can_start_checkout);
   const liveStatuses = new Set(["active", "trialing", "past_due"]);
   const hasLiveSubscription = liveStatuses.has(statusValue);
+  const hasActiveCoreSubscription =
+    statusValue === "active" &&
+    (status?.plan_type === planTypeKey || status?.plan_label === "Core" || status?.plan_label === "Bizzi + Human Review");
+  const canManageSubscription = canManagePortal && hasActiveCoreSubscription;
 
   useEffect(() => {
     if (!businessId) return;
@@ -209,7 +216,7 @@ export default function BillingCard({ userId, businessId, status }) {
 
   return (
     <div className="space-y-4">
-      {(showPaymentFailed || showTrialEndingSoon || showCancelScheduled) && (
+      {(showPaymentFailed || showTrialEndingSoon) && (
         <div className="space-y-2 rounded-2xl border border-white/10 bg-white/5 p-3 text-sm text-white/80 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
           {showPaymentFailed && (
             <div className="rounded-lg border border-amber-300/30 bg-amber-400/10 px-3 py-2 text-amber-100">
@@ -219,11 +226,6 @@ export default function BillingCard({ userId, businessId, status }) {
           {showTrialEndingSoon && (
             <div className="rounded-lg border border-teal-300/30 bg-teal-400/10 px-3 py-2 text-teal-100">
               Trial ending in {trialDaysRemaining} day{trialDaysRemaining === 1 ? "" : "s"}.
-            </div>
-          )}
-          {showCancelScheduled && (
-            <div className="rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-white/70">
-              Cancellation scheduled at the end of the current period.
             </div>
           )}
         </div>
@@ -360,7 +362,7 @@ export default function BillingCard({ userId, businessId, status }) {
             <div className="text-lg font-semibold">Payment Method</div>
             <p className="text-sm text-white/60">Card on file used for renewals and billing updates.</p>
           </div>
-          {canManagePortal ? (
+          {canManageSubscription ? (
             <button
               onClick={openPortal}
               disabled={busyAction !== null}
@@ -389,7 +391,7 @@ export default function BillingCard({ userId, businessId, status }) {
         {paymentMethodError ? (
           <p className="mt-2 text-xs text-amber-200/90">{paymentMethodError}</p>
         ) : null}
-        {!canManagePortal ? (
+        {!canManageSubscription && hasActiveCoreSubscription ? (
           <p className="mt-2 text-xs text-white/50">No billing portal available yet.</p>
         ) : null}
         {portalError ? (

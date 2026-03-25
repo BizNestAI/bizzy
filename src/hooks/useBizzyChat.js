@@ -59,27 +59,10 @@ export const useBizzyChat = (user_id) => {
   const API_BASE = apiBaseUrl || '';
 
   /* ────────────────────────────── Usage tracking ───────────────────────────── */
-  const ensureUsageRow = async () => {
-    if (!hasValidUser) return null;
-    const currentMonth = getCurrentMonth();
-    return supabase
-      .from('gpt_usage')
-      .upsert(
-        {
-          user_id,
-          month: currentMonth,
-          query_count: 0,
-          last_used: new Date().toISOString(),
-        },
-        { onConflict: 'user_id,month', ignoreDuplicates: true }
-      );
-  };
-
   const fetchUsage = async () => {
     if (!hasValidUser) return;
     const currentMonth = getCurrentMonth();
     try {
-      await ensureUsageRow();
       const { data, error } = await supabase
         .from('gpt_usage')
         .select('query_count')

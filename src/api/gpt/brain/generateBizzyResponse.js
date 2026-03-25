@@ -346,8 +346,7 @@ export async function generateBizzyResponse({
 
     // Usage soft cap (unchanged)
     console.log('[gpt] usage-check ok');
-    const now = new Date();
-    const currentMonth = now.toISOString().slice(0, 7);
+    const currentMonth = getCurrentUsageMonth();
     let usageRow = null;
     try {
       const { data: usageData } = await supabase
