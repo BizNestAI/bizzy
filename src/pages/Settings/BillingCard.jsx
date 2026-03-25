@@ -50,7 +50,11 @@ export default function BillingCard({ userId, businessId, status }) {
     if (!dateLike) return "—";
     const dt = dateLike instanceof Date ? dateLike : new Date(dateLike);
     if (Number.isNaN(dt.getTime())) return "—";
-    return dt.toLocaleDateString();
+    return new Intl.DateTimeFormat("en-US", {
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    }).format(dt);
   }
 
   function formatMoney(cents, currency = "USD") {
@@ -362,7 +366,7 @@ export default function BillingCard({ userId, businessId, status }) {
               disabled={busyAction !== null}
               className="inline-flex items-center gap-2 rounded-md border border-white/15 px-4 py-2 text-sm font-semibold text-white/90 transition hover:bg-white/5 disabled:opacity-60"
             >
-              {busyAction === "portal" ? "Opening portal…" : "Manage Billing"}
+              {busyAction === "portal" ? "Opening portal…" : "Manage Subscription"}
             </button>
           ) : null}
         </div>

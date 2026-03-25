@@ -27,6 +27,38 @@ const openai = openaiKey ? new OpenAI({ apiKey: openaiKey }) : null;
 const BIZZY_CHAT_MODEL = process.env.BIZZY_GPT_MODEL || 'gpt-5.1';
 const isGpt5Model = /^gpt-5/i.test(BIZZY_CHAT_MODEL || '');
 
+function getCurrentUsageMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+async function incrementMonthlyUsage(userId) {
+  if (!userId) return null;
+  const month = getCurrentUsageMonth();
+  const nowIso = new Date().toISOString();
+  const { data: usageData, error: fetchError } = await supabase
+    .from('gpt_usage')
+    .select('query_count')
+    .eq('user_id', userId)
+    .eq('month', month)
+    .maybeSingle();
+  if (fetchError && fetchError.code !== 'PGRST116') throw fetchError;
+  const nextCount = (usageData?.query_count || 0) + 1;
+  const { error: upsertError } = await supabase
+    .from('gpt_usage')
+    .upsert(
+      {
+        user_id: userId,
+        month,
+        query_count: nextCount,
+        last_used: nowIso,
+      },
+      { onConflict: 'user_id,month' }
+    );
+  if (upsertError) throw upsertError;
+  return nextCount;
+}
+
 function flattenMessageContent(content) {
   const chunks = Array.isArray(content) ? content : [content];
   return chunks
@@ -975,6 +1007,14 @@ export async function generateBizzyResponseHandler(req, res) {
         }
       }
     } catch {}
+
+    try {
+      if (!result?.meta?.error && user_id) {
+        await incrementMonthlyUsage(user_id);
+      }
+    } catch (usageError) {
+      console.warn('[gpt handler] usage increment failed:', usageError?.message || usageError);
+    }
 
     return res.json({ ...result });
   } catch (e) {

@@ -40,7 +40,10 @@ export const useBizzyChat = (user_id) => {
   const [followUpPrompt, setFollowUpPrompt] = useState(null);
   const [error, setError] = useState(null);
   const [usageCount, setUsageCount] = useState(0);
-  const getCurrentMonth = () => new Date().toISOString().slice(0, 7);
+  const getCurrentMonth = () => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  };
   const hasValidUser = user_id && user_id !== 'undefined';
 
   // Clarifier support
@@ -68,7 +71,7 @@ export const useBizzyChat = (user_id) => {
           query_count: 0,
           last_used: new Date().toISOString(),
         },
-        { onConflict: 'user_id,month' }
+        { onConflict: 'user_id,month', ignoreDuplicates: true }
       );
   };
 
@@ -94,22 +97,8 @@ export const useBizzyChat = (user_id) => {
 
   const incrementUsage = async () => {
     if (!hasValidUser) return;
-    const currentMonth = getCurrentMonth();
-    const nextCount = (usageCount || 0) + 1;
-    setUsageCount(nextCount);
     try {
-      await ensureUsageRow();
-      await supabase
-        .from('gpt_usage')
-        .upsert(
-          {
-            user_id,
-            month: currentMonth,
-            query_count: nextCount,
-            last_used: new Date().toISOString(),
-          },
-          { onConflict: 'user_id,month' }
-        );
+      await fetchUsage();
     } catch (err) {
       if (import.meta?.env?.DEV) {
         console.warn('[useBizzyChat] Failed to increment usage:', err.message);

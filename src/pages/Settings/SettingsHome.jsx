@@ -542,10 +542,9 @@ useEffect(() => {
               >
                 <Field label="Business Name"><Input name="business_name" value={businessForm.business_name} onChange={handleBusinessChange} /></Field>
                 <Field label="Industry"><Input name="industry" value={businessForm.industry} onChange={handleBusinessChange} /></Field>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <Field label="Team Size"><Input name="team_size" type="number" value={businessForm.team_size} onChange={handleBusinessChange} /></Field>
                   <Field label="State"><Input name="state" value={businessForm.state} onChange={handleBusinessChange} /></Field>
-                  <Field label="Timezone"><Input name="timezone" value={businessForm.timezone} onChange={handleBusinessChange} /></Field>
                 </div>
                 <div className="pt-2">
                   <AccentButton onClick={handleSaveBusiness} disabled={savingBusiness} className="focus-visible:outline-none">

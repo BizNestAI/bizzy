@@ -26,6 +26,8 @@ function normalizeMarkdown(raw, { demoteBoldLabels = false, autoLinkify = true }
     if (isFence) return chunk;
     let s = chunk;
     s = s.replace(/\r/g, "");
+    // Normalize malformed bold labels like "**Next action: **Do this"
+    s = s.replace(/\*\*([^*\n]+?):\s+\*\*(\S)/g, (_m, label, nextChar) => `**${label}:** ${nextChar}`);
     s = s.replace(/[ \t]+\n/g, "\n");
     s = s.replace(/\n{3,}/g, "\n\n");
     s = s.replace(/[ \t]{2,}/g, " ");
