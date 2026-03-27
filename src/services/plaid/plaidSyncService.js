@@ -12,6 +12,88 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizeMemo(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeAmount(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  return num.toFixed(2);
+}
+
+function buildFingerprintKey({ plaid_account_id, date, name, merchant_name, amount }) {
+  const accountId = plaid_account_id || null;
+  const txnDate = normalizeDate(date);
+  const memo = normalizeMemo(name || merchant_name || "");
+  const amt = normalizeAmount(amount);
+  if (!accountId || !txnDate || !memo || amt == null) return null;
+  return `${accountId}|${txnDate}|${amt}|${memo}`;
+}
+
+function buildFingerprintVariants(row = {}) {
+  const dates = Array.from(
+    new Set([normalizeDate(row.date), normalizeDate(row.authorized_date)].filter(Boolean))
+  );
+  return dates
+    .map((date) =>
+      buildFingerprintKey({
+        plaid_account_id: row.plaid_account_id,
+        date,
+        name: row.name,
+        merchant_name: row.merchant_name,
+        amount: row.amount,
+      })
+    )
+    .filter(Boolean);
+}
+
+function sameOptionalField(a, b) {
+  if (a == null || a === "" || b == null || b === "") return true;
+  return String(a) === String(b);
+}
+
+function isSafeReplayCandidate(candidate, row) {
+  if (!candidate || !row) return false;
+  return (
+    sameOptionalField(candidate.merchant_entity_id, row.merchant_entity_id) &&
+    sameOptionalField(candidate.payment_channel, row.payment_channel) &&
+    sameOptionalField(candidate.transaction_type, row.transaction_type) &&
+    sameOptionalField(candidate.check_number, row.check_number)
+  );
+}
+
+function uniqById(rows = []) {
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    if (!row?.id || seen.has(row.id)) continue;
+    seen.add(row.id);
+    out.push(row);
+  }
+  return out;
+}
+
+function isoDateAddDays(isoDate, deltaDays) {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return isoDate;
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return d.toISOString().slice(0, 10);
+}
+
+async function upsertRowsInChunks(table, rows, onConflict, chunkSize = 200) {
+  if (!rows.length) return;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const slice = rows.slice(i, i + chunkSize);
+    const { error } = await supabase.from(table).upsert(slice, { onConflict });
+    if (error) throw error;
+  }
+}
+
 // In-memory lock fallback (per process). DB locks are primary.
 const memoryLocks = new Set();
 
@@ -83,6 +165,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         plaid_item_id: item.plaid_item_id,
         plaid_account_id: tx.account_id,
         plaid_transaction_id: tx.transaction_id,
+        pending_transaction_id: tx.pending_transaction_id || null,
         name: tx.name || tx.merchant_name || "Transaction",
         merchant_name: tx.merchant_name || null,
         merchant_entity_id: tx.merchant_entity_id || null,
@@ -113,10 +196,17 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         counterparties: tx.counterparties || null,
         plaid_last_modified_at: tx.timestamp || tx.datetime || null,
         last_seen_at: now,
+        is_archived: false,
+        archived_at: null,
+        archived_reason: null,
         raw: tx,
         updated_at: now,
       };
-    });
+    })
+      .map((row) => ({
+        ...row,
+        duplicate_fingerprint: buildFingerprintKey(row),
+      }));
 
     if (process.env.NODE_ENV !== "production" && rows.length) {
       const sample = rows[0];
@@ -129,28 +219,190 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       });
     }
 
-    if (rows.length) {
-      const { error: txnErr } = await supabase
-        .from("bank_transactions")
-        .upsert(rows, { onConflict: "business_id,plaid_transaction_id" });
-      if (txnErr) {
+    let resolvedTxnIds = [];
+
+    if (rows.length || removed.length) {
+      const exactPlaidIds = Array.from(
+        new Set(
+          [
+            ...rows.map((r) => r.plaid_transaction_id),
+            ...rows.map((r) => r.pending_transaction_id),
+            ...removed.map((r) => r?.transaction_id),
+          ].filter(Boolean)
+        )
+      );
+      const accountIds = Array.from(new Set(rows.map((r) => r.plaid_account_id).filter(Boolean)));
+      const candidateDates = Array.from(
+        new Set(
+          rows.flatMap((row) => [normalizeDate(row.date), normalizeDate(row.authorized_date)].filter(Boolean))
+        )
+      );
+
+      const fetchedRows = [];
+      if (exactPlaidIds.length) {
+        const { data: byTxnId, error: byTxnIdErr } = await supabase
+          .from("bank_transactions")
+          .select(
+            "id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,is_archived,duplicate_fingerprint"
+          )
+          .eq("business_id", businessId)
+          .in("plaid_transaction_id", exactPlaidIds);
+        if (byTxnIdErr) throw byTxnIdErr;
+        fetchedRows.push(...(byTxnId || []));
+
+        const { data: byPendingId, error: byPendingIdErr } = await supabase
+          .from("bank_transactions")
+          .select(
+            "id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,is_archived,duplicate_fingerprint"
+          )
+          .eq("business_id", businessId)
+          .in("pending_transaction_id", exactPlaidIds);
+        if (byPendingIdErr) throw byPendingIdErr;
+        fetchedRows.push(...(byPendingId || []));
+      }
+
+      if (accountIds.length && candidateDates.length) {
+        const minDate = isoDateAddDays(candidateDates.reduce((min, d) => (d < min ? d : min)), -2);
+        const maxDate = isoDateAddDays(candidateDates.reduce((max, d) => (d > max ? d : max)), 2);
+        const { data: candidateRows, error: candidateErr } = await supabase
+          .from("bank_transactions")
+          .select(
+            "id,plaid_item_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,merchant_entity_id,payment_channel,transaction_type,check_number,amount,is_archived,duplicate_fingerprint"
+          )
+          .eq("business_id", businessId)
+          .eq("is_archived", false)
+          .in("plaid_account_id", accountIds)
+          .gte("date", minDate)
+          .lte("date", maxDate);
+        if (candidateErr) throw candidateErr;
+        fetchedRows.push(...(candidateRows || []));
+      }
+
+      const existingRows = uniqById(fetchedRows);
+      const existingByPlaidId = new Map();
+      const existingByPendingId = new Map();
+      const existingByFingerprint = new Map();
+      for (const row of existingRows) {
+        if (row.plaid_transaction_id && !existingByPlaidId.has(row.plaid_transaction_id)) {
+          existingByPlaidId.set(row.plaid_transaction_id, row);
+        }
+        if (row.pending_transaction_id && !existingByPendingId.has(row.pending_transaction_id)) {
+          existingByPendingId.set(row.pending_transaction_id, row);
+        }
+        for (const key of buildFingerprintVariants(row)) {
+          const arr = existingByFingerprint.get(key) || [];
+          arr.push(row);
+          existingByFingerprint.set(key, arr);
+        }
+      }
+
+      const claimedExistingIds = new Set();
+      const protectedRemovedIds = new Set();
+      const rowsForIdUpsert = [];
+      const rowsForPlaidUpsert = [];
+
+      for (const row of rows) {
+        let existing =
+          existingByPlaidId.get(row.plaid_transaction_id) ||
+          null;
+
+        if (!existing && row.pending_transaction_id) {
+          existing =
+            existingByPlaidId.get(row.pending_transaction_id) ||
+            existingByPendingId.get(row.pending_transaction_id) ||
+            null;
+        }
+
+        if (!existing) {
+          const fingerprintMatches = uniqById(
+            buildFingerprintVariants(row).flatMap((key) => existingByFingerprint.get(key) || [])
+          ).filter((candidate) => !candidate.is_archived && !claimedExistingIds.has(candidate.id));
+
+          if (fingerprintMatches.length === 1 && isSafeReplayCandidate(fingerprintMatches[0], row)) {
+            existing = fingerprintMatches[0];
+          }
+        }
+
+        if (existing && !claimedExistingIds.has(existing.id)) {
+          claimedExistingIds.add(existing.id);
+          if (existing.plaid_transaction_id) protectedRemovedIds.add(existing.plaid_transaction_id);
+          if (existing.pending_transaction_id) protectedRemovedIds.add(existing.pending_transaction_id);
+          rowsForIdUpsert.push({
+            ...row,
+            id: existing.id,
+          });
+          continue;
+        }
+
+        rowsForPlaidUpsert.push(row);
+      }
+
+      try {
+        await upsertRowsInChunks("bank_transactions", rowsForIdUpsert, "id");
+        await upsertRowsInChunks("bank_transactions", rowsForPlaidUpsert, "business_id,plaid_transaction_id");
+      } catch (txnErr) {
         const e = new Error("supabase_upsert_failed");
         e.supabase = txnErr;
         throw e;
       }
 
+      const removedIds = Array.from(
+        new Set((removed || []).map((row) => row?.transaction_id).filter(Boolean))
+      );
+      const archiveTxnIds = removedIds
+        .map((removedId) => existingByPlaidId.get(removedId))
+        .filter((row) => row?.id && !protectedRemovedIds.has(row.plaid_transaction_id))
+        .map((row) => row.id);
+
+      if (archiveTxnIds.length) {
+        const archivePayload = archiveTxnIds.map((id) => ({
+          id,
+          is_archived: true,
+          archived_at: now,
+          archived_reason: "plaid_removed",
+          updated_at: now,
+        }));
+        await upsertRowsInChunks("bank_transactions", archivePayload, "id");
+        const { error: catArchiveErr } = await supabase
+          .from("transaction_categorizations")
+          .update({ is_archived: true, archived_at: now, updated_at: now })
+          .eq("business_id", businessId)
+          .in("transaction_id", archiveTxnIds);
+        if (catArchiveErr) throw catArchiveErr;
+      }
+
       // Resolve ids after upsert to avoid duplicate categs
-      const plaidIds = rows.map((r) => r.plaid_transaction_id).filter(Boolean);
+      const plaidIds = rowsForPlaidUpsert.map((r) => r.plaid_transaction_id).filter(Boolean);
+      resolvedTxnIds = rowsForIdUpsert.map((r) => r.id).filter(Boolean);
+      if (plaidIds.length) {
+        const { data: bankResolved, error: bankResolveErr } = await supabase
+          .from("bank_transactions")
+          .select("id,plaid_transaction_id")
+          .eq("business_id", businessId)
+          .in("plaid_transaction_id", plaidIds);
+        if (bankResolveErr) throw bankResolveErr;
+        resolvedTxnIds.push(...(bankResolved || []).map((r) => r.id).filter(Boolean));
+      }
+
+      resolvedTxnIds = Array.from(new Set(resolvedTxnIds));
+    }
+
+    if (resolvedTxnIds.length) {
       const { data: bankResolved, error: bankResolveErr } = await supabase
         .from("bank_transactions")
-        .select("id,plaid_transaction_id")
+        .select("id")
         .eq("business_id", businessId)
-        .in("plaid_transaction_id", plaidIds);
+        .in("id", resolvedTxnIds);
       if (bankResolveErr) throw bankResolveErr;
-      const idMap = new Map((bankResolved || []).map((r) => [r.plaid_transaction_id, r.id]));
-
-      const txnIds = Array.from(idMap.values());
+      const txnIds = (bankResolved || []).map((r) => r.id).filter(Boolean);
       if (txnIds.length) {
+        const { error: catReviveErr } = await supabase
+          .from("transaction_categorizations")
+          .update({ is_archived: false, archived_at: null, updated_at: now })
+          .eq("business_id", businessId)
+          .in("transaction_id", txnIds);
+        if (catReviveErr) throw catReviveErr;
+
         const { data: existingCats, error: catErr } = await supabase
           .from("transaction_categorizations")
           .select("transaction_id")

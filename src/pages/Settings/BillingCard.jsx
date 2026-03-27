@@ -36,14 +36,21 @@ export default function BillingCard({ userId, businessId, status }) {
   }, [planTypeKey, status?.plan_label, status?.plan_type, statusValue]);
 
   const accountStateLabel = useMemo(() => {
-    if (statusValue === "active" && status?.cancel_at_period_end) {
-      const activeThrough = formatDate(periodEndsAt);
+    const activeThrough = formatDate(periodEndsAt);
+    const hasFutureEndDate =
+      periodEndsAt instanceof Date &&
+      !Number.isNaN(periodEndsAt.getTime()) &&
+      periodEndsAt.getTime() > Date.now();
+
+    if ((statusValue === "active" && status?.cancel_at_period_end) || (statusValue === "canceled" && hasFutureEndDate)) {
+      return activeThrough === "—" ? "Canceled" : `Canceled: Active through ${activeThrough}`;
+    }
+    if (statusValue === "canceled") {
       return activeThrough === "—" ? "Canceled" : `Canceled: Active through ${activeThrough}`;
     }
     if (statusValue === "active") return "Active";
     if (statusValue === "trialing") return "Trial active";
     if (statusValue === "past_due") return "Payment update needed";
-    if (statusValue === "canceled") return "Subscription ended";
     if (statusValue === "unpaid") return "Payment required";
     if (statusValue === "incomplete" || statusValue === "incomplete_expired") return "Setup incomplete";
     return "Activation required";
@@ -81,6 +88,8 @@ export default function BillingCard({ userId, businessId, status }) {
     statusValue === "active" &&
     (status?.plan_type === planTypeKey || status?.plan_label === "Core" || status?.plan_label === "Bizzi + Human Review");
   const canManageSubscription = canManagePortal && hasActiveCoreSubscription;
+  const nextBillingDateValue =
+    statusValue === "canceled" || status?.cancel_at_period_end ? "—" : formatDate(periodEndsAt);
 
   useEffect(() => {
     if (!businessId) return;
@@ -249,15 +258,7 @@ export default function BillingCard({ userId, businessId, status }) {
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <div className="rounded-xl border border-white/10 bg-black/20 p-3">
               <div className="text-xs uppercase tracking-widest text-white/50">Next billing date</div>
-              <div className="mt-1 text-base font-semibold text-white/90">
-                {formatDate(periodEndsAt)}
-              </div>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-              <div className="text-xs uppercase tracking-widest text-white/50">Trial ends</div>
-              <div className="mt-1 text-base font-semibold text-white/90">
-                {formatDate(trialEndsAt)}
-              </div>
+              <div className="mt-1 text-base font-semibold text-white/90">{nextBillingDateValue}</div>
             </div>
             <div className="rounded-xl border border-white/10 bg-black/20 p-3">
               <div className="text-xs uppercase tracking-widest text-white/50">Account state</div>

@@ -52,6 +52,7 @@ router.post("/approve", requireAuth, async (req, res) => {
     .from("bank_transactions")
     .select("id,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category,plaid_account_id")
     .eq("business_id", businessId)
+    .eq("is_archived", false)
     .in("id", txnIds);
   if (bankErr) {
     console.error("[bookkeeping][approve] bank fetch failed", bankErr?.message || bankErr);

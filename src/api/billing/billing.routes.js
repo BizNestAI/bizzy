@@ -85,7 +85,7 @@ async function syncBillingFromSubscription(businessId, subscriptionId) {
     stripe_customer_id: sub.customer || null,
     stripe_subscription_id: sub.id || subscriptionId,
     subscription_status: status,
-    current_period_end: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null,
+    current_period_end: deriveSubscriptionEndIso(sub),
     trial_end: sub.trial_end ? new Date(sub.trial_end * 1000).toISOString() : null,
     cancel_at_period_end: Boolean(sub.cancel_at_period_end),
     plan_price_id: priceId,
@@ -219,6 +219,11 @@ function normalizePlanType(planType) {
   return null;
 }
 
+function deriveSubscriptionEndIso(sub) {
+  const unixSeconds = sub?.current_period_end || sub?.cancel_at || sub?.ended_at || null;
+  return unixSeconds ? new Date(unixSeconds * 1000).toISOString() : null;
+}
+
 function resolveCheckoutPlanType(planType) {
   if (!planType) return "bizzi_human_review";
   return normalizePlanType(planType);
@@ -303,6 +308,30 @@ billingRouter.get("/status", requireAuth, async (req, res) => {
       updated_at: null,
     };
     const payload = { ...fallback, ...projectBillingRow(data) };
+    if (payload.stripe_subscription_id && !payload.current_period_end) {
+      try {
+        const stripeSubscription = await stripe.subscriptions.retrieve(payload.stripe_subscription_id);
+        const derivedCurrentPeriodEnd = deriveSubscriptionEndIso(stripeSubscription);
+        if (derivedCurrentPeriodEnd) {
+          payload.current_period_end = derivedCurrentPeriodEnd;
+          payload.subscription_status = mapSubStatus(stripeSubscription.status);
+          payload.cancel_at_period_end = Boolean(stripeSubscription.cancel_at_period_end);
+          await upsertBusinessBilling(business_id, {
+            current_period_end: derivedCurrentPeriodEnd,
+            subscription_status: payload.subscription_status,
+            cancel_at_period_end: payload.cancel_at_period_end,
+          });
+        }
+      } catch (syncErr) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[billing] status fallback sync failed", {
+            businessId: business_id,
+            subscriptionId: payload.stripe_subscription_id,
+            message: syncErr?.message || syncErr,
+          });
+        }
+      }
+    }
     const status = payload.subscription_status || "free";
     const hasSubscription = Boolean(payload.stripe_subscription_id);
     const isPaidOrTrial = status === "active" || status === "trialing";
@@ -795,7 +824,7 @@ export async function billingWebhookHandler(req, res) {
           stripe_customer_id: sub.customer,
           stripe_subscription_id: sub.id,
           subscription_status: status,
-          current_period_end: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null,
+          current_period_end: deriveSubscriptionEndIso(sub),
           trial_end: sub.trial_end ? new Date(sub.trial_end * 1000).toISOString() : null,
           cancel_at_period_end: Boolean(sub.cancel_at_period_end),
           plan_price_id: priceId,

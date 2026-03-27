@@ -169,6 +169,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
         "id,business_id,plaid_account_id,plaid_transaction_id,pending,date,name,merchant_name,counterparty_name,amount,signed_amount,direction"
       )
       .eq("business_id", businessId)
+      .eq("is_archived", false)
       .gte("date", start)
       .lte("date", end);
     if (plaidAccountId) bankQuery = bankQuery.eq("plaid_account_id", plaidAccountId);

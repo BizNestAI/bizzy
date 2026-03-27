@@ -107,6 +107,14 @@ function hideDanglingMarkdownMarkers(str = "") {
   return safe;
 }
 
+function measureTopOffsetForSelector(selector) {
+  if (!selector || typeof document === "undefined") return 0;
+  const el = document.querySelector(selector);
+  if (!el) return 0;
+  const rect = el.getBoundingClientRect();
+  return Math.max(0, Math.round(rect.top));
+}
+
 // Singleton portal target for the scroll-to-bottom button
 function getScrollPortalRoot() {
   if (typeof document === "undefined") return null;
@@ -116,19 +124,6 @@ function getScrollPortalRoot() {
   el.id = "bizzy-scrollbottom-root";
   document.body.appendChild(el);
   return el;
-}
-
-// Singleton ownership for the jump-to-bottom portal so only one button ever renders
-let scrollPortalOwner = null;
-function requestScrollPortal(ownerId) {
-  if (scrollPortalOwner && scrollPortalOwner !== ownerId) return false;
-  scrollPortalOwner = ownerId;
-  return true;
-}
-function releaseScrollPortal(ownerId) {
-  if (scrollPortalOwner === ownerId) {
-    scrollPortalOwner = null;
-  }
 }
 
 function hasUnresolvedAction(text = "") {
@@ -307,14 +302,11 @@ export default function ChatCanvas({
   }, []);
 
   // Respect the caller's top anchor (e.g., keep dashboard header visible)
-  const [topOffset, setTopOffset] = useState(0);
-  useEffect(() => {
+  const [topOffset, setTopOffset] = useState(() => measureTopOffsetForSelector(topAnchorSelector));
+  useLayoutEffect(() => {
     if (!topAnchorSelector || typeof window === "undefined") return;
     const measure = () => {
-      const el = document.querySelector(topAnchorSelector);
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      setTopOffset(Math.max(0, Math.round(rect.top)));
+      setTopOffset(measureTopOffsetForSelector(topAnchorSelector));
     };
     measure();
     const onResize = () => measure();
@@ -413,25 +405,35 @@ export default function ChatCanvas({
         left: `${navWidth}px`,
         right: 0,
         pointerEvents: "auto",
-        opacity: appear ? 1 : 0,
-        transform: appear ? "translateY(0px)" : "translateY(8px)",
-        transition: "opacity .24s cubic-bezier(.22,.1,.25,1), transform .24s cubic-bezier(.22,.1,.25,1)",
         display: "flex",
         flexDirection: "column",
-        background: "transparent",
+        backgroundColor: "var(--bg)",
         overscrollBehavior: "contain",
+        isolation: "isolate",
       }}
       onWheelCapture={(event) => event.stopPropagation()}
       onTouchMoveCapture={(event) => event.stopPropagation()}
     >
+      <div
+        aria-hidden
+        className="bizzy-bg-textured"
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 0,
+          backgroundColor: "var(--bg)",
+          pointerEvents: "none",
+        }}
+      />
+
       <button
         type="button"
         onClick={handleBackToDashboard}
         className="hidden md:inline-flex items-center gap-2 rounded-md border border-transparent bg-transparent text-white/80 hover:bg-white/6 transition-colors px-2.5 py-1.5"
         style={{
           position: "fixed",
-          top: "12px",
-          left: "0px",
+          top: `${effectiveTop + 12}px`,
+          left: `${navWidth}px`,
           zIndex: 9800,
           pointerEvents: "auto",
           backdropFilter: "none",
@@ -443,39 +445,53 @@ export default function ChatCanvas({
         <span className="text-sm font-medium">Dashboard</span>
       </button>
 
-      {/* Scroll layer fills available vertical space */}
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-        <div
-          ref={canvasScrollRef}
-          className="bizzy-canvas-scroll"
-          style={{
-            position: "absolute",
-            inset: 0,
-            overflowY: "auto",
-            overflowX: "hidden",
-            paddingTop: 104,
-            overscrollBehavior: "contain",
-            pointerEvents: "auto",
-          }}
-          onWheel={handleCanvasWheel}
-        >
-          <div style={columnStyle}>
-            <MessageStream
-              contentGutter={contentGutter}
-              scrollerRef={canvasScrollRef}
-              scrollShellStyle={scrollShellStyle}
-            />
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
+          opacity: appear ? 1 : 0,
+          transform: appear ? "translateY(0px)" : "translateY(8px)",
+          transition: "opacity .24s cubic-bezier(.22,.1,.25,1), transform .24s cubic-bezier(.22,.1,.25,1)",
+        }}
+      >
+        {/* Scroll layer fills available vertical space */}
+        <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+          <div
+            ref={canvasScrollRef}
+            className="bizzy-canvas-scroll"
+            style={{
+              position: "absolute",
+              inset: 0,
+              overflowY: "auto",
+              overflowX: "hidden",
+              paddingTop: 104,
+              overscrollBehavior: "contain",
+              pointerEvents: "auto",
+            }}
+            onWheel={handleCanvasWheel}
+          >
+            <div style={columnStyle}>
+              <MessageStream
+                contentGutter={contentGutter}
+                scrollerRef={canvasScrollRef}
+                scrollShellStyle={scrollShellStyle}
+              />
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Canvas-specific bar inside the shared column */}
-      <div style={{ position: "relative", flexShrink: 0, marginBottom: "16px" }}>
-        <div style={columnStyle} ref={barMeasureRef}>
-          <ChatCanvasBar
-            quickPromptMode={quickPromptMode}
-            placeholder="Talk to Bizzi about your books, cash flow, jobs, or taxes…"
-          />
+        {/* Canvas-specific bar inside the shared column */}
+        <div style={{ position: "relative", flexShrink: 0, marginBottom: "16px" }}>
+          <div style={columnStyle} ref={barMeasureRef}>
+            <ChatCanvasBar
+              quickPromptMode={quickPromptMode}
+              placeholder="Talk to Bizzi about your books, cash flow, jobs, or taxes…"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -523,6 +539,7 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
   const scrollerRef = providedScrollerRef || localScrollerRef;
   const bottomRef = useRef(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [historyRevealVisible, setHistoryRevealVisible] = useState(true);
   const [followups, setFollowups] = useState([]);
   const [followupsLoading, setFollowupsLoading] = useState(false);
   const [followupSending, setFollowupSending] = useState(false);
@@ -538,8 +555,6 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
   const followupsStatic = followupsFromCacheRef.current;
   const typewriterDoneRef = useRef(new Map()); // track when the tail assistant finished typing
   const [typewriterTick, setTypewriterTick] = useState(0);
-  const portalOwnerId = useId();
-  const [hasPortal, setHasPortal] = useState(false);
   const markTypewriterPending = useCallback((key) => {
     if (!key) return;
     if (typewriterDoneRef.current.get(key) === false) return;
@@ -574,23 +589,8 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
       followupKeyRef.current = null;
       setFollowups([]);
       setFollowupDockStyle(null);
-      if (hasPortal) {
-        releaseScrollPortal(portalOwnerId);
-        setHasPortal(false);
-      }
     }
   }, [isCanvasOpen]);
-
-  // Acquire singleton portal ownership
-  useEffect(() => {
-    if (!isCanvasOpen) return;
-    if (hasPortal) return;
-    const ok = requestScrollPortal(portalOwnerId);
-    setHasPortal(ok);
-    return () => {
-      releaseScrollPortal(portalOwnerId);
-    };
-  }, [isCanvasOpen, hasPortal, portalOwnerId]);
 
   /* stable id that never depends on text; zero-time assistant reply is keyed off its user */
   const idMapRef = useRef(new WeakMap());
@@ -890,22 +890,15 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
   /* Auto-follow + bottom indicator */
   const scrollToBottom = (behavior = "smooth") => {
     const el = scrollerRef.current; if (!el) return;
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ block: "end", behavior });
-    } else {
-      el.scrollTo({ top: el.scrollHeight, behavior });
-    }
+    el.scrollTo({ top: el.scrollHeight, behavior });
   };
   const scrollToBottomSoon = (behavior = "auto", delay = 30) => {
     const el = scrollerRef.current; if (!el) return;
     setTimeout(() => scrollToBottom(behavior), delay);
   };
   const forceScrollToBottom = (behavior = "auto") => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({ block: "end", behavior });
-      return;
-    }
-    scrollToBottom(behavior);
+    const el = scrollerRef.current; if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
   };
   const keepPinnedIfNearBottom = useCallback(() => {
     const el = scrollerRef.current;
@@ -917,17 +910,20 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
   }, []);
   const handleScrollButtonClick = useCallback(() => {
     manualRef.current = false;
-    upwardScrollRef.current = false;
+    hasScrolledUpRef.current = false;
     threadScrollPendingRef.current = false;
     stickToBottomRef.current = true;
+    setShowScrollBtn(false);
     scrollToBottom("smooth");
-    scrollToBottomSoon("auto", 40);
   }, []);
   const manualRef = useRef(false);
-  const upwardScrollRef = useRef(false);
-  const allowShowRef = useRef(false);
+  const hasScrolledUpRef = useRef(false);
+  const openSettledRef = useRef(false);
   const threadScrollPendingRef = useRef(false);
   const initialAutoScrollPendingRef = useRef(false);
+  const historyRevealPendingRef = useRef(false);
+  const historyRevealRafRef = useRef(0);
+  const settleTimerRef = useRef(0);
   const lastScrollTopRef = useRef(0);
   const lastThreadIdRef = useRef(activeThreadId);
   const openPinUntilRef = useRef(0);
@@ -937,47 +933,45 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
     if (!el) return;
     initialAutoScrollPendingRef.current = true;
     lastScrollTopRef.current = el.scrollTop;
-    upwardScrollRef.current = false;
-    allowShowRef.current = false;
+    hasScrolledUpRef.current = false;
     setShowScrollBtn(false);
     const onScroll = () => {
       const d = el.scrollHeight - el.clientHeight - el.scrollTop;
       const delta = el.scrollTop - lastScrollTopRef.current;
-      const userScrolled = Math.abs(delta) > 1;
-      const allowUserIntent =
-        !initialAutoScrollPendingRef.current && !threadScrollPendingRef.current;
-      if (userScrolled && allowUserIntent) {
+      const nearBottom = d < 12;
+      const awayFromBottom = d > 24;
+      lastScrollTopRef.current = el.scrollTop;
+
+      if (!openSettledRef.current || initialAutoScrollPendingRef.current || threadScrollPendingRef.current) {
+        setShowScrollBtn(false);
+        return;
+      }
+
+      if (Math.abs(delta) > 1) {
         manualRef.current = true;
-        allowShowRef.current = true;
-        initialAutoScrollPendingRef.current = false;
-        threadScrollPendingRef.current = false;
         pinnedOffsetRef.current = d;
       }
-      const scrolledUp = delta < -4;
-      const nearBottom = d < 12;
-      const awayFromBottom = d > 20;
-      lastScrollTopRef.current = el.scrollTop;
-      if (!nearBottom && Math.abs(delta) > 4) manualRef.current = true;
+
       if (nearBottom) {
-        upwardScrollRef.current = false;
-      } else if (scrolledUp && awayFromBottom) {
-        upwardScrollRef.current = true;
+        manualRef.current = false;
+        hasScrolledUpRef.current = false;
+        setShowScrollBtn(false);
+        return;
       }
-      setShowScrollBtn(allowShowRef.current && upwardScrollRef.current && !nearBottom);
+
+      if (delta < -2 && awayFromBottom) {
+        hasScrolledUpRef.current = true;
+      }
+
+      setShowScrollBtn(hasScrolledUpRef.current && awayFromBottom);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
-    el.addEventListener("wheel", onScroll, { passive: true });
-    el.addEventListener("touchstart", onScroll, { passive: true });
-    el.addEventListener("touchmove", onScroll, { passive: true });
     // allow scroll detection after initial auto-scroll settles
     const unlock = setTimeout(() => {
       initialAutoScrollPendingRef.current = false;
     }, 80);
     return () => {
       el.removeEventListener("scroll", onScroll);
-      el.removeEventListener("wheel", onScroll);
-      el.removeEventListener("touchstart", onScroll);
-      el.removeEventListener("touchmove", onScroll);
       clearTimeout(unlock);
     };
   }, []);
@@ -986,10 +980,55 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
     pinnedOffsetRef.current = 0;
   }, [isCanvasOpen, activeThreadId]);
   useEffect(() => {
+    return () => {
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+      }
+    };
+  }, []);
+  useEffect(() => {
+    if (!isCanvasOpen) return;
+    historyRevealPendingRef.current = true;
+    setHistoryRevealVisible(false);
+    return () => {
+      if (historyRevealRafRef.current) {
+        cancelAnimationFrame(historyRevealRafRef.current);
+        historyRevealRafRef.current = 0;
+      }
+    };
+  }, [isCanvasOpen, activeThreadId]);
+  useEffect(() => {
+    if (!isCanvasOpen) return;
+    if (!historyRevealPendingRef.current) return;
+    if (sorted.length === 0) return;
+
+    const hasExistingHistory = sorted.some((m) => normSender(m) === "assistant");
+    if (!hasExistingHistory) {
+      historyRevealPendingRef.current = false;
+      setHistoryRevealVisible(true);
+      return;
+    }
+
+    historyRevealRafRef.current = requestAnimationFrame(() => {
+      historyRevealRafRef.current = requestAnimationFrame(() => {
+        setHistoryRevealVisible(true);
+        historyRevealPendingRef.current = false;
+      });
+    });
+
+    return () => {
+      if (historyRevealRafRef.current) {
+        cancelAnimationFrame(historyRevealRafRef.current);
+        historyRevealRafRef.current = 0;
+      }
+    };
+  }, [sorted.length, isCanvasOpen]);
+  useEffect(() => {
     const el = scrollerRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       if (!isCanvasOpen) return;
+      if (threadScrollPendingRef.current) return;
       if (manualRef.current) return;
       const target = Math.max(0, el.scrollHeight - el.clientHeight - pinnedOffsetRef.current);
       el.scrollTop = target;
@@ -1001,12 +1040,16 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
     if (!isCanvasOpen) return;
     const el = scrollerRef.current;
     if (!el) return;
-    const pinUntil = Date.now() + 650;
+    const pinUntil = Date.now() + 220;
     openPinUntilRef.current = pinUntil;
     let rafId = 0;
     const tick = () => {
       if (!isCanvasOpen) return;
-      if (Date.now() < openPinUntilRef.current && !manualRef.current) {
+      if (
+        Date.now() < openPinUntilRef.current &&
+        !manualRef.current &&
+        threadScrollPendingRef.current
+      ) {
         el.scrollTop = el.scrollHeight;
         rafId = requestAnimationFrame(tick);
       }
@@ -1014,12 +1057,15 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
   }, [isCanvasOpen, activeThreadId]);
-  useEffect(() => { if (!manualRef.current) scrollToBottom(); }, [sorted, isGenerating]);
+  useEffect(() => {
+    if (threadScrollPendingRef.current) return;
+    if (!manualRef.current) scrollToBottom();
+  }, [sorted, isGenerating]);
   useEffect(() => {
     if (!isCanvasOpen) return;
     manualRef.current = false;
-    upwardScrollRef.current = false;
-    allowShowRef.current = false;
+    hasScrolledUpRef.current = false;
+    openSettledRef.current = false;
     threadScrollPendingRef.current = true;
     initialAutoScrollPendingRef.current = true;
     lastScrollTopRef.current = scrollerRef.current?.scrollTop || 0;
@@ -1032,9 +1078,10 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
   useEffect(() => {
     if (!followupSending) return;
     manualRef.current = false;
-    upwardScrollRef.current = false;
-    allowShowRef.current = false;
+    hasScrolledUpRef.current = false;
+    openSettledRef.current = true;
     stickToBottomRef.current = true;
+    setShowScrollBtn(false);
     scrollToBottom("auto");
     scrollToBottomSoon("auto", 40);
   }, [followupSending]);
@@ -1044,11 +1091,10 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
     if (!isCanvasOpen) return;
     threadScrollPendingRef.current = true;
     manualRef.current = false;
-    upwardScrollRef.current = false;
-    allowShowRef.current = false;
+    hasScrolledUpRef.current = false;
+    openSettledRef.current = false;
     initialAutoScrollPendingRef.current = true;
-    scrollToBottom("auto");
-    scrollToBottomSoon("auto", 40);
+    setShowScrollBtn(false);
   }, [activeThreadId, isCanvasOpen]);
 
   // After messages hydrate for a thread open, ensure we land at the bottom
@@ -1064,23 +1110,14 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
         threadScrollPendingRef.current = false;
         initialAutoScrollPendingRef.current = false;
         manualRef.current = false;
-        upwardScrollRef.current = false;
-        allowShowRef.current = false;
+        hasScrolledUpRef.current = false;
+        if (settleTimerRef.current) clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = setTimeout(() => {
+          openSettledRef.current = true;
+        }, 180);
       });
     });
   }, [sorted.length, isCanvasOpen]);
-
-  // Belt-and-suspenders: whenever thread changes and messages arrive, double-scroll to bottom
-  useEffect(() => {
-    if (!isCanvasOpen) return;
-    const doScroll = () => {
-      scrollToBottom("auto");
-      scrollToBottomSoon("auto", 80);
-    };
-    doScroll();
-    const t = setTimeout(doScroll, 140);
-    return () => clearTimeout(t);
-  }, [activeThreadId, sorted.length, isCanvasOpen]);
 
   /* Pre-mark older assistants: assistants at or before the last user never replay */
   const animatedRef = useRef(new Set());
@@ -1238,7 +1275,7 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
             .followup-arrow { opacity: 0.65; transform: translateX(-2px); transition: opacity .12s ease, transform .12s ease; display: inline-flex; align-items: center; }
             .followup-pill:hover .followup-arrow { opacity: 1; transform: translateX(0px); }
             @keyframes followupFade { to { opacity: 1; transform: translateY(0); } }
-            .scrollbottom-shell { position:fixed; left:0; width:100%; bottom:${CANVAS_BAR_HEIGHT + 18}px; display:flex; justify-content:center; pointer-events:none; opacity:0; transform: translateY(12px); transition: opacity .2s ease, transform .2s ease; z-index:20000; }
+            .scrollbottom-shell { position:fixed; left:var(--nav-w, 0px); width:calc(100vw - var(--nav-w, 0px)); bottom:${CANVAS_BAR_HEIGHT + 18}px; display:flex; justify-content:center; pointer-events:none; opacity:0; transform: translateY(12px); transition: opacity .2s ease, transform .2s ease; z-index:20000; }
             .scrollbottom-shell.visible { opacity:1; transform: translateY(0); }
             .scrollbottom-btn { pointer-events:auto; background:#0f1214; color:rgba(255,255,255,0.95); border:1px solid rgba(255,255,255,0.32); border-radius:999px; padding:6px; font-size:12px; box-shadow:0 16px 38px rgba(0,0,0,0.42); display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; }
             .scrollbottom-btn:hover { background:#15191c; border-color:rgba(255,255,255,0.4); transform: translateY(-1px); transition: all .15s ease; color: rgba(255,255,255,1); }
@@ -1251,6 +1288,14 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
 
         <div style={{ display: "none" }}>{doneBump}</div>
 
+        <div
+          style={{
+            opacity: historyRevealVisible ? 1 : 0,
+            transform: historyRevealVisible ? "translateY(0px)" : "translateY(8px)",
+            transition: "opacity .18s ease-out, transform .22s cubic-bezier(.22,1,.36,1)",
+            willChange: "opacity, transform",
+          }}
+        >
         {sorted.map((m, idx) => {
           const s  = normSender(m);
           const key = getStableId(m, idx, sorted);
@@ -1382,17 +1427,11 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
           const last = sorted[sorted.length - 1];
           return isGenerating && normSender(last) !== "assistant" ? <TypingIndicator /> : null;
         })()}
+        </div>
 
-        {scrollPortal && isCanvasOpen && scrollShellStyle && hasPortal
+        {scrollPortal && isCanvasOpen
           ? createPortal(
-              <div
-                className={`scrollbottom-shell ${showScrollBtn && !isGenerating ? "visible" : ""}`}
-                style={
-                  scrollShellStyle
-                    ? { left: `${scrollShellStyle.left}px`, width: `${scrollShellStyle.width}px` }
-                    : undefined
-                }
-              >
+              <div className={`scrollbottom-shell ${showScrollBtn && !isGenerating ? "visible" : ""}`}>
                 <button
                   onClick={handleScrollButtonClick}
                   className="scrollbottom-btn"

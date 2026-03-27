@@ -272,16 +272,16 @@ function CollapsedHistoryTooltip({
   const [filter, setFilter] = useState('');
   if (!anchor) return null;
   const anchorEl = anchor?.el || anchor;
-  if (!anchorEl?.getBoundingClientRect) return null;
-  const rect = anchorEl.getBoundingClientRect();
+  const rect = anchor?.rect || anchorEl?.getBoundingClientRect?.();
+  if (!rect) return null;
   const width = 260;
   const alignBottom = anchor?.align === 'bottom';
-  const top = alignBottom ? rect.top : Math.max(24, rect.top - 220);
+  const top = Math.round(alignBottom ? rect.top : Math.max(24, rect.top - 220));
   const bottomPadding = 12;
   const availableHeight = Math.max(200, (window.innerHeight || 800) - top - bottomPadding);
   const style = {
     position: 'fixed',
-    left: rect.right + 28, // nudge further clear of the NavRail border
+    left: Math.round(rect.right + 28), // nudge further clear of the NavRail border
     top,
     zIndex: 30000,
     width,
@@ -318,7 +318,6 @@ function CollapsedHistoryTooltip({
         />
       </div>
       <div className="overflow-y-auto pr-1 space-y-2 text-sm history-scroll flex-1 min-h-0">
-        {loading && <div className="text-xs text-white/50">Loading…</div>}
         {!loading && error && (
           <div className="text-xs text-rose-400">{error}</div>
         )}
@@ -555,12 +554,32 @@ const ChatDrawer = forwardRef(function ChatDrawer({
   const historyAnchorRef = React.useRef(null);
   const [historyAnchor, setHistoryAnchor] = React.useState(null);
   const historyTimer = React.useRef(null);
+  const snapshotAnchor = React.useCallback((anchorEl, align = null) => {
+    if (!anchorEl?.getBoundingClientRect) return null;
+    const rect = anchorEl.getBoundingClientRect();
+    return {
+      el: anchorEl,
+      align,
+      rect: {
+        top: Math.round(rect.top),
+        right: Math.round(rect.right),
+        bottom: Math.round(rect.bottom),
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+    };
+  }, []);
   const handleHistoryHover = (anchor, opts = {}) => {
     if (!collapsed) return;
     if (historyTimer.current) clearTimeout(historyTimer.current);
-    const anchorEl = anchor || historyAnchor || historyAnchorRef.current;
+    const anchorEl =
+      anchor?.el ||
+      anchor ||
+      historyAnchor?.el ||
+      historyAnchorRef.current;
     // Allow optional alignment override
-    setHistoryAnchor(anchorEl ? { el: anchorEl, align: opts.align || null } : null);
+    setHistoryAnchor(anchorEl ? snapshotAnchor(anchorEl, opts.align || null) : null);
   };
   const handleHistoryLeave = () => {
     if (!collapsed) return;
@@ -595,18 +614,24 @@ const ChatDrawer = forwardRef(function ChatDrawer({
   };
 
   // ✅ click → select thread AND open the ChatCanvas
-  const handleOpenThread = (id, isEditingRow, module) => {
+  const handleOpenThread = async (id, isEditingRow, module) => {
     if (isEditingRow) return;
     const mod = (module || 'bizzy').toLowerCase();
 
-    if (typeof focusThread === 'function') {
-      focusThread(id, mod);      // select thread
-    } else if (typeof openThreadFn === 'function') {
-      openThreadFn(id, { module: mod }); // hydrate if needed
+    if (typeof openCanvas === 'function') {
+      openCanvas(mod);
     }
-    if (typeof openCanvas === 'function') openCanvas(mod);      // <-- always open
-    window.dispatchEvent(new CustomEvent('bizzy:scrollCanvasBottom'));
-    setTimeout(() => window.dispatchEvent(new CustomEvent('bizzy:scrollCanvasBottom')), 120);
+
+    try {
+      if (typeof focusThread === 'function') {
+        await Promise.resolve(focusThread(id, mod));
+      } else if (typeof openThreadFn === 'function') {
+        await Promise.resolve(openThreadFn(id, { module: mod }));
+      }
+    } finally {
+      requestAnimationFrame(() => window.dispatchEvent(new CustomEvent('bizzy:scrollCanvasBottom')));
+      setTimeout(() => window.dispatchEvent(new CustomEvent('bizzy:scrollCanvasBottom')), 120);
+    }
   };
 
   const canViewMore =
@@ -676,7 +701,9 @@ const ChatDrawer = forwardRef(function ChatDrawer({
           loading={loading}
           error={error}
           threads={collapsedPreview}
-          onHover={(el) => handleHistoryHover(el || (historyAnchor?.el || historyAnchorRef.current), { align: 'bottom' })}
+          onHover={() => {
+            if (historyTimer.current) clearTimeout(historyTimer.current);
+          }}
           onLeave={handleHistoryLeave}
           onOpenThread={(thread) => handleOpenThread(thread.id, false, thread.module)}
           canViewMore={collapsedPreview.length < Math.min(visibleThreads.length, shownCount + 10)}

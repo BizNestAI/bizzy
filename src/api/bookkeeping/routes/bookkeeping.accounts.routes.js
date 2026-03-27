@@ -40,7 +40,8 @@ router.get("/accounts", requireAuth, async (req, res) => {
     const { data: txnStatusData, error: txnErr } = await supabase
       .from("bank_transactions")
       .select("plaid_account_id, transaction_categorizations(status)")
-      .eq("business_id", businessId);
+      .eq("business_id", businessId)
+      .eq("is_archived", false);
     if (txnErr) throw txnErr;
 
     const reviewCounts = {};

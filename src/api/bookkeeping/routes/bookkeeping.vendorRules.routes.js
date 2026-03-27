@@ -90,6 +90,7 @@ router.post("/vendor-rules/from-transaction", requireAuth, async (req, res) => {
       .from("bank_transactions")
       .select("id,merchant_entity_id,name,merchant_name,counterparty_name,amount,direction,category_primary,personal_finance_category,qbo_entity_type,qbo_entity_id")
       .eq("business_id", businessId)
+      .eq("is_archived", false)
       .eq("id", txnId)
       .maybeSingle();
     if (txnErr) throw txnErr;

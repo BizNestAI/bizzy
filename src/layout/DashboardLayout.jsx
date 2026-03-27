@@ -149,7 +149,7 @@ const DashboardContent = ({ children }) => {
    }, [location.pathname, currentBusiness?.id, setExtras]);
 
   const theme = useModuleTheme(location.pathname);
-  const { isCanvasOpen = false, activeThreadId, openCanvas, closeCanvas } = useBizzyChatContext();
+  const { isCanvasOpen = false, closeCanvas } = useBizzyChatContext();
 
   const [railOpen, setRailOpen] = useState(false);
   const toggleRail = () => setRailOpen((v) => !v);
@@ -298,14 +298,6 @@ const DashboardContent = ({ children }) => {
   const clampBarHeight = (h = 0) =>
     Math.min(MAX_BAR_HEIGHT, Math.max(DEFAULT_BAR_HEIGHT, Math.round(h) || 0));
 
-  // If we are on ChatHome with a selected thread but the canvas isn't open yet,
-  // open it automatically so the overlay shows.
-   useEffect(() => {
-     if (isChatHome && activeThreadId && !isCanvasOpen) {
-       openCanvas(activeThreadId);
-     }
-   }, [isChatHome, activeThreadId, isCanvasOpen, openCanvas]);
-
   useEffect(() => {
     // Only measure the desktop chat bar when it is rendered (canvas closed); ignore ChatCanvas-only height.
     if (!showPortalBar) return;
@@ -422,6 +414,21 @@ const DashboardContent = ({ children }) => {
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
+
+    // ChatHome should never inherit a preserved scroll position from the canvas.
+    // Restoring a stale top here can nudge the hero/bar stack upward after closing
+    // a long thread, which also makes the next canvas open feel like a shake.
+    if (isChatHome) {
+      if (isCanvasOpen) {
+        el.style.overflowY = "hidden";
+        return;
+      }
+      el.style.overflowY = "";
+      el.scrollTop = 0;
+      canvasScrollLockRef.current = { top: 0, overflowY: "" };
+      return;
+    }
+
     if (isCanvasOpen) {
       canvasScrollLockRef.current = {
         top: el.scrollTop,
@@ -435,7 +442,13 @@ const DashboardContent = ({ children }) => {
     if (Number.isFinite(top)) {
       el.scrollTop = top;
     }
-  }, [isCanvasOpen]);
+  }, [isCanvasOpen, isChatHome]);
+
+  useEffect(() => {
+    if (!isChatHome || isCanvasOpen) return;
+    lastBarHeightRef.current = DEFAULT_BAR_HEIGHT;
+    setBarHeight(DEFAULT_BAR_HEIGHT);
+  }, [isChatHome, isCanvasOpen]);
 
   // Freeze spacer to the last known bar height while ChatCanvas is open so ChatCanvas-only
   // content (e.g., follow-up prompts) cannot inflate dashboard/chat-home spacing.

@@ -141,6 +141,7 @@ html { scroll-behavior: smooth; }
 }
 .bizzy-chat-history-panel.bizzy-chat-history-tooltip {
   border-color: var(--surface-border);
+  transform-origin: top left;
 }
 .bizzy-chat-history-panel.bizzy-chat-history-tooltip:hover {
   border-color: var(--accent-green-faint);
@@ -916,7 +917,15 @@ body.pdf-modal-open .bizzy-qprompts {
   transform: translateY(6px) scale(0.98);
   animation: bizzyTooltipIn 280ms cubic-bezier(0.22, 0.68, 0.4, 1) forwards;
 }
+.bizzy-chat-history-tooltip.bizzy-tooltip-fade {
+  transform: translateY(6px);
+  animation: bizzyHistoryTooltipIn 220ms cubic-bezier(0.22, 0.68, 0.4, 1) forwards;
+}
 @keyframes bizzyTooltipIn {
   0% { opacity: 0; transform: translateY(6px) scale(0.98); }
   100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes bizzyHistoryTooltipIn {
+  0% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
 }

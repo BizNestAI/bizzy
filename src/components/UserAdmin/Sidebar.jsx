@@ -227,7 +227,7 @@ const PureSidebar = React.memo(function PureSidebar({
   const historyIconSize = Math.max(14, (collapsed ? 18 : sz.icon) - 2);
 
   const handleHistoryHover = useCallback((e) => {
-    const anchor = e?.currentTarget || historyBtnRef.current;
+    const anchor = historyBtnRef.current || e?.currentTarget;
     setTooltip({ label: null, x: 0, y: 0 });
     onChatHistoryHover?.(anchor);
   }, [onChatHistoryHover]);
@@ -239,7 +239,7 @@ const PureSidebar = React.memo(function PureSidebar({
   }, [onChatHistoryLeave]);
 
   const handleHistoryClick = useCallback((e) => {
-    const anchor = e?.currentTarget || historyBtnRef.current;
+    const anchor = historyBtnRef.current || e?.currentTarget;
     onChatHistoryClick?.(anchor);
   }, [onChatHistoryClick]);
 

@@ -66,6 +66,7 @@ router.get("/mapping-status", requireAuth, async (req, res) => {
       .from("bank_transactions")
       .select("id,plaid_account_id")
       .eq("business_id", businessId)
+      .eq("is_archived", false)
       .in("id", txnIds);
     if (bankErr) throw bankErr;
 

@@ -63,6 +63,7 @@ router.get("/reconciled-transactions", requireAuth, async (req, res) => {
         "id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,counterparty_name,amount,signed_amount,direction"
       )
       .eq("business_id", businessId)
+      .eq("is_archived", false)
       .in("id", ids);
     if (plaidAccountId) bankQuery = bankQuery.eq("plaid_account_id", plaidAccountId);
     if (dateFrom) bankQuery = bankQuery.gte("date", dateFrom);

@@ -83,6 +83,7 @@ router.patch("/transactions/:transactionId", requireAuth, async (req, res) => {
       .from("bank_transactions")
       .select("id,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category")
       .eq("business_id", businessId)
+      .eq("is_archived", false)
       .eq("id", transactionId)
       .maybeSingle();
     if (bankErr) throw bankErr;
@@ -176,6 +177,7 @@ router.get("/transactions", requireAuth, async (req, res) => {
         "id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,counterparties,counterparty_name,counterparty_source,counterparty_confidence,qbo_entity_type,qbo_entity_id,amount,signed_amount,direction,pending,category_primary,category_detailed,personal_finance_category"
       )
       .eq("business_id", businessId)
+      .eq("is_archived", false)
       .order("date", { ascending: false });
 
     const rangeStart = computeRangeStart(rangeParam);
@@ -321,7 +323,8 @@ router.post("/enrich-counterparties", requireAuth, async (req, res) => {
       .select(
         "id,business_id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparties,direction,counterparty_name,counterparty_source,counterparty_confidence,qbo_entity_type,qbo_entity_id"
       )
-      .eq("business_id", businessId);
+      .eq("business_id", businessId)
+      .eq("is_archived", false);
     if (txnIds && txnIds.length) {
       txQuery.in("id", txnIds);
     } else {

@@ -524,6 +524,7 @@ async function findTransferPairTxnId(businessId, row) {
     .from("bank_transactions")
     .select("id,plaid_account_id,amount,date,name,merchant_name,counterparty_name,category_primary,personal_finance_category")
     .eq("business_id", businessId)
+    .eq("is_archived", false)
     .neq("plaid_account_id", row.plaid_account_id)
     .gte("amount", targetAmount - EPS)
     .lte("amount", targetAmount + EPS)
@@ -567,6 +568,7 @@ async function findRefundOriginalTxn({ businessId, refundTxn }) {
     .from("bank_transactions")
     .select("id,plaid_account_id,amount,direction,date,name,merchant_name,counterparty_name")
     .eq("business_id", businessId)
+    .eq("is_archived", false)
     .gte("date", startIso)
     .lte("date", refundTxn.date)
     .lte("amount", targetAmount + EPS)
@@ -755,7 +757,8 @@ router.post("/suggest", requireAuth, async (req, res) => {
     const txQuery = supabase
       .from("bank_transactions")
       .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel")
-      .eq("business_id", businessId);
+      .eq("business_id", businessId)
+      .eq("is_archived", false);
     if (txnIds && txnIds.length) {
       txQuery.in("id", txnIds);
     } else {

@@ -34,6 +34,7 @@ async function fetchPendingCounts(businessId) {
     .from("bank_transactions")
     .select("plaid_account_id,count:id")
     .eq("business_id", businessId)
+    .eq("is_archived", false)
     .eq("pending", true)
     .group("plaid_account_id");
   if (error) {
@@ -53,6 +54,7 @@ async function fetchNeedsReviewCounts(businessId) {
     .from("bank_transactions")
     .select("id,plaid_account_id")
     .eq("business_id", businessId)
+    .eq("is_archived", false)
     .gte("date", sixtyDaysAgo)
     .limit(5000);
   if (txErr) {
@@ -99,10 +101,11 @@ async function fetchApprovedWaitingCounts(businessId) {
   }
   const ids = (catRows || []).map((c) => c.transaction_id).filter(Boolean);
   const { data: bankRows, error: bankErr } = ids.length
-    ? await supabase
+      ? await supabase
         .from("bank_transactions")
         .select("id,plaid_account_id")
         .eq("business_id", businessId)
+        .eq("is_archived", false)
         .in("id", ids)
     : { data: [] };
   if (bankErr) {
@@ -140,6 +143,7 @@ async function fetchPostedStats(businessId) {
     .from("bank_transactions")
     .select("id,plaid_account_id,amount")
     .eq("business_id", businessId)
+    .eq("is_archived", false)
     .in("id", ids);
   if (bankErr) {
     console.warn("[recon] posted bank fetch failed", bankErr.message || bankErr);

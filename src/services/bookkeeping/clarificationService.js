@@ -329,6 +329,7 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
     .from("bank_transactions")
     .select("id,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category")
     .eq("business_id", businessId)
+    .eq("is_archived", false)
     .in("id", txnIds);
   if (bankErr) return { ok: false, error: bankErr?.message || "bank_fetch_failed" };
   const bankMap = (bankRows || []).reduce((acc, row) => {
