@@ -102,11 +102,24 @@ export async function suggestTransactions(businessId, payload = {}) {
   if (process.env.NODE_ENV !== "production") {
     console.info("[bookkeepingClient] suggest payload", body);
   }
-  const res = await safeFetch(apiUrl("/api/bookkeeping/suggest"), {
-    method: "POST",
-    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
-    body: JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await safeFetch(apiUrl("/api/bookkeeping/suggest"), {
+      method: "POST",
+      headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[bookkeepingClient] suggest failed", {
+        status: err?.status || null,
+        url: err?.url || null,
+        body: err?.body || null,
+        message: err?.message || String(err),
+      });
+    }
+    throw err;
+  }
   if (process.env.NODE_ENV !== "production") {
     console.info("[bookkeepingClient] suggest response", res);
   }

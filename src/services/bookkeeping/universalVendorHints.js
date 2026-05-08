@@ -249,6 +249,8 @@ addVendors(
     "CAT Rental Store",
     "Herc Rentals",
     "United Rentals",
+    "SparkFun",
+    "SparkFun Electronics",
     "Sunbelt Rentals",
     "Ahern Rentals",
     "BlueLine Rental",
@@ -314,7 +316,7 @@ addVendors(
     "Olive Garden",
     "Cheesecake Factory",
   ],
-  { intents: ["meals"], primary: "meals", confidence: "medium" }
+  { intents: ["meals"], primary: "meals", confidence: "high" }
 );
 
 // Software / SaaS / productivity
@@ -562,13 +564,13 @@ addVendors(
 // Restaurants local/fast casual more
 addVendors(
   ["IHOP", "Denny's", "Waffle House", "Cracker Barrel", "Red Robin", "Chili's", "Applebee's", "Texas Roadhouse", "Outback Steakhouse", "Red Lobster"],
-  { intents: ["meals"], primary: "meals", confidence: "medium" }
+  { intents: ["meals"], primary: "meals", confidence: "high" }
 );
 
 // Coffee / bakery extras
 addVendors(
   ["Krispy Kreme", "Dunkin Donuts", "Tim Hortons Coffee", "Blue Bottle Coffee", "Philz Coffee"],
-  { intents: ["meals"], primary: "meals", confidence: "medium" }
+  { intents: ["meals"], primary: "meals", confidence: "high" }
 );
 
 // Home services marketplaces

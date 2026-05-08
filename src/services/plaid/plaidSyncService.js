@@ -349,10 +349,29 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       const removedIds = Array.from(
         new Set((removed || []).map((row) => row?.transaction_id).filter(Boolean))
       );
-      const archiveTxnIds = removedIds
-        .map((removedId) => existingByPlaidId.get(removedId))
-        .filter((row) => row?.id && !protectedRemovedIds.has(row.plaid_transaction_id))
-        .map((row) => row.id);
+      const archiveTxnIds = [];
+      for (const removedId of removedIds) {
+        const row = existingByPlaidId.get(removedId);
+        if (!row?.id) continue;
+
+        const isProtectedLifecycleRow =
+          (row.plaid_transaction_id && protectedRemovedIds.has(row.plaid_transaction_id)) ||
+          (row.pending_transaction_id && protectedRemovedIds.has(row.pending_transaction_id));
+
+        if (isProtectedLifecycleRow) {
+          if (process.env.NODE_ENV !== "production") {
+            console.info("[plaid][sync] skip archive for protected lifecycle row", {
+              business_id: businessId,
+              row_id: row.id,
+              plaid_transaction_id: row.plaid_transaction_id || null,
+              pending_transaction_id: row.pending_transaction_id || null,
+            });
+          }
+          continue;
+        }
+
+        archiveTxnIds.push(row.id);
+      }
 
       if (archiveTxnIds.length) {
         const archivePayload = archiveTxnIds.map((id) => ({

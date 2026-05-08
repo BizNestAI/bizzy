@@ -1,9 +1,6 @@
 const INTENT_ALIASES = {
-  airfare: "travel",
   lodging: "travel",
   car_rental: "travel",
-  transportation: "vehicle_expense",
-  rideshare: "vehicle_expense",
   parking: "parking_tolls",
   tolls: "parking_tolls",
   general_supplies: "materials",
@@ -19,11 +16,18 @@ const INTENT_ALIASES = {
   postage: "shipping",
 };
 
+export function resolveIntentKey(intent = "") {
+  const rawKey = String(intent || "").toLowerCase();
+  return INTENT_ALIASES[rawKey] || rawKey;
+}
+
 const INTENT_KEYWORDS = {
+  airfare: ["airfare", "airline", "airlines", "flight", "flights"],
+  transportation: ["transportation", "rideshare", "uber", "lyft", "taxi", "cab"],
   meals: ["meals", "meal", "meals and entertainment", "meals entertainment", "dining", "restaurant", "restaurants", "coffee"],
   fuel: ["fuel", "gas", "gasoline", "diesel"],
-  materials: ["materials", "material", "supplies", "supply", "job materials", "cogs", "cost of goods", "construction", "general supplies", "supplies and materials", "hardware"],
-  tools: ["tools", "tool", "equipment", "equip", "small tools", "rental", "tool rental"],
+  materials: ["materials", "material", "supplies", "supply", "job materials", "cogs", "cost of goods", "construction", "general supplies", "supplies and materials", "supplies materials", "hardware"],
+  tools: ["tools", "tool", "equipment", "equip", "small tools", "tool rental"],
   software: ["software", "subscriptions", "saas", "cloud", "licensing"],
   advertising: ["advertising", "marketing", "ads", "ad", "promotion", "lead", "leads", "yelp", "angi", "homeadvisor", "thumbtack"],
   travel: ["travel", "airfare", "lodging", "hotel", "airline", "flight", "rental car", "uber", "lyft"],
@@ -33,7 +37,7 @@ const INTENT_KEYWORDS = {
   payment_processing: ["processing", "merchant fees", "payment processing", "stripe", "square", "paypal fees"],
   payroll: ["payroll", "wages"],
   utilities: ["utilities", "telecom", "internet"],
-  vehicle_expense: ["auto", "vehicle", "fleet", "transportation", "rideshare", "parking", "toll", "lease"],
+  vehicle_expense: ["auto", "vehicle", "fleet", "parking", "toll"],
   security: ["security", "alarm", "monitoring"],
   shipping: ["shipping", "postage", "delivery"],
   office_supplies: ["office supplies", "office", "stationery"],
@@ -41,6 +45,28 @@ const INTENT_KEYWORDS = {
   parking_tolls: ["parking", "toll", "tolls"],
   interest_income: ["interest income", "interest"],
 };
+
+const RELATED_INTENT_KEYS = {
+  airfare: ["travel"],
+  transportation: ["vehicle_expense", "travel", "parking_tolls"],
+  travel: ["vehicle_expense", "parking_tolls"],
+  vehicle_expense: ["travel", "fuel", "parking_tolls"],
+  parking_tolls: ["vehicle_expense", "travel"],
+  materials: ["tools"],
+  tools: ["materials"],
+  rentals: ["tools", "materials"],
+  meals: ["travel"],
+  fuel: ["vehicle_expense", "travel"],
+  office_supplies: ["materials"],
+  software: ["office_supplies"],
+  shipping: ["materials"],
+};
+
+const STRICT_PRIMARY_ONLY_INTENTS = new Set([
+  "airfare",
+  "transportation",
+  "materials",
+]);
 
 function normalizeCoaName(name = "") {
   return (name || "")
@@ -91,6 +117,8 @@ function scoreAccount(intentKey, keywords, acct) {
   // intent vs account type weighting
   const acctType = normalizeCoaName(acct.type || acct.AccountType || "");
   const expenseIntents = new Set([
+    "airfare",
+    "transportation",
     "meals",
     "fuel",
     "materials",
@@ -123,13 +151,27 @@ function scoreAccount(intentKey, keywords, acct) {
   return { score, reason };
 }
 
+function buildIntentCandidates(intentKey) {
+  const candidates = [{ key: intentKey, penalty: 0, source: "primary" }];
+  if (STRICT_PRIMARY_ONLY_INTENTS.has(intentKey)) return candidates;
+  const related = RELATED_INTENT_KEYS[intentKey] || [];
+  related.forEach((key, index) => {
+    if (!INTENT_KEYWORDS[key]) return;
+    candidates.push({
+      key,
+      penalty: 18 + index * 4,
+      source: "related",
+    });
+  });
+  return candidates;
+}
+
 export function mapIntentToCoa({ businessId, intent, coaAccounts }) {
   void businessId; // reserved for future business-specific weighting
   if (!intent || !coaAccounts?.length) return null;
   const rawKey = intent.toLowerCase();
-  const intentKey = INTENT_ALIASES[rawKey] || rawKey;
-  const keywords = INTENT_KEYWORDS[intentKey];
-  if (!keywords) {
+  const intentKey = resolveIntentKey(rawKey);
+  if (!INTENT_KEYWORDS[intentKey]) {
     if (process.env.NODE_ENV !== "production") {
       console.info("[intentToCoaMapper] unknown_intent", { raw_intent: rawKey, resolved_intent: intentKey });
     }
@@ -145,19 +187,35 @@ export function mapIntentToCoa({ businessId, intent, coaAccounts }) {
   }));
 
   for (const acct of normalized) {
-    const { score, reason } = scoreAccount(intentKey, keywords, acct);
-    if (score > bestScore) {
-      bestScore = score;
-      best = { acct, reason: reason || "scored_best" };
+    for (const candidate of buildIntentCandidates(intentKey)) {
+      const keywords = INTENT_KEYWORDS[candidate.key];
+      if (!keywords?.length) continue;
+      const { score, reason } = scoreAccount(candidate.key, keywords, acct);
+      const adjustedScore = score - candidate.penalty;
+      if (adjustedScore > bestScore) {
+        bestScore = adjustedScore;
+        best = {
+          acct,
+          reason: reason || "scored_best",
+          matched_intent: candidate.key,
+          match_source: candidate.source,
+        };
+      }
     }
   }
 
-  if (!best || bestScore < 40) return null; // avoid weak accidental matches
+  if (!best || bestScore < 32) return null; // avoid weak accidental matches
 
   return {
     qbo_account_id: best.acct.id || best.acct.Id || null,
     qbo_account_name: best.acct.name || best.acct.Name || null,
-    match_reason: best.reason || "scored_best",
+    matched_intent: best.matched_intent,
+    match_source: best.match_source,
+    score: bestScore,
+    match_reason:
+      best.match_source === "related"
+        ? `${best.reason || "scored_best"}:${best.matched_intent}`
+        : best.reason || "scored_best",
   };
 }
 

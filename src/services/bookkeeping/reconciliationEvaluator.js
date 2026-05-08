@@ -16,6 +16,34 @@ function chunk(arr, size) {
   return out;
 }
 
+async function fetchAllRows(queryBuilderFactory, pageSize = 1000, hardCap = 20000) {
+  const rows = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + pageSize - 1;
+    const { data, error } = await queryBuilderFactory(from, to);
+    if (error) throw error;
+
+    const page = data || [];
+    rows.push(...page);
+
+    if (rows.length >= hardCap) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[recon] pagination hardCap reached", {
+          pageSize,
+          hardCap,
+          fetched: rows.length,
+        });
+      }
+      return rows.slice(0, hardCap);
+    }
+
+    if (page.length < pageSize) return rows;
+    from += pageSize;
+  }
+}
+
 function computeTolerance(bankBalance) {
   const base = Math.max(5, Math.abs(Number(bankBalance) || 0) * 0.005);
   return base;
@@ -26,6 +54,39 @@ function adjustToleranceForTiming(base, { pendingCount, approvedWaitingCount }) 
   if (!hasTiming) return { adjusted: base, timingNote: null };
   const adjusted = Math.max(base, 25);
   return { adjusted, timingNote: "Timing lag: pending/approved waiting to post" };
+}
+
+function buildExplanationSummary({
+  status,
+  comparisonMode,
+  accountName,
+  diffAmount,
+  toleranceAdjusted,
+  pendingCount,
+  needsReviewCount,
+  approvedWaitingCount,
+  notes,
+}) {
+  const label = accountName || "This account";
+  if (status === "ok") {
+    return `${label} matches within tolerance${Number.isFinite(diffAmount) ? ` (${Math.abs(diffAmount).toFixed(2)} diff)` : ""}.`;
+  }
+  if (status === "investigating") {
+    return `${label} is outside tolerance${Number.isFinite(diffAmount) ? ` by ${Math.abs(diffAmount).toFixed(2)}` : ""}${Number.isFinite(toleranceAdjusted) ? ` (tolerance ${toleranceAdjusted.toFixed(2)})` : ""}.`;
+  }
+  if (status === "partial") {
+    if (comparisonMode === "bizzi_proxy") {
+      return `${label} has only an informational proxy balance. Status is partial until a live QBO-backed balance is available.`;
+    }
+    return `${label} has partial reconciliation data and needs more signals before Bizzi can confirm correctness.`;
+  }
+  if (pendingCount || needsReviewCount || approvedWaitingCount) {
+    return `${label} does not have enough finalized data yet: ${pendingCount || 0} pending, ${needsReviewCount || 0} needs review, ${approvedWaitingCount || 0} approved waiting.`;
+  }
+  if (Array.isArray(notes) && notes.length) {
+    return `${label}: ${notes[0]}`;
+  }
+  return `${label} does not yet have enough data for a reliable reconciliation verdict.`;
 }
 
 async function fetchPendingCounts(businessId) {
@@ -50,14 +111,18 @@ async function fetchPendingCounts(businessId) {
 async function fetchNeedsReviewCounts(businessId) {
   const needsCounts = new Map();
   const sixtyDaysAgo = daysAgoIso(60);
-  const { data: txRows, error: txErr } = await supabase
-    .from("bank_transactions")
-    .select("id,plaid_account_id")
-    .eq("business_id", businessId)
-    .eq("is_archived", false)
-    .gte("date", sixtyDaysAgo)
-    .limit(5000);
-  if (txErr) {
+  let txRows = [];
+  try {
+    txRows = await fetchAllRows((from, to) =>
+      supabase
+        .from("bank_transactions")
+        .select("id,plaid_account_id")
+        .eq("business_id", businessId)
+        .eq("is_archived", false)
+        .gte("date", sixtyDaysAgo)
+        .range(from, to)
+    );
+  } catch (txErr) {
     console.warn("[recon] needs-review tx fetch failed", txErr.message || txErr);
     return needsCounts;
   }
@@ -68,6 +133,7 @@ async function fetchNeedsReviewCounts(businessId) {
       .from("transaction_categorizations")
       .select("transaction_id,status")
       .eq("business_id", businessId)
+      .eq("is_archived", false)
       .in("transaction_id", slice);
     if (catErr) {
       console.warn("[recon] needs-review cat fetch failed", catErr.message || catErr);
@@ -87,30 +153,39 @@ async function fetchNeedsReviewCounts(businessId) {
 
 async function fetchApprovedWaitingCounts(businessId) {
   const waitingCounts = new Map();
-  const { data: catRows, error: catErr } = await supabase
-    .from("transaction_categorizations")
-    .select("transaction_id,status,post_after,qbo_txn_id")
-    .eq("business_id", businessId)
-    .in("status", ["approved", "auto_approved", "failed"])
-    .is("qbo_txn_id", null)
-    .not("post_after", "is", null)
-    .limit(5000);
-  if (catErr) {
+  let catRows = [];
+  try {
+    catRows = await fetchAllRows((from, to) =>
+      supabase
+        .from("transaction_categorizations")
+        .select("transaction_id,status,post_after,qbo_txn_id")
+        .eq("business_id", businessId)
+        .eq("is_archived", false)
+        .in("status", ["approved", "auto_approved", "failed"])
+        .is("qbo_txn_id", null)
+        .not("post_after", "is", null)
+        .range(from, to)
+    );
+  } catch (catErr) {
     console.warn("[recon] waiting-to-post fetch failed", catErr.message || catErr);
     return waitingCounts;
   }
   const ids = (catRows || []).map((c) => c.transaction_id).filter(Boolean);
-  const { data: bankRows, error: bankErr } = ids.length
-      ? await supabase
+  const bankRows = [];
+  if (ids.length) {
+    for (const slice of chunk(ids, 1000)) {
+      const { data, error: bankErr } = await supabase
         .from("bank_transactions")
         .select("id,plaid_account_id")
         .eq("business_id", businessId)
         .eq("is_archived", false)
-        .in("id", ids)
-    : { data: [] };
-  if (bankErr) {
-    console.warn("[recon] waiting-to-post bank fetch failed", bankErr.message || bankErr);
-    return waitingCounts;
+        .in("id", slice);
+      if (bankErr) {
+        console.warn("[recon] waiting-to-post bank fetch failed", bankErr.message || bankErr);
+        return waitingCounts;
+      }
+      bankRows.push(...(data || []));
+    }
   }
   const acctMap = new Map((bankRows || []).map((r) => [r.id, r.plaid_account_id]));
   (catRows || []).forEach((row) => {
@@ -124,30 +199,39 @@ async function fetchApprovedWaitingCounts(businessId) {
 async function fetchPostedStats(businessId) {
   const postedStats = new Map(); // acct -> { count, sum, lastPostedAt }
   const ninetyDaysAgo = daysAgoIso(90);
-  const { data: catRows, error: catErr } = await supabase
-    .from("transaction_categorizations")
-    .select("transaction_id,posted_at,status")
-    .eq("business_id", businessId)
-    .eq("status", "posted")
-    .not("posted_at", "is", null)
-    .gte("posted_at", `${ninetyDaysAgo}T00:00:00Z`)
-    .limit(5000);
-  if (catErr) {
+  let catRows = [];
+  try {
+    catRows = await fetchAllRows((from, to) =>
+      supabase
+        .from("transaction_categorizations")
+        .select("transaction_id,posted_at,status")
+        .eq("business_id", businessId)
+        .eq("is_archived", false)
+        .eq("status", "posted")
+        .not("posted_at", "is", null)
+        .gte("posted_at", `${ninetyDaysAgo}T00:00:00Z`)
+        .range(from, to)
+    );
+  } catch (catErr) {
     console.warn("[recon] posted fetch failed", catErr.message || catErr);
     return postedStats;
   }
   const ids = (catRows || []).map((c) => c.transaction_id).filter(Boolean);
   if (!ids.length) return postedStats;
 
-  const { data: bankRows, error: bankErr } = await supabase
-    .from("bank_transactions")
-    .select("id,plaid_account_id,amount")
-    .eq("business_id", businessId)
-    .eq("is_archived", false)
-    .in("id", ids);
-  if (bankErr) {
-    console.warn("[recon] posted bank fetch failed", bankErr.message || bankErr);
-    return postedStats;
+  const bankRows = [];
+  for (const slice of chunk(ids, 1000)) {
+    const { data, error: bankErr } = await supabase
+      .from("bank_transactions")
+      .select("id,plaid_account_id,amount")
+      .eq("business_id", businessId)
+      .eq("is_archived", false)
+      .in("id", slice);
+    if (bankErr) {
+      console.warn("[recon] posted bank fetch failed", bankErr.message || bankErr);
+      return postedStats;
+    }
+    bankRows.push(...(data || []));
   }
   const bankMap = new Map((bankRows || []).map((r) => [r.id, r]));
 
@@ -248,6 +332,7 @@ export async function evaluateReconciliationStatus(businessId, opts = {}) {
         bookBalance = Number(posted.sum);
         bookBalanceSource = "bizzi_proxy";
         notes.push("Book balance source: Bizzi proxy (sum of posted txns)");
+        notes.push("Bizzi proxy is informational only and is not used for strict balance reconciliation");
       }
     }
 
@@ -260,20 +345,51 @@ export async function evaluateReconciliationStatus(businessId, opts = {}) {
 
     let status = "unknown";
     let diffAmount = null;
+    let comparisonMode = "missing";
     if (bankBalance == null || bookBalance == null) {
       status = "unknown";
       if (bankBalance == null) notes.push("Missing bank balance");
       if (bookBalance == null) notes.push("Missing book balance");
+    } else if (bookBalanceSource === "bizzi_proxy") {
+      status = "partial";
+      diffAmount = null;
+      comparisonMode = "bizzi_proxy";
     } else {
       diffAmount = Number(bankBalance) - Number(bookBalance);
       const absDiff = Math.abs(diffAmount);
       status = absDiff <= toleranceAdjusted ? "ok" : "investigating";
+      comparisonMode = "qbo_balance";
       if (status === "investigating" && timingNote) {
         notes.push("Investigating (timing lag) — discrepancy exceeds tolerance but timing signals present");
       }
     }
 
+    const accountName = acct.name || acct.official_name || null;
+    const accountMask = acct.mask || null;
+    const explanationSummary = buildExplanationSummary({
+      status,
+      comparisonMode,
+      accountName,
+      diffAmount,
+      toleranceAdjusted,
+      pendingCount,
+      needsReviewCount,
+      approvedWaitingCount,
+      notes,
+    });
+
     const details = {
+      plaid_account_name: accountName,
+      plaid_account_mask: accountMask,
+      plaid_account_display: accountMask ? `${accountName || "Account"} •••${accountMask}` : accountName || "Account",
+      linked_qbo_account_id: qboAccountId,
+      linked_qbo_account_name: qboAccountName,
+      linked_qbo_account_type: qboAccountType,
+      bank_balance,
+      book_balance: bookBalance,
+      balance_source: bookBalanceSource === "qbo_balance" ? "qbo_balance" : bookBalanceSource === "bizzi_proxy" ? "bizzi_proxy" : "missing",
+      comparison_mode: comparisonMode,
+      raw_diff_amount: diffAmount,
       tolerance: toleranceBase,
       tolerance_base: toleranceBase,
       tolerance_adjusted: toleranceAdjusted,
@@ -287,19 +403,42 @@ export async function evaluateReconciliationStatus(businessId, opts = {}) {
       qbo_account_id: qboAccountId,
       qbo_account_name: qboAccountName,
       qbo_account_type: qboAccountType,
+      explanation_summary: explanationSummary,
+      explanation_notes: notes,
       notes,
     };
 
     const row = {
       plaid_account_id: acct.plaid_account_id,
+      plaid_account_name: accountName,
+      plaid_account_mask: accountMask,
       status,
       bank_balance: bankBalance,
       book_balance: bookBalance,
       diff_amount: diffAmount,
       last_checked_at: nowIso,
+      explanation_summary: explanationSummary,
       details,
     };
     perAccount.push(row);
+
+    if (process.env.NODE_ENV !== "production" && (status === "investigating" || status === "unknown" || status === "partial")) {
+      console.info("[recon] account_evaluated", {
+        businessId,
+        plaid_account_id: acct.plaid_account_id,
+        plaid_account_name: accountName,
+        status,
+        comparison_mode: comparisonMode,
+        bank_balance: bankBalance,
+        book_balance: bookBalance,
+        diff_amount: diffAmount,
+        tolerance_adjusted: toleranceAdjusted,
+        pendingCount,
+        needsReviewCount,
+        approvedWaitingCount,
+        notes,
+      });
+    }
   }
 
   if (perAccount.length) {
@@ -348,9 +487,24 @@ export async function evaluateReconciliationStatus(businessId, opts = {}) {
 
   let overallStatus = "unknown";
   const anyInvestigating = perAccount.some((r) => r.status === "investigating");
+  const allOk = perAccount.length > 0 && perAccount.every((r) => r.status === "ok");
+  const anyPartial = perAccount.some((r) => r.status === "partial");
   const anyOk = perAccount.some((r) => r.status === "ok");
-  if (anyInvestigating) overallStatus = "investigating";
-  else if (anyOk && perAccount.every((r) => r.status === "ok")) overallStatus = "ok";
+  const anyUnknown = perAccount.some((r) => r.status === "unknown");
+  if (!perAccount.length) overallStatus = "unknown";
+  else if (anyInvestigating) overallStatus = "investigating";
+  else if (allOk) overallStatus = "ok";
+  else if (anyPartial || anyOk || anyUnknown) overallStatus = "partial";
+  else overallStatus = "unknown";
+
+  if (process.env.NODE_ENV !== "production" && overallStatus === "partial") {
+    console.info("[recon] overall status resolved to partial", {
+      businessId,
+      account_count: perAccount.length,
+      anyOk,
+      anyUnknown,
+    });
+  }
 
   return { overallStatus, perAccount };
 }

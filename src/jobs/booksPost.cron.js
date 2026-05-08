@@ -11,6 +11,8 @@ const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
 const BACKOFF_SCHEDULE_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000, 6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000];
 
+let postAttemptsTableAvailable = true;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -37,6 +39,74 @@ function computeBackoffMs(nextRetries) {
 
 function getNowIso() {
   return new Date().toISOString();
+}
+
+function isMissingRelationError(err) {
+  const message = String(err?.message || err || "").toLowerCase();
+  return message.includes("does not exist") || message.includes("relation") || err?.code === "42P01";
+}
+
+function summarizePayload(item, bankTxn, mapping) {
+  return {
+    categorization_status: item?.status || null,
+    final_qbo_account_id: item?.final_qbo_account_id || null,
+    final_qbo_account_name: item?.final_qbo_account_name || null,
+    plaid_account_id: bankTxn?.plaid_account_id || null,
+    plaid_transaction_id: bankTxn?.plaid_transaction_id || null,
+    mapped_qbo_account_id: mapping?.qbo_account_id || null,
+    mapped_qbo_account_type: mapping?.qbo_account_type || null,
+    amount: bankTxn?.amount ?? null,
+    date: bankTxn?.date || null,
+  };
+}
+
+function summarizeResponse(result) {
+  if (!result) return null;
+  return {
+    qbo_txn_id: result?.id || null,
+    qbo_txn_type: result?.type || null,
+  };
+}
+
+async function insertPostAttempt({
+  businessId,
+  transactionId,
+  status,
+  qboTxnId = null,
+  qboTxnType = null,
+  errorMessage = null,
+  retryCount = null,
+  postAfter = null,
+  payloadSummary = null,
+  responseSummary = null,
+  attemptedAt = null,
+}) {
+  if (!postAttemptsTableAvailable) return;
+  const row = {
+    business_id: businessId,
+    transaction_id: transactionId,
+    attempted_at: attemptedAt || getNowIso(),
+    status,
+    qbo_txn_id: qboTxnId,
+    qbo_txn_type: qboTxnType,
+    error_message: errorMessage,
+    retry_count: retryCount,
+    post_after: postAfter || null,
+    payload_summary: payloadSummary || null,
+    response_summary: responseSummary || null,
+  };
+  const { error } = await supabase.from("bookkeeping_post_attempts").insert(row);
+  if (!error) return;
+  if (isMissingRelationError(error)) {
+    postAttemptsTableAvailable = false;
+    if (process.env.NODE_ENV !== "production") {
+      log.warn("[books-post] bookkeeping_post_attempts missing; continuing without durable attempt log", {
+        message: error?.message || String(error),
+      });
+    }
+    return;
+  }
+  throw error;
 }
 
 function isOutflowLike(bankTxn = {}) {
@@ -421,6 +491,16 @@ async function handleItem(item) {
 
   const mapping = await getQboAccountForPlaidAccount(businessId, bank?.plaid_account_id);
   if (!mapping) {
+    await insertPostAttempt({
+      businessId,
+      transactionId: txnId,
+      status: "skipped",
+      errorMessage: "missing_qbo_account_mapping",
+      retryCount: Number(item?.meta?.post_retry_count || 0) || null,
+      postAfter: item?.post_after || null,
+      payloadSummary: summarizePayload(item, bank, null),
+      responseSummary: { reason: "plaid_account_unmapped" },
+    });
     const meta = {
       ...(item.meta || {}),
       post_block_reason: "plaid_account_unmapped",
@@ -461,6 +541,21 @@ async function handleItem(item) {
     console.warn("[books-post] idempotency lookup failed", dupErr?.message || dupErr);
   } else if (dupRow?.qbo_txn_id) {
     const postedIso = dupRow.posted_at || new Date().toISOString();
+    await insertPostAttempt({
+      businessId,
+      transactionId: txnId,
+      status: "skipped",
+      qboTxnId: dupRow.qbo_txn_id || null,
+      qboTxnType: dupRow.qbo_txn_type || null,
+      retryCount: Number(item?.meta?.post_retry_count || 0) || null,
+      postAfter: item?.post_after || null,
+      payloadSummary: summarizePayload(item, bank, mapping),
+      responseSummary: {
+        reason: "duplicate_prevented_via_idempotency_key",
+        existing_transaction_id: dupRow.transaction_id || null,
+      },
+      attemptedAt: postedIso,
+    });
     await supabase
       .from("transaction_categorizations")
       .update({
@@ -551,8 +646,31 @@ async function handleItem(item) {
     throw e;
   }
 
+  await insertPostAttempt({
+    businessId,
+    transactionId: txnId,
+    status: "attempted",
+    retryCount: Number(item?.meta?.post_retry_count || 0) || null,
+    postAfter: item?.post_after || null,
+    payloadSummary: summarizePayload(item, bank, mapping),
+    attemptedAt: nowIso,
+  });
+
   const result = await postToQbo(item, bank, qbo, mapping);
   if (!result) {
+    await insertPostAttempt({
+      businessId,
+      transactionId: txnId,
+      status: "skipped",
+      retryCount: Number(item?.meta?.post_retry_count || 0) || null,
+      postAfter: item?.post_after || null,
+      payloadSummary: summarizePayload(item, bank, mapping),
+      responseSummary: {
+        reason: "posting_returned_no_result",
+        post_error: item?.post_error || null,
+      },
+      attemptedAt: getNowIso(),
+    });
     await supabase
       .from("transaction_categorizations")
       .update({
@@ -565,6 +683,18 @@ async function handleItem(item) {
   const { id: qboId, type: qboType } = result;
 
   const postedIso = new Date().toISOString();
+  await insertPostAttempt({
+    businessId,
+    transactionId: txnId,
+    status: "posted",
+    qboTxnId: qboId || null,
+    qboTxnType: qboType || null,
+    retryCount: Number(item?.meta?.post_retry_count || 0) || null,
+    postAfter: item?.post_after || null,
+    payloadSummary: summarizePayload(item, bank, mapping),
+    responseSummary: summarizeResponse(result),
+    attemptedAt: postedIso,
+  });
   const { error } = await supabase
     .from("transaction_categorizations")
     .update({
@@ -616,6 +746,26 @@ async function markFailed(item, message) {
   if (shouldStop) {
     meta.next_post_attempt_at = null;
   }
+  await insertPostAttempt({
+    businessId: item.business_id,
+    transactionId: item.transaction_id,
+    status: "failed",
+    errorMessage: message || "post_failed",
+    retryCount: nextRetries,
+    postAfter: item?.post_after || null,
+    payloadSummary: {
+      categorization_status: item?.status || null,
+      final_qbo_account_id: item?.final_qbo_account_id || null,
+      final_qbo_account_name: item?.final_qbo_account_name || null,
+    },
+    responseSummary: {
+      next_post_attempt_at: meta.next_post_attempt_at || null,
+      posting_in_progress: false,
+      post_block_reason: meta.post_block_reason || null,
+      stopped_retrying: shouldStop,
+    },
+    attemptedAt: nowIso,
+  });
   await supabase
     .from("transaction_categorizations")
     .update({
@@ -742,6 +892,19 @@ async function runOnce() {
       return false;
     });
     if (checkUpdates.length) {
+      for (const update of checkUpdates) {
+        await insertPostAttempt({
+          businessId: update.business_id,
+          transactionId: update.transaction_id,
+          status: "skipped",
+          errorMessage: update.post_error || "blocked_check_requires_manual_approval",
+          postAfter: update.post_after || null,
+          responseSummary: {
+            reason: "blocked_check_requires_manual_approval",
+          },
+          attemptedAt: update.last_post_attempt_at || nowIso,
+        });
+      }
       const { error: checkErr } = await supabase
         .from("transaction_categorizations")
         .upsert(checkUpdates, { onConflict: "business_id,transaction_id" });
@@ -773,6 +936,19 @@ async function runOnce() {
           post_block_reason: "cc_payment_mapping_not_safe",
         },
       }));
+      for (const update of updates) {
+        await insertPostAttempt({
+          businessId: update.business_id,
+          transactionId: update.transaction_id,
+          status: "skipped",
+          errorMessage: update.post_error || "cc_payment_mapping_not_safe",
+          postAfter: update.post_after || null,
+          responseSummary: {
+            reason: "cc_payment_mapping_not_safe",
+          },
+          attemptedAt: nowIso,
+        });
+      }
       const { error: ccUpdateErr } = await supabase
         .from("transaction_categorizations")
         .upsert(updates, { onConflict: "business_id,transaction_id" });

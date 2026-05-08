@@ -44,7 +44,6 @@ function safeText(s) {
 // Core: build the *context-only* system prompt (no persona/style here)
 // ───────────────────────────────────────────────────────────────────────────────
 export function buildBizzySystemPrompt({
-  intent,
   hasContext,
   memoryContext = '',
   businessProfile = null,
@@ -73,6 +72,7 @@ export function buildBizzySystemPrompt({
     '- Keep paragraphs short (2–3 lines).',
     '- Italics are allowed but must be rare and brief (a single key word/phrase, at most once per response). Never italicize whole sentences.',
     '- Use inline code for small identifiers or literals when helpful.',
+    '- Do not write a labeled "**Next action:**" close. Ask the follow-up question or offer directly without that label.',
   ].join('\n');
 
   // ────────────────────────────────────────────────────────────────────────────

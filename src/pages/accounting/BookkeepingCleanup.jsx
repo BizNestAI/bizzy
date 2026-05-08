@@ -201,7 +201,9 @@ function AccountCard({ account, selected, onClick }) {
     >
       <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-300">
         <span>{account.type}</span>
-        <span className="text-emerald-300">{account.toReview} to review</span>
+        {Number(account.toReview || 0) > 0 ? (
+          <span className="text-emerald-300">{account.toReview} to review</span>
+        ) : null}
       </div>
       <div className="text-base font-semibold text-slate-50">{account.name}</div>
     </button>
@@ -218,7 +220,7 @@ function BookkeepingCleanup() {
   const rulesButtonDisabled = false;
   const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId");
   const userId = localStorage.getItem("user_id");
-  const { status: billingStatus } = useBillingStatus(businessId, userId);
+  const { status: billingStatus, loading: loadingBillingStatus } = useBillingStatus(businessId, userId);
   const billingAccess = getBillingAccess(resolveStatusValue(billingStatus));
   const canRunAI = usingDemo ? true : billingAccess.canRunAI;
   const [accounts, setAccounts] = useState(usingDemo ? DEMO_ACCOUNT_LIST : []);
@@ -267,11 +269,6 @@ function BookkeepingCleanup() {
     if (loadingAccounts || loadingTxns) return false;
     return !effectivePlaidConnected && hasPlaidHistory;
   }, [usingDemo, loadingAccounts, loadingTxns, effectivePlaidConnected, hasPlaidHistory]);
-
-  const qboDisconnected = useMemo(() => {
-    if (usingDemo) return false;
-    return effectivePlaidConnected && !qbConnected;
-  }, [usingDemo, effectivePlaidConnected, qbConnected]);
 
   const plaidNeverConnected = useMemo(() => {
     if (usingDemo) return false;
@@ -403,6 +400,10 @@ function BookkeepingCleanup() {
       return { ...a, toReview: counts[key] || a.toReview || 0, _key: key };
     });
   }, [accounts, transactions]);
+  const accountCardsReady = useMemo(() => {
+    if (usingDemo) return true;
+    return accountCards.length > 0;
+  }, [usingDemo, accountCards]);
   const totalToReview = useMemo(
     () => transactions.filter((t) => !["approved", "auto_approved"].includes(t.status)).length,
     [transactions]
@@ -424,6 +425,24 @@ function BookkeepingCleanup() {
     () => transactions.filter((t) => t.is_check && (t.status === "needs_review" || t.status === "uncategorized")),
     [transactions]
   );
+  const categorizedSuggestionCount = useMemo(() => {
+    const isRealGlName = (name = "") => {
+      const normalized = String(name || "").toLowerCase().trim();
+      if (!normalized) return false;
+      if (["select account", "selected account", "account"].includes(normalized)) return false;
+      if (normalized.includes("uncategorized")) return false;
+      if (normalized.includes("ask my accountant")) return false;
+      return true;
+    };
+
+    return transactions.filter((t) => {
+      const status = String(t.status || "").toLowerCase();
+      if (status === "approved" || status === "auto_approved" || status === "posted") return false;
+      const glId = t.glAccountId || t.suggestedAccountId || null;
+      const glName = t.glAccountName || t.suggestedAccountName || null;
+      return !!glId && isRealGlName(glName);
+    }).length;
+  }, [transactions]);
 
   const groupedChartAccounts = useMemo(() => {
     const byType = { income: [], expense: [], equity: [], other: [] };
@@ -846,8 +865,8 @@ function BookkeepingCleanup() {
           t.finalQboAccountName ||
           t.final_qbo_account_name ||
           null;
-        const glId = finalId || suggestedId || t.glAccountId || t.accountId || t.plaid_account_id || t.account_id || null;
-        const glName = finalName || suggestedName || t.glAccountName || t.accountName || null;
+        const glId = finalId || suggestedId || t.glAccountId || null;
+        const glName = finalName || suggestedName || t.glAccountName || null;
         const signed = Number(t.signed_amount ?? t.signedAmount ?? t.amount ?? 0);
         const dirRaw =
           t.direction ||
@@ -921,45 +940,7 @@ function BookkeepingCleanup() {
 
       const key = `${dateRange}|${accountFilter || "all"}`;
       if (canRunAI) {
-        const shouldRunSuggest =
-          !suggestRanRef.current ||
-          suggestRanRef.current !== key;
-        const needsReviewOrUncat = normalized.some((t) => {
-          const s = (t.status || "needs_review").toLowerCase();
-          return s === "needs_review" || s === "uncategorized";
-        });
         let latestNormalized = normalized;
-        if (shouldRunSuggest && needsReviewOrUncat) {
-          suggestRanRef.current = key;
-          if (process.env.NODE_ENV !== "production") {
-            console.info("[Books] running suggest for missing transactions");
-          }
-          try {
-            const suggestPayload = {
-              range: dateRange,
-              account_id: accountFilter,
-            };
-            if (disableAutoApprove === true) suggestPayload.auto_approve = false;
-            await suggestTransactions(businessId, suggestPayload);
-            // refresh to pick up suggestions
-            const res2 = await fetchTransactions(businessId, {
-              status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
-              account_id: accountFilter,
-              range: dateRange,
-              page,
-              page_size: rowsPerPage,
-            });
-            const txns2 = extractTxns(res2);
-            const normalized2 = normalizeTxns(txns2);
-            latestNormalized = normalized2;
-            setTransactions(normalized2);
-            const nextTotal2 = computeTotal(res2, normalized2);
-            setTotalCount(nextTotal2);
-          } catch (errSuggest) {
-            console.warn("[bookkeeping] suggest failed", errSuggest?.message || errSuggest);
-          }
-        }
-
         const needsEnrichment =
           (!enrichRanRef.current || enrichRanRef.current !== key) &&
           latestNormalized.some(
@@ -986,10 +967,68 @@ function BookkeepingCleanup() {
             const nextTotal3 = computeTotal(res3, normalized3);
             setTransactions(normalized3);
             setTotalCount(nextTotal3);
+            latestNormalized = normalized3;
             enrichRanRef.current = key;
           } catch (errEnrich) {
             console.warn("[bookkeeping] enrich-counterparties failed", errEnrich?.message || errEnrich);
             enrichRanRef.current = null;
+          }
+        }
+
+        const shouldRunSuggest =
+          !suggestRanRef.current ||
+          suggestRanRef.current !== key ||
+          latestNormalized.some((t) => {
+            const s = (t.status || "needs_review").toLowerCase();
+            if (!(s === "needs_review" || s === "uncategorized")) return false;
+            return !(t.glAccountId || t.suggestedAccountId);
+          });
+        const needsReviewOrUncat = latestNormalized.some((t) => {
+          const s = (t.status || "needs_review").toLowerCase();
+          return s === "needs_review" || s === "uncategorized";
+        });
+        const handledGraceCandidates = latestNormalized.some((t) => {
+          const s = (t.status || "").toLowerCase();
+          return (s === "approved" || s === "auto_approved") && t.canEdit === true;
+        });
+        if (shouldRunSuggest && (needsReviewOrUncat || handledGraceCandidates)) {
+          if (process.env.NODE_ENV !== "production") {
+            console.info("[Books] running suggest for missing transactions");
+          }
+          try {
+            const suggestPayload = {
+              range: dateRange,
+              account_id: accountFilter,
+            };
+            if (disableAutoApprove === true) suggestPayload.auto_approve = false;
+            const suggestRes = await suggestTransactions(businessId, suggestPayload);
+            // refresh to pick up suggestions after enrichment has populated stronger vendor identity
+            const res2 = await fetchTransactions(businessId, {
+              status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
+              account_id: accountFilter,
+              range: dateRange,
+              page,
+              page_size: rowsPerPage,
+            });
+            const txns2 = extractTxns(res2);
+            const normalized2 = normalizeTxns(txns2);
+            latestNormalized = normalized2;
+            setTransactions(normalized2);
+            const nextTotal2 = computeTotal(res2, normalized2);
+            setTotalCount(nextTotal2);
+            const stillMissingSuggestions = normalized2.some((t) => {
+              const s = (t.status || "needs_review").toLowerCase();
+              if (!(s === "needs_review" || s === "uncategorized")) return false;
+              return !(t.glAccountId || t.suggestedAccountId);
+            });
+            if (suggestRes?.row_error_count > 0 || stillMissingSuggestions) {
+              suggestRanRef.current = null;
+            } else {
+              suggestRanRef.current = key;
+            }
+          } catch (errSuggest) {
+            console.warn("[bookkeeping] suggest failed", errSuggest?.message || errSuggest);
+            suggestRanRef.current = null;
           }
         }
       }
@@ -1036,7 +1075,12 @@ function BookkeepingCleanup() {
         className="mb-4"
       />
 
-      <BillingGate status={billingStatus} businessId={businessId} userId={userId} hideBanner={usingDemo}>
+      <BillingGate
+        status={billingStatus}
+        businessId={businessId}
+        userId={userId}
+        hideBanner={usingDemo || loadingBillingStatus}
+      >
         {({ gateBanner }) => (
           <>
             {gateBanner}
@@ -1050,20 +1094,6 @@ function BookkeepingCleanup() {
               </div>
             </div>
 
-            {!usingDemo && loadingMappingStatus && (activeTab === "handled" || activeTab === "needs_review") ? (
-              <div className="mb-4 rounded-xl border border-[var(--accent-line)] bg-[var(--panel)] px-4 py-3 shadow-lg">
-                <div className="flex items-start gap-3 text-sm text-slate-100">
-                  <span className="mt-[2px]" aria-hidden="true">⏳</span>
-                  <div className="flex-1">
-                    <div className="font-semibold text-slate-100">Checking account mappings…</div>
-                    <div className="text-slate-300 text-[13px]">
-                      Bizzi is verifying your Plaid → QuickBooks account links.
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
             {!usingDemo && !loadingMappingStatus && mappingStatus?.needs_mapping && (activeTab === "handled" || activeTab === "needs_review") ? (
               <div className="mb-4 rounded-xl border border-[var(--accent-line)] bg-[var(--panel)] px-4 py-3 shadow-lg">
                 <div className="flex items-start gap-3 text-sm text-slate-100">
@@ -1075,33 +1105,6 @@ function BookkeepingCleanup() {
                       so it can post {mappingStatus?.affected_txn_count || 0} approved transactions.
                     </div>
                   </div>
-                </div>
-              </div>
-            ) : null}
-
-            {qboDisconnected ? (
-              <div className="mb-4 rounded-xl border border-amber-400/20 bg-amber-500/5 px-4 py-3 shadow-lg">
-                <div className="flex items-start gap-3 text-sm text-amber-100">
-                  <span className="mt-[2px]" aria-hidden="true">⚠️</span>
-                  <div className="flex-1">
-                    <div className="font-semibold text-amber-100">QuickBooks disconnected — Bizzi can still categorize, but posting is paused.</div>
-                    <div className="text-amber-200/80 text-[13px]">
-                      Reconnect QuickBooks to resume posting.
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="shrink-0 rounded-lg border border-amber-400/60 bg-amber-500/15 px-3 py-1.5 text-[12px] font-semibold text-amber-100 hover:bg-amber-500/25"
-                    onClick={() => {
-                      try {
-                        navigate("/dashboard/settings?tab=integrations");
-                      } catch (e) {
-                        window.location.href = "/dashboard/settings?tab=integrations";
-                      }
-                    }}
-                  >
-                    Reconnect QuickBooks
-                  </button>
                 </div>
               </div>
             ) : null}
@@ -1181,14 +1184,14 @@ function BookkeepingCleanup() {
         </div>
       </div>
 
-      {!plaidNeverConnected && activeTab === "needs_review" ? (
+      {!plaidNeverConnected && accountCardsReady && activeTab === "needs_review" && categorizedSuggestionCount > 0 ? (
         <div
           className="flex items-center justify-between gap-4 border rounded-xl px-4 py-3 mt-4"
           style={{ background: PANEL_BG, borderColor: "rgba(16, 185, 129, 0.2)" }}
         >
           <div className="flex-1">
             <div className="text-sm text-slate-200 font-semibold">
-              Bizzi has suggested categories for {typeof totalCount === "number" ? totalCount : "—"} transactions.
+              Bizzi has suggested categories for {categorizedSuggestionCount} transactions.
             </div>
             <div className="text-xs text-slate-400">Review and approve below to keep your books clean.</div>
           </div>

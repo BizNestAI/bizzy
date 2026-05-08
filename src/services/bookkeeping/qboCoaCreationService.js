@@ -182,7 +182,7 @@ async function createQboAccount(businessId, payload) {
 }
 
 export async function createQboCoaAccountIfNeeded({ businessId, candidateName, intent, source = "suggest", createdBy = "bizzi", meta = {} }) {
-  const coa = await fetchChartOfAccounts(businessId);
+  const coa = await fetchChartOfAccounts(businessId, { includeSubaccounts: true });
   const existing = findExistingCoaMatch(coa, candidateName);
   if (existing) {
     devLog("duplicate_block", { candidateName, existing: existing.name, reason: existing.match_reason });

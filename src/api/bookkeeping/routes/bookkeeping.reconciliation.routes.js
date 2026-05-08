@@ -5,6 +5,8 @@ import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { evaluateReconciliationStatus } from "../../../services/bookkeeping/reconciliationEvaluator.js";
 
 const router = Router();
+const SAFE_RECONCILIATION_ERROR_MESSAGE =
+  "An internal issue occurred during reconciliation. Bizzi will retry automatically.";
 
 function summarizeAccounts(rows = []) {
   const visible = (rows || []).filter(
@@ -20,12 +22,32 @@ function summarizeAccounts(rows = []) {
     }
     return {
       plaid_account_id: r.plaid_account_id,
+      plaid_account_name: r.details?.plaid_account_name || null,
+      plaid_account_mask: r.details?.plaid_account_mask || null,
       status: r.status || "unknown",
       diff_amount: r.diff_amount != null ? Number(r.diff_amount) : null,
       bank_balance: r.bank_balance != null ? Number(r.bank_balance) : null,
       book_balance: r.book_balance != null ? Number(r.book_balance) : null,
       last_checked_at: r.last_checked_at || null,
+      explanation_summary: r.details?.explanation_summary || note || null,
+      linked_qbo_account_id: r.details?.linked_qbo_account_id || r.details?.qbo_account_id || null,
+      linked_qbo_account_name: r.details?.linked_qbo_account_name || r.details?.qbo_account_name || null,
+      linked_qbo_account_type: r.details?.linked_qbo_account_type || r.details?.qbo_account_type || null,
+      comparison_mode: r.details?.comparison_mode || null,
+      balance_source: r.details?.balance_source || r.details?.book_balance_source || null,
+      pending_txn_count: r.details?.pending_txn_count ?? null,
+      needs_review_count: r.details?.needs_review_count ?? null,
+      approved_waiting_to_post_count: r.details?.approved_waiting_to_post_count ?? null,
+      posted_txn_count: r.details?.posted_txn_count ?? null,
+      last_posted_at: r.details?.last_posted_at || null,
+      last_sync_at: r.details?.last_sync_at || null,
+      notes: Array.isArray(r.details?.explanation_notes)
+        ? r.details.explanation_notes
+        : Array.isArray(r.details?.notes)
+        ? r.details.notes
+        : [],
       note: note || null,
+      details: r.details || null,
     };
   });
 }
@@ -58,7 +80,7 @@ router.get("/reconciliation-status", requireAuth, async (req, res) => {
     return res.json({ ok: true, overall_status, accounts });
   } catch (err) {
     console.error("[recon][get] failed", err?.message || err);
-    return res.status(500).json({ ok: false, error: "reconciliation_fetch_failed", message: err?.message || "failed" });
+    return res.status(500).json({ ok: false, error: "reconciliation_fetch_failed", message: SAFE_RECONCILIATION_ERROR_MESSAGE });
   }
 });
 
@@ -74,7 +96,7 @@ router.post("/reconciliation-status/run", requireAuth, async (req, res) => {
     return res.json({ ok: true, overall_status, accounts, ran_at: nowIso });
   } catch (err) {
     console.error("[recon][run] failed", err?.message || err);
-    return res.status(500).json({ ok: false, error: "reconciliation_run_failed", message: err?.message || "failed" });
+    return res.status(500).json({ ok: false, error: "reconciliation_run_failed", message: SAFE_RECONCILIATION_ERROR_MESSAGE });
   }
 });
 

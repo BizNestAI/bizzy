@@ -99,9 +99,8 @@ const MainLayoutCore = ({ children }) => {
     if (path.startsWith("/dashboard/jobs") || path.startsWith("/dashboard/leads-jobs")) {
       const base = path.startsWith("/dashboard/leads-jobs") ? "/dashboard/leads-jobs" : "/dashboard/jobs";
       return [
-        { label: "Overview", path: base },
-        { label: "Estimates", path: `${base}/estimates` },
-        { label: "Change Orders", path: `${base}/change-orders` },
+        { label: "Collections", path: `${base}/collections`, activePaths: [base] },
+        { label: "Job Costing", path: `${base}/job-costing` },
       ];
     }
     if (path.startsWith("/dashboard/marketing")) {

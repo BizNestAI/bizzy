@@ -17,7 +17,7 @@ import { ACCENT_HEX, ACCENT_SOFT } from '../../config/accent';
 const tabs = [
   { label: 'Financials', path: '/dashboard/accounting/bookkeeping' },
   { label: 'Tax', path: '/dashboard/tax' },
-  { label: 'Jobs: Coming Soon!', path: '/dashboard/leads-jobs', disableNavigate: true },
+  { label: 'Jobs', path: '/dashboard/leads-jobs' },
   // Temporarily hidden modules: Growth/Marketing, Calendar, Email
   // { label: 'Growth', path: '/dashboard/marketing' },
   // { label: 'Scheduling', path: '/dashboard/calendar' },

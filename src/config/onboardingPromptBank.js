@@ -7,7 +7,7 @@ const toneLines = [
   "- Offer to do the task with them (say \"Let's do it now together\") instead of only explaining.",
   "- Never promise features that do not exist; if it is a roadmap idea, say \"over time we'll add...\" instead of guaranteeing it today.",
   "- Keep the first turn tight: 3-4 short paragraphs or bullet sections.",
-  "- After you answer, call out one clear next action and ask a yes/no follow-up question.",
+  "- After you answer, ask the yes/no follow-up question directly without a labeled \"Next action\" line.",
 ];
 
 export const ONBOARDING_TONE_BLOCK = toneLines.join("\n");
@@ -54,7 +54,7 @@ Your QuickBooks ledger stays intact — this only stops QBO from importing the b
 **Optional: Finish your Business Profile**
 Trade + team size helps Bizzi talk like an operator, but Bizzi can still run without it.
 
-One clear next action: open **Settings → Sync** and connect **Plaid**, then **QuickBooks**.`,
+Open **Settings → Sync** and connect **Plaid**, then **QuickBooks**.`,
     followUps: [
       "What trade are you in?",
       "Roughly how many transactions per month?",
@@ -131,7 +131,7 @@ Your QuickBooks ledger stays intact — this only stops QBO from importing the b
 - Go to **Financials → Books Review**
 - Approve/edit categories (Bizzi learns vendor defaults so it gets quieter fast)
 
-One clear next action: open **Settings → Sync** and connect **Plaid**, then **QuickBooks**.`,
+Open **Settings → Sync** and connect **Plaid**, then **QuickBooks**.`,
     followUps: [
       "Do you want to connect checking or credit cards first?",
       "Is QuickBooks already set up for this business?",
@@ -243,7 +243,7 @@ So Bizzi can write the cleaned-up results into your ledger for tax season.
 After that, do your first Books Review pass:
 Approve/edit a handful of transactions so Bizzi learns your vendor defaults and stops asking.
 
-One clear next action: open **Settings → Sync** and connect **Plaid**, then **QuickBooks**.`,
+Open **Settings → Sync** and connect **Plaid**, then **QuickBooks**.`,
     followUps: ["Do you want to connect checking or credit cards first?"],
     followUpPrompt: "Ready to do that first step now (yes or no)?",
     nextStep:

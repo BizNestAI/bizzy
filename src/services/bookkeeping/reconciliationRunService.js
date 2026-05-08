@@ -19,6 +19,11 @@ function devLog(tag, payload) {
   }
 }
 
+function isMissingRelationError(err) {
+  const message = String(err?.message || err || "").toLowerCase();
+  return message.includes("does not exist") || message.includes("relation") || err?.code === "42P01";
+}
+
 function normalizeDate(d) {
   if (!d) return null;
   const ok = /^\d{4}-\d{2}-\d{2}$/.test(String(d));
@@ -48,7 +53,350 @@ function normalizeDirection(txn) {
   return "unknown";
 }
 
+function safeParseDate(value) {
+  if (!value) return null;
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function nullable(value) {
+  return value === undefined ? null : value;
+}
+
+function isApprovedLike(cat = {}) {
+  const statusLower = String(cat?.status || "").toLowerCase();
+  return statusLower === "approved" || statusLower === "auto_approved";
+}
+
+function deriveSourceOfTruth(cat = {}) {
+  if (cat?.qbo_txn_id) return "qbo";
+  if (isApprovedLike(cat)) return "bizzi_proxy";
+  return "unknown";
+}
+
+function deriveReconciliationConfidence({ cat, statusMeta }) {
+  const status = String(statusMeta?.status || "").toLowerCase();
+  if (cat?.qbo_txn_id) return "high";
+  if (isApprovedLike(cat)) return "medium";
+  if (["needs_review", "failed_post", "missing_in_qbo"].includes(status)) return "low";
+  return "low";
+}
+
+function deriveDuplicateSource({ bank, statusMeta }) {
+  if (statusMeta?.status === "duplicate_internal") return "reconciliation_safety";
+  if (statusMeta?.status === "duplicate_in_qbo") return "qbo_duplicate";
+  if (bank?.pending_transaction_id) return "pending_merge";
+  if (bank?.duplicate_fingerprint) return "plaid_replay";
+  return null;
+}
+
+function derivePipelineBucket({ bank, statusMeta }) {
+  if (bank?.is_archived === true) return "ingestion";
+  switch (statusMeta?.status) {
+    case "archived":
+      return "ingestion";
+    case "duplicate_internal":
+      return "ingestion";
+    case "pending":
+      return "ingestion";
+    case "needs_review":
+      return "categorization";
+    case "approved_waiting_post":
+      return "posting";
+    case "matched":
+    case "duplicate_in_qbo":
+      return "reconciliation";
+    case "failed_post":
+    case "missing_in_qbo":
+      return "posting";
+    default:
+      return "categorization";
+  }
+}
+
+function deriveCanonicalState(bank = {}) {
+  if (bank?.is_archived === true) return "archived";
+  if (bank?.pending === true) return "pending_candidate";
+  if (bank?.pending_transaction_id) return "merged_from_pending";
+  return "canonical";
+}
+
+function derivePostingState(cat = {}, nowTs) {
+  if (!cat) return "not_categorized";
+
+  const statusLower = String(cat?.status || "").toLowerCase();
+  const hasQbo = Boolean(cat?.qbo_txn_id);
+  const hasPostedAt = Boolean(cat?.posted_at);
+  const hasReconciled = Boolean(cat?.reconciled_at);
+  const postAfterTs = safeParseDate(cat?.post_after);
+  const nextAttemptTs = safeParseDate(cat?.meta?.next_post_attempt_at);
+  const postingInProgress = cat?.meta?.posting_in_progress === true;
+
+  if (hasQbo || hasPostedAt || hasReconciled || statusLower === "posted") return "posted_to_qbo";
+  if (statusLower === "failed") return "failed_post";
+  if (cat?.post_error) return "post_error";
+  if (postingInProgress) return "posting_in_progress";
+  if (postAfterTs && postAfterTs > nowTs) return "queued_for_posting";
+  if (nextAttemptTs && nextAttemptTs > nowTs) return "retry_scheduled";
+  if ((statusLower === "approved" || statusLower === "auto_approved") && !postAfterTs && !nextAttemptTs) {
+    return "missing_post_schedule";
+  }
+  if (statusLower === "approved" || statusLower === "auto_approved") return "approved_not_posted";
+  if (statusLower === "needs_review" || statusLower === "uncategorized" || !statusLower) return "awaiting_review";
+  return "unknown";
+}
+
+function deriveLifecycleStage({ bank, cat, statusMeta, nowTs }) {
+  const canonicalState = deriveCanonicalState(bank);
+  const postingState = derivePostingState(cat, nowTs);
+
+  if (statusMeta?.status === "archived") return "archived";
+  if (statusMeta?.status === "duplicate_internal") return "archived";
+  if (canonicalState === "archived") return "archived";
+  if (statusMeta?.status === "matched") return "posted_and_reconciled";
+  if (postingState === "posting_in_progress") return "posting_in_progress";
+  if (statusMeta?.status === "approved_waiting_post") return "approved_waiting_post";
+  if (statusMeta?.status === "missing_in_qbo") return "posting_gap_detected";
+  if (statusMeta?.status === "failed_post") return "posting_failed";
+  if (statusMeta?.status === "needs_review") return "awaiting_review";
+  if (statusMeta?.status === "pending") return canonicalState === "pending_candidate" ? "plaid_pending" : "pending";
+  if (!cat) return "plaid_ingested";
+  return "categorized";
+}
+
+function buildAuditSummary({ bank, cat, statusMeta, canonicalState, postingState, lifecycleStage }) {
+  const parts = [];
+  parts.push(`Plaid ${bank?.plaid_transaction_id || bank?.id || "transaction"} ingested`);
+  if (canonicalState === "archived") {
+    parts.push(`archived${bank?.archived_reason ? `: ${bank.archived_reason}` : ""}`);
+  } else if (canonicalState === "merged_from_pending") {
+    parts.push(`merged from pending ${bank?.pending_transaction_id || "candidate"}`);
+  } else if (canonicalState === "pending_candidate") {
+    parts.push("still pending in Plaid");
+  } else {
+    parts.push("canonical transaction");
+  }
+  if (cat?.status) {
+    parts.push(`categorization ${String(cat.status).replace(/_/g, " ")}`);
+  } else {
+    parts.push("not yet categorized");
+  }
+  if (statusMeta?.status === "archived") {
+    parts.push("removed from active reconciliation");
+  } else if (statusMeta?.status === "duplicate_internal") {
+    parts.push("suppressed by reconciliation dedupe safeguard");
+  } else if (statusMeta?.status === "duplicate_in_qbo") {
+    parts.push(`duplicate QBO post detected for ${cat?.qbo_txn_id || "linked txn"}`);
+  } else if (postingState === "posted_to_qbo" && cat?.qbo_txn_id) {
+    parts.push(`posted to QBO as ${cat.qbo_txn_type || "txn"} ${cat.qbo_txn_id}`);
+  } else if (statusMeta?.status === "failed_post") {
+    parts.push("posting failed and retry remains active");
+  } else if (statusMeta?.status === "missing_in_qbo") {
+    parts.push("approved but still missing in QuickBooks");
+  } else {
+    parts.push(`posting state ${postingState.replace(/_/g, " ")}`);
+  }
+  if (statusMeta?.status && lifecycleStage !== "categorized") {
+    parts.push(`reconciliation status ${statusMeta.status.replace(/_/g, " ")}`);
+  }
+  return parts.join(" -> ");
+}
+
+function buildItemDetails({ bank, cat, statusMeta, nowTs }) {
+  const canonicalState = deriveCanonicalState(bank);
+  const postingState = derivePostingState(cat, nowTs);
+  const lifecycleStage = deriveLifecycleStage({ bank, cat, statusMeta, nowTs });
+  const hasLinkedQboRecord = Boolean(cat?.qbo_txn_id);
+  const retryCount =
+    cat?.meta?.post_retry_count != null ? Number(cat.meta.post_retry_count) || 0 : null;
+  const safeToAutoPost =
+    typeof cat?.meta?.safe_to_auto_post === "boolean" ? cat.meta.safe_to_auto_post : null;
+  const postingInProgress =
+    typeof cat?.meta?.posting_in_progress === "boolean" ? cat.meta.posting_in_progress : null;
+  const nextPostAttemptAt = nullable(cat?.meta?.next_post_attempt_at);
+  const sourceOfTruth = deriveSourceOfTruth(cat);
+  const reconciliationConfidence = deriveReconciliationConfidence({ cat, statusMeta });
+  const duplicateSource = deriveDuplicateSource({ bank, statusMeta });
+  const pipelineBucket = derivePipelineBucket({ bank, statusMeta });
+  const latestAttempt = cat?.latest_post_attempt || null;
+
+  return {
+    source: "posting_integrity",
+    status: nullable(statusMeta?.status),
+    reason_code: nullable(statusMeta?.reason_code),
+    source_of_truth: sourceOfTruth,
+    reconciliation_confidence: reconciliationConfidence,
+    duplicate_source: duplicateSource,
+    pipeline_bucket: pipelineBucket,
+    lifecycle_stage: lifecycleStage,
+    canonical_state: canonicalState,
+    posting_state: postingState,
+    audit_summary: buildAuditSummary({
+      bank,
+      cat,
+      statusMeta,
+      canonicalState,
+      postingState,
+      lifecycleStage,
+    }),
+
+    plaid_transaction_id: nullable(bank?.plaid_transaction_id),
+    plaid_account_id: nullable(bank?.plaid_account_id),
+    pending_transaction_id: nullable(bank?.pending_transaction_id),
+    duplicate_fingerprint: nullable(bank?.duplicate_fingerprint),
+    bank_name: nullable(bank?.merchant_name || bank?.counterparty_name || bank?.name),
+    raw_date: nullable(bank?.date),
+    authorized_date: nullable(bank?.authorized_date),
+    is_archived: bank?.is_archived === true,
+    archived_at: nullable(bank?.archived_at),
+    archived_reason: nullable(bank?.archived_reason),
+    appears_canonical: canonicalState === "canonical" || canonicalState === "merged_from_pending",
+    merged_from_pending: canonicalState === "merged_from_pending",
+
+    categorization_status: nullable(cat?.status),
+    suggested_qbo_account_id: nullable(cat?.suggested_qbo_account_id),
+    suggested_qbo_account_name: nullable(cat?.suggested_qbo_account_name),
+    final_qbo_account_id: nullable(cat?.final_qbo_account_id),
+    final_qbo_account_name: nullable(cat?.final_qbo_account_name),
+
+    post_after: nullable(cat?.post_after),
+    post_error: nullable(cat?.post_error),
+    last_post_attempt_at: nullable(cat?.last_post_attempt_at),
+    latest_post_attempt_at: nullable(latestAttempt?.attempted_at),
+    latest_post_attempt_status: nullable(latestAttempt?.status),
+    latest_post_attempt_error: nullable(latestAttempt?.error_message),
+    post_attempt_count: nullable(cat?.post_attempt_count),
+    posting_in_progress: postingInProgress,
+    next_post_attempt_at: nextPostAttemptAt,
+    retry_count: retryCount,
+    post_block_reason: nullable(cat?.meta?.post_block_reason),
+    suggestion_source: nullable(cat?.meta?.suggestion_source),
+    taxonomy_type: nullable(cat?.meta?.taxonomy_type),
+    safe_to_auto_post: safeToAutoPost,
+
+    has_linked_qbo_record: hasLinkedQboRecord,
+    qbo_txn_id: nullable(cat?.qbo_txn_id),
+    qbo_txn_type: nullable(cat?.qbo_txn_type),
+    posted_at: nullable(cat?.posted_at),
+    reconciled_at: nullable(cat?.reconciled_at),
+
+    meta_snapshot: {
+      posting_in_progress: postingInProgress,
+      next_post_attempt_at: nextPostAttemptAt,
+      auto_approve_reason: nullable(cat?.meta?.auto_approve_reason),
+    },
+  };
+}
+
+async function fetchPostAttemptSummaries(businessId, transactionIds = []) {
+  if (!businessId || !transactionIds.length) {
+    return { latestByTransactionId: new Map(), countByTransactionId: new Map() };
+  }
+
+  const { data, error } = await supabase
+    .from("bookkeeping_post_attempts")
+    .select("transaction_id,attempted_at,status,error_message")
+    .eq("business_id", businessId)
+    .in("transaction_id", transactionIds)
+    .order("attempted_at", { ascending: false });
+
+  if (error) {
+    if (isMissingRelationError(error)) {
+      devLog("post_attempts_missing_table", {
+        businessId,
+        transaction_count: transactionIds.length,
+      });
+      return { latestByTransactionId: new Map(), countByTransactionId: new Map() };
+    }
+    throw error;
+  }
+
+  const latestByTransactionId = new Map();
+  const countByTransactionId = new Map();
+  for (const row of data || []) {
+    if (!row?.transaction_id) continue;
+    countByTransactionId.set(row.transaction_id, (countByTransactionId.get(row.transaction_id) || 0) + 1);
+    if (!latestByTransactionId.has(row.transaction_id)) {
+      latestByTransactionId.set(row.transaction_id, row);
+    }
+  }
+
+  return { latestByTransactionId, countByTransactionId };
+}
+
+function getInternalDedupeKey(bank = {}) {
+  return bank?.pending_transaction_id || bank?.duplicate_fingerprint || bank?.plaid_transaction_id || null;
+}
+
+function dedupeCanonicalScore(item = {}) {
+  const details = item?.details || {};
+  let score = 0;
+  if (item?.qbo_txn_id || details?.has_linked_qbo_record) score += 100;
+  if (item?.posted_at || item?.reconciled_at) score += 50;
+  if (details?.posting_state === "posted_to_qbo") score += 40;
+  if (details?.posting_state === "approved_waiting_post" || item?.status === "approved_waiting_post") score += 20;
+  if (details?.categorization_status === "approved" || details?.categorization_status === "auto_approved") score += 10;
+  if (details?.is_archived !== true && details?.canonical_state === "canonical") score += 5;
+  if (details?.is_archived !== true && details?.canonical_state === "merged_from_pending") score += 4;
+  if (item?.txn_date) score += safeParseDate(item.txn_date) || 0;
+  return score;
+}
+
+function applyInternalDedupeSafeguard(items = []) {
+  const keyed = new Map();
+  const duplicateGroups = [];
+
+  for (const item of items) {
+    if (item?.details?.is_archived === true) continue;
+    const key = getInternalDedupeKey(item?.details || {});
+    if (!key) continue;
+    const bucket = keyed.get(key) || [];
+    bucket.push(item);
+    keyed.set(key, bucket);
+  }
+
+  keyed.forEach((bucket, key) => {
+    if (!bucket || bucket.length < 2) return;
+    const ranked = [...bucket].sort((a, b) => dedupeCanonicalScore(b) - dedupeCanonicalScore(a));
+    const canonical = ranked[0];
+    const suppressed = ranked.slice(1);
+    if (!suppressed.length) return;
+
+    duplicateGroups.push({
+      dedupe_key: key,
+      canonical_transaction_id: canonical?.bank_transaction_id || null,
+      duplicate_transaction_ids: suppressed.map((row) => row?.bank_transaction_id).filter(Boolean),
+    });
+
+    suppressed.forEach((item) => {
+      item.status = "duplicate_internal";
+      item.note = "Duplicate active row suppressed by reconciliation safeguard";
+      item.details = {
+        ...(item.details || {}),
+        status: "duplicate_internal",
+        reason_code: "dedupe_safeguard",
+        duplicate_source: "reconciliation_safety",
+        duplicate_scope: "active_row_safeguard",
+        duplicate_transaction_ids: [canonical?.bank_transaction_id, ...suppressed.map((row) => row?.bank_transaction_id)]
+          .filter(Boolean)
+          .filter((id, index, arr) => arr.indexOf(id) === index),
+        canonical_transaction_id: canonical?.bank_transaction_id || null,
+      };
+    });
+  });
+
+  return duplicateGroups;
+}
+
 function categorizeItem({ bank, cat, nowTs, includePending }) {
+  if (bank?.is_archived === true) {
+    return {
+      status: "archived",
+      note: "Transaction was archived or replaced by Plaid",
+      reason_code: "archived",
+    };
+  }
+
   const statusLower = (cat?.status || "").toLowerCase();
   const pending = bank?.pending === true || cat?.meta?.pending === true;
   const hasCat = !!cat;
@@ -58,6 +406,7 @@ function categorizeItem({ bank, cat, nowTs, includePending }) {
   const postAfterTs = cat?.post_after ? Date.parse(cat.post_after) : null;
   const nextAttemptTs = cat?.meta?.next_post_attempt_at ? Date.parse(cat.meta.next_post_attempt_at) : null;
   const postBlocked = !!cat?.meta?.post_block_reason;
+  const postingInProgress = cat?.meta?.posting_in_progress === true;
   const retryCount = Number(cat?.meta?.post_retry_count || 0);
 
   const needsReview =
@@ -84,10 +433,25 @@ function categorizeItem({ bank, cat, nowTs, includePending }) {
     return { status: "matched", note: "Posted to QuickBooks", reason_code: "matched" };
   }
 
-  const approvedLike = statusLower === "approved" || statusLower === "auto_approved" || statusLower === "failed";
-  const inFuture = (postAfterTs && postAfterTs > nowTs) || (nextAttemptTs && nextAttemptTs > nowTs) || cat?.meta?.posting_in_progress;
+  const approvedLike = isApprovedLike(cat);
+  const inFuture = (postAfterTs && postAfterTs > nowTs) || (nextAttemptTs && nextAttemptTs > nowTs) || postingInProgress;
   if (approvedLike && !hasQbo && inFuture) {
     return { status: "approved_waiting_post", note: "Approved; queued for posting", reason_code: "approved_waiting_post" };
+  }
+
+  if (approvedLike && !hasQbo && !postAfterTs && !nextAttemptTs && !postingInProgress && !needsReview) {
+    devLog("approved_without_post_schedule", {
+      bank_transaction_id: bank?.id || null,
+      plaid_transaction_id: bank?.plaid_transaction_id || null,
+      categorization_status: cat?.status || null,
+      last_post_attempt_at: cat?.last_post_attempt_at || null,
+      post_error: cat?.post_error || null,
+    });
+    return {
+      status: "missing_in_qbo",
+      note: "Approved but no posting schedule found",
+      reason_code: "missing_post_schedule",
+    };
   }
 
   if (approvedLike && !hasQbo && postAfterTs && postAfterTs <= nowTs && !needsReview) {
@@ -140,6 +504,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
   const range = { start: normalizeDate(opts.date_from), end: normalizeDate(opts.date_to) };
   const { start, end } = range.start && range.end ? range : computeRange(scope);
   const includePending = opts.include_pending === true;
+  const includeArchived = opts.include_archived === true;
   const plaidAccountId = opts.plaid_account_id || null;
   const nowTs = Date.now();
 
@@ -166,12 +531,12 @@ export async function computeReconciliationRun(businessId, opts = {}) {
     let bankQuery = supabase
       .from("bank_transactions")
       .select(
-        "id,business_id,plaid_account_id,plaid_transaction_id,pending,date,name,merchant_name,counterparty_name,amount,signed_amount,direction"
+        "id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,pending,date,authorized_date,name,merchant_name,counterparty_name,amount,signed_amount,direction,is_archived,archived_at,archived_reason,duplicate_fingerprint"
       )
       .eq("business_id", businessId)
-      .eq("is_archived", false)
       .gte("date", start)
       .lte("date", end);
+    if (!includeArchived) bankQuery = bankQuery.eq("is_archived", false);
     if (plaidAccountId) bankQuery = bankQuery.eq("plaid_account_id", plaidAccountId);
     const { data: bankRows, error: bankErr } = await bankQuery;
     if (bankErr) throw bankErr;
@@ -188,12 +553,19 @@ export async function computeReconciliationRun(businessId, opts = {}) {
     const { data: catRows, error: catErr } = await supabase
       .from("transaction_categorizations")
       .select(
-        "business_id,transaction_id,status,post_after,post_error,qbo_txn_id,qbo_txn_type,posted_at,reconciled_at,final_qbo_account_name,suggested_qbo_account_name,meta,last_post_attempt_at"
+        "business_id,transaction_id,status,post_after,post_error,qbo_txn_id,qbo_txn_type,posted_at,reconciled_at,suggested_qbo_account_id,suggested_qbo_account_name,final_qbo_account_id,final_qbo_account_name,meta,last_post_attempt_at"
       )
       .eq("business_id", businessId)
+      .eq("is_archived", false)
       .in("transaction_id", bankIds);
     if (catErr) throw catErr;
+    devLog("loaded_categorizations", {
+      businessId,
+      bank_count: bankIds.length,
+      cat_count: (catRows || []).length,
+    });
     const catMap = new Map((catRows || []).map((c) => [c.transaction_id, c]));
+    const { latestByTransactionId, countByTransactionId } = await fetchPostAttemptSummaries(businessId, bankIds);
 
     // Build items
     const items = [];
@@ -209,12 +581,24 @@ export async function computeReconciliationRun(businessId, opts = {}) {
     };
 
     const qboIdCount = {};
+    let archivedCount = 0;
 
     for (const bank of bankRows || []) {
-      const cat = catMap.get(bank.id) || null;
+      const catBase = catMap.get(bank.id) || null;
+      const cat = catBase
+        ? {
+            ...catBase,
+            latest_post_attempt: latestByTransactionId.get(bank.id) || null,
+            post_attempt_count: countByTransactionId.get(bank.id) || 0,
+          }
+        : {
+            latest_post_attempt: latestByTransactionId.get(bank.id) || null,
+            post_attempt_count: countByTransactionId.get(bank.id) || 0,
+          };
       const dir = normalizeDirection(bank);
       const amount = Number.isFinite(Number(bank.signed_amount)) ? Number(bank.signed_amount) : Number(bank.amount);
       const statusMeta = categorizeItem({ bank, cat, nowTs, includePending });
+      const details = buildItemDetails({ bank, cat, statusMeta, nowTs });
 
       const item = {
         run_id: runId,
@@ -229,15 +613,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
         category_name: cat?.final_qbo_account_name || cat?.suggested_qbo_account_name || null,
         status: statusMeta.status,
         note: statusMeta.note,
-        details: {
-          source: "posting_integrity",
-          reason_code: statusMeta.reason_code,
-          post_error: cat?.post_error || null,
-          post_after: cat?.post_after || null,
-          retry_count: cat?.meta?.post_retry_count || null,
-          suggestion_source: cat?.meta?.suggestion_source || null,
-          taxonomy_type: cat?.meta?.taxonomy_type || null,
-        },
+        details,
         posted_at: cat?.posted_at || null,
         reconciled_at: cat?.reconciled_at || null,
         qbo_txn_id: cat?.qbo_txn_id || null,
@@ -245,28 +621,156 @@ export async function computeReconciliationRun(businessId, opts = {}) {
       };
 
       items.push(item);
-      counts.total_seen += 1;
-      if (cat?.qbo_txn_id) {
-        qboIdCount[cat.qbo_txn_id] = (qboIdCount[cat.qbo_txn_id] || 0) + 1;
+      if (bank?.is_archived === true) {
+        archivedCount += 1;
       }
     }
 
-    // Duplicate detection on qbo_txn_id
-  const dupIds = new Set(Object.keys(qboIdCount).filter((k) => qboIdCount[k] > 1));
-  items.forEach((item) => {
-    if (item.qbo_txn_id && dupIds.has(item.qbo_txn_id)) {
-      item.status = "duplicate_in_qbo";
-      item.note = "Duplicate post detected; investigating";
-      item.details = {
-        ...(item.details || {}),
-        reason_code: "duplicate_in_qbo",
-        duplicate_qbo_txn_id: item.qbo_txn_id,
-      };
+    const duplicateGroups = applyInternalDedupeSafeguard(items);
+    if (duplicateGroups.length) {
+      devLog("dedupe_safeguard_triggered", {
+        businessId,
+        run_id: runId,
+        groups: duplicateGroups,
+      });
     }
-  });
+
+    const activeCount = items.filter(
+      (item) => item?.details?.is_archived !== true && item?.status !== "duplicate_internal"
+    ).length;
+    items.forEach((item) => {
+      if (item?.details?.is_archived === true || item?.status === "duplicate_internal" || !item?.qbo_txn_id) return;
+      qboIdCount[item.qbo_txn_id] = (qboIdCount[item.qbo_txn_id] || 0) + 1;
+    });
+
+    devLog("built_items_details", {
+      businessId,
+      run_id: runId,
+      item_count: items.length,
+      active_count: activeCount,
+      archived_count: archivedCount,
+      sample: items[0]
+        ? {
+            bank_transaction_id: items[0].bank_transaction_id,
+            status: items[0].status,
+            details: {
+              lifecycle_stage: items[0].details?.lifecycle_stage || null,
+              canonical_state: items[0].details?.canonical_state || null,
+              posting_state: items[0].details?.posting_state || null,
+              has_linked_qbo_record: items[0].details?.has_linked_qbo_record || false,
+            },
+          }
+        : null,
+    });
+
+    // Run-window duplicate detection on qbo_txn_id.
+    // This detects collisions among items inside the current reconciliation run scope.
+    const dupIds = new Set(Object.keys(qboIdCount).filter((k) => qboIdCount[k] > 1));
+    const currentRunQboIds = Object.keys(qboIdCount).filter(Boolean);
+    const runScopeDuplicateTransactionIds = {};
+    items.forEach((item) => {
+      if (!item?.details?.is_archived && item?.status !== "duplicate_internal" && item?.qbo_txn_id) {
+        const txnIds = runScopeDuplicateTransactionIds[item.qbo_txn_id] || [];
+        txnIds.push(item.bank_transaction_id);
+        runScopeDuplicateTransactionIds[item.qbo_txn_id] = txnIds;
+      }
+    });
+    items.forEach((item) => {
+      if (item.qbo_txn_id && dupIds.has(item.qbo_txn_id)) {
+        item.status = "duplicate_in_qbo";
+        item.note = "Duplicate post detected; investigating";
+        item.details = {
+          ...(item.details || {}),
+          reason_code: "duplicate_in_qbo",
+          duplicate_scope: "run_scope",
+          duplicate_qbo_txn_id: item.qbo_txn_id,
+          duplicate_transaction_ids: (runScopeDuplicateTransactionIds[item.qbo_txn_id] || []).filter(
+            (txnId) => txnId !== item.bank_transaction_id
+          ),
+          scope_limited_duplicate_check: true,
+          run_scope: scope,
+          period_start: start,
+          period_end: end,
+        };
+      }
+    });
+
+    const businessHistoryDuplicateMap = {};
+    if (currentRunQboIds.length) {
+      const { data: historyCatRows, error: historyCatErr } = await supabase
+        .from("transaction_categorizations")
+        .select("transaction_id,qbo_txn_id")
+        .eq("business_id", businessId)
+        .eq("is_archived", false)
+        .in("qbo_txn_id", currentRunQboIds);
+      if (historyCatErr) throw historyCatErr;
+
+      const relatedTxnIds = Array.from(
+        new Set((historyCatRows || []).map((row) => row?.transaction_id).filter(Boolean))
+      );
+      let activeHistoryTxnIds = new Set();
+      if (relatedTxnIds.length) {
+        const { data: relatedBankRows, error: relatedBankErr } = await supabase
+          .from("bank_transactions")
+          .select("id,is_archived")
+          .eq("business_id", businessId)
+          .in("id", relatedTxnIds);
+        if (relatedBankErr) throw relatedBankErr;
+        activeHistoryTxnIds = new Set(
+          (relatedBankRows || []).filter((row) => row?.is_archived !== true).map((row) => row.id)
+        );
+      }
+
+      (historyCatRows || []).forEach((row) => {
+        if (!row?.qbo_txn_id || !row?.transaction_id || !activeHistoryTxnIds.has(row.transaction_id)) return;
+        const txnIds = businessHistoryDuplicateMap[row.qbo_txn_id] || [];
+        txnIds.push(row.transaction_id);
+        businessHistoryDuplicateMap[row.qbo_txn_id] = txnIds;
+      });
+
+      items.forEach((item) => {
+        if (item?.details?.is_archived === true || item?.status === "duplicate_internal" || !item?.qbo_txn_id) return;
+        const relatedTxnIdsForQboId = (businessHistoryDuplicateMap[item.qbo_txn_id] || []).filter(
+          (txnId) => txnId !== item.bank_transaction_id
+        );
+        if (!relatedTxnIdsForQboId.length) return;
+
+        item.status = "duplicate_in_qbo";
+        item.note = "Duplicate QuickBooks posting detected across Bizzi history";
+        item.details = {
+          ...(item.details || {}),
+          reason_code: "duplicate_in_qbo",
+          duplicate_scope: "business_history",
+          duplicate_qbo_txn_id: item.qbo_txn_id,
+          duplicate_transaction_ids: Array.from(new Set(relatedTxnIdsForQboId)),
+          scope_limited_duplicate_check: true,
+          run_scope: scope,
+          period_start: start,
+          period_end: end,
+        };
+      });
+    }
+
+    devLog("duplicate_check_summary", {
+      businessId,
+      run_scope: scope,
+      period_start: start,
+      period_end: end,
+      run_scope_duplicates: dupIds.size,
+      business_history_duplicates: Object.values(businessHistoryDuplicateMap).filter((txnIds) => txnIds.length > 1).length,
+      active_count: activeCount,
+      archived_count: archivedCount,
+    });
 
     // Recount with final statuses
     items.forEach((item) => {
+      if (item?.details?.is_archived === true) {
+        return;
+      }
+      if (item?.status === "duplicate_internal") {
+        return;
+      }
+      counts.total_seen += 1;
       switch (item.status) {
         case "matched":
           counts.matched_count += 1;
@@ -316,11 +820,19 @@ export async function computeReconciliationRun(businessId, opts = {}) {
         failed_post_count: counts.failed_post_count,
         missing_in_qbo_count: counts.missing_in_qbo_count,
         duplicate_in_qbo_count: counts.duplicate_in_qbo_count,
-        details: { counts, opts },
+        details: { counts, archived_count: archivedCount, opts },
       })
       .eq("id", runId);
 
-    devLog("run_complete", { businessId, run_id: runId, status: finalStatus, counts });
+    devLog("run_complete", {
+      businessId,
+      run_id: runId,
+      status: finalStatus,
+      counts,
+      active_count: activeCount,
+      archived_count: archivedCount,
+      total_items_written: items.length,
+    });
     return { ok: true, run_id: runId, status: finalStatus, counts };
   } catch (err) {
     await supabase

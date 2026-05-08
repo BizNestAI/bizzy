@@ -17,7 +17,7 @@ export default function SubsectionTabs({ items = [], align = "center" }) {
         style={{ boxShadow: "0 8px 24px rgba(0,0,0,0.35)", backgroundColor: "var(--header-overlay)" }}
       >
         {items.map((item, idx) => {
-          const active = location.pathname === item.path;
+          const active = location.pathname === item.path || item.activePaths?.includes(location.pathname);
           return (
             <React.Fragment key={item.path}>
               <button

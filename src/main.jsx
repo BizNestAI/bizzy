@@ -172,9 +172,13 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               <Route path="bizzy/chat" element={<ChatHome />} />
               <Route path="companion" element={<CompanionPage />} />
               <Route path="leads-jobs" element={<JobsDashboard />} />
+              <Route path="leads-jobs/collections" element={<JobsDashboard />} />
+              <Route path="leads-jobs/job-costing" element={<JobsDashboard />} />
               <Route path="leads-jobs/estimates" element={<JobsDashboard />} />
               <Route path="leads-jobs/change-orders" element={<JobsDashboard />} />
               <Route path="jobs" element={<JobsDashboard />} />
+              <Route path="jobs/collections" element={<JobsDashboard />} />
+              <Route path="jobs/job-costing" element={<JobsDashboard />} />
               <Route path="jobs/estimates" element={<JobsDashboard />} />
               <Route path="jobs/change-orders" element={<JobsDashboard />} />
 
