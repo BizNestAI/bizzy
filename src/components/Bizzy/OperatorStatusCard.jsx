@@ -252,8 +252,9 @@ export default function OperatorStatusCard({
       ) : null}
 
       <div className="flex flex-col items-center justify-center space-y-1 text-center">
-        <div className="text-[11px] tracking-[0.3em] uppercase font-semibold bizzy-operator-label">
-          <span className="bizzy-operator-dot">●</span> Operator Requests
+        <div className="inline-flex items-center justify-center gap-1.5 text-[10px] tracking-[0.11em] uppercase font-bold bizzy-operator-label">
+          <span className="bizzy-operator-dot" aria-hidden="true" />
+          <span>Operator Requests</span>
         </div>
         <div className="text-[12px] tracking-[0.26em] uppercase font-semibold text-white/80">
           Questions on your transactions

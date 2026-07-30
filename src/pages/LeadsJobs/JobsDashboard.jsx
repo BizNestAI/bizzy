@@ -2760,6 +2760,9 @@ function JobAssignmentBoard({
   onConfirmAssignment,
   onCancelAssignment,
   onStartVoice,
+  onAddJob,
+  onImportJobs,
+  onRefresh,
 }) {
   const postedTransactions = transactions.filter((txn) => String(txn.status || "").toLowerCase() === "posted");
   const pendingCandidates = useMemo(() => (
@@ -2975,7 +2978,7 @@ function JobAssignmentBoard({
   const transactionRangeEnd = Math.min(currentTransactionPage * transactionsPerPage, filteredTransactions.length);
   return (
     <section className={`sticky top-24 z-30 ${glass} p-3 sm:p-4`} aria-label="Job costing assignment board">
-      <div className="mb-3 flex items-center justify-between gap-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-full border border-white/10 bg-black/25 p-1">
           {[
             { key: "live", label: "Live", count: jobs.length },
@@ -2999,6 +3002,35 @@ function JobAssignmentBoard({
               </button>
             );
           })}
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onAddJob}
+            className="inline-flex h-9 items-center gap-2 rounded-full border border-emerald-300/24 bg-emerald-300/[0.09] px-3 text-xs font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.15] focus:outline-none focus:ring-2 focus:ring-emerald-300/18"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add Job
+          </button>
+          <button
+            type="button"
+            onClick={onImportJobs}
+            className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 text-xs font-semibold text-white/70 transition hover:border-emerald-300/20 hover:bg-emerald-300/[0.07] hover:text-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-300/16"
+          >
+            <UploadCloud className="h-3.5 w-3.5" />
+            Import Jobs
+          </button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={loading}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full border text-white/85 transition hover:bg-white/14 hover:border-white/50 focus:outline-none focus:ring-2 focus:ring-white/14 disabled:opacity-60"
+            style={{ borderColor: "rgba(255,255,255,0.22)", background: "rgba(18,18,20,0.86)" }}
+            aria-label="Refresh job costing"
+            title="Refresh"
+          >
+            <RefreshCcw className={loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+          </button>
         </div>
       </div>
       <div className="relative">
@@ -6963,42 +6995,13 @@ function JobCostingPage({ businessId, usingDemo }) {
             title="Job Costing"
             subtitle="Drag posted QuickBooks transactions into job buckets to track profitability in real time."
           />
-          <div className="mt-4 flex flex-wrap items-center justify-start gap-2">
-            <button
-              type="button"
-              onClick={() => setAddJobOpen(true)}
-              className="inline-flex h-9 items-center gap-2 rounded-full border border-emerald-300/24 bg-emerald-300/[0.09] px-3 text-xs font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.15] focus:outline-none focus:ring-2 focus:ring-emerald-300/18"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add Job
-            </button>
-            <button
-              type="button"
-              onClick={() => setImportJobsOpen(true)}
-              className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 text-xs font-semibold text-white/70 transition hover:border-emerald-300/20 hover:bg-emerald-300/[0.07] hover:text-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-300/16"
-            >
-              <UploadCloud className="h-3.5 w-3.5" />
-              Import Jobs
-            </button>
-            <button
-              type="button"
-              onClick={loadJobCosting}
-              disabled={loading}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-full border text-white/85 transition hover:bg-white/14 hover:border-white/50 focus:outline-none focus:ring-2 focus:ring-white/14 disabled:opacity-60"
-              style={{ borderColor: "rgba(255,255,255,0.22)", background: "rgba(18,18,20,0.86)" }}
-              aria-label="Refresh job costing"
-              title="Refresh"
-            >
-              <RefreshCcw className={loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
-            </button>
-          </div>
         </div>
 
         {error ? (
           <div className="rounded-[18px] border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">{error}</div>
         ) : null}
 
-        <div className="-mt-20 sm:-mt-24 lg:-mt-28">
+        <div className="-mt-10 sm:-mt-12 lg:-mt-14">
           <JobAssignmentBoard
             transactions={transactions}
             jobs={currentJobRows}
@@ -7051,6 +7054,9 @@ function JobCostingPage({ businessId, usingDemo }) {
             onConfirmAssignment={confirmAssignment}
             onCancelAssignment={cancelAssignment}
             onStartVoice={startVoice}
+            onAddJob={() => setAddJobOpen(true)}
+            onImportJobs={() => setImportJobsOpen(true)}
+            onRefresh={loadJobCosting}
           />
         </div>
 

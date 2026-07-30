@@ -6,10 +6,11 @@ import { Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
 import bizzyLogo from "../../assets/bizzy-logo.png";
 
 const BG =
-  "radial-gradient(900px 900px at 16% 12%, rgba(255,255,255,0.06), transparent 55%)," +
-  "radial-gradient(720px 720px at 78% 88%, rgba(255,255,255,0.04), transparent 50%)," +
-  "var(--bg)";
-const SHADOW = "0 28px 80px rgba(0,0,0,.55)";
+  "radial-gradient(820px 520px at 50% 34%, rgba(255,255,255,0.045), transparent 66%)," +
+  "radial-gradient(700px 520px at 50% 58%, rgba(32,216,155,0.045), transparent 74%)," +
+  "linear-gradient(180deg, #060807 0%, #020303 62%, #000 100%)";
+const SHADOW =
+  "0 26px 80px rgba(0,0,0,0.58), 0 0 0 1px rgba(255,255,255,0.055), inset 0 1px 0 rgba(255,255,255,0.08)";
 
 function pickAccessToken(result) {
   if (!result) return null;
@@ -64,119 +65,100 @@ export default function Login() {
 
   return (
     <div
-      className="min-h-screen relative flex items-center justify-center px-4 overflow-hidden bizzy-bg-textured"
+      className="bizzy-chathome min-h-screen relative flex items-center justify-center px-4 overflow-hidden bizzy-bg-textured"
       style={{ background: BG, color: "var(--text)" }}
     >
-      {/* Ambient glows */}
       <div
         aria-hidden
-        className="absolute w-[520px] h-[520px] rounded-full blur-[180px] opacity-50"
-        style={{ background: "rgba(52,211,153,0.20)", top: "-160px", left: "-160px" }}
-      />
-      <div
-        aria-hidden
-        className="absolute w-[460px] h-[460px] rounded-full blur-[190px] opacity-40"
-        style={{ background: "rgba(52,211,153,0.16)", bottom: "-180px", right: "-140px" }}
+        className="absolute left-1/2 top-[46%] h-[420px] w-[min(860px,86vw)] -translate-x-1/2 -translate-y-1/2 rounded-full blur-[48px]"
+        style={{
+          background:
+            "radial-gradient(64% 105% at 50% 42%, rgba(255,255,255,0.055), transparent 70%), radial-gradient(70% 115% at 50% 60%, rgba(32,216,155,0.042), transparent 78%)",
+          opacity: 0.58,
+          mixBlendMode: "screen",
+        }}
       />
 
-      {/* Subtle vignette */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
-          background: `
-            radial-gradient(900px 900px at 20% 0%, rgba(255,255,255,0.06), transparent 55%),
-            radial-gradient(700px 700px at 80% 100%, rgba(255,255,255,0.05), transparent 50%)
-          `,
-          boxShadow: "inset 0 0 120px rgba(0,0,0,0.55)",
-          filter: "saturate(90%)",
+          boxShadow: "inset 0 0 140px rgba(0,0,0,0.68)",
+          filter: "saturate(92%)",
         }}
       />
 
-      {/* Glass Card wrapper with gradient ring */}
-      <div className="relative w-full max-w-[28rem]">
+      <div className="relative w-full max-w-[24rem]">
         <div
           aria-hidden
-          className="pointer-events-none absolute -inset-0.5 rounded-[28px]"
+          className="pointer-events-none absolute -inset-8 rounded-full"
           style={{
-            background:
-              "linear-gradient(140deg, rgba(52,211,153,.28), rgba(52,211,153,.06) 40%, rgba(52,211,153,0) 70%)",
-            filter: "blur(10px)",
-            opacity: 0.8,
+            background: "radial-gradient(circle at 50% 50%, rgba(32,216,155,0.075), transparent 70%)",
+            filter: "blur(30px)",
           }}
         />
         <div
           className="
-            relative rounded-[26px] overflow-hidden
-            bg-gradient-to-b from-white/[0.06] via-white/[0.03] to-black/[0.35]
-            backdrop-blur-2xl text-white
-            ring-1 ring-[rgba(52,211,153,0.18)] shadow-2xl
+            relative overflow-hidden rounded-[22px]
+            border border-white/[0.13] bg-[#0d100f]/88
+            text-white backdrop-blur-2xl
           "
           style={{ boxShadow: SHADOW }}
         >
           <div
             aria-hidden
-            className="pointer-events-none absolute -bottom-16 inset-x-6 h-32 blur-3xl opacity-35"
-            style={{ background: "linear-gradient(90deg, rgba(52,211,153,0.32), rgba(16,185,129,0.24))" }}
+            className="pointer-events-none absolute inset-0"
+            style={{
+              background:
+                "radial-gradient(440px 220px at 50% -10%, rgba(255,255,255,0.07), transparent 66%), linear-gradient(180deg, rgba(255,255,255,0.026), transparent 36%)",
+            }}
           />
-          {/* Inner top highlight for depth */}
-          <div
-            aria-hidden
-            className="absolute inset-x-0 top-0 h-16 pointer-events-none"
-            style={{ background: "linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,0))" }}
-          />
-          {/* Content */}
-          <div className="p-6 sm:p-8">
-            {/* Brand header */}
-            <div className="text-center mb-6">
-              <div className="inline-flex items-center gap-3">
-                <div className="h-12 w-12 rounded-full bg-white/10 ring-1 ring-[rgba(52,211,153,0.4)] shadow-[0_12px_30px_rgba(0,0,0,.35)] flex items-center justify-center">
-                  <img
-                    src={bizzyLogo}
-                    alt="Bizzi logo"
-                    className="h-8 w-8 rounded-full object-cover"
-                    style={{ filter: "drop-shadow(0 2px 6px rgba(0,0,0,.25))" }}
-                  />
-                </div>
-                <span className="text-sm uppercase tracking-[0.5em] font-light text-white/80 drop-shadow">Bizzi</span>
+          <div className="relative p-5 sm:p-6">
+            <div className="mb-5 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-emerald-300/32 bg-white/[0.07] shadow-[0_12px_28px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.08)]">
+                <img
+                  src={bizzyLogo}
+                  alt="Bizzi logo"
+                  className="h-8 w-8 rounded-full object-cover"
+                  style={{ filter: "drop-shadow(0 2px 6px rgba(0,0,0,.25))" }}
+                />
               </div>
-              <p className="mt-2 text-sm text-white/70" style={{ color: "rgba(245,247,251,0.78)" }}>Welcome back — let’s get to work.</p>
+              <div className="mt-3 text-[12px] font-light uppercase tracking-[0.5em] text-white/[0.74]">Bizzi</div>
+              
             </div>
 
-            {/* Error */}
             {!!error && (
               <div className="mb-4 rounded-lg px-3 py-2 text-sm ring-1 ring-inset ring-rose-400/30 bg-rose-500/10 text-rose-200">
                 {error}
               </div>
             )}
 
-            {/* Form */}
-            <form onSubmit={handleLogin} className="space-y-4">
-              {/* Email */}
-              <label className="block text-xs uppercase tracking-wide text-white/60">Email</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/55" />
-                <input
-                  type={(() => "email")()}
-                  value={email}
-                  onChange={(e) => setValueSafe(setEmail, e.target.value)}
-                  placeholder="you@company.com"
-                  autoComplete="email"
-                  required
-                  className="
-                    w-full pl-10 pr-3 py-2.5 rounded-xl text-sm
-                    bg-[var(--input-bg)] ring-1 ring-inset ring-[rgba(255,255,255,0.12)]
-                    focus:outline-none focus:ring-[rgba(52,211,153,0.45)] focus:ring-2 focus:bg-white/[0.06]
-                    placeholder:text-white/45 transition
-                  "
-                />
+            <form onSubmit={handleLogin} className="space-y-3">
+              <div>
+                <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/[0.48]">Email</label>
+                <div className="relative">
+                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-white/[0.46]" />
+                  <input
+                    type={(() => "email")()}
+                    value={email}
+                    onChange={(e) => setValueSafe(setEmail, e.target.value)}
+                    placeholder="you@company.com"
+                    autoComplete="email"
+                    required
+                    className="
+                      bizzy-login-input w-full rounded-[14px] border border-white/[0.13] bg-[#151817] py-3 pl-11 pr-3 text-sm text-white/[0.92]
+                      shadow-[inset_0_1px_0_rgba(255,255,255,0.05),inset_0_-8px_16px_rgba(0,0,0,0.16)]
+                      transition placeholder:text-white/[0.34]
+                      focus:border-emerald-300/30 focus:bg-[#171a19] focus:outline-none focus:ring-2 focus:ring-emerald-300/12
+                    "
+                  />
+                </div>
               </div>
 
-              {/* Password */}
               <div>
-                <label className="block text-xs uppercase tracking-wide text-white/60">Password</label>
+                <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/[0.48]">Password</label>
                 <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/55" />
+                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-white/[0.46]" />
                   <input
                     type={showPw ? "text" : "password"}
                     value={password}
@@ -185,16 +167,16 @@ export default function Login() {
                     autoComplete="current-password"
                     required
                     className="
-                      w-full pl-10 pr-10 py-2.5 rounded-xl text-sm
-                      bg-[var(--input-bg)] ring-1 ring-inset ring-[rgba(255,255,255,0.12)]
-                      focus:outline-none focus:ring-[rgba(52,211,153,0.45)] focus:ring-2 focus:bg-white/[0.06]
-                      placeholder:text-white/45 transition
+                      bizzy-login-input w-full rounded-[14px] border border-white/[0.13] bg-[#151817] py-3 pl-11 pr-10 text-sm text-white/[0.92]
+                      shadow-[inset_0_1px_0_rgba(255,255,255,0.05),inset_0_-8px_16px_rgba(0,0,0,0.16)]
+                      transition placeholder:text-white/[0.34]
+                      focus:border-emerald-300/30 focus:bg-[#171a19] focus:outline-none focus:ring-2 focus:ring-emerald-300/12
                     "
                   />
                   <button
                     type="button"
                     onClick={() => setShowPw((s) => !s)}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/65 hover:text-white"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/[0.52] transition hover:text-white"
                     aria-label={showPw ? "Hide password" : "Show password"}
                   >
                     {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -202,25 +184,21 @@ export default function Login() {
                 </div>
               </div>
 
-              {/* Aux */}
-              <div className="flex items-center justify-between text-xs text-white/70">
+              <div className="flex items-center justify-end text-xs">
                 <span />
-                <Link to="/reset-password" className="text-white/80 hover:text-[var(--accent)]">
+                <Link to="/reset-password" className="text-white/[0.56] transition hover:text-emerald-100">
                   Forgot password?
                 </Link>
               </div>
 
-              {/* Submit */}
               <button
                 type="submit"
                 disabled={loading}
                 className="
-                  w-full mt-1 inline-flex items-center justify-center gap-2
-                  rounded-xl py-2.5 text-sm font-medium
-                  bg-gradient-to-r from-[rgba(52,211,153,0.22)] via-[rgba(52,211,153,0.16)] to-[rgba(52,211,153,0.08)]
-                  ring-1 ring-[rgba(52,211,153,0.45)] text-white shadow-[0_18px_45px_rgba(0,0,0,0.55)]
-                  hover:from-[rgba(52,211,153,0.32)] hover:via-[rgba(52,211,153,0.22)] hover:to-[rgba(52,211,153,0.12)]
-                  transition disabled:opacity-60
+                  mt-1 inline-flex w-full items-center justify-center gap-2 rounded-full
+                  border border-emerald-300/32 bg-[linear-gradient(180deg,rgba(32,216,155,0.18),rgba(19,185,129,0.10))] py-3 text-sm font-semibold text-emerald-50
+                  shadow-[0_18px_45px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)]
+                  transition hover:border-emerald-300/48 hover:bg-emerald-300/[0.16] disabled:opacity-60
                 "
                 aria-busy={loading ? "true" : "false"}
               >
@@ -229,7 +207,7 @@ export default function Login() {
             </form>
 
             {/* Divider */}
-            <div className="my-5 flex items-center gap-3">
+            <div className="my-4 flex items-center gap-3">
               <div className="flex-1 h-px bg-[rgba(255,255,255,0.08)]" />
               <span className="text-xs text-white/50">or</span>
               <div className="flex-1 h-px bg-[rgba(255,255,255,0.08)]" />
@@ -238,7 +216,7 @@ export default function Login() {
             {/* Social placeholder */}
             <button
               type="button"
-              className="w-full rounded-xl py-2.5 text-sm bg-white/[0.06] hover:bg-white/[0.10] ring-1 ring-inset ring-[rgba(255,255,255,0.12)] text-white transition flex items-center justify-center gap-2"
+              className="flex w-full items-center justify-center gap-2 rounded-full border border-white/[0.13] bg-white/[0.035] py-3 text-sm font-semibold text-white/[0.88] transition hover:border-white/24 hover:bg-white/[0.065]"
               onClick={() => alert("OAuth coming soon")}
             >
               <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-[#050608] text-xs font-semibold">
@@ -247,9 +225,9 @@ export default function Login() {
               Continue with Google
             </button>
 
-            <p className="mt-6 text-sm text-white/70 text-center">
+            <p className="mt-5 text-center text-sm text-white/[0.56]">
               Don’t have an account?{" "}
-              <Link to="/signup" className="text-white hover:text-[var(--accent)]">
+              <Link to="/signup" className="font-semibold text-white transition hover:text-emerald-100">
                 Create one
               </Link>
             </p>

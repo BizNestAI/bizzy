@@ -1,20 +1,22 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { Eye, EyeOff, ArrowRight, CheckCircle2 } from "lucide-react";
+import { Eye, EyeOff, ArrowRight, CheckCircle2, Mail, Lock } from "lucide-react";
 import { signUp } from "../../services/authService";
 import bizzyLogo from "../../assets/bizzy-logo.png";
 
 const BG =
-  "radial-gradient(900px 900px at 16% 12%, rgba(255,255,255,0.06), transparent 55%)," +
-  "radial-gradient(720px 720px at 78% 88%, rgba(255,255,255,0.04), transparent 50%)," +
-  "var(--bg)";
-const SHADOW = "0 28px 80px rgba(0,0,0,.55)";
+  "radial-gradient(820px 520px at 50% 34%, rgba(255,255,255,0.045), transparent 66%)," +
+  "radial-gradient(700px 520px at 50% 58%, rgba(32,216,155,0.045), transparent 74%)," +
+  "linear-gradient(180deg, #060807 0%, #020303 62%, #000 100%)";
+const SHADOW =
+  "0 26px 80px rgba(0,0,0,0.58), 0 0 0 1px rgba(255,255,255,0.055), inset 0 1px 0 rgba(255,255,255,0.08)";
 
 const baseInput =
-  "w-full rounded-xl text-sm text-white " +
-  "bg-[var(--input-bg)] ring-1 ring-inset ring-[rgba(255,255,255,0.12)] " +
-  "focus:outline-none focus:ring-[rgba(52,211,153,0.45)] focus:ring-2 focus:bg-white/[0.06] " +
-  "placeholder:text-white/45 transition px-4 py-2.5";
+  "bizzy-login-input w-full rounded-[14px] border border-white/[0.13] bg-[#151817] py-3 px-4 text-sm text-white/[0.92] " +
+  "shadow-[inset_0_1px_0_rgba(255,255,255,0.05),inset_0_-8px_16px_rgba(0,0,0,0.16)] " +
+  "transition placeholder:text-white/[0.34] focus:border-emerald-300/30 focus:bg-[#171a19] focus:outline-none focus:ring-2 focus:ring-emerald-300/12";
+
+const labelClass = "mb-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/[0.48]";
 
 const Signup = () => {
   const [email, setEmail] = useState("");
@@ -62,72 +64,61 @@ const Signup = () => {
 
   return (
     <div
-      className="min-h-screen relative flex items-center justify-center px-4 overflow-hidden text-white bizzy-bg-textured"
+      className="bizzy-chathome min-h-screen relative flex items-center justify-center px-4 overflow-hidden text-white bizzy-bg-textured"
       style={{ background: BG, color: "var(--text)" }}
     >
-      {/* Ambient glows */}
       <div
         aria-hidden
-        className="absolute w-[520px] h-[520px] rounded-full blur-[180px] opacity-50"
-        style={{ background: "rgba(52,211,153,0.20)", top: "-160px", left: "-160px" }}
-      />
-      <div
-        aria-hidden
-        className="absolute w-[460px] h-[460px] rounded-full blur-[190px] opacity-40"
-        style={{ background: "rgba(52,211,153,0.16)", bottom: "-180px", right: "-140px" }}
+        className="absolute left-1/2 top-[46%] h-[420px] w-[min(860px,86vw)] -translate-x-1/2 -translate-y-1/2 rounded-full blur-[48px]"
+        style={{
+          background:
+            "radial-gradient(64% 105% at 50% 42%, rgba(255,255,255,0.055), transparent 70%), radial-gradient(70% 115% at 50% 60%, rgba(32,216,155,0.042), transparent 78%)",
+          opacity: 0.58,
+          mixBlendMode: "screen",
+        }}
       />
 
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0"
         style={{
-          background: `
-            radial-gradient(900px 900px at 20% 0%, rgba(255,255,255,0.06), transparent 55%),
-            radial-gradient(700px 700px at 80% 100%, rgba(255,255,255,0.05), transparent 50%)
-          `,
-          boxShadow: "inset 0 0 120px rgba(0,0,0,0.55)",
-          filter: "saturate(90%)",
+          boxShadow: "inset 0 0 140px rgba(0,0,0,0.68)",
+          filter: "saturate(92%)",
         }}
       />
 
-      <div className="relative w-full max-w-[32rem]">
+      <div className="relative w-full max-w-[31rem]">
         <div
           aria-hidden
-          className="pointer-events-none absolute -inset-0.5 rounded-[28px]"
+          className="pointer-events-none absolute -inset-8 rounded-full"
           style={{
-            background:
-              "linear-gradient(140deg, rgba(52,211,153,.28), rgba(52,211,153,.06) 40%, rgba(52,211,153,0) 70%)",
-            filter: "blur(10px)",
-            opacity: 0.8,
+            background: "radial-gradient(circle at 50% 50%, rgba(32,216,155,0.075), transparent 70%)",
+            filter: "blur(30px)",
           }}
         />
         <div
           className="
-            relative rounded-[26px] overflow-hidden
-            bg-gradient-to-b from-white/[0.06] via-white/[0.03] to-black/[0.35]
-            backdrop-blur-2xl text-white
-            ring-1 ring-[rgba(52,211,153,0.18)] shadow-2xl
+            relative overflow-hidden rounded-[22px]
+            border border-white/[0.13] bg-[#0d100f]/88
+            text-white backdrop-blur-2xl
           "
           style={{ boxShadow: SHADOW }}
         >
           <div
             aria-hidden
-            className="pointer-events-none absolute -bottom-16 inset-x-6 h-32 blur-3xl opacity-35"
-            style={{ background: "linear-gradient(90deg, rgba(52,211,153,0.32), rgba(16,185,129,0.24))" }}
+            className="pointer-events-none absolute inset-0"
+            style={{
+              background:
+                "radial-gradient(500px 240px at 50% -10%, rgba(255,255,255,0.07), transparent 66%), linear-gradient(180deg, rgba(255,255,255,0.026), transparent 36%)",
+            }}
           />
-          <div className="p-6 sm:p-8">
-              <div className="text-center mb-6 space-y-3">
-                <div className="inline-flex items-center gap-3">
-                  <div className="h-12 w-12 rounded-full bg-white/10 ring-1 ring-[rgba(52,211,153,0.4)] shadow-[0_12px_30px_rgba(0,0,0,.35)] flex items-center justify-center">
-                    <img src={bizzyLogo} alt="Bizzi logo" className="h-8 w-8 rounded-full object-cover" />
-                  </div>
-                  <span className="text-sm uppercase tracking-[0.5em] font-light text-white/80 drop-shadow">Bizzi</span>
-                </div>
-              <div className="space-y-2">
-                <p className="text-[11px] uppercase tracking-[0.45em] text-white/45">Welcome aboard</p>
-                <p className="text-base text-white/80">Create your Bizzi account</p>
-                <p className="text-xs text-white/55">Unlock Bizzi’s insights in under a minute.</p>
+          <div className="relative p-5 sm:p-6">
+            <div className="mb-5 text-center">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-emerald-300/32 bg-white/[0.07] shadow-[0_12px_28px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.08)]">
+                <img src={bizzyLogo} alt="Bizzi logo" className="h-8 w-8 rounded-full object-cover" />
               </div>
+              <div className="mt-3 text-[12px] font-light uppercase tracking-[0.5em] text-white/[0.74]">Bizzi</div>
+              <p className="mt-2 text-sm text-white/[0.58]">Unlock Bizzi’s workspace in under a minute.</p>
             </div>
 
             {error && (
@@ -136,10 +127,10 @@ const Signup = () => {
               </div>
             )}
 
-            <form onSubmit={handleSignup} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <form onSubmit={handleSignup} className="space-y-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="block text-xs uppercase tracking-wide text-white/60">First name</label>
+                  <label className={labelClass}>First name</label>
                   <input
                     type="text"
                     value={firstName}
@@ -151,7 +142,7 @@ const Signup = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs uppercase tracking-wide text-white/60">Last name</label>
+                  <label className={labelClass}>Last name</label>
                   <input
                     type="text"
                     value={lastName}
@@ -165,21 +156,25 @@ const Signup = () => {
               </div>
 
               <div>
-                <label className="block text-xs uppercase tracking-wide text-white/60">Work Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@company.com"
-                  autoComplete="email"
-                  required
-                  className={baseInput}
-                />
+                <label className={labelClass}>Work email</label>
+                <div className="relative">
+                  <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/[0.46]" />
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@company.com"
+                    autoComplete="email"
+                    required
+                    className={`${baseInput} pl-11`}
+                  />
+                </div>
               </div>
 
               <div>
-                <label className="block text-xs uppercase tracking-wide text-white/60">Password</label>
+                <label className={labelClass}>Password</label>
                 <div className="relative">
+                  <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/[0.46]" />
                   <input
                     type={showPassword ? "text" : "password"}
                     value={password}
@@ -187,12 +182,12 @@ const Signup = () => {
                     placeholder="Create a strong password"
                     autoComplete="new-password"
                     required
-                    className={`${baseInput} pr-10`}
+                    className={`${baseInput} pl-11 pr-10`}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/65 hover:text-white"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/[0.52] transition hover:text-white"
                     aria-label={showPassword ? "Hide password" : "Show password"}
                   >
                     {showPassword ? <EyeOff className="h-5 w-4" /> : <Eye className="h-4 w-4" />}
@@ -201,8 +196,9 @@ const Signup = () => {
               </div>
 
               <div>
-                <label className="block text-xs uppercase tracking-wide text-white/60">Confirm Password</label>
+                <label className={labelClass}>Confirm password</label>
                 <div className="relative">
+                  <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-white/[0.46]" />
                   <input
                     type={showConfirm ? "text" : "password"}
                     value={confirm}
@@ -210,12 +206,12 @@ const Signup = () => {
                     placeholder="Repeat password"
                     autoComplete="new-password"
                     required
-                    className={`${baseInput} pr-10`}
+                    className={`${baseInput} pl-11 pr-10`}
                   />
                   <button
                     type="button"
                     onClick={() => setShowConfirm((v) => !v)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/65 hover:text-white"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/[0.52] transition hover:text-white"
                     aria-label={showConfirm ? "Hide password" : "Show password"}
                   >
                     {showConfirm ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -227,12 +223,10 @@ const Signup = () => {
                 type="submit"
                 disabled={loading}
                 className="
-                  w-full inline-flex items-center justify-center gap-2
-                  rounded-xl py-2.5 text-sm font-medium
-                  bg-gradient-to-r from-[rgba(52,211,153,0.22)] via-[rgba(52,211,153,0.16)] to-[rgba(52,211,153,0.08)]
-                  ring-1 ring-[rgba(52,211,153,0.45)] text-white shadow-[0_18px_45px_rgba(0,0,0,0.55)]
-                  hover:from-[rgba(52,211,153,0.32)] hover:via-[rgba(52,211,153,0.22)] hover:to-[rgba(52,211,153,0.12)]
-                  transition disabled:opacity-60
+                  mt-1 inline-flex w-full items-center justify-center gap-2 rounded-full
+                  border border-emerald-300/32 bg-[linear-gradient(180deg,rgba(32,216,155,0.18),rgba(19,185,129,0.10))] py-3 text-sm font-semibold text-emerald-50
+                  shadow-[0_18px_45px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)]
+                  transition hover:border-emerald-300/48 hover:bg-emerald-300/[0.16] disabled:opacity-60
                 "
                 aria-busy={loading ? "true" : "false"}
               >
@@ -240,9 +234,9 @@ const Signup = () => {
               </button>
             </form>
 
-            <p className="mt-6 text-sm text-white/70 text-center">
+            <p className="mt-5 text-center text-sm text-white/[0.56]">
               Already have an account?{" "}
-              <Link to="/login" className="text-white hover:text-[var(--accent)]">
+              <Link to="/login" className="font-semibold text-white transition hover:text-emerald-100">
                 Log in
               </Link>
             </p>
@@ -250,9 +244,7 @@ const Signup = () => {
 
           {confirmationSent && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/70 backdrop-blur-sm px-6">
-              <div
-                className="w-full max-w-sm rounded-3xl border border-[rgba(52,211,153,0.25)] bg-gradient-to-b from-white/12 via-white/6 to-white/10 p-6 text-center shadow-[0_30px_90px_rgba(0,0,0,0.6)]"
-              >
+              <div className="w-full max-w-sm rounded-[22px] border border-white/[0.13] bg-[#0d100f]/95 p-6 text-center shadow-[0_30px_90px_rgba(0,0,0,0.6)]">
                 <CheckCircle2 className="mx-auto h-14 w-14 text-emerald-300 drop-shadow-lg" />
                 <h2 className="mt-4 text-xl font-semibold tracking-tight">Confirm your email</h2>
                 <p className="mt-2 text-sm text-white/70">
@@ -265,10 +257,9 @@ const Signup = () => {
                 <button
                   type="button"
                   className="
-                    mt-6 w-full inline-flex items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-medium
-                    bg-gradient-to-r from-[rgba(52,211,153,0.22)] via-[rgba(52,211,153,0.16)] to-[rgba(52,211,153,0.08)]
-                    ring-1 ring-[rgba(52,211,153,0.45)] text-white
-                    shadow-[0_18px_45px_rgba(0,0,0,0.55)] hover:from-[rgba(52,211,153,0.32)] hover:via-[rgba(52,211,153,0.22)] hover:to-[rgba(52,211,153,0.12)] transition
+                    mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full
+                    border border-emerald-300/32 bg-[linear-gradient(180deg,rgba(32,216,155,0.18),rgba(19,185,129,0.10))] py-3 text-sm font-semibold text-emerald-50
+                    shadow-[0_18px_45px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-emerald-300/48 hover:bg-emerald-300/[0.16]
                   "
                   onClick={handleGoToLogin}
                 >
