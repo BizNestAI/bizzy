@@ -107,33 +107,15 @@ export async function genBizzyEstTaxDue({ userId, daysAhead = 7 }) {
 }
 
 /* ----------------------------------------------------------------------------
-  3) Low cash balance (financial_metrics)
+  3) Low cash balance
 ------------------------------------------------------------------------------*/
 export async function genBizzyCashLow({ userId, businessId, threshold = 5000 }) {
-  const { data, error } = await supabase
-    .from('financial_metrics')
-    .select('key,value,as_of')
-    .eq('key', 'cash_balance')
-    .order('as_of', { ascending: false })
-    .limit(1);
-  if (error || !data || !data.length) return [];
-
-  const bal = Number(data[0].value || 0);
-  if (bal >= threshold) return [];
-  const row = {
-    user_id: userId || null,
-    business_id: businessId || null,
-    module: 'bizzy',
-    title: `Low cash balance: ${fmtMoney(bal)}`,
-    body: `As of ${new Date(data[0].as_of).toLocaleDateString()}.`,
-    severity: 'warn',
-    is_read: false,
-    primary_cta: { action: 'open_route', label: 'Open Financials', route: '/dashboard/accounting' },
-    tags: ['cash','risk'],
-    source_event_id: `biz:cash_low:${data[0].as_of}`,
-  };
-  await insertInsightsDedup([row]);
-  return [row];
+  void userId;
+  void businessId;
+  void threshold;
+  // Disabled until Bizzi has a verified bank-balance source. Cash-flow data alone
+  // is not enough to claim current cash balance.
+  return [];
 }
 
 /* ----------------------------------------------------------------------------

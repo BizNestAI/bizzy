@@ -54,7 +54,7 @@ const INTENTS = {
 /* -------------------- Label / Prompt banks ---------------------- */
 // A few variants per module so copy feels alive.
 const LABELS = {
-  finance:   ['Review cash & margin', 'Check cash runway', 'Tighten AR follow-ups'],
+  finance:   ['Review cash flow & margin', 'Review collections', 'Tighten AR follow-ups'],
   marketing: ['Review leads & ads', 'Check last week’s ROI', 'Follow up on warm leads'],
   tax:       ['Check tax readiness', 'Estimate quarterly tax', 'See upcoming deadlines'],
   ops:       ['Review this week’s jobs', 'Build this week’s schedule', 'Flag at-risk jobs'],
@@ -66,7 +66,7 @@ const PROMPTS = {
   [INTENTS.fin_overview]:
     'Review cash, AR/collections, payroll ratio, and margin for the last 30 days. Summarize top risks and give 2–3 actions.',
   [INTENTS.cash_runway]:
-    'Calculate cash runway using current cash, recent burn, and upcoming known payments. Surface quick wins to extend runway.',
+    'Review recent cash-flow timing, collections, and expense pressure. Surface quick wins without assuming current bank balance.',
   [INTENTS.job_profitability]:
     'Review job profitability (top/bottom 3). Explain drivers and suggest price or labor adjustments.',
   [INTENTS.pricing_strategy]:
@@ -102,7 +102,7 @@ const PROMPTS = {
 /* ----------------------- Keyword routers ------------------------ */
 const ROUTES = [
   // finance
-  { rx: /\b(cash|runway|burn|collections|ar|receivables)\b/i,         intent: INTENTS.cash_runway,       kind: 'finance' },
+  { rx: /\b(cash|runway|burn|collections|ar|receivables)\b/i,         intent: INTENTS.fin_overview,      kind: 'finance' },
   { rx: /\b(margin|payroll|cogs|gross)\b/i,                           intent: INTENTS.fin_overview,      kind: 'finance' },
   { rx: /\b(job|profitability|wip)\b/i,                               intent: INTENTS.job_profitability, kind: 'finance' },
   { rx: /\b(pricing|price|quote)\b/i,                                 intent: INTENTS.pricing_strategy,  kind: 'finance' },

@@ -1,9 +1,14 @@
 // /src/services/tax/deductions.service.js
-// Composes the matrix for the Deductions page + chart-ready series.
-// Pulls from expense_totals_monthly; uses mock if flag active or no data.
-// Optionally bootstrap from account_breakdown (see stub).
+/* global process */
+// Composes the deductions matrix for the current Tax page. The authoritative
+// source is transaction_tax_classifications; expense_totals_monthly remains only
+// a bookkeeping comparison/backfill table.
 
-const USE_MOCK = String(process.env.MOCK_TAX || "").toLowerCase() === "true";
+import { computeTaxDeductionsSummary } from "./taxDeductionsEngine.js";
+import { toLegacyDeductionsMatrix } from "./taxDeductionsLegacyAdapter.js";
+import { normalizeDateOnly, normalizeTaxYear } from "./taxDomain.js";
+
+const USE_MOCK = String(process.env.MOCK_TAX_DEDUCTIONS || process.env.MOCK_TAX || "").toLowerCase() === "true";
 
 /**
  * getDeductionsMatrix({ supabase, businessId, year })
@@ -22,77 +27,24 @@ const USE_MOCK = String(process.env.MOCK_TAX || "").toLowerCase() === "true";
  *   ]
  * }
  */
-export async function getDeductionsMatrix({ supabase, businessId, year }) {
+export async function getDeductionsMatrix({ supabase, businessId, year, asOfDate, format = "legacy" }) {
   if (!supabase) throw new Error("Supabase client required");
   if (!businessId) throw new Error("businessId required");
-  year = Number(year || new Date().getFullYear());
+  const taxYear = normalizeTaxYear(year || new Date().getFullYear());
+  if (!taxYear) throw new Error("Invalid tax year");
 
-  const monthList = buildMonthList(year); // ["2025-01", ...]
-  const todayIso = new Date().toISOString().slice(0, 7);
-
-  // 1) Pull real rollups
-  const { data: rows, error } = await supabase
-    .from("expense_totals_monthly")
-    .select("month, category, amount, source")
-    .eq("business_id", businessId)
-    .gte("month", `${year}-01-01`)
-    .lte("month", `${year}-12-31`);
-
-  if (error) throw error;
-
-  const noRealData = !rows?.length;
-
-  // 2) Fallback / mock
-  const useMock = USE_MOCK || noRealData;
-  const source = useMock ? "mock" : "live";
-  const rollups = useMock ? buildMockRows({ year, monthList }) : rows;
-
-  // 3) Compose matrix (rounded to nearest dollar for UI)
-  const categoriesSet = new Set(rollups.map(r => r.category));
-  const categories = Array.from(categoriesSet).sort();
-
-  const matrix = categories.map(cat => {
-    const monthly = {};
-    let total = 0;
-    for (const m of monthList) {
-      const amt = sum(
-        rollups
-          .filter(r => r.category === cat && isoMonth(r.month) === m)
-          .map(r => Number(r.amount || 0))
-      );
-      const rounded = round0(amt);      // nearest dollar
-      monthly[m] = rounded;
-      total += rounded;
-    }
-    return { category: cat, monthly, ytdTotal: round0(total) };
-  });
-
-  // 4) Totals row (sum across categories) — rounded
-  const totalsMonthly = {};
-  for (const m of monthList) {
-    totalsMonthly[m] = round0(sum(matrix.map(r => r.monthly[m])));
+  if (USE_MOCK) {
+    const mock = buildDeterministicMockMatrix({ businessId, year: taxYear, asOfDate });
+    return format === "canonical" ? mock.canonical : mock.legacy;
   }
-  const totals = { monthly: totalsMonthly, ytdTotal: round0(sum(Object.values(totalsMonthly))) };
 
-  // 5) Chart series (per category, 12 integers)
-  const series = matrix.map(row => ({
-    category: row.category,
-    data: monthList.map(m => round0(row.monthly[m] || 0)),
-  }));
-
-  return {
-    meta: {
-      year,
-      generatedAt: new Date().toISOString(),
-      source,
-      month_list: monthList,
-      current_month: todayIso,
-    },
-    categories,
-    grid: matrix,
-    totals,
-    series,
-  };
+  const canonical = await computeTaxDeductionsSummary({
+    supabase,
+    businessId,
+    taxYear,
+    asOfDate: resolveAsOfDate(asOfDate, taxYear),
+  });
+  return format === "canonical" ? canonical : toLegacyDeductionsMatrix(canonical);
 }
 
 /**
@@ -114,7 +66,7 @@ export async function upsertExpenseTotals({ supabase, businessId, payload = [] }
     updated_at: new Date().toISOString(),
   }));
 
-  const { error, count } = await supabase
+  const { error } = await supabase
     .from("expense_totals_monthly")
     .upsert(rows, { onConflict: "business_id,month,category" });
 
@@ -126,7 +78,7 @@ export async function upsertExpenseTotals({ supabase, businessId, payload = [] }
  * (Optional) Bootstrap adapter from account_breakdown if you have monthly snapshots
  * Not used by default, but you can wire this into your QBO ingest task if helpful.
  */
-export async function bootstrapFromAccountBreakdown({ supabase, businessId, year, categoryMap = {} }) {
+export async function bootstrapFromAccountBreakdown() {
   // Example: read from 'account_breakdown' where account_type in ('Expense','Cost of Goods Sold')
   // Summarize by month/account → map to normalized category.
   // Upsert into expense_totals_monthly.
@@ -141,49 +93,118 @@ function buildMonthList(year) {
   for (let m = 1; m <= 12; m++) list.push(`${year}-${String(m).padStart(2, "0")}`);
   return list;
 }
-function isoMonth(d) {
-  if (!d) return "";
-  const s = String(d);
-  return s.length >= 7 ? s.slice(0, 7) : s;
-}
 function startOfMonthDate(yyyymm) {
   const s = String(yyyymm);
   const y = s.slice(0, 4);
   const m = s.slice(5, 7);
   return `${y}-${m}-01`;
 }
-function sum(arr) { return arr.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0); }
-function round0(n) { return Math.round(Number(n || 0)); } // nearest dollar
-function round2(n) { return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100; } // kept for compatibility
 
-function buildMockRows({ year, monthList }) {
-  // A handful of construction-relevant categories with gentle seasonality
-  const cats = [
-    "Vehicle Expenses",
-    "Contractors",
-    "Meals & Entertainment",
-    "Office Supplies",
-    "Tools & Equipment",
-    "Insurance",
-    "Rent",
+function resolveAsOfDate(value, taxYear) {
+  if (value == null || value === "") return `${taxYear}-12-31`;
+  const normalized = normalizeDateOnly(value);
+  if (!normalized) throw new Error("Invalid asOfDate");
+  return normalized;
+}
+function buildDeterministicMockMatrix({ businessId, year, asOfDate }) {
+  const monthList = buildMonthList(year);
+  const categories = [
+    { taxCategory: "contract_labor", displayName: "Contract Labor", base: 2800 },
+    { taxCategory: "supplies_materials", displayName: "Materials & Supplies", base: 1750 },
+    { taxCategory: "vehicle", displayName: "Vehicle Expenses", base: 620 },
   ];
-  const rows = [];
-  for (const cat of cats) {
+  const canonical = {
+    meta: {
+      businessId,
+      taxYear: year,
+      asOfDate: normalizeDateOnly(asOfDate) || `${year}-12-31`,
+      generatedAt: new Date().toISOString(),
+      source: "mock",
+      engineVersion: "tax-deductions-demo",
+      isLive: false,
+      is_demo: true,
+    },
+    coverage: {
+      eligiblePostedCount: 36,
+      classifiedCount: 36,
+      confirmedCount: 0,
+      autoClassifiedCount: 36,
+      needsReviewCount: 0,
+      excludedCount: 0,
+      classificationCoveragePercent: 100,
+      confirmedCoveragePercent: 0,
+      bookAmountCovered: 0,
+      needsReviewBookAmount: 0,
+      warnings: [],
+    },
+    totals: {
+      bookExpenseAmount: 0,
+      estimatedDeductibleAmount: 0,
+      confirmedDeductibleAmount: 0,
+      autoClassifiedDeductibleAmount: 0,
+      nondeductibleAmount: 0,
+      capitalizableAmount: 0,
+      balanceSheetActivityAmount: 0,
+      needsReviewAmount: 0,
+      excludedAmount: 0,
+      byMonth: Object.fromEntries(monthList.map((m) => [m, {
+        bookExpenseAmount: 0,
+        estimatedDeductibleAmount: 0,
+        confirmedDeductibleAmount: 0,
+        nondeductibleAmount: 0,
+        capitalizableAmount: 0,
+        needsReviewAmount: 0,
+      }])),
+    },
+    categories: [],
+    comparisons: {
+      currentYtdVsPriorYearYtd: { currentAmount: 0, priorAmount: 0, absoluteChange: 0, percentChange: null, comparisonAvailable: false },
+      currentMonthVsPriorMonth: { currentAmount: 0, priorAmount: 0, absoluteChange: 0, percentChange: null, comparisonAvailable: false },
+    },
+    warnings: [{ code: "demo_deductions", severity: "low", message: "Demo deductions are enabled." }],
+  };
+  for (const category of categories) {
+    const monthly = {};
+    let total = 0;
     for (let i = 0; i < monthList.length; i++) {
-      const m = monthList[i];
-      // crude seasonal function (busier in spring/summer)
-      const base =
-        cat === "Contractors" ? 3000 :
-        cat === "Vehicle Expenses" ? 900 :
-        cat === "Tools & Equipment" ? 700 :
-        cat === "Rent" ? 2500 :
-        cat === "Insurance" ? 800 :
-        cat === "Office Supplies" ? 200 : 350;
-
-      const seasonal = 1 + 0.25 * Math.sin((i / 12) * Math.PI * 2 + Math.PI / 3);
-      const amt = Math.max(0, Math.round(base * seasonal + (Math.random() * 120 - 60)));
-      rows.push({ month: `${m}-01`, category: cat, amount: amt, source: "mock" });
+      const amount = Math.round(category.base * (1 + ((i % 4) * 0.04)));
+      total += amount;
+      canonical.totals.byMonth[monthList[i]].bookExpenseAmount += amount;
+      canonical.totals.byMonth[monthList[i]].estimatedDeductibleAmount += amount;
+      canonical.totals.byMonth[monthList[i]].autoClassifiedDeductibleAmount = (canonical.totals.byMonth[monthList[i]].autoClassifiedDeductibleAmount || 0) + amount;
+      monthly[monthList[i]] = {
+        bookExpenseAmount: amount,
+        deductibleAmount: amount,
+        nondeductibleAmount: 0,
+        capitalizableAmount: 0,
+        needsReviewAmount: 0,
+        transactionCount: 1,
+      };
     }
+    canonical.categories.push({
+      taxCategory: category.taxCategory,
+      displayName: category.displayName,
+      bookExpenseAmount: total,
+      estimatedDeductibleAmount: total,
+      confirmedDeductibleAmount: 0,
+      autoClassifiedDeductibleAmount: total,
+      nondeductibleAmount: 0,
+      capitalizableAmount: 0,
+      needsReviewAmount: 0,
+      transactionCount: 12,
+      confirmedCount: 0,
+      reviewCount: 0,
+      averageDeductiblePercent: 100,
+      confidenceLevel: "medium",
+      monthly,
+      warnings: [],
+      topRules: [],
+      topBookkeepingCategories: [],
+    });
+    canonical.totals.bookExpenseAmount += total;
+    canonical.totals.estimatedDeductibleAmount += total;
+    canonical.totals.autoClassifiedDeductibleAmount += total;
   }
-  return rows;
+  canonical.coverage.bookAmountCovered = canonical.totals.bookExpenseAmount;
+  return { canonical, legacy: toLegacyDeductionsMatrix(canonical) };
 }

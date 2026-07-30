@@ -1,0 +1,5478 @@
+{
+  "overallStatus": "fail",
+  "taxYear": 2026,
+  "federal": {
+    "status": "pass",
+    "components": [
+      {
+        "key": "income_tax_brackets",
+        "ruleType": "federal_income_tax_brackets",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 5,
+        "effectiveCount": 5,
+        "supportLevel": "verified",
+        "status": "pass",
+        "ruleId": "c8216a2d-a9de-41ec-a41c-5208bfd24e7a",
+        "version": "irs-pub-505-2026",
+        "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+      },
+      {
+        "key": "standard_deduction",
+        "ruleType": "standard_deduction",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 5,
+        "effectiveCount": 5,
+        "supportLevel": "verified",
+        "status": "pass",
+        "ruleId": "adae4b16-55b4-40be-9675-2c5d774c051c",
+        "version": "irs-pub-505-2026",
+        "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+      },
+      {
+        "key": "se_tax_net_earnings_factor",
+        "ruleType": "self_employment_tax",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "pass",
+        "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+        "version": "irs-pub-505-2026-ssa-2026",
+        "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+      },
+      {
+        "key": "social_security_wage_base_rates",
+        "ruleType": "social_security_wage_base",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "pass",
+        "ruleId": "2718b1d0-e3ed-409a-a399-b375b901e822",
+        "version": "ssa-cbb-2026",
+        "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+      },
+      {
+        "key": "medicare_rate",
+        "ruleType": "self_employment_tax",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "pass",
+        "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+        "version": "irs-pub-505-2026-ssa-2026",
+        "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+      },
+      {
+        "key": "additional_medicare_thresholds",
+        "ruleType": "additional_medicare_tax",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 5,
+        "effectiveCount": 5,
+        "supportLevel": "verified",
+        "status": "pass",
+        "ruleId": "e5ca05e6-22b5-4eba-aaae-6e87c1abbc13",
+        "version": "irs-topic-560-2026",
+        "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+      },
+      {
+        "key": "safe_harbor_percentages",
+        "ruleType": "estimated_tax_safe_harbor",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "pass",
+        "ruleId": "7986c501-1b8b-49cd-a28d-14ddc06181a8",
+        "version": "irs-pub-505-2026",
+        "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+      },
+      {
+        "key": "estimated_payment_dates",
+        "ruleType": "estimated_tax_due_dates",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "pass",
+        "ruleId": "48865e4a-40a8-4a80-ab5f-0ade5fe61b1c",
+        "version": "irs-pub-505-2026",
+        "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+      }
+    ],
+    "filingStatusCoverage": [
+      {
+        "filingStatus": "single",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2c5ca3ac-2cd3-4246-8b49-4a4cc20a4f43",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "70860f21-a00a-4874-be84-cc1c1ac3b9e1",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "social_security_wage_base",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2718b1d0-e3ed-409a-a399-b375b901e822",
+            "version": "ssa-cbb-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "e5ca05e6-22b5-4eba-aaae-6e87c1abbc13",
+            "version": "irs-topic-560-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "7986c501-1b8b-49cd-a28d-14ddc06181a8",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "48865e4a-40a8-4a80-ab5f-0ade5fe61b1c",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          }
+        ],
+        "status": "pass"
+      },
+      {
+        "filingStatus": "married_filing_jointly",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "c8216a2d-a9de-41ec-a41c-5208bfd24e7a",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "4fe3353f-0cfd-4462-95ae-5b882201d4a4",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "social_security_wage_base",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2718b1d0-e3ed-409a-a399-b375b901e822",
+            "version": "ssa-cbb-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "3356ffa5-ed3c-406b-a051-0589bbd0b6c5",
+            "version": "irs-topic-560-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "7986c501-1b8b-49cd-a28d-14ddc06181a8",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "48865e4a-40a8-4a80-ab5f-0ade5fe61b1c",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          }
+        ],
+        "status": "pass"
+      },
+      {
+        "filingStatus": "married_filing_separately",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "9e89ad2c-67bf-4eb8-80b9-3c368fe6e578",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "04e8550d-87c8-49c4-9ccd-62e5b42c321b",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "social_security_wage_base",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2718b1d0-e3ed-409a-a399-b375b901e822",
+            "version": "ssa-cbb-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "a58af33e-384d-49f5-9e26-98bbb96295e6",
+            "version": "irs-topic-560-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "7986c501-1b8b-49cd-a28d-14ddc06181a8",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "48865e4a-40a8-4a80-ab5f-0ade5fe61b1c",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          }
+        ],
+        "status": "pass"
+      },
+      {
+        "filingStatus": "head_of_household",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "6cbea758-31be-4807-bddb-1f6f151021bb",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "adae4b16-55b4-40be-9675-2c5d774c051c",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "social_security_wage_base",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2718b1d0-e3ed-409a-a399-b375b901e822",
+            "version": "ssa-cbb-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "4a671e3d-57b4-4bde-9ded-70c294a590cf",
+            "version": "irs-topic-560-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "7986c501-1b8b-49cd-a28d-14ddc06181a8",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "48865e4a-40a8-4a80-ab5f-0ade5fe61b1c",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          }
+        ],
+        "status": "pass"
+      },
+      {
+        "filingStatus": "qualifying_surviving_spouse",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "ffc7c4f9-aaa1-4ed1-ac35-907c4d0ae9d3",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "29a4e014-6cd2-46fe-8c13-a21197bcb21a",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "social_security_wage_base",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2718b1d0-e3ed-409a-a399-b375b901e822",
+            "version": "ssa-cbb-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "2a708a05-a0ae-4fd7-b283-5d498c847a9a",
+            "version": "irs-pub-505-2026-ssa-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "f3a29259-3f2f-4cb6-b9f5-4ab966ff23b7",
+            "version": "irs-topic-560-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "7986c501-1b8b-49cd-a28d-14ddc06181a8",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "pass",
+            "ruleId": "48865e4a-40a8-4a80-ab5f-0ade5fe61b1c",
+            "version": "irs-pub-505-2026",
+            "verifiedAt": "2026-07-16T15:59:31.598066+00:00"
+          }
+        ],
+        "status": "pass"
+      }
+    ],
+    "missing": [],
+    "unverified": [],
+    "conflicting": [],
+    "expired": [],
+    "simplified": []
+  },
+  "states": [
+    {
+      "stateCode": "CA",
+      "status": "fail",
+      "components": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "individual_income_tax",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "partialEntitySupport": false,
+      "reserveFallbackStatus": "pass",
+      "missing": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "individual_income_tax",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "CA",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "unverified": [],
+      "conflicting": [],
+      "expired": [],
+      "simplified": []
+    },
+    {
+      "stateCode": "TX",
+      "status": "fail",
+      "components": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "no_individual_income_tax",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 1,
+          "effectiveCount": 1,
+          "supportLevel": "verified",
+          "status": "pass",
+          "ruleId": "9ea7f455-7d76-45da-b056-3da19a1368fa",
+          "version": "official-pack3-2026-v1",
+          "verifiedAt": "2026-07-16T18:15:37.065915+00:00",
+          "countsAsExplicitZeroTax": true
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "entity_tax_caveat",
+          "ruleType": "entity_tax_caveat",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 1,
+          "effectiveCount": 1,
+          "supportLevel": "verified",
+          "status": "pass",
+          "ruleId": "fd7ba6fe-1a8e-48af-8d21-069f02cb4ea1",
+          "version": "official-pack3-2026-v1",
+          "verifiedAt": "2026-07-16T18:15:37.065915+00:00"
+        }
+      ],
+      "partialEntitySupport": true,
+      "reserveFallbackStatus": "pass",
+      "missing": [
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "TX",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "unverified": [],
+      "conflicting": [],
+      "expired": [],
+      "simplified": []
+    },
+    {
+      "stateCode": "FL",
+      "status": "fail",
+      "components": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "no_individual_income_tax",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 1,
+          "effectiveCount": 1,
+          "supportLevel": "verified",
+          "status": "pass",
+          "ruleId": "3fcbe7c8-f86e-4db5-ad44-a752b0b725f7",
+          "version": "official-pack3-2026-v1",
+          "verifiedAt": "2026-07-16T18:15:37.065915+00:00",
+          "countsAsExplicitZeroTax": true
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "entity_tax_caveat",
+          "ruleType": "entity_tax_caveat",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 1,
+          "effectiveCount": 1,
+          "supportLevel": "verified",
+          "status": "pass",
+          "ruleId": "b71b73b0-d3ed-45d1-9a6c-77e2c05ecab1",
+          "version": "official-pack3-2026-v1",
+          "verifiedAt": "2026-07-16T18:15:37.065915+00:00"
+        }
+      ],
+      "partialEntitySupport": true,
+      "reserveFallbackStatus": "pass",
+      "missing": [
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "warning",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "FL",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "unverified": [],
+      "conflicting": [],
+      "expired": [],
+      "simplified": []
+    },
+    {
+      "stateCode": "NY",
+      "status": "fail",
+      "components": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "individual_income_tax",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "partialEntitySupport": false,
+      "reserveFallbackStatus": "pass",
+      "missing": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "individual_income_tax",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "NY",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "unverified": [],
+      "conflicting": [],
+      "expired": [],
+      "simplified": []
+    },
+    {
+      "stateCode": "NC",
+      "status": "fail",
+      "components": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "individual_income_tax",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "partialEntitySupport": false,
+      "reserveFallbackStatus": "pass",
+      "missing": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "individual_income_tax",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "unverified": [],
+      "conflicting": [],
+      "expired": [],
+      "simplified": []
+    }
+  ],
+  "deductions": {
+    "status": "fail",
+    "supportedCategories": [
+      "credit_card_payment",
+      "owner_draw",
+      "transfer",
+      "loan_principal",
+      "personal",
+      "refund",
+      "capitalizable_equipment",
+      "equipment",
+      "auto"
+    ],
+    "missingCategories": [
+      "advertising",
+      "bank_fees",
+      "contract_labor",
+      "cost_of_goods_sold",
+      "dues_subscriptions",
+      "insurance",
+      "interest",
+      "legal_professional",
+      "meals",
+      "office",
+      "payroll",
+      "rent",
+      "repairs_maintenance",
+      "supplies",
+      "taxes_licenses",
+      "travel",
+      "utilities"
+    ],
+    "certificationRequirements": [
+      {
+        "key": "materials_and_supplies",
+        "label": "Materials and supplies",
+        "categories": [
+          "supplies",
+          "materials",
+          "cost_of_goods_sold"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "subcontractors_contract_labor",
+        "label": "Subcontractors / contract labor",
+        "categories": [
+          "contract_labor",
+          "subcontractors"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "meals",
+        "label": "Meals",
+        "categories": [
+          "meals"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "vehicle_fuel",
+        "label": "Vehicle / fuel",
+        "categories": [
+          "auto",
+          "vehicle",
+          "fuel"
+        ],
+        "status": "pass",
+        "ruleIds": [
+          "670f03b3-64f9-4af1-9731-42406e853c7f"
+        ]
+      },
+      {
+        "key": "insurance",
+        "label": "Insurance",
+        "categories": [
+          "insurance"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "office_expense",
+        "label": "Office expense",
+        "categories": [
+          "office"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "tools_small_equipment",
+        "label": "Tools and small equipment",
+        "categories": [
+          "equipment",
+          "tools"
+        ],
+        "status": "pass",
+        "ruleIds": [
+          "59803476-1eed-4299-804f-50fbd9d2b2ba"
+        ]
+      },
+      {
+        "key": "capitalizable_equipment",
+        "label": "Capitalizable equipment",
+        "categories": [
+          "equipment",
+          "capitalizable_equipment"
+        ],
+        "requiredStatus": "capitalizable",
+        "status": "pass",
+        "ruleIds": [
+          "cddfec10-caaa-4ddb-a3b2-05e43a4c71c5"
+        ]
+      },
+      {
+        "key": "loan_principal",
+        "label": "Loan principal",
+        "categories": [
+          "loan_principal",
+          "debt_principal"
+        ],
+        "requiredStatus": "balance_sheet",
+        "status": "pass",
+        "ruleIds": [
+          "6a9fc48c-1de4-4318-a069-0b8aef1004c3"
+        ]
+      },
+      {
+        "key": "loan_interest",
+        "label": "Loan interest",
+        "categories": [
+          "interest",
+          "loan_interest"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "owner_draws_contributions",
+        "label": "Owner draws/contributions",
+        "categories": [
+          "owner_draw",
+          "owner_contribution",
+          "equity"
+        ],
+        "requiredStatus": "balance_sheet",
+        "status": "pass",
+        "ruleIds": [
+          "04b7e6a8-3a73-4f2c-b714-d1d33201cb72"
+        ]
+      },
+      {
+        "key": "transfers",
+        "label": "Transfers",
+        "categories": [
+          "transfer",
+          "transfers"
+        ],
+        "requiredStatus": "balance_sheet",
+        "status": "pass",
+        "ruleIds": [
+          "ce3c0216-c5d6-4767-84a2-f9c66226ad94"
+        ]
+      },
+      {
+        "key": "credit_card_payments",
+        "label": "Credit-card payments",
+        "categories": [
+          "credit_card_payment"
+        ],
+        "requiredStatus": "balance_sheet",
+        "status": "pass",
+        "ruleIds": [
+          "f412fb4d-6e2b-4ff1-a0f2-c399e827b78a"
+        ]
+      },
+      {
+        "key": "refunds_reversals",
+        "label": "Refunds/reversals",
+        "categories": [
+          "refund",
+          "reversal",
+          "refunds_reversals"
+        ],
+        "status": "pass",
+        "ruleIds": [
+          "5eab5837-c6aa-4bf4-a6fa-36558f24a9bc"
+        ]
+      },
+      {
+        "key": "payroll_payroll_taxes",
+        "label": "Payroll/payroll taxes",
+        "categories": [
+          "payroll",
+          "payroll_taxes"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "personal_nondeductible",
+        "label": "Personal/nondeductible expenses",
+        "categories": [
+          "personal",
+          "nondeductible"
+        ],
+        "requiredStatus": "nondeductible",
+        "status": "pass",
+        "ruleIds": [
+          "911f2579-8451-44d2-950a-2a3771e8aa6e"
+        ]
+      }
+    ],
+    "ruleConflicts": [],
+    "warnings": [],
+    "blockers": [
+      {
+        "code": "invalid_default_deductible_percent",
+        "severity": "high",
+        "taxYear": 2026,
+        "id": "6b77df6a-9eda-49dc-b5e9-8b52b02b4468",
+        "ruleCode": "loan_interest",
+        "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+      },
+      {
+        "code": "invalid_default_deductible_percent",
+        "severity": "high",
+        "taxYear": 2026,
+        "id": "7c0de939-e91f-4d24-a307-f36301a12d51",
+        "ruleCode": "payroll_payroll_taxes",
+        "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+      },
+      {
+        "code": "invalid_default_deductible_percent",
+        "severity": "high",
+        "taxYear": 2026,
+        "id": "1ccacfb5-49cf-4797-a743-2c33a8bc28ae",
+        "ruleCode": "subcontractors_contract_labor",
+        "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+      },
+      {
+        "code": "invalid_default_deductible_percent",
+        "severity": "high",
+        "taxYear": 2026,
+        "id": "63f062f4-71f1-4dc8-b5de-613d326e16e8",
+        "ruleCode": "insurance",
+        "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+      },
+      {
+        "code": "invalid_default_deductible_percent",
+        "severity": "high",
+        "taxYear": 2026,
+        "id": "d196361c-3f46-4834-88ae-8d0534f5f7b0",
+        "ruleCode": "materials_and_supplies",
+        "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+      },
+      {
+        "code": "invalid_default_deductible_percent",
+        "severity": "high",
+        "taxYear": 2026,
+        "id": "84fe8019-6750-4631-98e2-107101feb8ff",
+        "ruleCode": "office_expense",
+        "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+      },
+      {
+        "code": "invalid_default_deductible_percent",
+        "severity": "high",
+        "taxYear": 2026,
+        "id": "7aab8224-a338-4701-bb52-d523a5f5de13",
+        "ruleCode": "meals",
+        "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "materials_and_supplies",
+        "categories": [
+          "supplies",
+          "materials",
+          "cost_of_goods_sold"
+        ],
+        "requiredStatus": null,
+        "message": "Materials and supplies deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "subcontractors_contract_labor",
+        "categories": [
+          "contract_labor",
+          "subcontractors"
+        ],
+        "requiredStatus": null,
+        "message": "Subcontractors / contract labor deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "meals",
+        "categories": [
+          "meals"
+        ],
+        "requiredStatus": null,
+        "message": "Meals deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "insurance",
+        "categories": [
+          "insurance"
+        ],
+        "requiredStatus": null,
+        "message": "Insurance deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "office_expense",
+        "categories": [
+          "office"
+        ],
+        "requiredStatus": null,
+        "message": "Office expense deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "loan_interest",
+        "categories": [
+          "interest",
+          "loan_interest"
+        ],
+        "requiredStatus": null,
+        "message": "Loan interest deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "payroll_payroll_taxes",
+        "categories": [
+          "payroll",
+          "payroll_taxes"
+        ],
+        "requiredStatus": null,
+        "message": "Payroll/payroll taxes deduction treatment is not production-certified."
+      }
+    ]
+  },
+  "reserveFallback": {
+    "status": "pass",
+    "policyCode": "unsupported_state_provisional_reserve_v1",
+    "ruleId": "6d5ec6a2-a493-4189-b845-8ddfec5c12eb",
+    "version": "bizzi-pack3-2026-v1",
+    "supportLevel": "simplified",
+    "warnings": [],
+    "blockers": []
+  },
+  "supportedCombinations": [],
+  "unsupportedCombinations": [
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    }
+  ],
+  "certificationMode": true,
+  "certificationMatrix": [
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "state_entity_tax_partial",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    }
+  ],
+  "missingRuleTemplates": [
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "CA",
+        "rule_type": "individual_income_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "CA",
+        "rule_type": "standard_deduction",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "CA",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "CA",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "CA",
+        "rule_type": "s_corp_minimum_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "TX",
+        "rule_type": "s_corp_minimum_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "FL",
+        "rule_type": "s_corp_minimum_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NY",
+        "rule_type": "individual_income_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NY",
+        "rule_type": "standard_deduction",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NY",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NY",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NY",
+        "rule_type": "s_corp_minimum_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "individual_income_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "standard_deduction",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "s_corp_minimum_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_materials_and_supplies",
+        "tax_category": "supplies",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_subcontractors_contract_labor",
+        "tax_category": "contract_labor",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_meals",
+        "tax_category": "meals",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_insurance",
+        "tax_category": "insurance",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_office_expense",
+        "tax_category": "office",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_loan_interest",
+        "tax_category": "interest",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_payroll_payroll_taxes",
+        "tax_category": "payroll",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    }
+  ],
+  "deferredUnsupportedFeatures": [
+    "qbi_calculation",
+    "complex_credits",
+    "multi_state_allocation",
+    "local_taxes_where_unverified",
+    "capital_gains",
+    "partnership_income",
+    "spouse_income_integration",
+    "advanced_depreciation_unless_configured"
+  ],
+  "warnings": [
+    {
+      "code": "optional_state_rule_missing",
+      "severity": "medium",
+      "stateCode": "TX",
+      "ruleType": "standard_deduction",
+      "message": "TX optional rule standard_deduction is unavailable."
+    },
+    {
+      "code": "optional_state_rule_missing",
+      "severity": "medium",
+      "stateCode": "TX",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "TX optional rule estimated_tax_due_dates is unavailable."
+    },
+    {
+      "code": "optional_state_rule_missing",
+      "severity": "medium",
+      "stateCode": "TX",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "TX optional rule estimated_tax_safe_harbor is unavailable."
+    },
+    {
+      "code": "partial_entity_tax_support",
+      "severity": "medium",
+      "stateCode": "TX",
+      "ruleType": "entity_tax_caveat",
+      "message": "TX individual income tax is verified zero, but entity/business taxes remain partially supported."
+    },
+    {
+      "code": "provisional_reserve_available",
+      "severity": "low",
+      "stateCode": "TX",
+      "message": "TX may use provisional reserve guidance when total state liability is partial or unavailable."
+    },
+    {
+      "code": "optional_state_rule_missing",
+      "severity": "medium",
+      "stateCode": "FL",
+      "ruleType": "standard_deduction",
+      "message": "FL optional rule standard_deduction is unavailable."
+    },
+    {
+      "code": "optional_state_rule_missing",
+      "severity": "medium",
+      "stateCode": "FL",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "FL optional rule estimated_tax_due_dates is unavailable."
+    },
+    {
+      "code": "optional_state_rule_missing",
+      "severity": "medium",
+      "stateCode": "FL",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "FL optional rule estimated_tax_safe_harbor is unavailable."
+    },
+    {
+      "code": "partial_entity_tax_support",
+      "severity": "medium",
+      "stateCode": "FL",
+      "ruleType": "entity_tax_caveat",
+      "message": "FL individual income tax is verified zero, but entity/business taxes remain partially supported."
+    },
+    {
+      "code": "provisional_reserve_available",
+      "severity": "low",
+      "stateCode": "FL",
+      "message": "FL may use provisional reserve guidance when total state liability is partial or unavailable."
+    }
+  ],
+  "blockers": [
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "individual_income_tax",
+      "ruleType": "individual_income_tax",
+      "message": "individual_income_tax is not production-ready.",
+      "stateCode": "CA"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_standard_deduction_or_exemption",
+      "ruleType": "standard_deduction",
+      "message": "state_standard_deduction_or_exemption is not production-ready.",
+      "stateCode": "CA"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_estimated_payment_dates",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "state_estimated_payment_dates is not production-ready.",
+      "stateCode": "CA"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_safe_harbor",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "state_safe_harbor is not production-ready.",
+      "stateCode": "CA"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "s_corp_minimum_or_entity_tax",
+      "ruleType": "s_corp_minimum_tax",
+      "message": "s_corp_minimum_or_entity_tax is not production-ready.",
+      "stateCode": "CA"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "s_corp_minimum_or_entity_tax",
+      "ruleType": "s_corp_minimum_tax",
+      "message": "s_corp_minimum_or_entity_tax is not production-ready.",
+      "stateCode": "TX"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "s_corp_minimum_or_entity_tax",
+      "ruleType": "s_corp_minimum_tax",
+      "message": "s_corp_minimum_or_entity_tax is not production-ready.",
+      "stateCode": "FL"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "individual_income_tax",
+      "ruleType": "individual_income_tax",
+      "message": "individual_income_tax is not production-ready.",
+      "stateCode": "NY"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_standard_deduction_or_exemption",
+      "ruleType": "standard_deduction",
+      "message": "state_standard_deduction_or_exemption is not production-ready.",
+      "stateCode": "NY"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_estimated_payment_dates",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "state_estimated_payment_dates is not production-ready.",
+      "stateCode": "NY"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_safe_harbor",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "state_safe_harbor is not production-ready.",
+      "stateCode": "NY"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "s_corp_minimum_or_entity_tax",
+      "ruleType": "s_corp_minimum_tax",
+      "message": "s_corp_minimum_or_entity_tax is not production-ready.",
+      "stateCode": "NY"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "individual_income_tax",
+      "ruleType": "individual_income_tax",
+      "message": "individual_income_tax is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_standard_deduction_or_exemption",
+      "ruleType": "standard_deduction",
+      "message": "state_standard_deduction_or_exemption is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_estimated_payment_dates",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "state_estimated_payment_dates is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_safe_harbor",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "state_safe_harbor is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "s_corp_minimum_or_entity_tax",
+      "ruleType": "s_corp_minimum_tax",
+      "message": "s_corp_minimum_or_entity_tax is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "invalid_default_deductible_percent",
+      "severity": "high",
+      "taxYear": 2026,
+      "id": "6b77df6a-9eda-49dc-b5e9-8b52b02b4468",
+      "ruleCode": "loan_interest",
+      "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+    },
+    {
+      "code": "invalid_default_deductible_percent",
+      "severity": "high",
+      "taxYear": 2026,
+      "id": "7c0de939-e91f-4d24-a307-f36301a12d51",
+      "ruleCode": "payroll_payroll_taxes",
+      "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+    },
+    {
+      "code": "invalid_default_deductible_percent",
+      "severity": "high",
+      "taxYear": 2026,
+      "id": "1ccacfb5-49cf-4797-a743-2c33a8bc28ae",
+      "ruleCode": "subcontractors_contract_labor",
+      "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+    },
+    {
+      "code": "invalid_default_deductible_percent",
+      "severity": "high",
+      "taxYear": 2026,
+      "id": "63f062f4-71f1-4dc8-b5de-613d326e16e8",
+      "ruleCode": "insurance",
+      "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+    },
+    {
+      "code": "invalid_default_deductible_percent",
+      "severity": "high",
+      "taxYear": 2026,
+      "id": "d196361c-3f46-4834-88ae-8d0534f5f7b0",
+      "ruleCode": "materials_and_supplies",
+      "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+    },
+    {
+      "code": "invalid_default_deductible_percent",
+      "severity": "high",
+      "taxYear": 2026,
+      "id": "84fe8019-6750-4631-98e2-107101feb8ff",
+      "ruleCode": "office_expense",
+      "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+    },
+    {
+      "code": "invalid_default_deductible_percent",
+      "severity": "high",
+      "taxYear": 2026,
+      "id": "7aab8224-a338-4701-bb52-d523a5f5de13",
+      "ruleCode": "meals",
+      "message": "default_deductible_percent must be a finite number >= 0 <= 1."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "materials_and_supplies",
+      "categories": [
+        "supplies",
+        "materials",
+        "cost_of_goods_sold"
+      ],
+      "requiredStatus": null,
+      "message": "Materials and supplies deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "subcontractors_contract_labor",
+      "categories": [
+        "contract_labor",
+        "subcontractors"
+      ],
+      "requiredStatus": null,
+      "message": "Subcontractors / contract labor deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "meals",
+      "categories": [
+        "meals"
+      ],
+      "requiredStatus": null,
+      "message": "Meals deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "insurance",
+      "categories": [
+        "insurance"
+      ],
+      "requiredStatus": null,
+      "message": "Insurance deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "office_expense",
+      "categories": [
+        "office"
+      ],
+      "requiredStatus": null,
+      "message": "Office expense deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "loan_interest",
+      "categories": [
+        "interest",
+        "loan_interest"
+      ],
+      "requiredStatus": null,
+      "message": "Loan interest deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "payroll_payroll_taxes",
+      "categories": [
+        "payroll",
+        "payroll_taxes"
+      ],
+      "requiredStatus": null,
+      "message": "Payroll/payroll taxes deduction treatment is not production-certified."
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "CA",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "TX",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "FL",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NY",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "state_rules_failed"
+    }
+  ],
+  "environment": "test",
+  "requestedScope": {
+    "taxYear": 2026,
+    "states": [
+      "CA",
+      "TX",
+      "FL",
+      "NY",
+      "NC"
+    ],
+    "entityPaths": [
+      "sole_proprietor",
+      "single_member_llc_disregarded",
+      "single_member_llc_s_corp",
+      "s_corporation"
+    ],
+    "filingStatuses": [
+      "single",
+      "married_filing_jointly",
+      "married_filing_separately",
+      "head_of_household",
+      "qualifying_surviving_spouse"
+    ]
+  }
+}

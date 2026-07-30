@@ -13,6 +13,7 @@ import qboCoaCreateRoutes from "./routes/bookkeeping.qboCoaCreate.routes.js";
 import qboPaymentAccountsRoutes from "./routes/bookkeeping.qboPaymentAccounts.routes.js";
 import qboVendorsRoutes from "./routes/bookkeeping.qboVendors.routes.js";
 import clarificationsRoutes from "./routes/bookkeeping.clarifications.routes.js";
+import postingRoutes from "./routes/bookkeeping.posting.routes.js";
 
 const router = Router();
 
@@ -30,5 +31,6 @@ router.use(qboCoaCreateRoutes);
 router.use(qboPaymentAccountsRoutes);
 router.use(qboVendorsRoutes);
 router.use(clarificationsRoutes);
+router.use(postingRoutes);
 
 export default router;

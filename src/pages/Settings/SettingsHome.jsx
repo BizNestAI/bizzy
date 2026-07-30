@@ -34,9 +34,11 @@ import {
 } from "../../services/bookkeeping/bookkeepingClient";
 
 /** Graphite neutrals (tokens) */
-const NEUTRAL_BORDER = "rgba(165,167,169,0.18)";
+const NEUTRAL_BORDER = "rgba(255,255,255,0.105)";
+const SOFT_BORDER = "rgba(255,255,255,0.075)";
 const TEXT_MUTED = "var(--text-2)";
-const PANEL_BG = "var(--panel)";
+const PANEL_BG = "rgba(17,19,18,0.78)";
+const ROW_BG = "rgba(255,255,255,0.032)";
 const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
 
 /** Tabs visible for MVP */
@@ -316,28 +318,27 @@ useEffect(() => {
     <div className="w-full px-3 md:px-4 pb-12 pt-0 bg-app text-primary" style={{ "--accent": "var(--accent)" }}>
       {/* Header (aligned with page content) */}
       <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6 mb-5">
-        <h1 className="text-2xl md:text-3xl font-semibold tracking-[0.18em] text-[color:var(--text)] text-left">
+        <h1 className="text-[20px] sm:text-[22px] font-semibold tracking-[0.2em] text-[color:var(--text)] text-left">
           Settings
         </h1>
-        <p className="mt-1 text-sm text-left" style={{ color: "rgba(var(--accent-rgb),0.78)" }}>
+        <p className="mt-1 text-sm text-left text-white/70">
           Profile, business identity, integrations, and billing — all in one place.
         </p>
       </div>
 
       <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6">
       <section
-        className="mb-5 rounded-3xl px-4 py-5 border border-[rgba(var(--accent-rgb),0.14)]"
-        style={{ background: PANEL_BG, boxShadow: "0 0 0 1px rgba(var(--accent-rgb),0.05), 0 22px 60px rgba(0,0,0,0.35)" }}
+        className="mb-4 rounded-2xl border px-4 py-3"
+        style={{ background: "rgba(17,19,18,0.72)", borderColor: NEUTRAL_BORDER, boxShadow: "none" }}
       >
-        <div className="flex flex-col gap-4">
-          <div>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
             <p className="text-sm font-semibold text-white/85">Data Source Mode</p>
             <p className="text-xs text-white/60">
               Toggle between Bizzi’s mock data (Mike’s Remodeling) and live integrations. Live Mode shows zeroes until your accounts sync.
             </p>
           </div>
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
             <ModeToggle
               active={dataMode !== "live"}
               labelOn="Mock Mode"
@@ -356,17 +357,16 @@ useEffect(() => {
                 setTimeout(() => window.location.reload(), 150);
               }}
             />
-            <div className="text-xs text-white/55">
+            <div className="text-xs text-white/55 sm:max-w-[18rem]">
               <div>{dataMode !== "live" ? "Bizzi demo data is active." : "Live mode enabled."}</div>
               <div>{dataMode !== "live" ? "Great for demos and testing." : "Connect QuickBooks, Gmail, Plaid, and more to populate your dashboards."}</div>
-            </div>
             </div>
           </div>
         </div>
       </section>
 
       {/* Tab pills */}
-      <div className="p-2.5 mb-5">
+      <div className="mb-5">
         <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="Settings tabs">
           <div className="flex flex-wrap gap-1.5 sm:gap-2">
             {tabs.map(({ key, icon: Icon }) => {
@@ -382,21 +382,21 @@ useEffect(() => {
                       ? {
                           outline: "none",
                           transition: "none",
-                          color: "var(--accent)",
-                          border: `1px solid rgba(var(--accent-rgb),0.4)`,
-                          boxShadow: "0 0 0 1px rgba(var(--accent-rgb),0.12), 0 10px 24px rgba(0,0,0,0.35)",
-                          background: "rgba(255,255,255,0.06)",
+                          color: "var(--text)",
+                          border: `1px solid rgba(var(--accent-rgb),0.3)`,
+                          boxShadow: "none",
+                          background: "rgba(var(--accent-rgb),0.1)",
                         }
                       : {
                           outline: "none",
                           transition: "none",
                           color: "var(--text)",
                           border: `1px solid ${NEUTRAL_BORDER}`,
-                          background: "rgba(255,255,255,0.02)",
+                          background: "transparent",
                         }
                   }
                 >
-                  <Icon className="h-4 w-4 opacity-90 group-hover:opacity-100" />
+                  <Icon className="h-4 w-4 opacity-75 group-hover:opacity-100" />
                   {key}
                 </button>
               );
@@ -405,9 +405,9 @@ useEffect(() => {
               onClick={() => navigate('/setup')}
               className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm border transition"
               style={{
-                borderColor: "rgba(255,255,255,0.2)",
+                borderColor: NEUTRAL_BORDER,
                 color: "var(--text)",
-                background: "rgba(255,255,255,0.06)",
+                background: "transparent",
               }}
             >
               Review Business Setup
@@ -417,11 +417,8 @@ useEffect(() => {
       </div>
 
       {/* Content wrapper */}
-      <div
-        className="rounded-3xl shadow-bizzi border p-4 sm:p-6"
-        style={{ background: PANEL_BG, borderColor: NEUTRAL_BORDER }}
-      >
-        <div className="grid grid-cols-12 gap-6">
+      <div className="p-0">
+        <div className="grid grid-cols-12 gap-4">
           {/* -------- Profile -------- */}
           {activeTab === "Profile" && (
             <>
@@ -467,10 +464,10 @@ useEffect(() => {
                   </button>
                 ) : (
                 <div
-                  className="rounded-2xl p-4 sm:p-5"
+                  className="rounded-xl p-4"
                   style={{
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    background: "rgba(20,21,22,0.9)",
+                    border: `1px solid ${SOFT_BORDER}`,
+                    background: ROW_BG,
                     boxShadow: "none",
                   }}
                 >
@@ -609,13 +606,13 @@ useEffect(() => {
             </div>
           ) : null}
           {!businessId ? (
-            <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/60">
+            <div className="rounded-lg border px-3 py-2 text-sm text-white/60" style={{ borderColor: SOFT_BORDER, background: ROW_BG }}>
               Select a business to manage billing.
             </div>
           ) : (
             <>
               <div className="rounded-xl border px-4 py-3"
-                style={{ borderColor: NEUTRAL_BORDER, background: "rgba(255,255,255,0.04)" }}>
+                style={{ borderColor: SOFT_BORDER, background: ROW_BG }}>
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-white/90">Bizzi credits usage</p>
@@ -663,26 +660,26 @@ function ModeToggle({ active, onChange, disabled, labelOn = "On", labelOff = "Of
       type="button"
       onClick={() => !disabled && onChange(!active)}
       className={[
-        "relative inline-flex items-center rounded-full border border-white/15 bg-black/30 p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(var(--accent-rgb),0.4)]",
-        disabled ? "opacity-50 cursor-not-allowed" : "hover:border-[rgba(var(--accent-rgb),0.4)]",
+        "relative inline-flex items-center rounded-full border p-1 transition focus-visible:outline-none",
+        disabled ? "opacity-50 cursor-not-allowed" : "hover:border-white/20",
       ].join(" ")}
-      style={{ width: 210, height: 52 }}
+      style={{ width: 188, height: 44, background: "rgba(0,0,0,0.22)", borderColor: SOFT_BORDER }}
     >
       <span
         className={[
-          "absolute inset-1 rounded-full bg-[rgba(var(--accent-rgb),0.14)] transition-all duration-300",
+          "absolute inset-1 rounded-full bg-[rgba(var(--accent-rgb),0.12)] transition-all duration-300",
           active ? "translate-x-0 opacity-100" : "translate-x-[calc(100%-2px)] opacity-0",
         ].join(" ")}
         aria-hidden
       />
       <span
         className={[
-          "absolute inset-1 rounded-full bg-white/8 transition-all duration-300",
+          "absolute inset-1 rounded-full bg-white/6 transition-all duration-300",
           active ? "translate-x-[calc(0%)] opacity-0" : "translate-x-0 opacity-100",
         ].join(" ")}
         aria-hidden
       />
-      <div className="relative z-10 flex w-full items-center justify-between px-4 text-[13px] font-semibold">
+      <div className="relative z-10 flex w-full items-center justify-between px-3 text-[12px] font-semibold">
         <span className={active ? "text-white" : "text-white/40"}>{labelOn}</span>
         <span className={!active ? "text-white" : "text-white/40"}>{labelOff}</span>
       </div>
@@ -708,9 +705,9 @@ function loadPlaidScript() {
 
 function StatusBadge({ label = "Unknown", tone = "slate" }) {
   const toneMap = {
-    ok: "bg-emerald-500/15 text-emerald-200 border-emerald-500/30",
-    warning: "bg-amber-500/15 text-amber-200 border-amber-500/30",
-    slate: "bg-white/10 text-white/70 border-white/15",
+    ok: "bg-emerald-500/12 text-emerald-200 border-emerald-500/24",
+    warning: "bg-amber-500/12 text-amber-200 border-amber-500/24",
+    slate: "bg-white/7 text-white/65 border-white/12",
   };
   const cls = toneMap[tone] || toneMap.slate;
   return (
@@ -741,6 +738,7 @@ function PlaidIntegrationCard({ businessId }) {
   const [qboPaymentAccounts, setQboPaymentAccounts] = useState([]);
   const [mappingSaving, setMappingSaving] = useState({});
   const [mappingOverrides, setMappingOverrides] = useState({});
+  const [mappingMessages, setMappingMessages] = useState({});
 
   const fetchStatus = useCallback(async () => {
     if (!businessId) return;
@@ -935,10 +933,26 @@ function PlaidIntegrationCard({ businessId }) {
     });
     return map;
   }, [mappingRows]);
-  const hasMappingNeeds = useMemo(
-    () => isConnected && (mappingRows || []).some((row) => row?.requires_mapping && !row?.mapped),
-    [isConnected, mappingRows]
-  );
+  const visiblePlaidAccountIds = useMemo(() => {
+    const ids = new Set();
+    (institutions || []).forEach((inst) => {
+      (inst?.accounts || []).forEach((acct) => {
+        if (acct?.plaid_account_id) ids.add(acct.plaid_account_id);
+      });
+    });
+    return ids;
+  }, [institutions]);
+  const unmappedPostableRows = useMemo(() => {
+    if (!isConnected) return [];
+    return (mappingRows || []).filter((row) => {
+      if (visiblePlaidAccountIds.size > 0 && !visiblePlaidAccountIds.has(row?.plaid_account_id)) return false;
+      if (!row?.requires_mapping || row?.posting_category === "NotUsed") return false;
+      const overrideValue = mappingOverrides?.[row.plaid_account_id];
+      if (overrideValue === "__none__") return false;
+      return !(overrideValue || row?.mapped);
+    });
+  }, [isConnected, mappingOverrides, mappingRows, visiblePlaidAccountIds]);
+  const hasMappingNeeds = unmappedPostableRows.length > 0;
 
   const handleMappingChange = useCallback(async (plaidAccountId, value) => {
     if (!businessId || !plaidAccountId) return;
@@ -948,10 +962,25 @@ function PlaidIntegrationCard({ businessId }) {
         const ensured = await ensureQboPaymentAccount(businessId, plaidAccountId);
         const qboId = ensured?.account?.id || null;
         if (qboId) {
+          const ensuredAccount = {
+            id: String(qboId),
+            name: ensured?.account?.name || "QuickBooks account",
+            type: ensured?.account?.type || null,
+          };
+          setQboPaymentAccounts((prev) => {
+            const exists = (prev || []).some((opt) => String(opt.id) === String(qboId));
+            return exists ? prev : [...(prev || []), ensuredAccount];
+          });
           await updateAccountMapping(businessId, {
             plaid_account_id: plaidAccountId,
             qbo_account_id: qboId,
           });
+          setMappingMessages((prev) => ({
+            ...prev,
+            [plaidAccountId]: ensured?.created
+              ? `Created a new QuickBooks account: ${ensuredAccount.name}. You can confirm it in QBO under Chart of accounts.`
+              : `Mapped to existing QuickBooks account: ${ensuredAccount.name}.`,
+          }));
           setMappingOverrides((prev) => {
             const next = { ...prev };
             delete next[plaidAccountId];
@@ -964,7 +993,8 @@ function PlaidIntegrationCard({ businessId }) {
                     ...row,
                     mapped: true,
                     qbo_account_id: String(qboId),
-                    qbo_account_name: ensured?.account?.name || row.qbo_account_name || null,
+                    qbo_account_name: ensuredAccount.name || row.qbo_account_name || null,
+                    qbo_account_type: ensuredAccount.type || row.qbo_account_type || null,
                   }
                 : row
             )
@@ -976,6 +1006,11 @@ function PlaidIntegrationCard({ businessId }) {
           qbo_account_id: "__none__",
         });
         setMappingOverrides((prev) => ({ ...prev, [plaidAccountId]: "__none__" }));
+        setMappingMessages((prev) => {
+          const next = { ...prev };
+          delete next[plaidAccountId];
+          return next;
+        });
         setMappingRows((prev) =>
           prev.map((row) =>
             row.plaid_account_id === plaidAccountId
@@ -998,6 +1033,10 @@ function PlaidIntegrationCard({ businessId }) {
           delete next[plaidAccountId];
           return next;
         });
+        setMappingMessages((prev) => {
+          const selectedName = qboPaymentAccounts.find((opt) => String(opt.id) === String(value))?.name || "QuickBooks account";
+          return { ...prev, [plaidAccountId]: `Mapped to QuickBooks account: ${selectedName}.` };
+        });
         setMappingRows((prev) =>
           prev.map((row) =>
             row.plaid_account_id === plaidAccountId
@@ -1018,12 +1057,12 @@ function PlaidIntegrationCard({ businessId }) {
     } finally {
       setMappingSaving((prev) => ({ ...prev, [plaidAccountId]: false }));
     }
-  }, [businessId, refreshMappings]);
+  }, [businessId, qboPaymentAccounts, refreshMappings]);
 
   return (
     <div
-      className="mt-2 rounded-xl border border-white/10 bg-white/5 p-3"
-      style={{ backdropFilter: "blur(4px)" }}
+      className="mt-4 border-t pt-4"
+      style={{ borderColor: SOFT_BORDER }}
     >
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex flex-col gap-1">
@@ -1091,7 +1130,8 @@ function PlaidIntegrationCard({ businessId }) {
       ) : null}
       {hasMappingNeeds ? (
         <div className="mt-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-100">
-          Bizzi can’t post until these are mapped. Please select the appropriate account or create a new one for each unmapped account.
+          Bizzi can’t post from {unmappedPostableRows.length} postable account{unmappedPostableRows.length === 1 ? "" : "s"} until mapped.
+          Please select the appropriate account or create a new one for each unmapped account.
         </div>
       ) : null}
 
@@ -1106,14 +1146,15 @@ function PlaidIntegrationCard({ businessId }) {
             </div>
           </div>
         ) : isEmpty ? (
-          <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3 text-xs text-white/70">
+          <div className="rounded-lg border px-3 py-3 text-xs text-white/70" style={{ borderColor: SOFT_BORDER, background: ROW_BG }}>
             No banks connected yet. Add a bank to start syncing transactions.
           </div>
         ) : (
           institutions.map((inst) => (
             <div
               key={inst.plaid_item_id}
-              className="rounded-lg border border-white/10 bg-black/30 px-3 py-3"
+              className="border-t px-0 py-3 first:border-t-0"
+              style={{ borderColor: SOFT_BORDER }}
             >
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -1138,7 +1179,7 @@ function PlaidIntegrationCard({ businessId }) {
               <div className="mt-1 text-[11px] text-white/50">
                 Disconnect stops new transactions from syncing. Your historical transactions and categorizations stay saved.
               </div>
-              <div className="mt-2 space-y-1">
+                  <div className="mt-2">
                 {(inst.accounts || []).map((acct) => {
                   const mappingInfo = mappingById.get(acct.plaid_account_id) || null;
                   const overrideValue = mappingOverrides?.[acct.plaid_account_id];
@@ -1152,9 +1193,29 @@ function PlaidIntegrationCard({ businessId }) {
                   const typeNeeded = mappingInfo?.qbo_options_hint?.type_needed || null;
                   const postingCategory = mappingInfo?.posting_category || null;
                   const requiresMapping = mappingInfo?.requires_mapping;
-                  const qboOptions = typeNeeded
+                  const baseQboOptions = typeNeeded
                     ? qboPaymentAccounts.filter((opt) => opt?.type === typeNeeded)
                     : qboPaymentAccounts;
+                  const selectedMappedOption =
+                    mappingInfo?.qbo_account_id && mappingInfo?.qbo_account_name
+                      ? {
+                          id: String(mappingInfo.qbo_account_id),
+                          name: mappingInfo.qbo_account_name,
+                          type: mappingInfo.qbo_account_type || typeNeeded || null,
+                        }
+                      : null;
+                  const qboOptions =
+                    selectedMappedOption &&
+                    !baseQboOptions.some((opt) => String(opt.id) === String(selectedMappedOption.id))
+                      ? [...baseQboOptions, selectedMappedOption]
+                      : baseQboOptions;
+                  const missingQboOptionsMessage =
+                    requiresMapping && !mappedFlag && typeNeeded && qboOptions.length === 0
+                      ? typeNeeded === "CreditCard"
+                        ? "No QuickBooks Credit Card accounts found. Create one to map this Plaid card."
+                        : "No QuickBooks Bank accounts found. Create one to map this Plaid account."
+                      : null;
+                  const mappingMessage = mappingMessages?.[acct.plaid_account_id] || null;
                   const optionIds = new Set(qboOptions.map((o) => String(o.id)));
                   const selectedValueRaw = overrideValue
                     ? overrideValue
@@ -1178,7 +1239,8 @@ function PlaidIntegrationCard({ businessId }) {
                   return (
                     <div
                       key={acct.plaid_account_id}
-                      className="flex items-center justify-between rounded-md border border-white/5 bg-white/5 px-2 py-2"
+                      className="flex items-center justify-between gap-3 border-t px-0 py-2 first:border-t-0"
+                      style={{ borderColor: SOFT_BORDER }}
                     >
                       <div className="flex flex-col">
                         <span className="text-sm text-white/90">
@@ -1231,6 +1293,16 @@ function PlaidIntegrationCard({ businessId }) {
                             Suggested match{suggestionLabel ? `: ${suggestionLabel}` : ""}. Review before confirming.
                           </div>
                         ) : null}
+                        {missingQboOptionsMessage ? (
+                          <div className="max-w-[18rem] text-right text-[10px] leading-snug text-amber-100/85">
+                            {missingQboOptionsMessage}
+                          </div>
+                        ) : null}
+                        {mappingMessage ? (
+                          <div className="max-w-[18rem] text-right text-[10px] leading-snug text-emerald-100/85">
+                            {mappingMessage}
+                          </div>
+                        ) : null}
                         {acct.plaid_item_id && acct.plaid_item_id !== "unknown" ? (
                           confirmDisconnectByAccount[acct.plaid_account_id] ? (
                             <div className="flex items-center gap-2">
@@ -1279,7 +1351,7 @@ function Badge({ children }) {
   return (
     <span
       className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide"
-      style={{ background: "rgba(255,255,255,0.06)", border: `1px solid rgba(var(--accent-rgb),0.22)`, color: TEXT_MUTED, boxShadow: "0 0 0 1px rgba(var(--accent-rgb),0.06)" }}
+      style={{ background: ROW_BG, border: `1px solid ${SOFT_BORDER}`, color: TEXT_MUTED, boxShadow: "none" }}
     >
       {children}
     </span>
@@ -1318,7 +1390,8 @@ function DarkMappingDropdown({
         type="button"
         disabled={disabled}
         onClick={() => setOpen((prev) => !prev)}
-        className="inline-flex w-full items-center justify-between gap-2 rounded-md border border-white/10 bg-[rgba(18,18,20,0.92)] px-3 py-2 text-[11px] text-white/90 shadow-[0_8px_18px_rgba(0,0,0,0.32)] backdrop-blur-md transition-all duration-150 ease-out hover:bg-[rgba(28,28,32,0.98)] hover:border-white/30 focus:outline-none focus:ring-2 focus:ring-white/14 disabled:opacity-60"
+        className="inline-flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-[11px] text-white/90 transition-all duration-150 ease-out hover:border-white/24 focus:outline-none disabled:opacity-60"
+        style={{ background: "var(--input-bg)", borderColor: SOFT_BORDER, boxShadow: "none" }}
       >
         <span className={`truncate text-left ${selected ? "text-white/90" : "text-white/55"}`}>
           {selected?.label || placeholder}
@@ -1327,9 +1400,10 @@ function DarkMappingDropdown({
       </button>
 
       <div
-        className={`absolute right-0 z-40 mt-2 w-full overflow-hidden rounded-xl border border-[rgba(var(--accent-rgb),0.22)] bg-[rgba(10,12,16,0.98)] shadow-[0_20px_50px_rgba(0,0,0,0.58)] backdrop-blur-xl transition-all duration-150 ${
+        className={`absolute right-0 z-40 mt-2 w-full overflow-hidden rounded-xl border bg-[rgba(10,12,16,0.98)] shadow-[0_14px_34px_rgba(0,0,0,0.44)] transition-all duration-150 ${
           open ? "pointer-events-auto translate-y-0 opacity-100" : "pointer-events-none -translate-y-1 opacity-0"
         }`}
+        style={{ borderColor: NEUTRAL_BORDER }}
       >
         <div className="max-h-72 overflow-y-auto py-1">
           {(options || []).map((opt) => {
@@ -1362,13 +1436,13 @@ function DarkMappingDropdown({
 function Section({ title, subtitle, icon: Icon, children, className = "" }) {
   return (
     <div
-      className={`m-0 w-full rounded-2xl shadow-bizzi border p-4 sm:p-5 ${className}`}
-      style={{ background: PANEL_BG, border: `1px solid rgba(var(--accent-rgb),0.16)`, boxShadow: "0 0 0 1px rgba(var(--accent-rgb),0.05), 0 18px 50px rgba(0,0,0,0.3)" }}
+      className={`m-0 w-full rounded-2xl border p-4 sm:p-5 ${className}`}
+      style={{ background: PANEL_BG, border: `1px solid ${NEUTRAL_BORDER}`, boxShadow: "none" }}
     >
-      <div className="flex items-start justify-between mb-3">
+      <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2">
-          {Icon && <Icon className="h-4 w-4" style={{ color: "var(--accent)" }} />}
-          <h2 className="text-lg font-semibold">{title}</h2>
+          {Icon && <Icon className="h-4 w-4 text-white/75" />}
+          <h2 className="text-base font-semibold">{title}</h2>
         </div>
       </div>
       {subtitle && <p className="text-xs mb-4" style={{ color: TEXT_MUTED }}>{subtitle}</p>}
@@ -1394,8 +1468,8 @@ function Input(props) {
       {...props}
       className="w-full px-3 py-2 rounded-xl outline-none transition"
       style={{
-        background: "rgba(20,21,22,0.85)",
-        border: `1px solid ${NEUTRAL_BORDER}`,
+        background: "var(--input-bg)",
+        border: `1px solid ${SOFT_BORDER}`,
         color: "var(--text)",
       }}
     />
@@ -1545,10 +1619,12 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
   return (
     <div
       data-integration={provider || undefined}
-      className="relative flex items-center justify-between rounded-xl px-3 py-3 mb-2 transition"
+      className={`relative flex items-center justify-between rounded-xl px-3 py-3 mb-2 transition ${
+        confirmDisconnect ? "z-40" : "z-0"
+      }`}
       style={{
-        background: "rgba(255,255,255,0.06)",
-        border: `1px solid ${NEUTRAL_BORDER}`,
+        background: ROW_BG,
+        border: `1px solid ${SOFT_BORDER}`,
       }}
     >
       <div className="flex flex-col gap-0.5 max-w-[65%]">
@@ -1626,7 +1702,7 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
             </GhostButton>
             {confirmDisconnect ? (
               <div
-                className="absolute right-0 mt-2 w-48 rounded-lg border border-white/10 bg-[rgba(12,12,14,0.9)] shadow-lg p-3 text-xs text-white/80"
+                className="absolute right-0 z-50 mt-2 w-48 rounded-lg border border-white/10 bg-[rgba(12,12,14,0.9)] shadow-lg p-3 text-xs text-white/80"
                 style={{ backdropFilter: "blur(6px)" }}
               >
                 <div className="mb-2 text-white/90">Disconnect {disconnectLabel}?</div>

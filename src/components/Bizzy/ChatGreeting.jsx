@@ -3,8 +3,6 @@ import { supabase } from "../../services/supabaseClient";
 import { getDailyGreeting } from "../../api/greetings/dailyGreeting";
 
 const STORAGE_KEY_PREFIX = "bizzy:chatGreeting:";
-const FONT_STACK =
-  "'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial";
 const WARM_TEXT = "var(--text)";
 
 export default function ChatGreeting({ className = "", textOverride = null, opacity = 1 }) {
@@ -15,8 +13,6 @@ export default function ChatGreeting({ className = "", textOverride = null, opac
       stamp: now.toISOString().slice(0, 10),
     };
   });
-
-  const message = useMemo(() => getDailyGreeting(), [today.dayKey]);
 
   const storageKey = `${STORAGE_KEY_PREFIX}${today.stamp}`;
   const [displayed, setDisplayed] = useState("");
@@ -79,11 +75,10 @@ export default function ChatGreeting({ className = "", textOverride = null, opac
   const combinedGreeting = useMemo(() => {
     if (textOverride) return textOverride;
     return getDailyGreeting(today.stamp, firstName);
-  }, [firstName, today.stamp, message, textOverride]);
+  }, [firstName, today.stamp, textOverride]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const seen = window.localStorage?.getItem(storageKey);
     setDisplayed(combinedGreeting);
     setVisible(false);
     // show after a short delay for fade-in
@@ -94,13 +89,13 @@ export default function ChatGreeting({ className = "", textOverride = null, opac
   return (
     <div
       className={[
-        "text-center font-medium transition tracking-tight mx-auto whitespace-nowrap",
+        "text-center font-medium transition tracking-normal mx-auto whitespace-nowrap",
         className,
       ].join(" ")}
       style={{
-        fontFamily: FONT_STACK,
+        fontFamily: "inherit",
         color: WARM_TEXT,
-        fontSize: "clamp(22px, 2.6vw, 27px)",
+        fontSize: "clamp(20px, 2.25vw, 24px)",
         lineHeight: 1.15,
         maxWidth: "1200px",
         opacity: visible ? opacity : 0,

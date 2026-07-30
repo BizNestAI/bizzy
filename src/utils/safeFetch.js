@@ -136,7 +136,7 @@ export async function safeFetch(input, init = {}) {
   }
 
   if (!res.ok) {
-    const err = new Error(json?.error || `HTTP ${res.status}`);
+    const err = new Error(json?.message || json?.error || `HTTP ${res.status}`);
     err.status = res.status;
     err.url = url;
     err.body = json ?? text?.slice(0, 1000);

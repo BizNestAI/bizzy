@@ -1,42 +1,16 @@
 // /src/insights/InsightsRail.jsx
-import React, { useEffect, useMemo, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useInsightsStore } from './useInsightsStore';
 import InsightCard from './InsightCard';
-import { useRightExtras } from './RightExtrasContext';
 import { MOCK_INSIGHTS } from './mockInsights';
 import useDemoMode from '../hooks/useDemoMode.js';
 import { ACCENT_HEX } from '../config/accent';
+import { apiUrl, safeFetch } from '../utils/safeFetch.js';
 
 /* ----------------------- small helpers ----------------------- */
-function moduleFromPath(path) {
-  const clean = (path || '').split('?')[0].split('#')[0];
-  const seg = clean.split('/')[2] || 'bizzy';
-  const lowered = seg.toLowerCase();
-  if (lowered === 'sch') return 'calendar';
-  if (lowered === 'financials') return 'accounting';
-  if (lowered.includes('lead') || lowered.includes('job')) return 'jobs';
-  return lowered;
-}
-
-const accentHexMap = {
-  bizzy:       ACCENT_HEX,
-  accounting:  ACCENT_HEX,
-  marketing:   ACCENT_HEX,
-  tax:         ACCENT_HEX,
-  investments: ACCENT_HEX,
-  email:       ACCENT_HEX,
-  calendar:    ACCENT_HEX,
-  activity:    ACCENT_HEX,
-  ops:         ACCENT_HEX,
-};
-
+const GLOBAL_INSIGHTS_MODULE = 'contractor_cfo';
 const CHROME_HEX = ACCENT_HEX;
-const isChromeRoute = (p = '') =>
-  p.startsWith('/dashboard/bizzy') ||
-  p.startsWith('/dashboard/leads-jobs') ||
-  p.startsWith('/dashboard/calendar') ||
-  p.startsWith('/dashboard/activity');
 
 function hexToRgba(hex, a = 1) {
   const c = (hex || '').replace('#', '');
@@ -66,38 +40,27 @@ export default function InsightsRail({
   accountId,
   isOpen = true,
 }) {
-  const location   = useLocation();
-  const chrome     = isChromeRoute(location.pathname);
-
-  const routeModule      = moduleFromPath(location.pathname);
-  const { extras }       = useRightExtras(); // { type:'agenda', props:{businessId, module?} } | { type:null }
-  const descriptorModule = extras?.type === 'agenda' ? extras.props?.module : undefined;
-  const moduleKey        = descriptorModule || routeModule;
+  const moduleKey = GLOBAL_INSIGHTS_MODULE;
+  const navigate = useNavigate();
 
   const demoMode = useDemoMode();
   const usingDemoInsights = demoMode === 'demo';
 
   /* ---- Accent for rail glass & dividers ---- */
-  const accentHex = useMemo(
-    () => (chrome ? CHROME_HEX : (accentHexMap[moduleKey] || ACCENT_HEX)),
-    [chrome, moduleKey]
-  );
+  const accentHex = useMemo(() => CHROME_HEX, []);
 
   const headerLine = useMemo(() => hexToRgba(accentHex, 0.2), [accentHex]);
 
   /* ---- Frosted glass config ---- */
   const glass = useMemo(() => {
-    const border = chrome ? 'rgba(191,191,191,0.12)' : hexToRgba(accentHex, 0.12);
     return {
       blur:     '16px',
       saturate: '130%',
-      border,
+      border: 'rgba(191,191,191,0.12)',
       shadow:   '0 18px 38px rgba(0,0,0,0.26), inset 0 1px 0 rgba(255,255,255,0.04)',
-      leftGlow: chrome
-        ? 'linear-gradient(to right, rgba(191,191,191,0.12), transparent)'
-        : `linear-gradient(to right, ${hexToRgba(accentHex, 0.12)}, transparent)`,
+      leftGlow: 'linear-gradient(to right, rgba(191,191,191,0.12), transparent)',
     };
-  }, [accentHex, chrome]);
+  }, []);
 
   /* ---- Insights data for current module ---- */
   const { items, markRead, markSeen, fetchInsights, snooze } = useInsightsStore({
@@ -112,26 +75,20 @@ export default function InsightsRail({
   const displayItems = useMemo(() => {
     if (items.length) return items;
     if (!usingDemoInsights) return [];
-    return MOCK_INSIGHTS.filter((i) => {
-      const mod = (i.module || '').toLowerCase();
-      const key = (moduleKey || '').toLowerCase();
-      if (key === 'jobs' || key === 'ops' || key.includes('lead')) {
-        return mod === 'jobs' || mod === 'ops' || mod === 'leads' || mod === 'lead-jobs';
-      }
-      return mod === key;
-    });
+    return MOCK_INSIGHTS.filter((i) => (i.module || '').toLowerCase() === moduleKey);
   }, [items, moduleKey, usingDemoInsights]);
+  const alertCountLabel = `${displayItems.length} ${displayItems.length === 1 ? 'alert' : 'alerts'}`;
 
   /* 
    * SEEN on view; READ on leave
    * - Mark SEEN when ≥50% visible (no timers).
    * - Do NOT mark READ here.
-   * - When moduleKey changes (leaving this module), mark all seen-but-unread as READ.
+   * - On rail teardown, mark all seen-but-unread global alerts as READ.
    */
   const listRef          = useRef(null);
   const itemsByModuleRef = useRef(new Map());
 
-  // Cache the latest items per module so leaving a module still has its snapshot.
+  // Cache the latest global alert snapshot so teardown can mark seen items read.
   useEffect(() => {
     itemsByModuleRef.current.set(moduleKey, items);
   }, [items, moduleKey]);
@@ -158,7 +115,7 @@ export default function InsightsRail({
     return () => io.disconnect();
   }, [items, markSeen]);
 
-  // Mark READ when leaving a module (cleanup runs before moduleKey updates take effect).
+  // Mark READ when the rail tears down.
   useEffect(() => {
     const moduleOnMount = moduleKey;
     return () => {
@@ -169,13 +126,83 @@ export default function InsightsRail({
         .map((r) => r.id)
         .filter(Boolean);
       toRead.forEach((id) => {
-        try { markRead(id); } catch (e) { /* non-fatal */ }
+        try { markRead(id); } catch { /* non-fatal */ }
       });
     };
   }, [moduleKey, markRead]);
 
-  /* ---- Fetch when module changes ---- */
+  /* ---- Fetch global alerts ---- */
   useEffect(() => { fetchInsights(); }, [moduleKey, accountId]); // eslint-disable-line
+
+  const handleCta = useCallback(async (insight, cta) => {
+    const action = normalizeAction(cta?.action);
+    const payload = cta?.payload || {};
+
+    try {
+      if (action === 'navigate') {
+        const path = payload.path || payload.route || payload.url;
+        if (!path) {
+          console.warn('[insights] CTA navigate missing path', { insightId: insight?.id, cta });
+          return;
+        }
+        navigate(path);
+        return;
+      }
+
+      if (action === 'open_chat') {
+        const text = payload.prompt || payload.text || payload.message || insight?.body || insight?.title || '';
+        if (!text) {
+          console.warn('[insights] CTA open_chat missing prompt', { insightId: insight?.id, cta });
+          return;
+        }
+        window.dispatchEvent(new CustomEvent('bizzy:prefill-chat', { detail: { text, prompt: text, context: { insight, payload } } }));
+        window.dispatchEvent(new Event('bizzy:open-chat'));
+        return;
+      }
+
+      if (action === 'mark_acted_on') {
+        if (!insight?.id) return;
+        await safeFetch(apiUrl('/api/insights/feedback'), {
+          method: 'POST',
+          body: {
+            businessId,
+            insightId: insight.id,
+            userId,
+            feedback: 'acted_on',
+          },
+        });
+        await fetchInsights();
+        return;
+      }
+
+      if (action === 'run_reconciliation') {
+        await safeFetch(apiUrl('/api/bookkeeping/reconciliations/run'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-business-id': businessId || '' },
+          body: {
+            businessId,
+            ...(payload && typeof payload === 'object' ? payload : {}),
+          },
+        });
+        await fetchInsights();
+        return;
+      }
+
+      if (action === 'open_modal') {
+        const modal = payload.modal || payload.modalKey || payload.type;
+        if (!modal) {
+          console.warn('[insights] CTA open_modal missing modal key', { insightId: insight?.id, cta });
+          return;
+        }
+        window.dispatchEvent(new CustomEvent('bizzy:open-modal', { detail: { modal, payload, insight } }));
+        return;
+      }
+
+      console.warn('[insights] Unsupported CTA action', { action: cta?.action, insightId: insight?.id });
+    } catch (error) {
+      console.warn('[insights] CTA action failed', { action: cta?.action, insightId: insight?.id, error });
+    }
+  }, [businessId, userId, fetchInsights, navigate]);
 
   return (
     <div
@@ -183,10 +210,10 @@ export default function InsightsRail({
       className={[
         'insights-rail',
         'absolute inset-0 isolate flex flex-col overflow-hidden',
-        'transition-[opacity,transform] duration-800 ease-[cubic-bezier(0.18,0.9,0.32,1)]',
-        isOpen ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-4 pointer-events-none',
+        'transition-opacity duration-150 ease-out',
+        isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none',
       ].join(' ')}
-      style={{ marginTop: 0, paddingTop: 0 }}
+      style={{ marginTop: 0, paddingTop: 0, width: '100%' }}
     >
       {/* ===== GLASS: single continuous surface under content ===== */}
       <div
@@ -229,12 +256,28 @@ export default function InsightsRail({
           }}
         >
           {/* Header */}
-          <div className="ml-4 mt-3 pr-2">
-            <div className="font-semibold text-primary">
-              Live Alerts <span className="text-[12px] text-white/50">(sorted by most recent)</span>
+          <div className="ml-4 mt-3 pr-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[15px] font-semibold leading-tight text-white/95">
+                  Live Alerts
+                </div>
+                <div className="mt-1 text-[11px] font-medium leading-4 text-white/48">
+                  Financial alerts sorted by most recent
+                </div>
+              </div>
+              <span
+                className="shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold leading-none text-white/72"
+                style={{
+                  borderColor: hexToRgba(accentHex, 0.18),
+                  background: hexToRgba(accentHex, 0.06),
+                }}
+              >
+                {alertCountLabel}
+              </span>
             </div>
             <div
-              className="mt-2 h-[1px] rounded-full"
+              className="mt-3 h-[1px] rounded-full"
               style={{
                 background: headerLine,
                 width: 'calc(100% - 12px)',
@@ -263,9 +306,11 @@ export default function InsightsRail({
                   <InsightCard
                     insight={ins}
                     onSnooze={snooze}
+                    onCta={handleCta}
                     accentHex={accentHex}
                     animate={!alreadyAnimated}
                     index={idx}
+                    hideDashboardNavigationCtas
                   />
                 </div>
               );
@@ -281,4 +326,10 @@ export default function InsightsRail({
       </div>
     </div>
   );
+}
+
+function normalizeAction(action) {
+  const normalized = String(action || '').trim().toLowerCase();
+  if (normalized === 'open_route') return 'navigate';
+  return normalized;
 }

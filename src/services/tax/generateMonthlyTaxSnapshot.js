@@ -1,3 +1,4 @@
+/* global process */
 // /src/services/tax/generateMonthlyTaxSnapshot.js
 // Builds a concise monthly snapshot by reading Supabase + (optionally) calling GPT.
 // If OPENAI_API_KEY is missing OR MOCK_TAX=true OR there is no real data yet,
@@ -5,6 +6,8 @@
 
 import fetch from "node-fetch"; // remove if Node 18+ (global fetch)
 import { Parser as Json2CsvParser } from "@json2csv/plainjs";
+import { normalizeTaxYear } from "./taxDomain.js";
+import { getTaxProfile } from "./taxProfile.service.js";
 
 const USE_MOCK = String(process.env.MOCK_TAX || "").toLowerCase() === "true";
 
@@ -12,15 +15,18 @@ export async function generateMonthlyTaxSnapshot({
   supabase,
   openaiApiKey,                // may be null -> fallback path
   businessId,
-  year = new Date().getFullYear(),
+  year,
   month = new Date().toISOString().slice(0, 7), // "YYYY-MM"
   archive = true,
 }) {
   if (!supabase) throw new Error("Supabase client is required");
   if (!businessId) throw new Error("businessId required");
 
-  const isoStart = `${year}-01-01`;
-  const isoEnd = `${year}-12-31`;
+  // Reporting year is explicit when supplied; otherwise derive it from the
+  // snapshot month, then fall back to the current calendar year.
+  const taxYear = resolveSnapshotTaxYear({ year, month });
+  const isoStart = `${taxYear}-01-01`;
+  const isoEnd = `${taxYear}-12-31`;
 
   const [metricsRes, profileRes, insightsRes, taxConfigRes] = await Promise.all([
     supabase
@@ -32,18 +38,18 @@ export async function generateMonthlyTaxSnapshot({
       .gte("month", isoStart)
       .lte("month", isoEnd)
       .order("month", { ascending: true }),
-    supabase.from("tax_profiles").select("*").eq("business_id", businessId).maybeSingle(),
+    getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false }),
     supabase
       .from("tax_insights_cache")
       .select("created_at,tips")
       .eq("business_id", businessId)
       .order("created_at", { ascending: false })
       .limit(1),
-    supabase.from("tax_config").select("config").eq("year", year).maybeSingle(),
+    supabase.from("tax_config").select("config").eq("year", taxYear).maybeSingle(),
   ]);
 
   const financial = metricsRes.data ?? [];
-  const taxProfile = profileRes.data ?? {};
+  const taxProfile = profileRes ?? {};
   const config = taxConfigRes.data?.config ?? {};
   const cachedTips = insightsRes.data?.[0]?.tips ?? null;
 
@@ -52,7 +58,7 @@ export async function generateMonthlyTaxSnapshot({
 
   // --- MOCK SWITCH ---
   if (USE_MOCK || noRealData) {
-    const mock = buildMockSnapshot({ year, month });
+    const mock = buildMockSnapshot({ year: taxYear });
     // NEW: watermark
     mock.meta = { ...(mock.meta || {}), source };
     if (archive) {
@@ -108,6 +114,7 @@ export async function generateMonthlyTaxSnapshot({
     recentChanges: recent,
     industry: "home_service_construction",
     safeHarborMode: taxProfile?.safe_harbor_mode || "110pct_prior",
+    taxYear,
   };
 
   let normalized;
@@ -179,7 +186,7 @@ Return JSON only.
 }
 
 // ---------------- MOCK BUILDER (snapshot) ----------------
-function buildMockSnapshot({ year, month }) {
+function buildMockSnapshot({ year }) {
   const ytdProfit = 153000;
   const estimatedTaxDue = 35200;
   const topDeductions = [
@@ -205,7 +212,7 @@ function buildMockSnapshot({ year, month }) {
       "Evaluate Section 179 for current equipment purchases.",
     ],
     urgency: [
-      { step: 1, urgency: "High",   deadline: `${year}-09-15` },
+      { step: 1, urgency: "High",   deadline: "Verify in Tax Desk" },
       { step: 2, urgency: "Medium", deadline: "Ongoing" },
       { step: 3, urgency: "High",   deadline: `${year}-12-31` },
     ],
@@ -237,7 +244,7 @@ function buildDeterministicSnapshot(ctx) {
 
   const urgency = [
     { step: 1, urgency: "Medium", deadline: "Ongoing" },
-    { step: 2, urgency: "High",   deadline: `${new Date().getFullYear()}-09-15` },
+    { step: 2, urgency: "High",   deadline: "Verify in Tax Desk" },
     { step: 3, urgency: "Medium", deadline: "Dec 31" },
   ];
 
@@ -337,3 +344,21 @@ const toNum = (n) => (typeof n === "number" ? n : Number(n || 0));
 const sum = (arr) => arr.reduce((a, b) => a + toNum(b), 0);
 const round = (n) => Math.round((toNum(n) + Number.EPSILON) * 100) / 100;
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+function resolveSnapshotTaxYear({ year, month }) {
+  const explicit = normalizeTaxYear(year);
+  if (year != null && !explicit) throw new Error("Invalid tax year");
+  if (explicit) return explicit;
+
+  const monthYear = parseYearFromMonth(month);
+  if (monthYear) return monthYear;
+
+  const current = normalizeTaxYear(new Date().getFullYear());
+  if (!current) throw new Error("Invalid tax year");
+  return current;
+}
+
+function parseYearFromMonth(month) {
+  const match = /^(\d{4})-\d{2}$/.exec(String(month || ""));
+  return match ? normalizeTaxYear(match[1]) : null;
+}

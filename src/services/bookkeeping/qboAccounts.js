@@ -1,6 +1,7 @@
 import { getQBOClient } from "../../utils/qboClient.js";
 
-export async function fetchChartOfAccounts(businessId) {
+export async function fetchChartOfAccounts(businessId, opts = {}) {
+  const includeSubaccounts = opts?.includeSubaccounts === true;
   const qbo = await getQBOClient(businessId);
   if (!qbo) return [];
   try {
@@ -12,7 +13,7 @@ export async function fetchChartOfAccounts(businessId) {
     });
     const accounts = Array.isArray(res?.QueryResponse?.Account) ? res.QueryResponse.Account : [];
     return accounts
-      .filter((a) => !a.SubAccount && a.AccountType && !/header/i.test(a.Classification || ""))
+      .filter((a) => (includeSubaccounts || !a.SubAccount) && a.AccountType && !/header/i.test(a.Classification || ""))
       .map((a) => ({
         id: a.Id,
         name: a.Name,
@@ -79,6 +80,12 @@ function buildPaymentAccountName(baseName, mask, existingNames = new Set()) {
   return `${candidate} ${i}`;
 }
 
+function defaultAccountSubType(qboType) {
+  if (qboType === "CreditCard") return "CreditCard";
+  if (qboType === "Bank") return "Checking";
+  return null;
+}
+
 export async function ensurePaymentAccount({
   businessId,
   plaidName,
@@ -106,6 +113,7 @@ export async function ensurePaymentAccount({
   const payload = {
     Name: name,
     AccountType: qboType,
+    AccountSubType: defaultAccountSubType(qboType),
   };
 
   const fn = qbo.account && typeof qbo.account.create === "function" ? qbo.account.create : qbo.createAccount;
@@ -119,6 +127,7 @@ export async function ensurePaymentAccount({
         id: acct.Id || acct.id,
         name: acct.Name || name,
         type: acct.AccountType || qboType,
+        subType: acct.AccountSubType || payload.AccountSubType || null,
       });
     });
   });

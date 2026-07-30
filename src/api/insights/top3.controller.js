@@ -1,7 +1,10 @@
 // File: /src/api/insights/top3.controller.js
+/* global process */
 import { supabase } from '../../services/supabaseAdmin.js';
 import dayjs from 'dayjs';
 import fetch from 'node-fetch';
+
+const CONTRACTOR_CFO_MODULE = 'contractor_cfo';
 
 // helper: fetch json
 async function getJSON(url, headers = {}) {
@@ -15,8 +18,8 @@ function clamp(n, min, max) {
   return Math.max(min, Math.min(max, n));
 }
 
-function makeAlert({ id, title, module, score, cta }) {
-  return { id, title, module, score, cta };
+function makeAlert({ id, title, score, cta }) {
+  return { id, title, module: CONTRACTOR_CFO_MODULE, score, cta };
 }
 
 // Score helpers
@@ -49,6 +52,8 @@ export async function getTop3Alerts(req, res) {
       req.query.business_id || req.query.businessId || req.headers['x-business-id'];
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
+    // Legacy dashboard-only endpoint. All DB reads are scoped by business_id,
+    // and all returned cards are normalized to contractor_cfo.
     const API = process.env.API_BASE || 'http://localhost:5050';
     const headers = { 'x-business-id': business_id };
 
@@ -80,9 +85,8 @@ export async function getTop3Alerts(req, res) {
               ? '/dashboard/tax'
               : d.source === 'payroll'
               ? '/dashboard/accounting'
-              : '/dashboard/bizzy';
-          const module = d.related_module || d.source || 'bizzy';
-          return makeAlert({ id: d.id, title, module, score, cta });
+              : '/dashboard/accounting';
+          return makeAlert({ id: d.id, title, score, cta });
         });
       }
     }
@@ -97,6 +101,7 @@ export async function getTop3Alerts(req, res) {
         .from('insights')
         .select('*')
         .eq('business_id', business_id)
+        .eq('module', 'contractor_cfo')
         .is('read_at', null)
         .gte('created_at', sinceIso)
         .order('created_at', { ascending: false })
@@ -111,6 +116,7 @@ export async function getTop3Alerts(req, res) {
           .from('insights')
           .select('*')
           .eq('business_id', business_id)
+          .eq('module', 'contractor_cfo')
           .eq('is_read', false)
           .gte('created_at', sinceIso)
           .order('created_at', { ascending: false })
@@ -121,16 +127,13 @@ export async function getTop3Alerts(req, res) {
       insightAlerts = rows.map((r) => {
         const score = scoreInsight(r);
         const title = r.title || r.body || 'New insight';
-        const mod = (r.module || 'bizzy').toLowerCase();
         const cta =
-          mod === 'tax'
-            ? '/dashboard/tax'
-            : mod === 'accounting'
-            ? '/dashboard/accounting'
-            : mod === 'marketing'
-            ? '/dashboard/marketing'
-            : '/dashboard/bizzy';
-        return makeAlert({ id: r.id, title, module: mod, score, cta });
+          r.primary_cta_payload?.path ||
+          r.primary_cta_payload?.route ||
+          r.primary_cta?.payload?.path ||
+          r.primary_cta?.route ||
+          '/dashboard/accounting';
+        return makeAlert({ id: r.id, title, score, cta });
       });
     }
 
@@ -149,7 +152,6 @@ export async function getTop3Alerts(req, res) {
           makeAlert({
             id: `acc-margin-${Date.now()}`,
             title: `Profit margin under 10% — review pricing or labor.`,
-            module: 'accounting',
             score: 80,
             cta: '/dashboard/accounting',
           })
@@ -160,13 +162,12 @@ export async function getTop3Alerts(req, res) {
           makeAlert({
             id: `acc-exp-${Date.now()}`,
             title: `Expenses rising ${Math.round(expense_mom * 100)}% MoM — check overhead.`,
-            module: 'accounting',
             score: 70,
             cta: '/dashboard/accounting',
           })
         );
       }
-    } catch (e) {
+    } catch {
       // ignore if metrics endpoint not ready
     }
 
@@ -185,23 +186,16 @@ export async function getTop3Alerts(req, res) {
         {
           id: 'mock-1',
           title: 'Q3 Estimated Payment due in 3 days',
-          module: 'tax',
+          module: CONTRACTOR_CFO_MODULE,
           score: 85,
           cta: '/dashboard/tax',
         },
         {
           id: 'mock-2',
           title: 'Profit margin under 10% — review pricing or labor.',
-          module: 'accounting',
+          module: CONTRACTOR_CFO_MODULE,
           score: 80,
           cta: '/dashboard/accounting',
-        },
-        {
-          id: 'mock-3',
-          title: 'Ad spend up 30% MoM — leads flat',
-          module: 'marketing',
-          score: 75,
-          cta: '/dashboard/marketing',
         },
       ];
     }
@@ -209,10 +203,18 @@ export async function getTop3Alerts(req, res) {
     return res.json({
       items: top3,
       count: top3.length,
+      legacy_dashboard_only: true,
+      module: CONTRACTOR_CFO_MODULE,
       generated_at: new Date().toISOString(),
     });
   } catch (e) {
     console.error('[top3] failed', e);
-    return res.json({ items: [], count: 0, diag: e.message });
+    return res.json({
+      items: [],
+      count: 0,
+      legacy_dashboard_only: true,
+      module: CONTRACTOR_CFO_MODULE,
+      generated_at: new Date().toISOString(),
+    });
   }
 }

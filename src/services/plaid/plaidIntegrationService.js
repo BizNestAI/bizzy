@@ -1,5 +1,5 @@
 import { supabase } from "../supabaseAdmin.js";
-import { getPlaidClient } from "./plaidClient.js";
+import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
 
 const devLog = (tag, payload) => {
   if (process.env.NODE_ENV !== "production") {
@@ -50,6 +50,7 @@ export async function fetchAndUpsertAccounts({ businessId, plaidItemId, accessTo
   const rows = accounts.map((acc) => ({
     business_id: businessId,
     plaid_item_id: plaidItemId,
+    plaid_env: plaidEnvName,
     plaid_account_id: acc.account_id,
     name: acc.name || acc.official_name || "Account",
     official_name: acc.official_name || null,
@@ -118,6 +119,7 @@ export async function exchangePublicToken({ businessId, userId, publicToken, met
     institution_id,
     institution_name,
     status: "connected",
+    plaid_env: plaidEnvName,
     is_active: true,
     disconnected_at: null,
     cursor: null,

@@ -1,8 +1,11 @@
 // File: /src/api/insights/headline.controller.js
+/* global process */
 import dayjs from 'dayjs';
 import { supabase } from '../../services/supabaseAdmin.js';
 import fetch from 'node-fetch';
 import { attachCTA } from './headline.cta.js';
+
+const CONTRACTOR_CFO_MODULE = 'contractor_cfo';
 
 /* ---------------- Seeded variety helpers (deterministic) ----------- */
 function seedFrom(str = '') {
@@ -51,7 +54,7 @@ const DEFAULTS = [
   "Welcome back — want me to run a quick health check on your cash, taxes, or jobs?",
   "Good to see you — I can review this week’s jobs and flag anything at risk.",
   "Hey there — I’ll watch your cash flow and taxes so you can focus on work.",
-  "Welcome to Bizzi — your AI business cofounder.",
+  "Welcome back — I can scan cash, AR, jobs, and tax readiness.",
   "Morning — I can prep a simple priority list so you don’t have to.",
   "Let’s get after it — want me to check what moved overnight?",
   "Good to see you again — I can scan yesterday’s numbers and flag anything at risk.",
@@ -76,13 +79,6 @@ async function getAccountingSnapshot(business_id) {
   try {
     const r = await fetch(`${process.env.API_BASE}/api/accounting/metrics?business_id=${business_id}`, { headers: { 'x-business-id': business_id }});
     if (!r.ok) throw new Error('acc metrics failed');
-    return await r.json();
-  } catch { return null; }
-}
-async function getMarketingSnapshot(business_id) {
-  try {
-    const r = await fetch(`${process.env.API_BASE}/api/marketing/analytics?business_id=${business_id}`, { headers: { 'x-business-id': business_id }});
-    if (!r.ok) throw new Error('mkt metrics failed');
     return await r.json();
   } catch { return null; }
 }
@@ -111,7 +107,7 @@ async function getUpcomingDeadline(business_id) {
 }
 
 /* --------------- Rule scoring → data-driven headline --------------- */
-function chooseHeadline({ acc, mkt, tax, deadline, rng }) {
+function chooseHeadline({ acc, tax, deadline, rng }) {
   if (deadline) {
     const days = dayjs(deadline.due_date).diff(dayjs(), 'day');
     const when = days <= 0 ? 'today' : (days === 1 ? 'tomorrow' : `in ${days} days`);
@@ -127,14 +123,6 @@ function chooseHeadline({ acc, mkt, tax, deadline, rng }) {
       kind: 'finance',
       headline: `Revenue is trending up ${Math.round(acc.revenue_mom*100)}% vs last month, but payroll is your top expense. Want me to walk through fixes?`,
       data: { metric: 'payroll_ratio' }
-    };
-  }
-
-  if (mkt?.spend_mom > 0.20 && (mkt?.leads_mom ?? 0) <= 0) {
-    return {
-      kind: 'marketing',
-      headline: `Ad spend is up ${Math.round(mkt.spend_mom*100)}%, but leads are flat. Want me to suggest a fix?`,
-      data: { metric: 'roi' }
     };
   }
 
@@ -157,6 +145,9 @@ export async function getDailyHeadline(req, res) {
     const user_id     = req.query.user_id     || req.query.userId     || req.headers['x-user-id'];
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
+    // Legacy dashboard-only endpoint. Every DB read/write is business-scoped, and
+    // cached payload metadata is pinned to contractor_cfo so old widgets cannot
+    // reintroduce stale module rows.
     const today = dayjs().format('YYYY-MM-DD');
 
     // 1) cache per business per day
@@ -168,7 +159,13 @@ export async function getDailyHeadline(req, res) {
       .maybeSingle();
 
     if (!selErr && cached) {
-      return res.json({ headline: cached.headline, kind: cached.kind, data: cached.data || {} });
+      return res.json({
+        headline: cached.headline,
+        kind: cached.kind,
+        data: { ...(cached.data || {}), legacy_dashboard_only: true, module: CONTRACTOR_CFO_MODULE },
+        legacy_dashboard_only: true,
+        module: CONTRACTOR_CFO_MODULE,
+      });
     }
 
     // 2) seed RNG with business + date → variety per day per account
@@ -176,14 +173,13 @@ export async function getDailyHeadline(req, res) {
     const rng  = mulberry32(seed);
 
     // 3) compute from snapshots or generic composition
-    const [acc, mkt, tax, deadline] = await Promise.all([
+    const [acc, tax, deadline] = await Promise.all([
       getAccountingSnapshot(business_id),
-      getMarketingSnapshot(business_id),
       getTaxSnapshot(business_id),
       getUpcomingDeadline(business_id)
     ]);
 
-    let pick = chooseHeadline({ acc, mkt, tax, deadline, rng });
+    let pick = chooseHeadline({ acc, tax, deadline, rng });
     pick = attachCTA(pick, { rng }); // 👈 make CTA module-aware & varied with the same seed
 
     // 4) store cache
@@ -192,14 +188,25 @@ export async function getDailyHeadline(req, res) {
       user_id,
       headline: pick.headline,
       kind: pick.kind,
-      data: pick.data,
+      data: { ...(pick.data || {}), legacy_dashboard_only: true, module: CONTRACTOR_CFO_MODULE },
       valid_for: today
     });
 
-    return res.json(pick);
+    return res.json({
+      ...pick,
+      data: { ...(pick.data || {}), legacy_dashboard_only: true, module: CONTRACTOR_CFO_MODULE },
+      legacy_dashboard_only: true,
+      module: CONTRACTOR_CFO_MODULE,
+    });
   } catch (e) {
     console.error('[headline] failed', e);
     const idx = Math.floor((Date.now()/86400000)) % DEFAULTS.length;
-    return res.json({ kind: 'generic', headline: DEFAULTS[idx], data: {} });
+    return res.json({
+      kind: 'generic',
+      headline: DEFAULTS[idx],
+      data: { legacy_dashboard_only: true, module: CONTRACTOR_CFO_MODULE },
+      legacy_dashboard_only: true,
+      module: CONTRACTOR_CFO_MODULE,
+    });
   }
 }

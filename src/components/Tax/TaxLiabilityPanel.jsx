@@ -1,8 +1,9 @@
 // /src/components/Tax/TaxLiabilityPanel.jsx
-import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../services/supabaseClient";
+// Deprecated compatibility panel. The active Tax Dashboard consumes
+// useTaxOverview() directly; keep this only for older routes until removed.
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarDays, Check, AlertTriangle, ArrowRight, RefreshCw, Loader2 } from "lucide-react";
-import apiBaseUrl from "../../utils/apiBase.js";
+import { createTaxPayment, getLegacyTaxLiability } from "../../services/tax/taxApiClient.js";
 
 export default function TaxLiabilityPanel({ businessId, year: yearProp, onAskBizzy, prefetched, onRefetch }) {
   const year = yearProp ?? new Date().getFullYear();
@@ -13,28 +14,7 @@ export default function TaxLiabilityPanel({ businessId, year: yearProp, onAskBiz
   const [overrides, setOverrides] = useState({});
   const [payForm, setPayForm] = useState({});
   const [savingQuarter, setSavingQuarter] = useState(null);
-
-  const API_BASE = apiBaseUrl ? `${apiBaseUrl.replace(/\/+$/, "")}/api` : "/api";
-
-  const endpoint = `${API_BASE}/tax/calculate-tax-liability`;
-
-  async function getAccessToken() {
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (/^sb-.*-auth-token$/.test(k)) {
-          const parsed = JSON.parse(localStorage.getItem(k) || "{}");
-          return (
-            parsed?.access_token ||
-            parsed?.currentSession?.access_token ||
-            parsed?.user?.access_token ||
-            null
-          );
-        }
-      }
-    } catch {}
-    return null;
-  }
+  const paymentSubmitKeys = useRef({});
 
   async function fetchLiability() {
     if (!businessId) return;
@@ -42,34 +22,12 @@ export default function TaxLiabilityPanel({ businessId, year: yearProp, onAskBiz
     setError("");
 
     try {
-      const token = await getAccessToken();
-
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          businessId,
-          year,
-          projectionOverride: { overrides },
-        }),
+      const next = await getLegacyTaxLiability({
+        businessId,
+        year,
+        projectionOverride: { overrides },
       });
-
-      const txt = await res.text();
-      if (!res.ok) {
-        let msg = `API ${res.status}`;
-        try {
-          const j = JSON.parse(txt || "{}");
-          if (j?.error) msg += ` — ${j.error}`;
-          if (res.status === 401 && !token) msg += " (missing access token)";
-        } catch {}
-        throw new Error(msg);
-      }
-
-      const json = txt ? JSON.parse(txt) : { ok: true, data: null };
-      setData(json?.data ?? null);
+      setData(next ?? null);
     } catch (e) {
       console.error("Tax liability API error:", e);
       setError(e?.message || "Failed to load from server");
@@ -84,7 +42,7 @@ useEffect(() => { if (prefetched) setData(prefetched); }, [prefetched]);
   useEffect(() => {
     if (!prefetched) fetchLiability();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [businessId, year, API_BASE, !!prefetched]);
+  }, [businessId, year, !!prefetched]);
 
   useEffect(() => {
     const id = setTimeout(fetchLiability, 400);
@@ -116,14 +74,21 @@ useEffect(() => { if (prefetched) setData(prefetched); }, [prefetched]);
       }
       setData(optimistic);
 
-      const { error } = await supabase.from("tax_payments").insert({
-        business_id: businessId,
+      await createTaxPayment({
         year,
-        quarter: q,
-        payment_date: date,
-        amount,
+        businessId,
+        idempotencyKey: paymentSubmitKeys.current[q] || (paymentSubmitKeys.current[q] = createPaymentIdempotencyKey()),
+        payment: {
+          quarter: q,
+          paymentDate: date,
+          amount,
+          paymentType: "estimated_payment",
+          jurisdiction: "federal",
+          source: "manual",
+          metadata: { recordedFrom: "TaxLiabilityPanel" },
+        },
       });
-      if (error) throw error;
+      delete paymentSubmitKeys.current[q];
 
       fetchLiability();
       setPayForm((s) => ({ ...s, [q]: { date: "", amount: "" } }));
@@ -205,6 +170,11 @@ useEffect(() => { if (prefetched) setData(prefetched); }, [prefetched]);
       ) : null}
     </div>
   );
+}
+
+function createPaymentIdempotencyKey() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return `tax-payment:${crypto.randomUUID()}`;
+  return `tax-payment:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
 /* ---------------- UI atoms ---------------- */

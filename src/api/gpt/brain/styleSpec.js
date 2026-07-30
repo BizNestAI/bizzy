@@ -342,7 +342,8 @@ export const STYLE_CHAT = `
 Chat formatting rules (enforce strictly):
 - Write in short paragraphs (2–4 sentences). Use clean Markdown.
 - Avoid boilerplate headers like "Summary", "Details", or "Next steps".
-- **Bold** is allowed for short labels or micro-headers that improve scanning (e.g., **Next action:**, **Risk:**). Do not bold full sentences.
+- **Bold** is allowed for short labels or micro-headers that improve scanning (e.g., **Risk:**). Do not bold full sentences.
+- Do not end with a labeled "**Next action:**" line. If a closing question or offer is useful, ask it directly as a normal sentence.
 - *Italics* are allowed but must be rare: a single word/phrase at most once per response. Never italicize whole sentences.
 - Use a bullet list only when listing 3+ items, offering options, or when the user asks for steps; keep each bullet to one short line.
 - If the user asks for steps, use a numbered list (max 5), one concise line per step.

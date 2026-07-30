@@ -131,8 +131,8 @@ export default function NavRail({
                 aria-label="Go to ChatHome"
                 title="Go to ChatHome"
                   style={{
-                    border: `1px solid ${hexToRgba(baseAccent, 0.55)}`,
-                    boxShadow: `0 0 0 1px ${hexToRgba(baseAccent, 0.22)}, 0 0 10px ${accentSoft}`
+                    border: `1px solid ${hexToRgba(baseAccent, 0.42)}`,
+                    boxShadow: `0 0 0 1px ${hexToRgba(baseAccent, 0.12)}, 0 8px 22px rgba(0,0,0,0.28)`
                   }}
                 >
                   <img

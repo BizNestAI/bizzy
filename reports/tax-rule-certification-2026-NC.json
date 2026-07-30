@@ -1,0 +1,3405 @@
+{
+  "overallStatus": "fail",
+  "taxYear": 2026,
+  "federal": {
+    "status": "fail",
+    "components": [
+      {
+        "key": "income_tax_brackets",
+        "ruleType": "federal_income_tax_brackets",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 5,
+        "effectiveCount": 5,
+        "supportLevel": "verified",
+        "status": "fail",
+        "reason": "invalid_shape",
+        "errorCode": "invalid_verified_at",
+        "message": "verified_at must be a valid date."
+      },
+      {
+        "key": "standard_deduction",
+        "ruleType": "standard_deduction",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 5,
+        "effectiveCount": 5,
+        "supportLevel": "verified",
+        "status": "fail",
+        "reason": "invalid_shape",
+        "errorCode": "invalid_verified_at",
+        "message": "verified_at must be a valid date."
+      },
+      {
+        "key": "se_tax_net_earnings_factor",
+        "ruleType": "self_employment_tax",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "fail",
+        "reason": "invalid_shape",
+        "errorCode": "invalid_verified_at",
+        "message": "verified_at must be a valid date."
+      },
+      {
+        "key": "social_security_wage_base_rates",
+        "ruleType": "self_employment_tax",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "fail",
+        "reason": "invalid_shape",
+        "errorCode": "invalid_verified_at",
+        "message": "verified_at must be a valid date."
+      },
+      {
+        "key": "medicare_rate",
+        "ruleType": "self_employment_tax",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "fail",
+        "reason": "invalid_shape",
+        "errorCode": "invalid_verified_at",
+        "message": "verified_at must be a valid date."
+      },
+      {
+        "key": "additional_medicare_thresholds",
+        "ruleType": "additional_medicare_tax",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 5,
+        "effectiveCount": 5,
+        "supportLevel": "verified",
+        "status": "fail",
+        "reason": "invalid_shape",
+        "errorCode": "invalid_verified_at",
+        "message": "verified_at must be a valid date."
+      },
+      {
+        "key": "safe_harbor_percentages",
+        "ruleType": "estimated_tax_safe_harbor",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "fail",
+        "reason": "invalid_shape",
+        "errorCode": "invalid_verified_at",
+        "message": "verified_at must be a valid date."
+      },
+      {
+        "key": "estimated_payment_dates",
+        "ruleType": "estimated_tax_due_dates",
+        "stateCode": null,
+        "filingStatus": null,
+        "rowCount": 1,
+        "effectiveCount": 1,
+        "supportLevel": "verified",
+        "status": "fail",
+        "reason": "invalid_shape",
+        "errorCode": "invalid_verified_at",
+        "message": "verified_at must be a valid date."
+      }
+    ],
+    "filingStatusCoverage": [
+      {
+        "filingStatus": "single",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "single",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          }
+        ],
+        "status": "fail"
+      },
+      {
+        "filingStatus": "married_filing_jointly",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "married_filing_jointly",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          }
+        ],
+        "status": "fail"
+      },
+      {
+        "filingStatus": "married_filing_separately",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "married_filing_separately",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          }
+        ],
+        "status": "fail"
+      },
+      {
+        "filingStatus": "head_of_household",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "head_of_household",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          }
+        ],
+        "status": "fail"
+      },
+      {
+        "filingStatus": "qualifying_surviving_spouse",
+        "components": [
+          {
+            "key": "income_tax_brackets",
+            "ruleType": "federal_income_tax_brackets",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "standard_deduction",
+            "ruleType": "standard_deduction",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "se_tax_net_earnings_factor",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "social_security_wage_base_rates",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "medicare_rate",
+            "ruleType": "self_employment_tax",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "additional_medicare_thresholds",
+            "ruleType": "additional_medicare_tax",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "safe_harbor_percentages",
+            "ruleType": "estimated_tax_safe_harbor",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          },
+          {
+            "key": "estimated_payment_dates",
+            "ruleType": "estimated_tax_due_dates",
+            "stateCode": null,
+            "filingStatus": "qualifying_surviving_spouse",
+            "rowCount": 1,
+            "effectiveCount": 1,
+            "supportLevel": "verified",
+            "status": "fail",
+            "reason": "invalid_shape",
+            "errorCode": "invalid_verified_at",
+            "message": "verified_at must be a valid date."
+          }
+        ],
+        "status": "fail"
+      }
+    ],
+    "missing": [],
+    "unverified": [],
+    "conflicting": [],
+    "expired": [],
+    "simplified": []
+  },
+  "states": [
+    {
+      "stateCode": "NC",
+      "status": "fail",
+      "components": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "individual_income_tax",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "missing": [
+        {
+          "key": "individual_income_tax",
+          "ruleType": "individual_income_tax",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_standard_deduction_or_exemption",
+          "ruleType": "standard_deduction",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_estimated_payment_dates",
+          "ruleType": "estimated_tax_due_dates",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "state_safe_harbor",
+          "ruleType": "estimated_tax_safe_harbor",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        },
+        {
+          "key": "s_corp_minimum_or_entity_tax",
+          "ruleType": "s_corp_minimum_tax",
+          "stateCode": "NC",
+          "filingStatus": null,
+          "rowCount": 0,
+          "effectiveCount": 0,
+          "supportLevel": null,
+          "status": "fail",
+          "reason": "missing"
+        }
+      ],
+      "unverified": [],
+      "conflicting": [],
+      "expired": [],
+      "simplified": []
+    }
+  ],
+  "deductions": {
+    "status": "fail",
+    "supportedCategories": [],
+    "missingCategories": [
+      "advertising",
+      "auto",
+      "bank_fees",
+      "contract_labor",
+      "cost_of_goods_sold",
+      "dues_subscriptions",
+      "equipment",
+      "insurance",
+      "interest",
+      "legal_professional",
+      "meals",
+      "office",
+      "payroll",
+      "rent",
+      "repairs_maintenance",
+      "supplies",
+      "taxes_licenses",
+      "travel",
+      "utilities"
+    ],
+    "certificationRequirements": [
+      {
+        "key": "materials_and_supplies",
+        "label": "Materials and supplies",
+        "categories": [
+          "supplies",
+          "materials",
+          "cost_of_goods_sold"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "subcontractors_contract_labor",
+        "label": "Subcontractors / contract labor",
+        "categories": [
+          "contract_labor",
+          "subcontractors"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "meals",
+        "label": "Meals",
+        "categories": [
+          "meals"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "vehicle_fuel",
+        "label": "Vehicle / fuel",
+        "categories": [
+          "auto",
+          "vehicle",
+          "fuel"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "insurance",
+        "label": "Insurance",
+        "categories": [
+          "insurance"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "office_expense",
+        "label": "Office expense",
+        "categories": [
+          "office"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "tools_small_equipment",
+        "label": "Tools and small equipment",
+        "categories": [
+          "equipment",
+          "tools"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "capitalizable_equipment",
+        "label": "Capitalizable equipment",
+        "categories": [
+          "equipment",
+          "capitalizable_equipment"
+        ],
+        "requiredStatus": "capitalizable",
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "loan_principal",
+        "label": "Loan principal",
+        "categories": [
+          "loan_principal",
+          "debt_principal"
+        ],
+        "requiredStatus": "balance_sheet",
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "loan_interest",
+        "label": "Loan interest",
+        "categories": [
+          "interest",
+          "loan_interest"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "owner_draws_contributions",
+        "label": "Owner draws/contributions",
+        "categories": [
+          "owner_draw",
+          "owner_contribution",
+          "equity"
+        ],
+        "requiredStatus": "balance_sheet",
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "transfers",
+        "label": "Transfers",
+        "categories": [
+          "transfer",
+          "transfers"
+        ],
+        "requiredStatus": "balance_sheet",
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "credit_card_payments",
+        "label": "Credit-card payments",
+        "categories": [
+          "credit_card_payment"
+        ],
+        "requiredStatus": "balance_sheet",
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "refunds_reversals",
+        "label": "Refunds/reversals",
+        "categories": [
+          "refund",
+          "reversal",
+          "refunds_reversals"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "payroll_payroll_taxes",
+        "label": "Payroll/payroll taxes",
+        "categories": [
+          "payroll",
+          "payroll_taxes"
+        ],
+        "status": "fail",
+        "ruleIds": []
+      },
+      {
+        "key": "personal_nondeductible",
+        "label": "Personal/nondeductible expenses",
+        "categories": [
+          "personal",
+          "nondeductible"
+        ],
+        "requiredStatus": "nondeductible",
+        "status": "fail",
+        "ruleIds": []
+      }
+    ],
+    "ruleConflicts": [],
+    "warnings": [],
+    "blockers": [
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "materials_and_supplies",
+        "categories": [
+          "supplies",
+          "materials",
+          "cost_of_goods_sold"
+        ],
+        "requiredStatus": null,
+        "message": "Materials and supplies deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "subcontractors_contract_labor",
+        "categories": [
+          "contract_labor",
+          "subcontractors"
+        ],
+        "requiredStatus": null,
+        "message": "Subcontractors / contract labor deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "meals",
+        "categories": [
+          "meals"
+        ],
+        "requiredStatus": null,
+        "message": "Meals deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "vehicle_fuel",
+        "categories": [
+          "auto",
+          "vehicle",
+          "fuel"
+        ],
+        "requiredStatus": null,
+        "message": "Vehicle / fuel deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "insurance",
+        "categories": [
+          "insurance"
+        ],
+        "requiredStatus": null,
+        "message": "Insurance deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "office_expense",
+        "categories": [
+          "office"
+        ],
+        "requiredStatus": null,
+        "message": "Office expense deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "tools_small_equipment",
+        "categories": [
+          "equipment",
+          "tools"
+        ],
+        "requiredStatus": null,
+        "message": "Tools and small equipment deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "capitalizable_equipment",
+        "categories": [
+          "equipment",
+          "capitalizable_equipment"
+        ],
+        "requiredStatus": "capitalizable",
+        "message": "Capitalizable equipment deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "loan_principal",
+        "categories": [
+          "loan_principal",
+          "debt_principal"
+        ],
+        "requiredStatus": "balance_sheet",
+        "message": "Loan principal deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "loan_interest",
+        "categories": [
+          "interest",
+          "loan_interest"
+        ],
+        "requiredStatus": null,
+        "message": "Loan interest deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "owner_draws_contributions",
+        "categories": [
+          "owner_draw",
+          "owner_contribution",
+          "equity"
+        ],
+        "requiredStatus": "balance_sheet",
+        "message": "Owner draws/contributions deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "transfers",
+        "categories": [
+          "transfer",
+          "transfers"
+        ],
+        "requiredStatus": "balance_sheet",
+        "message": "Transfers deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "credit_card_payments",
+        "categories": [
+          "credit_card_payment"
+        ],
+        "requiredStatus": "balance_sheet",
+        "message": "Credit-card payments deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "refunds_reversals",
+        "categories": [
+          "refund",
+          "reversal",
+          "refunds_reversals"
+        ],
+        "requiredStatus": null,
+        "message": "Refunds/reversals deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "payroll_payroll_taxes",
+        "categories": [
+          "payroll",
+          "payroll_taxes"
+        ],
+        "requiredStatus": null,
+        "message": "Payroll/payroll taxes deduction treatment is not production-certified."
+      },
+      {
+        "code": "missing_certification_deduction_rule",
+        "severity": "high",
+        "taxYear": 2026,
+        "requirementKey": "personal_nondeductible",
+        "categories": [
+          "personal",
+          "nondeductible"
+        ],
+        "requiredStatus": "nondeductible",
+        "message": "Personal/nondeductible expenses deduction treatment is not production-certified."
+      }
+    ]
+  },
+  "supportedCombinations": [],
+  "unsupportedCombinations": [
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    }
+  ],
+  "certificationMode": true,
+  "certificationMatrix": [
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_disregarded",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "single_member_llc_s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    },
+    {
+      "taxYear": 2026,
+      "entityPath": "s_corporation",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "blockers": [
+        "federal_rules_failed",
+        "state_rules_failed",
+        "deduction_rules_failed",
+        "s_corp_state_component_unavailable"
+      ]
+    }
+  ],
+  "missingRuleTemplates": [
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "federal_income_tax_brackets",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "standard_deduction",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "self_employment_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "additional_medicare_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "federal_income_tax_brackets",
+        "filing_status": "single",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "standard_deduction",
+        "filing_status": "single",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "self_employment_tax",
+        "filing_status": "single",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "additional_medicare_tax",
+        "filing_status": "single",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": "single",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": "single",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "federal_income_tax_brackets",
+        "filing_status": "married_filing_jointly",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "standard_deduction",
+        "filing_status": "married_filing_jointly",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "self_employment_tax",
+        "filing_status": "married_filing_jointly",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "additional_medicare_tax",
+        "filing_status": "married_filing_jointly",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": "married_filing_jointly",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": "married_filing_jointly",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "federal_income_tax_brackets",
+        "filing_status": "married_filing_separately",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "standard_deduction",
+        "filing_status": "married_filing_separately",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "self_employment_tax",
+        "filing_status": "married_filing_separately",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "additional_medicare_tax",
+        "filing_status": "married_filing_separately",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": "married_filing_separately",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": "married_filing_separately",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "federal_income_tax_brackets",
+        "filing_status": "head_of_household",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "standard_deduction",
+        "filing_status": "head_of_household",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "self_employment_tax",
+        "filing_status": "head_of_household",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "additional_medicare_tax",
+        "filing_status": "head_of_household",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": "head_of_household",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": "head_of_household",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "federal_income_tax_brackets",
+        "filing_status": "qualifying_surviving_spouse",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "standard_deduction",
+        "filing_status": "qualifying_surviving_spouse",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "self_employment_tax",
+        "filing_status": "qualifying_surviving_spouse",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "additional_medicare_tax",
+        "filing_status": "qualifying_surviving_spouse",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": "qualifying_surviving_spouse",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_rule_configs",
+      "reason": "invalid_shape",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": "qualifying_surviving_spouse",
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "individual_income_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "standard_deduction",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "estimated_tax_due_dates",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "estimated_tax_safe_harbor",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "state_tax_rule_configs",
+      "reason": "missing",
+      "requiredValues": {
+        "tax_year": 2026,
+        "state_code": "NC",
+        "rule_type": "s_corp_minimum_tax",
+        "filing_status": null,
+        "support_level": "verified",
+        "is_active": true,
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE",
+        "version": "REQUIRES_VERIFIED_SOURCE",
+        "config": "REQUIRES_VERIFIED_SOURCE"
+      }
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_materials_and_supplies",
+        "tax_category": "supplies",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_subcontractors_contract_labor",
+        "tax_category": "contract_labor",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_meals",
+        "tax_category": "meals",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_vehicle_fuel",
+        "tax_category": "auto",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_insurance",
+        "tax_category": "insurance",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_office_expense",
+        "tax_category": "office",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_tools_small_equipment",
+        "tax_category": "equipment",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_capitalizable_equipment",
+        "tax_category": "equipment",
+        "deductibility_status": "capitalizable",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_loan_principal",
+        "tax_category": "loan_principal",
+        "deductibility_status": "balance_sheet",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_loan_interest",
+        "tax_category": "interest",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_owner_draws_contributions",
+        "tax_category": "owner_draw",
+        "deductibility_status": "balance_sheet",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_transfers",
+        "tax_category": "transfer",
+        "deductibility_status": "balance_sheet",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_credit_card_payments",
+        "tax_category": "credit_card_payment",
+        "deductibility_status": "balance_sheet",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_refunds_reversals",
+        "tax_category": "refund",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_payroll_payroll_taxes",
+        "tax_category": "payroll",
+        "deductibility_status": "REQUIRES_VERIFIED_SOURCE",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    },
+    {
+      "table": "tax_deduction_rules",
+      "requiredValues": {
+        "tax_year": 2026,
+        "jurisdiction": "federal",
+        "rule_code": "REQUIRES_VERIFIED_SOURCE_personal_nondeductible",
+        "tax_category": "personal",
+        "deductibility_status": "nondeductible",
+        "default_deductible_percent": "REQUIRES_VERIFIED_SOURCE",
+        "source_name": "REQUIRES_VERIFIED_SOURCE",
+        "source_url": "REQUIRES_VERIFIED_SOURCE",
+        "verified_at": "REQUIRES_VERIFIED_SOURCE"
+      },
+      "reason": "missing_certification_deduction_rule"
+    }
+  ],
+  "deferredUnsupportedFeatures": [
+    "qbi_calculation",
+    "complex_credits",
+    "multi_state_allocation",
+    "local_taxes_where_unverified",
+    "capital_gains",
+    "partnership_income",
+    "spouse_income_integration",
+    "advanced_depreciation_unless_configured"
+  ],
+  "warnings": [],
+  "blockers": [
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "income_tax_brackets",
+      "ruleType": "federal_income_tax_brackets",
+      "message": "income_tax_brackets is not production-ready.",
+      "filingStatus": "single"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "standard_deduction",
+      "ruleType": "standard_deduction",
+      "message": "standard_deduction is not production-ready.",
+      "filingStatus": "single"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "se_tax_net_earnings_factor",
+      "ruleType": "self_employment_tax",
+      "message": "se_tax_net_earnings_factor is not production-ready.",
+      "filingStatus": "single"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "social_security_wage_base_rates",
+      "ruleType": "self_employment_tax",
+      "message": "social_security_wage_base_rates is not production-ready.",
+      "filingStatus": "single"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "medicare_rate",
+      "ruleType": "self_employment_tax",
+      "message": "medicare_rate is not production-ready.",
+      "filingStatus": "single"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "additional_medicare_thresholds",
+      "ruleType": "additional_medicare_tax",
+      "message": "additional_medicare_thresholds is not production-ready.",
+      "filingStatus": "single"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "safe_harbor_percentages",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "safe_harbor_percentages is not production-ready.",
+      "filingStatus": "single"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "estimated_payment_dates",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "estimated_payment_dates is not production-ready.",
+      "filingStatus": "single"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "income_tax_brackets",
+      "ruleType": "federal_income_tax_brackets",
+      "message": "income_tax_brackets is not production-ready.",
+      "filingStatus": "married_filing_jointly"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "standard_deduction",
+      "ruleType": "standard_deduction",
+      "message": "standard_deduction is not production-ready.",
+      "filingStatus": "married_filing_jointly"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "se_tax_net_earnings_factor",
+      "ruleType": "self_employment_tax",
+      "message": "se_tax_net_earnings_factor is not production-ready.",
+      "filingStatus": "married_filing_jointly"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "social_security_wage_base_rates",
+      "ruleType": "self_employment_tax",
+      "message": "social_security_wage_base_rates is not production-ready.",
+      "filingStatus": "married_filing_jointly"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "medicare_rate",
+      "ruleType": "self_employment_tax",
+      "message": "medicare_rate is not production-ready.",
+      "filingStatus": "married_filing_jointly"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "additional_medicare_thresholds",
+      "ruleType": "additional_medicare_tax",
+      "message": "additional_medicare_thresholds is not production-ready.",
+      "filingStatus": "married_filing_jointly"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "safe_harbor_percentages",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "safe_harbor_percentages is not production-ready.",
+      "filingStatus": "married_filing_jointly"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "estimated_payment_dates",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "estimated_payment_dates is not production-ready.",
+      "filingStatus": "married_filing_jointly"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "income_tax_brackets",
+      "ruleType": "federal_income_tax_brackets",
+      "message": "income_tax_brackets is not production-ready.",
+      "filingStatus": "married_filing_separately"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "standard_deduction",
+      "ruleType": "standard_deduction",
+      "message": "standard_deduction is not production-ready.",
+      "filingStatus": "married_filing_separately"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "se_tax_net_earnings_factor",
+      "ruleType": "self_employment_tax",
+      "message": "se_tax_net_earnings_factor is not production-ready.",
+      "filingStatus": "married_filing_separately"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "social_security_wage_base_rates",
+      "ruleType": "self_employment_tax",
+      "message": "social_security_wage_base_rates is not production-ready.",
+      "filingStatus": "married_filing_separately"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "medicare_rate",
+      "ruleType": "self_employment_tax",
+      "message": "medicare_rate is not production-ready.",
+      "filingStatus": "married_filing_separately"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "additional_medicare_thresholds",
+      "ruleType": "additional_medicare_tax",
+      "message": "additional_medicare_thresholds is not production-ready.",
+      "filingStatus": "married_filing_separately"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "safe_harbor_percentages",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "safe_harbor_percentages is not production-ready.",
+      "filingStatus": "married_filing_separately"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "estimated_payment_dates",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "estimated_payment_dates is not production-ready.",
+      "filingStatus": "married_filing_separately"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "income_tax_brackets",
+      "ruleType": "federal_income_tax_brackets",
+      "message": "income_tax_brackets is not production-ready.",
+      "filingStatus": "head_of_household"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "standard_deduction",
+      "ruleType": "standard_deduction",
+      "message": "standard_deduction is not production-ready.",
+      "filingStatus": "head_of_household"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "se_tax_net_earnings_factor",
+      "ruleType": "self_employment_tax",
+      "message": "se_tax_net_earnings_factor is not production-ready.",
+      "filingStatus": "head_of_household"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "social_security_wage_base_rates",
+      "ruleType": "self_employment_tax",
+      "message": "social_security_wage_base_rates is not production-ready.",
+      "filingStatus": "head_of_household"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "medicare_rate",
+      "ruleType": "self_employment_tax",
+      "message": "medicare_rate is not production-ready.",
+      "filingStatus": "head_of_household"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "additional_medicare_thresholds",
+      "ruleType": "additional_medicare_tax",
+      "message": "additional_medicare_thresholds is not production-ready.",
+      "filingStatus": "head_of_household"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "safe_harbor_percentages",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "safe_harbor_percentages is not production-ready.",
+      "filingStatus": "head_of_household"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "estimated_payment_dates",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "estimated_payment_dates is not production-ready.",
+      "filingStatus": "head_of_household"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "income_tax_brackets",
+      "ruleType": "federal_income_tax_brackets",
+      "message": "income_tax_brackets is not production-ready.",
+      "filingStatus": "qualifying_surviving_spouse"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "standard_deduction",
+      "ruleType": "standard_deduction",
+      "message": "standard_deduction is not production-ready.",
+      "filingStatus": "qualifying_surviving_spouse"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "se_tax_net_earnings_factor",
+      "ruleType": "self_employment_tax",
+      "message": "se_tax_net_earnings_factor is not production-ready.",
+      "filingStatus": "qualifying_surviving_spouse"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "social_security_wage_base_rates",
+      "ruleType": "self_employment_tax",
+      "message": "social_security_wage_base_rates is not production-ready.",
+      "filingStatus": "qualifying_surviving_spouse"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "medicare_rate",
+      "ruleType": "self_employment_tax",
+      "message": "medicare_rate is not production-ready.",
+      "filingStatus": "qualifying_surviving_spouse"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "additional_medicare_thresholds",
+      "ruleType": "additional_medicare_tax",
+      "message": "additional_medicare_thresholds is not production-ready.",
+      "filingStatus": "qualifying_surviving_spouse"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "safe_harbor_percentages",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "safe_harbor_percentages is not production-ready.",
+      "filingStatus": "qualifying_surviving_spouse"
+    },
+    {
+      "code": "missing_federal_filing_status_rule",
+      "severity": "critical",
+      "key": "estimated_payment_dates",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "estimated_payment_dates is not production-ready.",
+      "filingStatus": "qualifying_surviving_spouse"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "individual_income_tax",
+      "ruleType": "individual_income_tax",
+      "message": "individual_income_tax is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_standard_deduction_or_exemption",
+      "ruleType": "standard_deduction",
+      "message": "state_standard_deduction_or_exemption is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_estimated_payment_dates",
+      "ruleType": "estimated_tax_due_dates",
+      "message": "state_estimated_payment_dates is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "state_safe_harbor",
+      "ruleType": "estimated_tax_safe_harbor",
+      "message": "state_safe_harbor is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "missing_or_unready_state_rule",
+      "severity": "critical",
+      "key": "s_corp_minimum_or_entity_tax",
+      "ruleType": "s_corp_minimum_tax",
+      "message": "s_corp_minimum_or_entity_tax is not production-ready.",
+      "stateCode": "NC"
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "materials_and_supplies",
+      "categories": [
+        "supplies",
+        "materials",
+        "cost_of_goods_sold"
+      ],
+      "requiredStatus": null,
+      "message": "Materials and supplies deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "subcontractors_contract_labor",
+      "categories": [
+        "contract_labor",
+        "subcontractors"
+      ],
+      "requiredStatus": null,
+      "message": "Subcontractors / contract labor deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "meals",
+      "categories": [
+        "meals"
+      ],
+      "requiredStatus": null,
+      "message": "Meals deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "vehicle_fuel",
+      "categories": [
+        "auto",
+        "vehicle",
+        "fuel"
+      ],
+      "requiredStatus": null,
+      "message": "Vehicle / fuel deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "insurance",
+      "categories": [
+        "insurance"
+      ],
+      "requiredStatus": null,
+      "message": "Insurance deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "office_expense",
+      "categories": [
+        "office"
+      ],
+      "requiredStatus": null,
+      "message": "Office expense deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "tools_small_equipment",
+      "categories": [
+        "equipment",
+        "tools"
+      ],
+      "requiredStatus": null,
+      "message": "Tools and small equipment deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "capitalizable_equipment",
+      "categories": [
+        "equipment",
+        "capitalizable_equipment"
+      ],
+      "requiredStatus": "capitalizable",
+      "message": "Capitalizable equipment deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "loan_principal",
+      "categories": [
+        "loan_principal",
+        "debt_principal"
+      ],
+      "requiredStatus": "balance_sheet",
+      "message": "Loan principal deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "loan_interest",
+      "categories": [
+        "interest",
+        "loan_interest"
+      ],
+      "requiredStatus": null,
+      "message": "Loan interest deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "owner_draws_contributions",
+      "categories": [
+        "owner_draw",
+        "owner_contribution",
+        "equity"
+      ],
+      "requiredStatus": "balance_sheet",
+      "message": "Owner draws/contributions deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "transfers",
+      "categories": [
+        "transfer",
+        "transfers"
+      ],
+      "requiredStatus": "balance_sheet",
+      "message": "Transfers deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "credit_card_payments",
+      "categories": [
+        "credit_card_payment"
+      ],
+      "requiredStatus": "balance_sheet",
+      "message": "Credit-card payments deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "refunds_reversals",
+      "categories": [
+        "refund",
+        "reversal",
+        "refunds_reversals"
+      ],
+      "requiredStatus": null,
+      "message": "Refunds/reversals deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "payroll_payroll_taxes",
+      "categories": [
+        "payroll",
+        "payroll_taxes"
+      ],
+      "requiredStatus": null,
+      "message": "Payroll/payroll taxes deduction treatment is not production-certified."
+    },
+    {
+      "code": "missing_certification_deduction_rule",
+      "severity": "high",
+      "taxYear": 2026,
+      "requirementKey": "personal_nondeductible",
+      "categories": [
+        "personal",
+        "nondeductible"
+      ],
+      "requiredStatus": "nondeductible",
+      "message": "Personal/nondeductible expenses deduction treatment is not production-certified."
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "sole_proprietor",
+      "entityType": "sole_proprietor",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_disregarded",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "single_member_llc_s_corp",
+      "entityType": "single_member_llc",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "single",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_jointly",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "married_filing_separately",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "head_of_household",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    },
+    {
+      "code": "unsupported_tax_scope_combination",
+      "severity": "critical",
+      "entityPath": "s_corporation",
+      "entityType": "s_corp",
+      "filingStatus": "qualifying_surviving_spouse",
+      "stateCode": "NC",
+      "status": "fail",
+      "reason": "federal_rules_failed"
+    }
+  ],
+  "environment": "staging",
+  "requestedScope": {
+    "taxYear": 2026,
+    "states": [
+      "NC"
+    ],
+    "entityPaths": [
+      "sole_proprietor",
+      "single_member_llc_disregarded",
+      "single_member_llc_s_corp",
+      "s_corporation"
+    ],
+    "filingStatuses": [
+      "single",
+      "married_filing_jointly",
+      "married_filing_separately",
+      "head_of_household",
+      "qualifying_surviving_spouse"
+    ]
+  }
+}

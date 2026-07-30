@@ -1,5 +1,6 @@
 import { supabase } from "../services/supabaseAdmin.js";
 import { runPlaidSyncForBusiness } from "../services/plaid/plaidSyncService.js";
+import { runReconciliationOnceForBusiness } from "./reconciliation.cron.js";
 
 const CRON_DISABLED = String(process.env.DISABLE_PLAID_SYNC_CRON || "").toLowerCase() === "true";
 const CRON_INTERVAL_MINUTES = Number(process.env.PLAID_SYNC_CRON_INTERVAL_MINUTES || 15);
@@ -68,6 +69,10 @@ async function tick() {
     processed += 1;
     try {
       const res = await runPlaidSyncForBusiness(item.business_id, { force: false });
+      runReconciliationOnceForBusiness(item.business_id, {
+        force: true,
+        preferQboBalance: false,
+      }).catch(() => {});
       if (process.env.NODE_ENV !== "production") {
         console.info("[plaid-sync-cron] synced business", item.business_id, res);
       }

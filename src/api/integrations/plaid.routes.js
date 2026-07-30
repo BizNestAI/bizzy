@@ -114,8 +114,9 @@ router.post("/sync", requireAuth, async (req, res) => {
   if (!businessId) return;
   try {
     const result = await runPlaidSyncForBusiness(businessId, { force: true });
-    // Best-effort reconciliation refresh after sync; throttled in helper.
-    runReconciliationOnceForBusiness(businessId, { force: false, preferQboBalance: false }).catch(() => {});
+    // Best-effort ledger refresh after Plaid sync so newly imported source
+    // transactions appear in the monthly reconciliation audit immediately.
+    runReconciliationOnceForBusiness(businessId, { force: true, preferQboBalance: false }).catch(() => {});
     return res.json(result);
   } catch (err) {
     const plaid = err?.response?.data || err?.data || null;

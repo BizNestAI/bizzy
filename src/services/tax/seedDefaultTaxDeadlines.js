@@ -17,7 +17,7 @@ function utcDate(y, m, d) {
 }
 
 /** Federal small-business baseline deadlines for a given year. */
-function federalSmallBizDeadlines(year) {
+export function federalSmallBizDeadlines(year) {
   const items = [];
 
   // Quarterly estimated tax (1040-ES) — Q1/Q2/Q3 current year, Q4 is Jan 15 of next year

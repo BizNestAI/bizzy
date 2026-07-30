@@ -230,10 +230,10 @@ export default function DocsLibraryPage(props) {
       <div className="relative overflow-hidden rounded-2xl p-5 md:p-7">
         <div className="relative flex items-start justify-start gap-4">
           <div>
-            <h1 className="text-3xl md:text-4xl font-semibold leading-tight tracking-[0.18em] text-[color:var(--text)] text-left">
+            <h1 className="text-[20px] sm:text-[22px] font-semibold leading-tight tracking-[0.2em] text-[color:var(--text)] text-left">
               Bizzi Docs Library
             </h1>
-            <p className="mt-2 text-sm text-left" style={{ color: "rgba(var(--accent-rgb),0.78)" }}>
+            <p className="mt-2 text-sm text-left text-white/70">
               Your summaries, uploads, and references—searchable and organized.
             </p>
           </div>

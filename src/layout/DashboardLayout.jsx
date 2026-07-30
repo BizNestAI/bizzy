@@ -22,6 +22,8 @@ import { useInsightsUnread } from "../insights/InsightsUnreadContext";
 import { useMemo } from "react";
 import { ACCENT_HEX } from "../config/accent";
 
+const MotionDiv = motion.div;
+
 const BAR_GAP_PX = 32;
 const SPACER_EXTRA = 84;
 const DEFAULT_BAR_HEIGHT = 110;
@@ -52,51 +54,16 @@ const LAYERS = {
   HANDLE: 9600,   // Insights toggle handle always clickable
 };
 
-const isChromeRoute = (path) => {
-  // Pages that previously used Bizzi pink → now use Chrome/Silver
-  return (
-    path.startsWith("/dashboard/bizzy") ||        // Pulse
-    path.startsWith("/dashboard/bizzy-docs") ||   // Docs
-    path.startsWith("/dashboard/companion") ||    // Meet Bizzi
-    path.startsWith("/dashboard/settings") ||     // Settings/Sync
-    path === "/chat"                              // Chat home
-  );
-};
+const GLOBAL_INSIGHTS_MODULE = "contractor_cfo";
 
-function moduleFromPath(pathname = "") {
-    const seg = pathname.split("/")[2] || "bizzy";
-    if (seg === "financials") return "accounting";
-    if (seg === "sch")        return "calendar";
-    return seg.toLowerCase();
-  }
-
-const accentHexMap = {
-  bizzy: ACCENT_HEX,
-  accounting: ACCENT_HEX,
-  marketing: ACCENT_HEX,
-  tax: ACCENT_HEX,
-  investments: ACCENT_HEX,
-  email: ACCENT_HEX,
-  calendar: ACCENT_HEX,
-  activity: ACCENT_HEX,
-  ops: ACCENT_HEX,
-  jobs: ACCENT_HEX,
-  leads: ACCENT_HEX,
-  "lead-jobs": ACCENT_HEX,
-  "leads-jobs": ACCENT_HEX,
-};
-
-// Normalize unread counts to canonical module keys
-// Mirrors Sidebar normalization (inbox->email, sch->calendar, jobs->ops)
-// Honors business suffix (module:businessId) so we don't aggregate across businesses.
+// Normalize unread counts while honoring business suffix (module:businessId)
+// so we don't aggregate across businesses.
 function normalizeUnreadMap(raw = {}, bizId = "") {
-  const ALIAS = { inbox: "email", sch: "calendar", jobs: "ops" };
   const totals = {};
   Object.entries(raw || {}).forEach(([key, val]) => {
     const [base, suffix] = key.split(":");
     if (suffix && bizId && suffix !== bizId) return; // skip other businesses
-    const canonical = ALIAS[base] || base;
-    totals[canonical] = (totals[canonical] || 0) + Number(val || 0);
+    totals[base] = (totals[base] || 0) + Number(val || 0);
   });
   return totals;
 }
@@ -131,7 +98,9 @@ const DashboardContent = ({ children }) => {
     const inChatHome = location.pathname.startsWith("/dashboard/bizzy/chat");
     if (location.pathname.startsWith("/dashboard/") && !inChatHome) {
       localStorage.setItem("bizzy:lastDashboard", location.pathname);
-      try { sessionStorage.setItem("bizzy:visitedDash", "1"); } catch {}
+      try { sessionStorage.setItem("bizzy:visitedDash", "1"); } catch {
+        // Session storage can be unavailable in restricted contexts.
+      }
     }
   }, [location.pathname]);
 
@@ -143,9 +112,8 @@ const DashboardContent = ({ children }) => {
        localStorage.getItem("currentBusinessId") ||
        localStorage.getItem("business_id") ||
        "";
-     const module = moduleFromPath(location.pathname);
      if (!businessId) return;
-     setExtras({ type: "agenda", props: { businessId, module } });
+     setExtras({ type: "agenda", props: { businessId, module: GLOBAL_INSIGHTS_MODULE } });
    }, [location.pathname, currentBusiness?.id, setExtras]);
 
   const theme = useModuleTheme(location.pathname);
@@ -153,19 +121,21 @@ const DashboardContent = ({ children }) => {
 
   const [railOpen, setRailOpen] = useState(false);
   const toggleRail = () => setRailOpen((v) => !v);
-  const moduleKey = moduleFromPath(location.pathname);
+  const moduleKey = GLOBAL_INSIGHTS_MODULE;
   const unreadCount = normalizedUnread[moduleKey] || 0;
   const isCleared = clearedModules.has(moduleKey);
   const lastUnreadRef = useRef(new Map());
   const effectiveUnread = unreadCount > 0 ? unreadCount : (lastUnreadRef.current.get(moduleKey) || 0);
   const showUnreadBadge = effectiveUnread > 0 && !isCleared;
-  const badgeAccent = useMemo(() => accentHexMap[moduleKey] || ACCENT_HEX, [moduleKey]);
+  const badgeAccent = ACCENT_HEX;
 
   // Persist cleared modules in session
   useEffect(() => {
     try {
       sessionStorage.setItem(storageKey, JSON.stringify(Array.from(clearedModules)));
-    } catch {}
+    } catch {
+      // Session storage can be unavailable in restricted contexts.
+    }
   }, [clearedModules, storageKey]);
 
   // Cache unread while rail is open so badge stays visible
@@ -195,38 +165,27 @@ const DashboardContent = ({ children }) => {
       lastUnreadRef.current.delete(moduleKey);
     }
   }, [railOpen, markModuleAsRead, moduleKey, unreadCount]);
-  const useChrome = isChromeRoute(location.pathname);
   const centerRef = useRef(null);
   const contentRef = useRef(null);
   const rightAsideRef = useRef(null);
   const prevPathRef = useRef(location.pathname);
   const canvasScrollLockRef = useRef({ top: 0, overflowY: null });
-  // Graphite base color for the curtain
-  const [curtainBg, setCurtainBg] = useState(getComputedStyle(document.documentElement)?.getPropertyValue("--bg")?.trim() || "#12100F");
-  useEffect(() => {
-    const host =
-      centerRef.current?.closest("section") ||
-      document.querySelector("section.bg-app") ||
-      document.body;
-    const bg = getComputedStyle(host).backgroundColor || getComputedStyle(document.documentElement).getPropertyValue("--bg") || "#12100F";
-    setCurtainBg(bg);
-  }, [location.pathname, theme]);
 
-  const bgColor = theme?.bgClass || "";
   const textColor = theme?.textClass || "text-primary";
 
   const onDashboard = location.pathname.startsWith("/dashboard/");
   const isChatHome  = location.pathname.startsWith("/dashboard/bizzy/chat") || location.pathname.startsWith("/chat");
+  const isMonthlyReviewAdmin = location.pathname.startsWith("/dashboard/admin/monthly-review");
   const hideCenter  = isCanvasOpen;
   const inSettings  = location.pathname.includes("settings");
   const inMeetBizzi = location.pathname.includes("companion");
   const inDocs      = location.pathname.includes("bizzy-docs");
   const showPortalBar =
-    !isCanvasOpen && !isChatHome && (onDashboard || inSettings || inMeetBizzi || inDocs);
+    !isMonthlyReviewAdmin && !isCanvasOpen && !isChatHome && (onDashboard || inSettings || inMeetBizzi || inDocs);
 
-  const disableRails = inSettings || inMeetBizzi || inDocs;
+  const disableRails = inSettings || inMeetBizzi || inDocs || isMonthlyReviewAdmin;
   const showRail = onDashboard && !disableRails && !isChatHome;
-  const showChat = onDashboard || isChatHome || inSettings || inMeetBizzi || inDocs;
+  const showChat = !isMonthlyReviewAdmin && (onDashboard || isChatHome || inSettings || inMeetBizzi || inDocs);
 
   const railStateRef = useRef(railOpen);
   const prevCanvasOpen = useRef(isCanvasOpen);
@@ -235,9 +194,6 @@ const DashboardContent = ({ children }) => {
 
   useEffect(() => {
     const becameOpen = !prevCanvasOpen.current && isCanvasOpen;
-    if (becameOpen && showRail && !isChatHome) {
-      setRailOpen(false);
-    }
     if (becameOpen) {
       preCanvasBarHeightRef.current = lastBarHeightRef.current || barHeight || DEFAULT_BAR_HEIGHT;
     } else if (prevCanvasOpen.current && !isCanvasOpen) {
@@ -347,7 +303,10 @@ const DashboardContent = ({ children }) => {
   // Robust measurement of center column (left/width)
   const [chatBounds, setChatBounds] = useState({ left: 0, width: 0 });
   const measureCenter = () => {
-    const rectSource = contentRef.current || centerRef.current;
+    // Measure the outer center column, not contentRef. contentRef is sized from
+    // chatBounds, so measuring it can permanently lock in a narrower width after
+    // DevTools changes the viewport until a full refresh.
+    const rectSource = centerRef.current || contentRef.current;
     if (rectSource) {
       const rect = rectSource.getBoundingClientRect();
       const left = Math.round(rect.left);
@@ -374,9 +333,11 @@ const DashboardContent = ({ children }) => {
     if (centerRef.current) ro.observe(centerRef.current);
     const onResize = () => measureCenter();
     window.addEventListener("resize", onResize);
+    window.visualViewport?.addEventListener("resize", onResize);
     return () => {
       ro.disconnect();
       window.removeEventListener("resize", onResize);
+      window.visualViewport?.removeEventListener("resize", onResize);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [railOpen, showRail, location.pathname]);
@@ -482,7 +443,7 @@ const DashboardContent = ({ children }) => {
         <section className="relative flex flex-col overflow-hidden bg-transparent">
           <div style={{ position: "relative", zIndex: 1, height: "100%" }} className="flex flex-col min-h-0">
             {/* Desktop Chat toggle lives in the chrome instead of the scrollable column */}
-            {!isChatHome &&
+            {!isChatHome && !isMonthlyReviewAdmin &&
               createPortal(
                 <ChatSwitchToggle
                   context="dashboard"
@@ -503,8 +464,10 @@ const DashboardContent = ({ children }) => {
                 className="flex w-full h-full"
                 data-center-col
                 style={{
-                  width: `min(${CHAT_CONTENT_VW * 100}vw, ${CHAT_MAX_W}px)`,
-                  maxWidth: `${CHAT_MAX_W}px`,
+                  width: isMonthlyReviewAdmin
+                    ? "calc(100vw - var(--nav-w, 0px) - 48px)"
+                    : `min(${CHAT_CONTENT_VW * 100}vw, ${CHAT_MAX_W}px)`,
+                  maxWidth: isMonthlyReviewAdmin ? "none" : `${CHAT_MAX_W}px`,
                   margin: "0 auto",
                 }}
               >
@@ -512,8 +475,16 @@ const DashboardContent = ({ children }) => {
                   ref={contentRef}
                   className={`flex-1 min-h-0 px-0 ${isChatHome ? "overflow-hidden" : "overflow-y-auto no-scrollbar touch-scroll"}`}
                   style={{
-                    width: chatBounds.width ? `${chatBounds.width}px` : `min(${CHAT_CONTENT_VW * 100}vw, ${CHAT_MAX_W}px)`,
-                    maxWidth: chatBounds.width ? `${chatBounds.width}px` : `${CHAT_MAX_W}px`,
+                    width: isMonthlyReviewAdmin
+                      ? "100%"
+                      : chatBounds.width
+                        ? `${chatBounds.width}px`
+                        : `min(${CHAT_CONTENT_VW * 100}vw, ${CHAT_MAX_W}px)`,
+                    maxWidth: isMonthlyReviewAdmin
+                      ? "none"
+                      : chatBounds.width
+                        ? `${chatBounds.width}px`
+                        : `${CHAT_MAX_W}px`,
                     margin: "0 auto",
                     // hide page content under the overlay on ChatHome
                     visibility: hideCenter ? "hidden" : "visible",
@@ -522,7 +493,7 @@ const DashboardContent = ({ children }) => {
                 >
                   {/* Keep page content visually aligned with the chat width */}
                   <AnimatePresence mode="wait">
-                    <motion.div
+                    <MotionDiv
                       key={location.pathname}
                       initial={{ opacity: 0, y: 30 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -532,9 +503,9 @@ const DashboardContent = ({ children }) => {
                     >
                       <div className="flex flex-col gap-4">
                         {children}
-                        <div style={{ height: `${spacerHeight}px` }} />
+                        {!isMonthlyReviewAdmin ? <div style={{ height: `${spacerHeight}px` }} /> : null}
                       </div>
-                    </motion.div>
+                    </MotionDiv>
                   </AnimatePresence>
                 </div>
               </div>
@@ -546,6 +517,7 @@ const DashboardContent = ({ children }) => {
                 <ChatCanvas
                   left={chatBounds.left}
                   width={chatBounds.width}
+                  rightInset={railOpen && showRail ? RIGHT_RAIL_W + GRID_GAP : 0}
                   barNudge={DASH_BAR_ALIGN_NUDGE_PX}
                   topAnchorSelector="[data-chat-top-anchor]"
                   quickPromptMode={quickPromptMode}
@@ -601,21 +573,23 @@ const DashboardContent = ({ children }) => {
             <aside
               ref={rightAsideRef}
               className="hidden lg:flex"
+              aria-hidden={!railOpen}
               style={{
                 position: "fixed",
                 top: 0,
                 right: 0,
                 height: "100vh",
-                width: railOpen ? `${RIGHT_RAIL_W}px` : "0px",
+                width: `${RIGHT_RAIL_W}px`,
                 overscrollBehavior: "contain",
                 "--chat-clearance": `${chatClearance}px`,
                 zIndex: LAYERS.HANDLE + 10,
                 background: "transparent",
                 overflow: "visible",
-                transition: "width 560ms cubic-bezier(0.22,1,0.36,1), transform 560ms cubic-bezier(0.22,1,0.36,1)",
-                transform: railOpen ? "translateX(0)" : "translateX(10px)",
+                opacity: railOpen ? 1 : 0,
+                transition: "transform 260ms cubic-bezier(0.2,0.85,0.25,1), opacity 180ms ease",
+                transform: railOpen ? "translateX(0)" : "translateX(calc(100% + 10px))",
                 pointerEvents: railOpen ? "auto" : "none",
-                visibility: railOpen ? "visible" : "hidden",
+                willChange: "transform, opacity",
               }}
             >
               <div
@@ -625,12 +599,10 @@ const DashboardContent = ({ children }) => {
               />
 
               <div
-                className="h-full w-full will-change-transform transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                className="h-full w-full"
                 style={{
                   paddingRight: 0,
-                  transform: railOpen ? "translateX(0)" : "translateX(12px)",
                   pointerEvents: railOpen ? "auto" : "none",
-                  visibility: railOpen ? "visible" : "hidden",
                   height: "100%",
                   position: "relative",
                 }}
@@ -638,7 +610,6 @@ const DashboardContent = ({ children }) => {
                 <InsightsRail
                   userId={userId}
                   businessId={businessId}
-                  accountId={undefined}
                   isOpen={railOpen}
                 />
               </div>
@@ -665,7 +636,7 @@ const DashboardContent = ({ children }) => {
             const curtainH = Math.max(barH - trimTop + UNDERLAP, CURTAIN_MIN_H);
 
             return (
-              <motion.div
+              <MotionDiv
                 ref={chatWrapperRef}
                 className="hidden md:block fixed bottom-8 pointer-events-none"
                 data-bizzy-chatbar
@@ -700,7 +671,6 @@ const DashboardContent = ({ children }) => {
                   }}
                 >
                   <div
-                    className="bizzy-bg-textured"
                     style={{
                       position: "absolute",
                       inset: 0,
@@ -724,7 +694,6 @@ const DashboardContent = ({ children }) => {
                   }}
                 >
                   <div
-                    className="bizzy-bg-textured"
                     style={{
                       position: "absolute",
                       inset: 0,
@@ -736,9 +705,13 @@ const DashboardContent = ({ children }) => {
 
                 {/* Bar above curtain */}
                 <div style={{ position: "relative", zIndex: 1 }} className="pointer-events-auto">
-                  <BizzyChatBar variant="contained" quickPromptMode={quickPromptMode} />
+                  <BizzyChatBar
+                    variant="contained"
+                    quickPromptMode={quickPromptMode}
+                    flushColumnPadding
+                  />
                 </div>
-              </motion.div>
+              </MotionDiv>
             );
           })(),
           document.body

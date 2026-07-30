@@ -14,6 +14,7 @@ import {
 import { safeFetch } from '../../utils/safeFetch';
 import { getDemoData, shouldUseDemoData } from '../../services/demo/demoClient.js';
 import { Loader2, AlertTriangle } from 'lucide-react';
+import KpiCard from '../UI/KpiCard.jsx';
 
 const currency = (n) =>
   typeof n === 'number'
@@ -127,11 +128,11 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
   };
 
   return (
-    <div className="rounded-[32px] border border-white/10 bg-gradient-to-b from-white/6 via-white/2 to-transparent px-5 py-6 text-white shadow-[0_35px_100px_rgba(0,0,0,0.55)]">
+    <div className="rounded-[32px] border border-emerald-300/12 bg-[linear-gradient(180deg,rgba(11,14,13,0.96)_0%,rgba(6,9,8,0.92)_100%)] px-5 py-6 text-white shadow-[0_35px_100px_rgba(0,0,0,0.55)]">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.4em] text-white/60">Accuracy radar</p>
-          <h2 className="mt-2 text-2xl font-semibold text-white">Forecast vs actual (last {months} months)</h2>
+          <h2 className="mt-2 text-2xl font-semibold text-white">Forecast vs actual (last {months} completed months)</h2>
           {error && (
             <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-rose-400/40 bg-rose-500/10 px-3 py-1 text-xs text-rose-200">
               <AlertTriangle size={14} /> {error}
@@ -144,13 +145,13 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-full border border-white/10 p-0.5 bg-white/5 backdrop-blur">
+          <div className="inline-flex rounded-full border border-white/12 bg-black/25 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_16px_36px_rgba(0,0,0,0.34)] backdrop-blur">
             {['Revenue', 'Expenses', 'Profit'].map((m) => (
               <button
                 key={m}
                 onClick={() => setMetric(m)}
                 className={`px-3 py-1.5 text-sm rounded-full transition ${
-                  metric === m ? 'bg-white/25 font-semibold text-white shadow-[0_4px_12px_rgba(0,0,0,0.35)]' : 'text-white/80 hover:bg-white/10'
+                  metric === m ? 'bg-emerald-300/18 font-semibold text-emerald-50 shadow-[0_0_18px_rgba(16,185,129,0.13)]' : 'text-white/72 hover:bg-white/8 hover:text-white'
                 }`}
               >
                 {m}
@@ -160,14 +161,28 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 text-sm text-white/85 sm:grid-cols-4">
-        <MiniStat label="MAPE" value={`${stats.mapePct.toFixed(1)}%`} />
-        <MiniStat label="Approx. accuracy" value={`${stats.accuracyPct.toFixed(1)}%`} />
-        <MiniStat label="Series" value={metric} />
-        <MiniStat label="Samples" value={rows.length ? `${rows.length} mo` : '—'} />
+      <div className="mt-4 grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard
+          compact
+          label="MAPE"
+          value={`${stats.mapePct.toFixed(1)}%`}
+          detail="Lower is better"
+          tone={stats.mapePct <= 5 ? 'emerald' : stats.mapePct <= 10 ? 'amber' : 'rose'}
+          className="min-h-[108px]"
+        />
+        <KpiCard
+          compact
+          label="Approx. accuracy"
+          value={`${stats.accuracyPct.toFixed(1)}%`}
+          detail="Forecast fit"
+          tone={stats.accuracyPct >= 90 ? 'emerald' : stats.accuracyPct >= 75 ? 'amber' : 'rose'}
+          className="min-h-[108px]"
+        />
+        <KpiCard compact label="Series" value={metric} detail="Active comparison" tone="neutral" className="min-h-[108px]" />
+        <KpiCard compact label="Samples" value={rows.length ? `${rows.length} mo` : '—'} detail="Rolling window" tone="neutral" className="min-h-[108px]" />
       </div>
 
-      <div className="mt-6 rounded-3xl border border-white/10 bg-black/25 p-4">
+      <div className="mt-6 rounded-3xl border border-emerald-300/10 bg-[#070b0a]/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_20px_60px_rgba(0,0,0,0.35)]">
         {loading ? (
           <div className="h-64 w-full rounded-2xl bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 animate-pulse">
             <div className="space-y-3">
@@ -198,7 +213,7 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
                   </feMerge>
                 </filter>
               </defs>
-              <CartesianGrid strokeDasharray="3 4" stroke="#22252d" />
+              <CartesianGrid strokeDasharray="3 6" vertical={false} stroke="rgba(148,163,184,0.12)" />
               <XAxis dataKey="month_label" tick={{ fill: '#dbe2ff', fontSize: 12 }} stroke="#9ca8c8" />
               <YAxis
                 stroke="#9ca8c8"
@@ -207,7 +222,7 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
                 tickFormatter={(v) => (v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${v}`)}
               />
               <Tooltip content={<TooltipContent />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
-              <Legend wrapperStyle={{ color: '#e3e8ff' }} iconType="circle" />
+              <Legend wrapperStyle={{ color: '#e3e8ff', fontWeight: 600 }} iconType="circle" />
               <Bar dataKey={keys.actual} name={`Actual ${metric}`} fill="url(#actualBar)" radius={[10, 10, 4, 4]} filter="url(#glow)">
                 <LabelList
                   dataKey={(r) => formatDelta(r[keys.actual], r[keys.forecast])}
@@ -224,15 +239,6 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
   );
 }
 
-function MiniStat({ label, value }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-      <div className="text-[11px] uppercase tracking-wide text-white/55">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-white">{value}</div>
-    </div>
-  );
-}
-
 function formatDelta(actual = 0, forecast = 0) {
   const delta = (actual ?? 0) - (forecast ?? 0);
   if (!delta) return '+0';
@@ -241,12 +247,12 @@ function formatDelta(actual = 0, forecast = 0) {
 }
 
 function buildMockAccuracy(months = 6) {
-  const timeline = buildTrailingMonths(months);
-  return timeline.map(({ key, label }) => {
-    const actualRevenue = 17000 + Math.round(Math.random() * 5000);
-    const forecastRevenue = actualRevenue + Math.round((Math.random() - 0.5) * 2000);
-    const actualExpenses = 11000 + Math.round(Math.random() * 4000);
-    const forecastExpenses = actualExpenses + Math.round((Math.random() - 0.5) * 1500);
+  return buildTrailingMonths(months).map(({ key, label }, index) => {
+    const seasonalLift = Math.round(Math.sin(index / 2) * 900);
+    const actualRevenue = 18500 + index * 950 + seasonalLift;
+    const forecastRevenue = actualRevenue + ((index % 3) - 1) * 600;
+    const actualExpenses = 12200 + index * 620 + Math.round(Math.cos(index / 2) * 500);
+    const forecastExpenses = actualExpenses - ((index % 3) - 1) * 350;
     const actualProfit = actualRevenue - actualExpenses;
     const forecastProfit = forecastRevenue - forecastExpenses;
     return {
@@ -263,33 +269,31 @@ function buildMockAccuracy(months = 6) {
 }
 
 function alignToRollingWindow(rows, months = 6) {
-  if (rows && rows.length) {
-    const normalized = rows
-      .slice(0, months)
-      .map((row) => {
-        const key = monthKey(row.month, row.month_label);
-        return {
-          ...row,
-          month: `${key}-01`,
-          month_label: row.month_label || labelFromKey(key),
-        };
-      });
-    if (normalized.length >= months) return normalized;
-  }
-
-  const timeline = buildTrailingMonths(months);
+  const count = Math.max(3, Math.min(12, Number(months) || 6));
+  const timeline = buildTrailingMonths(count);
+  const normalizedRows = (rows || []).map((row) => {
+    const key = monthKey(row.month, row.month_label);
+    return {
+      ...row,
+      month: `${key}-01`,
+      month_label: row.month_label || labelFromKey(key),
+    };
+  });
   const map = new Map(
-    (rows || []).map((row) => {
-      const key = monthKey(row.month, row.month_label);
-      return [key, { ...row, month: `${key}-01`, month_label: labelFromKey(key) }];
-    })
+    normalizedRows.map((row) => [monthKey(row.month, row.month_label), row])
   );
 
-  const defaults = averageRow(rows || []);
+  const defaults = averageRow(normalizedRows);
 
-  return timeline.map(({ key, label }) => {
-    const existing = map.get(key);
-    if (existing) return existing;
+  return timeline.map(({ key, label }, index) => {
+    const existing = map.get(key) || normalizedRows[index];
+    if (existing) {
+      return {
+        ...existing,
+        month: `${key}-01`,
+        month_label: label,
+      };
+    }
     return {
       month: `${key}-01`,
       month_label: label,
@@ -307,11 +311,12 @@ function alignToRollingWindow(rows, months = 6) {
 function buildTrailingMonths(count) {
   const result = [];
   const anchor = new Date();
-  anchor.setUTCDate(1);
-  anchor.setUTCMonth(anchor.getUTCMonth() - 1); // end at last completed month
+  anchor.setDate(1);
+  anchor.setHours(12, 0, 0, 0);
+  anchor.setMonth(anchor.getMonth() - 1); // end at last completed month
   for (let i = count - 1; i >= 0; i--) {
-    const d = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() - i, 1));
-    const key = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1, 12);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     result.push({ key, label: d.toLocaleString('default', { month: 'short', year: 'numeric' }) });
   }
   return result;
@@ -323,10 +328,11 @@ function monthKey(month, label) {
     const parsed = Date.parse(label);
     if (!Number.isNaN(parsed)) {
       const d = new Date(parsed);
-      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     }
   }
-  return `${new Date().getUTCFullYear()}-${String(new Date().getUTCMonth() + 1).padStart(2, '0')}`;
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
 function labelFromKey(key) {
@@ -368,8 +374,10 @@ function buildAccuracyFromFinancials(financials = {}, months = 6) {
       Number(row.profit || 0),
     ])
   );
-  const recent = revenueRows.slice(-months);
-  return recent.map((row, idx) => {
+  const timeline = buildTrailingMonths(months);
+  const recent = revenueRows.slice(-timeline.length);
+  return timeline.map(({ key, label }, idx) => {
+    const row = recent[idx] || recent.at(-1) || {};
     const month = row.month;
     const actualRevenue = Number(row.revenue || 0);
     const actualProfit = Number(profitMap.get(month) || 0);
@@ -377,13 +385,8 @@ function buildAccuracyFromFinancials(financials = {}, months = 6) {
     const variance = ((idx % 3) - 1) * 0.04; // gentle +/- 4% oscillation
     const forecastRevenue = Math.round(actualRevenue * (1 + variance));
     const forecastExpenses = Math.round(actualExpenses * (1 - variance / 2));
-    const label = new Date(`${month}-01T00:00:00Z`).toLocaleString('default', {
-      month: 'short',
-      year: 'numeric',
-      timeZone: 'UTC',
-    });
     return {
-      month: `${month}-01`,
+      month: `${key}-01`,
       month_label: label,
       actualRevenue,
       forecastRevenue,

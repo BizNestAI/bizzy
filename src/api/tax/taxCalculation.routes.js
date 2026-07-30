@@ -1,0 +1,425 @@
+// /src/api/tax/taxCalculation.routes.js
+import { Router } from "express";
+import { supabase as defaultSupabase } from "../../services/supabaseAdmin.js";
+import { runCanonicalTaxCalculation } from "../../services/tax/orchestrator/taxOrchestrator.js";
+import { TAX_CALCULATION_TYPES, TAX_TRIGGER_SOURCES } from "../../services/tax/taxDomain.js";
+import { notFoundError, validationError } from "../../services/tax/taxErrors.js";
+import { compareTaxRuns } from "../../services/tax/runs/taxRunComparison.service.js";
+import { getLatestTaxRun, getTaxRun, listTaxRuns } from "../../services/tax/runs/taxRun.repository.js";
+import { getTaxCalculationWorkpaper } from "../../services/tax/workpaper/taxWorkpaper.service.js";
+import { compareExplanationComponents } from "../../services/tax/explanations/taxExplanationDiff.js";
+import { buildTaxCalculationSummary } from "../../services/tax/explanations/taxExplanationSummary.js";
+import { toCanonicalTaxCalculationDto } from "../../services/tax/api/taxCalculationDto.js";
+import { parseTaxApiIncludes, resolveTaxApiVersion } from "../../services/tax/api/taxApiVersion.js";
+import { assertTaxBusinessAccess, getAuthenticatedUserId } from "./taxRouteUtils.js";
+import { optionalDate, optionalEnum, optionalTaxYear, requireUuid, validateBusinessIdInput, validatePagination } from "./taxValidation.js";
+import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
+
+const router = Router();
+
+router.post("/calculations", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const body = req.body || {};
+    const apiVersion = resolveTaxApiVersion(req);
+    const include = parseTaxApiIncludes(body.include ?? req.query?.include);
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const taxYear = optionalTaxYear(body.year ?? body.taxYear, new Date().getFullYear());
+    const asOfDate = optionalDate(body.asOfDate, "asOfDate");
+    const calculationType = optionalEnum(body.calculationType, Object.values(TAX_CALCULATION_TYPES), "calculationType") || TAX_CALCULATION_TYPES.FULL_ESTIMATE;
+    const triggerSource = optionalEnum(body.triggerSource, Object.values(TAX_TRIGGER_SOURCES), "triggerSource") || TAX_TRIGGER_SOURCES.MANUAL;
+    const data = await runCanonicalTaxCalculation({
+      supabase,
+      businessId,
+      taxYear,
+      asOfDate,
+      calculationType,
+      projectionMethod: body.projectionMethod || "blended",
+      projectionScenario: body.projectionScenario || "base",
+      manualOverrides: body.manualOverrides || null,
+      triggerSource,
+      force: body.force === true,
+      requestId: body.idempotencyKey || req.headers?.["x-request-id"] || null,
+      completionType: body.completionType || null,
+      userId: getAuthenticatedUserId(req),
+      persistRun: body.persistRun !== false,
+    });
+    return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ canonicalResult: data, include, apiVersion }));
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculation_failed");
+  }
+});
+
+router.get("/calculations", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const taxYear = req.query?.year || req.query?.taxYear ? optionalTaxYear(req.query?.year ?? req.query?.taxYear, new Date().getFullYear()) : null;
+    const pagination = validatePagination({ limit: req.query?.limit || 50, offset: req.query?.offset || 0 });
+    const rows = await listTaxRuns({
+      supabase,
+      businessId,
+      taxYear,
+      status: req.query?.status || null,
+      calculationType: req.query?.calculationType || null,
+      triggerSource: req.query?.triggerSource || null,
+      limit: pagination.limit,
+      offset: pagination.offset,
+    });
+    return sendTaxSuccess(res, { rows, pagination: { limit: pagination.limit || 50, offset: pagination.offset || 0, count: rows.length } });
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculations_list_failed");
+  }
+});
+
+router.get("/calculations/latest", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const apiVersion = resolveTaxApiVersion(req);
+    const include = parseTaxApiIncludes(req.query?.include);
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const taxYear = optionalTaxYear(req.query?.year ?? req.query?.taxYear, new Date().getFullYear());
+    const refresh = optionalBoolean(req.query?.refresh, "refresh") === true;
+    const calculationType = optionalEnum(req.query?.calculationType, Object.values(TAX_CALCULATION_TYPES), "calculationType") || TAX_CALCULATION_TYPES.FULL_ESTIMATE;
+    if (refresh) {
+      const data = await runCanonicalTaxCalculation({
+        supabase,
+        businessId,
+        taxYear,
+        asOfDate: optionalDate(req.query?.asOfDate, "asOfDate"),
+        calculationType,
+        triggerSource: TAX_TRIGGER_SOURCES.MANUAL,
+        userId: getAuthenticatedUserId(req),
+        persistRun: true,
+      });
+      return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ canonicalResult: data, include, apiVersion }));
+    }
+    const latest = await getLatestTaxRun({ supabase, businessId, taxYear });
+    if (!latest) throw notFoundError("tax_calculation_not_found", "No completed tax calculation exists for this business and year.", { businessId, taxYear });
+    return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ run: latest, include, apiVersion }));
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculation_latest_failed");
+  }
+});
+
+router.get("/calculations/:runId/compare/:otherRunId", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const runId = requireUuid(req.params.runId, "runId");
+    const otherRunId = requireUuid(req.params.otherRunId, "otherRunId");
+    const current = await getTaxRun({ supabase, businessId, runId });
+    const previous = await getTaxRun({ supabase, businessId, runId: otherRunId });
+    if (!current || !previous) throw notFoundError("tax_calculation_not_found", "One or both tax calculations were not found.", { runId, otherRunId });
+    return sendTaxSuccess(res, compareTaxRuns({ previousRun: previous, currentRun: current }));
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculation_compare_failed");
+  }
+});
+
+router.get("/calculations/:runId/explanation", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const runId = requireUuid(req.params.runId, "runId");
+    const run = await getTaxRun({ supabase, businessId, runId });
+    if (!run) throw notFoundError("tax_calculation_not_found", "Tax calculation was not found.", { runId });
+    const components = filterComponents(await loadRunComponents({ supabase, businessId, runId }), req.query || {});
+    const summary = buildTaxCalculationSummary({ canonicalResult: canonicalFromRun(run), components: components.map((row) => row.metadata || row) });
+    return sendTaxSuccess(res, { run, summary, components });
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculation_explanation_failed");
+  }
+});
+
+router.get("/calculations/:runId/explanation/:componentKey", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const runId = requireUuid(req.params.runId, "runId");
+    const run = await getTaxRun({ supabase, businessId, runId });
+    if (!run) throw notFoundError("tax_calculation_not_found", "Tax calculation was not found.", { runId });
+    const componentKey = String(req.params.componentKey || "");
+    const components = await loadRunComponents({ supabase, businessId, runId });
+    const component = components.find((row) => row.component_key === componentKey || row.metadata?.componentKey === componentKey);
+    if (!component) throw notFoundError("tax_calculation_component_not_found", "Tax calculation component was not found.", { runId, componentKey });
+    return sendTaxSuccess(res, { run, component });
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculation_component_explanation_failed");
+  }
+});
+
+router.get("/calculations/:runId/changes", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const runId = requireUuid(req.params.runId, "runId");
+    const run = await getTaxRun({ supabase, businessId, runId });
+    if (!run) throw notFoundError("tax_calculation_not_found", "Tax calculation was not found.", { runId });
+    const previousRunId = req.query?.otherRunId ? requireUuid(req.query.otherRunId, "otherRunId") : await findPreviousRunId({ supabase, businessId, runId });
+    const currentComponents = await loadRunComponents({ supabase, businessId, runId });
+    const previousComponents = previousRunId ? await loadRunComponents({ supabase, businessId, runId: previousRunId }) : [];
+    const diff = compareExplanationComponents({
+      previousComponents: previousComponents.map((row) => row.metadata || row),
+      currentComponents: currentComponents.map((row) => row.metadata || row),
+    });
+    return sendTaxSuccess(res, { run, previousRunId, diff });
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculation_changes_failed");
+  }
+});
+
+router.get("/calculations/:runId/confidence", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const runId = requireUuid(req.params.runId, "runId");
+    const run = await getTaxRun({ supabase, businessId, runId });
+    if (!run) throw notFoundError("tax_calculation_not_found", "Tax calculation was not found.", { runId });
+    return sendTaxSuccess(res, { runId, confidence: confidenceFromRun(run) });
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculation_confidence_failed");
+  }
+});
+
+router.get("/calculations/:runId/components", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const runId = requireUuid(req.params.runId, "runId");
+    const run = await getTaxRun({ supabase, businessId, runId });
+    if (!run) throw notFoundError("tax_calculation_not_found", "Tax calculation was not found.", { runId });
+    const { data, error } = await supabase
+      .from("tax_calculation_components")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("run_id", runId)
+      .order("sort_order", { ascending: true });
+    if (error) throw validationError("tax_calculation_components_unavailable", "Calculation components are unavailable.", { runId });
+    return sendTaxSuccess(res, { run, components: data || [] });
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculation_components_failed");
+  }
+});
+
+router.get("/calculations/:runId/workpaper", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const runId = requireUuid(req.params.runId, "runId");
+    const data = await getTaxCalculationWorkpaper({
+      supabase,
+      businessId,
+      runId,
+      section: req.query?.section || null,
+    });
+    return sendTaxSuccess(res, data);
+  } catch (err) {
+    return sendTaxError(res, err, "tax_workpaper_failed");
+  }
+});
+
+router.get("/workpaper", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const taxYear = optionalTaxYear(req.query?.year ?? req.query?.taxYear ?? req.query?.tax_year, new Date().getFullYear());
+    const runId = req.query?.runId || req.query?.run_id ? requireUuid(req.query?.runId ?? req.query?.run_id, "runId") : null;
+    const throughDate = optionalDate(req.query?.throughDate ?? req.query?.through_date, "throughDate");
+    const data = await getTaxCalculationWorkpaper({
+      supabase,
+      businessId,
+      taxYear,
+      runId,
+      throughDate,
+      section: req.query?.section || null,
+    });
+    return sendTaxSuccess(res, data);
+  } catch (err) {
+    return sendTaxError(res, err, "tax_workpaper_failed");
+  }
+});
+
+router.get("/confidence/current", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const taxYear = optionalTaxYear(req.query?.year ?? req.query?.taxYear, new Date().getFullYear());
+    const refresh = optionalBoolean(req.query?.refresh, "refresh") === true;
+    const calculationType = optionalEnum(req.query?.calculationType, Object.values(TAX_CALCULATION_TYPES), "calculationType") || TAX_CALCULATION_TYPES.FULL_ESTIMATE;
+    if (refresh) {
+      const data = await runCanonicalTaxCalculation({
+        supabase,
+        businessId,
+        taxYear,
+        asOfDate: optionalDate(req.query?.asOfDate, "asOfDate"),
+        calculationType,
+        triggerSource: TAX_TRIGGER_SOURCES.MANUAL,
+        userId: getAuthenticatedUserId(req),
+        persistRun: true,
+      });
+      return sendTaxSuccess(res, { runId: data?.meta?.runId || null, confidence: data.confidence }, { source: "refreshed" });
+    }
+    const latest = await getLatestTaxRun({ supabase, businessId, taxYear });
+    if (!latest) throw notFoundError("tax_calculation_not_found", "No completed tax calculation exists for this business and year.", { businessId, taxYear });
+    return sendTaxSuccess(res, { runId: latest.id, confidence: confidenceFromRun(latest) }, { source: "persisted" });
+  } catch (err) {
+    return sendTaxError(res, err, "tax_current_confidence_failed");
+  }
+});
+
+router.get("/calculations/:runId", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const apiVersion = resolveTaxApiVersion(req);
+    const include = parseTaxApiIncludes(req.query?.include);
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const runId = requireUuid(req.params.runId, "runId");
+    const data = await getTaxRun({ supabase, businessId, runId });
+    if (!data) throw notFoundError("tax_calculation_not_found", "Tax calculation was not found.", { runId });
+    return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ run: data, include, apiVersion }));
+  } catch (err) {
+    return sendTaxError(res, err, "tax_calculation_fetch_failed");
+  }
+});
+
+router.get("/overview", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const apiVersion = resolveTaxApiVersion(req);
+    const include = parseTaxApiIncludes(req.query?.include);
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const taxYear = optionalTaxYear(req.query?.year ?? req.query?.taxYear, new Date().getFullYear());
+    const requestedAsOfDate = optionalDate(req.query?.asOfDate, "asOfDate");
+    const refresh = String(req.query?.refresh || "").toLowerCase() === "true";
+    if (refresh) {
+      const data = await runCanonicalTaxCalculation({
+        supabase,
+        businessId,
+        taxYear,
+        asOfDate: requestedAsOfDate,
+        triggerSource: TAX_TRIGGER_SOURCES.MANUAL,
+        userId: getAuthenticatedUserId(req),
+        persistRun: true,
+      });
+      return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ canonicalResult: data, include, apiVersion }));
+    }
+    const latest = await getLatestTaxRun({ supabase, businessId, taxYear });
+    if (!latest) throw notFoundError("tax_calculation_not_found", "No completed tax calculation exists for this business and year.", { businessId, taxYear });
+    if (requestedAsOfDate && String(latest.as_of_date || "") !== requestedAsOfDate) {
+      const data = await runCanonicalTaxCalculation({
+        supabase,
+        businessId,
+        taxYear,
+        asOfDate: requestedAsOfDate,
+        triggerSource: TAX_TRIGGER_SOURCES.PAGE_REFRESH,
+        userId: getAuthenticatedUserId(req),
+        persistRun: true,
+      });
+      return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ canonicalResult: data, include, apiVersion }));
+    }
+    return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ run: latest, include, apiVersion }));
+  } catch (err) {
+    return sendTaxError(res, err, "tax_overview_failed");
+  }
+});
+
+export default router;
+
+async function loadRunComponents({ supabase, businessId, runId }) {
+  const { data, error } = await supabase
+    .from("tax_calculation_components")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("run_id", runId)
+    .order("sort_order", { ascending: true });
+  if (error) throw validationError("tax_calculation_components_unavailable", "Calculation components are unavailable.", { runId });
+  return data || [];
+}
+
+function filterComponents(components, query) {
+  return components.filter((row) => {
+    const meta = row.metadata || {};
+    if (query.group && meta.componentGroup !== query.group) return false;
+    if (query.severity && meta.display?.severity !== query.severity) return false;
+    if (query.componentType && row.component_type !== query.componentType && meta.componentType !== query.componentType) return false;
+    if (String(query.changedOnly || "").toLowerCase() === "true" && !meta.metadata?.changed) return false;
+    return true;
+  });
+}
+
+async function findPreviousRunId({ supabase, businessId, runId }) {
+  const { data } = await supabase
+    .from("tax_calculation_run_links")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("newer_run_id", runId)
+    .limit(1)
+    .maybeSingle();
+  return data?.older_run_id || null;
+}
+
+function canonicalFromRun(run) {
+  return {
+    meta: { businessId: run.business_id, taxYear: run.tax_year },
+    liability: { projectedTotalTax: run.estimated_total_tax },
+    warnings: run.warnings || [],
+    missingInputs: run.missing_inputs || [],
+    safeHarbor: { combined: { status: run.safe_harbor_target == null ? "unavailable" : "available" } },
+  };
+}
+
+function confidenceFromRun(run) {
+  return {
+    score: Number(run.confidence_score || 0),
+    level: run.confidence_level || "unavailable",
+    status: run.confidence_status || null,
+    estimateReady: run.estimate_ready === true,
+    reserveReady: run.reserve_ready === true,
+    factors: run.confidence_factors || [],
+    penalties: run.confidence_penalties || [],
+    blockers: run.confidence_blockers || [],
+    methodologyVersion: run.confidence_methodology_version || null,
+    sourceFreshness: run.source_freshness || {},
+    readiness: {
+      estimateReady: run.estimate_ready === true,
+      reserveReady: run.reserve_ready === true,
+    },
+  };
+}
+
+function optionalBoolean(value, field) {
+  if (value == null || value === "") return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  throw validationError(`invalid_${field}`, `${field} must be true or false.`, { field });
+}

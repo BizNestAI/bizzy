@@ -11,7 +11,7 @@ import {
 import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { getUniversalVendorHintForTransaction } from "../../../services/bookkeeping/universalVendorHintMatcher.js";
-import { mapIntentToCoa } from "../../../services/bookkeeping/intentToCoaMapper.js";
+import { mapIntentToCoa, resolveIntentKey } from "../../../services/bookkeeping/intentToCoaMapper.js";
 import { createQboCoaAccountIfNeeded } from "../../../services/bookkeeping/qboCoaCreationService.js";
 import { createOrUpdateClarificationRequest } from "../../../services/bookkeeping/clarificationService.js";
 import { computeMemoPrefixForLearning } from "../../../services/bookkeeping/vendorRuleLearner.js";
@@ -29,7 +29,10 @@ const devLog = (tag, payload) => {
   }
 };
 const UNIVERSAL_COA_ALLOWLIST = new Set([
+  "airfare",
   "transportation",
+  "travel",
+  "vehicle_expense",
   "fuel",
   "meals",
   "software",
@@ -44,10 +47,39 @@ const UNIVERSAL_COA_ALLOWLIST = new Set([
   "payment_processing",
 ]);
 
+function isUniversalIntentAllowlisted(intent = "") {
+  return UNIVERSAL_COA_ALLOWLIST.has(resolveIntentKey(intent));
+}
+
+const UNIVERSAL_AUTO_APPROVE_ALLOWLIST = new Set([
+  "airfare",
+  "transportation",
+  "travel",
+  "vehicle_expense",
+  "fuel",
+  "meals",
+  "software",
+  "advertising",
+  "insurance",
+  "utilities",
+  "office_supplies",
+  "cleaning",
+  "parking_tolls",
+  "shipping",
+  "bank_fees",
+  "payment_processing",
+]);
+
+function isUniversalIntentAutoApproveAllowed(intent = "") {
+  return UNIVERSAL_AUTO_APPROVE_ALLOWLIST.has(resolveIntentKey(intent));
+}
+
 function intentToStandardAccountName(intent = "") {
-  const key = (intent || "").toLowerCase();
+  const key = resolveIntentKey(intent);
   const map = {
+    airfare: "Airfare",
     transportation: "Transportation",
+    vehicle_expense: "Vehicle Expense",
     fuel: "Fuel",
     meals: "Meals & Entertainment",
     software: "Software Subscriptions",
@@ -60,8 +92,19 @@ function intentToStandardAccountName(intent = "") {
     shipping: "Shipping",
     bank_fees: "Bank Fees",
     payment_processing: "Payment Processing Fees",
+    travel: "Travel",
+    materials: "Supplies & Materials",
+    tools: "Tools & Equipment",
   };
   return map[key] || null;
+}
+
+function shouldForceCanonicalIntentAccount(intent = "", mappedAccountName = "") {
+  const key = resolveIntentKey(intent);
+  if (!["transportation", "airfare"].includes(key)) return false;
+  const canonical = normalizeName(intentToStandardAccountName(key) || "");
+  const mapped = normalizeName(mappedAccountName || "");
+  return Boolean(canonical) && canonical !== mapped;
 }
 
 function applyAutoApproval({ status, confidence, meta = {}, checkHit = {}, suggestedAcct = {}, taxonomyType = null, nowIso, reason, autoApprove = false, txnId = null }) {
@@ -215,11 +258,17 @@ function ensureAccountName({ acctId, acctName, coa }) {
   const trimmed = String(acctName || "").trim();
   if (trimmed.length > 1) return { id: acctId, name: trimmed };
   const resolved = findCoaNameById(coa, acctId);
-  return { id: acctId, name: resolved || "Selected account" };
+  return { id: acctId, name: resolved || "" };
+}
+
+function isUnresolvedAccountName(name = "") {
+  const normalized = normalizeName(name || "");
+  return !normalized || normalized === "selected account" || normalized === "select account" || normalized === "account";
 }
 
 function isSuspenseAccount({ acctId, acctName, suspenseIds }) {
   if (!acctId) return true;
+  if (isUnresolvedAccountName(acctName)) return true;
   const name = String(acctName || "");
   return (
     suspenseIds.has(String(acctId)) ||
@@ -228,8 +277,137 @@ function isSuspenseAccount({ acctId, acctName, suspenseIds }) {
   );
 }
 
+function shouldReevaluateExistingSuggestion({
+  existingCat,
+  suggestedId,
+  suggestedName,
+  suggestedSuspense,
+  suggestionSource,
+  allowProtectedReevaluation = false,
+}) {
+  if (!existingCat) return false;
+
+  const statusLower = String(existingCat.status || "").toLowerCase();
+  if (["approved", "auto_approved", "posted"].includes(statusLower) && !allowProtectedReevaluation) return false;
+
+  if ((existingCat.final_qbo_account_id || existingCat.final_qbo_account_name) && !allowProtectedReevaluation) return false;
+  if (existingCat?.meta?.auto_approve_reason === "manual_user") return false;
+
+  const source = String(suggestionSource || "").toLowerCase();
+  const confidence = String(existingCat.confidence || "").toLowerCase();
+  const weakSource = source === "fallback" || source === "plaid_mapping" || source === "unknown" || !source;
+  const weakConfidence = confidence === "low" || confidence === "medium" || !confidence;
+  const unresolvedName = isUnresolvedAccountName(suggestedName);
+  const systemOwnedUniversal =
+    source === "universal_hint" &&
+    (existingCat.decided_by === "universal_hint" || existingCat.decided_by === "bizzi");
+
+  return (
+    !suggestedId ||
+    unresolvedName ||
+    suggestedSuspense ||
+    (weakSource && weakConfidence) ||
+    systemOwnedUniversal
+  );
+}
+
+function buildApprovalIdentity(txn = {}) {
+  const merchantEntityId = txn?.merchant_entity_id ? String(txn.merchant_entity_id) : null;
+  const vendorCandidates = [
+    txn?.counterparty_name,
+    txn?.merchant_name,
+  ]
+    .map((value) => normalizeVendorCandidate(value))
+    .filter(Boolean);
+  const { prefix } = computeMemoPrefixForLearning(txn, 20);
+  return {
+    merchantEntityId,
+    vendorCandidates: [...new Set(vendorCandidates)],
+    memoPrefix: prefix || "",
+  };
+}
+
+function buildUserApprovalContext(approvedCats = [], bankTxnMap = {}) {
+  const context = {
+    hasAnyUserApprovals: false,
+    byMerchantEntityId: new Map(),
+    byVendorCandidate: new Map(),
+    byMemoPrefix: new Map(),
+  };
+
+  for (const cat of approvedCats || []) {
+    const txn = bankTxnMap?.[cat.transaction_id];
+    if (!txn) continue;
+    context.hasAnyUserApprovals = true;
+    const identity = buildApprovalIdentity(txn);
+    const entry = {
+      transaction_id: cat.transaction_id,
+      final_qbo_account_id: cat.final_qbo_account_id || null,
+      final_qbo_account_name: cat.final_qbo_account_name || null,
+      decided_by: cat.decided_by || null,
+      status: cat.status || null,
+    };
+
+    if (identity.merchantEntityId && !context.byMerchantEntityId.has(identity.merchantEntityId)) {
+      context.byMerchantEntityId.set(identity.merchantEntityId, entry);
+    }
+    for (const candidate of identity.vendorCandidates) {
+      if (!context.byVendorCandidate.has(candidate)) {
+        context.byVendorCandidate.set(candidate, entry);
+      }
+    }
+    if (identity.memoPrefix && identity.memoPrefix.length >= 8 && !context.byMemoPrefix.has(identity.memoPrefix)) {
+      context.byMemoPrefix.set(identity.memoPrefix, entry);
+    }
+  }
+
+  return context;
+}
+
+function findSimilarUserApproval(context, txn = {}) {
+  if (!context?.hasAnyUserApprovals) return null;
+  const identity = buildApprovalIdentity(txn);
+
+  if (identity.merchantEntityId && context.byMerchantEntityId.has(identity.merchantEntityId)) {
+    return {
+      ...context.byMerchantEntityId.get(identity.merchantEntityId),
+      match_type: "merchant_entity_id",
+      match_value: identity.merchantEntityId,
+    };
+  }
+
+  for (const candidate of identity.vendorCandidates) {
+    if (context.byVendorCandidate.has(candidate)) {
+      return {
+        ...context.byVendorCandidate.get(candidate),
+        match_type: "vendor_candidate",
+        match_value: candidate,
+      };
+    }
+  }
+
+  if (identity.memoPrefix && identity.memoPrefix.length >= 8 && context.byMemoPrefix.has(identity.memoPrefix)) {
+    return {
+      ...context.byMemoPrefix.get(identity.memoPrefix),
+      match_type: "memo_prefix",
+      match_value: identity.memoPrefix,
+    };
+  }
+
+  return null;
+}
+
+function hasUserApprovedVendorRuleMatch({ vendorRule, similarUserApproval }) {
+  if (!vendorRule || !similarUserApproval) return false;
+  const vendorRuleAccountId = String(vendorRule.default_qbo_account_id || "");
+  const approvalAccountId = String(similarUserApproval.final_qbo_account_id || "");
+  if (!vendorRuleAccountId || !approvalAccountId) return false;
+  return vendorRuleAccountId === approvalAccountId;
+}
+
 /* ----------------------- Chart of Accounts (QBO) ----------------------- */
-async function fetchChartOfAccounts(businessId) {
+async function fetchChartOfAccounts(businessId, opts = {}) {
+  const includeSubaccounts = opts?.includeSubaccounts === true;
   const qbo = await getQBOClient(businessId);
   if (!qbo) return [];
   try {
@@ -243,7 +421,7 @@ async function fetchChartOfAccounts(businessId) {
       ? res.QueryResponse.Account
       : [];
     return accounts
-      .filter((a) => !a.SubAccount && a.AccountType && !/header/i.test(a.Classification || ""))
+      .filter((a) => (includeSubaccounts || !a.SubAccount) && a.AccountType && !/header/i.test(a.Classification || ""))
       .map((a) => ({
         id: a.Id,
         name: a.Name,
@@ -291,7 +469,7 @@ async function ensureSuspenseAccounts(businessId) {
   const qbo = await getQBOClient(businessId);
   if (!qbo) return { expenseFallback: null, incomeFallback: null, ama: null };
 
-  const coa = await fetchChartOfAccounts(businessId);
+  const coa = await fetchChartOfAccounts(businessId, { includeSubaccounts: true });
   const coaMap = (coa || []).reduce((acc, c) => {
     acc[normalizeName(c.name)] = c;
     return acc;
@@ -344,7 +522,7 @@ function findOwnerEquityAccounts(coaMap) {
 
 async function ensureOwnerEquityAccounts(businessId, existingCoa = null) {
   const qbo = await getQBOClient(businessId);
-  const coa = existingCoa || (await fetchChartOfAccounts(businessId));
+  const coa = existingCoa || (await fetchChartOfAccounts(businessId, { includeSubaccounts: true }));
   const coaMap = (coa || []).reduce((acc, c) => {
     acc[normalizeName(c.name)] = c;
     return acc;
@@ -734,7 +912,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
 
   try {
     // Fetch COA
-    const coa = await fetchChartOfAccounts(businessId);
+    const coa = await fetchChartOfAccounts(businessId, { includeSubaccounts: true });
     const coaMap = (coa || []).reduce((acc, c) => {
       acc[normalizeName(c.name)] = c;
       return acc;
@@ -744,12 +922,19 @@ router.post("/suggest", requireAuth, async (req, res) => {
     const userId = req.user?.id || req.user?.user_id || null;
     let ownerTokens = [];
     if (userId) {
-      const { data: userProfile } = await supabase
-        .from("user_profiles")
-        .select("first_name,last_name,full_name")
-        .eq("id", userId)
-        .maybeSingle();
-      ownerTokens = buildOwnerTokens(userProfile || {});
+      try {
+        const { data: userProfile } = await supabase
+          .from("user_profiles")
+          .select("first_name,last_name,full_name")
+          .eq("id", userId)
+          .maybeSingle();
+        ownerTokens = buildOwnerTokens(userProfile || {});
+      } catch (userProfileErr) {
+        devLog("owner_profile_lookup_skipped", {
+          user_id: userId,
+          error: userProfileErr?.message || String(userProfileErr),
+        });
+      }
     }
     const taxonomyContext = { ownerTokens };
 
@@ -774,7 +959,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
     // Existing categs
     const { data: existing, error: catErr } = await supabase
       .from("transaction_categorizations")
-      .select("transaction_id,suggested_qbo_account_id,suggested_qbo_account_name,confidence,status,meta")
+      .select("transaction_id,suggested_qbo_account_id,suggested_qbo_account_name,confidence,status,meta,final_qbo_account_id,final_qbo_account_name,decided_by,post_after,qbo_txn_id")
       .eq("business_id", businessId)
       .in("transaction_id", ids);
     if (catErr) throw catErr;
@@ -793,35 +978,102 @@ router.post("/suggest", requireAuth, async (req, res) => {
     );
     let vendorRuleUsageMap = {};
     if (vendorRuleIds.length) {
-      const { data: vendorRuleRows, error: vendorRuleErr } = await supabase
-        .from("vendor_rules")
-        .select("id,usage_count")
+      try {
+        const { data: vendorRuleRows, error: vendorRuleErr } = await supabase
+          .from("vendor_rules")
+          .select("id,usage_count")
+          .eq("business_id", businessId)
+          .in("id", vendorRuleIds);
+        if (vendorRuleErr) throw vendorRuleErr;
+        vendorRuleUsageMap = (vendorRuleRows || []).reduce((acc, row) => {
+          acc[String(row.id)] = row.usage_count || 0;
+          return acc;
+        }, {});
+      } catch (vendorRuleUsageErr) {
+        devLog("vendor_rule_usage_lookup_skipped", {
+          business_id: businessId,
+          count: vendorRuleIds.length,
+          error: vendorRuleUsageErr?.message || String(vendorRuleUsageErr),
+        });
+        vendorRuleUsageMap = {};
+      }
+    }
+
+    let userApprovalContext = {
+      hasAnyUserApprovals: false,
+      byMerchantEntityId: new Map(),
+      byVendorCandidate: new Map(),
+      byMemoPrefix: new Map(),
+    };
+    try {
+      const { data: userApprovedCats, error: userApprovedErr } = await supabase
+        .from("transaction_categorizations")
+        .select("transaction_id,final_qbo_account_id,final_qbo_account_name,decided_by,status")
         .eq("business_id", businessId)
-        .in("id", vendorRuleIds);
-      if (vendorRuleErr) throw vendorRuleErr;
-      vendorRuleUsageMap = (vendorRuleRows || []).reduce((acc, row) => {
-        acc[String(row.id)] = row.usage_count || 0;
-        return acc;
-      }, {});
+        .in("decided_by", ["user", "user_clarification"])
+        .in("status", ["approved", "auto_approved", "posted"])
+        .not("final_qbo_account_id", "is", null);
+      if (userApprovedErr) throw userApprovedErr;
+
+      const approvedTxnIds = Array.from(
+        new Set((userApprovedCats || []).map((row) => row.transaction_id).filter(Boolean))
+      );
+      let approvedTxnMap = {};
+      if (approvedTxnIds.length) {
+        const { data: approvedBankTxns, error: approvedBankErr } = await supabase
+          .from("bank_transactions")
+          .select("id,name,merchant_name,counterparty_name,merchant_entity_id")
+          .eq("business_id", businessId)
+          .eq("is_archived", false)
+          .in("id", approvedTxnIds);
+        if (approvedBankErr) throw approvedBankErr;
+        approvedTxnMap = (approvedBankTxns || []).reduce((acc, txn) => {
+          acc[txn.id] = txn;
+          return acc;
+        }, {});
+      }
+
+      userApprovalContext = buildUserApprovalContext(userApprovedCats || [], approvedTxnMap);
+      devLog("user_approval_context", {
+        business_id: businessId,
+        has_any_user_approvals: userApprovalContext.hasAnyUserApprovals,
+        approved_category_count: (userApprovedCats || []).length,
+      });
+    } catch (userApprovalErr) {
+      devLog("user_approval_context_skipped", {
+        business_id: businessId,
+        error: userApprovalErr?.message || String(userApprovalErr),
+      });
     }
 
     const nowIso = new Date().toISOString();
     const rows = [];
+    const rowErrors = [];
     let autoApproved = 0;
     let skipped = 0;
     const metaBackfills = [];
     let metaBackfilled = 0;
 
-    const { data: clarRows, error: clarErr } = await supabase
-      .from("clarification_requests")
-      .select("id,transaction_id,status,last_notified_at,dismissed_until")
-      .eq("business_id", businessId)
-      .in("transaction_id", ids);
-    if (clarErr) throw clarErr;
-    const clarMap = (clarRows || []).reduce((acc, row) => {
-      acc[row.transaction_id] = row;
-      return acc;
-    }, {});
+    let clarMap = {};
+    try {
+      const { data: clarRows, error: clarErr } = await supabase
+        .from("clarification_requests")
+        .select("id,transaction_id,status,last_notified_at,dismissed_until")
+        .eq("business_id", businessId)
+        .in("transaction_id", ids);
+      if (clarErr) throw clarErr;
+      clarMap = (clarRows || []).reduce((acc, row) => {
+        acc[row.transaction_id] = row;
+        return acc;
+      }, {});
+    } catch (clarErr) {
+      devLog("clarification_lookup_skipped", {
+        business_id: businessId,
+        txn_count: ids.length,
+        error: clarErr?.message || String(clarErr),
+      });
+      clarMap = {};
+    }
 
     const suspenseIds = new Set(
       [fallbacks?.expenseFallback?.id, fallbacks?.incomeFallback?.id, fallbacks?.ama?.id]
@@ -933,8 +1185,12 @@ router.post("/suggest", requireAuth, async (req, res) => {
     };
 
     for (const row of txns || []) {
+      let rowBranch = "init";
+      try {
       const checkHit = isCheck(row);
       const existingCat = existingMap[row.id];
+      const similarUserApproval = findSimilarUserApproval(userApprovalContext, row);
+      const hasSimilarUserApproval = Boolean(similarUserApproval);
       const metaBase = existingCat?.meta || {};
       const checkMeta = checkHit.is_check
         ? {
@@ -946,9 +1202,13 @@ router.post("/suggest", requireAuth, async (req, res) => {
           }
         : {};
       const baseMetaWithCheck = { ...metaBase, ...checkMeta };
-      if (existingCat && existingCat.suggested_qbo_account_id) {
+      rowBranch = "existing_categorization";
+        if (existingCat && existingCat.suggested_qbo_account_id) {
         const taxHit = classifyTaxonomy(row, taxonomyContext);
         let mergedMeta = { ...baseMetaWithCheck };
+        mergedMeta.user_approval_backed = hasSimilarUserApproval;
+        mergedMeta.user_approval_match_type = similarUserApproval?.match_type || null;
+        mergedMeta.user_approval_match_txn_id = similarUserApproval?.transaction_id || null;
         if (taxHit) {
           const hasTaxonomyMeta = existingCat?.meta?.taxonomy_type;
           if (!hasTaxonomyMeta) {
@@ -1051,10 +1311,63 @@ router.post("/suggest", requireAuth, async (req, res) => {
           acctName: suggestedNameResolved,
           suspenseIds,
         });
-        const suggestedAcct = suggestedId ? { id: suggestedId, name: suggestedNameResolved || "" } : null;
+        const existingSuggestionSource = String(mergedMeta.suggestion_source || "");
         const statusLower = String(existingCat.status || "").toLowerCase();
+        const protectedBizziGraceEligible =
+          ["approved", "auto_approved"].includes(statusLower) &&
+          existingCat.decided_by === "bizzi" &&
+          !existingCat.qbo_txn_id &&
+          existingCat.post_after &&
+          Date.parse(existingCat.post_after) > nowTs &&
+          existingCat?.meta?.auto_approve_reason !== "manual_user";
+        const existingVendorRuleApproved =
+          existingSuggestionSource === "vendor_rule" &&
+          Boolean(mergedMeta.vendor_rule_coa_id) &&
+          String(mergedMeta.vendor_rule_coa_id) === String(similarUserApproval?.final_qbo_account_id || "");
+        const preferUniversalForTxn =
+          !userApprovalContext.hasAnyUserApprovals ||
+          !existingVendorRuleApproved;
+        let reevalExisting = shouldReevaluateExistingSuggestion({
+          existingCat,
+          suggestedId,
+          suggestedName: suggestedNameResolved,
+          suggestedSuspense,
+          suggestionSource: existingSuggestionSource,
+          allowProtectedReevaluation: protectedBizziGraceEligible,
+        });
+        if (
+          !reevalExisting &&
+          existingSuggestionSource === "vendor_rule" &&
+          !existingVendorRuleApproved
+        ) {
+          reevalExisting = true;
+          devLog("existing_vendor_rule_deferred_to_universal", {
+            txn: row.id,
+            plaid_transaction_id: row.plaid_transaction_id,
+            has_any_user_approvals: userApprovalContext.hasAnyUserApprovals,
+            user_approval_match_type: similarUserApproval?.match_type || null,
+            user_approval_match_txn_id: similarUserApproval?.transaction_id || null,
+            vendor_rule_coa_id: mergedMeta.vendor_rule_coa_id || null,
+            approved_account_id: similarUserApproval?.final_qbo_account_id || null,
+          });
+        }
+        if (reevalExisting) {
+          devLog("existing_suggestion_reevaluate", {
+            txn: row.id,
+            plaid_transaction_id: row.plaid_transaction_id,
+            suggested_qbo_account_id: suggestedId || null,
+            suggested_qbo_account_name: suggestedNameResolved || null,
+            suggestion_source: existingSuggestionSource || null,
+            confidence: existingCat.confidence || null,
+            suspense_account: suggestedSuspense,
+            prefer_universal_for_txn: preferUniversalForTxn,
+            user_approval_backed: existingVendorRuleApproved,
+            protected_bizzi_grace_eligible: protectedBizziGraceEligible,
+          });
+        } else {
+        const suggestedAcct = suggestedId ? { id: suggestedId, name: suggestedNameResolved || "" } : null;
         const protectedStatuses = ["approved", "auto_approved", "posted"];
-        const canUpgrade = !protectedStatuses.includes(statusLower);
+        const canUpgrade = !protectedStatuses.includes(statusLower) || protectedBizziGraceEligible;
         const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution"];
         const taxType = String(mergedMeta.taxonomy_type || "").toLowerCase();
         let promotionSource = null;
@@ -1081,7 +1394,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
             mergedMeta.suggestion_source === "universal_hint" &&
             hintMeta.key &&
             hintConfidenceHigh &&
-            UNIVERSAL_COA_ALLOWLIST.has(hintIntent) &&
+            isUniversalIntentAllowlisted(hintIntent) &&
             safeUniversal;
           const source = String(mergedMeta.suggestion_source || "");
           highConfidencePromote =
@@ -1108,9 +1421,10 @@ router.post("/suggest", requireAuth, async (req, res) => {
           vendorRulePromote || universalPromote
             ? "high"
             : existingCat.confidence || "low";
+        const reevaluatedBaseStatus = protectedBizziGraceEligible ? "needs_review" : (existingCat.status || "needs_review");
         const reason = mergedMeta.auto_approve_reason || mergedMeta.suggestion_source || "model_high";
         const autoResult = applyAutoApproval({
-          status: existingCat.status || "needs_review",
+          status: reevaluatedBaseStatus,
           confidence: confidenceForAutoApproval,
           meta: mergedMeta,
           checkHit,
@@ -1143,6 +1457,11 @@ router.post("/suggest", requireAuth, async (req, res) => {
           meta: autoResult.meta,
           updated_at: nowIso,
         };
+        if (payload.status !== "auto_approved" && payload.status !== "approved" && payload.status !== "posted") {
+          payload.final_qbo_account_id = null;
+          payload.final_qbo_account_name = null;
+          payload.post_after = null;
+        }
         if (canUpgrade && autoResult.status === "auto_approved") {
           payload.status = "auto_approved";
           payload.final_qbo_account_id = suggestedId || null;
@@ -1174,8 +1493,10 @@ router.post("/suggest", requireAuth, async (req, res) => {
           skipped += 1;
         }
         continue;
+        }
       }
 
+      rowBranch = "taxonomy";
       const taxHit = classifyTaxonomy(row, taxonomyContext);
       if (taxHit) {
         const taxonomyMeta = buildTaxonomyMeta(taxHit);
@@ -1315,6 +1636,11 @@ router.post("/suggest", requireAuth, async (req, res) => {
           decided_by: autoResult.decidedBy || "taxonomy",
           decided_at: autoResult.decidedAt || nowIso,
         };
+        if (payload.status !== "auto_approved" && payload.status !== "approved" && payload.status !== "posted") {
+          payload.final_qbo_account_id = null;
+          payload.final_qbo_account_name = null;
+          payload.post_after = null;
+        }
         if (autoResult.finalAcctId !== undefined) payload.final_qbo_account_id = autoResult.finalAcctId;
         if (autoResult.finalAcctName !== undefined) payload.final_qbo_account_name = autoResult.finalAcctName;
         if (autoResult.postAfter !== undefined) payload.post_after = autoResult.postAfter;
@@ -1330,8 +1656,14 @@ router.post("/suggest", requireAuth, async (req, res) => {
         continue;
       }
 
+      // Business-learned vendor rules are the strongest category signal and should win before global hints.
+      rowBranch = "vendor_rule";
       const vendorRule = await getVendorRuleForTransaction({ businessId, bankTransaction: row });
-      if (vendorRule && vendorRule.default_qbo_account_id) {
+      const vendorRuleApprovalBacked = hasUserApprovedVendorRuleMatch({
+        vendorRule,
+        similarUserApproval,
+      });
+      if (vendorRule && vendorRule.default_qbo_account_id && vendorRuleApprovalBacked) {
         if (!looksLikeTaxonomyLandmineMemo(row)) {
           const txnDir = canonicalTxnDirection(row);
           const hint = (vendorRule.direction_hint || "").toUpperCase();
@@ -1343,6 +1675,9 @@ router.post("/suggest", requireAuth, async (req, res) => {
                 (vendorRule.confidence || "").toLowerCase() === "high";
               const vendorMeta = {
                 suggestion_source: "vendor_rule",
+                user_approval_backed: true,
+                user_approval_match_type: similarUserApproval?.match_type || null,
+                user_approval_match_txn_id: similarUserApproval?.transaction_id || null,
                 suggestion_debug: {
                   rule_id: vendorRule.id,
                   match_reason: vendorRule.match_reason,
@@ -1422,6 +1757,9 @@ router.post("/suggest", requireAuth, async (req, res) => {
             }
             const vendorMeta = {
               suggestion_source: "vendor_rule",
+              user_approval_backed: true,
+              user_approval_match_type: similarUserApproval?.match_type || null,
+              user_approval_match_txn_id: similarUserApproval?.transaction_id || null,
               suggestion_debug: {
                 rule_id: vendorRule.id,
                 match_reason: vendorRule.match_reason,
@@ -1485,6 +1823,11 @@ router.post("/suggest", requireAuth, async (req, res) => {
               decided_at: autoResult.decidedAt || nowIso,
               updated_at: nowIso,
             };
+            if (payload.status !== "auto_approved" && payload.status !== "approved" && payload.status !== "posted") {
+              payload.final_qbo_account_id = null;
+              payload.final_qbo_account_name = null;
+              payload.post_after = null;
+            }
             if (autoResult.finalAcctId !== undefined) payload.final_qbo_account_id = autoResult.finalAcctId;
             if (autoResult.finalAcctName !== undefined) payload.final_qbo_account_name = autoResult.finalAcctName;
             if (autoResult.postAfter !== undefined) payload.post_after = autoResult.postAfter;
@@ -1500,15 +1843,42 @@ router.post("/suggest", requireAuth, async (req, res) => {
             continue;
           }
         }
+      } else if (vendorRule && vendorRule.default_qbo_account_id && !vendorRuleApprovalBacked) {
+        devLog("vendor_rule_deferred_to_universal", {
+          txn: row.id,
+          plaid_transaction_id: row.plaid_transaction_id,
+          vendor_rule_id: vendorRule.id,
+          has_any_user_approvals: userApprovalContext.hasAnyUserApprovals,
+          user_approval_match_type: similarUserApproval?.match_type || null,
+          user_approval_match_txn_id: similarUserApproval?.transaction_id || null,
+          vendor_rule_account_id: vendorRule.default_qbo_account_id || null,
+          approved_account_id: similarUserApproval?.final_qbo_account_id || null,
+        });
       }
 
+      rowBranch = "universal_hint";
       const universalHint = await getUniversalVendorHintForTransaction({ bankTxn: row });
       if (universalHint) {
-        const mappedIntent = mapIntentToCoa({
+        const preferUniversalForTxn =
+          !userApprovalContext.hasAnyUserApprovals || !vendorRuleApprovalBacked;
+        let mappedIntent = mapIntentToCoa({
           businessId,
           intent: universalHint.primary_intent,
           coaAccounts: coa,
         });
+        if (
+          mappedIntent?.qbo_account_id &&
+          shouldForceCanonicalIntentAccount(universalHint.primary_intent, mappedIntent.qbo_account_name)
+        ) {
+          devLog("universal_hint_force_canonical_account", {
+            txn: row.id,
+            plaid_transaction_id: row.plaid_transaction_id,
+            intent: universalHint.primary_intent,
+            mapped_qbo_account_name: mappedIntent.qbo_account_name || null,
+            canonical_account_name: intentToStandardAccountName(universalHint.primary_intent),
+          });
+          mappedIntent = null;
+        }
         if (mappedIntent?.qbo_account_id) {
           const hintSuggested = ensureAccountName({
             acctId: mappedIntent.qbo_account_id,
@@ -1520,14 +1890,22 @@ router.post("/suggest", requireAuth, async (req, res) => {
               ? universalHint.confidence || "high"
               : "medium";
           const hintConfidenceHigh = (universalHint?.confidence || "").toLowerCase() === "high";
+          const strongPrimaryIntentMatch =
+            mappedIntent.match_source === "primary" &&
+            (mappedIntent.match_reason === "keyword_exact" || mappedIntent.match_reason === "keyword_startswith");
           const allowAuto =
             hintConfidenceHigh &&
-            UNIVERSAL_COA_ALLOWLIST.has((universalHint.primary_intent || "").toLowerCase()) &&
+            strongPrimaryIntentMatch &&
+            isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
             !checkHit.is_check &&
             isUniversalHintAutoApproveSafe(universalHint);
           const hintMeta = {
             ...baseMetaWithCheck,
             suggestion_source: "universal_hint",
+            user_approval_backed: hasSimilarUserApproval,
+            user_approval_match_type: similarUserApproval?.match_type || null,
+            user_approval_match_txn_id: similarUserApproval?.transaction_id || null,
+            universal_bootstrap_mode: preferUniversalForTxn,
             universal_hint: {
               key: universalHint.matched_rule_key,
               canonical_vendor: universalHint.canonical_vendor,
@@ -1616,6 +1994,11 @@ router.post("/suggest", requireAuth, async (req, res) => {
             decided_at: autoResult.decidedAt || nowIso,
             updated_at: nowIso,
           };
+          if (payload.status !== "auto_approved" && payload.status !== "approved" && payload.status !== "posted") {
+            payload.final_qbo_account_id = null;
+            payload.final_qbo_account_name = null;
+            payload.post_after = null;
+          }
           if (autoResult.finalAcctId !== undefined) payload.final_qbo_account_id = autoResult.finalAcctId;
           if (autoResult.finalAcctName !== undefined) payload.final_qbo_account_name = autoResult.finalAcctName;
           if (autoResult.postAfter !== undefined) payload.post_after = autoResult.postAfter;
@@ -1635,7 +2018,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
             (universalHint?.confidence || "").toLowerCase() === "high" ||
             mt === "exact" ||
             mt === "startswith";
-          if (UNIVERSAL_COA_ALLOWLIST.has((universalHint.primary_intent || "").toLowerCase()) && confident && !checkHit.is_check) {
+          if (isUniversalIntentAllowlisted(universalHint.primary_intent) && confident && !checkHit.is_check) {
             const candidateName = intentToStandardAccountName(universalHint.primary_intent);
             if (candidateName) {
               const created = await createQboCoaAccountIfNeeded({
@@ -1668,6 +2051,10 @@ router.post("/suggest", requireAuth, async (req, res) => {
                 const hintMeta = {
                   ...baseMetaWithCheck,
                   suggestion_source: "universal_hint",
+                  user_approval_backed: hasSimilarUserApproval,
+                  user_approval_match_type: similarUserApproval?.match_type || null,
+                  user_approval_match_txn_id: similarUserApproval?.transaction_id || null,
+                  universal_bootstrap_mode: preferUniversalForTxn,
                   universal_hint: {
                     key: universalHint.matched_rule_key,
                     canonical_vendor: universalHint.canonical_vendor,
@@ -1682,7 +2069,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
                 };
                 const allowAuto =
                   (universalHint?.confidence || "").toLowerCase() === "high" &&
-                  UNIVERSAL_COA_ALLOWLIST.has((universalHint.primary_intent || "").toLowerCase()) &&
+                  isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
                   !checkHit.is_check &&
                   isUniversalHintAutoApproveSafe(universalHint);
                 hintMeta.safe_to_auto_post = allowAuto;
@@ -1756,6 +2143,11 @@ router.post("/suggest", requireAuth, async (req, res) => {
                   decided_at: autoResult.decidedAt || nowIso,
                   updated_at: nowIso,
                 };
+                if (payload.status !== "auto_approved" && payload.status !== "approved" && payload.status !== "posted") {
+                  payload.final_qbo_account_id = null;
+                  payload.final_qbo_account_name = null;
+                  payload.post_after = null;
+                }
                 if (autoResult.finalAcctId !== undefined) payload.final_qbo_account_id = autoResult.finalAcctId;
                 if (autoResult.finalAcctName !== undefined) payload.final_qbo_account_name = autoResult.finalAcctName;
                 if (autoResult.postAfter !== undefined) payload.post_after = autoResult.postAfter;
@@ -1796,6 +2188,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
         }
       }
 
+      rowBranch = "check_block";
       if (checkHit.is_check) {
         const dir = (row.direction || "").toUpperCase();
         const suggestedAcct =
@@ -1832,6 +2225,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
         continue;
       }
 
+      rowBranch = "plaid_baseline";
       const mapped = mapPlaidToCoa(row, coaMap, fallbacks);
       const acct = mapped.account;
       const mappedSuggested = ensureAccountName({
@@ -1886,6 +2280,27 @@ router.post("/suggest", requireAuth, async (req, res) => {
       });
       if (autoResult.status === "auto_approved" && !checkHit.is_check) autoApproved += 1;
 
+      const mappedSuspense = isSuspenseAccount({
+        acctId: mappedSuggested.id,
+        acctName: mappedSuggested.name,
+        suspenseIds,
+      });
+      if (!mappedSuggested.id || mappedSuspense) {
+        devLog("categorization_fallthrough", {
+          txn: row.id,
+          plaid_transaction_id: row.plaid_transaction_id,
+          source: suggestionSource,
+          mapping_reason: mapped.reason || null,
+          suggested_qbo_account_id: mappedSuggested.id || null,
+          suggested_qbo_account_name: mappedSuggested.name || null,
+          suspense_account: mappedSuspense,
+          merchant_name: row.merchant_name || null,
+          counterparty_name: row.counterparty_name || null,
+          name: row.name || null,
+          category_primary: row.category_primary || null,
+        });
+      }
+
       devLog("mapping_used", {
         txn: row.id,
         plaid_transaction_id: row.plaid_transaction_id,
@@ -1917,6 +2332,23 @@ router.post("/suggest", requireAuth, async (req, res) => {
         confidenceOverride: confidence,
         suggestionSource: suggestionSource,
       });
+      } catch (rowErr) {
+        skipped += 1;
+        const errPayload = {
+          transaction_id: row?.id || null,
+          plaid_transaction_id: row?.plaid_transaction_id || null,
+          branch: rowBranch,
+          error: rowErr?.message || String(rowErr),
+        };
+        rowErrors.push(errPayload);
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[bookkeeping][suggest][row_failed]", {
+            business_id: businessId,
+            ...errPayload,
+          });
+        }
+        continue;
+      }
     }
 
     if (!rows.length) {
@@ -1924,21 +2356,49 @@ router.post("/suggest", requireAuth, async (req, res) => {
         const { error: backfillErr } = await supabase
           .from("transaction_categorizations")
           .upsert(metaBackfills, { onConflict: "business_id,transaction_id" });
-        if (backfillErr) throw backfillErr;
+        if (backfillErr) {
+          devLog("meta_backfill_skipped", {
+            business_id: businessId,
+            count: metaBackfills.length,
+            error: backfillErr?.message || String(backfillErr),
+          });
+        }
       }
-      return res.json({ ok: true, updated: 0, auto_approved: autoApproved, skipped, meta_backfilled: metaBackfilled, sample: [] });
+      return res.json({
+        ok: true,
+        updated: 0,
+        auto_approved: autoApproved,
+        skipped,
+        meta_backfilled: metaBackfilled,
+        row_error_count: rowErrors.length,
+        row_errors: rowErrors,
+        sample: [],
+      });
     }
 
     if (metaBackfills.length) {
       const { error: backfillErr } = await supabase
         .from("transaction_categorizations")
         .upsert(metaBackfills, { onConflict: "business_id,transaction_id" });
-      if (backfillErr) throw backfillErr;
+      if (backfillErr) {
+        devLog("meta_backfill_skipped", {
+          business_id: businessId,
+          count: metaBackfills.length,
+          error: backfillErr?.message || String(backfillErr),
+        });
+      }
     }
+
+    const normalizedRows = rows.map((row) => ({
+      ...row,
+      decided_by: row.decided_by || "bizzi",
+      decided_at: row.decided_at || nowIso,
+      updated_at: row.updated_at || nowIso,
+    }));
 
     const { data: upserted, error: upErr } = await supabase
       .from("transaction_categorizations")
-      .upsert(rows, { onConflict: "business_id,transaction_id" })
+      .upsert(normalizedRows, { onConflict: "business_id,transaction_id" })
       .select("transaction_id,suggested_qbo_account_id,suggested_qbo_account_name,confidence,status,reason,meta");
     if (upErr) throw upErr;
 
@@ -1948,10 +2408,15 @@ router.post("/suggest", requireAuth, async (req, res) => {
       auto_approved: autoApproved,
       skipped,
       meta_backfilled: metaBackfilled,
+      row_error_count: rowErrors.length,
+      row_errors: rowErrors,
       sample: (upserted || []).slice(0, 3),
     });
   } catch (err) {
-    console.error("[bookkeeping][suggest] failed", err?.message || err);
+    console.error("[bookkeeping][suggest] failed", {
+      message: err?.message || String(err),
+      stack: err?.stack || null,
+    });
     return res.status(500).json({ ok: false, error: "suggest_failed", message: err?.message || "failed" });
   }
 });

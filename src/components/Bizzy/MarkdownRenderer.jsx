@@ -28,6 +28,11 @@ function normalizeMarkdown(raw, { demoteBoldLabels = false, autoLinkify = true }
     s = s.replace(/\r/g, "");
     // Normalize malformed bold labels like "**Next action: **Do this"
     s = s.replace(/\*\*([^*\n]+?):\s+\*\*(\S)/g, (_m, label, nextChar) => `**${label}:** ${nextChar}`);
+    // Bizzi should ask the closing question directly, without a visible "Next action" label.
+    s = s.replace(
+      /(^|\n)[ \t]*(?:[-*+]\s*)?(?:\*\*)?Next action:?(?:\*\*)?[ \t]*/gi,
+      (_m, lineStart) => (lineStart ? "\n\n" : "")
+    );
     s = s.replace(/[ \t]+\n/g, "\n");
     s = s.replace(/\n{3,}/g, "\n\n");
     s = s.replace(/[ \t]{2,}/g, " ");
@@ -61,7 +66,7 @@ export default function MarkdownRenderer({
         {children}
       </em>
     ),
-    a: ({ node, ...props }) => (
+    a: (props) => (
       <a
         {...props}
         target="_blank"

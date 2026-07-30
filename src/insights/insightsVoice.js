@@ -43,8 +43,8 @@ function ensureEndPunct(s) {
   return /[.!?]\s*$/.test(s) ? s : s + '.';
 }
 function normalizeModule(mod) {
-  const m = String(mod || 'bizzy').toLowerCase();
-  if (m === 'financials') return 'accounting';
+  const m = String(mod || 'contractor_cfo').toLowerCase();
+  if (m === 'contractor_cfo') return 'contractor_cfo';
   return m;
 }
 function alreadyBizziAuthored(i) {
@@ -107,7 +107,7 @@ const CONNECTORS = [
 /* ----------------------------- Module-aware lexicon (with variants) ----------------------------- */
 
 const MODULE_LEXICON = {
-  accounting: [
+  contractor_cfo: [
     { from: /\bYour current balance is\b/i, to: [
       "I’m " + pickSeed(VERBS_TRACK) + " cash — it’s",
       "Cash looks at about",
@@ -124,25 +124,6 @@ const MODULE_LEXICON = {
       "Projected",
       "Expected",
     ]},
-  ],
-  marketing: [
-    { from: /\bAverage rating\b/gi, to: [
-      "I’m seeing an average rating",
-      "Ratings are averaging",
-      "Reviews are sitting around",
-    ]},
-    { from: /\breviews?\b/gi, to: [
-      "reviews I’m tracking",
-      "recent feedback",
-      "customer reviews I pulled",
-    ]},
-    { from: /\bengagement\b/gi, to: [
-      "engagement I’m seeing",
-      "interaction rate",
-      "response activity",
-    ]},
-  ],
-  tax: [
     { from: /\bQuarterly estimated tax payment\b/gi, to: [
       "I’m tracking your quarterly estimated tax payment",
       "Your quarterly estimate is on my radar",
@@ -153,20 +134,12 @@ const MODULE_LEXICON = {
       "Due date I have queued",
       "Cutoff I’m tracking",
     ]},
-  ],
-  investments: [
-    { from: /\bPortfolio\b/gi, to: [
-      "Portfolio I’m monitoring",
-      "Holdings I’m tracking",
-      "Your portfolio",
+    { from: /\bAR\b/g, to: "AR (money owed to you)" },
+    { from: /\bPayroll\b/gi, to: [
+      "Payroll",
+      "Labor spend",
+      "Crew cost",
     ]},
-    { from: /\brebalance\b/gi, to: [
-      "rebalance (if drift > 5%)",
-      "a light rebalance if drift’s high",
-      "rebalance when allocations drift",
-    ]},
-  ],
-  bizzy: [
     { from: /\bNo major changes\b/gi, to: [
       "I’m not seeing any major changes",
       "No big swings on my end",
@@ -228,7 +201,8 @@ function applyModuleLexicon(modKey, text = '', rng) {
 
 function coachingTail(insight, body, tone, rng) {
   const mod = normalizeModule(insight.module);
-  const patterns = bizzyPersona?.domain_posture?.[mod]?.patterns || [];
+  const postureKey = mod === 'contractor_cfo' ? 'accounting' : mod;
+  const patterns = bizzyPersona?.domain_posture?.[postureKey]?.patterns || [];
   const needsDot = !/[.!?]\s*$/.test(body);
   let out = needsDot ? body + '.' : body;
 
@@ -276,7 +250,7 @@ function withConnector(text, rng) {
 
 /* ----------------------------- Main adapter ----------------------------- */
 
-export function toBizziVoice(insight = {}, opts = {}) {
+export function toBizziVoice(insight = {}) {
   if (!insight) return insight;
   if (alreadyBizziAuthored(insight)) return insight;
 
@@ -310,6 +284,6 @@ export function toBizziVoice(insight = {}, opts = {}) {
   };
 }
 
-export function applyBizziVoice(list = [], opts = {}) {
-  return Array.isArray(list) ? list.map(i => toBizziVoice(i, opts)) : [];
+export function applyBizziVoice(list = []) {
+  return Array.isArray(list) ? list.map(i => toBizziVoice(i)) : [];
 }

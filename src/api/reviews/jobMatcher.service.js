@@ -21,21 +21,31 @@ function overlapScore(a, b) {
   return hit / Math.max(A.size, B.size);
 }
 
+function normalizeJob(row = {}) {
+  return {
+    id: row.id || row.job_id,
+    jobName: row.name || row.job_name || row.project_name || row.customer_name || 'Untitled Job',
+    customerName: row.customer_name || row.client_name || row.client || '',
+    address: row.address || row.service_address || row.job_address || '',
+  };
+}
+
 /**
  * Try to match a single review to a job from a candidate list.
- * Jobs: { id, client_name, title, address } (adjust fields to your schema)
+ * Jobs are normalized from the available jobs table columns.
  */
 function pickBestJob(review, jobs) {
   const cand = [];
-  for (const j of jobs) {
+  for (const rawJob of jobs) {
+    const j = normalizeJob(rawJob);
     let score = 0;
 
     // Strong signals
-    if (review.author_name && j.client_name) {
-      score = Math.max(score, overlapScore(review.author_name, j.client_name) * 2.0);
+    if (review.author_name && j.customerName) {
+      score = Math.max(score, overlapScore(review.author_name, j.customerName) * 2.0);
     }
     // Text-body signals
-    score = Math.max(score, overlapScore(review.body, j.title || ''));
+    score = Math.max(score, overlapScore(review.body, j.jobName || ''));
     score = Math.max(score, overlapScore(review.body, j.address || '') * 0.8);
 
     if (score > 0) cand.push({ id: j.id, score });
@@ -62,10 +72,10 @@ export async function runJobMatcherForBusiness(business_id, { days = 120 } = {})
     .limit(500);
   if (rErr) return { matched: 0, scanned: 0, errors: 1 };
 
-  // Pull jobs (adjust table/columns to your schema)
+  // Pull jobs without naming optional columns; normalize from whichever columns exist.
   const { data: jobs, error: jErr } = await supabase
     .from('jobs')
-    .select('id, client_name, title, address')
+    .select('*')
     .eq('business_id', business_id)
     .limit(1000);
   if (jErr) return { matched: 0, scanned: reviews?.length || 0, errors: 1 };

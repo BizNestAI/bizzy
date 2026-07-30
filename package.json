@@ -7,8 +7,19 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
+    "test": "node --test tests/**/*.test.js",
     "preview": "vite preview",
-    "check:bookkeeping": "node scripts/manual/checkBookkeeping.js"
+    "check:bookkeeping": "node scripts/manual/checkBookkeeping.js",
+    "tax:audit-legacy": "node scripts/tax/legacyTaxMigrationCli.js audit",
+    "tax:migrate-legacy-snapshots": "node scripts/tax/legacyTaxMigrationCli.js migrate-snapshots",
+    "tax:migrate-legacy-payments": "node scripts/tax/legacyTaxMigrationCli.js migrate-payments",
+    "tax:rollback-legacy-payments": "node scripts/tax/legacyTaxMigrationCli.js rollback-payments",
+    "tax:validate-rules": "node scripts/tax/validate-rules.js",
+    "tax:validate-rules:json": "node scripts/tax/validate-rules.js --json",
+    "tax:qa-business": "node scripts/tax/run-business-qa.js",
+    "tax:production-audit": "node scripts/tax/production-audit.js",
+    "test:tax-rls": "node --test --test-concurrency=1 tests/integration/tax/*.integration.test.js",
+    "test:tax-output-safety": "node --test --test-concurrency=1 tests/security/tax/taxSensitiveOutput.integration.test.js"
   },
   "dependencies": {
     "@headlessui/react": "^2.2.7",

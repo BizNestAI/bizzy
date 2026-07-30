@@ -34,7 +34,10 @@ router.get("/reconciled-transactions", requireAuth, async (req, res) => {
   const dateTo = parseDate(req.query?.date_to);
 
   try {
-    // Step A: fetch posted categorizations
+    // Correctness-first implementation:
+    // fetch the posted categorizations in posted_at order, apply bank-row filters,
+    // then paginate the fully filtered result set. This can later move to an RPC/view
+    // if posted transaction volume grows large enough to require DB-side pagination.
     const { data: catRows, error: catErr } = await supabase
       .from("transaction_categorizations")
       .select(
@@ -43,20 +46,20 @@ router.get("/reconciled-transactions", requireAuth, async (req, res) => {
       .eq("business_id", businessId)
       .eq("status", "posted")
       .not("qbo_txn_id", "is", null)
-      .order("posted_at", { ascending: false, nullsLast: true })
-      .range(offset, offset + limit - 1);
+      .order("posted_at", { ascending: false, nullsLast: true });
     if (catErr) throw catErr;
 
-    const ids = (catRows || []).map((c) => c.transaction_id).filter(Boolean);
-    if (!ids.length) {
+    const candidateRows = catRows || [];
+    const candidateIds = candidateRows.map((c) => c.transaction_id).filter(Boolean);
+    if (!candidateIds.length) {
       return res.json({
         ok: true,
         items: [],
-        meta: { limit, offset, count: 0, has_more: false },
+        meta: { limit, offset, count: 0, total: 0, has_more: false },
       });
     }
 
-    // Step B: fetch bank rows with optional filters
+    // Step C: fetch matching active bank rows with optional filters before pagination
     let bankQuery = supabase
       .from("bank_transactions")
       .select(
@@ -64,7 +67,7 @@ router.get("/reconciled-transactions", requireAuth, async (req, res) => {
       )
       .eq("business_id", businessId)
       .eq("is_archived", false)
-      .in("id", ids);
+      .in("id", candidateIds);
     if (plaidAccountId) bankQuery = bankQuery.eq("plaid_account_id", plaidAccountId);
     if (dateFrom) bankQuery = bankQuery.gte("date", dateFrom);
     if (dateTo) bankQuery = bankQuery.lte("date", dateTo);
@@ -72,11 +75,12 @@ router.get("/reconciled-transactions", requireAuth, async (req, res) => {
     const { data: bankRows, error: bankErr } = await bankQuery;
     if (bankErr) throw bankErr;
 
-    const catMap = new Map((catRows || []).map((c) => [c.transaction_id, c]));
-    const items = (bankRows || [])
-      .map((row) => {
-        const cat = catMap.get(row.id);
-        if (!cat) return null;
+    // Step D/E: preserve posted_at ordering from categorizations and only keep matched bank rows
+    const bankMap = new Map((bankRows || []).map((row) => [row.id, row]));
+    const filteredItems = candidateRows
+      .map((cat) => {
+        const row = bankMap.get(cat.transaction_id);
+        if (!row) return null;
         return {
           id: row.id,
           plaid_account_id: row.plaid_account_id,
@@ -98,14 +102,32 @@ router.get("/reconciled-transactions", requireAuth, async (req, res) => {
       })
       .filter(Boolean);
 
+    // Step F: paginate after all filters are applied
+    const totalFiltered = filteredItems.length;
+    const pagedItems = filteredItems.slice(offset, offset + limit);
+    const hasMore = offset + limit < totalFiltered;
+
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[reconciled-transactions] filtered result", {
+        businessId,
+        candidate_count: candidateRows.length,
+        matched_bank_count: (bankRows || []).length,
+        total_filtered: totalFiltered,
+        returned_count: pagedItems.length,
+        limit,
+        offset,
+      });
+    }
+
     return res.json({
       ok: true,
-      items,
+      items: pagedItems,
       meta: {
         limit,
         offset,
-        count: items.length,
-        has_more: (catRows || []).length === limit,
+        count: pagedItems.length,
+        total: totalFiltered,
+        has_more: hasMore,
       },
     });
   } catch (err) {

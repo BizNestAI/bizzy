@@ -41,6 +41,33 @@ function labelFor(d) {
   return new Date(d).toLocaleString('default', { month: 'short', year: 'numeric' });
 }
 
+function buildCompletedMonthWindow(count) {
+  const result = [];
+  const anchor = new Date();
+  anchor.setDate(1);
+  anchor.setHours(12, 0, 0, 0);
+  anchor.setMonth(anchor.getMonth() - 1);
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1, 12);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    result.push({ key, label: d.toLocaleString('default', { month: 'short', year: 'numeric' }) });
+  }
+  return result;
+}
+
+function reanchorMockRows(rows, months) {
+  const source = rows.slice(-months);
+  return buildCompletedMonthWindow(months).map(({ key, label }, index) => {
+    const row = source[index] || source[source.length - 1] || {};
+    return {
+      ...row,
+      month: `${key}-01`,
+      month_label: label,
+      source: 'mock',
+    };
+  });
+}
+
 /**
  * GET /api/accounting/forecast-accuracy
  * Query: userId, businessId, months=6
@@ -81,6 +108,9 @@ router.get('/', async (req, res) => {
 
   let result = [];
   if (actuals.length && forecasts.length) {
+    const window = buildCompletedMonthWindow(months);
+    const windowKeys = new Set(window.map((row) => row.key));
+    const windowLabels = new Map(window.map((row) => [row.key, row.label]));
     const fMap = new Map(
       forecasts.map((f) => [ymKey(f.month), f])
     );
@@ -88,6 +118,7 @@ router.get('/', async (req, res) => {
     result = actuals
       .map((a) => {
         const key = ymKey(a.month);
+        if (!windowKeys.has(key)) return null;
         const f = fMap.get(key);
         if (!f) return null;
 
@@ -101,7 +132,7 @@ router.get('/', async (req, res) => {
 
         return {
           month: `${key}-01`,
-          month_label: labelFor(a.month),
+          month_label: windowLabels.get(key) || labelFor(a.month),
           forecastRevenue: fr,
           forecastExpenses: fe,
           forecastProfit: fp,
@@ -113,12 +144,11 @@ router.get('/', async (req, res) => {
       })
       .filter(Boolean);
 
-    // Keep the last N months
-    result = result.slice(-months);
+    result.sort((a, b) => a.month.localeCompare(b.month));
   }
 
   if (!result.length) {
-    return res.status(200).json({ usingMock: true, rows: MOCK.slice(-months) });
+    return res.status(200).json({ usingMock: true, rows: reanchorMockRows(MOCK, months) });
   }
 
   return res.status(200).json({ usingMock: false, rows: result });

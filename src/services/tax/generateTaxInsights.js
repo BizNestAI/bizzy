@@ -1,5 +1,8 @@
+/* global process */
 // /src/services/tax/generateTaxInsights.js
 import fetch from "node-fetch"; // remove if Node 18+
+import { normalizeTaxYear } from "./taxDomain.js";
+import { getTaxProfile } from "./taxProfile.service.js";
 
 const USE_MOCK = String(process.env.MOCK_TAX || "").toLowerCase() === "true";
 
@@ -7,18 +10,20 @@ export async function generateTaxInsights({
   supabase,
   openaiApiKey,     // may be null -> fallback path
   businessId,
-  year = new Date().getFullYear(),
+  year,
 }) {
   if (!businessId || typeof businessId !== "string") {
     throw new Error("Missing or invalid businessId");
   }
   if (!supabase) throw new Error("Supabase client is required");
 
-  const since = `${year - 1}-12-01`;
+  // Reporting year is explicit when supplied; otherwise use current calendar year.
+  const taxYear = resolveTaxYear(year);
+  const since = `${taxYear - 1}-12-01`;
 
   const [
     metricsRes,
-    profileRes,
+    taxProfile,
     purchasesRes,
     deadlinesRes,
     mileageRes,
@@ -30,7 +35,7 @@ export async function generateTaxInsights({
       .eq("business_id", businessId)
       .gte("month", since)
       .order("month", { ascending: true }),
-    supabase.from("tax_profiles").select("*").eq("business_id", businessId).maybeSingle(),
+    getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false }),
     supabase
       .from("upcoming_purchases")
       .select("date,category,amount,description")
@@ -40,8 +45,8 @@ export async function generateTaxInsights({
       .from("tax_deadlines")
       .select("label,due_on,kind")
       .eq("business_id", businessId)
-      .gte("due_on", `${year}-01-01`)
-      .lte("due_on", `${year}-12-31`),
+      .gte("due_on", `${taxYear}-01-01`)
+      .lte("due_on", `${taxYear}-12-31`),
     supabase.from("job_mileage").select("date,miles").eq("business_id", businessId).gte("date", since),
     supabase.from("industry_benchmarks").select("metric,value,unit").eq("industry", "home_service_construction"),
   ]);
@@ -50,20 +55,20 @@ export async function generateTaxInsights({
   const noRealData = !financialSnapshot?.length;
 
   if (USE_MOCK || noRealData || !openaiApiKey) {
-    return mockInsights(year);
+    return mockInsights(taxYear);
   }
 
   // --- GPT path ---
   const context = {
     financialSnapshot,
-    taxProfile: profileRes.data ?? {},
+    taxProfile: taxProfile ?? {},
     upcoming: purchasesRes.data ?? [],
     deadlines: deadlinesRes.data ?? [],
     mileageSummary: {
       totalMiles: (mileageRes.data ?? []).reduce((s, r) => s + Number(r.miles || 0), 0),
     },
     benchmarks: benchRes.data ?? [],
-    year,
+    year: taxYear,
     now: new Date().toISOString(),
   };
 
@@ -154,4 +159,10 @@ function normalizeTips(list) {
     reasoning: String(t.reasoning || "").slice(0, 400),
     deadline: String(t.deadline || "Ongoing"),
   }));
+}
+
+function resolveTaxYear(value) {
+  const normalized = normalizeTaxYear(value ?? new Date().getFullYear());
+  if (!normalized) throw new Error("Invalid tax year");
+  return normalized;
 }

@@ -1,36 +1,51 @@
 // /src/api/tax/generateMonthlyTaxSnapshot.js
+/* global process */
 import { supabase } from "../../services/supabaseAdmin.js";
 import { generateMonthlyTaxSnapshot } from "../../services/tax/generateMonthlyTaxSnapshot.js";
+import { triggerContractorCfoInsightsBestEffort } from "../../services/insights/contractorCfoTriggerService.js";
+import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
+import { optionalTaxYear, validateBusinessIdInput } from "./taxValidation.js";
+import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
 
 export default async function generateMonthlyTaxSnapshotHandler(req, res) {
-  res.set("Cache-Control", "no-store");
+  setTaxNoStore(res);
 
   if ((req.method || "").toUpperCase() !== "POST") {
-    return res.status(405).json({ ok: false, error: "Method Not Allowed. Use POST." });
-  }
-  if (!req.user) {
-    return res.status(401).json({ ok: false, error: "Unauthorized: missing/invalid token" });
+    return sendTaxError(res, { code: "method_not_allowed", message: "Method Not Allowed. Use POST.", status: 405 }, "method_not_allowed");
   }
 
-  const { businessId, year, month, archive = true } = req.body || {};
-  if (!businessId || typeof businessId !== "string") {
-    return res.status(422).json({ ok: false, error: "businessId (string) is required" });
+  let input;
+  try {
+    const requestedYear = req.body?.year ?? req.body?.taxYear;
+    input = {
+      businessId: validateBusinessIdInput(req),
+      year: requestedYear == null ? undefined : optionalTaxYear(requestedYear, new Date().getFullYear()),
+      month: req.body?.month,
+      archive: req.body?.archive !== false,
+    };
+    await assertTaxBusinessAccess({ req, businessId: input.businessId, supabase });
+  } catch (err) {
+    return sendTaxError(res, err, "invalid_tax_snapshot_request");
   }
 
   try {
     const data = await generateMonthlyTaxSnapshot({
       supabase,
-      businessId,
-      year,
-      month,
-      archive,
+      businessId: input.businessId,
+      year: input.year,
+      month: input.month,
+      archive: input.archive,
       openaiApiKey: process.env.OPENAI_API_KEY || null, // allow null (fallback inside service)
       userId: req.user.id,
     });
-    return res.json({ ok: true, data });
+    triggerContractorCfoInsightsBestEffort({
+      businessId: input.businessId,
+      trigger: "tax",
+      force: false,
+    });
+    return sendTaxSuccess(res, data);
   } catch (err) {
     console.error("[generateMonthlyTaxSnapshot] error:", err);
-    const status = Number(err?.status) || 400;
-    return res.status(status).json({ ok: false, error: err?.message || "Failed to generate snapshot" });
+    return sendTaxError(res, err, "tax_data_unavailable");
   }
 }

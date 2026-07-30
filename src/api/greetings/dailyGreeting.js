@@ -1,7 +1,7 @@
 const FALLBACK = "Morning, legend. Let's make this week count.";
 
 const LINES = [
-  "Morning, legend. Let's make this week count.",
+  "Hey, legend. Let's make this week count.",
   "Fresh pot, clear head. Clean slate. Let's get after it.",
   "Still early enough to change the whole tone of the week.",
   "Pick the next win, then keep the line moving.",
@@ -11,7 +11,7 @@ const LINES = [
   "No noise, no drama. Just sharp execution today.",
   "You already know the lever to pull. Let’s move it.",
   "Control the controllables. Everything else follows.",
-  "Small steps today, big calm by Friday.",
+  "You're closer to your goals than you think.",
 ];
 
 function seededRandom(seed) {

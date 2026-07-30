@@ -5,22 +5,23 @@ import { ShieldQuestion, AlertTriangle } from "lucide-react";
 const CARD_CLASSES =
   "rounded-[18px] border border-white/12 bg-gradient-to-br from-white/8 via-white/[0.03] to-black/60 shadow-[0_18px_50px_rgba(0,0,0,0.35)]";
 
-export default function SafeHarborMeter({ safeHarbor = {}, summary = {}, snapshot = {}, onAskBizzy }) {
+export default function SafeHarborMeter({ safeHarbor = {}, summary = {}, onAskBizzy }) {
   const { target, covered, remaining, percent } = useMemo(() => {
-    const fallbackTarget = snapshot?.profitYTD ? snapshot.profitYTD * 0.25 : null; // TODO: replace with API provided safe harbor target when available
-    const targetVal = safeHarbor?.requiredAnnual ?? summary?.annualEstimate ?? fallbackTarget;
-    const coveredVal = Number(summary?.ytdPaid ?? 0);
-    const remainingVal = targetVal != null ? Math.max(targetVal - coveredVal, 0) : null;
-    const pct = targetVal ? Math.max(0, Math.min(100, Math.round((coveredVal / targetVal) * 100))) : 0;
+    const targetVal = safeHarbor?.requiredAnnual ?? safeHarbor?.combined?.requiredAnnual ?? null;
+    const coveredVal = safeHarbor?.coveredAmount ?? safeHarbor?.combined?.coveredAmount ?? summary?.ytdPaid ?? null;
+    const remainingVal = safeHarbor?.remainingAmount ?? safeHarbor?.combined?.remainingAmount ?? (
+      targetVal != null && coveredVal != null ? Math.max(targetVal - coveredVal, 0) : null
+    );
+    const pct = targetVal && coveredVal != null ? Math.max(0, Math.min(100, Math.round((coveredVal / targetVal) * 100))) : null;
     return { target: targetVal, covered: coveredVal, remaining: remainingVal, percent: pct };
-  }, [safeHarbor?.requiredAnnual, snapshot?.profitYTD, summary?.annualEstimate, summary?.ytdPaid]);
+  }, [safeHarbor, summary?.ytdPaid]);
 
   return (
     <div className={`${CARD_CLASSES} p-4 sm:p-5 text-white`}>
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-[12px] uppercase tracking-[0.12em] text-white/65">Safe harbor status</div>
-          <div className="text-lg font-semibold mt-1">Coverage {target ? `${percent}%` : "—"}</div>
+          <div className="text-lg font-semibold mt-1">Coverage {percent != null ? `${percent}%` : "—"}</div>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -33,7 +34,7 @@ export default function SafeHarborMeter({ safeHarbor = {}, summary = {}, snapsho
         </div>
       </div>
 
-      <ProgressBar percent={percent} />
+      <ProgressBar percent={percent ?? 0} />
 
       <div className="mt-3 grid grid-cols-2 gap-2 text-[13px] text-white/75">
         <Metric label="Target" value={target} />

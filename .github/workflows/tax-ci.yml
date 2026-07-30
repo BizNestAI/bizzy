@@ -1,0 +1,60 @@
+name: Tax CI
+
+on:
+  pull_request:
+    paths:
+      - "src/api/tax/**"
+      - "src/services/tax/**"
+      - "src/services/insights/**"
+      - "scripts/tax/**"
+      - "tests/tax*.test.js"
+      - "supabase/migrations/*tax*"
+      - "docs/tax-*.md"
+      - "package.json"
+  workflow_dispatch:
+
+jobs:
+  tax:
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: test
+      SUPABASE_URL: http://localhost:54321
+      SUPABASE_SERVICE_ROLE_KEY: test-service-role-key
+      TAX_SCHEDULER_INTERNAL_SECRET: test-tax-scheduler-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run tax:production-audit -- --json
+      - run: node --test tests/taxSecurityAudit.test.js
+      - run: node --test tests/taxQuality.test.js
+      - run: node --test tests/taxOverviewApi.test.js
+      - run: node --test tests/taxOrchestrator.test.js
+      - run: node --test tests/taxRecalculationEvents.test.js
+      - run: node --test tests/taxSchedulers.test.js
+      - run: node --test tests/taxRlsIntegrationHarness.test.js
+      - run: node --test tests/taxResponseSafetyScanner.test.js
+      - name: Tax RLS real-session integration
+        if: ${{ vars.TAX_RLS_INTEGRATION_ENABLED == 'true' }}
+        env:
+          TAX_RLS_INTEGRATION_ENABLED: ${{ vars.TAX_RLS_INTEGRATION_ENABLED }}
+          TAX_RLS_TARGET_ENV: ${{ vars.TAX_RLS_TARGET_ENV || 'test' }}
+          TEST_SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
+          TEST_SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
+          TEST_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.TEST_SUPABASE_SERVICE_ROLE_KEY }}
+          TEST_API_BASE_URL: ${{ secrets.TEST_API_BASE_URL }}
+        run: npm run test:tax-rls
+      - name: Tax output safety runtime scan
+        if: ${{ vars.TAX_OUTPUT_SAFETY_ENABLED == 'true' }}
+        env:
+          TAX_OUTPUT_SAFETY_ENABLED: ${{ vars.TAX_OUTPUT_SAFETY_ENABLED }}
+          TAX_OUTPUT_SAFETY_TARGET_ENV: ${{ vars.TAX_OUTPUT_SAFETY_TARGET_ENV || 'test' }}
+          TEST_SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
+          TEST_SUPABASE_ANON_KEY: ${{ secrets.TEST_SUPABASE_ANON_KEY }}
+          TEST_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.TEST_SUPABASE_SERVICE_ROLE_KEY }}
+          TEST_API_BASE_URL: ${{ secrets.TEST_API_BASE_URL }}
+        run: npm run test:tax-output-safety
+      - run: npm run build

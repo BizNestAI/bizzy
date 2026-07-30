@@ -27,9 +27,9 @@ module.exports = {
         'neon-purple': 'rgb(var(--accent-rgb))',
 
         app: {
-          DEFAULT: '#12100F',
-          light:   '#151312',
-          dark:    '#0F0E0C',
+          DEFAULT: '#050606',
+          light:   '#111312',
+          dark:    '#080a09',
         },
         softWhite: '#f7f1e8',
 
@@ -46,11 +46,11 @@ module.exports = {
       },
 
       boxShadow: {
-        'neon-pink':   '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
-        'neon-green':  '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
-        'neon-blue':   '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
-        'neon-gold':   '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
-        'neon-purple': '0 0 12px 4px rgba(var(--accent-rgb),0.45)',
+        'neon-pink':   '0 0 10px 2px rgba(var(--accent-rgb),0.16)',
+        'neon-green':  '0 0 10px 2px rgba(var(--accent-rgb),0.16)',
+        'neon-blue':   '0 0 10px 2px rgba(var(--accent-rgb),0.16)',
+        'neon-gold':   '0 0 10px 2px rgba(var(--accent-rgb),0.16)',
+        'neon-purple': '0 0 10px 2px rgba(var(--accent-rgb),0.16)',
 
         // Graphite card shadow
         'bizzi-card':  'var(--card-shadow)',
@@ -89,17 +89,18 @@ module.exports = {
         '.text-primary':  { color: 'var(--text)' },
         '.text-secondary':{ color: 'var(--text-2)' },
         '.shadow-bizzi':  { boxShadow: 'var(--card-shadow)' },
-        '.glow-accent':   { boxShadow: '0 0 0 0 var(--accent-soft), 0 0 20px var(--accent-soft)' },
+        '.glow-accent':   { boxShadow: '0 0 0 1px var(--accent-line), 0 0 12px var(--accent-soft)' },
       });
 
       addComponents({
         '.btn-accent-hover': {
-          backgroundImage: 'linear-gradient(90deg, var(--accent), var(--accent-2))',
+          backgroundColor: 'var(--accent)',
+          backgroundImage: 'none',
           transition: 'filter .2s ease, box-shadow .2s ease, transform .06s ease',
         },
         '.btn-accent-hover:hover': {
           filter: 'brightness(1.03)',
-          boxShadow: '0 0 16px var(--accent-soft)',
+          boxShadow: '0 10px 24px rgba(0,0,0,0.28), 0 0 0 1px var(--accent-line)',
           transform: 'translateY(-0.5px)',
         },
       });

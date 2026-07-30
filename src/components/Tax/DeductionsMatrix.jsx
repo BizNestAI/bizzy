@@ -20,9 +20,6 @@ export default function DeductionsMatrix({
   currentMonth,
   grid = [],
   totals,
-  onExport,
-  onAdd,
-  onAskBizzy,
   onRowClick,
   showTotals = true,
   title = "Deductions",
@@ -95,11 +92,9 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
 
   return (
     <div
-      className="rounded-[32px] p-2 md:p-3"
+      className="rounded-[22px]"
       style={{
-        background: "linear-gradient(180deg, rgba(12,12,14,0.92), rgba(14,14,16,0.94))",
-        border: "1px solid rgba(191,191,191,0.16)",
-        boxShadow: "0 32px 80px rgba(0,0,0,0.55)",
+        background: "transparent",
       }}
     >
       {!hideHeader && (
@@ -110,8 +105,8 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
       )}
 
       <div
-        className="mt-4 rounded-[32px] border overflow-hidden"
-        style={{ borderColor: "rgba(191,191,191,0.16)", background: "rgba(10,10,12,0.96)" }}
+        className="mt-4 overflow-hidden rounded-[18px]"
+        style={{ background: "rgba(10,10,12,0.72)" }}
       >
         <div
           ref={scrollRef}
@@ -131,15 +126,14 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
           >
             {/* Header row with sticky Category & YTD at end */}
             <div
-              className="grid gap-x-1 md:gap-x-2 items-center px-3 py-0.5 text-[12px] md:text-xs text-white/70 border-b border-white/10 sticky top-0 z-20"
-              style={{ background: "rgba(10,10,12,0.98)", gridTemplateColumns: columnTemplate }}
+              className="grid gap-x-1 md:gap-x-2 items-center px-3 py-1 text-[12px] md:text-xs text-white/70 border-b border-white/[0.06] sticky top-0 z-20"
+              style={{ background: "rgba(10,10,12,0.82)", gridTemplateColumns: columnTemplate }}
             >
               <div
                 className="font-medium sticky left-0 z-30 pr-2 py-1 text-center"
                 style={{
-                  background: "rgba(10,10,12,0.96)",
-                  borderRight: "1px solid rgba(255,255,255,0.08)",
-                  boxShadow: "8px 0 24px rgba(0,0,0,0.28)",
+                  background: "rgba(10,10,12,0.82)",
+                  boxShadow: "10px 0 22px rgba(0,0,0,0.24)",
                   width: STICKY_WIDTH,
                   minWidth: STICKY_WIDTH,
                   maxWidth: STICKY_WIDTH,
@@ -165,21 +159,21 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
             </div>
 
             {/* Body rows */}
-            <div className="divide-y divide-white/5">
+            <div>
               {grid.map((row, ri) => {
                 return (
                   <div
                     key={row.category + ri}
-                    className="group relative grid gap-x-1 md:gap-x-2 items-center px-3 py-1 transition-colors hover:bg-white/[0.02] hover:border-white/10 border border-transparent cursor-pointer"
+                    className="group relative grid gap-x-1 md:gap-x-2 items-center px-3 py-1 transition-colors hover:bg-white/[0.035] cursor-pointer"
                     style={{ gridTemplateColumns: columnTemplate }}
                     onClick={() => onRowClick?.(row)}
                   >
                   {/* Sticky first column; fully opaque so no bleed-through */}
                   <div
-                    className="sticky left-0 z-30 pr-2 flex min-h-[72px] flex-col items-center justify-center text-center border-r border-white/10 relative py-1"
+                    className="sticky left-0 z-30 pr-2 flex min-h-[70px] flex-col items-center justify-center text-center relative py-1"
                     style={{
-                      background: "rgba(10,10,12,0.96)",
-                      boxShadow: "8px 0 24px rgba(0,0,0,0.28)",
+                      background: "rgba(10,10,12,0.82)",
+                      boxShadow: "10px 0 22px rgba(0,0,0,0.24)",
                       width: STICKY_WIDTH,
                       minWidth: STICKY_WIDTH,
                       maxWidth: STICKY_WIDTH,
@@ -213,14 +207,13 @@ const STICKY_WIDTH = 180; // width of category column we want always visible
             {/* Totals row */}
             {showTotals ? (
               <div
-                className="grid gap-x-1 md:gap-x-2 items-center px-3 py-1 border-t border-white/10 mt-1"
+                className="grid gap-x-1 md:gap-x-2 items-center px-3 py-1 border-t border-white/[0.06] mt-1"
                 style={{ gridTemplateColumns: columnTemplate }}
               >
                 <div
                   className="text-sm font-medium sticky left-0 z-30 pr-2 flex min-h-[72px] items-center justify-center text-center"
                   style={{
-                    background: "var(--panel)",
-                    borderRight: "1px solid rgba(255,255,255,0.08)",
+                    background: "rgba(10,10,12,0.82)",
                     width: STICKY_WIDTH,
                     minWidth: STICKY_WIDTH,
                     maxWidth: STICKY_WIDTH,

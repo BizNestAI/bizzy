@@ -44,6 +44,9 @@ function readUrlPeriod() {
     if (y && m) {
       return { year: normalizeYear(y), month: clampMonth(m) };
     }
+    const reviewMonth = url.searchParams.get("review_month");
+    const parsedReviewMonth = fromMonthText(reviewMonth);
+    if (parsedReviewMonth) return parsedReviewMonth;
   } catch {}
   return null;
 }

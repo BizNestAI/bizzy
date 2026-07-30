@@ -211,10 +211,10 @@ function buildMonthSequence(n) {
   const out = [];
   const d = new Date();
   d.setDate(1);
+  d.setHours(12, 0, 0, 0);
   for (let i = 0; i < n; i++) {
-    const dt = new Date(d);
-    dt.setMonth(d.getMonth() + i);
-    const ym = dt.toISOString().slice(0, 7); // YYYY-MM
+    const dt = new Date(d.getFullYear(), d.getMonth() + i, 1, 12, 0, 0, 0);
+    const ym = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`; // YYYY-MM
     const label = dt.toLocaleString('default', { month: 'short', year: 'numeric' });
     out.push({ ym, label });
   }

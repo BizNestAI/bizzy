@@ -6,7 +6,7 @@ const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
 const MIN_COL_WIDTHS = [36, 90, 160, 140, 150, 100, 170]; // px floors per column
 
-function CoaDropdown({ value, suggestedId, suggestedName, accounts, onChange, status, disabled }) {
+export function CoaDropdown({ value, suggestedId, suggestedName, accounts, onChange, status, disabled }) {
   const [open, setOpen] = React.useState(false);
   const [renderMenu, setRenderMenu] = React.useState(false);
   const ref = React.useRef(null);
@@ -116,7 +116,7 @@ function CoaDropdown({ value, suggestedId, suggestedName, accounts, onChange, st
           e.stopPropagation();
           setOpen((v) => !v);
         }}
-        className={`w-full rounded-xl border border-[var(--accent-line)] bg-[var(--panel)] px-3 py-2 pr-9 text-[11px] font-medium text-slate-50 shadow-[0_6px_18px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.03)] outline-none transition text-left ${
+        className={`w-full rounded-lg border border-[var(--accent-line)] bg-[var(--panel)] px-3 py-1.5 pr-9 text-[11px] font-medium text-slate-50 shadow-[0_6px_18px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.03)] outline-none transition text-left ${
           disabled ? "opacity-70 cursor-not-allowed" : "focus:border-emerald-400/70 focus:ring-2 focus:ring-emerald-500/30"
         }`}
       >
@@ -243,9 +243,14 @@ export default function BookkeepingFeed({
   // Column widths (px) — draggable like QuickBooks
   const [colWidths, setColWidths] = React.useState([36, 90, 220, 160, 170, 100, 180]);
   const containerRef = React.useRef(null);
+  const scrollAreaRef = React.useRef(null);
   const [containerWidth, setContainerWidth] = React.useState(null);
+  const [hasHorizontalOverflow, setHasHorizontalOverflow] = React.useState(false);
+  const [horizontalScrollActive, setHorizontalScrollActive] = React.useState(false);
+  const scrollFadeTimerRef = React.useRef(null);
   const dragRef = React.useRef(null); // { index, startX, start }
   const gridTemplate = React.useMemo(() => colWidths.map((w) => `${w}px`).join(" "), [colWidths]);
+  const totalGridWidth = React.useMemo(() => colWidths.reduce((sum, width) => sum + width, 0), [colWidths]);
 
   const beginDrag = (index, clientX) => {
     dragRef.current = { index, startX: clientX, start: [...colWidths] };
@@ -276,6 +281,7 @@ export default function BookkeepingFeed({
       document.removeEventListener("mousemove", onDrag);
       document.removeEventListener("mouseup", endDrag);
       document.body.style.userSelect = "";
+      if (scrollFadeTimerRef.current) clearTimeout(scrollFadeTimerRef.current);
     },
     []
   );
@@ -293,37 +299,33 @@ export default function BookkeepingFeed({
   }, []);
 
   React.useEffect(() => {
-    if (!containerWidth) return;
-    const total = colWidths.reduce((a, b) => a + b, 0);
-    const available = containerWidth - 4; // small padding guard
-    if (total <= available) return;
+    const el = scrollAreaRef.current;
+    if (!el) return;
+    const syncOverflow = () => {
+      setHasHorizontalOverflow(el.scrollWidth - el.clientWidth > 8);
+    };
+    syncOverflow();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => syncOverflow());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [containerWidth, totalGridWidth, transactions.length]);
 
-    // Scale columns down proportionally, respecting minimums
-    let scaled = colWidths.map((w, i) =>
-      Math.max(MIN_COL_WIDTHS[i] || 0, Math.floor((w * available) / total))
-    );
-    let scaledTotal = scaled.reduce((a, b) => a + b, 0);
+  const pulseHorizontalScrollbar = React.useCallback(() => {
+    setHorizontalScrollActive(true);
+    if (scrollFadeTimerRef.current) clearTimeout(scrollFadeTimerRef.current);
+    scrollFadeTimerRef.current = setTimeout(() => {
+      setHorizontalScrollActive(false);
+    }, 1200);
+  }, []);
 
-    // If still over (because of mins), trim only columns with spare room
-    if (scaledTotal > available) {
-      let over = scaledTotal - available;
-      const spare = scaled.map((w, i) => w - (MIN_COL_WIDTHS[i] || 0));
-      const spareTotal = spare.reduce((a, b) => a + Math.max(0, b), 0);
-      if (spareTotal > 0) {
-        scaled = scaled.map((w, i) => {
-          if (over <= 0) return w;
-          const room = Math.max(0, spare[i]);
-          if (!room) return w;
-          const cut = Math.min(room, Math.round((room / spareTotal) * over));
-          over -= cut;
-          return w - cut;
-        });
-      }
-    }
-
-    const changed = scaled.some((w, i) => Math.abs(w - colWidths[i]) > 0.5);
-    if (changed) setColWidths(scaled);
-  }, [containerWidth, colWidths]);
+  React.useEffect(() => {
+    const el = scrollAreaRef.current;
+    if (!el) return;
+    const onScroll = () => pulseHorizontalScrollbar();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [pulseHorizontalScrollbar]);
 
   const checkboxClasses =
     "relative h-4 w-4 appearance-none rounded border border-[var(--accent-line)] bg-[var(--panel)] text-emerald-500 shadow-inner transition-colors duration-150 outline-none " +
@@ -406,209 +408,246 @@ export default function BookkeepingFeed({
       className="mt-2 rounded-xl border overflow-hidden relative"
       style={{ background: panelBg, borderColor: panelBorder }}
     >
+      <style>{`
+        .books-feed-x-scroll {
+          overflow-x: auto;
+          overflow-y: hidden;
+          scrollbar-width: thin;
+          scrollbar-color: transparent transparent;
+        }
+        .books-feed-x-scroll::-webkit-scrollbar {
+          height: 8px;
+        }
+        .books-feed-x-scroll::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .books-feed-x-scroll::-webkit-scrollbar-thumb {
+          background: transparent;
+          border-radius: 9999px;
+          transition: background 180ms ease;
+        }
+        .books-feed-x-scroll.scrollbar-visible {
+          scrollbar-color: rgba(148,163,184,0.38) transparent;
+        }
+        .books-feed-x-scroll.scrollbar-visible::-webkit-scrollbar-thumb {
+          background: rgba(148,163,184,0.38);
+        }
+        .books-feed-x-scroll.scrollbar-visible::-webkit-scrollbar-thumb:hover {
+          background: rgba(148,163,184,0.52);
+        }
+      `}</style>
       <div
-        className="grid text-[11px] uppercase tracking-wide text-slate-400 border-b px-3 py-2.5 divide-x divide-[rgba(255,255,255,0.06)]"
-        style={{ background: panelBg, borderColor: panelBorder, columnGap: 0, rowGap: 0, gridTemplateColumns: gridTemplate }}
+        ref={scrollAreaRef}
+        className={`books-feed-x-scroll ${hasHorizontalOverflow && horizontalScrollActive ? "scrollbar-visible" : ""}`}
+        onMouseEnter={() => {
+          if (hasHorizontalOverflow) pulseHorizontalScrollbar();
+        }}
       >
-        <div className="flex items-center justify-center relative">
-          <input
-            type="checkbox"
-            checked={allSelected}
-            disabled={readOnly}
-            onChange={() => {
-              if (readOnly) return;
-              toggleSelectAll();
-            }}
-            className={`${checkboxClasses} ${readOnly ? "opacity-50 cursor-not-allowed" : ""}`}
-          />
-        </div>
-        {["date", "description", "payee", "account", "total", "action"].map((key, idx) => {
-          const labelMap = { date: "Date", description: "Description", payee: "Payee/Customer", account: "Account", total: "Total", action: "Action" };
-          const align =
-            key === "total"
-              ? "text-right"
-              : key === "action"
-              ? "text-center"
-              : "text-left";
-          const onClick =
-            key === "date" ? () => cycleSort("date") : key === "description" ? () => cycleSort("description") : undefined;
-          return (
-            <div key={key} className={`relative flex items-center ${align} w-full`}>
-              <button
-                type={onClick ? "button" : "button"}
-                onClick={onClick}
-                className={`flex items-center w-full ${align === "text-left" ? "justify-start" : align === "text-right" ? "justify-end" : "justify-center"}`}
-                title={onClick ? `Sort by ${labelMap[key]}` : undefined}
-                style={{ cursor: onClick ? "pointer" : "default" }}
-              >
-                <span className={align === "text-right" ? "w-full text-right" : ""}>{labelMap[key]}</span>
-                {key === "date" || key === "description" ? renderSortIndicator(key) : null}
-              </button>
-              {/* Drag handle */}
-              {idx < colWidths.length - 1 ? (
-                <div
-                  role="separator"
-                  onMouseDown={(e) => beginDrag(idx + 1, e.clientX)}
-                  className="absolute right-[-6px] top-0 h-full w-3 cursor-col-resize"
-                  style={{ touchAction: "none" }}
-                />
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-
-      {sortedTransactions.map((txn, idx) => {
-        const payeeConfidence = txn.payeeConfidence || txn.counterparty_confidence || txn.confidence || null;
-        const showAddToQbo =
-          ENABLE_QBO_ADD_STUB &&
-          txn.vendor &&
-          !txn.qboEntityId &&
-          payeeConfidence === "high";
-        const isPosted = txn.status === "posted";
-
-        return (
+        <div style={{ minWidth: totalGridWidth }}>
           <div
-            key={txn.id}
-            className="grid items-center px-3 py-3 text-[11px] text-slate-100 border-b divide-x divide-[rgba(255,255,255,0.06)] transition-colors"
-            style={{
-              background: panelBg,
-              borderColor: panelBorder,
-              transition: "background 120ms ease",
-              gridTemplateColumns: gridTemplate,
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = ROW_HOVER_BG)}
-            onMouseLeave={(e) => (e.currentTarget.style.background = panelBg)}
+            className="grid text-[11px] uppercase tracking-wide text-slate-400 border-b px-3 py-2.5 divide-x divide-[rgba(255,255,255,0.06)]"
+            style={{ background: panelBg, borderColor: panelBorder, columnGap: 0, rowGap: 0, gridTemplateColumns: gridTemplate }}
           >
-          <div className="flex items-center justify-center">
-            <input
-              type="checkbox"
-              disabled={isPosted || readOnly}
-              checked={selectedIds.has(txn.id)}
-              onChange={() => {
-                if (isPosted || readOnly) return;
-                toggleRow(txn.id);
-              }}
-              className={`${checkboxClasses} ${(isPosted || readOnly) ? "opacity-50 cursor-not-allowed" : ""}`}
-              title={isPosted ? "Already posted to QuickBooks." : readOnly ? "Billing required to edit transactions." : undefined}
-            />
-          </div>
-          <div className="text-slate-300 truncate">{fmtDate(txn.date)}</div>
-          <div className="min-w-0 pl-2 text-[10px] font-medium text-slate-50 truncate leading-tight whitespace-nowrap" title={txn.description || ""}>
-            <div className="flex items-center gap-2">
-              <span className="truncate">{txn.description || "—"}</span>
-              {txn.is_check ? (
-                <span
-                  className="inline-flex items-center rounded-full border border-slate-500/70 bg-white/5 px-2 py-[1px] text-[9px] font-semibold text-slate-100"
-                  title="Checks often don’t include vendor details. Bizzi needs one quick clarification."
-                >
-                  Check
-                </span>
-              ) : null}
-            </div>
-            {txn.is_check && txn.check_number ? (
-              <span className="text-[9px] text-slate-400">Check #{txn.check_number}</span>
-            ) : null}
-          </div>
-          <div className="min-w-0 flex flex-col text-slate-400 leading-tight whitespace-nowrap" title={txn.vendor || ""}>
-            <span className="truncate">{txn.vendor || "—"}</span>
-            {showAddToQbo ? (
-              <button
-                type="button"
-                onClick={() => window.alert("Add to QuickBooks coming soon")}
-                className="mt-[2px] inline-flex w-fit items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2 py-[2px] text-[9px] font-semibold text-slate-100 hover:border-emerald-400/50 hover:text-emerald-200"
-              >
-                Add to QuickBooks
-              </button>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-1 text-slate-200 text-[11px] leading-tight whitespace-nowrap overflow-visible relative z-[120]">
-            {isPosted ? (
-              <span className="inline-flex items-center rounded-full px-2 py-[2px] text-[10px] font-semibold bg-emerald-500/10 text-emerald-200 border border-emerald-500/40">
-                Posted to QuickBooks
-              </span>
-            ) : null}
-            {accounts.length > 0 ? (
-              <CoaDropdown
-                value={accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? txn.accountId ?? ""}
-                suggestedId={txn.suggestedAccountId}
-                suggestedName={txn.suggestedAccountName || txn.glAccountName}
-                accounts={accounts}
-                status={txn.status}
-                disabled={
-                  isPosted ||
-                  txn.status === "failed" ||
-                  (["approved", "auto_approved"].includes(txn.status) && !txn.canEdit) ||
-                  readOnly
-                }
-                onChange={(id) => handleAccountSelect(txn.id, id)}
+            <div className="flex items-center justify-center relative">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                disabled={readOnly}
+                onChange={() => {
+                  if (readOnly) return;
+                  toggleSelectAll();
+                }}
+                className={`${checkboxClasses} ${readOnly ? "opacity-50 cursor-not-allowed" : ""}`}
               />
-            ) : (
-              <span className="text-slate-400 text-[11px] truncate">{txn.currentAccount}</span>
-            )}
+            </div>
+            {["date", "description", "payee", "account", "total", "action"].map((key, idx) => {
+              const labelMap = { date: "Date", description: "Description", payee: "Payee/Customer", account: "Account", total: "Total", action: "Action" };
+              const align =
+                key === "total"
+                  ? "text-right"
+                  : key === "action"
+                  ? "text-center"
+                  : "text-left";
+              const onClick =
+                key === "date" ? () => cycleSort("date") : key === "description" ? () => cycleSort("description") : undefined;
+              return (
+                <div key={key} className={`relative flex items-center ${align} w-full`}>
+                  <button
+                    type={onClick ? "button" : "button"}
+                    onClick={onClick}
+                    className={`flex items-center w-full ${align === "text-left" ? "justify-start" : align === "text-right" ? "justify-end" : "justify-center"}`}
+                    title={onClick ? `Sort by ${labelMap[key]}` : undefined}
+                    style={{ cursor: onClick ? "pointer" : "default" }}
+                  >
+                    <span className={align === "text-right" ? "w-full text-right" : ""}>{labelMap[key]}</span>
+                    {key === "date" || key === "description" ? renderSortIndicator(key) : null}
+                  </button>
+                  {idx < colWidths.length - 1 ? (
+                    <div
+                      role="separator"
+                      onMouseDown={(e) => beginDrag(idx + 1, e.clientX)}
+                      className="absolute right-[-6px] top-0 h-full w-3 cursor-col-resize"
+                      style={{ touchAction: "none" }}
+                    />
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
-          <div
-            className={`text-right font-semibold whitespace-nowrap ${
-              (Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0) < 0 ? "text-rose-400" : "text-emerald-400"
-            }`}
-          >
-            {(() => {
-              const display = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0;
-              const isOutflow = display < 0;
-              const abs = Math.abs(display);
-              return `${isOutflow ? "-" : "+"}$${abs.toFixed(2)}`;
-            })()}
-          </div>
-          <div className="flex justify-center">
-            {isPosted ? (
-              <span className="text-[10px] text-slate-400">Posted</span>
-            ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
-              <>
-                <button
-                  className="inline-flex items-center justify-center rounded-full border border-amber-300/60 bg-amber-500/15 px-2 py-[3px] text-[10px] font-medium text-amber-100 hover:bg-amber-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={readOnly}
-                  onClick={() => {
-                    if (readOnly) return;
-                    onUndo && onUndo(txn.id);
+
+          {sortedTransactions.map((txn, idx) => {
+            const payeeConfidence = txn.payeeConfidence || txn.counterparty_confidence || txn.confidence || null;
+            const showAddToQbo =
+              ENABLE_QBO_ADD_STUB &&
+              txn.vendor &&
+              !txn.qboEntityId &&
+              payeeConfidence === "high";
+            const isPosted = txn.status === "posted";
+
+            return (
+              <div
+                key={txn.id}
+                className="grid items-center px-3 py-2 text-[11px] text-slate-100 border-b divide-x divide-[rgba(255,255,255,0.06)] transition-colors"
+                style={{
+                  background: panelBg,
+                  borderColor: panelBorder,
+                  transition: "background 120ms ease",
+                  gridTemplateColumns: gridTemplate,
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = ROW_HOVER_BG)}
+                onMouseLeave={(e) => (e.currentTarget.style.background = panelBg)}
+              >
+              <div className="flex items-center justify-center">
+                <input
+                  type="checkbox"
+                  disabled={isPosted || readOnly}
+                  checked={selectedIds.has(txn.id)}
+                  onChange={() => {
+                    if (isPosted || readOnly) return;
+                    toggleRow(txn.id);
                   }}
-                >
-                  Undo
-                </button>
-                {txn.status === "auto_approved" ? (
-                  <span className="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2 py-[2px] text-[9px] font-semibold text-emerald-100">
-                    Auto-approved
+                  className={`${checkboxClasses} ${(isPosted || readOnly) ? "opacity-50 cursor-not-allowed" : ""}`}
+                  title={isPosted ? "Already posted to QuickBooks." : readOnly ? "Billing required to edit transactions." : undefined}
+                />
+              </div>
+              <div className="text-slate-300 truncate">{fmtDate(txn.date)}</div>
+              <div className="min-w-0 pl-2 text-[10px] font-medium text-slate-50 truncate leading-tight whitespace-nowrap" title={txn.description || ""}>
+                <div className="flex items-center gap-2">
+                  <span className="truncate">{txn.description || "—"}</span>
+                  {txn.is_check ? (
+                    <span
+                      className="inline-flex items-center rounded-full border border-slate-500/70 bg-white/5 px-2 py-[1px] text-[9px] font-semibold text-slate-100"
+                      title="Checks often don’t include vendor details. Bizzi needs one quick clarification."
+                    >
+                      Check
+                    </span>
+                  ) : null}
+                </div>
+                {txn.is_check && txn.check_number ? (
+                  <span className="text-[9px] text-slate-400">Check #{txn.check_number}</span>
+                ) : null}
+              </div>
+              <div className="min-w-0 flex flex-col text-slate-400 leading-tight whitespace-nowrap" title={txn.vendor || ""}>
+                <span className="truncate">{txn.vendor || "—"}</span>
+                {showAddToQbo ? (
+                  <button
+                    type="button"
+                    onClick={() => window.alert("Add to QuickBooks coming soon")}
+                    className="mt-[2px] inline-flex w-fit items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2 py-[2px] text-[9px] font-semibold text-slate-100 hover:border-emerald-400/50 hover:text-emerald-200"
+                  >
+                    Add to QuickBooks
+                  </button>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-1 text-slate-200 text-[11px] leading-tight whitespace-nowrap overflow-visible relative z-[120]">
+                {isPosted ? (
+                  <span className="inline-flex items-center rounded-full px-2 py-[2px] text-[10px] font-semibold bg-emerald-500/10 text-emerald-200 border border-emerald-500/40">
+                    Posted to QuickBooks
                   </span>
                 ) : null}
-              </>
-            ) : (
-             <button
-               className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/14 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/24 hover:border-emerald-300/90 active:scale-[0.99] disabled:opacity-45 disabled:cursor-not-allowed shadow-[0_2px_6px_rgba(0,0,0,0.2)] transition-transform"
-               disabled={
-                 readOnly ||
-                 txn.is_check &&
-                 !(accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null)
-               }
-               title={
-                 txn.is_check && !(accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null)
-                   ? "Select a category to approve this check."
-                   : readOnly
-                   ? "Billing required to approve transactions."
-                   : "Approve"
-               }
-              onClick={() => {
-                if (readOnly) return;
-                onApprove && onApprove(txn.id, accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null);
-              }}
-              aria-label="Approve transaction"
-            >
-              ✓
-            </button>
-            )}
-         </div>
-       </div>
-      );
-      })}
-      <div className="flex items-center justify-between px-3 py-2 text-[10px] text-slate-400">
+                {accounts.length > 0 ? (
+                  <CoaDropdown
+                    value={accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? txn.accountId ?? ""}
+                    suggestedId={txn.suggestedAccountId}
+                    suggestedName={txn.suggestedAccountName || txn.glAccountName}
+                    accounts={accounts}
+                    status={txn.status}
+                    disabled={
+                      isPosted ||
+                      txn.status === "failed" ||
+                      (["approved", "auto_approved"].includes(txn.status) && !txn.canEdit) ||
+                      readOnly
+                    }
+                    onChange={(id) => handleAccountSelect(txn.id, id)}
+                  />
+                ) : (
+                  <span className="text-slate-400 text-[11px] truncate">{txn.currentAccount}</span>
+                )}
+              </div>
+              <div
+                className={`text-right font-semibold whitespace-nowrap ${
+                  (Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0) < 0 ? "text-rose-400" : "text-emerald-400"
+                }`}
+              >
+                {(() => {
+                  const display = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0;
+                  const isOutflow = display < 0;
+                  const abs = Math.abs(display);
+                  return `${isOutflow ? "-" : "+"}$${abs.toFixed(2)}`;
+                })()}
+              </div>
+              <div className="flex justify-center">
+                {isPosted ? (
+                  <span className="text-[10px] text-slate-400">Posted</span>
+                ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
+                  <>
+                    <button
+                      className="inline-flex items-center justify-center rounded-full border border-amber-300/60 bg-amber-500/15 px-2 py-[3px] text-[10px] font-medium text-amber-100 hover:bg-amber-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={readOnly}
+                      onClick={() => {
+                        if (readOnly) return;
+                        onUndo && onUndo(txn.id);
+                      }}
+                    >
+                      Undo
+                    </button>
+                    {txn.status === "auto_approved" ? (
+                      <span className="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2 py-[2px] text-[9px] font-semibold text-emerald-100">
+                        Auto-approved
+                      </span>
+                    ) : null}
+                  </>
+                ) : (
+                 <button
+                   className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/14 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/24 hover:border-emerald-300/90 active:scale-[0.99] disabled:opacity-45 disabled:cursor-not-allowed shadow-[0_2px_6px_rgba(0,0,0,0.2)] transition-transform"
+                   disabled={
+                     readOnly ||
+                     txn.is_check &&
+                     !(accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null)
+                   }
+                   title={
+                     txn.is_check && !(accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null)
+                       ? "Select a category to approve this check."
+                       : readOnly
+                       ? "Billing required to approve transactions."
+                       : "Approve"
+                   }
+                  onClick={() => {
+                    if (readOnly) return;
+                    onApprove && onApprove(txn.id, accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null);
+                  }}
+                  aria-label="Approve transaction"
+                >
+                  ✓
+                </button>
+                )}
+             </div>
+           </div>
+          );
+          })}
+        </div>
+      </div>
+      <div className="flex items-center justify-between px-3 py-1.5 text-[10px] text-slate-400">
         <span>
           {totalCount ? `${(page - 1) * pageSize + 1}-${Math.min(page * pageSize, totalCount)} of ${totalCount}` : null}
         </span>
@@ -616,15 +655,15 @@ export default function BookkeepingFeed({
           <button
             disabled={page <= 1}
             onClick={() => onPageChange && onPageChange(page - 1)}
-            className="h-6 w-6 rounded border border-slate-700 text-slate-200 disabled:opacity-40 flex items-center justify-center"
+            className="h-5 w-5 rounded border border-slate-700 text-slate-200 disabled:opacity-40 flex items-center justify-center"
           >
             ‹
           </button>
-          <span className="px-2 py-1 rounded border border-slate-700 text-slate-100">{page}</span>
+          <span className="px-2 py-0.5 rounded border border-slate-700 text-slate-100">{page}</span>
           <button
             disabled={page >= pageCount}
             onClick={() => onPageChange && onPageChange(page + 1)}
-            className="h-6 w-6 rounded border border-slate-700 text-slate-200 disabled:opacity-40 flex items-center justify-center"
+            className="h-5 w-5 rounded border border-slate-700 text-slate-200 disabled:opacity-40 flex items-center justify-center"
           >
             ›
           </button>
