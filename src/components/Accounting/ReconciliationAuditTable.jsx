@@ -1,20 +1,9 @@
-import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React from "react";
+import { ChevronUp } from "lucide-react";
 import CardHeader from "../UI/CardHeader.jsx";
-import ReconciliationTraceDrawer from "./ReconciliationTraceDrawer.jsx";
 import {
-  getReconciliationActionLabel,
-  getReconciliationIssueCopy,
   getReconciliationTone,
-  titleCase,
 } from "./reconciliationIssueCopy.js";
-
-const DATE_RANGE_OPTIONS = [
-  { value: "last_30", label: "Last 30 days" },
-  { value: "last_90", label: "Last 90 days" },
-  { value: "this_month", label: "This month" },
-  { value: "all", label: "All dates" },
-];
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All pipeline states" },
@@ -30,6 +19,9 @@ const STATUS_OPTIONS = [
   { value: "unknown", label: "Unknown" },
 ];
 
+const PANEL_BG = "#151717";
+const PANEL_BORDER = "rgba(255,255,255,0.06)";
+
 function formatMoney(n) {
   if (n === null || n === undefined) return "—";
   const num = Number(n);
@@ -39,9 +31,17 @@ function formatMoney(n) {
 
 function formatDate(iso) {
   if (!iso) return "—";
-  const d = new Date(iso);
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(String(iso)) ? `${iso}T00:00:00` : iso;
+  const d = new Date(normalized);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString(undefined, { month: "numeric", day: "numeric", year: "2-digit" });
+}
+
+function formatMonth(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 }
 
 function pipelineStatusLabel(status) {
@@ -102,42 +102,6 @@ function pipelineStatusClass(status) {
   }
 }
 
-function qboStatusLabel(row) {
-  const postingState = row?.details?.posting_state || null;
-  if (row?.status === "duplicate_internal") return "Suppressed by safeguard";
-  if (postingState === "posted_to_qbo" || row?.qbo_txn_id) return "Linked in QBO";
-  if (postingState === "queued_for_posting") return "Queued to post";
-  if (postingState === "retry_scheduled") return "Retry scheduled";
-  if (postingState === "posting_in_progress") return "Posting now";
-  if (postingState === "missing_post_schedule") return "Schedule missing";
-  if (postingState === "approved_not_posted") return "Approved, not posted";
-  if (postingState === "post_error") return "Post error";
-  if (postingState === "failed_post") return "Failed in QBO";
-  if (postingState === "awaiting_review") return "Awaiting review";
-  if (postingState === "not_categorized") return "No category yet";
-  return "Not linked";
-}
-
-function qboStatusClass(row) {
-  const postingState = row?.details?.posting_state || null;
-  if (postingState === "posted_to_qbo" || row?.qbo_txn_id) {
-    return "border-emerald-400/30 bg-emerald-500/10 text-emerald-100";
-  }
-  if (["queued_for_posting", "retry_scheduled", "posting_in_progress", "approved_not_posted"].includes(postingState)) {
-    return "border-cyan-400/30 bg-cyan-500/10 text-cyan-100";
-  }
-  if (postingState === "missing_post_schedule") {
-    return "border-amber-300/30 bg-amber-400/10 text-amber-100";
-  }
-  if (["post_error", "failed_post"].includes(postingState)) {
-    return "border-rose-400/30 bg-rose-500/10 text-rose-100";
-  }
-  if (["awaiting_review", "not_categorized"].includes(postingState)) {
-    return "border-amber-300/30 bg-amber-400/10 text-amber-100";
-  }
-  return "border-white/10 bg-white/5 text-slate-200";
-}
-
 function resolveCategory(row) {
   return (
     row?.category_name ||
@@ -151,6 +115,30 @@ function resolveMerchant(row) {
   return row?.merchant || row?.details?.merchant_name || row?.details?.counterparty_name || "—";
 }
 
+function resolveDescription(row) {
+  return (
+    row?.bank_memo ||
+    row?.transaction_memo ||
+    row?.plaid_memo ||
+    row?.memo ||
+    row?.original_description ||
+    row?.details?.bank_memo ||
+    row?.details?.transaction_memo ||
+    row?.details?.plaid_memo ||
+    row?.details?.memo ||
+    row?.details?.original_description ||
+    row?.details?.bank_name ||
+    row?.description ||
+    "—"
+  );
+}
+
+function amountClass(amount) {
+  const value = Number(amount);
+  if (!Number.isFinite(value) || value === 0) return "text-slate-100";
+  return value > 0 ? "text-emerald-300" : "text-rose-300";
+}
+
 function EmptyState({ title, copy }) {
   return (
     <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-5 py-10 text-center">
@@ -160,19 +148,6 @@ function EmptyState({ title, copy }) {
   );
 }
 
-function getSelectedRangeCopy(rangeValue) {
-  switch (rangeValue) {
-    case "last_90":
-      return "last 90 days";
-    case "this_month":
-      return "this month";
-    case "all":
-      return "all dates";
-    default:
-      return "last 30 days";
-  }
-}
-
 export default function ReconciliationAuditTable({
   accounts = [],
   accountMap,
@@ -180,7 +155,7 @@ export default function ReconciliationAuditTable({
   setFilters,
   searchInput,
   setSearchInput,
-  refreshingRun,
+  refreshing,
   loading,
   error,
   rows = [],
@@ -190,14 +165,13 @@ export default function ReconciliationAuditTable({
   latestRunId,
   selectedRunSummary,
   isHistoricalSnapshot = false,
+  isClosing = false,
   onRefresh,
+  onCollapse,
   onReturnToLatest,
   onPrevPage,
   onNextPage,
 }) {
-  const navigate = useNavigate();
-  const [traceRow, setTraceRow] = useState(null);
-
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const noConnectedIntegrations = !accounts.length;
   const noRunYet = !latestRunId;
@@ -206,13 +180,11 @@ export default function ReconciliationAuditTable({
   const filtersActive =
     filters.status !== "all" ||
     filters.account !== "all" ||
-    filters.dateRange !== "all" ||
     Boolean(String(searchInput || "").trim());
   const noResults = !!latestRunId && !loading && !error && rows.length === 0;
   const hasAuditOnlyVisibleRows = (rows || []).some(
     (row) => row?.status === "archived" || row?.status === "duplicate_internal"
   );
-  const selectedRangeCopy = getSelectedRangeCopy(filters?.dateRange);
   const activeRunLabel = selectedRunSummary?.last_checked_at
     ? new Date(selectedRunSummary.last_checked_at).toLocaleString(undefined, {
         month: "short",
@@ -222,24 +194,14 @@ export default function ReconciliationAuditTable({
         minute: "2-digit",
       })
     : "Latest available run";
+  const selectedMonthLabel =
+    formatMonth(selectedRunSummary?.period_start) ||
+    formatMonth(selectedRunSummary?.period_end) ||
+    "Selected month";
   const usingHistoricalRun = Boolean(isHistoricalSnapshot);
-  const viewLabel = usingHistoricalRun ? `Viewing historical run from ${activeRunLabel}` : "Viewing latest run";
-
-  const buildBooksReviewUrl = (row) => {
-    const transactionId = row?.bank_transaction_id || row?.id || "";
-    const accountId = row?.plaid_account_id || "";
-    const params = new URLSearchParams();
-    if (transactionId) params.set("transaction_id", transactionId);
-    if (accountId) params.set("account_id", accountId);
-    const qs = params.toString();
-    return `/dashboard/accounting/bookkeeping${qs ? `?${qs}` : ""}`;
-  };
-
-  const canOpenBooksReview = (row) =>
-    ["needs_review", "failed_post", "missing_in_qbo", "approved_waiting_post"].includes(row?.status);
-
-  const canRefreshAudit = (row) =>
-    ["failed_post", "missing_in_qbo", "duplicate_in_qbo", "unknown"].includes(row?.status);
+  const viewLabel = usingHistoricalRun
+    ? `Viewing ${selectedMonthLabel}`
+    : `Viewing latest monthly run: ${selectedMonthLabel}`;
 
   const emptyState = (() => {
     if (error || loading || !noResults) return null;
@@ -251,35 +213,38 @@ export default function ReconciliationAuditTable({
     }
     if (noRunYet) {
       return {
-        title: "Ready to run your first reconciliation check",
-        copy: "Bizzi will trace transactions from Plaid into Bizzi and confirm what was categorized, approved, posted, or still needs review.",
+        title: "Waiting for the first monthly ledger rows",
+        copy: "Plaid transactions will appear here automatically after bank sync, including uncategorized and unposted items.",
       };
     }
     if (selectedRunFailed) {
       return {
-        title: "Reconciliation run did not complete.",
-        copy: "Try again or check logs.",
+        title: "Monthly ledger refresh did not complete.",
+        copy: "Bizzi will retry automatically. Existing source transactions remain visible when available.",
       };
     }
     if (filtersActive) {
       return {
         title: "No audit rows match these filters.",
-        copy: "Try widening the date range or clearing filters.",
+        copy: "Try clearing the status, account, or search filters.",
       };
     }
     return {
-      title: "No transactions found for this period.",
-      copy: `Bizzi did not find reconciliation audit rows for ${selectedRangeCopy}.`,
+      title: "No transactions found for this monthly run.",
+      copy: `Bizzi did not find reconciliation audit rows for ${selectedMonthLabel}.`,
     };
   })();
 
   return (
-    <div className="rounded-2xl border border-[var(--accent-line)] bg-[var(--panel)] p-4 shadow-lg">
+    <div
+      className={`${isClosing ? "reconciliation-audit-exit" : "reconciliation-audit-enter"} rounded-2xl border p-4 shadow-lg`}
+      style={{ background: PANEL_BG, borderColor: PANEL_BORDER }}
+    >
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <CardHeader
-            title="Reconciliation Audit"
-            subtitle="End-to-end audit of the Plaid to Bizzi to QuickBooks pipeline across review, approval, posting, and reconciliation states."
+            title={`Reconciliation Audit — ${selectedMonthLabel}`}
+            subtitle="Every Plaid transaction for the selected month, including category, posting state, and QuickBooks lifecycle."
             size="sm"
             titleTone="bold"
           />
@@ -294,22 +259,35 @@ export default function ReconciliationAuditTable({
                 onClick={onReturnToLatest}
                 className="inline-flex items-center rounded-full border border-cyan-300/20 bg-cyan-400/10 px-2 py-[3px] text-[10px] font-medium leading-none text-cyan-100 hover:bg-cyan-400/15"
               >
-                Return to latest run
+                Return to latest month
               </button>
             ) : null}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-[12px] font-semibold text-slate-100 hover:bg-white/10 disabled:opacity-60"
-          disabled={refreshingRun || loading}
-        >
-          {refreshingRun ? "Running…" : "Refresh audit"}
-        </button>
+        <div className="flex items-center gap-2">
+          {onCollapse ? (
+            <button
+              type="button"
+              onClick={onCollapse}
+              aria-label="Collapse reconciliation audit"
+              title="Collapse audit"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
+            >
+              <ChevronUp className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-[12px] font-semibold text-slate-100 hover:bg-white/10 disabled:opacity-60"
+            disabled={refreshing || loading}
+          >
+            {refreshing || loading ? "Refreshing..." : "Refresh view"}
+          </button>
+        </div>
       </div>
 
-      <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
+      <div className="mt-4 grid gap-2 md:grid-cols-3">
         <select
           value={filters.status}
           onChange={(e) => setFilters((prev) => ({ ...prev, status: e.target.value }))}
@@ -335,58 +313,44 @@ export default function ReconciliationAuditTable({
           ))}
         </select>
 
-        <select
-          value={filters.dateRange}
-          onChange={(e) => setFilters((prev) => ({ ...prev, dateRange: e.target.value }))}
-          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400/40"
-        >
-          {DATE_RANGE_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-
         <input
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search merchant or description"
-          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-emerald-400/40 xl:col-span-2"
+          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-emerald-400/40"
         />
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-2xl border border-white/6 bg-black/10">
+      <div className="mt-4 overflow-hidden rounded-2xl border border-white/6 bg-[#111313]">
         <div className="overflow-x-auto">
-          <table className="min-w-[1380px] w-full text-sm text-slate-100">
+          <table className="min-w-[1040px] w-full text-sm text-slate-100">
             <thead className="bg-white/[0.03] text-[11px] uppercase tracking-[0.18em] text-slate-400">
               <tr className="border-b border-white/6">
-                <th className="px-4 py-3 text-left">Date</th>
-                <th className="px-4 py-3 text-left">Description</th>
-                <th className="px-4 py-3 text-left">Merchant / Payee</th>
-                <th className="px-4 py-3 text-left">Account</th>
-                <th className="px-4 py-3 text-right">Amount</th>
-                <th className="px-4 py-3 text-left">Pipeline Status</th>
-                <th className="px-4 py-3 text-left">QBO Status</th>
-                <th className="px-4 py-3 text-left">Category</th>
-                <th className="px-4 py-3 text-left">Action / View</th>
+                <th className="px-3 py-2.5 text-left">Date</th>
+                <th className="px-3 py-2.5 text-left">Description</th>
+                <th className="px-3 py-2.5 text-left">Merchant / Payee</th>
+                <th className="px-3 py-2.5 text-left">Account</th>
+                <th className="px-3 py-2.5 text-right">Amount</th>
+                <th className="px-3 py-2.5 text-left">Pipeline Status</th>
+                <th className="px-3 py-2.5 text-left">Category</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/6">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-slate-300">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-300">
                     Loading audit rows…
                   </td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-slate-300">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-300">
                     Failed to load reconciliation audit rows.
                   </td>
                 </tr>
               ) : noConnectedIntegrations ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-6">
+                  <td colSpan={7} className="px-4 py-6">
                     <EmptyState
                       title="Connect Plaid and QuickBooks to start reconciliation."
                       copy="Bizzi needs both integrations connected before it can generate reconciliation audit rows."
@@ -395,40 +359,38 @@ export default function ReconciliationAuditTable({
                 </tr>
               ) : noRunYet ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-6">
+                  <td colSpan={7} className="px-4 py-6">
                     <EmptyState
-                      title="Ready to run your first reconciliation check"
-                      copy="Bizzi will trace transactions from Plaid into Bizzi and confirm what was categorized, approved, posted, or still needs review."
+                      title="Waiting for the first monthly ledger rows"
+                      copy="Plaid transactions will appear here automatically after bank sync, including uncategorized and unposted items."
                     />
                   </td>
                 </tr>
               ) : noResults ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-6">
+                  <td colSpan={7} className="px-4 py-6">
                     <EmptyState title={emptyState?.title} copy={emptyState?.copy} />
                   </td>
                 </tr>
               ) : (
                 rows.map((row) => {
                   const accountLabel = accountMap.get(row.plaid_account_id) || row.plaid_account_id || "—";
-                  const statusCopy = getReconciliationIssueCopy(row.status, row.details || {});
                   const statusTone = getReconciliationTone(row.status, row.details || {});
                   return (
-                    <tr key={row.id} className="align-top transition hover:bg-white/[0.025]">
-                      <td className="px-4 py-3 text-[13px] text-slate-200">{formatDate(row.txn_date)}</td>
-                      <td className="px-4 py-3">
-                        <div className="font-medium text-slate-100">{row.description || "—"}</div>
-                        <div className="mt-1 text-[12px] text-slate-500">
-                          {titleCase(row.details?.lifecycle_stage || "unknown")}
+                    <tr key={row.id} className="align-middle transition hover:bg-white/[0.025]">
+                      <td className="px-3 py-2 text-[12px] text-slate-200 whitespace-nowrap">{formatDate(row.txn_date)}</td>
+                      <td className="px-3 py-2">
+                        <div className="max-w-[320px] truncate text-[12px] font-medium text-slate-100" title={resolveDescription(row)}>
+                          {resolveDescription(row)}
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-[13px] text-slate-300">{resolveMerchant(row)}</td>
-                      <td className="px-4 py-3 text-[13px] text-slate-300">{accountLabel}</td>
-                      <td className="px-4 py-3 text-right text-[13px] font-medium text-slate-100">
+                      <td className="px-3 py-2 text-[12px] text-slate-300">{resolveMerchant(row)}</td>
+                      <td className="px-3 py-2 text-[12px] text-slate-300">{accountLabel}</td>
+                      <td className={`px-3 py-2 text-right text-[12px] font-semibold ${amountClass(row.amount)}`}>
                         {formatMoney(row.amount)}
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="space-y-1.5">
+                      <td className="px-3 py-2">
+                        <div>
                           <span
                             className={`inline-flex items-center rounded-full border px-2 py-[3px] text-[10px] font-semibold leading-tight ${
                               statusTone === "green"
@@ -444,50 +406,9 @@ export default function ReconciliationAuditTable({
                           >
                             {pipelineStatusDisplayLabel(row)}
                           </span>
-                          <div className="max-w-[220px] text-[11px] leading-4 text-slate-400">
-                            {statusCopy}
-                          </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center rounded-full border px-2 py-[3px] text-[10px] font-semibold leading-tight ${qboStatusClass(row)}`}
-                        >
-                          {qboStatusLabel(row)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-[13px] text-slate-300">{resolveCategory(row)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setTraceRow({ ...row, _accountLabel: accountLabel })}
-                            title={getReconciliationActionLabel(row.status, row.details || {})}
-                            className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[12px] font-medium text-slate-100 hover:bg-white/10"
-                          >
-                            View trace
-                          </button>
-                          {canOpenBooksReview(row) ? (
-                            <button
-                              type="button"
-                              onClick={() => navigate(buildBooksReviewUrl(row))}
-                              className="rounded-md border border-amber-300/20 bg-amber-400/10 px-2.5 py-1 text-[12px] font-medium text-amber-100 hover:bg-amber-400/15"
-                            >
-                              Open in Books Review
-                            </button>
-                          ) : null}
-                          {canRefreshAudit(row) ? (
-                            <button
-                              type="button"
-                              onClick={onRefresh}
-                              disabled={refreshingRun}
-                              className="rounded-md border border-cyan-300/20 bg-cyan-400/10 px-2.5 py-1 text-[12px] font-medium text-cyan-100 hover:bg-cyan-400/15 disabled:opacity-60"
-                            >
-                              {refreshingRun ? "Running…" : "Refresh audit"}
-                            </button>
-                          ) : null}
-                        </div>
-                      </td>
+                      <td className="px-3 py-2 text-[12px] text-slate-300">{resolveCategory(row)}</td>
                     </tr>
                   );
                 })
@@ -527,18 +448,6 @@ export default function ReconciliationAuditTable({
         </div>
       ) : null}
 
-      <ReconciliationTraceDrawer
-        open={Boolean(traceRow)}
-        row={traceRow}
-        accountLabel={traceRow?._accountLabel}
-        statusExplanation={traceRow ? getReconciliationIssueCopy(traceRow.status, traceRow.details || {}) : ""}
-        onRefresh={onRefresh}
-        onOpenBooksReview={() => {
-          if (!traceRow) return;
-          navigate(buildBooksReviewUrl(traceRow));
-        }}
-        onClose={() => setTraceRow(null)}
-      />
     </div>
   );
 }

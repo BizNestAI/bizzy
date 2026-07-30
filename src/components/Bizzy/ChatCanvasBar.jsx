@@ -7,7 +7,6 @@ import { ONBOARDING_PROMPTS } from "../../config/chatQuickPrompts";
 import { CANVAS_COL_MAX, CANVAS_COL_PAD } from "../../config/chatCanvasLayout";
 
 export default function ChatCanvasBar({
-  quickPromptMode,
   isOnboardingMode = false,
   placeholder,
 }) {
@@ -58,11 +57,8 @@ export default function ChatCanvasBar({
   }, [currentModule, isLoading, sendMessage, openCanvas]);
 
   const shellClassName = "bg-transparent text-white";
-  const borderCol = "var(--surface-border)";
-  const neutralShellBg = "var(--surface-graphite)";
-  const neutralShellBorder = "1px solid var(--surface-border)";
-  const focusGlow = "none";
-  const focusBg = "none";
+  const neutralShellBg = "linear-gradient(180deg, var(--chatbar-bg), var(--chatbar-bg-2))";
+  const neutralShellBorder = "1px solid var(--chatbar-border)";
   const effectiveTone = "neutral";
 
   return (
@@ -97,9 +93,9 @@ export default function ChatCanvasBar({
             onFocus={() => inputRef.current?.focus()}
             style={{
               border: neutralShellBorder,
-              boxShadow: "0 10px 24px rgba(0,0,0,0.28)",
-              backgroundImage: focusBg,
-              backgroundColor: neutralShellBg,
+              boxShadow: "var(--chatbar-shadow)",
+              backgroundImage: neutralShellBg,
+              backgroundColor: "var(--chatbar-bg)",
             }}
           >
             <textarea
@@ -134,12 +130,11 @@ export default function ChatCanvasBar({
               onClick={() => setIsRecording((p) => !p)}
               onKeyDown={(e) => e.key === "Enter" && setIsRecording((p) => !p)}
               className={[
-                "ml-3 h-8.5 w-8.5 rounded-full flex items-center justify-center select-none",
+                "ml-3 h-8.5 w-8.5 rounded-full flex items-center justify-center select-none transition-colors",
                 effectiveTone === "neutral"
-                  ? "bg-transparent text-white/90 border border-white/20"
+                  ? "bg-transparent text-white/90 border border-white/20 hover:text-[var(--accent-contrast)] hover:border-[var(--accent-line)]"
                   : "bg-[#0f141b] text-[var(--accent)] border",
               ].join(" ")}
-              style={{ borderColor: borderCol }}
               aria-label="Toggle voice"
               title="Toggle voice"
             >

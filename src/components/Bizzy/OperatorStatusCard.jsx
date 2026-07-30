@@ -4,11 +4,7 @@ import { Check } from "lucide-react";
 
 export default function OperatorStatusCard({
   count = 0,
-  onReview,
   onHide,
-  loading = false,
-  subtitle,
-  ctaLabel = "Review now \u2192",
   businessId,
   onRefresh,
   mockMode = false,
@@ -24,10 +20,6 @@ export default function OperatorStatusCard({
     ? mockRequests.length
     : 0;
   const hasOpenRequests = effectiveCount > 0;
-  if (!effectiveCount || effectiveCount <= 0) return null;
-  const hasItems = effectiveCount > 0;
-  const title = "Bizzi needs clarification";
-  const sub = subtitle || `${effectiveCount} transaction${effectiveCount === 1 ? "" : "s"} need clarification`;
 
   const borderColor = "rgba(255, 255, 255, 0.08)";
   const outerShadow = "0 20px 60px rgba(0,0,0,0.45)";
@@ -219,10 +211,12 @@ export default function OperatorStatusCard({
       setRequests((prev) => prev.filter((r) => r.id !== req.id));
     } catch (e) {
       console.warn("[OperatorStatusCard] submit single failed", e);
-    } finally {
+  } finally {
       setSubmittingId(null);
     }
   };
+
+  if (!effectiveCount || effectiveCount <= 0) return null;
 
   const showList = expanded && requests.length > 0;
   const showEmpty = expanded && requests.length === 0 && !loadingList;
@@ -232,7 +226,7 @@ export default function OperatorStatusCard({
     <div
       className={[
         "bizzy-operator-card relative w-full max-w-4xl mx-auto rounded-2xl md:rounded-3xl border px-6 py-5 text-white",
-        hasOpenRequests ? "bizzy-operator-attn bizzy-ai-pulse" : "",
+        hasOpenRequests ? "bizzy-operator-attn" : "",
       ].join(" ")}
       style={{
         background: "rgba(17,19,21,0.9)",
@@ -272,7 +266,7 @@ export default function OperatorStatusCard({
           {loadingList && <div className="text-xs text-white/60">Loading…</div>}
           {showList && (
             <div
-              className="space-y-3 max-h-[320px] overflow-y-auto pr-1 pb-20 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-900/60"
+              className="space-y-2 max-h-[300px] overflow-y-auto pr-1 pb-12 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-900/60"
               style={{ scrollbarColor: "rgba(107,114,128,0.85) rgba(26,28,30,0.7)" }}
             >
               {requests.map((req) => {
@@ -284,20 +278,20 @@ export default function OperatorStatusCard({
                 return (
                   <div
                     key={req.id}
-                    className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 shadow-inner shadow-black/30 transition-transform transition-colors duration-200 hover:-translate-y-[1px] hover:border-white/20 hover:bg-white/8 hover:shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+                    className="rounded-lg border border-white/10 bg-[#151717] px-3 py-1.5 shadow-inner shadow-black/30 transition-transform transition-colors duration-200 hover:-translate-y-[1px] hover:border-emerald-300/22 hover:bg-emerald-300/[0.06] hover:shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
                   >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex-1 space-y-0.5">
-              <div className="flex items-center gap-2">
-                <span className="text-white font-semibold">{merchant}</span>
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1 space-y-0.5 pt-0.5">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="truncate text-[15px] text-white font-semibold leading-tight">{merchant}</span>
               </div>
               <div className="text-[11px] text-white/70 flex items-center gap-3">
                 {txn.date && <span>{txn.date}</span>}
                 <span>{txn.amount !== undefined ? formatAmount(txn.amount) : ""}</span>
               </div>
-              <div className="text-xs text-white/60 leading-snug">{memo || "No memo available"}</div>
+              <div className="truncate text-[11px] text-white/60 leading-snug">{memo || "No memo available"}</div>
             </div>
-            <div className="w-[240px] space-y-1.5">
+            <div className="w-[300px] max-w-[45%] space-y-1">
               <label className="block text-[10px] uppercase tracking-[0.12em] text-white/60">
                 What was this charge for?
               </label>
@@ -308,7 +302,7 @@ export default function OperatorStatusCard({
                     value={answers[req.id] || ""}
                     onChange={(e) => handleChange(req.id, e.target.value)}
                     placeholder="e.g., materials for Elm St roof"
-                    className="bizzy-operator-input w-full rounded-lg bg-black/40 border border-white/12 px-3 py-1.5 pr-8 text-[13px] text-white placeholder-white/30 focus:outline-none"
+                    className="bizzy-operator-input h-8 w-full rounded-lg bg-black/40 border border-white/12 px-2.5 pr-8 text-[12px] text-white placeholder-white/30 focus:outline-none"
                   />
                   {answers[req.id] ? (
                     <button
@@ -327,7 +321,7 @@ export default function OperatorStatusCard({
                     type="button"
                     onClick={() => submitOne(req)}
                     disabled={submittingId === req.id || !canSubmit}
-                    className={`flex items-center justify-center rounded-full h-8 w-8 transition border ${
+                    className={`flex items-center justify-center rounded-full h-7 w-7 flex-shrink-0 transition border ${
                       submittingId === req.id || !canSubmit
                         ? "bg-white/8 text-white/35 border-white/10 cursor-not-allowed"
                         : "bg-[rgba(30,180,124,0.16)] text-white border-[rgba(30,180,124,0.34)] hover:shadow-[0_0_10px_rgba(30,180,124,0.20)]"
@@ -340,7 +334,7 @@ export default function OperatorStatusCard({
                 ) : null}
               </div>
                 <div
-                  className="flex gap-1.5 overflow-x-auto whitespace-nowrap pr-1 pt-0.5 pb-2 -mb-2 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-900/60"
+                  className="flex gap-1.5 overflow-x-auto whitespace-nowrap pr-1 pt-0.5 pb-1 -mb-1 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-900/60"
                   style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(107,114,128,0.85) rgba(26,28,30,0.7)" }}
                 >
                   {QUICK_INTENTS.map((chip) => {
@@ -350,7 +344,7 @@ export default function OperatorStatusCard({
                         key={chip}
                                 type="button"
                                 onClick={() => handleChip(req.id, chip)}
-                                className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition border flex-shrink-0 ${
+                                className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition border flex-shrink-0 ${
                                   active
                                     ? "bg-emerald-500/15 text-emerald-50 border-emerald-400/50"
                                     : "bg-white/5 text-white/70 border-white/12 hover:border-white/30"

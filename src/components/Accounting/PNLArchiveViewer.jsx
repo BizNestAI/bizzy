@@ -9,6 +9,7 @@ import useCurrentBusiness from "../../hooks/useCurrentBusiness";
 import AskBizzyInsightButton from "../Bizzy/AskBizzyInsightButton";
 import { getMonthName } from "../../utils/dateUtils";
 import { apiFetch, getApiBase } from "../../utils/apiBase.js";
+import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 
 const SYNC_ENDPOINT = "/api/accounting/reports-sync";
 
@@ -21,6 +22,7 @@ const MONTHS = [
 export default function PNLArchiveViewer() {
   const user = useUser();
   const { currentBusiness } = useCurrentBusiness();
+  const usingDemo = shouldUseDemoData(currentBusiness);
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filteredYear, setFilteredYear] = useState(null);
@@ -43,12 +45,18 @@ export default function PNLArchiveViewer() {
   async function fetchReports() {
     if (!currentBusiness?.id) return;
     setLoading(true);
-    const { data, error } = await supabase
+    let query = supabase
       .from("report_metadata")
       .select("*")
       .eq("business_id", currentBusiness.id)
       .order("year", { ascending: false })
       .order("month", { ascending: false });
+
+    if (!usingDemo) {
+      query = query.not("monthly_review_published_at", "is", null);
+    }
+
+    const { data, error } = await query;
     if (error) {
       console.error("[PNLArchiveViewer] fetch error:", error);
       setReports([]);
@@ -59,21 +67,25 @@ export default function PNLArchiveViewer() {
   }
 
   async function maybeSeedMockOnce() {
+    if (!usingDemo) return;
     if (!currentBusiness?.id) return;
     const key = `pnl_mock_seeded_${currentBusiness.id}`;
-    if (localStorage.getItem(key)) return;
     const { data } = await supabase
       .from("report_metadata")
       .select("id", { count: "exact" })
       .eq("business_id", currentBusiness.id)
       .limit(1);
     const isEmpty = !data || data.length === 0;
-    if (!isEmpty) return;
+    if (!isEmpty) {
+      localStorage.setItem(key, "1");
+      return;
+    }
     try {
       await apiFetch(SYNC_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          user_id: user?.id || "demo-user",
           business_id: currentBusiness.id,
           window: 12,
           forceMock: true,
@@ -148,10 +160,7 @@ export default function PNLArchiveViewer() {
       }
       const json = await res.json();
       console.log("[PNLArchiveViewer] generatePdfOnDemand response", { url: res.url, json });
-      // Refresh local cache if we just wrote a new storage path
-      if (!report.storage_path && json?.storage_path) {
-        await fetchReports();
-      }
+      await fetchReports();
       return json;
     } catch (err) {
       console.error("[PNLArchiveViewer] generatePdfOnDemand error", err?.message || err);
@@ -175,7 +184,7 @@ export default function PNLArchiveViewer() {
     const isLegacy = storagePath.startsWith("backfill/");
     const trySign = isCanonicalPnlKey(storagePath) && !isLegacy;
 
-    const shouldSkipSign = !trySign || report.year >= 2025;
+    const shouldSkipSign = !usingDemo;
 
     try {
       let signedUrl = null;
@@ -201,7 +210,7 @@ export default function PNLArchiveViewer() {
       }
 
       if (!signedUrl) {
-        const generated = await generatePdfOnDemand(report, { forceRefresh: false });
+        const generated = await generatePdfOnDemand(report, { forceRefresh: !usingDemo });
         if (generated?.signed_url) {
           signedUrl = generated.signed_url;
           await fetchReports(); // refresh storage_path to canonical
@@ -321,7 +330,7 @@ export default function PNLArchiveViewer() {
         <div className="mt-16 text-center text-gray-400 space-y-3">
           <p className="text-lg font-medium">No reports found.</p>
           <p className="text-sm text-gray-500">
-            Once synced in Settings, your Profit &amp; Loss PDFs will appear here with summaries and GPT analysis.
+            Final monthly Profit &amp; Loss reports appear here after Bizzi completes the monthly review.
           </p>
         </div>
       ) : (

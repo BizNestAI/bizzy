@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import Typewriter from "./Typewriter.jsx";
 
 /** Chrome Silver for default/ChatHome scheme */
@@ -15,14 +16,25 @@ function hexToRgba(hex, a = 1) {
 export default function InsightCard({
   insight = {},
   onSnooze,
+  onCta,
   accentHex,
   animate = false,
   index = 0,
   onFirstShown,
+  hideDashboardNavigationCtas = false,
 }) {
   const { module, title, body, metrics = [], created_at } = insight;
   const moduleKey = String(module || "bizzy").toLowerCase();
   const [hovered, setHovered] = useState(false);
+  const primaryCta = useMemo(() => {
+    const cta = normalizeCta(insight, "primary");
+    return hideDashboardNavigationCtas && isDashboardNavigationCta(cta) ? null : cta;
+  }, [hideDashboardNavigationCtas, insight]);
+  const secondaryCta = useMemo(() => {
+    const cta = normalizeCta(insight, "secondary");
+    return hideDashboardNavigationCtas && isDashboardNavigationCta(cta) ? null : cta;
+  }, [hideDashboardNavigationCtas, insight]);
+  const hasCtas = Boolean(primaryCta?.label || secondaryCta?.label);
 
   // Accent: always default chrome silver (or explicit override)
   const baseHex = useMemo(() => accentHex || CHROME_HEX, [accentHex]);
@@ -38,8 +50,15 @@ export default function InsightCard({
 
   // Typewriter timing
   const [titleDone, setTitleDone] = useState(false);
+  const [relativeNow, setRelativeNow] = useState(() => Date.now());
   const delay = Math.min(index * 120, 1200);
   const BODY_AFTER_TITLE_PAUSE = 350;
+
+  useEffect(() => {
+    if (!created_at) return undefined;
+    const id = setInterval(() => setRelativeNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, [created_at]);
 
   return (
     <div
@@ -90,16 +109,15 @@ export default function InsightCard({
         </div>
 
         <div className="flex items-center gap-2 shrink-0 mt-[2px]">
-          <span className="text-[11px] text-white/60 leading-none">{timeAgo(created_at)}</span>
+          <span className="text-[11px] text-white/60 leading-none">{timeAgo(created_at, relativeNow)}</span>
           {onSnooze && (
             <button
               aria-label="Dismiss insight"
               title="Dismiss"
               onClick={() => onSnooze(insight.id, new Date().toISOString())}
-              className="h-6 w-6 grid place-items-center rounded-md border border-white/12 text-white/70 hover:text-white hover:bg-white/10 transition"
-              style={{ lineHeight: 1, paddingTop: "1px" }}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-white/12 p-0 text-white/70 hover:text-white hover:bg-white/10 transition"
             >
-              ×
+              <X className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
             </button>
           )}
         </div>
@@ -140,18 +158,77 @@ export default function InsightCard({
           ))}
         </div>
       )}
+
+      {/* CTAs */}
+      {hasCtas && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {primaryCta?.label && (
+            <button
+              type="button"
+              onClick={() => onCta?.(insight, primaryCta, "primary")}
+              className="min-h-7 max-w-full rounded-md border border-emerald-400/45 bg-emerald-400/12 px-2.5 py-1 text-[12px] font-semibold leading-4 text-emerald-100 shadow-[0_0_12px_rgba(16,185,129,0.12)] transition hover:border-emerald-300/70 hover:bg-emerald-400/20 focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
+              style={{ fontFamily: '"IBM Plex Sans", system-ui, -apple-system, Segoe UI, Roboto, sans-serif' }}
+            >
+              <span className="block truncate">{primaryCta.label}</span>
+            </button>
+          )}
+          {secondaryCta?.label && (
+            <button
+              type="button"
+              onClick={() => onCta?.(insight, secondaryCta, "secondary")}
+              className="min-h-7 max-w-full rounded-md border border-white/12 bg-white/[0.04] px-2.5 py-1 text-[12px] font-semibold leading-4 text-white/74 transition hover:border-white/22 hover:bg-white/[0.08] hover:text-white focus:outline-none focus:ring-2 focus:ring-white/15"
+              style={{ fontFamily: '"IBM Plex Sans", system-ui, -apple-system, Segoe UI, Roboto, sans-serif' }}
+            >
+              <span className="block truncate">{secondaryCta.label}</span>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 /* ---------------- helpers ---------------- */
 
-function timeAgo(ts) {
+function parsePayload(value) {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return { value };
+  }
+}
+
+function normalizeCta(insight = {}, prefix) {
+  const nested = insight[`${prefix}_cta`] || {};
+  const label = insight[`${prefix}_cta_label`] ?? nested.label ?? null;
+  const action = insight[`${prefix}_cta_action`] ?? nested.action ?? null;
+  const payload = insight[`${prefix}_cta_payload`] ?? nested.payload ?? (nested.route ? { route: nested.route } : null);
+  if (!label || !action) return null;
+  return {
+    label,
+    action,
+    payload: parsePayload(payload),
+  };
+}
+
+function isDashboardNavigationCta(cta) {
+  if (!cta) return false;
+  const action = String(cta.action || "").trim().toLowerCase();
+  if (action !== "navigate" && action !== "open_route") return false;
+  const payload = cta.payload || {};
+  const route = payload.path || payload.route || payload.url || payload.value || "";
+  return String(route).startsWith("/dashboard");
+}
+
+function timeAgo(ts, nowMs = Date.now()) {
   if (!ts) return "";
-  const diff = Date.now() - new Date(ts).getTime();
-  if (Number.isNaN(diff)) return "";
-  const s = diff / 1000;
-  if (s < 60) return `${Math.floor(s)}s`;
+  const createdMs = new Date(ts).getTime();
+  if (!Number.isFinite(createdMs)) return "";
+  const diffMs = Math.max(0, nowMs - createdMs);
+  const s = Math.floor(diffMs / 1000);
+  if (s < 60) return "now";
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;

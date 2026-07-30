@@ -6,7 +6,7 @@ import {
   Calendar as CalendarIcon, Briefcase, BookOpen, Settings, Mail,
   Activity as ActivityIcon, Landmark,
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion as Motion, AnimatePresence } from 'framer-motion';
 import { createPortal } from 'react-dom';
 
 import { subSidebarConfig } from '../../utils/subSidebarConfig';
@@ -16,8 +16,8 @@ import { ACCENT_HEX, ACCENT_SOFT } from '../../config/accent';
 /* ------------------------------ Tabs ------------------------------ */
 const tabs = [
   { label: 'Financials', path: '/dashboard/accounting/bookkeeping' },
+  { label: 'Jobs', path: '/dashboard/leads-jobs/job-costing' },
   { label: 'Tax', path: '/dashboard/tax' },
-  { label: 'Jobs', path: '/dashboard/leads-jobs' },
   // Temporarily hidden modules: Growth/Marketing, Calendar, Email
   // { label: 'Growth', path: '/dashboard/marketing' },
   // { label: 'Scheduling', path: '/dashboard/calendar' },
@@ -118,9 +118,6 @@ const neutralBadgeStyle = {
   color: '#e5e7eb',
 };
 
-function renderActiveClass(_label) {
-  return `text-white font-semibold`;
-}
 function getHoverClass() {
   return ""; // glow removed per design
 }
@@ -164,7 +161,6 @@ const PureSidebar = React.memo(function PureSidebar({
   collapsed = false,
   activePath,
   unreadByModule = {},
-  markModuleAsRead,
   onChatHistoryHover,
   onChatHistoryLeave,
   onChatHistoryClick,
@@ -393,7 +389,7 @@ const PureSidebar = React.memo(function PureSidebar({
 
             <AnimatePresence initial={false}>
               {shouldShowDropdown && (
-                <motion.div
+                <Motion.div
                   key={`${tab.path}-dropdown`}
                   initial={{ opacity: 0, height: 0 }}
                   animate={{ opacity: 1, height: 'auto' }}
@@ -418,7 +414,7 @@ const PureSidebar = React.memo(function PureSidebar({
                       {item.label}
                     </NavLink>
                   ))}
-                </motion.div>
+                </Motion.div>
               )}
             </AnimatePresence>
           </div>
@@ -466,7 +462,7 @@ const PureSidebar = React.memo(function PureSidebar({
       {tooltip.label &&
         createPortal(
           <AnimatePresence>
-            <motion.div
+            <Motion.div
               initial={{ opacity: 0, x: -4, y: -4, scale: 0.96 }}
               animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
               exit={{ opacity: 0, x: -2, y: -2, scale: 0.96 }}
@@ -482,7 +478,7 @@ const PureSidebar = React.memo(function PureSidebar({
               }}
             >
               {tooltip.label}
-            </motion.div>
+            </Motion.div>
           </AnimatePresence>,
           document.body
         )
@@ -555,7 +551,6 @@ export default function SidebarContainer(props) {
       {...props}
       activePath={activePath}
       unreadByModule={unreadByModule}
-      markModuleAsRead={markModuleAsRead}
     />
   );
 }

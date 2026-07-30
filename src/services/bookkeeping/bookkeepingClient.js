@@ -27,6 +27,31 @@ export async function getTransactions(businessId, params = {}) {
   return res?.rows || res?.items || [];
 }
 
+export async function getTransactionCounts(businessId, params = {}) {
+  const search = new URLSearchParams();
+  Object.entries(params || {}).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") search.set(k, v);
+  });
+  const qs = search.toString() ? `?${search.toString()}` : "";
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/transactions/counts${qs}`), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+  return res?.counts || { needs_review: 0, handled: 0, posted: 0 };
+}
+
+export async function runPostingNow(businessId, options = {}) {
+  const res = await safeFetch(apiUrl("/api/bookkeeping/posting/run"), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId, force: options.force === true }),
+  });
+  if (res && res.ok === false) {
+    throw new Error(res.summary?.error || res.message || res.error || "posting_run_failed");
+  }
+  return res;
+}
+
 export async function getQboCoa(businessId) {
   return safeFetch(apiUrl("/api/bookkeeping/qbo/coa"), {
     method: "GET",

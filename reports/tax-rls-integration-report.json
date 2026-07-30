@@ -1,0 +1,33 @@
+{
+  "status": "skipped",
+  "realSessionExecuted": false,
+  "generatedAt": "2026-07-19T17:05:44.172Z",
+  "environment": {
+    "targetLabel": "unknown",
+    "supabaseConfigured": false,
+    "apiConfigured": false,
+    "appearsProduction": false
+  },
+  "sections": {
+    "http_tenancy": {
+      "status": "skipped",
+      "reason": "TAX_RLS_INTEGRATION_ENABLED is not true.",
+      "missingEnvironment": [
+        "TEST_SUPABASE_URL",
+        "TEST_SUPABASE_ANON_KEY",
+        "TEST_SUPABASE_SERVICE_ROLE_KEY",
+        "TEST_API_BASE_URL"
+      ]
+    },
+    "direct_supabase": {
+      "status": "skipped",
+      "reason": "TAX_RLS_INTEGRATION_ENABLED is not true.",
+      "missingEnvironment": [
+        "TEST_SUPABASE_URL",
+        "TEST_SUPABASE_ANON_KEY",
+        "TEST_SUPABASE_SERVICE_ROLE_KEY",
+        "TEST_API_BASE_URL"
+      ]
+    }
+  }
+}

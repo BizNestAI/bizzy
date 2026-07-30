@@ -1,7 +1,6 @@
 // /components/Bizzy/BizzySubmitButton.jsx
 import React from "react";
-import { motion, useReducedMotion } from "framer-motion";
-import { Brain as PhBrain } from "@phosphor-icons/react"; // npm i @phosphor-icons/react
+import { ArrowUp } from "lucide-react";
 
 export default function BizzySubmitButton({
   onClick,
@@ -10,19 +9,10 @@ export default function BizzySubmitButton({
   disabled = false,
   className = "",
   title,
-  Icon = PhBrain,
   withGlow = false,                 // <- NEW: no glow by default
   glowColor = "rgba(124,58,237,0.24)", // if you ever enable withGlow
 }) {
   const dim = `${size}px`;
-  const prefersReducedMotion = useReducedMotion();
-  const spin =
-    isLoading && !prefersReducedMotion
-      ? {
-          animate: { rotate: 360 },
-          transition: { repeat: Infinity, duration: 1.6, ease: "linear" },
-        }
-      : {};
 
   return (
     <button
@@ -33,9 +23,11 @@ export default function BizzySubmitButton({
       title={title ?? (isLoading ? "Bizzi is thinking…" : "Send to Bizzi")}
       className={[
         "relative inline-flex items-center justify-center rounded-full",
-        "bg-white/8 border border-white/20 backdrop-blur",
+        "bg-white/8 border border-white/20 text-white/85 backdrop-blur",
         "transition-transform duration-200",
-        disabled || isLoading ? "opacity-90 cursor-not-allowed" : "hover:scale-105 cursor-pointer",
+        disabled || isLoading
+          ? "opacity-90 cursor-not-allowed"
+          : "hover:scale-105 hover:border-[var(--accent-line)] hover:text-[var(--accent-contrast)] cursor-pointer",
         className,
       ].join(" ")}
       style={{ width: dim, height: dim, outline: "none", boxShadow: "none" }}
@@ -49,28 +41,15 @@ export default function BizzySubmitButton({
         />
       )}
 
-      {/* Slim inner ring */}
-      <div
-        aria-hidden
-        className="absolute inset-[2px] rounded-full"
-        style={{ boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.24)" }}
-      />
-
-      {/* Inner canvas (flat, no blur) */}
-      <div
-        aria-hidden
-        className="absolute rounded-full"
-        style={{
-          inset: "3px",
-          background: "transparent",
-          boxShadow: "none",
-        }}
-      />
-
-      {/* Icon (spins only while loading) */}
-      <motion.div className="relative z-10" {...spin}>
-        <Icon size={Math.floor(size * 0.72)} color="#EDEDED" weight="regular" />
-      </motion.div>
+      {/* Send icon */}
+      <div className="relative z-10 flex items-center justify-center">
+        <ArrowUp
+          size={Math.floor(size * 0.58)}
+          color="currentColor"
+          strokeWidth={2.4}
+          aria-hidden="true"
+        />
+      </div>
     </button>
   );
 }

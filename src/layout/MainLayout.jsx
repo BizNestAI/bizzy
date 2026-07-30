@@ -7,6 +7,7 @@ import BusinessWizard from '../pages/UserAdmin/BusinessWizard';
 import useModuleTheme from '../hooks/useModuleTheme';
 import { BizzyChatProvider, useBizzyChatContext } from '../context/BizzyChatContext';
 import SubsectionTabs from '../components/Navigation/SubsectionTabs.jsx';
+import FinancialMonthlyReviewStamp from '../components/Accounting/FinancialMonthlyReviewStamp.jsx';
 import ToastPortal from '../insights/ToastPortal';
 import { InsightsUnreadProvider } from '../insights/InsightsUnreadContext';
 
@@ -42,6 +43,23 @@ const MainLayoutCore = ({ children }) => {
     const fetchCurrentBusiness = async () => {
       if (!user) return;
       try {
+        const url = new URL(window.location.href);
+        const requestedBusinessId =
+          url.searchParams.get('business_id') ||
+          localStorage.getItem('currentBusinessId') ||
+          localStorage.getItem('business_id');
+        if (requestedBusinessId) {
+          const { data: requestedBiz } = await supabase.from('business_profiles')
+            .select('*').eq('id', requestedBusinessId).maybeSingle();
+          if (requestedBiz) {
+            setCurrentBusiness(requestedBiz);
+            setIsProfileComplete(true);
+            localStorage.setItem('currentBusinessId', requestedBiz.id);
+            localStorage.setItem('business_id', requestedBiz.id);
+            return;
+          }
+        }
+
         const { data: link } = await supabase
           .from('user_business_link').select('business_id')
           .eq('user_id', user.id).eq('role','owner').limit(1).maybeSingle();
@@ -59,11 +77,10 @@ const MainLayoutCore = ({ children }) => {
       } catch (err) {
         console.error('Error fetching business:', err);
         setIsProfileComplete(false);
-      } finally {
       }
     };
     fetchCurrentBusiness();
-  }, [user]);
+  }, [user, location.search]);
 
   useEffect(() => {
     const handler = (event) => {
@@ -75,14 +92,6 @@ const MainLayoutCore = ({ children }) => {
     window.addEventListener('bizzy:navigate', handler);
     return () => window.removeEventListener('bizzy:navigate', handler);
   }, [navigate]);
-
-  if (isProfileComplete === false) {
-    return (
-      <div className="h-screen bg-[var(--bg)] bizzy-bg-textured font-sans p-6 text-primary">
-        <BusinessWizard />
-      </div>
-    );
-  }
 
   const businessId = currentBusiness?.id || localStorage.getItem('currentBusinessId');
   const subnavItems = React.useMemo(() => {
@@ -99,8 +108,10 @@ const MainLayoutCore = ({ children }) => {
     if (path.startsWith("/dashboard/jobs") || path.startsWith("/dashboard/leads-jobs")) {
       const base = path.startsWith("/dashboard/leads-jobs") ? "/dashboard/leads-jobs" : "/dashboard/jobs";
       return [
-        { label: "Collections", path: `${base}/collections`, activePaths: [base] },
-        { label: "Job Costing", path: `${base}/job-costing` },
+        { label: "Job Costing", path: `${base}/job-costing`, activePaths: [base] },
+        { label: "Collections", path: `${base}/collections` },
+        { label: "Bid Builder", path: `${base}/bid-builder`, tooltip: "Bid Builder: Coming Soon!", disableNavigate: true },
+        { label: "Change Orders", path: `${base}/change-orders`, tooltip: "Change Orders: Coming Soon!", disableNavigate: true },
       ];
     }
     if (path.startsWith("/dashboard/marketing")) {
@@ -111,12 +122,19 @@ const MainLayoutCore = ({ children }) => {
     }
     if (path.startsWith("/dashboard/tax")) {
       return [
-        { label: "Overview", path: "/dashboard/tax" },
-        { label: "Deductions", path: "/dashboard/tax/deductions" },
+        { label: "Tax Overview", path: "/dashboard/tax" },
       ];
     }
     return [];
   }, [location.pathname]);
+
+  if (isProfileComplete === false) {
+    return (
+      <div className="h-screen bg-[var(--bg)] bizzy-bg-textured font-sans p-6 text-primary">
+        <BusinessWizard />
+      </div>
+    );
+  }
 
   return (
     <InsightsUnreadProvider userId={user?.id} businessId={businessId}>
@@ -141,8 +159,18 @@ const MainLayoutCore = ({ children }) => {
               }}
             >
               <div className="flex items-center gap-3 w-full" style={{ position: "relative", zIndex: 1 }}>
-                <div className="flex-1 flex justify-center">
-                  {subnavItems.length > 0 && !isCanvasOpen ? <SubsectionTabs items={subnavItems} /> : null}
+                <div className="flex-1 flex items-center justify-center">
+                  {subnavItems.length > 0 && !isCanvasOpen ? (
+                    <div className="relative inline-flex items-center justify-center">
+                      <SubsectionTabs items={subnavItems} />
+                      {moduleKey === 'accounting' ? (
+                        <FinancialMonthlyReviewStamp
+                          businessId={businessId}
+                          className="absolute left-full top-1/2 ml-3 -translate-y-1/2"
+                        />
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 {/* Floating Chat back button – fixed above dashboard content */}
                 {!isChatHome && (

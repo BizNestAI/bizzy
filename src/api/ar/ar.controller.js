@@ -2,6 +2,7 @@
 import { syncOpenItems, fetchTopOpenItems, fetchInvoiceDetails } from "./ar.service.js";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
+import { triggerContractorCfoInsightsBestEffort } from "../../services/insights/contractorCfoTriggerService.js";
 
 function getBusinessId(req) {
   const { business_id, businessId } = req.body || {};
@@ -95,6 +96,11 @@ export async function syncOpenItemsHandler(req, res) {
       businessId,
       force: Boolean(force),
       windowDays: typeof window_days === "number" ? window_days : null,
+    });
+    triggerContractorCfoInsightsBestEffort({
+      businessId,
+      trigger: "collections",
+      force: false,
     });
     return res.status(200).json(result);
   } catch (err) {

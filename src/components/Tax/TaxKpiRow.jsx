@@ -1,67 +1,75 @@
 // src/components/Tax/TaxKpiRow.jsx
 import React from "react";
-import { ACCENT_LINE } from "../../config/accent";
 import { Wallet2, BarChart3, PiggyBank, TimerReset } from "lucide-react";
+import KpiCard from "../UI/KpiCard.jsx";
 
-export default function TaxKpiRow({ summary = {}, snapshot = {}, nextDue = {}, className = "" }) {
+export default function TaxKpiRow({
+  summary = {},
+  snapshot = {},
+  nextDue = {},
+  taxTrendChange = null,
+  className = "",
+}) {
   const topDeduction = snapshot?.topDeductions?.[0];
+  const profitRaw = snapshot?.profitYTD ?? summary?.profitYTD;
+  const profit = profitRaw == null || Number.isNaN(Number(profitRaw)) ? null : Number(profitRaw);
+  const daysUntilPayment = nextDue?.days == null ? null : Number(nextDue.days);
+  const urgentPayment = Number.isFinite(daysUntilPayment) && daysUntilPayment <= 14;
+  const overduePayment = Number.isFinite(daysUntilPayment) && daysUntilPayment <= 0;
   const cards = [
     {
       label: "Estimated YTD Tax",
-      value: summary?.ytdEstimated,
+      value: formatCurrency(summary?.ytdEstimated),
+      detail: "Year to date",
+      tone: "amber",
+      trend: Number(taxTrendChange) >= 0 ? "up" : "down",
+      change: formatPercent(taxTrendChange),
       icon: <Wallet2 className="h-4 w-4" />,
     },
     {
       label: "Profit YTD",
-      value: snapshot?.profitYTD ?? summary?.profitYTD,
+      value: formatCurrency(profit),
+      detail: "Taxable profit",
+      tone: profit == null || profit >= 0 ? "emerald" : "rose",
       icon: <BarChart3 className="h-4 w-4" />,
     },
     {
       label: "Top Deduction",
-      value: topDeduction ? topDeduction.amount : null,
+      value: topDeduction ? formatCurrency(topDeduction.amount) : "—",
       detail: topDeduction
         ? `${topDeduction.category}${topDeduction.percentRevenue != null ? ` (${topDeduction.percentRevenue}%)` : ""}`
         : null,
+      tone: "emerald",
       icon: <PiggyBank className="h-4 w-4" />,
     },
     {
       label: "Next Payment",
-      value: nextDue?.amount,
-      detail: nextDue?.days != null ? `in ${nextDue.days} days` : null,
+      value: formatCurrency(nextDue?.amount),
+      detail: Number.isFinite(daysUntilPayment)
+        ? overduePayment
+          ? "Due now"
+          : `Due in ${daysUntilPayment} days`
+        : null,
+      tone: urgentPayment ? "amber" : "neutral",
+      trend: urgentPayment ? "up" : null,
+      change: urgentPayment ? (overduePayment ? "Due" : "Soon") : "",
       icon: <TimerReset className="h-4 w-4" />,
+      className: urgentPayment
+        ? "border-amber-300/35 shadow-[0_22px_58px_rgba(0,0,0,0.4),0_0_26px_rgba(251,191,36,0.12)]"
+        : "",
     },
   ];
 
   return (
-    <div className={`grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 ${className}`}>
+    <div className={`grid grid-cols-2 items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-4 ${className}`}>
       {cards.map((card, idx) => (
-        <KpiCard key={idx} {...card} />
+        <KpiCard
+          key={idx}
+          {...card}
+          className={`min-h-[132px] ${card.className || ""}`}
+          valueClassName={card.label === "Top Deduction" ? "text-[clamp(1.35rem,1.45vw,1.65rem)]" : ""}
+        />
       ))}
-    </div>
-  );
-}
-
-function KpiCard({ label, value, detail, icon }) {
-  return (
-    <div
-      className="group relative rounded-[16px] bg-white/[0.05] shadow-[0_18px_50px_rgba(0,0,0,0.35)] px-3.5 py-3 flex flex-col gap-1.5 border transition-all duration-200 hover:-translate-y-1 hover:border-[rgba(var(--accent-rgb),0.55)]"
-      style={{ borderColor: ACCENT_LINE }}
-    >
-      {/* Accent hover frame to match Financial KPI cards */}
-      <div
-        className="pointer-events-none absolute inset-0 rounded-[16px] opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-visible:opacity-100 border-2 border-[rgba(var(--accent-rgb),0.35)]"
-        style={{ boxShadow: "inset 0 0 0 1px rgba(16,185,129,0.15)" }}
-      />
-      <div className="absolute inset-0 rounded-[16px] ring-1 ring-inset ring-white/8 pointer-events-none" />
-
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] uppercase tracking-[0.1em] text-white/65">{label}</span>
-        <span className="text-white/70">{icon}</span>
-      </div>
-      <div className="text-[19px] font-semibold text-white tabular-nums">
-        {value != null && value !== "" ? formatCurrency(value) : "—"}
-      </div>
-      {detail ? <div className="text-[12px] text-white/65">{detail}</div> : null}
     </div>
   );
 }
@@ -73,4 +81,10 @@ function formatCurrency(n) {
   } catch {
     return `$${Number(n).toLocaleString()}`;
   }
+}
+
+function formatPercent(value) {
+  if (value == null || Number.isNaN(Number(value))) return "";
+  const rounded = Math.round(Number(value));
+  return `${rounded > 0 ? "+" : ""}${rounded}%`;
 }

@@ -250,11 +250,13 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
 export default function ChatCanvas({
   left: propLeft,
   width: propWidth,
+  rightInset = 0,
   barNudge = 0,
   topAnchorSelector,
   quickPromptMode = "normal",
 }) {
   const { isCanvasOpen, closeCanvas } = useBizzyChatContext();
+  const canvasRightInset = Math.max(0, Math.round(Number(rightInset) || 0));
   const prevOverflowRef = useRef({ body: "", html: "" });
   const navWidth = useMemo(() => {
     if (typeof window === "undefined") return 0;
@@ -288,6 +290,14 @@ export default function ChatCanvas({
       } catch {}
     };
   }, [isCanvasOpen]);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    document.documentElement.style.setProperty("--bizzy-canvas-right-inset", `${canvasRightInset}px`);
+    return () => {
+      document.documentElement.style.setProperty("--bizzy-canvas-right-inset", "0px");
+    };
+  }, [canvasRightInset]);
 
   const handleCanvasWheel = useCallback((event) => {
     const el = event.currentTarget;
@@ -403,13 +413,14 @@ export default function ChatCanvas({
         top: `${effectiveTop}px`,
         bottom: 0,
         left: `${navWidth}px`,
-        right: 0,
+        right: `${canvasRightInset}px`,
         pointerEvents: "auto",
         display: "flex",
         flexDirection: "column",
         backgroundColor: "var(--bg)",
         overscrollBehavior: "contain",
         isolation: "isolate",
+        transition: "right 560ms cubic-bezier(0.22,1,0.36,1)",
       }}
       onWheelCapture={(event) => event.stopPropagation()}
       onTouchMoveCapture={(event) => event.stopPropagation()}
@@ -1275,7 +1286,7 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
             .followup-arrow { opacity: 0.65; transform: translateX(-2px); transition: opacity .12s ease, transform .12s ease; display: inline-flex; align-items: center; }
             .followup-pill:hover .followup-arrow { opacity: 1; transform: translateX(0px); }
             @keyframes followupFade { to { opacity: 1; transform: translateY(0); } }
-            .scrollbottom-shell { position:fixed; left:var(--nav-w, 0px); width:calc(100vw - var(--nav-w, 0px)); bottom:${CANVAS_BAR_HEIGHT + 18}px; display:flex; justify-content:center; pointer-events:none; opacity:0; transform: translateY(12px); transition: opacity .2s ease, transform .2s ease; z-index:20000; }
+            .scrollbottom-shell { position:fixed; left:var(--nav-w, 0px); right:var(--bizzy-canvas-right-inset, 0px); bottom:${CANVAS_BAR_HEIGHT + 18}px; display:flex; justify-content:center; pointer-events:none; opacity:0; transform: translateY(12px); transition: opacity .2s ease, transform .2s ease, right 560ms cubic-bezier(0.22,1,0.36,1); z-index:20000; }
             .scrollbottom-shell.visible { opacity:1; transform: translateY(0); }
             .scrollbottom-btn { pointer-events:auto; background:#0f1214; color:rgba(255,255,255,0.95); border:1px solid rgba(255,255,255,0.32); border-radius:999px; padding:6px; font-size:12px; box-shadow:0 16px 38px rgba(0,0,0,0.42); display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; }
             .scrollbottom-btn:hover { background:#15191c; border-color:rgba(255,255,255,0.4); transform: translateY(-1px); transition: all .15s ease; color: rgba(255,255,255,1); }

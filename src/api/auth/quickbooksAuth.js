@@ -17,6 +17,7 @@ import {
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { backfillLast12Months } from "../../services/qboBackfillRunner.js";
 import { lastFullMonthParts } from "../../utils/monthKey.js";
+import { buildQuickBooksOAuthScopes } from "../../services/jobCosting/qboProjectsService.js";
 
 const router = express.Router();
 
@@ -101,7 +102,7 @@ async function fetchCompanyInfoDetails({ access_token, realm_id }) {
   }
 }
 
-const scopes = ["com.intuit.quickbooks.accounting"].join(" ");
+const defaultScopes = buildQuickBooksOAuthScopes().join(" ");
 const pad2 = (n) => String(n).padStart(2, "0");
 
 async function revokeQuickBooksToken({ token }) {
@@ -179,7 +180,7 @@ export async function saveQboTokens({
   expires_in = null,
   x_refresh_token_expires_in = null,
   token_type = "Bearer",
-  scope = scopes,
+  scope = defaultScopes,
   company_name = null,
   connected_company_name = null,
   connected_legal_name = null,
@@ -235,13 +236,15 @@ router.get("/quickbooks", (req, res) => {
   const statePayload = {
     nonce: crypto.randomUUID(),
     businessId,
+    includeProjectsScope: req.query.projects === "1" || req.query.include_projects_scope === "1",
   };
   const state = Buffer.from(JSON.stringify(statePayload)).toString("base64url");
   // Intuit respects a single prompt param; combine values with space to force re-login + consent
   const prompt = encodeURIComponent("login consent");
+  const requestedScopes = buildQuickBooksOAuthScopes({ includeProjects: statePayload.includeProjectsScope }).join(" ");
   const url = `${authUrl}?client_id=${client_id}&redirect_uri=${encodeURIComponent(
     redirect_uri
-  )}&response_type=code&scope=${encodeURIComponent(scopes)}&state=${state}&prompt=${prompt}`;
+  )}&response_type=code&scope=${encodeURIComponent(requestedScopes)}&state=${state}&prompt=${prompt}`;
 
   // Visibility for env + URL generation before redirect (dev-friendly)
   console.log("[QBO Auth] env:", qboEnvName, "apiBase:", qbApiBase, "redirect:", qbRedirectUri);

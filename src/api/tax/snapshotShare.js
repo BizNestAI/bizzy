@@ -1,24 +1,32 @@
 // /src/api/tax/snapshotShare.js
+/* global process */
 import { supabase } from "../../services/supabaseAdmin.js";
 import nodemailer from "nodemailer";
 import { generateMonthlyTaxSnapshot } from "../../services/tax/generateMonthlyTaxSnapshot.js";
+import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
+import { optionalTaxYear, validateBusinessIdInput } from "./taxValidation.js";
+import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
 
 export default async function shareSnapshotHandler(req, res) {
+  setTaxNoStore(res);
   try {
     // Accept query OR body; keep existing query semantics
     const src = req.method === "GET" ? req.query : (req.body || {});
-    const { businessId, year, month, to } = src;
+    const businessId = validateBusinessIdInput(req);
+    const requestedYear = src.year ?? src.taxYear;
+    const year = requestedYear == null ? undefined : optionalTaxYear(requestedYear, new Date().getFullYear());
+    const { month, to } = src;
 
-    if (!businessId) return res.status(422).json({ ok: false, error: "businessId required" });
+    await assertTaxBusinessAccess({ req, businessId, supabase });
     if (!process.env.SMTP_HOST) {
-      return res.status(500).json({ ok: false, error: "Email not configured (SMTP_* envs missing)" });
+      return sendTaxError(res, { code: "email_not_configured", message: "Email is not configured.", status: 500 }, "email_not_configured");
     }
 
     const snapshot = await generateMonthlyTaxSnapshot({
       supabase,
       openaiApiKey: process.env.OPENAI_API_KEY || null,
       businessId,
-      year: Number(year) || undefined,
+      year,
       month: month || undefined,
       archive: false,
     });
@@ -32,7 +40,7 @@ export default async function shareSnapshotHandler(req, res) {
 
     const toAddr = to || process.env.SNAPSHOT_FALLBACK_EMAIL;
     if (!toAddr) {
-      return res.status(422).json({ ok: false, error: "missing ?to= or SNAPSHOT_FALLBACK_EMAIL" });
+      return sendTaxError(res, { code: "missing_recipient", message: "Missing snapshot recipient.", status: 422 }, "missing_recipient");
     }
 
     // Simple HTML summary email
@@ -64,9 +72,9 @@ export default async function shareSnapshotHandler(req, res) {
       `,
     });
 
-    res.json({ ok: true });
+    return sendTaxSuccess(res, { sent: true });
   } catch (err) {
     console.error("[snapshotShare] error:", err);
-    res.status(400).json({ ok: false, error: err.message || "Failed to share snapshot" });
+    return sendTaxError(res, err, "tax_data_unavailable");
   }
 }

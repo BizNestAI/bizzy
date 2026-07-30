@@ -53,7 +53,7 @@ const BizzyVoiceIcon = ({ setInput }) => {
       type="button"
       onClick={toggleRecording}
       className={`transition-colors duration-300 ${
-        isRecording ? 'text-red-500 animate-pulse' : 'text-white hover:text-emerald-400'
+        isRecording ? 'text-red-500 animate-pulse' : 'text-current'
       }`}
     >
       <Mic size={20} />

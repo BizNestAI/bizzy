@@ -1,24 +1,29 @@
 // /src/api/tax/snapshotExport.js
+/* global process */
 import PDFDocument from "pdfkit";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { generateMonthlyTaxSnapshot } from "../../services/tax/generateMonthlyTaxSnapshot.js";
 import { Parser } from "@json2csv/plainjs";
+import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
+import { optionalTaxYear, validateBusinessIdInput } from "./taxValidation.js";
+import { sendTaxError, setTaxNoStore } from "./taxHttp.js";
 
 export default async function exportSnapshotHandler(req, res) {
+  setTaxNoStore(res);
   try {
     // Accept query OR body (supports GET/POST without breaking existing UI)
     const q = req.method === "GET" ? req.query : (req.body || {});
-    const { businessId, year, month, kind = "pdf" } = q;
-
-    if (!businessId || typeof businessId !== "string") {
-      return res.status(422).json({ ok: false, error: "businessId (string) required" });
-    }
+    const businessId = validateBusinessIdInput(req);
+    const requestedYear = q.year ?? q.taxYear;
+    const year = requestedYear == null ? undefined : optionalTaxYear(requestedYear, new Date().getFullYear());
+    const { month, kind = "pdf" } = q;
+    await assertTaxBusinessAccess({ req, businessId, supabase });
 
     const snapshot = await generateMonthlyTaxSnapshot({
       supabase,
       openaiApiKey: process.env.OPENAI_API_KEY || null,
       businessId,
-      year: Number(year) || undefined,
+      year,
       month: month || undefined,
       archive: false, // avoid upsert during export
     });
@@ -85,6 +90,6 @@ export default async function exportSnapshotHandler(req, res) {
     doc.end();
   } catch (err) {
     console.error("[snapshotExport] error:", err);
-    res.status(400).json({ ok: false, error: err.message || "Failed to export snapshot" });
+    return sendTaxError(res, err, "tax_data_unavailable");
   }
 }

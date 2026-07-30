@@ -1,7 +1,8 @@
 // File: /src/api/insights/pulse.controller.js
-import { supabase } from '../../services/supabaseAdmin.js';
-import dayjs from 'dayjs';
+/* global process */
 import fetch from 'node-fetch';
+
+const CONTRACTOR_CFO_MODULE = 'contractor_cfo';
 
 async function getJSON(url, headers = {}) {
   const r = await fetch(url, { headers });
@@ -16,7 +17,7 @@ async function fetchSignals(business_id) {
   let acc = null;
   try {
     acc = await getJSON(`${API}/api/accounting/metrics?business_id=${business_id}`, headers);
-  } catch(e) { acc = null; }
+  } catch { acc = null; }
 
   // Normalize
   const revenue_mom   = clampNum(acc?.revenue_mom, -1, 1);   // month-over-month revenue growth
@@ -94,10 +95,14 @@ export async function getPulse(req, res) {
     const business_id = req.query.business_id || req.query.businessId || req.headers['x-business-id'];
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
+    // Legacy dashboard-only endpoint. Signals are business-scoped through the
+    // accounting API call, and the payload is always contractor_cfo.
     const signals = await fetchSignals(business_id);
     const { score, status, breakdown } = calculatePulse(signals);
 
     return res.json({
+      module: CONTRACTOR_CFO_MODULE,
+      legacy_dashboard_only: true,
       pulse_score: score,
       status,
       breakdown, // ⬅️ EXPLANATION INCLUDED
@@ -108,12 +113,13 @@ export async function getPulse(req, res) {
   } catch (e) {
     console.error('[pulse] failed', e);
     return res.json({
+      module: CONTRACTOR_CFO_MODULE,
+      legacy_dashboard_only: true,
       pulse_score: 50,
       status: 'watch',
       breakdown: null,
       signals: {},
       generated_at: new Date().toISOString(),
-      diag: e.message
     });
   }
 }

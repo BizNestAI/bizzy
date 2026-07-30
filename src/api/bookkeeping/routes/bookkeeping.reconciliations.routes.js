@@ -4,6 +4,7 @@ import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { computeReconciliationRun } from "../../../services/bookkeeping/reconciliationRunService.js";
 import { evaluateReconciliationStatus } from "../../../services/bookkeeping/reconciliationEvaluator.js";
+import { triggerContractorCfoInsightsBestEffort } from "../../../services/insights/contractorCfoTriggerService.js";
 
 const router = Router();
 
@@ -51,10 +52,20 @@ function parseRange(range, dateFrom, dateTo) {
   let start = null;
   const r = (range || "").toLowerCase();
   const isAll = ["all", "all_dates", "all_time"].includes(r);
+  const isThisMonth = ["this_month", "current_month", "month"].includes(r);
   const is90 = ["last_90", "last90", "last_90_days", "90"].includes(r);
   const is30 = ["last_30", "last30", "last_30_days", "30", ""].includes(r);
   if (isAll) {
     return { date_from: null, date_to: null, scope: "all" };
+  }
+  if (isThisMonth) {
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    return {
+      date_from: monthStart.toISOString().slice(0, 10),
+      date_to: monthEnd.toISOString().slice(0, 10),
+      scope: "this_month",
+    };
   }
   if (is90) {
     start = new Date(today.getTime() - 90 * 24 * 60 * 60 * 1000);
@@ -64,6 +75,21 @@ function parseRange(range, dateFrom, dateTo) {
     start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
   }
   return { date_from: start.toISOString().slice(0, 10), date_to: end, scope: range || "last_30_days" };
+}
+
+function sameRunRequestScope(run, opts = {}) {
+  if (!run) return false;
+  const runStart = run.period_start ? String(run.period_start).slice(0, 10) : null;
+  const runEnd = run.period_end ? String(run.period_end).slice(0, 10) : null;
+  const requestedStart = opts.date_from ? String(opts.date_from).slice(0, 10) : null;
+  const requestedEnd = opts.date_to ? String(opts.date_to).slice(0, 10) : null;
+  const requestedScope = opts.scope || null;
+  const runScope = run.scope || null;
+
+  if (requestedStart || requestedEnd) {
+    return runStart === requestedStart && runEnd === requestedEnd;
+  }
+  return runScope === requestedScope;
 }
 
 async function pickLatestRun(businessId) {
@@ -76,6 +102,28 @@ async function pickLatestRun(businessId) {
     .maybeSingle();
   if (error) throw error;
   return data || null;
+}
+
+async function pickLatestMatchingRun(businessId, opts = {}) {
+  let query = supabase
+    .from("reconciliation_runs")
+    .select("*")
+    .eq("business_id", businessId)
+    .order("last_checked_at", { ascending: false, nullsLast: true });
+
+  if (opts.date_from) query = query.eq("period_start", opts.date_from);
+  if (opts.date_to) query = query.eq("period_end", opts.date_to);
+  if (!opts.date_from && !opts.date_to && opts.scope) query = query.eq("scope", opts.scope);
+
+  const { data, error } = await query.limit(10);
+  if (error) throw error;
+
+  const requestedAccountId = opts.plaid_account_id || null;
+  return (
+    (data || []).find((row) => (row?.details?.opts?.plaid_account_id || null) === requestedAccountId) ||
+    data?.[0] ||
+    null
+  );
 }
 
 function shapeRunSummary(run) {
@@ -253,13 +301,14 @@ router.post("/reconciliations/run", requireAuth, async (req, res) => {
       date_from: parsedRange.date_from,
       date_to: parsedRange.date_to,
       plaid_account_id: body.plaid_account_id || null,
-      include_pending: body.include_pending === true,
+      include_pending: body.include_pending !== false,
+      include_archived: body.include_archived !== false,
     };
 
-    const latest = await pickLatestRun(businessId);
+    const latest = await pickLatestMatchingRun(businessId, opts);
     const now = Date.now();
     const latestTs = latest?.last_checked_at ? Date.parse(latest.last_checked_at) : null;
-    if (latest && latestTs && now - latestTs < FIVE_MIN_MS) {
+    if (latest && latestTs && sameRunRequestScope(latest, opts) && now - latestTs < FIVE_MIN_MS) {
       const summary = shapeRunSummary(latest);
       const accounts_summary = latest ? await summarizeAccountsFromItems(businessId, latest.id) : [];
       let account_health = [];
@@ -285,7 +334,7 @@ router.post("/reconciliations/run", requireAuth, async (req, res) => {
       });
     }
 
-    await computeReconciliationRun(businessId, opts);
+    const computed = await computeReconciliationRun(businessId, opts);
     let account_health = [];
     let account_health_error = false;
     try {
@@ -296,9 +345,16 @@ router.post("/reconciliations/run", requireAuth, async (req, res) => {
       account_health = [];
       account_health_error = true;
     }
-    const latestAfter = await pickLatestRun(businessId);
+    const latestAfter = computed?.run_id
+      ? await pickRunById(businessId, computed.run_id)
+      : await pickLatestMatchingRun(businessId, opts);
     const summaryAfter = shapeRunSummary(latestAfter);
     const accounts_summary = latestAfter ? await summarizeAccountsFromItems(businessId, latestAfter.id) : [];
+    triggerContractorCfoInsightsBestEffort({
+      businessId,
+      trigger: "reconciliation",
+      force: false,
+    });
 
     return res.json({
       ok: true,

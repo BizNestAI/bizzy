@@ -23,11 +23,8 @@ const accentHexMap = {
 };
 
 const CHROME_HEX  = ACCENT_HEX;
-const CHROME_SOFT = "rgba(52,211,153,0.50)";
-const CHROME_TOP  = "#d0f5e6";
-const DEFAULT_BORDER   = hexToRgba(CHROME_HEX, 0.25);
-const DEFAULT_QP_FRAME = hexToRgba(CHROME_HEX, 0.22);
-const DEFAULT_GLOW     = hexToRgba(CHROME_HEX, 0.24);
+const DEFAULT_BORDER   = hexToRgba(CHROME_HEX, 0.18);
+const DEFAULT_QP_FRAME = hexToRgba(CHROME_HEX, 0.16);
 
 function hexToRgba(hex, alpha = 1) {
   let c = (hex || "").replace("#", "");
@@ -69,6 +66,7 @@ export default function BizzyChatBar({
   tone = "auto",
   shellClassName = "",
   quickPromptMode = "normal",
+  flushColumnPadding = false,
 }) {
   const location = useLocation();
   const pathname = location?.pathname || "";
@@ -105,9 +103,6 @@ export default function BizzyChatBar({
   }, [tone, isChatHome, pathname]);
 
   const accentHex  = effectiveTone === "neutral" ? neutralFrame : brandAccent;
-  // Always use the ChatHome default chrome border, even on dashboards.
-  const borderCol  = DEFAULT_BORDER;
-  const glowCol    = isChatHome ? "transparent" : (useChromeAccent ? CHROME_SOFT : DEFAULT_GLOW);
 
   /** Submit */
   const handleSubmit = async (e) => {
@@ -178,32 +173,22 @@ export default function BizzyChatBar({
     return () => cancelAnimationFrame(raf);
   }, [isChatHome, shouldRender, isCanvasOpen]);
 
-  if (!shouldRender) return null;
-
   // Container positioning
   let containerClass = "w-full";
   if (variant === "contained") containerClass = "sticky bottom-3 z-20 w-full";
   else if (variant === "fixed") containerClass = "fixed bottom-0 left-0 w-full z-50";
 
-  // Focus glow removed (keep neutral)
-  const focusGlow = "none";
-  const focusBg = "none";
-
   // Unified neutral shell (graphite glass, no blue) shared across ChatHome, dashboards, and Canvas
-  const neutralShellBg = "var(--surface-graphite)";
-  const neutralShellBorder = "1px solid var(--surface-border)";
-  const barShadow = "0 0 0 1px var(--surface-border), 0 10px 24px rgba(0,0,0,0.28)";
-
-  // Chrome static pages should stay centered/narrow; dashboards with Canvas open should not.
-  const isChromeStaticPage =
-    currentModule === "docs" || currentModule === "companion" || currentModule === "settings";
+  const neutralShellBg = "linear-gradient(180deg, var(--chatbar-bg), var(--chatbar-bg-2))";
+  const neutralShellBorder = "1px solid var(--chatbar-border)";
+  const barShadow = "var(--chatbar-shadow)";
 
   // Shared chat column width (aligns with conversation width)
   const widthWrapperStyle = {
     maxWidth: "var(--chat-col-max)",
     width: "100%",
-    paddingLeft: "var(--chat-col-pad)",
-    paddingRight: "var(--chat-col-pad)",
+    paddingLeft: flushColumnPadding ? 0 : "var(--chat-col-pad)",
+    paddingRight: flushColumnPadding ? 0 : "var(--chat-col-pad)",
     margin: "0 auto",
     boxSizing: "border-box",
   };
@@ -212,19 +197,12 @@ export default function BizzyChatBar({
   const quickPromptFrame = DEFAULT_QP_FRAME;
   const promptContainerClass = isChatHome ? "bizzy-chathome-prompts bizzy-chathome-chips" : "";
   const promptChipClass = isChatHome ? "bizzy-chathome-chip bizzy-chip" : "";
-  const devBizId =
-    import.meta.env?.DEV && typeof window !== "undefined"
-      ? window.localStorage?.getItem("currentBusinessId") ||
-        window.localStorage?.getItem("business_id") ||
-        ""
-      : "";
   const lastLogRef = useRef({ mode: null, module: null });
 
   useEffect(() => {
     if (!import.meta.env?.DEV) return;
     const prev = lastLogRef.current;
     if (prev.mode !== quickPromptMode || prev.module !== currentModule) {
-      // eslint-disable-next-line no-console
       console.log("[BizzyChatBar] mode:", quickPromptMode, "module:", currentModule);
       lastLogRef.current = { mode: quickPromptMode, module: currentModule };
     }
@@ -249,6 +227,8 @@ export default function BizzyChatBar({
     window.addEventListener("bizzy:prefill-chat", handler);
     return () => window.removeEventListener("bizzy:prefill-chat", handler);
   }, [currentModule, isLoading, sendMessage, openCanvas]);
+
+  if (!shouldRender) return null;
 
   return (
     <div className={[containerClass, className].join(" ")}>
@@ -301,8 +281,8 @@ export default function BizzyChatBar({
                   border: neutralShellBorder,
                   // Keep focus state flat—no outer glow when the bar is active
                   boxShadow: isFocused ? barShadow : barShadow,
-                  backgroundImage: focusBg,
-                  backgroundColor: neutralShellBg,
+                  backgroundImage: neutralShellBg,
+                  backgroundColor: "var(--chatbar-bg)",
                 }}
               >
                 <div className="bizzy-chatbar-sheen" aria-hidden="true" />
@@ -340,12 +320,12 @@ export default function BizzyChatBar({
                   onClick={() => setIsRecording((p) => !p)}
                   onKeyDown={(e) => e.key === "Enter" && setIsRecording((p) => !p)}
                 className={[
-                  "ml-3 h-8.5 w-8.5 rounded-full flex items-center justify-center select-none",
+                  "ml-3 h-8.5 w-8.5 rounded-full flex items-center justify-center select-none transition-colors",
                   effectiveTone === "neutral"
-                    ? "bg-transparent text-white/90 border border-white/20"
+                    ? "bg-transparent text-white/90 border border-white/20 hover:text-[var(--accent-contrast)] hover:border-[var(--accent-line)]"
                     : "bg-[#0f141b] text-[var(--accent)] border",
                 ].join(" ")}
-                  style={{ borderColor: borderCol, boxShadow: "none" }}
+                  style={{ boxShadow: "none" }}
                   aria-label="Toggle voice"
                   title="Toggle voice"
                 >

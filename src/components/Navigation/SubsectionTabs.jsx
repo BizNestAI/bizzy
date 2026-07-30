@@ -17,15 +17,27 @@ export default function SubsectionTabs({ items = [], align = "center" }) {
         style={{ boxShadow: "0 8px 24px rgba(0,0,0,0.35)", backgroundColor: "var(--header-overlay)" }}
       >
         {items.map((item, idx) => {
-          const active = location.pathname === item.path || item.activePaths?.includes(location.pathname);
+          const disabled = !!item.disableNavigate;
+          const active = !disabled && (location.pathname === item.path || item.activePaths?.includes(location.pathname));
           return (
             <React.Fragment key={item.path}>
               <button
                 type="button"
-                onClick={() => navigate(item.path)}
+                onClick={(event) => {
+                  if (disabled) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                  }
+                  navigate(item.path);
+                }}
+                title={item.tooltip || undefined}
+                aria-disabled={disabled ? "true" : undefined}
                 className={`text-sm transition px-2 py-1 rounded-md ${
                   active
                     ? "text-[var(--text)] bg-[rgba(var(--accent-rgb),0.14)] border border-[rgba(var(--accent-rgb),0.45)] shadow-[0_0_12px_rgba(var(--accent-rgb),0.25)]"
+                    : disabled
+                    ? "text-white/35 cursor-not-allowed hover:text-white/45"
                     : "text-white/80 hover:text-white hover:bg-[rgba(var(--accent-rgb),0.08)]"
                 } focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[rgba(var(--accent-rgb),0.45)]`}
               >

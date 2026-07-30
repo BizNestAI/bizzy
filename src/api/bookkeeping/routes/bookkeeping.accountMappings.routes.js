@@ -42,7 +42,8 @@ router.get("/account-mappings", requireAuth, async (req, res) => {
     const { data: plaidAccounts, error: acctErr } = await supabase
       .from("plaid_accounts")
       .select("plaid_account_id,name,official_name,mask,type,subtype,is_active")
-      .eq("business_id", businessId);
+      .eq("business_id", businessId)
+      .eq("is_active", true);
     if (acctErr) throw acctErr;
 
     const { data: mappings, error: mapErr } = await supabase

@@ -1,6 +1,22 @@
 // /src/api/tax/calculateTaxLiability.js
+/* global process */
 import { supabase } from "../../services/supabaseAdmin.js";
 import { calculateTaxLiability } from "../../services/tax/calculateTaxLiability.js";
+import { dataUnavailableError } from "../../services/tax/taxErrors.js";
+import { emitTaxDataChanged } from "../../services/tax/taxChangeEvents.js";
+import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
+import { validateTaxCalculationRequest } from "./taxValidation.js";
+import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
+
+let deps = {
+  supabase,
+  calculateTaxLiability,
+  emitTaxDataChanged,
+};
+
+export function __setTaxCalculateLiabilityTestDeps(next = {}) {
+  deps = { ...deps, ...next };
+}
 
 function isMissingTable(err) {
   const msg = (err?.message || "").toLowerCase();
@@ -24,7 +40,7 @@ function mockLiability({ year }) {
     quarter: `Q${q}`, due: qDue[q], amount: 9500, paid: 0, remaining: 9500,
   }));
   return {
-    meta: { year, generatedAt: new Date().toISOString() },
+    meta: { year, generatedAt: new Date().toISOString(), source: "mock", is_demo: true },
     summary: {
       annualEstimate: annual,
       ytdEstimated: Math.round(annual * 0.65),
@@ -43,39 +59,51 @@ function mockLiability({ year }) {
 }
 
 export default async function calculateTaxLiabilityHandler(req, res) {
-  res.set("Cache-Control", "no-store");
+  setTaxNoStore(res);
 
   if ((req.method || "").toUpperCase() !== "POST") {
-    return res.status(405).json({ ok: false, error: "Method not allowed. Use POST." });
-  }
-  if (!req.user) {
-    return res.status(401).json({ ok: false, error: "Unauthorized: missing/invalid token" });
+    return sendTaxError(res, { code: "method_not_allowed", message: "Method not allowed. Use POST.", status: 405 }, "method_not_allowed");
   }
 
-  const { businessId, projectionOverride = {}, year = new Date().getFullYear() } = req.body || {};
-  if (!businessId || typeof businessId !== "string") {
-    return res.status(422).json({ ok: false, error: "businessId (string) is required" });
+  let input;
+  try {
+    input = validateTaxCalculationRequest(req);
+    await assertTaxBusinessAccess({ req, businessId: input.businessId, supabase: deps.supabase });
+  } catch (err) {
+    return sendTaxError(res, err, "invalid_tax_calculation_request");
   }
 
   if (process.env.MOCK_TAX_LIABILITY === "true") {
-    return res.json({ ok: true, data: mockLiability({ year }) });
+    return sendTaxSuccess(res, mockLiability({ year: input.taxYear }), { source: "mock", is_demo: true });
   }
 
   try {
-    const data = await calculateTaxLiability({
-      supabase,
-      businessId,
-      projectionOverride,
-      year,
+    const data = await deps.calculateTaxLiability({
+      supabase: deps.supabase,
+      businessId: input.businessId,
+      projectionOverride: input.projectionOverride,
+      year: input.taxYear,
+      asOfDate: input.asOfDate,
+      calculationType: input.calculationType,
+      triggerSource: req.body?.triggerSource || input.triggerSource,
+      projectionMethod: req.body?.projectionMethod || null,
+      projectionScenario: req.body?.projectionScenario || null,
+      force: req.body?.force === true || req.body?.refresh === true,
       userId: req.user.id,
     });
-    return res.json({ ok: true, data });
+    deps.emitTaxDataChanged?.({
+      businessId: input.businessId,
+      taxYear: input.taxYear,
+      changeType: "tax_calculation_completed",
+      entityId: data?.meta?.runId || null,
+      userId: req.user.id,
+    });
+    return sendTaxSuccess(res, data);
   } catch (err) {
     if (isMissingTable(err)) {
-      return res.json({ ok: true, data: mockLiability({ year }) });
+      return sendTaxError(res, dataUnavailableError("Tax data is temporarily unavailable."), "tax_data_unavailable");
     }
     console.error("[tax] calculate-liability error:", err);
-    const status = Number(err?.status) || 400;
-    return res.status(status).json({ ok: false, error: err?.message || "Error calculating tax liability" });
+    return sendTaxError(res, err, "tax_calculation_failed");
   }
 }

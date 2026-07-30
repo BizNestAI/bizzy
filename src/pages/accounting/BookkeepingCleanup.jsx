@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { CheckCircle2, CircleAlert, UploadCloud } from "lucide-react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext.jsx";
 import BookkeepingFeed from "../../components/Accounting/BookkeepingFeed.jsx";
@@ -9,6 +10,7 @@ import BillingGate, { getBillingAccess, resolveStatusValue } from "../../compone
 import {
   getAccounts as fetchAccounts,
   getTransactions as fetchTransactions,
+  getTransactionCounts as fetchTransactionCounts,
   getQboCoa as fetchQboCoa,
   approveTransactions,
   undoTransaction,
@@ -17,6 +19,7 @@ import {
   enrichCounterparties,
   getMappingStatus,
   getClarificationRequests,
+  runPostingNow,
 } from "../../services/bookkeeping/bookkeepingClient.js";
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
@@ -146,9 +149,9 @@ const MOCK_TRANSACTIONS = DEMO_TRANSACTIONS.length ? DEMO_TRANSACTIONS : [
 ];
 
 const TABS = [
-  { key: "needs_review", label: "Needs Review" },
-  { key: "handled", label: "Handled" },
-  { key: "posted", label: "Posted" },
+  { key: "needs_review", label: "Needs Review", icon: CircleAlert },
+  { key: "handled", label: "Handled", icon: CheckCircle2 },
+  { key: "posted", label: "Posted", icon: UploadCloud },
 ];
 
 const DATE_RANGE_OPTIONS = [
@@ -214,6 +217,40 @@ function getAcctKey(a) {
   return a?.plaid_account_id || a?.plaidAccountId || a?.id || null;
 }
 
+function getTxnAccountKey(txn = {}) {
+  return txn.plaid_account_id || txn.plaidAccountId || txn.accountId || txn.account_id || null;
+}
+
+function matchesBooksTab(txn = {}, tabKey = "needs_review") {
+  const status = txn.status || "needs_review";
+  const handledStatuses = ["approved", "auto_approved"];
+  if (tabKey === "all") return true;
+  if (tabKey === "needs_review") {
+    if (status === "needs_review" || status === "uncategorized" || !status) return true;
+    return status === "auto_approved" && txn.is_check === true;
+  }
+  if (tabKey === "uncategorized") {
+    return status === "uncategorized" || txn.currentAccount === "Uncategorized" || txn.currentAccount === "Ask My Accountant";
+  }
+  if (tabKey === "handled") return handledStatuses.includes(status);
+  if (tabKey === "posted") return status === "posted" || Boolean(txn.qbo_txn_id || txn.qboTxnId);
+  if (tabKey === "flagged") return Boolean(txn.flagged);
+  return false;
+}
+
+function isWithinBookkeepingDateRange(dateStr, dateRange, { ignoreRange = false, now = new Date() } = {}) {
+  if (ignoreRange) return true;
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return true;
+  const diffDays = (now - d) / (1000 * 60 * 60 * 24);
+  if (dateRange === "this_month") {
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }
+  if (dateRange === "last_30") return diffDays <= 30;
+  if (dateRange === "last_90") return diffDays <= 90;
+  return true;
+}
+
 function BookkeepingCleanup() {
   const { currentBusiness } = useBusiness?.() || {};
   const usingDemo = shouldUseDemoData(currentBusiness);
@@ -239,6 +276,10 @@ function BookkeepingCleanup() {
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingTxns, setLoadingTxns] = useState(false);
+  const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null });
+  const [countsRefreshKey, setCountsRefreshKey] = useState(0);
+  const [postingNow, setPostingNow] = useState(false);
+  const [postingRunSummary, setPostingRunSummary] = useState(null);
   const suggestRanRef = useRef(null);
   const enrichRanRef = useRef(null);
   const accountOverrides = useRef(new Map());
@@ -337,7 +378,7 @@ function BookkeepingCleanup() {
   const [disableAutoApprove, setDisableAutoApprove] = useState(false);
   const [activeTab, setActiveTab] = useState("needs_review");
   const [dateRange, setDateRange] = useState("all");
-  const [accountFilter, setAccountFilter] = useState(null);
+  const [accountFilter, setAccountFilter] = useState(() => (usingDemo ? getAcctKey(DEMO_ACCOUNT_LIST[0]) : null));
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkCategory, setBulkCategory] = useState("Materials");
@@ -366,6 +407,32 @@ function BookkeepingCleanup() {
     }
   }, [businessId, usingDemo]);
 
+  const loadTabCounts = useCallback(async () => {
+    if (usingDemo) return;
+    if (!businessId || !accountFilter) {
+      setTabCounts({ needs_review: null, handled: null, posted: null });
+      return;
+    }
+    try {
+      const counts = await fetchTransactionCounts(businessId, {
+        account_id: accountFilter,
+        range: dateRange,
+      });
+      setTabCounts({
+        needs_review: Number(counts?.needs_review || 0),
+        handled: Number(counts?.handled || 0),
+        posted: Number(counts?.posted || 0),
+      });
+    } catch (e) {
+      console.warn("[bookkeeping] transaction counts fetch failed", e?.message || e);
+      setTabCounts({ needs_review: null, handled: null, posted: null });
+    }
+  }, [accountFilter, businessId, dateRange, usingDemo]);
+
+  useEffect(() => {
+    loadTabCounts();
+  }, [loadTabCounts, countsRefreshKey]);
+
   const loadClarifications = useCallback(async () => {
     if (!businessId || usingDemo) return;
     try {
@@ -379,7 +446,7 @@ function BookkeepingCleanup() {
   }, [businessId, usingDemo]);
 
   useEffect(() => {
-    if (usingDemo) setAccountFilter("all");
+    if (usingDemo) setAccountFilter((current) => current || getAcctKey(DEMO_ACCOUNT_LIST[0]));
   }, [usingDemo]);
 
   useEffect(() => {
@@ -387,12 +454,11 @@ function BookkeepingCleanup() {
   }, [loadClarifications]);
 
   const accountCards = useMemo(() => {
-    const handledStatuses = new Set(["approved", "auto_approved"]);
     const counts = transactions.reduce((acc, txn) => {
-      const key = txn.plaid_account_id || txn.plaidAccountId || txn.accountId || txn.account_id;
-      const status = txn.status || "needs_review";
-      const needsReview = !handledStatuses.has(status);
-      acc[key] = (acc[key] || 0) + (needsReview ? 1 : 0);
+      const key = getTxnAccountKey(txn);
+      if (matchesBooksTab(txn, "needs_review")) {
+        acc[key] = (acc[key] || 0) + 1;
+      }
       return acc;
     }, {});
     return accounts.map((a) => {
@@ -515,34 +581,13 @@ function BookkeepingCleanup() {
 
   const filteredTransactions = useMemo(() => {
     const now = new Date();
-    const rangeCheck = (dateStr) => {
-      if (usingDemo) return true;
-      const d = new Date(dateStr);
-      if (Number.isNaN(d.getTime())) return true;
-      const diffDays = (now - d) / (1000 * 60 * 60 * 24);
-      if (dateRange === "this_month") {
-        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-      }
-      if (dateRange === "last_30") return diffDays <= 30;
-      if (dateRange === "last_90") return diffDays <= 90;
-      return true;
-    };
-
     const accountFilterNormalized = accountFilter === "all" ? null : accountFilter;
 
     const base = transactions.filter((txn) => {
-      const status = txn.status || "needs_review";
-      const handledStatuses = ["approved", "auto_approved"];
-      const matchesTab =
-        activeTab === "all" ||
-        (activeTab === "needs_review" && (status === "needs_review" || status === "uncategorized")) ||
-        (activeTab === "uncategorized" && (status === "uncategorized" || txn.currentAccount === "Uncategorized" || txn.currentAccount === "Ask My Accountant")) ||
-        (activeTab === "handled" && handledStatuses.includes(status)) ||
-        (activeTab === "flagged" && txn.flagged);
-
-      const txnAcct = txn.plaid_account_id || txn.plaidAccountId || txn.accountId || txn.account_id || null;
+      const matchesTab = matchesBooksTab(txn, activeTab);
+      const txnAcct = getTxnAccountKey(txn);
       const matchesAccount = !accountFilterNormalized || txnAcct === accountFilterNormalized;
-      const matchesRange = rangeCheck(txn.date);
+      const matchesRange = isWithinBookkeepingDateRange(txn.date, dateRange, { ignoreRange: usingDemo, now });
       return matchesTab && matchesAccount && matchesRange;
     });
 
@@ -551,6 +596,24 @@ function BookkeepingCleanup() {
     }
     return base;
   }, [accountFilter, activeTab, dateRange, transactions, usingDemo, showChecksOnly]);
+
+  const displayedTabCounts = useMemo(() => {
+    if (!usingDemo) return tabCounts;
+    const now = new Date();
+    const accountFilterNormalized = accountFilter === "all" ? null : accountFilter;
+    return transactions.reduce(
+      (acc, txn) => {
+        const txnAcct = getTxnAccountKey(txn);
+        if (accountFilterNormalized && txnAcct !== accountFilterNormalized) return acc;
+        if (!isWithinBookkeepingDateRange(txn.date, dateRange, { ignoreRange: true, now })) return acc;
+        if (matchesBooksTab(txn, "needs_review")) acc.needs_review += 1;
+        if (matchesBooksTab(txn, "handled")) acc.handled += 1;
+        if (matchesBooksTab(txn, "posted")) acc.posted += 1;
+        return acc;
+      },
+      { needs_review: 0, handled: 0, posted: 0 }
+    );
+  }, [accountFilter, dateRange, tabCounts, transactions, usingDemo]);
 
   const visibleTransactions = filteredTransactions.slice(0, rowsPerPage);
   const start = (page - 1) * rowsPerPage;
@@ -716,6 +779,24 @@ function BookkeepingCleanup() {
     setBulkJob(value);
   };
 
+  const handleRunPostingNow = async () => {
+    if (!businessId || usingDemo || postingNow) return;
+    setPostingNow(true);
+    setPostingRunSummary(null);
+    try {
+      const res = await runPostingNow(businessId, { force: true });
+      setPostingRunSummary(res?.summary || null);
+      await reloadTransactions();
+      setCountsRefreshKey((value) => value + 1);
+      await loadMappingStatus();
+    } catch (err) {
+      console.warn("[bookkeeping] posting run failed", err?.message || err);
+      setPostingRunSummary({ ok: false, error: err?.message || "posting_run_failed" });
+    } finally {
+      setPostingNow(false);
+    }
+  };
+
   useEffect(() => {
     setSelectedIds(new Set());
     setPage(1);
@@ -799,15 +880,8 @@ function BookkeepingCleanup() {
       const loadedAccounts = res?.accounts || [];
       setAccounts(loadedAccounts);
       setLastSyncAt(res?.meta?.last_sync_at || null);
-      // Auto-select a default account (prefer checking) if none selected
       if (!accountFilter && loadedAccounts.length) {
-        const preferred =
-          loadedAccounts.find(
-            (a) =>
-              String(a.type || "").toLowerCase() === "depository" &&
-              String(a.subtype || "").toLowerCase().includes("checking")
-          ) || loadedAccounts[0];
-        const key = getAcctKey(preferred);
+        const key = getAcctKey(loadedAccounts[0]);
         if (key) setAccountFilter(key);
       }
     } catch (e) {
@@ -1037,6 +1111,7 @@ function BookkeepingCleanup() {
       console.warn("[bookkeeping] transactions load failed", e?.message || e);
     } finally {
       setLoadingTxns(false);
+      setCountsRefreshKey((value) => value + 1);
     }
   }, [activeTab, accountFilter, businessId, canRunAI, dateRange, disableAutoApprove, page, rowsPerPage, usingDemo, loadMappingStatus]);
 
@@ -1234,8 +1309,27 @@ function BookkeepingCleanup() {
       ) : null}
 
       {activeTab === "handled" ? (
-        <div className="mt-2 text-xs text-slate-400">
-          Bizzi automatically posts handled transactions to QuickBooks. You can edit here during the grace window if needed.
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+          <span>
+            Bizzi automatically posts handled transactions to QuickBooks. You can edit here during the grace window if needed.
+          </span>
+          {!usingDemo ? (
+            <button
+              type="button"
+              onClick={handleRunPostingNow}
+              disabled={postingNow}
+              className="rounded-full border border-white/10 px-3 py-1.5 text-slate-200 transition hover:border-[var(--accent-line)] hover:bg-[var(--panel)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {postingNow ? "Posting..." : "Run posting now"}
+            </button>
+          ) : null}
+          {postingRunSummary ? (
+            <span className={postingRunSummary.ok === false ? "text-rose-300" : "text-emerald-300"}>
+              {postingRunSummary.ok === false
+                ? `Posting run failed: ${postingRunSummary.error || "unknown error"}`
+                : `Posting run checked ${postingRunSummary.forced ? postingRunSummary.pending || 0 : postingRunSummary.due || 0} handled and attempted ${postingRunSummary.attempted || 0}.`}
+            </span>
+          ) : null}
         </div>
       ) : null}
       {activeTab === "posted" ? (
@@ -1249,6 +1343,9 @@ function BookkeepingCleanup() {
           {/** Ensure uniform sizing across all tab buttons */}
           {TABS.map((tab) => {
             const active = tab.key === activeTab;
+            const Icon = tab.icon;
+            const count = displayedTabCounts?.[tab.key];
+            const hasCount = count !== null && count !== undefined;
             return (
               <button
                 key={tab.key}
@@ -1262,7 +1359,15 @@ function BookkeepingCleanup() {
                     : "text-slate-200 border-white/10 hover:bg-[var(--panel)] hover:border-[var(--accent-line)]"
                 }`}
               >
-                {tab.label}
+                <span className="inline-flex items-center justify-center gap-1.5 whitespace-nowrap">
+                  <Icon className={`h-3.5 w-3.5 ${active ? "text-emerald-300" : "text-slate-400"}`} strokeWidth={2} />
+                  {hasCount ? (
+                    <span className={`tabular-nums ${active ? "text-emerald-200" : "text-slate-300"}`}>
+                      {count}
+                    </span>
+                  ) : null}
+                  <span>{tab.label}</span>
+                </span>
               </button>
             );
           })}

@@ -1,5 +1,6 @@
 import { supabase } from "../supabaseAdmin.js";
-import { getPlaidClient } from "./plaidClient.js";
+import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
+import { triggerContractorCfoInsightsBestEffort } from "../insights/contractorCfoTriggerService.js";
 
 function normalizeDate(d) {
   if (!d) return null;
@@ -163,6 +164,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       return {
         business_id: businessId,
         plaid_item_id: item.plaid_item_id,
+        plaid_env: item.plaid_env || plaidEnvName,
         plaid_account_id: tx.account_id,
         plaid_transaction_id: tx.transaction_id,
         pending_transaction_id: tx.pending_transaction_id || null,
@@ -556,7 +558,7 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
 
   const { data: items, error: itemsErr } = await supabase
     .from("plaid_items")
-    .select("id,plaid_item_id,plaid_access_token,cursor,status,last_sync_at,is_active")
+    .select("id,plaid_item_id,plaid_env,plaid_access_token,cursor,status,last_sync_at,is_active")
     .eq("business_id", businessId)
     .eq("is_active", true);
   if (itemsErr) throw itemsErr;
@@ -581,6 +583,14 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
         supabase: err?.supabase || null,
       });
     }
+  }
+
+  if (synced > 0) {
+    triggerContractorCfoInsightsBestEffort({
+      businessId,
+      trigger: "plaid_sync",
+      force: false,
+    });
   }
 
   return { ok: true, synced, skipped };

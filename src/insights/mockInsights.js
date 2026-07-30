@@ -1,288 +1,227 @@
-// Shared mock insights used in dev/demo mode
-const MOCK_INSIGHTS = [
-  // Pulse / Bizzy module
-  {
-    id: 'mock-pulse-1',
-    module: 'bizzy',
-    severity: 'warn',
-    title: 'Bizzi Pulse 44/100 (At risk)',
-    body: 'Cash is tight and payroll is heavy. Collect AR and trim labor 5–10% to stabilize margins.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-    primary_cta: { action: 'open_route', label: 'Open Pulse', route: '/dashboard/bizzy' },
-  },
-  {
-    id: 'mock-pulse-2',
-    module: 'bizzy',
-    severity: 'info',
-    title: 'Profit margin steady at 32.5%',
-    body: 'Solid margin, but payroll is the main lever. A 5% reduction pushes you toward 35%.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-    primary_cta: { action: 'open_route', label: 'See Financials', route: '/dashboard/financials' },
-  },
-  {
-    id: 'mock-pulse-3',
-    module: 'bizzy',
-    severity: 'warn',
-    title: 'Cash on hand: $24.2K',
-    body: 'Collecting 50% of AR keeps you above a two-month runway.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-  },
-  {
-    id: 'mock-pulse-4',
-    module: 'bizzy',
-    severity: 'info',
-    title: 'Top priority this week',
-    body: 'Focus on AR follow-ups and payroll renegotiation.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-  },
+// Shared mock insights used in dev/demo mode.
+// The live rail defaults to global Contractor CFO alerts only.
 
-  // Financials / Accounting
-  {
-    id: 'mock-fin-1',
-    module: 'accounting',
-    severity: 'info',
-    title: 'Revenue $48.2K vs. Expenses $32.5K',
-    body: 'Margin is 32.5%. Payroll is still the biggest lever for savings.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-    primary_cta: { action: 'open_route', label: 'Open Financials', route: '/dashboard/financials' },
-  },
-  {
-    id: 'mock-fin-2',
-    module: 'accounting',
-    severity: 'warn',
-    title: 'Labor costs are 39% of spend',
-    body: 'A 5% trim adds roughly $1,600 profit.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-  },
-  {
-    id: 'mock-fin-3',
-    module: 'accounting',
-    severity: 'warn',
-    title: 'AR outstanding: $18.6K',
-    body: 'Collect half to add $9.3K cash this month.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-  },
+const MODULE = 'contractor_cfo';
 
-  // Marketing
-  {
-    id: 'mock-mkt-1',
-    module: 'marketing',
-    severity: 'info',
-    title: '62 new leads this month',
-    body: '70% from Google Ads with the highest close rate.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-    primary_cta: { action: 'open_route', label: 'Open Marketing', route: '/dashboard/marketing' },
-  },
-  {
-    id: 'mock-mkt-2',
-    module: 'marketing',
-    severity: 'info',
-    title: 'Boost Google Ads budget',
-    body: 'A 10% increase could add 8–10 qualified leads.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-  },
-  {
-    id: 'mock-mkt-3',
-    module: 'marketing',
-    severity: 'warn',
-    title: 'Follow-ups lagging',
-    body: '20% of leads are untouched — roughly $12K potential revenue.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-  },
+function cta(label, path) {
+  return {
+    action: 'navigate',
+    label,
+    payload: { path },
+  };
+}
 
-  // Tax
+const CONTRACTOR_CFO_MOCK_INSIGHTS = [
   {
-    id: 'mock-tax-1',
-    module: 'tax',
+    id: 'mock-cfo-collections-priority-1',
+    module: MODULE,
     severity: 'warn',
-    title: 'Tax payment due in 3 days',
-    body: 'Estimated $6,200 for Q3 — pay early to avoid penalties.',
+    category: 'collections',
+    title: 'Collections should come first',
+    body: 'Overdue AR is large enough to affect this month\'s operating cash flow. Follow up before approving new material purchases.',
+    metrics: [
+      { label: 'Overdue AR', value: '$18.6K' },
+      { label: 'Potential inflow', value: '$9.3K' },
+    ],
     created_at: null,
     is_read: false,
     is_seen: false,
-    primary_cta: { action: 'open_route', label: 'Open Tax', route: '/dashboard/tax' },
+    primary_cta: cta('Review Collections', '/dashboard/leads-jobs/collections'),
   },
   {
-    id: 'mock-tax-2',
-    module: 'tax',
-    severity: 'info',
-    title: 'Tax readiness: 83%',
-    body: 'Missing two receipts (~$600). Upload to keep records clean.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-  },
-
-  // Investments
-  {
-    id: 'mock-inv-1',
-    module: 'investments',
-    severity: 'info',
-    title: 'Portfolio up 5.4%',
-    body: 'Tech ETFs are driving gains.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-    primary_cta: { action: 'open_route', label: 'Open Investments', route: '/dashboard/investments' },
-  },
-  {
-    id: 'mock-inv-2',
-    module: 'investments',
+    id: 'mock-cfo-books-1',
+    module: MODULE,
     severity: 'warn',
-    title: 'Equity drift at 68% (target 60%)',
-    body: 'Rebalance to lock in ~$2.2K gains.',
+    category: 'bookkeeping_reconciliation',
+    title: '18 transactions need review',
+    body: 'Uncategorized spend is high enough to distort your margin and tax estimate.',
+    metrics: [
+      { label: 'Needs review', value: '18' },
+      { label: 'Oldest', value: '11 days' },
+    ],
     created_at: null,
     is_read: false,
     is_seen: false,
-  },
-
-  // Jobs / Ops
-  {
-    id: 'mock-jobs-1',
-    module: 'jobs',
-    severity: 'info',
-    title: '9 new leads this week',
-    body: 'Most from Google Ads; lock dates for top 3 to lift your win rate above 30%.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-    primary_cta: { action: 'open_route', label: 'Review pipeline', route: '/dashboard/leads-jobs' },
+    primary_cta: cta('Open Books', '/dashboard/accounting'),
+    secondary_cta: cta('Run Reconciliation', '/dashboard/accounting/reconciliations'),
   },
   {
-    id: 'mock-jobs-2',
-    module: 'jobs',
+    id: 'mock-cfo-collections-1',
+    module: MODULE,
     severity: 'warn',
-    title: '3 overdue invoices — $13.0K',
-    body: 'Hawthorne, Greenway, and North Ridge are past due. Collect half to add ~$6.5K cash.',
+    category: 'collections',
+    title: 'AR overdue is $18.6K',
+    body: 'Collecting half would add $9.3K cash this month and reduce short-term funding pressure.',
+    metrics: [
+      { label: 'Overdue AR', value: '$18.6K' },
+      { label: 'Largest invoice', value: '$7.4K' },
+    ],
     created_at: null,
     is_read: false,
     is_seen: false,
-    primary_cta: { action: 'open_route', label: 'Open unpaid list', route: '/dashboard/leads-jobs' },
+    primary_cta: cta('Open Collections', '/dashboard/leads-jobs/collections'),
   },
   {
-    id: 'mock-jobs-3',
-    module: 'jobs',
+    id: 'mock-cfo-labor-1',
+    module: MODULE,
     severity: 'info',
-    title: 'Schedule two hot leads',
-    body: 'Kitchen remodel consult (Google Ads) and window replacement (Greenway HOA) are unscheduled—slot them this week.',
+    category: 'labor_payroll',
+    title: 'Labor is 39% of spend',
+    body: 'A 5% trim adds roughly $1,600 to monthly profit without changing revenue.',
+    metrics: [
+      { label: 'Labor share', value: '39%' },
+      { label: 'Profit impact', value: '$1.6K' },
+    ],
     created_at: null,
     is_read: false,
     is_seen: false,
+    primary_cta: cta('Review Reports', '/dashboard/accounting/reports'),
   },
-
-  // Calendar
   {
-    id: 'mock-cal-1',
-    module: 'calendar',
-    severity: 'info',
-    title: 'No meetings scheduled',
-    body: 'Add payroll + AR follow-ups by Wednesday to stay on track.',
+    id: 'mock-cfo-jobs-1',
+    module: MODULE,
+    severity: 'critical',
+    category: 'job_costing',
+    title: 'Brown Bath Remodel margin is at 0%',
+    body: 'Costs are posted but revenue is missing. Assign revenue or review the job before more spend lands.',
+    metrics: [
+      { label: 'Margin', value: '0%' },
+      { label: 'Posted cost', value: '$400' },
+    ],
     created_at: null,
     is_read: false,
     is_seen: false,
+    primary_cta: cta('Open Job Costing', '/dashboard/leads-jobs/job-costing'),
   },
   {
-    id: 'mock-cal-2',
-    module: 'calendar',
+    id: 'mock-cfo-change-orders-1',
+    module: MODULE,
     severity: 'warn',
-    title: 'Tile delivery & walkthrough due Thursday',
-    body: 'Confirm crew assignments by Tuesday morning.',
+    category: 'change_orders',
+    title: '$6.8K approved change orders are unbilled',
+    body: 'Billing these approved changes protects job margin and speeds up cash collection.',
+    metrics: [
+      { label: 'Unbilled COs', value: '$6.8K' },
+      { label: 'Count', value: '3' },
+    ],
     created_at: null,
     is_read: false,
     is_seen: false,
+    primary_cta: cta('Open Change Orders', '/dashboard/leads-jobs/change-orders'),
   },
   {
-    id: 'mock-cal-3',
-    module: 'calendar',
-    severity: 'info',
-    title: 'Add Weekly Bizzi Review',
-    body: 'Fridays at 8 a.m.—recap finances and pipeline.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-  },
-
-  // Email
-  {
-    id: 'mock-email-1',
-    module: 'email',
+    id: 'mock-cfo-tax-1',
+    module: MODULE,
     severity: 'warn',
-    title: '2 urgent emails pending',
-    body: 'Both from John Smith confirming project start.',
+    category: 'tax',
+    title: 'Tax set-aside is running light',
+    body: 'Set aside another $2.4K this month to keep the next estimated payment covered.',
+    metrics: [
+      { label: 'Reserve gap', value: '$2.4K' },
+      { label: 'Due window', value: 'Next quarter' },
+    ],
     created_at: null,
     is_read: false,
     is_seen: false,
-    primary_cta: { action: 'open_route', label: 'Open Inbox', route: '/dashboard/email' },
-    account_id: 'mock-email-acct',
+    primary_cta: cta('View Tax Estimate', '/dashboard/tax'),
   },
   {
-    id: 'mock-email-2',
-    module: 'email',
-    severity: 'info',
-    title: 'Avg reply time: 19 hours',
-    body: 'Target under six hours to keep close rates up.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-  },
-
-  // Jobs / Ops
-  {
-    id: 'mock-ops-1',
-    module: 'ops',
-    severity: 'info',
-    title: '3 active jobs ($92K total)',
-    body: 'All on track with no delays reported.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
-    primary_cta: { action: 'open_route', label: 'Open Jobs', route: '/dashboard/leads-jobs' },
-  },
-  {
-    id: 'mock-ops-2',
-    module: 'ops',
+    id: 'mock-cfo-reconciliation-1',
+    module: MODULE,
     severity: 'warn',
-    title: 'Labor utilization 86%',
-    body: 'Healthy now, but overtime risk if another job starts.',
+    category: 'bookkeeping_reconciliation',
+    title: 'Plaid sync is stale',
+    body: 'Bank data has not refreshed in 4 days. Refresh before relying on cash or reconciliation alerts.',
+    metrics: [
+      { label: 'Last sync', value: '4 days ago' },
+    ],
     created_at: null,
     is_read: false,
     is_seen: false,
-  },
-  {
-    id: 'mock-ops-3',
-    module: 'ops',
-    severity: 'warn',
-    title: 'Tile delivery Wednesday',
-    body: 'Any delay could push November revenue into December.',
-    created_at: null,
-    is_read: false,
-    is_seen: false,
+    primary_cta: cta('Run Reconciliation', '/dashboard/accounting/reconciliations'),
   },
 ];
 
-function countMockInsights({ suppress } = {}) {
+// Historical module mocks kept only for explicit backwards compatibility.
+// InsightsRail imports MOCK_INSIGHTS, so these stale modules are not used by the live/demo rail.
+const LEGACY_MOCK_INSIGHTS = [
+  {
+    id: 'legacy-mock-bizzy-1',
+    module: 'bizzy',
+    severity: 'warn',
+    title: 'Bizzi Pulse 44/100 (At risk)',
+    body: 'Legacy dashboard-only mock. Use Contractor CFO rail mocks for current demo behavior.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: cta('Open Accounting', '/dashboard/accounting'),
+  },
+  {
+    id: 'legacy-mock-marketing-1',
+    module: 'marketing',
+    severity: 'info',
+    title: '62 new leads this month',
+    body: 'Legacy marketing mock retained for old module demos only.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: cta('Open Marketing', '/dashboard/marketing'),
+  },
+  {
+    id: 'legacy-mock-investments-1',
+    module: 'investments',
+    severity: 'info',
+    title: 'Portfolio up 5.4%',
+    body: 'Legacy investments mock retained for old module demos only.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: cta('Open Investments', '/dashboard/investments'),
+  },
+  {
+    id: 'legacy-mock-calendar-1',
+    module: 'calendar',
+    severity: 'info',
+    title: 'No meetings scheduled',
+    body: 'Legacy calendar mock retained for old module demos only.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+  },
+  {
+    id: 'legacy-mock-email-1',
+    module: 'email',
+    severity: 'warn',
+    title: '2 urgent emails pending',
+    body: 'Legacy email mock retained for old module demos only.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: cta('Open Dashboard', '/dashboard/accounting'),
+    account_id: 'mock-email-acct',
+  },
+  {
+    id: 'legacy-mock-ops-1',
+    module: 'ops',
+    severity: 'info',
+    title: '3 active jobs',
+    body: 'Legacy ops mock retained for old module demos only.',
+    created_at: null,
+    is_read: false,
+    is_seen: false,
+    primary_cta: cta('Open Job Costing', '/dashboard/leads-jobs/job-costing'),
+  },
+];
+
+const MOCK_INSIGHTS = CONTRACTOR_CFO_MOCK_INSIGHTS;
+
+function getMockInsights({ includeLegacy = false } = {}) {
+  return includeLegacy ? [...CONTRACTOR_CFO_MOCK_INSIGHTS, ...LEGACY_MOCK_INSIGHTS] : MOCK_INSIGHTS;
+}
+
+function countMockInsights({ suppress, includeLegacy = false } = {}) {
   const skip = suppress ? new Set([...suppress].map((x) => String(x || '').toLowerCase())) : null;
-  return MOCK_INSIGHTS.reduce((acc, item) => {
+  return getMockInsights({ includeLegacy }).reduce((acc, item) => {
     const key = String(item.module || '').toLowerCase();
     if (skip && skip.has(key)) return acc;
     acc[key] = (acc[key] || 0) + 1;
@@ -290,4 +229,10 @@ function countMockInsights({ suppress } = {}) {
   }, {});
 }
 
-export { MOCK_INSIGHTS, countMockInsights };
+export {
+  CONTRACTOR_CFO_MOCK_INSIGHTS,
+  LEGACY_MOCK_INSIGHTS,
+  MOCK_INSIGHTS,
+  countMockInsights,
+  getMockInsights,
+};

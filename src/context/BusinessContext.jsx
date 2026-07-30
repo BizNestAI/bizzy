@@ -13,10 +13,30 @@ export const BusinessProvider = ({ children }) => {
   // Load initial businessId from localStorage (SSR-safe)
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const stored = localStorage.getItem("currentBusinessId") || localStorage.getItem("business_id");
+    const url = new URL(window.location.href);
+    const urlBusinessId = url.searchParams.get("business_id");
+    const stored = urlBusinessId || localStorage.getItem("currentBusinessId") || localStorage.getItem("business_id");
     if (stored) setBusinessIdState(stored);
     setLoading(false); // let UI render while we fetch profile below
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const syncFromUrl = () => {
+      try {
+        const url = new URL(window.location.href);
+        const urlBusinessId = url.searchParams.get("business_id");
+        if (urlBusinessId && urlBusinessId !== businessId) setBusinessId(urlBusinessId);
+      } catch {}
+    };
+    syncFromUrl();
+    window.addEventListener("popstate", syncFromUrl);
+    window.addEventListener("bizzy:sync-url-context", syncFromUrl);
+    return () => {
+      window.removeEventListener("popstate", syncFromUrl);
+      window.removeEventListener("bizzy:sync-url-context", syncFromUrl);
+    };
+  }, [businessId]);
 
   // Keep localStorage in sync and allow callers to change business quickly
   const setBusinessId = (id) => {

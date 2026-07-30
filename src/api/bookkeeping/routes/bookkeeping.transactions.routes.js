@@ -6,6 +6,7 @@ import { resolvePayee } from "../../../services/bookkeeping/payeeResolver.js";
 import { learnVendorRuleFromTransaction } from "../../../services/bookkeeping/vendorRuleLearner.js";
 import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
 
+/* global process */
 const router = Router();
 
 function firstDayOfMonth() {
@@ -41,8 +42,176 @@ function normalizeDate(d) {
   return parsed.toISOString().slice(0, 10);
 }
 
-function normalizeName(name = "") {
-  return (name || "").toLowerCase().replace(/\s+/g, " ").trim();
+function matchesTransactionStatusFilter(statusFilter, cat = {}) {
+  const status = cat?.status || "needs_review";
+  const isCheckTxn = cat?.meta?.is_check === true;
+  const handledView = statusFilter === "approved" || statusFilter === "handled";
+  const postedView = statusFilter === "posted";
+
+  if (postedView) {
+    const hasQbo = Boolean(cat?.qbo_txn_id);
+    return status === "posted" || hasQbo;
+  }
+
+  if (handledView) {
+    return ["approved", "auto_approved"].includes(status);
+  }
+
+  if (!status || status === "needs_review" || status === "uncategorized") return true;
+  if (status === "auto_approved" && isCheckTxn) return true;
+  return false;
+}
+
+function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null) {
+  const suggestedId = cat.suggested_qbo_account_id || null;
+  const suggestedName = cat.suggested_qbo_account_name || null;
+  const finalId = cat.final_qbo_account_id || null;
+  const finalName = cat.final_qbo_account_name || null;
+  const amount = Number(row.amount || 0);
+  const dir = row.direction || (amount < 0 ? "OUTFLOW" : amount > 0 ? "INFLOW" : "UNKNOWN");
+  return {
+    id: row.id,
+    plaidTransactionId: row.plaid_transaction_id || null,
+    plaidAccountId: row.plaid_account_id || null,
+    plaid_account_id: row.plaid_account_id || null,
+    date: row.date,
+    vendor: row.counterparty_name || row.merchant_name || "",
+    payee: row.counterparty_name || row.merchant_name || "",
+    description: row.name || "",
+    amount,
+    signed_amount: amount,
+    direction: dir,
+    currentAccount: acctName,
+    suggestedAccountId: suggestedId,
+    suggestedAccountName: suggestedName,
+    final_qbo_account_id: finalId,
+    final_qbo_account_name: finalName,
+    glAccountId: finalId || suggestedId || null,
+    glAccountName: finalName || suggestedName || null,
+    confidence: cat.confidence || null,
+    reason: cat.reason || null,
+    status: cat.status || "needs_review",
+    payeeSource: row.counterparty_source || null,
+    payeeConfidence: row.counterparty_confidence || null,
+    qboEntityType: row.qbo_entity_type || null,
+    qboEntityId: row.qbo_entity_id || null,
+    is_check: cat.meta?.is_check === true,
+    check_number: cat.meta?.check_number || null,
+    vendor_rule_id: cat.meta?.vendor_rule_id || null,
+    suggestion_source: cat.meta?.suggestion_source || null,
+    vendor_rule_match_reason: cat.meta?.vendor_rule_match_reason || null,
+    posted_at: cat.posted_at || null,
+    reconciled_at: cat.reconciled_at || null,
+    qbo_txn_type: cat.qbo_txn_type || null,
+    qbo_txn_id: cat.qbo_txn_id || null,
+    post_after: cat.post_after || null,
+  };
+}
+
+// Job Costing uses posted Books transactions as the source of truth.
+export function normalizePostedBookTransaction(row = {}) {
+  const bankMemo =
+    row.bank_memo ||
+    row.memo ||
+    row.transaction_memo ||
+    row.plaid_memo ||
+    row.original_description ||
+    row.originalDescription ||
+    row.name ||
+    row.description ||
+    "";
+
+  return {
+    id: row.id,
+    transaction_id: row.id,
+    date: row.date,
+    vendor: row.vendor || row.payee || "",
+    payee: row.payee || row.vendor || "",
+    description: bankMemo,
+    memo: bankMemo,
+    bank_memo: bankMemo,
+    original_description: row.original_description || row.originalDescription || row.name || row.description || "",
+    amount: Number(row.amount || 0),
+    direction: row.direction || (Number(row.amount || 0) < 0 ? "OUTFLOW" : "INFLOW"),
+    final_qbo_account_id: row.final_qbo_account_id || row.glAccountId || null,
+    final_qbo_account_name: row.final_qbo_account_name || row.glAccountName || null,
+    gl_account_id: row.final_qbo_account_id || row.glAccountId || null,
+    gl_account: row.final_qbo_account_name || row.glAccountName || "Uncategorized",
+    qbo_txn_id: row.qbo_txn_id || null,
+    qbo_txn_type: row.qbo_txn_type || null,
+    posted_at: row.posted_at || null,
+    plaid_account_id: row.plaid_account_id || row.plaidAccountId || null,
+    status: row.status || "posted",
+  };
+}
+
+export async function fetchBookkeepingTransactions({
+  businessId,
+  statusFilter = "needs_review",
+  accountId = null,
+  rangeParam = "this_month",
+  page = 1,
+  pageSize = 25,
+} = {}) {
+  // Step A: fetch bank transactions
+  const txQuery = supabase
+    .from("bank_transactions")
+    .select(
+      "id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,counterparties,counterparty_name,counterparty_source,counterparty_confidence,qbo_entity_type,qbo_entity_id,amount,signed_amount,direction,pending,category_primary,category_detailed,personal_finance_category"
+    )
+    .eq("business_id", businessId)
+    .eq("is_archived", false)
+    .order("date", { ascending: false });
+
+  const rangeStart = computeRangeStart(rangeParam);
+  if (rangeStart) txQuery.gte("date", normalizeDate(rangeStart));
+  if (accountId) txQuery.eq("plaid_account_id", accountId);
+
+  const { data: baseRows, error: txErr } = await txQuery;
+  if (txErr) throw txErr;
+
+  // Step B: fetch categorizations separately
+  const ids = (baseRows || []).map((r) => r.id);
+  let catMap = {};
+  if (ids.length) {
+    const { data: catRows, error: catErr } = await supabase
+      .from("transaction_categorizations")
+      .select(
+        "transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,confidence,reason,final_qbo_account_id,final_qbo_account_name,post_after,qbo_txn_id,qbo_txn_type,posted_at,reconciled_at,post_error,last_post_attempt_at,meta"
+      )
+      .eq("business_id", businessId)
+      .in("transaction_id", ids);
+    if (catErr) throw catErr;
+    catMap = (catRows || []).reduce((acc, row) => {
+      acc[row.transaction_id] = row;
+      return acc;
+    }, {});
+  }
+
+  // Step C: fetch plaid accounts for display name
+  const uniqueAccountIds = Array.from(new Set((baseRows || []).map((row) => row.plaid_account_id).filter(Boolean)));
+  let accountMap = {};
+  if (uniqueAccountIds.length) {
+    const { data: acctRows, error: acctErr } = await supabase
+      .from("plaid_accounts")
+      .select("plaid_account_id,name,official_name")
+      .eq("business_id", businessId)
+      .in("plaid_account_id", uniqueAccountIds);
+    if (acctErr) throw acctErr;
+    accountMap = (acctRows || []).reduce((acc, row) => {
+      acc[row.plaid_account_id] = row.name || row.official_name || null;
+      return acc;
+    }, {});
+  }
+
+  const filtered = (baseRows || []).filter((row) => matchesTransactionStatusFilter(statusFilter, catMap[row.id] || {}));
+  const totalCount = filtered.length;
+  const start = (page - 1) * pageSize;
+  const end = start + pageSize;
+  const pageRows = filtered.slice(start, end);
+
+  const rows = pageRows.map((row) => normalizeBookkeepingTransactionRow(row, catMap[row.id] || {}, accountMap[row.plaid_account_id] || null));
+  return { rows, totalCount };
 }
 
 /* ----------------------------- Grace edits ----------------------------- */
@@ -75,7 +244,6 @@ router.patch("/transactions/:transactionId", requireAuth, async (req, res) => {
       return res.status(400).json({ ok: false, error: "not_in_grace_window" });
     }
     const prevFinalId = current?.final_qbo_account_id || null;
-    const prevFinalName = current?.final_qbo_account_name || null;
 
     const nowIso = new Date().toISOString();
     const nextPostAfter = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -159,6 +327,61 @@ router.patch("/transactions/:transactionId", requireAuth, async (req, res) => {
 });
 
 /* ----------------------------- Transactions ----------------------------- */
+router.get("/transactions/counts", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  const accountId = req.query?.account_id || req.query?.plaid_account_id || null;
+  const rangeParam = (req.query?.range || "this_month").toLowerCase();
+
+  try {
+    const txQuery = supabase
+      .from("bank_transactions")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("is_archived", false);
+
+    const rangeStart = computeRangeStart(rangeParam);
+    if (rangeStart) txQuery.gte("date", normalizeDate(rangeStart));
+    if (accountId) txQuery.eq("plaid_account_id", accountId);
+
+    const { data: baseRows, error: txErr } = await txQuery;
+    if (txErr) throw txErr;
+
+    const ids = (baseRows || []).map((row) => row.id);
+    let catMap = {};
+    if (ids.length) {
+      const { data: catRows, error: catErr } = await supabase
+        .from("transaction_categorizations")
+        .select("transaction_id,status,qbo_txn_id,meta")
+        .eq("business_id", businessId)
+        .in("transaction_id", ids);
+      if (catErr) throw catErr;
+      catMap = (catRows || []).reduce((acc, row) => {
+        acc[row.transaction_id] = row;
+        return acc;
+      }, {});
+    }
+
+    const counts = { needs_review: 0, handled: 0, posted: 0 };
+    (baseRows || []).forEach((row) => {
+      const cat = catMap[row.id] || {};
+      if (matchesTransactionStatusFilter("needs_review", cat)) counts.needs_review += 1;
+      if (matchesTransactionStatusFilter("handled", cat)) counts.handled += 1;
+      if (matchesTransactionStatusFilter("posted", cat)) counts.posted += 1;
+    });
+
+    return res.json({ ok: true, counts });
+  } catch (err) {
+    console.error("[bookkeeping][transaction-counts] failed", err?.message || err);
+    return res.status(500).json({
+      ok: false,
+      error: "transaction_counts_fetch_failed",
+      message: err?.message || "failed",
+    });
+  }
+});
+
 router.get("/transactions", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
@@ -170,125 +393,13 @@ router.get("/transactions", requireAuth, async (req, res) => {
   const pageSize = Math.min(Math.max(parseInt(req.query?.page_size, 10) || 25, 1), 200);
 
   try {
-    // Step A: fetch bank transactions
-    const txQuery = supabase
-      .from("bank_transactions")
-      .select(
-        "id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,counterparties,counterparty_name,counterparty_source,counterparty_confidence,qbo_entity_type,qbo_entity_id,amount,signed_amount,direction,pending,category_primary,category_detailed,personal_finance_category"
-      )
-      .eq("business_id", businessId)
-      .eq("is_archived", false)
-      .order("date", { ascending: false });
-
-    const rangeStart = computeRangeStart(rangeParam);
-    if (rangeStart) txQuery.gte("date", normalizeDate(rangeStart));
-    if (accountId) txQuery.eq("plaid_account_id", accountId);
-
-    const { data: baseRows, error: txErr } = await txQuery;
-    if (txErr) throw txErr;
-
-    // Step B: fetch categorizations separately
-    const ids = (baseRows || []).map((r) => r.id);
-    let catMap = {};
-    if (ids.length) {
-      const { data: catRows, error: catErr } = await supabase
-        .from("transaction_categorizations")
-        .select(
-          "transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,confidence,reason,final_qbo_account_id,final_qbo_account_name,post_after,qbo_txn_id,qbo_txn_type,posted_at,reconciled_at,post_error,last_post_attempt_at,meta"
-        )
-        .eq("business_id", businessId)
-        .in("transaction_id", ids);
-      if (catErr) throw catErr;
-      catMap = (catRows || []).reduce((acc, row) => {
-        acc[row.transaction_id] = row;
-        return acc;
-      }, {});
-    }
-
-    // Step C: fetch plaid accounts for display name
-    const uniqueAccountIds = Array.from(new Set((baseRows || []).map((row) => row.plaid_account_id).filter(Boolean)));
-    let accountMap = {};
-    if (uniqueAccountIds.length) {
-      const { data: acctRows, error: acctErr } = await supabase
-        .from("plaid_accounts")
-        .select("plaid_account_id,name,official_name")
-        .eq("business_id", businessId)
-        .in("plaid_account_id", uniqueAccountIds);
-      if (acctErr) throw acctErr;
-      accountMap = (acctRows || []).reduce((acc, row) => {
-        acc[row.plaid_account_id] = row.name || row.official_name || null;
-        return acc;
-      }, {});
-    }
-
-    const filtered = (baseRows || []).filter((row) => {
-      const status = catMap[row.id]?.status || "needs_review";
-      const isCheck = catMap[row.id]?.meta?.is_check === true;
-      const handledView = statusFilter === "approved" || statusFilter === "handled";
-      const postedView = statusFilter === "posted";
-
-      if (postedView) {
-        const hasQbo = Boolean(catMap[row.id]?.qbo_txn_id);
-        const isPosted = status === "posted" || hasQbo;
-        return isPosted;
-      }
-
-      if (handledView) {
-        return ["approved", "auto_approved"].includes(status);
-      }
-
-      if (!status || status === "needs_review" || status === "uncategorized") return true;
-      if (status === "auto_approved" && isCheck) return true;
-      return false;
-    });
-
-    const totalCount = filtered.length;
-    const start = (page - 1) * pageSize;
-    const end = start + pageSize;
-    const pageRows = filtered.slice(start, end);
-
-    const rows = pageRows.map((row) => {
-      const cat = catMap[row.id] || {};
-      const suggestedId = cat.suggested_qbo_account_id || null;
-      const suggestedName = cat.suggested_qbo_account_name || null;
-      const finalId = cat.final_qbo_account_id || null;
-      const finalName = cat.final_qbo_account_name || null;
-      const acctName = accountMap[row.plaid_account_id] || null;
-      const amount = Number(row.amount || 0);
-      const dir = row.direction || (amount < 0 ? "OUTFLOW" : amount > 0 ? "INFLOW" : "UNKNOWN");
-      return {
-        id: row.id,
-        plaidTransactionId: row.plaid_transaction_id || null,
-        plaidAccountId: row.plaid_account_id || null,
-        date: row.date,
-        vendor: row.counterparty_name || "",
-        description: row.name || "",
-        amount,
-        signed_amount: amount,
-        direction: dir,
-        currentAccount: acctName,
-        suggestedAccountId: suggestedId,
-        suggestedAccountName: suggestedName,
-        glAccountId: finalId || suggestedId || null,
-        glAccountName: finalName || suggestedName || null,
-        confidence: cat.confidence || null,
-        reason: cat.reason || null,
-        status: cat.status || "needs_review",
-        payeeSource: row.counterparty_source || null,
-        payeeConfidence: row.counterparty_confidence || null,
-        qboEntityType: row.qbo_entity_type || null,
-        qboEntityId: row.qbo_entity_id || null,
-        is_check: cat.meta?.is_check === true,
-        check_number: cat.meta?.check_number || null,
-        vendor_rule_id: cat.meta?.vendor_rule_id || null,
-        suggestion_source: cat.meta?.suggestion_source || null,
-        vendor_rule_match_reason: cat.meta?.vendor_rule_match_reason || null,
-        posted_at: cat.posted_at || null,
-        reconciled_at: cat.reconciled_at || null,
-        qbo_txn_type: cat.qbo_txn_type || null,
-        qbo_txn_id: cat.qbo_txn_id || null,
-        post_after: cat.post_after || null,
-      };
+    const { rows } = await fetchBookkeepingTransactions({
+      businessId,
+      statusFilter,
+      accountId,
+      rangeParam,
+      page,
+      pageSize,
     });
 
     if (process.env.NODE_ENV !== "production") {

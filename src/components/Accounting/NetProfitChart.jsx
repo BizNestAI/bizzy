@@ -199,7 +199,7 @@ export default function NetProfitChart({
 
     fetchSeries();
     return ()=>{ cancelled=true; };
-  }, [userId, businessId, year, month, windowMonths.length, demoData, forceLive]);
+  }, [userId, businessId, year, month, windowMonths, demoData, forceLive]);
 
   // Measure container to tune margins / bar size responsively
   const [measureRef, { width: w }] = useMeasure();  // keep above returns
@@ -224,40 +224,40 @@ export default function NetProfitChart({
       : "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
 
   // Responsive visuals
-  const chartH = Math.max(200, height);
+  const chartH = Math.max(compact ? 318 : 308, height - (compact ? 24 : 42));
   const small = (w || 0) < 520;
 
   const xTickCount  = small ? 6 : 12;              // months shown (we still force all labels)
-  const leftMargin  = small ? 28 : 36;
-  const rightMargin = 12;
-  const topMargin   = 8;
-  const bottomMargin= small ? 30 : 38;             // extra space for month labels
+  const leftMargin  = small ? 38 : 56;
+  const rightMargin = small ? 14 : 24;
+  const topMargin   = compact ? 18 : 8;
+  const bottomMargin= small ? 28 : 38;             // month labels
 
-  const xTickStyle  = { fill: "#a3a3a3", fontSize: small ? 11 : 12, dy: 6 };
+  const xTickStyle  = { fill: "rgba(255,255,255,0.66)", fontSize: small ? 11 : 13, fontWeight: 700 };
 
   // Compute a reasonable barSize from width (12 months)
-  const paddingPerBar = small ? 4 : 6;
+  const paddingPerBar = small ? 1 : 1;
   const approxBarSize = Math.max(
-    14,
-    Math.floor(((w || 0) - leftMargin - rightMargin) / 12) - paddingPerBar
+    compact ? 18 : 22,
+    Math.floor(((w || 0) - leftMargin - rightMargin) / 12) - paddingPerBar - (compact ? 4 : 0)
   );
 
   // Darker emerald to match Insight cards
   const BAR_COLOR = "#00D59C";
 
   return (
-    <div className={`bg-zinc-900 border border-white/10 rounded-xl p-4 ${className}`}>
+    <div className={`flex h-full flex-col rounded-xl border border-white/10 bg-[var(--panel)] p-5 shadow-[0_18px_40px_rgba(0,0,0,0.32)] ${className}`}>
       {/* Compact CardHeader to match Pulse sizing */}
       <CardHeader
         title="NET PROFIT"
         right={<span className={badgeClass}>{isMock ? "Mock" : "QuickBooks"}</span>}
         size="sm"
         dense
-        className="mb-2"
+        className={compact ? "mb-3" : "mb-1"}
         titleClassName="text-[13px]" // safe override if supported
       />
 
-      <div ref={measureRef} style={{ height: chartH }}>
+      <div ref={measureRef} className="min-h-0 flex-1" style={{ height: chartH }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={series}
@@ -277,10 +277,10 @@ export default function NetProfitChart({
               tickCount={xTickCount}
               tickMargin={12}
               minTickGap={0}
-              height={28}
+              height={38}
             />
             <YAxis
-              tick={{ fill: "#a3a3a3", fontSize: small ? 11 : 12 }}
+              tick={{ fill: "rgba(255,255,255,0.62)", fontSize: small ? 11 : 13, fontWeight: 700 }}
               tickLine={false}
               axisLine={false}
               width={leftMargin + 4}

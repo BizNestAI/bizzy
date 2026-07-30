@@ -6,7 +6,7 @@ const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
 const MIN_COL_WIDTHS = [36, 90, 160, 140, 150, 100, 170]; // px floors per column
 
-function CoaDropdown({ value, suggestedId, suggestedName, accounts, onChange, status, disabled }) {
+export function CoaDropdown({ value, suggestedId, suggestedName, accounts, onChange, status, disabled }) {
   const [open, setOpen] = React.useState(false);
   const [renderMenu, setRenderMenu] = React.useState(false);
   const ref = React.useRef(null);
@@ -116,7 +116,7 @@ function CoaDropdown({ value, suggestedId, suggestedName, accounts, onChange, st
           e.stopPropagation();
           setOpen((v) => !v);
         }}
-        className={`w-full rounded-xl border border-[var(--accent-line)] bg-[var(--panel)] px-3 py-2 pr-9 text-[11px] font-medium text-slate-50 shadow-[0_6px_18px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.03)] outline-none transition text-left ${
+        className={`w-full rounded-lg border border-[var(--accent-line)] bg-[var(--panel)] px-3 py-1.5 pr-9 text-[11px] font-medium text-slate-50 shadow-[0_6px_18px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.03)] outline-none transition text-left ${
           disabled ? "opacity-70 cursor-not-allowed" : "focus:border-emerald-400/70 focus:ring-2 focus:ring-emerald-500/30"
         }`}
       >
@@ -507,7 +507,7 @@ export default function BookkeepingFeed({
             return (
               <div
                 key={txn.id}
-                className="grid items-center px-3 py-3 text-[11px] text-slate-100 border-b divide-x divide-[rgba(255,255,255,0.06)] transition-colors"
+                className="grid items-center px-3 py-2 text-[11px] text-slate-100 border-b divide-x divide-[rgba(255,255,255,0.06)] transition-colors"
                 style={{
                   background: panelBg,
                   borderColor: panelBorder,
@@ -647,7 +647,7 @@ export default function BookkeepingFeed({
           })}
         </div>
       </div>
-      <div className="flex items-center justify-between px-3 py-2 text-[10px] text-slate-400">
+      <div className="flex items-center justify-between px-3 py-1.5 text-[10px] text-slate-400">
         <span>
           {totalCount ? `${(page - 1) * pageSize + 1}-${Math.min(page * pageSize, totalCount)} of ${totalCount}` : null}
         </span>
@@ -655,15 +655,15 @@ export default function BookkeepingFeed({
           <button
             disabled={page <= 1}
             onClick={() => onPageChange && onPageChange(page - 1)}
-            className="h-6 w-6 rounded border border-slate-700 text-slate-200 disabled:opacity-40 flex items-center justify-center"
+            className="h-5 w-5 rounded border border-slate-700 text-slate-200 disabled:opacity-40 flex items-center justify-center"
           >
             ‹
           </button>
-          <span className="px-2 py-1 rounded border border-slate-700 text-slate-100">{page}</span>
+          <span className="px-2 py-0.5 rounded border border-slate-700 text-slate-100">{page}</span>
           <button
             disabled={page >= pageCount}
             onClick={() => onPageChange && onPageChange(page + 1)}
-            className="h-6 w-6 rounded border border-slate-700 text-slate-200 disabled:opacity-40 flex items-center justify-center"
+            className="h-5 w-5 rounded border border-slate-700 text-slate-200 disabled:opacity-40 flex items-center justify-center"
           >
             ›
           </button>

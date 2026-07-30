@@ -347,8 +347,14 @@ function ChatHomeInner() {
                       }}
                     />
                   </div>
-                  <div className="w-full text-center mb-3 px-2 mt-1">
-                    <ChatGreeting className="bizzy-chathome-headline" opacity={heroOpacity} />
+                  <div className="bizzy-chathome-brand w-full mb-2 px-2 mt-1">
+                    <div className="bizzy-chathome-status" aria-label="Financial Operator online">
+                      <span className="bizzy-chathome-status-dot" aria-hidden="true" />
+                      <span>Financial Operator online</span>
+                    </div>
+                    <div className="bizzy-chathome-greeting-row">
+                      <ChatGreeting className="bizzy-chathome-headline" opacity={heroOpacity} />
+                    </div>
                   </div>
 
                   <div className="w-full relative">

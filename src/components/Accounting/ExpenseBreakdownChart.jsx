@@ -250,31 +250,18 @@ export default function ExpenseBreakdownChart({
       ? "text-xs px-2 py-1 rounded-full border text-amber-300 border-amber-400/40"
       : "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
 
-  // ---- Legend layout
-  const itemsCount = (data || []).length;
-  const isNarrow   = (w || 0) < 640;   // <= sm
-  const cols       = isNarrow ? 2 : 3;
-  const rowsNeeded = Math.ceil(itemsCount / cols);
-
-  const rowHeight  = isNarrow ? 22 : 24;
-  const rowGap     = 10;
-  const topPad     = 14;
-  const bottomPad  = 16;
-
-  const legendAllowance =
-    topPad + rowsNeeded * rowHeight + (rowsNeeded - 1) * rowGap + bottomPad;
-
-  const chartH = Math.max(140, height - legendAllowance);
+  const isNarrow = (w || 0) < 430;
+  const chartH = isNarrow ? 132 : 158;
   const boxSize = Math.min(w || 0, chartH);
-  const baseR = Math.max(60, Math.floor(boxSize * (compact ? 0.42 : 0.48)));
+  const baseR = Math.max(54, Math.floor(boxSize * (compact ? 0.38 : 0.42)));
   const outerRadius = baseR;
-  const innerRadius = Math.floor(baseR * (compact ? 0.60 : 0.64));
+  const innerRadius = Math.floor(baseR * (compact ? 0.62 : 0.66));
 
   const overlayTotalCls = compact ? "text-[14px]" : "text-[16px]";
   const overlayMetaCls = compact ? "text-[10px]" : "text-[11px]";
 
   return (
-    <div className={`bg-zinc-900 border border-white/10 rounded-xl p-4 ${className}`}>
+    <div className={`flex h-full flex-col rounded-xl border border-white/10 bg-[var(--panel)] p-4 shadow-[0_18px_40px_rgba(0,0,0,0.32)] ${className}`}>
       {/* Consistent compact header (Pulse style) */}
       <CardHeader
         title="EXPENSE BREAKDOWN"
@@ -285,69 +272,79 @@ export default function ExpenseBreakdownChart({
         titleClassName="text-[13px]" // safe override if supported
       />
 
-      {/* Pie area */}
-      <div ref={measureRef} className="relative" style={{ height: chartH }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie
-              data={data}
-              dataKey="value"
-              nameKey="name"
-              innerRadius={innerRadius}
-              outerRadius={outerRadius}
-              paddingAngle={2}
-              cx="50%"
-              cy="50%"
-              labelLine={false}
-              isAnimationActive={false}
-            >
-              {data.map((entry, i) => (
-                <Cell key={`cell-${i}`} fill={greenShade(i, data.length)} />
-              ))}
-            </Pie>
+      <div
+        ref={measureRef}
+        className="flex min-h-0 flex-1 flex-col gap-3"
+      >
+        <div className="relative shrink-0" style={{ height: chartH }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={data}
+                dataKey="value"
+                nameKey="name"
+                innerRadius={innerRadius}
+                outerRadius={outerRadius}
+                paddingAngle={2}
+                cx="50%"
+                cy="50%"
+                labelLine={false}
+                isAnimationActive={false}
+              >
+                {data.map((entry, i) => (
+                  <Cell key={`cell-${i}`} fill={greenShade(i, data.length)} />
+                ))}
+              </Pie>
 
-            <Tooltip
-              content={<CustomTooltip />}
-              wrapperStyle={{ zIndex: 30 }}
-              isAnimationActive={false}
-              offset={12}
-              allowEscapeViewBox={{ x: true, y: true }}
-            />
-          </PieChart>
-        </ResponsiveContainer>
+              <Tooltip
+                content={<CustomTooltip />}
+                wrapperStyle={{ zIndex: 30 }}
+                isAnimationActive={false}
+                offset={12}
+                allowEscapeViewBox={{ x: true, y: true }}
+              />
+            </PieChart>
+          </ResponsiveContainer>
 
-        {/* Center overlay */}
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-          <div className="text-center">
-            <div className={`${overlayMetaCls} text-white/60`}>Total</div>
-            <div className={`text-white font-semibold ${overlayTotalCls}`}>
-              ${Number(total).toLocaleString()}
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="text-center">
+              <div className={`${overlayMetaCls} text-white/56`}>Total</div>
+              <div className={`font-semibold text-white ${overlayTotalCls}`}>
+                ${Number(total).toLocaleString()}
+              </div>
+              {top?.name ? (
+                <div className={`${overlayMetaCls} max-w-[96px] truncate text-white/50`}>Top: {top.name}</div>
+              ) : null}
             </div>
-            {top?.name && (
-              <div className={`${overlayMetaCls} text-white/60`}>Top: {top.name}</div>
-            )}
           </div>
         </div>
-      </div>
 
-      {/* Legend */}
-      <div
-        className={`mt-0 grid ${isNarrow ? "grid-cols-2" : "grid-cols-3"} text-[12px] text-white/80`}
-        style={{ rowGap, marginTop: topPad }}
-      >
-        {data.map((d, i) => {
-          const pct = total ? Math.round((Number(d.value) / total) * 100) : 0;
-          const swatch = greenShade(i, data.length);
-          return (
-            <div key={d.name} className="flex items-center gap-2">
-              <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: swatch }} />
-              <span className="truncate">{d.name}</span>
-              <span className="ml-auto tabular-nums text-white/60">
-                {pct}% • ${Number(d.value).toLocaleString()}
-              </span>
-            </div>
-          );
-        })}
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1 [scrollbar-color:rgba(52,211,153,0.28)_transparent] [scrollbar-width:thin]">
+          <div className={`grid min-w-0 gap-2 ${isNarrow ? "grid-cols-1" : "grid-cols-2"}`}>
+          {data.map((d, i) => {
+            const pct = total ? Math.round((Number(d.value) / total) * 100) : 0;
+            const swatch = greenShade(i, data.length);
+            return (
+              <div key={d.name} className="relative overflow-hidden rounded-md border border-white/[0.055] bg-white/[0.025] px-2.5 py-2">
+                <div
+                  className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 opacity-80"
+                  style={{ width: `${Math.max(4, pct)}%`, backgroundColor: swatch }}
+                />
+                <div className="relative grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: swatch }} />
+                    <span className="truncate text-[11px] font-semibold text-white/82">{d.name}</span>
+                  </div>
+                  <div className="whitespace-nowrap text-right text-[11px] tabular-nums">
+                    <span className="font-semibold text-white/80">{pct}%</span>
+                    <span className="ml-1.5 text-white/45">${Number(d.value).toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -6,6 +6,7 @@ import { getQuickBooksAccessToken } from "../../services/quickbooksTokenService.
 import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
 import { monthKeyFromParts } from "../../utils/monthKey.js";
 import { upsertExpenseTotalsMonthly } from "../../services/expenseTotalsMonthly.js";
+import { triggerContractorCfoInsightsBestEffort } from "../../services/insights/contractorCfoTriggerService.js";
 
 const router = express.Router();
 
@@ -359,6 +360,11 @@ router.post("/sync", async (req, res) => {
 
     const result = await runQboSync({ businessId, year, month });
     console.info("[QBO SYNC] completed", { business_id: businessId, month: result.month, env: qboEnvName });
+    triggerContractorCfoInsightsBestEffort({
+      businessId,
+      trigger: "qbo_sync",
+      force: false,
+    });
     return res.json({ ok: true, ...result });
   } catch (err) {
     console.error("[QBO SYNC] failed", err?.message || err, err?.meta ? JSON.stringify(err.meta, null, 2) : "");

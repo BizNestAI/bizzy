@@ -14,6 +14,8 @@
  *     given FICA parameters and then returns the total annual SE tax.
  *     Your calculateTaxLiability() already calls this with annualized
  *     profit (profit * 12) and then divides by 12.
+ *     Deprecated for canonical tax flows: use
+ *     selfEmployment/selfEmploymentTaxEngine.js instead.
  * ---------------------------------------------------------------------------
  */
 
@@ -45,6 +47,10 @@ export function computeTaxFromBrackets(amount = 0, brackets = [], opts = {}) {
   return isAnnualAmount ? round2(annualTax) : round2(annualTax / periodsPerYear);
 }
 
+/**
+ * @deprecated Legacy liability compatibility only. Canonical SE tax must use
+ * computeSelfEmploymentTax() with verified tax_rule_configs.
+ */
 export function computeSETax(
   annualProfit = 0,
   fica = { ssWageBase: 0, ssRate: 0.062, medicareRate: 0.0145 },

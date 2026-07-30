@@ -69,32 +69,12 @@ export async function genAROverdue({ userId, businessId, minDays = 7 }) {
 /* 2) CASH LOW                                                                */
 /* -------------------------------------------------------------------------- */
 export async function genCashLow({ userId, businessId, threshold = 5000 }) {
-  // financial_metrics expected row: { key: 'cash_balance', value: <number>, as_of: <iso> }
-  const { data, error } = await supabase
-    .from('financial_metrics')
-    .select('key,value,as_of')
-    .eq('key', 'cash_balance')
-    .order('as_of', { ascending: false })
-    .limit(1);
-  if (error || !data || !data.length) return [];
-
-  const bal = Number(data[0].value || 0);
-  if (bal >= threshold) return [];
-
-  const row = {
-    user_id: userId || null,
-    business_id: businessId || null,
-    module: 'financials',
-    title: `Low cash balance: ${fmtMoney(bal)}`,
-    body: `As of ${new Date(data[0].as_of).toLocaleDateString()}. Consider delaying non-critical spend or pulling cash in.`,
-    severity: 'warn',
-    is_read: false,
-    primary_cta: { action: 'open_route', label: 'Open Financials', route: '/dashboard/accounting' },
-    tags: ['cash','risk'],
-    source_event_id: `fin:cash_low:${data[0].as_of}`,
-  };
-  await insertInsightsDedup([row]);
-  return [row];
+  void userId;
+  void businessId;
+  void threshold;
+  // Disabled until Bizzi has a verified bank-balance source. Cash-flow data alone
+  // is not enough to claim current cash balance or runway.
+  return [];
 }
 
 /* -------------------------------------------------------------------------- */
@@ -195,47 +175,12 @@ export async function genGrossMarginDrop({ userId, businessId, windowMonths = 4,
 /* 5) CASH RUNWAY (from forecast)                                            */
 /* -------------------------------------------------------------------------- */
 export async function genCashRunwayLow({ userId, businessId, minMonths = 2 }) {
-  // Prefer cashflow_forecast (months_ahead, runway_months) else monthly_forecast (has fields you maintain)
-  let runway = null;
-
-  // Try cashflow_forecast
-  try {
-    const { data } = await supabase
-      .from('cashflow_forecast')
-      .select('runway_months, as_of')
-      .order('as_of', { ascending: false })
-      .limit(1);
-    if (data && data.length) runway = Number(data[0].runway_months || 0);
-  } catch {}
-
-  // Fallback to monthly_forecast
-  if (runway === null) {
-    try {
-      const { data } = await supabase
-        .from('monthly_forecast')
-        .select('runway_months, period')
-        .order('period', { ascending: false })
-        .limit(1);
-      if (data && data.length) runway = Number(data[0].runway_months || 0);
-    } catch {}
-  }
-
-  if (runway === null || isNaN(runway) || runway >= minMonths) return [];
-
-  const row = {
-    user_id: userId || null,
-    business_id: businessId || null,
-    module: 'financials',
-    title: `Cash runway low: ${runway.toFixed(1)} month(s)`,
-    body: `Increase collections or reduce spend to extend runway beyond ${minMonths}+ months.`,
-    severity: 'warn',
-    is_read: false,
-    primary_cta: { action: 'open_route', label: 'Open Forecast', route: '/dashboard/accounting/forecasts' },
-    tags: ['cash','runway','forecast'],
-    source_event_id: `fin:runway_low:${new Date().toISOString().slice(0,10)}`,
-  };
-  await insertInsightsDedup([row]);
-  return [row];
+  void userId;
+  void businessId;
+  void minMonths;
+  // Disabled until Bizzi has a verified bank-balance source. Forecast activity can
+  // show monthly cash-flow direction, but not actual runway.
+  return [];
 }
 
 /* -------------------------------------------------------------------------- */

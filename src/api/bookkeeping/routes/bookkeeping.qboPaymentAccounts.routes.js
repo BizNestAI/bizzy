@@ -29,6 +29,18 @@ function mapPlaidRailToQboType(plaidRail) {
   return null;
 }
 
+function getQboErrorMessage(err) {
+  const faultError = err?.Fault?.Error?.[0] || err?.fault?.error?.[0] || null;
+  return (
+    faultError?.Detail ||
+    faultError?.Message ||
+    err?.response?.data?.Fault?.Error?.[0]?.Detail ||
+    err?.response?.data?.Fault?.Error?.[0]?.Message ||
+    err?.message ||
+    "failed"
+  );
+}
+
 router.get("/qbo/payment-accounts", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
@@ -114,11 +126,15 @@ router.post("/qbo/payment-accounts/ensure", requireAuth, async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("[bookkeeping][qbo-payment-accounts] ensure failed", err?.message || err);
+    const message = getQboErrorMessage(err);
+    console.error("[bookkeeping][qbo-payment-accounts] ensure failed", {
+      message,
+      fault: err?.Fault || err?.response?.data?.Fault || null,
+    });
     return res.status(500).json({
       ok: false,
       error: "qbo_payment_accounts_ensure_failed",
-      message: err?.message || "failed",
+      message,
     });
   }
 });

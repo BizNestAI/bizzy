@@ -1,6 +1,5 @@
 // File: /src/components/Bizzy/AskBizzyQuickPrompts.jsx
 import React, { useState } from 'react';
-import { supabase } from '../../services/supabaseClient';
 
 // Curated defaults (feel free to expand)
 const CURATED = {
@@ -60,18 +59,6 @@ function stableKey(module, idx, text) {
  *  - className?:    string
  *  - chipClassName?:string
  */
-function hexToRgbaLocal(hex, alpha = 1) {
-  if (!hex || typeof hex !== "string") return hex;
-  const clean = hex.replace("#", "");
-  const expand = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
-  const value = Number.parseInt(expand, 16);
-  if (Number.isNaN(value)) return hex;
-  const r = (value >> 16) & 255;
-  const g = (value >> 8) & 255;
-  const b = value & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
 export default function AskBizzyQuickPrompts({
   module = 'general',
   prompts,
@@ -99,9 +86,6 @@ export default function AskBizzyQuickPrompts({
   };
 
   const [hoverIdx, setHoverIdx] = useState(null);
-  const pulseEnabled =
-    (chipClassName || "").includes("bizzy-chathome-chip") ||
-    (className || "").includes("bizzy-chathome");
 
   return (
     <div className={`w-full px-2 py-0 ${className}`}>
@@ -131,7 +115,6 @@ export default function AskBizzyQuickPrompts({
                 onMouseLeave={() => setHoverIdx((prev) => (prev === idx ? null : prev))}
                 className={[
                   'bizzy-quickprompt',
-                  pulseEnabled ? 'bizzy-quickprompt--pulse' : '',
                   'bizzy-chip',
                   'inline-flex items-center rounded-full border',
                   'px-3 py-1 text-sm',
@@ -142,15 +125,11 @@ export default function AskBizzyQuickPrompts({
             data-bizzy-chip
             style={{
               color: isActive ? highlightHex : 'rgba(255,255,255,0.9)',
-              borderColor: 'var(--surface-border)',
+              borderColor: isActive ? 'var(--accent-line)' : 'var(--surface-border)',
               background: isActive ? 'var(--surface-graphite-2)' : 'var(--surface-graphite)',
-              boxShadow: pulseEnabled
-                ? `${baseShadow}, 0 0 0 0 var(--surface-glow-green)`
-                : baseShadow,
-              animation: pulseEnabled
-                ? 'bizzyChipGlow 4.2s ease-in-out infinite, bizzyChipBorder 4.2s ease-in-out infinite'
-                : undefined,
-              animationDelay: pulseEnabled ? `${idx * 0.6}s` : undefined,
+              boxShadow: baseShadow,
+              animation: undefined,
+              animationDelay: undefined,
               "--qp-glow-a": "0 0 0 0 var(--surface-glow-green)",
               "--qp-glow-b": "0 0 16px var(--surface-glow-green)",
             }}

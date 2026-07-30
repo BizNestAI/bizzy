@@ -1,0 +1,93 @@
+{
+  "status": "skipped",
+  "runtimeExecuted": false,
+  "generatedAt": "2026-07-19T17:05:44.452Z",
+  "reason": "TAX_OUTPUT_SAFETY_ENABLED is not true.",
+  "missingEnvironment": [
+    "TEST_SUPABASE_URL",
+    "TEST_SUPABASE_ANON_KEY",
+    "TEST_SUPABASE_SERVICE_ROLE_KEY",
+    "TEST_API_BASE_URL"
+  ],
+  "environment": {
+    "targetLabel": "test",
+    "apiConfigured": false,
+    "supabaseConfigured": false,
+    "appearsProduction": false
+  },
+  "staticScan": {
+    "status": "pass",
+    "findingCount": 8,
+    "findings": [
+      {
+        "file": "src/api/tax/calculateTaxLiability.js",
+        "line": 23,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "const details = (err?.details || \"\").toLowerCase();"
+      },
+      {
+        "file": "src/api/tax/taxHttp.js",
+        "line": 34,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "action: safe ? err?.details?.action || err?.action || null : null,"
+      },
+      {
+        "file": "src/api/tax/taxHttp.js",
+        "line": 39,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "if (safe && err?.details && isSafeDetails(err.details)) {"
+      },
+      {
+        "file": "src/services/tax/security/taxResponseSafetyScanner.js",
+        "line": 71,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "details: error?.details,"
+      },
+      {
+        "file": "src/services/tax/state/stateTaxEngine.js",
+        "line": 54,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "configSet = { stateCode: state, configs: {}, missing: [{ code: err.code, details: err.details }], warnings: [], supportLevel: TAX_RULE_SUPPO"
+      },
+      {
+        "file": "src/services/tax/stateTaxRule.repository.js",
+        "line": 94,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "missing.push({ ruleType, code: err.code || \"unsupported_state_tax_rule\", details: err.details });"
+      },
+      {
+        "file": "src/services/tax/taxRuleConfig.repository.js",
+        "line": 95,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "missing.push({ ruleType, code: err.code || \"tax_rule_config_missing\", details: err.details });"
+      },
+      {
+        "file": "src/components/Tax/Setup/TaxSetupWorkflow.jsx",
+        "line": 482,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "const details = err?.details || {};"
+      }
+    ]
+  },
+  "runtime": {
+    "totalResponses": 0,
+    "unsafeResponses": 0,
+    "results": []
+  }
+}

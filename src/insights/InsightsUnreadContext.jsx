@@ -17,14 +17,6 @@ const Ctx = createContext({
   markModuleAsRead: () => {},
 });
 
-/* ---------- alias helpers ---------- */
-function aliasOf(mod) {
-  if (mod === "email") return "inbox";
-  if (mod === "calendar") return "sch";
-  if (mod === "ops") return "jobs";
-  return null;
-}
-
 /* ---------- normalize/flatten keys ---------- */
 /** folds module:businessId → module and sums any duplicates */
 function normalizeCounts(raw = {}) {
@@ -42,7 +34,6 @@ function normalizeCounts(raw = {}) {
 const ENABLE_UNREAD_FETCH =
   String(
     (typeof import.meta !== "undefined" && import.meta.env?.VITE_ENABLE_INSIGHTS_UNREAD) ||
-    (typeof process !== "undefined" && process.env?.VITE_ENABLE_INSIGHTS_UNREAD) ||
     ""
   ).toLowerCase() === "true";
 let unreadEndpointUnavailable = !ENABLE_UNREAD_FETCH;
@@ -61,7 +52,7 @@ async function fetchUnreadCounts(businessId) {
   if (businessId) url.searchParams.set("businessId", businessId);
   try {
     const resp = await safeFetch(url.toString(), { headers });
-    // expected shape: { counts: { accounting: 2, marketing: 1, email: 3, ... } }
+    // expected shape: { counts: { contractor_cfo: 2 } }
     return resp?.counts || {};
   } catch (e) {
     // endpoint not available or not hooked up in sandbox; fail closed and suppress repeated noise
@@ -77,7 +68,7 @@ export function InsightsUnreadProvider({ businessId, children }) {
   const [counts, setCounts] = useState({});         // raw map as emitted/returned
   const countsRef = useRef({});
 
-  const isDev = (import.meta?.env?.MODE || process.env.NODE_ENV) !== "production";
+  const isDev = ((typeof import.meta !== "undefined" && import.meta.env?.MODE) || "development") !== "production";
   const demoMode = useDemoMode?.();
   const allowMock = demoMode === "demo";
 
@@ -103,8 +94,6 @@ export function InsightsUnreadProvider({ businessId, children }) {
             const next = { ...prev };
             Object.entries(devCounts).forEach(([mod, cnt]) => {
               next[mod] = cnt;
-              const alias = aliasOf(mod);
-              if (alias) next[alias] = cnt;
             });
             countsRef.current = next;
             return next;
@@ -136,9 +125,6 @@ export function InsightsUnreadProvider({ businessId, children }) {
       if (evtBiz && businessId && evtBiz !== businessId) return; // ignore other businesses
       setCounts((prev) => {
         const next = { ...prev, [moduleKey]: Number(count || 0) };
-        // if the store emits canonical, also keep alias mirrored (and vice versa later)
-        const alias = aliasOf(moduleKey);
-        if (alias) next[alias] = Number(count || 0);
         countsRef.current = next;
         return next;
       });
@@ -152,8 +138,6 @@ export function InsightsUnreadProvider({ businessId, children }) {
     if (!mod) return;
     setCounts((prev) => {
       const next = { ...prev, [mod]: 0 };
-      const alias = aliasOf(mod);
-      if (alias) next[alias] = 0;
       countsRef.current = next;
       return next;
     });

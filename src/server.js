@@ -22,16 +22,21 @@ import bookkeepingRouter from "./api/accounting/bookkeeping.routes.js";
 import expenseBreakdownRouter from "./api/accounting/expense-breakdown.js";
 import qboSyncRouter from "./api/accounting/qbo-sync.js";
 import qboBackfillRouter from "./api/accounting/qbo-backfill.routes.js";
+import qboJobCostingWebhooksRouter from "./api/qbo/qboJobCostingWebhooks.routes.js";
 import arRouter from "./api/ar/ar.routes.js";
 import bookkeepingPlaidRouter from "./api/bookkeeping/bookkeeping.routes.js";
 import { startBooksPostingCron } from "./jobs/booksPost.cron.js";
 import { startPlaidDailySyncCron } from "./cron/plaidSync.cron.js";
 import { startReconciliationCron } from "./cron/reconciliation.cron.js";
+import { startQboJobCostingSyncCron } from "./cron/qboJobCostingSync.cron.js";
+import { startContractorCfoInsightsCron } from "./services/insights/contractorCfoTriggerService.js";
 
 // Marketing
 import marketingRouter from "./api/marketing/marketing.routes.js";
 
 import jobsRoutes from "./api/Jobs/jobs.routes.js";
+import jobCostingChangeOrdersRouter from "./api/jobCosting/routes/jobCosting.changeOrders.routes.js";
+import jobCostingBidBuilderRouter from "./api/jobCosting/routes/jobCosting.bidBuilder.routes.js";
 import { startForecastCron } from "./jobs/forecast.cron.js";
 
 // GPT & chats
@@ -50,11 +55,12 @@ import affordabilityCheckHandler from "./api/accounting/affordabilityCheck.js";
 import emailRouter from "./api/email/gmail.routes.js";
 import { callback as gmailOAuthCallback } from "./api/email/gmail.auth.js";
 import { qboEnvName } from "./utils/qboEnv.js";
+import { validateTaxEnvironmentSafety } from "./services/tax/taxEnvironmentSafety.js";
+import { startTaxRecalculationWorker } from "./services/tax/events/taxRecalculationWorker.service.js";
+import { startTaxScheduler } from "./services/tax/scheduling/taxScheduler.service.js";
 
 // Tax (router)
 import taxRouter from "./api/tax/index.js";
-import taxRoutes from "./api/tax/tax.routes.js";
-import taxDeductionsRouter from "./api/tax/deductions.routes.js";
 
 import bizzyInsightRouter from "./api/gpt/brain/bizzyInsight.js";
 import { requireAuth } from "./api/gpt/middlewares/requireAuth.js";
@@ -62,6 +68,7 @@ import plaidIntegrationsRouter from "./api/integrations/plaid.routes.js";
 
 /* 🔹 NEW: Hero insights router */
 import heroInsightsRouter from "./api/hero-insights/router.js";
+import monthlyReviewAdminRouter from "./api/admin/monthlyReview.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -69,6 +76,7 @@ const PORT = process.env.PORT || 5050;
 app.disable("x-powered-by");
 
 console.info("[QBO] QB_ENVIRONMENT:", qboEnvName);
+validateTaxEnvironmentSafety();
 
 /* ----------------------------- Stripe webhook FIRST (raw body) ----------------------------- */
 app.post(
@@ -76,6 +84,7 @@ app.post(
   express.raw({ type: "application/json" }),
   billingWebhookHandler
 );
+app.use("/api/qbo/webhooks", qboJobCostingWebhooksRouter);
 if (process.env.NODE_ENV !== "production") {
   console.log("[billing] webhook mounted", {
     route: "/api/billing/webhook",
@@ -202,6 +211,9 @@ app.use("/api/email", requireAuth, emailRouter);
 app.use("/api/marketing", marketingRouter);
 
 app.use("/api/jobs", jobsRoutes);
+app.use("/api/job-costing", jobCostingChangeOrdersRouter);
+app.use("/api/job-costing", jobCostingBidBuilderRouter);
+app.use("/api/job-costing", jobsRoutes);
 
 /* --------------------------- Investments & Calendar --------------------------- */
 app.use("/api/investments", requireAuth, investmentsRouter);
@@ -216,16 +228,17 @@ app.use("/api/reviews", reviewsRouter);
 app.use("/api/docs", docsRouter);
 app.use("/api/insights", insightsRoutes);
 
-/* -------------------------------- Tax (some behind auth) -------------------------------- */
+/* -------------------------------- Tax (authenticated) -------------------------------- */
 app.use("/api/tax", requireAuth, taxRouter);
-app.use("/api/tax", taxRoutes);
-app.use("/api/tax/deductions", requireAuth, taxDeductionsRouter);
 
 /* 🔹 NEW: Hero Insights API
    - Public by default so we can show curated mock hero before sync
    - If you want auth, change to: app.use("/api/hero-insights", requireAuth, heroInsightsRouter);
 */
 app.use("/api/hero-insights", heroInsightsRouter);
+
+/* -------------------------------- Internal Admin -------------------------------- */
+app.use("/api/admin/monthly-review", monthlyReviewAdminRouter);
 
 /* ------------------------------- Billing REST (non-webhook) ------------------------------ */
 app.use("/api/billing", express.json(), billingRouter);
@@ -264,6 +277,10 @@ app.listen(PORT, () => {
 startForecastCron();
 startBooksPostingCron();
 startPlaidDailySyncCron();
+startContractorCfoInsightsCron();
+startTaxRecalculationWorker();
+startTaxScheduler();
+startQboJobCostingSyncCron();
 if (String(process.env.DISABLE_RECON_CRON || "").toLowerCase() !== "true") {
   startReconciliationCron();
 } else {

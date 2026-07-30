@@ -498,33 +498,117 @@ async function insertItems(runId, items) {
   }
 }
 
+async function findExistingMonthlyRun({ businessId, start, end, plaidAccountId }) {
+  const { data, error } = await supabase
+    .from("reconciliation_runs")
+    .select("id,details")
+    .eq("business_id", businessId)
+    .eq("period_start", start)
+    .eq("period_end", end)
+    .order("last_checked_at", { ascending: false, nullsLast: true })
+    .limit(10);
+  if (error) throw error;
+
+  const requestedAccountId = plaidAccountId || null;
+  return (
+    (data || []).find((row) => (row?.details?.opts?.plaid_account_id || null) === requestedAccountId) ||
+    data?.[0] ||
+    null
+  );
+}
+
+async function prepareMonthlyRun({ businessId, scope, start, end, plaidAccountId, opts }) {
+  const existingRun = await findExistingMonthlyRun({ businessId, start, end, plaidAccountId });
+  const runPayload = {
+    business_id: businessId,
+    scope,
+    period_start: start,
+    period_end: end,
+    status: "unknown",
+    overall_note: computeOverallNote("unknown", { total_seen: 0 }),
+    last_checked_at: NOW(),
+    total_seen: 0,
+    matched_count: 0,
+    needs_review_count: 0,
+    approved_waiting_post_count: 0,
+    pending_count: 0,
+    failed_post_count: 0,
+    missing_in_qbo_count: 0,
+    duplicate_in_qbo_count: 0,
+    details: { opts, source_of_truth_refresh: true },
+  };
+
+  if (existingRun?.id) {
+    const { error } = await supabase.from("reconciliation_runs").update(runPayload).eq("id", existingRun.id);
+    if (error) throw error;
+    return existingRun.id;
+  }
+
+  const { data: runRow, error } = await supabase
+    .from("reconciliation_runs")
+    .insert(runPayload)
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  return runRow?.id || null;
+}
+
+async function removeStaleItemsForRun({ businessId, runId, activeBankIds }) {
+  if (!runId) return;
+  if (!activeBankIds?.length) {
+    const { error } = await supabase
+      .from("reconciliation_items")
+      .delete()
+      .eq("business_id", businessId)
+      .eq("run_id", runId);
+    if (error) throw error;
+    return;
+  }
+
+  const { data: existingRows, error: fetchErr } = await supabase
+    .from("reconciliation_items")
+    .select("id,bank_transaction_id")
+    .eq("business_id", businessId)
+    .eq("run_id", runId);
+  if (fetchErr) throw fetchErr;
+
+  const activeIds = new Set(activeBankIds);
+  const staleIds = (existingRows || [])
+    .filter((row) => row?.bank_transaction_id && !activeIds.has(row.bank_transaction_id))
+    .map((row) => row.id)
+    .filter(Boolean);
+  if (!staleIds.length) return;
+
+  for (let i = 0; i < staleIds.length; i += CHUNK_SIZE) {
+    const slice = staleIds.slice(i, i + CHUNK_SIZE);
+    const { error } = await supabase
+      .from("reconciliation_items")
+      .delete()
+      .eq("business_id", businessId)
+      .eq("run_id", runId)
+      .in("id", slice);
+    if (error) throw error;
+  }
+}
+
 export async function computeReconciliationRun(businessId, opts = {}) {
   if (!businessId) throw new Error("businessId_required");
   const scope = opts.scope || DEFAULT_SCOPE;
   const range = { start: normalizeDate(opts.date_from), end: normalizeDate(opts.date_to) };
   const { start, end } = range.start && range.end ? range : computeRange(scope);
-  const includePending = opts.include_pending === true;
-  const includeArchived = opts.include_archived === true;
+  const includePending = opts.include_pending !== false;
+  const includeArchived = opts.include_archived !== false;
   const plaidAccountId = opts.plaid_account_id || null;
   const nowTs = Date.now();
-
-  // Insert run skeleton
-  const { data: runRow, error: runErr } = await supabase
-    .from("reconciliation_runs")
-    .insert({
-      business_id: businessId,
-      scope,
-      period_start: start,
-      period_end: end,
-      status: "unknown",
-      overall_note: computeOverallNote("unknown", { total_seen: 0 }),
-      last_checked_at: NOW(),
-      details: { opts },
-    })
-    .select("id")
-    .maybeSingle();
-  if (runErr) throw runErr;
-  const runId = runRow?.id;
+  const normalizedOpts = { ...opts, include_pending: includePending, include_archived: includeArchived };
+  const runId = await prepareMonthlyRun({
+    businessId,
+    scope,
+    start,
+    end,
+    plaidAccountId,
+    opts: normalizedOpts,
+  });
 
   try {
     // Fetch bank txns
@@ -545,7 +629,16 @@ export async function computeReconciliationRun(businessId, opts = {}) {
     if (!bankIds.length) {
       const finalStatus = "unknown";
       const overall_note = computeOverallNote(finalStatus, { total_seen: 0 });
-      await supabase.from("reconciliation_runs").update({ status: finalStatus, overall_note }).eq("id", runId);
+      await removeStaleItemsForRun({ businessId, runId, activeBankIds: [] });
+      await supabase
+        .from("reconciliation_runs")
+        .update({
+          status: finalStatus,
+          overall_note,
+          last_checked_at: NOW(),
+          details: { counts: { total_seen: 0 }, opts: normalizedOpts },
+        })
+        .eq("id", runId);
       return { ok: true, run_id: runId, status: finalStatus, counts: { total_seen: 0 } };
     }
 
@@ -799,6 +892,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
     });
 
     // Persist items
+    await removeStaleItemsForRun({ businessId, runId, activeBankIds: bankIds });
     if (items.length) {
       await insertItems(runId, items);
     }
@@ -820,7 +914,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
         failed_post_count: counts.failed_post_count,
         missing_in_qbo_count: counts.missing_in_qbo_count,
         duplicate_in_qbo_count: counts.duplicate_in_qbo_count,
-        details: { counts, archived_count: archivedCount, opts },
+        details: { counts, archived_count: archivedCount, opts: normalizedOpts },
       })
       .eq("id", runId);
 
@@ -841,7 +935,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
         status: "failed",
         overall_note: computeOverallNote("failed", {}),
         last_checked_at: NOW(),
-        details: { error: err?.message || err },
+        details: { error: err?.message || err, opts: normalizedOpts },
       })
       .eq("id", runId);
     throw err;

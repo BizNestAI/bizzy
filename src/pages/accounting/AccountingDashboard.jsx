@@ -9,8 +9,6 @@ import ModuleHeader from '../../components/layout/ModuleHeader/ModuleHeader';
 
 import FinancialKPICards from '../../components/Accounting/FinancialKPICards';
 import MonthlyBriefCard from '../../components/Accounting/MonthlyBriefCard';
-import RecentCashActivity from '../../components/Bizzy/RecentCashActivity.jsx';
-import KPIDashboardPanel from '../../components/Accounting/KPIDashboardPanel.jsx';
 import useIntegrationManager from '../../hooks/useIntegrationManager.js';
 import { safeFetch } from '../../utils/safeFetch.js';
 import { RefreshCcw, ChevronDown } from 'lucide-react';
@@ -24,19 +22,11 @@ const ExpenseBreakdownChart = lazy(() => import('../../components/Accounting/Exp
 // ✅ publish right-rail extras to the layout
 import { useRightExtras } from '../../insights/RightExtrasContext';
 import LiveModePlaceholder from '../../components/common/LiveModePlaceholder.jsx';
-import { getDemoData, shouldForceLiveData, shouldUseDemoData } from '../../services/demo/demoClient.js';
+import { shouldUseDemoData } from '../../services/demo/demoClient.js';
 import { ACCENT_HEX } from '../../config/accent';
 
 /* ------------------ Visual constants ------------------ */
 const ACCOUNTING_ACCENT = ACCENT_HEX;
-function hexToRgba(hex, alpha = 1) {
-  let c = (hex || '').replace('#', '');
-  if (c.length === 3) c = c.split('').map(s => s + s).join('');
-  const n = parseInt(c || '000000', 16);
-  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
 // Graphite / chrome neutrals (slightly darker than before)
 const CHROME_BORDER        = 'rgba(165,167,169,0.10)';  // subtle neutral border
 const CHROME_BORDER_HOVER  = 'rgba(165,167,169,0.14)';
@@ -113,14 +103,6 @@ const TEMP_DEBUG_MOCK_HERO = {
 };
 
 export default function AccountingDashboard() {
-  const periodSelectStyles = `
-    select[data-period-select] { color-scheme: dark; }
-    select[data-period-select] option { background-color: #0c0e12; color: #fff; }
-    select[data-period-select]::-webkit-scrollbar { width: 8px; height: 8px; }
-    select[data-period-select]::-webkit-scrollbar-track { background: transparent; }
-    select[data-period-select]::-webkit-scrollbar-thumb { background-color: #5f6164; border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
-    select[data-period-select] { scrollbar-width: thin; scrollbar-color: #5f6164 transparent; }
-  `;
   const { currentBusiness, loading } = useBusiness();
   const businessId =
     currentBusiness?.id ||
@@ -130,7 +112,7 @@ export default function AccountingDashboard() {
   const theme = useModuleTheme('accounting');
   const navigate = useNavigate();
   const { setRightExtras } = useRightExtras();
-  const { year, month, setYearMonth, resetToCurrentMonth } = useFinancialPeriod(businessId);
+  const { year, month, setYearMonth } = useFinancialPeriod(businessId);
 
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -164,14 +146,6 @@ export default function AccountingDashboard() {
 
   const userId = useMemo(() => localStorage.getItem('user_id') || '', []);
   const usingDemo = useMemo(() => shouldUseDemoData(currentBusiness), [currentBusiness]);
-  const recentCash = useMemo(() => {
-    if (usingDemo) {
-      const demo = getDemoData();
-      return demo?.financials?.recentCash || [];
-    }
-    return [];
-  }, [usingDemo]);
-  const forceLive = shouldForceLiveData();
   const integrationManager = useIntegrationManager({ businessId });
   const qbState = integrationManager?.getStatus?.('quickbooks') || {};
   const qbStatus = qbState?.status || 'disconnected';
@@ -333,19 +307,8 @@ export default function AccountingDashboard() {
     }
   };
 
-  const handlePeriodChange = (e) => {
-    const val = e?.target?.value || periodValue;
-    const [y, m] = (val || '').split('-').map(Number);
-    if (y && m) {
-      setYearMonth(y, m);
-      setEmptyMonth(false);
-      setFallbackTag(false);
-      autoFallbackRef.current = false;
-    }
-  };
-
   const handleEmptyData = () => {
-    if (process.env.NODE_ENV !== 'production' && isCurrentMonth && !autoFallbackRef.current) {
+    if (import.meta.env.MODE !== 'production' && isCurrentMonth && !autoFallbackRef.current) {
       autoFallbackRef.current = true;
       setFallbackTag(true);
       setEmptyMonth(false);
@@ -369,8 +332,8 @@ export default function AccountingDashboard() {
 
   // Heights tuned so charts are fully visible
   const H_REVENUE = 300;
-  const H_EXPENSE = 200;
-  const H_PROFIT  = 280;
+  const H_EXPENSE = 380;
+  const H_PROFIT  = 380;
 
   return (
     /**
@@ -565,20 +528,6 @@ export default function AccountingDashboard() {
             </Suspense>
           </CardFrame>
         </div>
-
-        {/* Bizzy KPI dashboard panel */}
-        <CardFrame padded={false} variant="emerald-dark">
-          <div className="rounded-[inherit] p-3">
-            <KPIDashboardPanel userId={userId} businessId={businessId} />
-          </div>
-        </CardFrame>
-
-        {/* Recent cash activity */}
-        <CardFrame padded={false} variant="emerald-dark">
-          <div className="rounded-[inherit] p-3">
-            <RecentCashActivity items={recentCash} currency="$" />
-          </div>
-        </CardFrame>
 
         {/* Insights below the charts */}
         <CardFrame padded={false} variant="emerald-dark">

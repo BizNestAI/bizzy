@@ -1,5 +1,6 @@
 import { supabase } from "../services/supabaseAdmin.js";
 import { evaluateReconciliationStatus } from "../services/bookkeeping/reconciliationEvaluator.js";
+import { triggerContractorCfoInsightsBestEffort } from "../services/insights/contractorCfoTriggerService.js";
 
 const POLL_MINUTES = Number(process.env.RECON_CRON_MINUTES || 60);
 const MIN_INTERVAL_HOURS = Number(process.env.RECON_MIN_INTERVAL_HOURS || 6);
@@ -73,6 +74,11 @@ export async function runReconciliationOnceForBusiness(businessId, { force = fal
     }
     const result = await evaluateReconciliationStatus(businessId, {
       preferQboBalance: preferQboBalance ?? force,
+    });
+    triggerContractorCfoInsightsBestEffort({
+      businessId,
+      trigger: "reconciliation",
+      force: false,
     });
     return { ok: true, result };
   } catch (err) {

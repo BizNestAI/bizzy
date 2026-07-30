@@ -13,6 +13,7 @@ import SettingsHome from "./pages/Settings/SettingsHome";
 import AccountingDashboard from "./pages/accounting/AccountingDashboard";
 import MarketingDashboard from "./pages/Marketing/MarketingDashboard";
 import TaxDashboard from "./pages/Tax/TaxDashboard";
+import TaxCalculationWorkpaper from "./pages/Tax/TaxCalculationWorkpaper.jsx";
 import BizzyPanel from "./pages/Bizzy/BizzyPanel";
 import ChatHome from "./pages/Bizzy/ChatHome.jsx";
 
@@ -22,8 +23,6 @@ import BookkeepingCleanup from "./pages/accounting/BookkeepingCleanup.jsx";
 import ReconciledTransactions from "./pages/accounting/ReconciledTransactions.jsx";
 import Reconciliations from "./pages/accounting/Reconciliations.jsx";
 import AccountingRules from "./pages/accounting/Rules.jsx";
-
-import DeductionsPage from "./pages/Tax/DeductionsPage";
 
 import ProtectedRoute from "./components/UserAdmin/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
@@ -47,6 +46,7 @@ import ReviewsPage from "./pages/Marketing/ReviewsPage.jsx";
 import SocialCaptionPage from "./pages/Marketing/SocialCaptionPage.jsx";
 import CompanionPage from "./pages/Companion/CompanionPage.jsx";
 import JobsDashboard from "./pages/LeadsJobs/JobsDashboard.jsx";
+import MonthlyReviewConsole from "./pages/Admin/MonthlyReviewConsole.jsx";
 
 const AffordabilityPage = React.lazy(() => import("./pages/accounting/Affordability.jsx"));
 const ScenariosPage = React.lazy(() => import("./pages/accounting/Scenarios.jsx"));
@@ -174,11 +174,15 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               <Route path="leads-jobs" element={<JobsDashboard />} />
               <Route path="leads-jobs/collections" element={<JobsDashboard />} />
               <Route path="leads-jobs/job-costing" element={<JobsDashboard />} />
+              <Route path="leads-jobs/bid-builder" element={<JobsDashboard />} />
+              <Route path="leads-jobs/bid-builder/:bidId" element={<JobsDashboard />} />
               <Route path="leads-jobs/estimates" element={<JobsDashboard />} />
               <Route path="leads-jobs/change-orders" element={<JobsDashboard />} />
               <Route path="jobs" element={<JobsDashboard />} />
               <Route path="jobs/collections" element={<JobsDashboard />} />
               <Route path="jobs/job-costing" element={<JobsDashboard />} />
+              <Route path="jobs/bid-builder" element={<JobsDashboard />} />
+              <Route path="jobs/bid-builder/:bidId" element={<JobsDashboard />} />
               <Route path="jobs/estimates" element={<JobsDashboard />} />
               <Route path="jobs/change-orders" element={<JobsDashboard />} />
 
@@ -217,7 +221,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 
               {/* Tax */}
               <Route path="tax" element={<TaxDashboard />} />
-              <Route path="tax/deductions" element={<DeductionsPage />} />
+              <Route path="tax/calculation" element={<TaxCalculationWorkpaper />} />
+              <Route path="tax/deductions" element={<Navigate to="/dashboard/tax" replace />} />
 
               {/* Calendar */}
               <Route path="calendar" element={<CalendarHub />} />
@@ -231,6 +236,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 
               {/* Settings */}
               <Route path="settings" element={<SettingsHome />} />
+
+              {/* Internal Admin */}
+              <Route path="admin/monthly-review" element={<MonthlyReviewConsole />} />
             </Route>
           </Routes>
         </PeriodProvider>

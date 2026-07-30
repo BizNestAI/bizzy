@@ -18,10 +18,13 @@ router.get("/accounts", requireAuth, async (req, res) => {
     const { data: accounts, error } = await supabase
       .from("plaid_accounts")
       .select(
-        "plaid_account_id,name,official_name,mask,type,subtype,current_balance,available_balance,limit_balance,iso_currency_code,unofficial_currency_code,is_active,created_at,updated_at"
+        "plaid_account_id,name,official_name,mask,type,subtype,current_balance,available_balance,limit_balance,iso_currency_code,unofficial_currency_code,is_active,connected_at,created_at,updated_at"
       )
       .eq("business_id", businessId)
-      .eq("is_active", true);
+      .eq("is_active", true)
+      .order("connected_at", { ascending: true, nullsLast: true })
+      .order("created_at", { ascending: true, nullsLast: true })
+      .order("name", { ascending: true, nullsLast: true });
     if (error) throw error;
 
     const { data: healthRow } = await supabase
@@ -65,6 +68,8 @@ router.get("/accounts", requireAuth, async (req, res) => {
         balance: balance != null ? Number(balance) : null,
         currency: a?.iso_currency_code || null,
         toReview: reviewCounts[a.plaid_account_id] || 0,
+        connected_at: a.connected_at || null,
+        created_at: a.created_at || null,
         last_synced_at: null,
       };
     });
