@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { Eye, EyeOff, ArrowRight, CheckCircle2, Mail, Lock } from "lucide-react";
 import { signUp } from "../../services/authService";
@@ -19,6 +19,7 @@ const baseInput =
 const labelClass = "mb-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/[0.48]";
 
 const Signup = () => {
+  const firstNameInputRef = useRef(null);
   const [email, setEmail] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -31,6 +32,14 @@ const Signup = () => {
   const [confirmationSent, setConfirmationSent] = useState(false);
   const [pendingEmail, setPendingEmail] = useState("");
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const focusTimer = window.setTimeout(() => {
+      firstNameInputRef.current?.focus({ preventScroll: true });
+    }, 260);
+
+    return () => window.clearTimeout(focusTimer);
+  }, []);
 
   const handleSignup = async (e) => {
     e.preventDefault();
@@ -64,7 +73,7 @@ const Signup = () => {
 
   return (
     <div
-      className="bizzy-chathome min-h-screen relative flex items-center justify-center px-4 overflow-hidden text-white bizzy-bg-textured"
+      className="bizzy-auth-page bizzy-chathome min-h-screen relative flex items-center justify-center px-4 overflow-hidden text-white bizzy-bg-textured"
       style={{ background: BG, color: "var(--text)" }}
     >
       <div
@@ -87,7 +96,7 @@ const Signup = () => {
         }}
       />
 
-      <div className="relative w-full max-w-[31rem]">
+      <div className="bizzy-auth-card-wrap relative w-full max-w-[31rem]">
         <div
           aria-hidden
           className="pointer-events-none absolute -inset-8 rounded-full"
@@ -132,6 +141,7 @@ const Signup = () => {
                 <div>
                   <label className={labelClass}>First name</label>
                   <input
+                    ref={firstNameInputRef}
                     type="text"
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}

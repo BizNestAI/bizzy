@@ -1,5 +1,5 @@
 // src/pages/UserAdmin/Login.jsx
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { login } from "../../services/authService";
 import { useNavigate, Link } from "react-router-dom";
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
@@ -33,12 +33,21 @@ function pickIds(result) {
 }
 
 export default function Login() {
+  const emailInputRef = useRef(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const focusTimer = window.setTimeout(() => {
+      emailInputRef.current?.focus({ preventScroll: true });
+    }, 260);
+
+    return () => window.clearTimeout(focusTimer);
+  }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -65,7 +74,7 @@ export default function Login() {
 
   return (
     <div
-      className="bizzy-chathome min-h-screen relative flex items-center justify-center px-4 overflow-hidden bizzy-bg-textured"
+      className="bizzy-auth-page bizzy-chathome min-h-screen relative flex items-center justify-center px-4 overflow-hidden bizzy-bg-textured"
       style={{ background: BG, color: "var(--text)" }}
     >
       <div
@@ -88,7 +97,7 @@ export default function Login() {
         }}
       />
 
-      <div className="relative w-full max-w-[24rem]">
+      <div className="bizzy-auth-card-wrap relative w-full max-w-[24rem]">
         <div
           aria-hidden
           className="pointer-events-none absolute -inset-8 rounded-full"
@@ -139,6 +148,7 @@ export default function Login() {
                 <div className="relative">
                   <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-white/[0.46]" />
                   <input
+                    ref={emailInputRef}
                     type={(() => "email")()}
                     value={email}
                     onChange={(e) => setValueSafe(setEmail, e.target.value)}
