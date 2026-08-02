@@ -60,7 +60,7 @@ export async function genBizzyDeadlines({ userId, businessId, daysAhead = 14 }) 
     is_read: false,
     primary_cta: d.route
       ? { action: 'open_route', label: 'Open', route: d.route }
-      : { action: 'open_route', label: 'Open', route: '/dashboard/bizzy' },
+      : { action: 'open_route', label: 'Open', route: '/dashboard/bizzi' },
     tags: ['deadline', d.module || 'bizzy'],
     source_event_id: `biz:deadline:${d.id}`,
   }));

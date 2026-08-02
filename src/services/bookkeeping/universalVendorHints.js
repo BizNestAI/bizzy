@@ -201,7 +201,7 @@ addVendors(
 // Big box / retail / warehouse
 addVendors(
   ["Amazon", "Amazon Marketplace", "Walmart", "Target", "Costco", "Sam's Club", "BJ's Wholesale", "Kroger", "Safeway", "Albertsons", "Publix", "Meijer", "H-E-B", "Aldi", "Lidl", "Trader Joe's"],
-  { intents: ["general_supplies"], primary: "general_supplies", confidence: "medium" }
+  { intents: ["supplies"], primary: "supplies", confidence: "medium" }
 );
 
 // Hardware / materials / tools (contractor heavy)
@@ -246,29 +246,10 @@ addVendors(
     "Valspar",
     "John Deere",
     "Caterpillar",
-    "CAT Rental Store",
-    "Herc Rentals",
-    "United Rentals",
     "SparkFun",
     "SparkFun Electronics",
-    "Sunbelt Rentals",
-    "Ahern Rentals",
-    "BlueLine Rental",
-    "United Site Services",
-    "EquipmentShare",
     "Tractor Supply",
     "Rural King",
-    "NAPA Auto Parts",
-    "AutoZone",
-    "O'Reilly Auto Parts",
-    "Advance Auto Parts",
-    "Carquest",
-    "Pep Boys",
-    "Les Schwab",
-    "Discount Tire",
-    "Tire Kingdom",
-    "Firestone Complete Auto Care",
-    "Jiffy Lube",
   ],
   {
     intents: ["materials", "tools", "equipment"],
@@ -315,6 +296,47 @@ addVendors(
     "Buffalo Wild Wings",
     "Olive Garden",
     "Cheesecake Factory",
+    "Panda Express",
+    "Qdoba",
+    "Moe's Southwest Grill",
+    "Tropical Smoothie Cafe",
+    "Potbelly",
+    "Firehouse Subs",
+    "Arby's",
+    "Sonic Drive-In",
+    "Dairy Queen",
+    "Culver's",
+    "Whataburger",
+    "Jack in the Box",
+    "Carl's Jr.",
+    "Hardee's",
+    "Raising Cane's",
+    "Zaxby's",
+    "Bojangles",
+    "Del Taco",
+    "Noodles & Company",
+    "Jason's Deli",
+    "Corner Bakery",
+    "Au Bon Pain",
+    "Pret A Manger",
+    "First Watch",
+    "The Habit Burger Grill",
+    "MOD Pizza",
+    "Blaze Pizza",
+    "California Pizza Kitchen",
+    "P.F. Chang's",
+    "Texas Roadhouse",
+    "Outback Steakhouse",
+    "LongHorn Steakhouse",
+    "Chili's",
+    "Applebee's",
+    "TGI Fridays",
+    "Red Robin",
+    "Red Lobster",
+    "Cracker Barrel",
+    "IHOP",
+    "Denny's",
+    "Waffle House",
   ],
   { intents: ["meals"], primary: "meals", confidence: "high" }
 );
@@ -482,10 +504,182 @@ addVendors(
   { intents: ["utilities", "telecom"], primary: "utilities", confidence: "medium" }
 );
 
-// Rentals / storage
+// Equipment rental / storage
 addVendors(
-  ["U-Haul", "Penske Truck Rental", "Ryder", "Enterprise Truck Rental", "Public Storage", "Extra Space Storage", "CubeSmart", "Life Storage"],
-  { intents: ["rentals"], primary: "rentals", confidence: "medium" }
+  [
+    "United Rentals",
+    "Sunbelt Rentals",
+    "Herc Rentals",
+    "Ahern Rentals",
+    "EquipmentShare",
+    "BigRentz",
+    "Home Depot Rental",
+    "Lowe's Rental",
+    "RentalMax",
+    "BlueLine Rental",
+    "CAT Rental Store",
+    "Caterpillar Rental",
+    "United Site Services",
+    "WillScot",
+    "Mobile Mini",
+    "PODS",
+    "U-Haul",
+    "Penske Truck Rental",
+    "Ryder",
+    "Enterprise Truck Rental",
+    "Budget Truck Rental",
+    "Public Storage",
+    "Extra Space Storage",
+    "CubeSmart",
+    "Life Storage",
+  ],
+  { intents: ["equipment_rental"], primary: "equipment_rental", confidence: "high", notes: "Equipment / truck / jobsite rental" }
+);
+
+// Subcontractors
+UNIVERSAL_VENDOR_HINTS.push(
+  {
+    key: "subcontractor_trade_company_suffix",
+    match: { type: "regex", value: "\\b(?:construction|electric|electrical|plumbing|hvac|roofing|concrete|painting|drywall|landscaping|landscape|masonry|excavating|excavation|flooring|framing|carpentry|paving|asphalt|septic|demolition|demo|insulation|glass|garage door|fencing|welding|mechanical)\\b.*\\b(?:llc|inc|co|company|corp|corporation|services|contractors|contracting)\\b" },
+    canonical: "Subcontractor Trade Company",
+    intents: ["subcontractors"],
+    primary_intent: "subcontractors",
+    confidence: "medium",
+    notes: "Trade-company name pattern; confirm before posting",
+  },
+  {
+    key: "subcontractor_trade_company_prefix",
+    match: { type: "regex", value: "\\b(?:llc|inc|co|company|corp|corporation)\\b.*\\b(?:construction|electric|electrical|plumbing|hvac|roofing|concrete|painting|drywall|landscaping|landscape|masonry|excavating|excavation|flooring|framing|carpentry|paving|asphalt|septic|demolition|demo|insulation|glass|garage door|fencing|welding|mechanical)\\b" },
+    canonical: "Subcontractor Trade Company",
+    intents: ["subcontractors"],
+    primary_intent: "subcontractors",
+    confidence: "medium",
+    notes: "Trade-company name pattern; confirm before posting",
+  }
+);
+
+// Permits / licenses / municipal fees
+UNIVERSAL_VENDOR_HINTS.push(
+  {
+    key: "permit_center",
+    match: { type: "contains", value: "permit center" },
+    canonical: "Permit Center",
+    intents: ["permits_fees"],
+    primary_intent: "permits_fees",
+    confidence: "high",
+    notes: "Permit / municipal fee",
+  },
+  {
+    key: "building_department",
+    match: { type: "contains", value: "building department" },
+    canonical: "Building Department",
+    intents: ["permits_fees"],
+    primary_intent: "permits_fees",
+    confidence: "high",
+    notes: "Permit / inspection fee",
+  },
+  {
+    key: "inspection_services",
+    match: { type: "contains", value: "inspection services" },
+    canonical: "Inspection Services",
+    intents: ["permits_fees"],
+    primary_intent: "permits_fees",
+    confidence: "medium",
+    notes: "Inspection / permit-related fee",
+  },
+  {
+    key: "contractor_licensing",
+    match: { type: "contains", value: "contractor licensing" },
+    canonical: "Contractor Licensing",
+    intents: ["permits_fees"],
+    primary_intent: "permits_fees",
+    confidence: "high",
+    notes: "Contractor license / registration fee",
+  },
+  {
+    key: "building_permit_regex",
+    match: { type: "regex", value: "\\b(?:city of|county of|township of|department of buildings|building dept|dob|state licensing board|secretary of state)\\b" },
+    canonical: "Municipal / Licensing Agency",
+    intents: ["permits_fees"],
+    primary_intent: "permits_fees",
+    confidence: "medium",
+    notes: "Municipal, permit, registration, or licensing fee",
+  }
+);
+
+// Waste disposal / dump fees
+addVendors(
+  [
+    "Waste Management",
+    "Republic Services",
+    "Waste Connections",
+    "GFL Environmental",
+    "Rumpke",
+    "Recology",
+    "Casella Waste",
+    "Advanced Disposal",
+    "1-800-GOT-JUNK",
+    "Bagster",
+    "Junk King",
+    "College Hunks Hauling Junk",
+  ],
+  { intents: ["waste_disposal"], primary: "waste_disposal", confidence: "high", notes: "Waste disposal / hauling / dump fees" }
+);
+
+UNIVERSAL_VENDOR_HINTS.push(
+  {
+    key: "wm_waste_management",
+    match: { type: "exact", value: "wm" },
+    canonical: "WM",
+    intents: ["waste_disposal"],
+    primary_intent: "waste_disposal",
+    confidence: "high",
+    notes: "Waste Management / dump fees",
+  },
+  {
+    key: "landfill_transfer_station",
+    match: { type: "regex", value: "\\b(?:landfill|transfer station|dump fee|disposal fee)\\b" },
+    canonical: "Landfill / Transfer Station",
+    intents: ["waste_disposal"],
+    primary_intent: "waste_disposal",
+    confidence: "medium",
+    notes: "Waste disposal / dump fee signal",
+  }
+);
+
+// Uniforms / laundry
+addVendors(
+  [
+    "Cintas",
+    "UniFirst",
+    "Aramark",
+    "Alsco",
+    "Prudential Overall Supply",
+    "Vestis",
+    "Red Kap",
+    "Carhartt",
+    "Work World",
+    "Boot Barn",
+  ],
+  { intents: ["uniforms_laundry"], primary: "uniforms_laundry", confidence: "high", notes: "Uniforms / laundry / workwear" }
+);
+
+// Safety / PPE
+addVendors(
+  [
+    "SafetyCompany",
+    "Magid Glove",
+    "Full Source",
+    "Radians",
+    "Mallory Safety",
+    "PK Safety",
+    "Grainger Safety",
+    "Uline Safety",
+    "Fastenal Safety",
+    "MSC Safety",
+    "Zoro Safety",
+  ],
+  { intents: ["safety_ppe"], primary: "safety_ppe", confidence: "high", notes: "Safety gear / PPE" }
 );
 
 // Food wholesalers / grocery bulk
@@ -533,8 +727,14 @@ UNIVERSAL_VENDOR_HINTS.push(
 
 // Medical / health
 addVendors(
-  ["CVS", "Walgreens", "Rite Aid", "Duane Reade", "Health Mart", "Kaiser", "UnitedHealthcare", "Blue Cross", "Cigna", "Humana", "Walgreens Pharmacy"],
+  ["Rite Aid", "Duane Reade", "Health Mart", "Kaiser", "UnitedHealthcare", "Blue Cross", "Cigna", "Humana"],
   { intents: ["medical"], primary: "medical", confidence: "medium" }
+);
+
+// Pharmacy / convenience supplies
+addVendors(
+  ["CVS", "CVS Pharmacy", "Walgreens", "Walgreens Pharmacy"],
+  { intents: ["supplies"], primary: "supplies", confidence: "medium", notes: "Pharmacy retail commonly used for business supplies" }
 );
 
 // Education / training
@@ -563,7 +763,27 @@ addVendors(
 
 // Restaurants local/fast casual more
 addVendors(
-  ["IHOP", "Denny's", "Waffle House", "Cracker Barrel", "Red Robin", "Chili's", "Applebee's", "Texas Roadhouse", "Outback Steakhouse", "Red Lobster"],
+  [
+    "Bonefish Grill",
+    "Carrabba's",
+    "Maggiano's",
+    "Yard House",
+    "BJ's Restaurant",
+    "Dave & Buster's",
+    "Fogo de Chao",
+    "Seasons 52",
+    "Bahama Breeze",
+    "Miller's Ale House",
+    "Twin Peaks",
+    "Hooters",
+    "Mission BBQ",
+    "City Barbeque",
+    "Famous Dave's",
+    "Sonny's BBQ",
+    "Portillo's",
+    "Crumbl Cookies",
+    "Nothing Bundt Cakes",
+  ],
   { intents: ["meals"], primary: "meals", confidence: "high" }
 );
 
@@ -588,7 +808,7 @@ addVendors(
 // Construction marketplaces / job mgmt
 addVendors(
   ["Procore", "Buildertrend", "CoConstruct", "Fieldwire", "PlanGrid", "Bluebeam", "Autodesk Construction Cloud", "Jobber", "ServiceTitan", "Housecall Pro"],
-  { intents: ["software", "construction_ops"], primary: "construction_ops", confidence: "medium" }
+  { intents: ["software"], primary: "software", confidence: "medium" }
 );
 
 // Banking / processors extras
@@ -601,6 +821,65 @@ addVendors(
 addVendors(
   ["Ford Motor", "GM Financial", "Chevrolet", "Ram Trucks", "Peterbilt", "Kenworth", "Volvo Trucks", "Mack Trucks", "PACCAR", "Isuzu Trucks"],
   { intents: ["vehicle_expense"], primary: "vehicle_expense", confidence: "low", notes: "Vehicle related; confirm context" }
+);
+
+// Vehicle maintenance / parts / tires
+addVendors(
+  [
+    "NAPA Auto Parts",
+    "AutoZone",
+    "O'Reilly Auto Parts",
+    "Advance Auto Parts",
+    "Carquest",
+    "Pep Boys",
+    "Les Schwab",
+    "Discount Tire",
+    "Tire Kingdom",
+    "Firestone Complete Auto Care",
+    "Jiffy Lube",
+    "Valvoline Instant Oil Change",
+    "Valvoline",
+    "Take 5 Oil Change",
+    "Meineke",
+    "Midas",
+    "Monro Auto Service",
+    "Mr. Tire",
+    "Big O Tires",
+    "Goodyear Auto Service",
+    "Goodyear",
+    "Tire Discounters",
+    "Belle Tire",
+    "America's Tire",
+    "NTB",
+    "National Tire and Battery",
+    "Mavis Discount Tire",
+    "Tires Plus",
+    "AAMCO",
+    "Christian Brothers Automotive",
+    "Grease Monkey",
+    "Express Oil Change",
+    "SpeeDee Oil Change",
+    "Quick Lane",
+    "Meineke Car Care Center",
+    "Jiffy Lube Multicare",
+    "Safelite AutoGlass",
+    "Maaco",
+    "Caliber Collision",
+    "Gerber Collision",
+    "Crash Champions",
+    "Service King",
+    "FleetPride",
+    "TruckPro",
+    "TA Truck Service",
+    "Love's Truck Care",
+    "Pilot Flying J Truck Care",
+    "Speedco",
+    "Boss Truck Shops",
+    "Goodyear Commercial Tire",
+    "Bridgestone Commercial",
+    "Michelin Retread",
+  ],
+  { intents: ["vehicle_expense"], primary: "vehicle_expense", confidence: "high", notes: "Vehicle maintenance / parts / tires" }
 );
 
 // Food delivery / catering

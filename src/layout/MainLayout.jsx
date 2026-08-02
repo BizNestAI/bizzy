@@ -15,7 +15,7 @@ const RIGHT_RAIL_W = 320;  // keep in sync with DashboardLayout / InsightsRail w
 const GRID_GAP     = 6;    // the grid gap between center & right rail columns
 
 /* Which module routes should use Chrome/Silver? */
-const CHROME_MODULES = new Set(['bizzy','leads-jobs','calendar','activity','bizzy-docs','companion','settings']);
+const CHROME_MODULES = new Set(['bizzy','leads-jobs','calendar','activity','docs','companion','settings']);
 
 const MainLayoutCore = ({ children }) => {
   const { user } = useAuth();
@@ -23,11 +23,16 @@ const MainLayoutCore = ({ children }) => {
   const location = useLocation();
 
   const seg = location.pathname.split('/')[2] || 'bizzy';
-  const moduleKey = (seg === 'financials' ? 'accounting' : seg).toLowerCase();
+  const rawModuleKey = (seg === 'financials' ? 'accounting' : seg).toLowerCase();
+  const moduleKey = rawModuleKey === 'bizzi'
+    ? 'bizzy'
+    : rawModuleKey === 'bizzi-docs'
+      ? 'docs'
+      : rawModuleKey;
   const theme = useModuleTheme(moduleKey);
 
   const textColor = theme?.textClass || 'text-primary';
-  const isChatHome = location.pathname.startsWith('/dashboard/bizzy/chat') || location.pathname.startsWith('/chat');
+  const isChatHome = location.pathname.startsWith('/dashboard/bizzi/chat') || location.pathname.startsWith('/chat');
   const { isCanvasOpen = false } = useBizzyChatContext?.() || {};
 
   const [currentBusiness, setCurrentBusiness] = useState(null);

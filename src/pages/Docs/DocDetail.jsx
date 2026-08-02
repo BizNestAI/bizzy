@@ -11,7 +11,7 @@ import { extractPdfText } from '../../utils/pdfText';
 import { toMarkdownSections } from '../../utils/pdfToBizzyFormat';
 import '../../styles/prose-bizzy.css';
 
-const LIST_ROUTE = '/dashboard/bizzy-docs';
+const LIST_ROUTE = '/dashboard/bizzi-docs';
 
 /* --------------------------------- tokens -------------------------------- */
 const NEUTRAL_BORDER = 'rgba(165,167,169,0.18)';

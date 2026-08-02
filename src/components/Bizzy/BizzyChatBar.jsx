@@ -1,5 +1,5 @@
 // File: /src/components/Bizzy/BizzyChatBar.jsx
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useLocation } from "react-router-dom";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
 import AskBizzyQuickPrompts from "./AskBizzyQuickPrompts";
@@ -11,6 +11,7 @@ import { NORMAL_PROMPTS, ONBOARDING_PROMPTS } from "../../config/chatQuickPrompt
 import { identifyOnboardingPrompt } from "../../config/onboardingPromptBank";
 import { CHAT_BAR_MAX_W, CHAT_BAR_VW } from "../../config/chatLayout";
 import { ACCENT_HEX } from "../../config/accent";
+import { apiUrl, safeFetch } from "../../utils/safeFetch";
 
 /* -------------------------------------------------- */
 const accentHexMap = {
@@ -49,7 +50,7 @@ function getModuleFromPath(path) {
   if (seg === "calendar") return "calendar";
   if (seg === "activity") return "activity";
   if (seg === "leads-jobs") return "jobs";
-  if (seg === "bizzy-docs") return "docs";
+  if (seg === "bizzi-docs") return "docs";
   if (seg === "companion") return "companion";
   if (seg === "settings") return "settings";
   return "bizzy";
@@ -71,7 +72,7 @@ export default function BizzyChatBar({
   const location = useLocation();
   const pathname = location?.pathname || "";
   const currentModule = getModuleFromPath(pathname);
-  const isChatHome = pathname.startsWith("/dashboard/bizzy/chat") || pathname.startsWith("/chat");
+  const isChatHome = pathname.startsWith("/dashboard/bizzi/chat") || pathname.startsWith("/chat");
 
   const { isCanvasOpen, sendMessage, isLoading, startQuickPrompt, openCanvas } =
     useBizzyChatContext();
@@ -80,6 +81,7 @@ export default function BizzyChatBar({
   const [isRecording, setIsRecording] = useState(false);
   const [quickPrompts, setQuickPrompts] = useState([]);
   const [isFocused, setIsFocused] = useState(false);
+  const [chatGateNotice, setChatGateNotice] = useState(null);
   const inputRef = useRef(null);
 
   const allowedByRoute = routeAllowsBar(pathname);
@@ -104,11 +106,56 @@ export default function BizzyChatBar({
 
   const accentHex  = effectiveTone === "neutral" ? neutralFrame : brandAccent;
 
+  const getBusinessId = useCallback(() => {
+    try {
+      return localStorage.getItem("currentBusinessId") || localStorage.getItem("business_id") || "";
+    } catch {
+      return "";
+    }
+  }, []);
+
+  const checkChatAccess = useCallback(async () => {
+    const businessId = getBusinessId();
+    if (!businessId) return { allowed: false, message: "Select a business before asking Bizzi a question." };
+    const url = new URL(apiUrl("/api/gpt/chat-access"));
+    url.searchParams.set("business_id", businessId);
+    const access = await safeFetch(url.toString(), {
+      headers: { "x-business-id": businessId },
+    });
+    if (!access?.subscription_active) {
+      const used = Number(access?.usage_count || 0);
+      const limit = Number(access?.trial_limit || access?.limit || 2);
+      const remaining = Math.max(0, Number(access?.remaining ?? (limit - used)));
+      setChatGateNotice({
+        blocked: !access?.allowed,
+        title: access?.allowed ? "Bizzi test questions" : "Subscription required",
+        message: access?.allowed
+          ? `You have ${remaining} of ${limit} test questions left before a monthly subscription is required.`
+          : "You have used both test questions. Start a monthly subscription to keep asking Bizzi questions.",
+      });
+    } else if (chatGateNotice) {
+      setChatGateNotice(null);
+    }
+    return access;
+  }, [chatGateNotice, getBusinessId]);
+
   /** Submit */
   const handleSubmit = async (e) => {
     if (e?.preventDefault) e.preventDefault();
     const text = (input || "").trim();
     if (!text || isLoading) return;
+    let access = null;
+    try {
+      access = await checkChatAccess();
+    } catch (err) {
+      setChatGateNotice({
+        blocked: true,
+        title: "Could not verify access",
+        message: err?.message || "Bizzi could not verify your subscription status. Try again in a moment.",
+      });
+      return;
+    }
+    if (!access?.allowed) return;
     setInput("");
     inputRef.current?.blur?.();
     openCanvas(currentModule);
@@ -122,6 +169,18 @@ export default function BizzyChatBar({
   /** Quick prompt */
   const handlePromptClick = async (text) => {
     if (!text || isLoading) return;
+    let access = null;
+    try {
+      access = await checkChatAccess();
+    } catch (err) {
+      setChatGateNotice({
+        blocked: true,
+        title: "Could not verify access",
+        message: err?.message || "Bizzi could not verify your subscription status. Try again in a moment.",
+      });
+      return;
+    }
+    if (!access?.allowed) return;
     if (input) setInput("");
     inputRef.current?.blur?.();
     openCanvas(currentModule);
@@ -216,9 +275,21 @@ export default function BizzyChatBar({
       if (!text) return;
       setInput(text);
       if (autoSend && !isLoading) {
-        openCanvas(currentModule);
-        window.dispatchEvent(new Event("bizzy:open-chat"));
-        setTimeout(() => {
+        setTimeout(async () => {
+          let access = null;
+          try {
+            access = await checkChatAccess();
+          } catch (err) {
+            setChatGateNotice({
+              blocked: true,
+              title: "Could not verify access",
+              message: err?.message || "Bizzi could not verify your subscription status. Try again in a moment.",
+            });
+            return;
+          }
+          if (!access?.allowed) return;
+          openCanvas(currentModule);
+          window.dispatchEvent(new Event("bizzy:open-chat"));
           setInput("");
           sendMessage(text, { openCanvas: true, module: currentModule });
         }, 0);
@@ -226,7 +297,7 @@ export default function BizzyChatBar({
     };
     window.addEventListener("bizzy:prefill-chat", handler);
     return () => window.removeEventListener("bizzy:prefill-chat", handler);
-  }, [currentModule, isLoading, sendMessage, openCanvas]);
+  }, [currentModule, isLoading, sendMessage, openCanvas, checkChatAccess]);
 
   if (!shouldRender) return null;
 
@@ -266,6 +337,29 @@ export default function BizzyChatBar({
             data-bizzy-chatbar-shell
             data-bizzy-chatbar-measured
           >
+            {chatGateNotice ? (
+              <div
+                className="mb-2 flex items-start justify-between gap-3 rounded-lg border border-amber-300/24 bg-[#14120b]/95 px-3 py-2 text-sm text-amber-50 shadow-[0_12px_30px_rgba(0,0,0,0.28)]"
+                role="status"
+              >
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold uppercase tracking-[0.12em] text-amber-100/80">
+                    {chatGateNotice.title}
+                  </div>
+                  <div className="mt-0.5 text-[13px] leading-snug text-amber-50/86">
+                    {chatGateNotice.message}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close subscription notice"
+                  onClick={() => setChatGateNotice(null)}
+                  className="shrink-0 rounded-full border border-amber-100/18 bg-white/[0.04] px-2 py-0.5 text-sm font-semibold text-amber-50/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-amber-200/35"
+                >
+                  X
+                </button>
+              </div>
+            ) : null}
             <form onSubmit={handleSubmit} className="mt-1">
               <div
                 data-bizzy-chatbar-form

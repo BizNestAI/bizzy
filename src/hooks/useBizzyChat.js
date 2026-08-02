@@ -1,7 +1,8 @@
 // File: /src/hooks/useBizzyChat.js
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { supabase } from '../services/supabaseClient.js';
-import apiBaseUrl from '../utils/apiBase.js';
+import { getDemoMode, shouldUseDemoData } from '../services/demo/demoClient.js';
+import { apiUrl, safeFetch } from '../utils/safeFetch.js';
 
 // Lightweight intent/trigger detectors (frontend safeguards)
 const SAVE_INTENT_RE = /\b(save (this|it)?|save to docs|add to docs|put this in docs|remember this decision|keep this decision|document this)\b/i;
@@ -56,8 +57,6 @@ export const useBizzyChat = (user_id) => {
   const userRequestedNavigationRef = useRef(false);
   const lastUserMessageRef = useRef('');
 
-  const API_BASE = apiBaseUrl || '';
-
   /* ────────────────────────────── Usage tracking ───────────────────────────── */
   const fetchUsage = async () => {
     if (!hasValidUser) return;
@@ -94,19 +93,16 @@ export const useBizzyChat = (user_id) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasValidUser, user_id]);
 
-  /* ────────────────────────────── Utilities ───────────────────────────── */
-  const parseJsonOrThrow = async (res) => {
-    const ct = res.headers.get('content-type') || '';
-    const text = await res.text();
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-    if (!ct.includes('application/json')) {
-      throw new Error(`Non-JSON response (${ct}): ${text.slice(0, 200)}`);
-    }
+  const getActiveDataMode = () => {
     try {
-      return JSON.parse(text);
+      if (getDemoMode?.() === 'demo' || shouldUseDemoData?.()) return 'demo';
+      if (getDemoMode?.() === 'live') return 'live';
+      if (localStorage.getItem('bizzy:dataMode') === 'demo' || localStorage.getItem('bizzy:demo') === '1') return 'demo';
+      if (localStorage.getItem('bizzy:dataMode') === 'live' || localStorage.getItem('bizzy:demo') === '0') return 'live';
     } catch {
-      throw new Error('Unexpected server response. Please try again.');
+      // Ignore storage failures and let the server default.
     }
+    return 'auto';
   };
 
   /* ────────────────────────────── Hydration ───────────────────────────── */
@@ -290,10 +286,12 @@ export const useBizzyChat = (user_id) => {
 
     try {
       const bizId = business_id || localStorage.getItem('currentBusinessId') || null;
+      const dataMode = getActiveDataMode();
 
       const payload = {
         user_id: user_id ?? localStorage.getItem('user_id') ?? undefined,
         business_id: bizId,
+        data_mode: dataMode,
         message: trimmedInput,
         intent,
         context: {
@@ -308,20 +306,22 @@ export const useBizzyChat = (user_id) => {
       const headers = {
         'Content-Type': 'application/json',
         'x-current-route': (typeof window !== 'undefined' && window.location?.pathname) || '',
+        'x-bizzy-data-mode': dataMode,
         'x-bizzy-depth': depth,
         'x-debug': '1',  // TEMP only
       };
 
       // Prefer primary route; alias for backward compatibility
-      const primary = `${API_BASE}/api/gpt/generate`;
-      const alias   = `${API_BASE}/api/gpt/generate-response`;
+      const primary = apiUrl('/api/gpt/generate');
+      const alias = apiUrl('/api/gpt/generate-response');
 
-      let res = await fetch(primary, { method: 'POST', headers, body: JSON.stringify(payload) });
-      if (res.status === 404) {
-        res = await fetch(alias, { method: 'POST', headers, body: JSON.stringify(payload) });
+      let data;
+      try {
+        data = await safeFetch(primary, { method: 'POST', headers, body: payload });
+      } catch (primaryErr) {
+        if (primaryErr?.status !== 404) throw primaryErr;
+        data = await safeFetch(alias, { method: 'POST', headers, body: payload });
       }
-
-      const data = await parseJsonOrThrow(res);
 
       // If the server created a thread on the first turn, inform parent
       if (!threadId && data?.meta?.thread_id && typeof onThreadCreated === 'function') {

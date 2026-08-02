@@ -315,7 +315,7 @@ useEffect(() => {
 
   /* ---------------- Render ---------------- */
   return (
-    <div className="w-full px-3 md:px-4 pb-12 pt-0 bg-app text-primary" style={{ "--accent": "var(--accent)" }}>
+    <div className="w-full px-3 md:px-4 pb-12 pt-[88px] bg-app text-primary" style={{ "--accent": "var(--accent)" }}>
       {/* Header (aligned with page content) */}
       <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6 mb-5">
         <h1 className="text-[20px] sm:text-[22px] font-semibold tracking-[0.2em] text-[color:var(--text)] text-left">
@@ -402,7 +402,7 @@ useEffect(() => {
               );
             })}
             <button
-              onClick={() => navigate('/setup')}
+              onClick={() => navigate('/setup?from=settings', { state: { fromSettings: true } })}
               className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm border transition"
               style={{
                 borderColor: NEUTRAL_BORDER,

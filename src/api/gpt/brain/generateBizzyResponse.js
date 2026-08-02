@@ -26,10 +26,129 @@ const openaiKey = process.env.OPENAI_API_KEY || '';
 const openai = openaiKey ? new OpenAI({ apiKey: openaiKey }) : null;
 const BIZZY_CHAT_MODEL = process.env.BIZZY_GPT_MODEL || 'gpt-5.1';
 const isGpt5Model = /^gpt-5/i.test(BIZZY_CHAT_MODEL || '');
+const FREE_CHAT_LIMIT = 2;
+const PAID_CHAT_LIMIT = 300;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function getCurrentUsageMonth() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function readModeScopedBillingValue(row, key, fallbackValue = null) {
+  if (!row) return fallbackValue;
+  const requestedStripeMode = String(process.env.STRIPE_MODE || '').trim().toLowerCase();
+  const stripeMode = requestedStripeMode === 'test' || requestedStripeMode === 'live'
+    ? requestedStripeMode
+    : process.env.NODE_ENV === 'production' ? 'live' : 'test';
+  const scopedKey = `${key}_${stripeMode}`;
+  if (row?.[scopedKey] !== undefined && row?.[scopedKey] !== null) return row[scopedKey];
+  if (stripeMode === 'live' && row?.[key] !== undefined && row?.[key] !== null) return row[key];
+  return fallbackValue;
+}
+
+function projectChatBilling(row) {
+  return {
+    subscription_status: readModeScopedBillingValue(row, 'subscription_status', 'free') || 'free',
+    plan_type: readModeScopedBillingValue(row, 'plan_type', null),
+    stripe_subscription_id: readModeScopedBillingValue(row, 'stripe_subscription_id', null),
+    current_period_end: readModeScopedBillingValue(row, 'current_period_end', null),
+    cancel_at_period_end: Boolean(readModeScopedBillingValue(row, 'cancel_at_period_end', false)),
+  };
+}
+
+function hasActiveMonthlySubscription(billing) {
+  if (!billing) return false;
+  if (billing.subscription_status !== 'active') return false;
+  if (!billing.stripe_subscription_id && !billing.plan_type) return false;
+  if (billing.cancel_at_period_end && billing.current_period_end) {
+    const end = new Date(billing.current_period_end);
+    if (!Number.isNaN(end.getTime()) && end.getTime() <= Date.now()) return false;
+  }
+  return true;
+}
+
+async function getMonthlyUsageCount(userId, month = getCurrentUsageMonth()) {
+  if (!userId) return 0;
+  const { data, error } = await supabase
+    .from('gpt_usage')
+    .select('query_count')
+    .eq('user_id', userId)
+    .eq('month', month)
+    .maybeSingle();
+  if (error && error.code !== 'PGRST116') throw error;
+  return Number(data?.query_count || 0);
+}
+
+async function getBusinessBillingForUser(userId, businessId) {
+  if (!userId || !businessId || !UUID_RE.test(String(userId)) || !UUID_RE.test(String(businessId))) {
+    return { ok: false, status: 400, error: 'invalid_ids', message: 'Valid user id and business id are required.' };
+  }
+
+  const { data: business, error: businessError } = await supabase
+    .from('business_profiles')
+    .select('id,user_id')
+    .eq('id', businessId)
+    .maybeSingle();
+  if (businessError || !business) {
+    return { ok: false, status: 404, error: 'business_not_found', message: 'Business not found.' };
+  }
+  if (business.user_id !== userId) {
+    return { ok: false, status: 403, error: 'forbidden', message: 'You do not own this business.' };
+  }
+
+  const { data: billingRow, error: billingError } = await supabase
+    .from('business_billing')
+    .select('*')
+    .eq('business_id', businessId)
+    .maybeSingle();
+  if (billingError) {
+    return { ok: false, status: 500, error: 'billing_lookup_failed', message: 'Failed to load billing status.' };
+  }
+
+  return { ok: true, billing: projectChatBilling(billingRow) };
+}
+
+export async function getBizzyChatAccess({ user_id, business_id } = {}) {
+  const month = getCurrentUsageMonth();
+  const billingResult = await getBusinessBillingForUser(user_id, business_id);
+  if (!billingResult.ok) {
+    return {
+      ok: false,
+      allowed: false,
+      status: billingResult.status,
+      error: billingResult.error,
+      message: billingResult.message,
+      month,
+      usage_count: 0,
+      limit: FREE_CHAT_LIMIT,
+      remaining: 0,
+      subscription_active: false,
+    };
+  }
+
+  const usageCount = await getMonthlyUsageCount(user_id, month);
+  const subscriptionActive = hasActiveMonthlySubscription(billingResult.billing);
+  const limit = subscriptionActive ? PAID_CHAT_LIMIT : FREE_CHAT_LIMIT;
+  const remaining = Math.max(0, limit - usageCount);
+  const allowed = usageCount < limit;
+  return {
+    ok: true,
+    allowed,
+    month,
+    usage_count: usageCount,
+    limit,
+    remaining,
+    subscription_active: subscriptionActive,
+    subscription_status: billingResult.billing.subscription_status,
+    trial_limit: FREE_CHAT_LIMIT,
+    paid_limit: PAID_CHAT_LIMIT,
+    message: allowed
+      ? null
+      : subscriptionActive
+        ? "You've reached the current 300-query monthly limit."
+        : 'Your two test questions are used. Subscribe to keep asking Bizzi questions.',
+  };
 }
 
 async function incrementMonthlyUsage(userId) {
@@ -212,6 +331,107 @@ function needsWebLookup(message, intent) {
 }
 
 const MAX_ARTIFACTS = 2;
+
+function normalizeDataMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  if (mode === 'demo' || mode === 'mock') return 'demo';
+  if (mode === 'live') return 'live';
+  return 'auto';
+}
+
+function demoBusinessProfileFromSnapshot(demoData) {
+  const name = demoData?.meta?.businessName || "Mike's Remodeling";
+  return {
+    id: 'demo-business',
+    business_name: name,
+    name,
+    business_type: 'Contractor / remodeling',
+    industry: 'Remodeling and home services',
+    location: 'Demo market',
+    team_size: null,
+    has_viewed_integrations_page: true,
+    onboarding_completed_once: true,
+  };
+}
+
+function resetLiveFinancialContext(bundle) {
+  [
+    'kpis',
+    'forecast',
+    'moves',
+    'accounts',
+    'bookkeepingHealth',
+    'metricHint',
+    'periodHint',
+    'unpaidCustomers',
+  ].forEach((key) => {
+    delete bundle[key];
+  });
+}
+
+function applyDemoContext(bundle, demoData) {
+  if (!demoData) return;
+  resetLiveFinancialContext(bundle);
+  const monthTag = demoData?.meta?.period || new Date().toISOString().slice(0, 7);
+  const fin = demoData?.financials || {};
+  const prev = fin?.prevMonth || {};
+  const topDriver = Array.isArray(fin.topCostDrivers) && fin.topCostDrivers[0]?.name
+    ? fin.topCostDrivers[0].name
+    : prev?.topSpendingCategory || null;
+
+  bundle.kpis = [
+    {
+      month: monthTag,
+      total_revenue: Number(fin.mtdRevenue ?? 0),
+      total_expenses: Number(fin.mtdExpenses ?? 0),
+      net_profit: Number(fin.mtdProfit ?? 0),
+      profit_margin: Number(fin.profitMarginPct ?? 0),
+      top_spending_category: topDriver,
+    },
+  ];
+
+  if (prev && Object.keys(prev).length) {
+    bundle.kpis.push({
+      month: 'Prior period',
+      total_revenue: Number(prev.revenue ?? 0),
+      total_expenses: Number(prev.expenses ?? 0),
+      net_profit: Number(prev.profit ?? 0),
+      profit_margin: Number(prev.profitMarginPct ?? 0),
+      top_spending_category: prev.topSpendingCategory || null,
+    });
+  }
+
+  bundle.forecast = fin?.forecastNext30d
+    ? [{
+        month: 'Next 30 days',
+        cash_in: Number(fin.forecastNext30d?.cashIn ?? 0),
+        cash_out: Number(fin.forecastNext30d?.cashOut ?? 0),
+        net_cash: Number(fin.forecastNext30d?.net ?? 0),
+      }]
+    : [];
+
+  bundle.moves = Array.isArray(fin?.suggestedMoves)
+    ? fin.suggestedMoves.map((move) => ({
+        title: move?.title || '',
+        rationale: [move?.rationale, move?.timeframe].filter(Boolean).join(' '),
+        month: move?.month || monthTag,
+      })).filter((move) => move.title)
+    : [];
+
+  if (Array.isArray(fin?.unpaidCustomers)) {
+    const jobLookup = new Map(
+      (demoData?.jobs?.topUnpaid || []).map((job) => [job.external_id || job.id, job.title || job.name || ''])
+    );
+    bundle.unpaidCustomers = fin.unpaidCustomers.map((row) => ({
+      ...row,
+      project: jobLookup.get(row.invoiceId) || null,
+    }));
+  }
+
+  bundle.demoSnapshot = demoData;
+  bundle.dataMode = 'demo';
+}
+
 const extractJsonCandidate = (raw = '') => {
   const trimmed = String(raw || '').trim();
   if (!trimmed) return null;
@@ -301,9 +521,12 @@ export async function generateBizzyResponse({
   personaMessage = null,
   threadId = null,
   business_id: businessIdFromHandler = null,
+  dataMode = 'auto',
 }) {
   const started = Date.now();
-  console.log('[gpt] start', { user_id, threadId, business_id: businessIdFromHandler });
+  const requestedDataMode = normalizeDataMode(dataMode);
+  const effectiveDemoMode = requestedDataMode === 'demo' || (requestedDataMode !== 'live' && isDemoMode());
+  console.log('[gpt] start', { user_id, threadId, business_id: businessIdFromHandler, dataMode: requestedDataMode, demoMode: effectiveDemoMode });
   const llmInvocation = {
     requested_model: BIZZY_CHAT_MODEL,
     method: isGpt5Model ? 'responses' : 'chat.completions',
@@ -331,14 +554,14 @@ export async function generateBizzyResponse({
         return await generateBizzyResponse({
           user_id, message, type: 'affordability_check',
           parsedInput: { ...parsedInput, affordHint: parsed }, styleMessages, personaMessage,
-          threadId, business_id: businessIdFromHandler,
+          threadId, business_id: businessIdFromHandler, dataMode: requestedDataMode,
         });
       }
       if (detectSchedulingIntent(message)) {
         return await generateBizzyResponse({
           user_id, message, type: 'calendar_schedule',
           parsedInput: { ...parsedInput, scheduleHint: message }, styleMessages, personaMessage,
-          threadId, business_id: businessIdFromHandler,
+          threadId, business_id: businessIdFromHandler, dataMode: requestedDataMode,
         });
       }
     }
@@ -384,7 +607,9 @@ export async function generateBizzyResponse({
 
     try {
       const profileColumns = 'id,business_name,name,business_type,industry,location,team_size,has_viewed_integrations_page,onboarding_completed_once';
-      if (businessId) {
+      if (effectiveDemoMode) {
+        businessProfile = demoBusinessProfileFromSnapshot(null);
+      } else if (businessId) {
         const { data: bp } = await supabase
           .from('business_profiles')
           .select(profileColumns)
@@ -406,8 +631,15 @@ export async function generateBizzyResponse({
     businessProfileComplete = Boolean(profileName && businessProfile?.industry);
     hasViewedIntegrationsPage = Boolean(businessProfile?.has_viewed_integrations_page);
     onboardingCompletedOnce = Boolean(businessProfile?.onboarding_completed_once);
+    if (effectiveDemoMode) {
+      businessProfileComplete = true;
+      hasViewedIntegrationsPage = true;
+      onboardingCompletedOnce = true;
+      qbConnected = true;
+      plaidConnected = true;
+    }
 
-    if (businessId) {
+    if (!effectiveDemoMode && businessId) {
       try {
         const { data: qbRow } = await supabase
           .from('quickbooks_tokens')
@@ -432,7 +664,7 @@ export async function generateBizzyResponse({
 
     // Fetch bookkeeping health snapshot to inform coaching behaviors
     try {
-      if (businessId) {
+      if (!effectiveDemoMode && businessId) {
         bookkeepingHealth = await getBookkeepingHealth(businessId);
         if (bookkeepingHealth) {
           bundle.bookkeepingHealth = bookkeepingHealth;
@@ -475,56 +707,12 @@ export async function generateBizzyResponse({
     // DEMO MODE: hydrate bundle with demo data
     // ───────────────────────────────────────────────
     let demoData = null;
-    if (isDemoMode()) {
+    if (effectiveDemoMode) {
       try {
         demoData = await loadDemoData();
         if (demoData) {
-          const monthTag = new Date().toISOString().slice(0, 7);
-          const fin = demoData?.financials || {};
-          const demoKpi = {
-            month: monthTag,
-            total_revenue: fin.mtdRevenue ?? 0,
-            total_expenses: fin.mtdExpenses ?? 0,
-            net_profit: fin.mtdProfit ?? 0,
-            profit_margin: fin.profitMarginPct ?? 0,
-            top_spending_category: Array.isArray(fin.topCostDrivers) && fin.topCostDrivers[0]?.name
-              ? fin.topCostDrivers[0].name
-              : null
-          };
-
-          if (!Array.isArray(bundle.kpis) || bundle.kpis.length === 0) {
-            bundle.kpis = [demoKpi];
-          }
-          if (!Array.isArray(bundle.forecast) || bundle.forecast.length === 0) {
-            if (fin?.forecastNext30d) {
-              bundle.forecast = [{
-                month: monthTag,
-                cash_in: Number(fin.forecastNext30d?.cashIn ?? 0),
-                cash_out: Number(fin.forecastNext30d?.cashOut ?? 0),
-                net_cash: Number(fin.forecastNext30d?.net ?? 0),
-              }];
-            }
-          }
-          if (!Array.isArray(bundle.moves) || bundle.moves.length === 0) {
-            bundle.moves = [
-              ...(fin?.topCostDrivers ? [{
-                title: `Negotiate ${fin.topCostDrivers[0]?.name || 'top cost'} vendor terms`,
-                rationale: 'Largest contributor to spend; 5–10% reduction yields material impact.'
-              }] : [])
-            ];
-          }
-
-          if (!bundle.unpaidCustomers && Array.isArray(fin?.unpaidCustomers)) {
-            const jobLookup = new Map(
-              (demoData?.jobs?.topUnpaid || []).map((job) => [job.external_id || job.id, job.title || job.name || ""])
-            );
-            bundle.unpaidCustomers = fin.unpaidCustomers.map((row) => ({
-              ...row,
-              project: jobLookup.get(row.invoiceId) || null,
-            }));
-          }
-
-          bundle.demoSnapshot = demoData;
+          businessProfile = demoBusinessProfileFromSnapshot(demoData);
+          applyDemoContext(bundle, demoData);
         }
       } catch (e) {
         console.warn('[demo] loadDemoData failed:', e?.message || e);
@@ -538,7 +726,7 @@ export async function generateBizzyResponse({
     const needMoves    = !Array.isArray(bundle.moves)    || bundle.moves.length === 0;
 
     const supportPromises = [];
-    if (businessId && (needKPIs || needForecast || needMoves)) {
+    if (!effectiveDemoMode && businessId && (needKPIs || needForecast || needMoves)) {
       if (needKPIs) {
         supportPromises.push(
           supabase
@@ -589,7 +777,7 @@ export async function generateBizzyResponse({
     let recentChatSummary = '';
 
     // Fallback: load recent thread turns if not already present
-    if ((!recentChat || recentChat.length === 0) && threadId) {
+    if (!effectiveDemoMode && (!recentChat || recentChat.length === 0) && threadId) {
       try {
         const { data: recentMsgs } = await supabase
           .from('gpt_messages')
@@ -620,10 +808,12 @@ export async function generateBizzyResponse({
     // Memory fetch (unchanged)
     let memoryContext = '';
     try {
-      const memorySnippets = await retrieveRelevantMemories(user_id, message);
-      memoryContext = memorySnippets?.length
-        ? `Context from past Bizzi conversations:\n${memorySnippets.map((m) => m.summary).join('\n')}`
-        : '';
+      if (!effectiveDemoMode) {
+        const memorySnippets = await retrieveRelevantMemories(user_id, message);
+        memoryContext = memorySnippets?.length
+          ? `Context from past Bizzi conversations:\n${memorySnippets.map((m) => m.summary).join('\n')}`
+          : '';
+      }
     } catch {}
 
     if (recentChatSummary) {
@@ -669,6 +859,7 @@ export async function generateBizzyResponse({
       memoryContext += `
 
 [Demo Business Snapshot]
+- Data mode: Mock Mode. Treat this demo snapshot as the only authoritative business data. Do not use or mention live QuickBooks/sandbox figures.
 - Business: ${demoData?.meta?.businessName || 'Demo Co.'} (${demoData?.meta?.period || ''})
 - Cash on hand: $${fin?.cashOnHand ?? '—'} • AR outstanding: $${fin?.arOutstanding ?? 0}
 - MTD Revenue: $${fin?.mtdRevenue ?? 0} • Expenses: $${fin?.mtdExpenses ?? 0} • Profit: $${fin?.mtdProfit ?? 0} • Margin: ${fin?.profitMarginPct ?? 0}%
@@ -898,7 +1089,8 @@ export async function generateBizzyResponse({
         thread_id: localThreadId || null,
         took_ms: Date.now() - started,
         context_keys: Object.keys(bundle || {}),
-        demoMode: isDemoMode() ? true : false,
+        demoMode: effectiveDemoMode,
+        dataMode: effectiveDemoMode ? 'demo' : requestedDataMode,
         llm: llmInvocation,
         web_lookup_used: webLookupUsed,
         web_limit_reached: webLimitReached,
@@ -927,7 +1119,8 @@ export async function generateBizzyResponse({
 
 export async function generateBizzyResponseHandler(req, res) {
   try {
-    const { user_id, message, type } = req.body ?? {};
+    const { message, type } = req.body ?? {};
+    const user_id = req.user?.id || req.body?.user_id || null;
     const styleMessages  = Array.isArray(req.bizzy?.systemMessages) ? req.bizzy.systemMessages : [];
     const normalizedType = type || req.body?.intent || req.bizzy?.intent || null;
     const personaMessage = typeof req.bizzy?.personaMessage === 'string' ? req.bizzy.personaMessage : null;
@@ -938,6 +1131,34 @@ export async function generateBizzyResponseHandler(req, res) {
 
     const incomingThreadId = req.body?.thread_id || null;
     const business_id = req.body?.business_id || req.header('x-business-id') || null;
+    const dataMode = normalizeDataMode(
+      req.body?.data_mode ||
+      req.body?.dataMode ||
+      req.header('x-bizzy-data-mode') ||
+      parsedInput?.data_mode ||
+      parsedInput?.dataMode
+    );
+
+    const access = await getBizzyChatAccess({ user_id, business_id });
+    if (!access.allowed) {
+      const blockedStatus = access.ok
+        ? access.subscription_active ? 429 : 402
+        : (access.status || 403);
+      return res.status(blockedStatus).json({
+        ok: false,
+        error: access.ok
+          ? access.subscription_active ? 'monthly_chat_limit_reached' : 'chat_subscription_required'
+          : access.error,
+        responseText: access.message || 'Subscribe to keep asking Bizzi questions.',
+        suggestedActions: [],
+        followUpPrompt: '',
+        meta: {
+          billing_gate: access,
+          thread_id: incomingThreadId || null,
+          intent: normalizedType || 'general',
+        },
+      });
+    }
 
     let threadIdToUse = incomingThreadId;
     let fallbackTitleUsed = null;
@@ -973,6 +1194,7 @@ export async function generateBizzyResponseHandler(req, res) {
       personaMessage,
       threadId: threadIdToUse || null,
       business_id,
+      dataMode,
     });
 
     result.meta = {
@@ -1028,6 +1250,26 @@ export async function generateBizzyResponseHandler(req, res) {
         error: 'gpt_handler_failed',
         ...(debug ? { debug: { message: String(e?.message || e), stack: e?.stack } } : {}),
       });
+  }
+}
+
+export async function getBizzyChatAccessHandler(req, res) {
+  try {
+    const user_id = req.user?.id || req.query?.user_id || req.header('x-user-id') || null;
+    const business_id = req.query?.business_id || req.query?.businessId || req.header('x-business-id') || null;
+    const access = await getBizzyChatAccess({ user_id, business_id });
+    return res.status(access.ok ? 200 : (access.status || 400)).json(access);
+  } catch (e) {
+    console.warn('[gpt chat-access] failed:', e?.message || e);
+    return res.status(500).json({
+      ok: false,
+      allowed: false,
+      error: 'chat_access_failed',
+      message: 'Failed to load chat access.',
+      limit: FREE_CHAT_LIMIT,
+      remaining: 0,
+      subscription_active: false,
+    });
   }
 }
 

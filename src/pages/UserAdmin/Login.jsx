@@ -1,8 +1,8 @@
 // src/pages/UserAdmin/Login.jsx
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { login } from "../../services/authService";
-import { useNavigate, Link } from "react-router-dom";
-import { Mail, Lock, Eye, EyeOff, ArrowRight } from "lucide-react";
+import { useNavigate, Link, useLocation } from "react-router-dom";
+import { Mail, Lock, Eye, EyeOff, ArrowRight, CheckCircle2 } from "lucide-react";
 import bizzyLogo from "../../assets/bizzy-logo.png";
 
 const BG =
@@ -40,6 +40,12 @@ export default function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  const showConfirmedBanner = useMemo(() => {
+    const confirmedFromState = Boolean(location.state?.emailConfirmed);
+    const confirmedFromQuery = new URLSearchParams(location.search || "").get("confirmed") === "1";
+    return confirmedFromState || confirmedFromQuery;
+  }, [location.search, location.state]);
 
   useEffect(() => {
     const focusTimer = window.setTimeout(() => {
@@ -64,7 +70,7 @@ export default function Login() {
       if (businessId) localStorage.setItem("business_id", businessId);
 
       // Always send users to ChatHome after login
-      navigate("/dashboard/bizzy/chat");
+      navigate("/dashboard/bizzi/chat");
     } catch (err) {
       setError(err?.message || "Login failed. Please try again.");
     } finally {
@@ -135,6 +141,18 @@ export default function Login() {
               <div className="mt-3 text-[12px] font-light uppercase tracking-[0.5em] text-white/[0.74]">Bizzi</div>
               
             </div>
+
+            {showConfirmedBanner && (
+              <div className="mb-4 rounded-lg border border-emerald-300/28 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
+                <div className="flex items-start gap-2">
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                  <div>
+                    <div className="font-semibold">Email confirmed successfully.</div>
+                    <div className="text-emerald-50/78">Welcome to Bizzi.</div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {!!error && (
               <div className="mb-4 rounded-lg px-3 py-2 text-sm ring-1 ring-inset ring-rose-400/30 bg-rose-500/10 text-rose-200">

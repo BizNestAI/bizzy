@@ -12,6 +12,17 @@ export const AuthProvider = ({ children }) => {
 
     const loadSession = async () => {
       try {
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          const code = url.searchParams.get("code");
+          const routeHandlesAuthCode = url.pathname === "/auth/confirm" || url.pathname === "/reset-password";
+          if (code && !routeHandlesAuthCode) {
+            const { error } = await supabase.auth.exchangeCodeForSession(code);
+            if (error) throw error;
+            url.searchParams.delete("code");
+            window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+          }
+        }
         const { data } = await supabase.auth.getSession();
         if (mounted) {
           setSession(data.session);

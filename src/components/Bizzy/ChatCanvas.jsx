@@ -150,6 +150,16 @@ function truncateForFollowups(text = "", max = 600, mode = "tail") {
 }
 
 /* ---------------- typewriter ---------------- */
+const REVEAL_LEAD_IN_CHARS = 180;
+const REVEAL_MAX_DURATION_MS = 2600;
+const REVEAL_TARGET_CHUNK_FRAMES = 48;
+
+function getBurstSize(totalLength = 0) {
+  if (totalLength <= REVEAL_LEAD_IN_CHARS) return 1;
+  const remaining = Math.max(0, totalLength - REVEAL_LEAD_IN_CHARS);
+  return Math.max(2, Math.ceil(remaining / REVEAL_TARGET_CHUNK_FRAMES));
+}
+
 function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
   const [typingDone, setTypingDone] = useState(false);
   const [shown, setShown] = useState("");
@@ -168,6 +178,7 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
   const chunkRef = useRef([]);
   const chunkCostsRef = useRef([]);
   const budgetRef = useRef(0);
+  const visibleCharCountRef = useRef(0);
   useEffect(() => {
     setTypingDone(false);
   }, [id, text]);
@@ -178,6 +189,7 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
     setShown("");
     lastTsRef.current = 0;
     budgetRef.current = 0;
+    visibleCharCountRef.current = 0;
     finishedRef.current = false;
     const chunks = chunkWords(textRef.current);
     chunkRef.current = chunks;
@@ -193,14 +205,8 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
       const costs = chunkCostsRef.current;
       if (idx >= chunks.length) return;
       const base = chunks.slice(0, idx).map((c) => c.text).join("");
-      const cost = costs[idx] || 1;
-      const chunk = chunks[idx];
-      const sliceLen = chunk.atomic
-        ? budgetRef.current >= cost
-          ? chunk.text.length
-          : 0
-        : Math.max(0, Math.floor((budgetRef.current / cost) * chunk.text.length));
-      setShown(base + chunk.text.slice(0, sliceLen));
+      visibleCharCountRef.current = base.length;
+      setShown(base);
     };
 
     const loop = (ts) => {
@@ -208,7 +214,13 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
       const dt = (ts - lastTsRef.current) / 1000;
       lastTsRef.current = ts;
 
-      budgetRef.current += speed * dt;
+      const totalLength = textRef.current.length;
+      const burstSize = getBurstSize(totalLength);
+      const leadInComplete = visibleCharCountRef.current >= Math.min(REVEAL_LEAD_IN_CHARS, totalLength);
+      const revealSpeed = leadInComplete
+        ? Math.max(speed * burstSize, totalLength / (REVEAL_MAX_DURATION_MS / 1000))
+        : speed;
+      budgetRef.current += revealSpeed * dt;
       while (
         iRef.current < chunkRef.current.length &&
         budgetRef.current >= chunkCostsRef.current[iRef.current]
@@ -216,6 +228,7 @@ function Typewriter({ id, text = "", speed = 200, onDone, onProgress }) {
         budgetRef.current -= chunkCostsRef.current[iRef.current];
         iRef.current += 1;
         const nextText = chunkRef.current.slice(0, iRef.current).map((c) => c.text).join("");
+        visibleCharCountRef.current = nextText.length;
         setShown(nextText);
         onProgressRef.current?.(
           textRef.current.length ? nextText.length / textRef.current.length : 1
@@ -1328,18 +1341,14 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
           const alreadyAnimated = animatedRef.current.has(key);
           const followupBusy = followupsLoading || followupSending;
 
-          // Animate only if:
-          //  - this row is the current tail assistant
-          //  - that assistant follows a fresh user message
-          //  - we didn't animate this particular tail before
-          //  - and we aren't in "reopen suppress" mode
+          // Animate any newly arrived tail assistant after the latest user.
+          // Reopened historical threads are pre-marked above so they do not replay.
           const shouldAnimate =
             isTailAssistant &&
             hasAssistantAfterLastUser &&
             lastAnimatedTailKeyRef.current !== key &&
             !alreadyAnimated &&
             !reopenBlockRef.current &&
-            freshQueryRef.current &&
             !threadJustOpenedRef.current;
 
           if (shouldAnimate) {

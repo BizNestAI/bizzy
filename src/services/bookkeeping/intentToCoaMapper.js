@@ -3,13 +3,14 @@ const INTENT_ALIASES = {
   car_rental: "travel",
   parking: "parking_tolls",
   tolls: "parking_tolls",
-  general_supplies: "materials",
+  general_supplies: "supplies",
   equipment: "tools",
   subscriptions: "software",
   ads: "advertising",
   leads: "advertising",
   food_supplies: "materials",
   construction_ops: "software",
+  rentals: "equipment_rental",
   vehicle_lease: "vehicle_expense",
   medical: "office_supplies",
   training: "office_supplies",
@@ -26,18 +27,24 @@ const INTENT_KEYWORDS = {
   transportation: ["transportation", "rideshare", "uber", "lyft", "taxi", "cab"],
   meals: ["meals", "meal", "meals and entertainment", "meals entertainment", "dining", "restaurant", "restaurants", "coffee"],
   fuel: ["fuel", "gas", "gasoline", "diesel"],
-  materials: ["materials", "material", "supplies", "supply", "job materials", "cogs", "cost of goods", "construction", "general supplies", "supplies and materials", "supplies materials", "hardware"],
+  supplies: ["supplies", "supply", "general supplies"],
+  materials: ["materials", "material", "job materials", "cogs", "cost of goods", "construction", "supplies and materials", "supplies materials", "hardware"],
   tools: ["tools", "tool", "equipment", "equip", "small tools", "tool rental"],
   software: ["software", "subscriptions", "saas", "cloud", "licensing"],
   advertising: ["advertising", "marketing", "ads", "ad", "promotion", "lead", "leads", "yelp", "angi", "homeadvisor", "thumbtack"],
   travel: ["travel", "airfare", "lodging", "hotel", "airline", "flight", "rental car", "uber", "lyft"],
   insurance: ["insurance"],
-  rentals: ["rental", "rentals", "equipment rental"],
+  equipment_rental: ["equipment rental", "equipment rentals", "rental", "rentals", "tool rental", "truck rental", "jobsite rental"],
+  subcontractors: ["subcontractors", "subcontractor", "contract labor", "outside labor"],
+  permits_fees: ["permits", "permit", "permit fees", "licenses", "license", "licensing", "inspection fees", "municipal fees"],
+  waste_disposal: ["waste disposal", "dump fees", "dump fee", "landfill", "disposal", "hauling", "trash", "debris removal"],
+  uniforms_laundry: ["uniforms", "uniform", "laundry", "workwear", "work clothes"],
+  safety_ppe: ["safety", "ppe", "personal protective equipment", "gloves", "hard hats", "respirators"],
   bank_fees: ["bank fees", "service charge", "service fee", "bank charge", "processing fees"],
   payment_processing: ["processing", "merchant fees", "payment processing", "stripe", "square", "paypal fees"],
   payroll: ["payroll", "wages"],
   utilities: ["utilities", "telecom", "internet"],
-  vehicle_expense: ["auto", "vehicle", "fleet", "parking", "toll"],
+  vehicle_expense: ["auto", "vehicle", "fleet", "vehicle expense", "vehicle maintenance", "auto repair", "repair", "maintenance", "oil change", "tires", "tire"],
   security: ["security", "alarm", "monitoring"],
   shipping: ["shipping", "postage", "delivery"],
   office_supplies: ["office supplies", "office", "stationery"],
@@ -53,8 +60,13 @@ const RELATED_INTENT_KEYS = {
   vehicle_expense: ["travel", "fuel", "parking_tolls"],
   parking_tolls: ["vehicle_expense", "travel"],
   materials: ["tools"],
+  supplies: ["office_supplies", "materials"],
   tools: ["materials"],
-  rentals: ["tools", "materials"],
+  equipment_rental: ["tools", "materials"],
+  permits_fees: ["office_supplies"],
+  waste_disposal: ["materials"],
+  uniforms_laundry: ["supplies", "office_supplies"],
+  safety_ppe: ["supplies", "tools"],
   meals: ["travel"],
   fuel: ["vehicle_expense", "travel"],
   office_supplies: ["materials"],
@@ -65,7 +77,14 @@ const RELATED_INTENT_KEYS = {
 const STRICT_PRIMARY_ONLY_INTENTS = new Set([
   "airfare",
   "transportation",
+  "supplies",
   "materials",
+  "equipment_rental",
+  "subcontractors",
+  "permits_fees",
+  "waste_disposal",
+  "uniforms_laundry",
+  "safety_ppe",
 ]);
 
 function normalizeCoaName(name = "") {
@@ -116,18 +135,26 @@ function scoreAccount(intentKey, keywords, acct) {
 
   // intent vs account type weighting
   const acctType = normalizeCoaName(acct.type || acct.AccountType || "");
+  const cogsIntents = new Set([
+    "subcontractors",
+  ]);
   const expenseIntents = new Set([
     "airfare",
     "transportation",
     "meals",
     "fuel",
+    "supplies",
     "materials",
     "tools",
     "software",
     "advertising",
     "travel",
     "insurance",
-    "rentals",
+    "equipment_rental",
+    "permits_fees",
+    "waste_disposal",
+    "uniforms_laundry",
+    "safety_ppe",
     "bank_fees",
     "payment_processing",
     "payroll",
@@ -140,7 +167,10 @@ function scoreAccount(intentKey, keywords, acct) {
     "parking_tolls",
   ]);
 
-  if (intentKey === "interest_income") {
+  if (cogsIntents.has(intentKey)) {
+    if (acctType.includes("cost of goods") || acctType.includes("cogs")) score += 20;
+    if (acctType.includes("income")) score -= 50;
+  } else if (intentKey === "interest_income") {
     if (acctType.includes("income")) score += 20;
     if (acctType.includes("expense") || acctType.includes("cost")) score -= 50;
   } else if (expenseIntents.has(intentKey)) {

@@ -9,14 +9,14 @@ export function test(t) {
 export async function recipe() {
   // Static map; client will read navigateTo
   const routeMap = {
-    bizzy: '/dashboard/bizzy',
+    bizzy: '/dashboard/bizzi',
     financials: '/dashboard/accounting',
     marketing: '/dashboard/marketing',
     tax: '/dashboard/tax',
     investments: '/dashboard/investments',
     calendar: '/dashboard/calendar',
     settings: '/dashboard/settings',
-    docs: '/dashboard/bizzy-docs'
+    docs: '/dashboard/bizzi-docs'
   };
   return { routeMap };
 }

@@ -23,7 +23,7 @@ const tabs = [
   // { label: 'Scheduling', path: '/dashboard/calendar' },
   // { label: 'Email', path: '/dashboard/email' },
   { label: 'Activity', path: '/dashboard/activity', tooltip: 'Activity: Coming Soon!', disableNavigate: true },
-  { label: 'Bizzi Docs', path: '/dashboard/bizzy-docs' },
+  { label: 'Bizzi Docs', path: '/dashboard/bizzi-docs' },
   { label: 'Settings/Sync', path: '/dashboard/settings' },
 ];
 
@@ -73,10 +73,10 @@ function moduleKeyFromPath(pathname = '') {
   if (seg === 'scheduling' || seg === 'sch') return 'calendar';
   if (seg === 'activity') return 'activity';
   if (seg === 'leads-jobs' || seg === 'jobs') return 'ops';
-  if (seg === 'bizzy-docs' || seg === 'docs') return 'docs';
+  if (seg === 'bizzi-docs' || seg === 'docs') return 'docs';
   if (seg === 'companion') return 'companion';
   if (seg === 'settings' || seg === 'settings-sync' || seg === 'sync') return 'settings';
-  if (seg === 'bizzy' || seg === '') return 'bizzy';
+  if (seg === 'bizzi' || seg === 'bizzy' || seg === '') return 'bizzy';
   return 'bizzy';
 }
 
@@ -152,7 +152,7 @@ function pathActive(tabPath, currentPath) {
   const b = currentPath.replace(/\/+$/, '');
   return b === a || b.startsWith(a + '/');
 }
-const DOCS_PATH = '/dashboard/bizzy-docs';
+const DOCS_PATH = '/dashboard/bizzi-docs';
 
 /* ======================== Pure / Memoized ======================== */
 const PureSidebar = React.memo(function PureSidebar({
@@ -178,13 +178,13 @@ const PureSidebar = React.memo(function PureSidebar({
   // ⬇️ Navigate ONLY. Do not clear here; badges clear when leaving via the effect below.
   const onNavigate = useCallback((path) => {
     // From ChatHome, clicking Pulse should go to the Pulse dashboard, not stay on chat
-    if (path === '/dashboard/bizzy' && activePath.startsWith('/dashboard/bizzy/chat')) {
-      navigate('/dashboard/bizzy');
+    if (path === '/dashboard/bizzi' && activePath.startsWith('/dashboard/bizzi/chat')) {
+      navigate('/dashboard/bizzi');
       return;
     }
     // From any dashboard view, clicking the active icon should bounce back to ChatHome
-    if (activePath.startsWith('/dashboard/') && !activePath.startsWith('/dashboard/bizzy/chat') && pathActive(path, activePath)) {
-      navigate('/dashboard/bizzy/chat');
+    if (activePath.startsWith('/dashboard/') && !activePath.startsWith('/dashboard/bizzi/chat') && pathActive(path, activePath)) {
+      navigate('/dashboard/bizzi/chat');
       return;
     }
     navigate(path);
@@ -208,7 +208,7 @@ const PureSidebar = React.memo(function PureSidebar({
     const currentModule = moduleKeyFromPath(p);
     const tabModule = moduleKeyFromLabel(tab.label);
     // Do not highlight Pulse when sitting on ChatHome
-    if (tab.label === 'Pulse' && p.startsWith('/dashboard/bizzy/chat')) return false;
+    if (tab.label === 'Pulse' && p.startsWith('/dashboard/bizzi/chat')) return false;
     if (tab.label === 'Leads & Jobs') return /\/(leads|jobs)\b/i.test(p);
     if (tab.label === 'Bizzi Docs Library') return p === DOCS_PATH || p.startsWith(DOCS_PATH + '/');
     if (tabModule && currentModule && tabModule === currentModule) return true;
@@ -527,7 +527,7 @@ export default function SidebarContainer(props) {
     if (typeof markModuleAsRead !== "function") return;
 
     const isChatHome =
-      activePath.startsWith("/dashboard/bizzy/chat") ||
+      activePath.startsWith("/dashboard/bizzi/chat") ||
       activePath === "/chat" ||
       activePath.startsWith("/chat/");
     const prev = prevModuleRef.current;

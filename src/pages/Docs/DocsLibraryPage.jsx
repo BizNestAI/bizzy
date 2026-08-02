@@ -216,7 +216,7 @@ export default function DocsLibraryPage(props) {
       // refresh and navigate
       setDocs([]); setCount(0); setHasMore(false);
       if (newDoc?.id) {
-        navigate(`/dashboard/bizzy-docs/${newDoc.id}${editImmediately ? '?edit=1' : ''}`);
+        navigate(`/dashboard/bizzi-docs/${newDoc.id}${editImmediately ? '?edit=1' : ''}`);
       }
     } catch (e) {
       console.error('createBlankNote failed', e);
@@ -390,7 +390,7 @@ export default function DocsLibraryPage(props) {
               {docs.map((d, i) => {
                 const title = d.title || d.filename || 'Untitled';
                 const extOrMime = (d.mime_type || d.extension || '').toString();
-                const href = `/dashboard/bizzy-docs/${d.id ?? d.doc_id ?? i}`;
+                const href = `/dashboard/bizzi-docs/${d.id ?? d.doc_id ?? i}`;
                 const created = d.created_at ? new Date(d.created_at) : null;
                 const categoryKey = (d.category || 'general').toString();
                 const categoryLabel = CATEGORY_LABEL[categoryKey] || categoryKey;
@@ -468,7 +468,7 @@ export default function DocsLibraryPage(props) {
         onCreated={(newId) => {
           setShowUpload(false);
           setDocs([]); setCount(0); setHasMore(false);
-          if (newId) navigate(`/dashboard/bizzy-docs/${newId}`);
+          if (newId) navigate(`/dashboard/bizzi-docs/${newId}`);
         }}
       />
     </div>

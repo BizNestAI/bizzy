@@ -17,13 +17,13 @@ export default function ChatSwitchToggle({
   // Don't render if a conversation is active; ChatCanvas has its own back button.
   if (isCanvasOpen) return null;
   // Hide on ChatHome entirely
-  const isChatHome = location.pathname.startsWith("/dashboard/bizzy/chat") || location.pathname.startsWith("/chat");
+  const isChatHome = location.pathname.startsWith("/dashboard/bizzi/chat") || location.pathname.startsWith("/chat");
   if (isChatHome) return null;
 
-  const lastDash = localStorage.getItem("bizzy:lastDashboard") || "/dashboard/bizzy";
+  const lastDash = localStorage.getItem("bizzy:lastDashboard") || "/dashboard/bizzi";
 
   const goToDash = () => navigate(lastDash, { replace: false });
-  const goToChat = () => navigate("/dashboard/bizzy/chat", { replace: false });
+  const goToChat = () => navigate("/dashboard/bizzi/chat", { replace: false });
 
   const label = context === "chat" ? "Dashboard" : "Chat";
   const onClick = context === "chat" ? goToDash : goToChat;

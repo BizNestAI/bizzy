@@ -33,7 +33,7 @@ function routeCategory(path = '') {
   if (/tax/.test(p)) return 'tax';
   if (/investments?/.test(p)) return 'inv';
   if (/calendar/.test(p)) return 'ops';
-  if (/bizzy-docs|docs/.test(p)) return 'docs';
+  if (/bizzi-docs|docs/.test(p)) return 'docs';
   if (/settings|sync/.test(p)) return 'billing';
   return null;
 }

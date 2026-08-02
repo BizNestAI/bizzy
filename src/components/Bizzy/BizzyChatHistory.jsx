@@ -36,7 +36,7 @@ function getModuleFromPath(path = '') {
   if (path.includes('/dashboard/marketing')) return 'marketing';
   if (path.includes('/dashboard/tax')) return 'tax';
   if (path.includes('/dashboard/investments')) return 'investments';
-  if (path.includes('/dashboard/bizzy')) return 'bizzy';
+  if (path.includes('/dashboard/bizzi')) return 'bizzy';
   return 'bizzy';
 }
 
@@ -84,7 +84,21 @@ const TypingDots = ({ accentHex }) => (
   </div>
 );
 
-/* ---------- Inline typewriter (unchanged) ---------- */
+/* ---------- Inline typewriter ---------- */
+const TYPE_LEAD_IN_CHARS = 180;
+const TYPE_MAX_DURATION_MS = 2600;
+const TYPE_TARGET_FRAMES = 48;
+
+function nextTypewriterIndex(text, index) {
+  if (index < TYPE_LEAD_IN_CHARS) {
+    return Math.min(text.length, index + Math.max(3, Math.ceil(text.length / 800)));
+  }
+  const remaining = Math.max(0, text.length - TYPE_LEAD_IN_CHARS);
+  const burst = Math.max(2, Math.ceil(remaining / TYPE_TARGET_FRAMES));
+  const floorBurst = Math.max(burst, Math.ceil(text.length / (TYPE_MAX_DURATION_MS / 16.67)));
+  return Math.min(text.length, index + floorBurst);
+}
+
 const TypewriterText = ({ text = '', onDone, containerRef, autoScroll }) => {
   const [shown, setShown] = useState('');
   const lastScrollTsRef = useRef(0);
@@ -98,8 +112,7 @@ const TypewriterText = ({ text = '', onDone, containerRef, autoScroll }) => {
     let i = 0;
     let raf;
     const step = () => {
-      const chunk = Math.max(1, Math.ceil(text.length / 800));
-      i = Math.min(text.length, i + chunk);
+      i = nextTypewriterIndex(text, i);
       setShown(text.slice(0, i));
       if (autoRef.current && containerRef?.current) {
         const now = performance.now();

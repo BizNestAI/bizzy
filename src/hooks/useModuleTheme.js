@@ -36,9 +36,15 @@ function normalizeModuleKey(input) {
   if (!input) return 'bizzy';
   if (input.includes('/')) {
     const seg = input.split('/')[2] || '';
-    return seg.toLowerCase() || 'bizzy';
+    const key = seg.toLowerCase() || 'bizzy';
+    if (key === 'bizzi') return 'bizzy';
+    if (key === 'bizzi-docs') return 'docs';
+    return key;
   }
-  return input.toLowerCase();
+  const key = input.toLowerCase();
+  if (key === 'bizzi') return 'bizzy';
+  if (key === 'bizzi-docs') return 'docs';
+  return key;
 }
 
 export default function useModuleTheme(explicitModule = null) {

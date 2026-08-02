@@ -11,7 +11,10 @@ import NavRailBusinessBadge from './NavRailBusinessBadge';
 
 function moduleFromPath(path) {
   const seg = path.split('/')[2] || 'bizzy';
-  return (seg === 'financials' ? 'accounting' : seg).toLowerCase();
+  const key = (seg === 'financials' ? 'accounting' : seg).toLowerCase();
+  if (key === 'bizzi') return 'bizzy';
+  if (key === 'bizzi-docs') return 'docs';
+  return key;
 }
 function hexToRgba(hex, alpha = 1) {
   let c = (hex || '').replace('#', '');
@@ -25,8 +28,8 @@ const COLLAPSED_NAV_W = 115;
 
 /** Bizzi/chrome routes */
 const isChromeRoute = (path) =>
-  path.startsWith('/dashboard/bizzy')   ||   // Pulse
-  path.startsWith('/dashboard/bizzy-docs') ||
+  path.startsWith('/dashboard/bizzi')   ||   // Pulse
+  path.startsWith('/dashboard/bizzi-docs') ||
   path.startsWith('/dashboard/companion') ||
   path.startsWith('/dashboard/settings') ||
   path.startsWith('/dashboard/leads-jobs') ||
@@ -46,7 +49,7 @@ export default function NavRail({
   const location = useLocation();
   const navigate = useNavigate();
 
-  const isChatHome = location.pathname.startsWith('/dashboard/bizzy/chat') || location.pathname.startsWith('/chat');
+  const isChatHome = location.pathname.startsWith('/dashboard/bizzi/chat') || location.pathname.startsWith('/chat');
   const moduleKey = useMemo(() => moduleFromPath(location.pathname), [location.pathname]);
   const useChrome = isChromeRoute(location.pathname);
 
@@ -126,7 +129,7 @@ export default function NavRail({
             <div className="flex items-center min-w-0 gap-3">
               <div className="flex items-center gap-3 min-w-0 flex-shrink-0">
                 <button
-                onClick={() => navigate('/dashboard/bizzy/chat')}
+                onClick={() => navigate('/dashboard/bizzi/chat')}
                 className="group relative h-9 w-9 rounded-full overflow-hidden shrink-0 outline-none"
                 aria-label="Go to ChatHome"
                 title="Go to ChatHome"

@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import useOutsideClick from '../../hooks/useOutsideClick';
 import { useAuth } from '../../context/AuthContext';
 import MarkdownRenderer from './MarkdownRenderer';
-import apiBaseUrl from '../../utils/apiBase.js';
+import { apiUrl, safeFetch } from '../../utils/safeFetch.js';
 
 /**
  * Backward compatible AskBizzy button with two modes:
@@ -52,7 +52,6 @@ const AskBizzyInsightButton = ({
 
   useOutsideClick(panelRef, () => setOpen(false));
 
-  const API_BASE = apiBaseUrl || ''; // use Vite proxy if empty
   const businessId = localStorage.getItem('currentBusinessId') || null;
 
   const btnSize =
@@ -72,14 +71,6 @@ const AskBizzyInsightButton = ({
     btnSize,
     className,
   ].join(' ');
-
-  const parseJsonOrThrow = async (res) => {
-    const ct = res.headers.get('content-type') || '';
-    const text = await res.text();
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-    if (!ct.includes('application/json')) throw new Error(`Non-JSON (${ct}): ${text.slice(0, 200)}`);
-    try { return JSON.parse(text); } catch { throw new Error('Unexpected server response.'); }
-  };
 
   // Unified handler that supports both modes
   const handleAsk = async () => {
@@ -116,23 +107,17 @@ const AskBizzyInsightButton = ({
       opts: { depth: 'brief' },
     };
 
-    const primary = `${API_BASE}/api/gpt/generate`;
-    const alias   = `${API_BASE}/api/gpt/generate-response`;
+    const primary = apiUrl('/api/gpt/generate');
+    const alias = apiUrl('/api/gpt/generate-response');
 
     try {
-      let res = await fetch(primary, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (res.status === 404) {
-        res = await fetch(alias, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
+      let data;
+      try {
+        data = await safeFetch(primary, { method: 'POST', body: payload });
+      } catch (primaryErr) {
+        if (primaryErr?.status !== 404) throw primaryErr;
+        data = await safeFetch(alias, { method: 'POST', body: payload });
       }
-      const data = await parseJsonOrThrow(res);
       setResponse(data.responseText || data.reply || 'No insight available.');
     } catch (err) {
       console.error('[AskBizzyInsight] error:', err);

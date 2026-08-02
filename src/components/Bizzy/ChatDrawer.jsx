@@ -421,9 +421,9 @@ function CollapsedHistoryTooltip({
 
 // Routes that should **always** use chrome/silver accent
 const isChromeRoute = (p = '') =>
-   p.startsWith('/dashboard/bizzy') ||             // Pulse & Bizzi core
+   p.startsWith('/dashboard/bizzi') ||             // Pulse & Bizzi core
    p.startsWith('/chat') ||                        // legacy ChatHome
-   p.includes('/dashboard/bizzy-docs') ||
+   p.includes('/dashboard/bizzi-docs') ||
    p.includes('/dashboard/companion') ||
    p.includes('/dashboard/settings') ||
    p.includes('/dashboard/calendar') ||

@@ -95,7 +95,7 @@ const DashboardContent = ({ children }) => {
     }
   });
   useEffect(() => {
-    const inChatHome = location.pathname.startsWith("/dashboard/bizzy/chat");
+    const inChatHome = location.pathname.startsWith("/dashboard/bizzi/chat");
     if (location.pathname.startsWith("/dashboard/") && !inChatHome) {
       localStorage.setItem("bizzy:lastDashboard", location.pathname);
       try { sessionStorage.setItem("bizzy:visitedDash", "1"); } catch {
@@ -174,12 +174,12 @@ const DashboardContent = ({ children }) => {
   const textColor = theme?.textClass || "text-primary";
 
   const onDashboard = location.pathname.startsWith("/dashboard/");
-  const isChatHome  = location.pathname.startsWith("/dashboard/bizzy/chat") || location.pathname.startsWith("/chat");
+  const isChatHome  = location.pathname.startsWith("/dashboard/bizzi/chat") || location.pathname.startsWith("/chat");
   const isMonthlyReviewAdmin = location.pathname.startsWith("/dashboard/admin/monthly-review");
   const hideCenter  = isCanvasOpen;
   const inSettings  = location.pathname.includes("settings");
   const inMeetBizzi = location.pathname.includes("companion");
-  const inDocs      = location.pathname.includes("bizzy-docs");
+  const inDocs      = location.pathname.includes("bizzi-docs");
   const showPortalBar =
     !isMonthlyReviewAdmin && !isCanvasOpen && !isChatHome && (onDashboard || inSettings || inMeetBizzi || inDocs);
 
@@ -344,7 +344,7 @@ const DashboardContent = ({ children }) => {
 
   // Reset scroll when landing on ChatHome so it never inherits a scrolled dashboard position.
   useEffect(() => {
-    if (location.pathname.startsWith("/dashboard/bizzy/chat") || location.pathname.startsWith("/chat")) {
+    if (location.pathname.startsWith("/dashboard/bizzi/chat") || location.pathname.startsWith("/chat")) {
       window.scrollTo({ top: 0, behavior: "auto" });
       if (contentRef.current) contentRef.current.scrollTo({ top: 0, behavior: "auto" });
     }
@@ -354,12 +354,12 @@ const DashboardContent = ({ children }) => {
     const prev = prevPathRef.current;
     const leavingChat =
       prev &&
-      (prev.startsWith("/dashboard/bizzy/chat") || prev.startsWith("/chat"));
+      (prev.startsWith("/dashboard/bizzi/chat") || prev.startsWith("/chat"));
     const nowOnDashboard =
       location.pathname.startsWith("/dashboard/") &&
-      !location.pathname.startsWith("/dashboard/bizzy/chat");
+      !location.pathname.startsWith("/dashboard/bizzi/chat");
     const nowOnChat =
-      location.pathname.startsWith("/dashboard/bizzy/chat") || location.pathname.startsWith("/chat");
+      location.pathname.startsWith("/dashboard/bizzi/chat") || location.pathname.startsWith("/chat");
 
     if (leavingChat && nowOnDashboard) {
       window.scrollTo({ top: 0, behavior: "auto" });

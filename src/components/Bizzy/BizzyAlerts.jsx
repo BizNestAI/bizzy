@@ -9,8 +9,8 @@ const MODULE_STYLE = {
   accounting: { hex: ACCENT_HEX, icon: DollarSign,  label: "Accounting", to: "/dashboard/accounting" },
   tax:        { hex: ACCENT_HEX, icon: Landmark,    label: "Tax",        to: "/dashboard/tax" },
   marketing:  { hex: ACCENT_HEX, icon: TrendingUp,  label: "Marketing",  to: "/dashboard/marketing" },
-  bizzy:      { hex: ACCENT_HEX, icon: AlertCircle, label: "Bizzi",      to: "/dashboard/bizzy" },
-  default:    { hex: ACCENT_HEX, icon: AlertCircle, label: "Bizzi",      to: "/dashboard/bizzy" },
+  bizzy:      { hex: ACCENT_HEX, icon: AlertCircle, label: "Bizzi",      to: "/dashboard/bizzi" },
+  default:    { hex: ACCENT_HEX, icon: AlertCircle, label: "Bizzi",      to: "/dashboard/bizzi" },
 };
 
 function sevDot(sev) {
