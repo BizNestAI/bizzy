@@ -1,5 +1,5 @@
 // Manual test checklist (DEV)
-// - With qbConnected true and business_profiles flags true, quickPromptMode must become "normal" within 1 refresh.
+// - With connected integrations and local onboarding flags, quickPromptMode must become "normal" within 1 refresh.
 // - If business_profiles is blocked by RLS or missing, quickPromptMode must still become "normal" using localStorage fallbacks.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -25,13 +25,6 @@ function getStoredBusinessId() {
     window.localStorage?.getItem("business_id") ||
     null
   );
-}
-
-async function updateBusinessFlags(businessId, updates = {}) {
-  if (!businessId) {
-    return { error: new Error("Missing businessId") };
-  }
-  return supabase.from("business_profiles").update(updates).eq("id", businessId);
 }
 
 const LOCAL_KEYS = {
@@ -73,7 +66,6 @@ export async function markIntegrationsPageViewed(options = {}) {
         .from("business_profiles")
         .select("id")
         .eq("user_id", userId)
-        .order("created_at", { ascending: true })
         .limit(1)
         .maybeSingle();
       businessId = data?.id || null;
@@ -85,16 +77,27 @@ export async function markIntegrationsPageViewed(options = {}) {
   if (!businessId) {
     return { error: new Error("Missing businessId") };
   }
-  return updateBusinessFlags(businessId, {
-    has_viewed_integrations_page: true,
-  });
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(LOCAL_KEYS.hasViewedIntegrations, "true");
+      window.localStorage.setItem(LOCAL_KEYS.visitedIntegrations, "true");
+    }
+  } catch {
+    /* ignore */
+  }
+  return { error: null };
 }
 
 async function markOnboardingCompletedOnce(businessId) {
   if (!businessId) return { error: new Error("Missing businessId") };
-  return updateBusinessFlags(businessId, {
-    onboarding_completed_once: true,
-  });
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(LOCAL_KEYS.onboardingOnce, "true");
+    }
+  } catch {
+    /* ignore */
+  }
+  return { error: null };
 }
 
 async function fetchOnboardingStatus(businessId, contextBusiness = null) {
@@ -107,9 +110,7 @@ async function fetchOnboardingStatus(businessId, contextBusiness = null) {
   try {
     profileRes = await supabase
       .from("business_profiles")
-      .select(
-        "id,business_name,industry,has_viewed_integrations_page,onboarding_completed_once"
-      )
+      .select("id,business_name,industry")
       .eq("id", businessId)
       .maybeSingle();
   } catch (err) {
@@ -209,11 +210,10 @@ async function fetchOnboardingStatus(businessId, contextBusiness = null) {
     readLocalFlag(LOCAL_KEYS.visitedIntegrations) ||
     localForce;
   const hasViewedIntegrationsPage = profile
-    ? Boolean(profile?.has_viewed_integrations_page) || Boolean(localViewed)
-    : Boolean(localViewed) || Boolean(contextBusiness?.has_viewed_integrations_page);
+    ? Boolean(localViewed)
+    : Boolean(localViewed);
 
   let onboardingCompletedOnce =
-    (profile && Boolean(profile?.onboarding_completed_once)) ||
     Boolean(readLocalFlag(LOCAL_KEYS.onboardingOnce));
 
   const onboardingComplete = businessProfileComplete && qbConnected && plaidConnected && hasViewedIntegrationsPage;

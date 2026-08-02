@@ -10,7 +10,7 @@ export async function recipe({ user_id, business_id, supabase }) {
   const modules = ['bizzy','financials','marketing','tax','investments','calendar','docs','settings'];
   const { data: bp } = await supabase
     .from('business_profiles')
-    .select('id,name,industry,team_size')
+    .select('id,business_name,industry,team_size')
     .eq('user_id', user_id)
     .maybeSingle();
   return { modules, businessProfile: bp || null };

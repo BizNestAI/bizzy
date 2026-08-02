@@ -225,16 +225,7 @@ async function safeSelect(supabase, table, buildQuery, fallback = []) {
 }
 
 export async function fetchBusinessRevenueBasis(businessId, { supabase = defaultSupabase } = {}) {
-  const { data, error } = await supabase
-    .from("business_profiles")
-    .select("job_costing_revenue_basis")
-    .eq("id", businessId)
-    .maybeSingle();
-  if (error) {
-    if (isMissingSchemaError(error)) return REVENUE_BASIS.INVOICED;
-    throw error;
-  }
-  return normalizeBasis(data?.job_costing_revenue_basis, REVENUE_BASIS.INVOICED);
+  return REVENUE_BASIS.INVOICED;
 }
 
 export async function fetchCanonicalJobRevenueSummaries({

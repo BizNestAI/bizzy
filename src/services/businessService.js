@@ -14,7 +14,7 @@ export const updateBusinessProfile = async (businessId, updates) => {
     .from('business_profiles')
     .update(updates)
     .eq('id', businessId)
-    .select('id, owner_name, owner_role, founded_year')
+    .select('id, business_name, industry, founded_year')
     .single();
 
   return { data, error };

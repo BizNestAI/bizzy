@@ -345,9 +345,7 @@ function demoBusinessProfileFromSnapshot(demoData) {
     id: 'demo-business',
     business_name: name,
     name,
-    business_type: 'Contractor / remodeling',
     industry: 'Remodeling and home services',
-    location: 'Demo market',
     team_size: null,
     has_viewed_integrations_page: true,
     onboarding_completed_once: true,
@@ -606,7 +604,7 @@ export async function generateBizzyResponse({
     const allowNavigationActions = !!bundle.userRequestedNavigation;
 
     try {
-      const profileColumns = 'id,business_name,name,business_type,industry,location,team_size,has_viewed_integrations_page,onboarding_completed_once';
+      const profileColumns = 'id,business_name,industry,state,team_size,annual_revenue,founded_year,services_offered,billing_model,top_challenge';
       if (effectiveDemoMode) {
         businessProfile = demoBusinessProfileFromSnapshot(null);
       } else if (businessId) {
@@ -629,8 +627,8 @@ export async function generateBizzyResponse({
 
     const profileName = businessProfile?.business_name || businessProfile?.name || '';
     businessProfileComplete = Boolean(profileName && businessProfile?.industry);
-    hasViewedIntegrationsPage = Boolean(businessProfile?.has_viewed_integrations_page);
-    onboardingCompletedOnce = Boolean(businessProfile?.onboarding_completed_once);
+    hasViewedIntegrationsPage = false;
+    onboardingCompletedOnce = false;
     if (effectiveDemoMode) {
       businessProfileComplete = true;
       hasViewedIntegrationsPage = true;

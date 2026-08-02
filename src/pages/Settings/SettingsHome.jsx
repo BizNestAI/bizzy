@@ -122,7 +122,6 @@ export default function SettingsHome() {
     industry: "",
     team_size: "",
     state: "",
-    timezone: "",
   });
   const [savingBusiness, setSavingBusiness] = useState(false);
   const [bizSuccessMsg, setBizSuccessMsg] = useState("");
@@ -147,7 +146,6 @@ export default function SettingsHome() {
         industry: currentBusiness.industry || "",
         team_size: currentBusiness.team_size || "",
         state: currentBusiness.state || "",
-        timezone: currentBusiness.timezone || "",
       });
     }
   }, [currentBusiness]);

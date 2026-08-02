@@ -86,7 +86,7 @@ async function listCandidateBusinesses({ supabase, taxYear, page, pageSize }) {
   const to = from + pageSize - 1;
   const { data, error } = await supabase
     .from("business_profiles")
-    .select("id,business_id,owner_user_id,user_id,status,is_active,deleted_at,disabled_at,timezone,metadata")
+    .select("id,user_id")
     .range(from, to);
   if (!error && data?.length) return data;
 

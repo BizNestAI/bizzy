@@ -156,14 +156,13 @@ const BusinessWizard = () => {
 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [signupName, setSignupName] = useState('');
 
   const [formData, setFormData] = useState({
     business_name: '',
     founded_year: '',
     industry: '',
     team_size: '',
-    annual_revenue_band: '',
+    annual_revenue: '',
     state: '',
     services_offered: '',
     billing_model: BILLING_MODELS[0],
@@ -211,26 +210,14 @@ const BusinessWizard = () => {
     let alive = true;
     (async () => {
       try {
-        const { data: userProfile } = await supabase
-          .from('user_profiles')
-          .select('first_name,last_name,full_name')
-          .eq('id', user.id)
-          .maybeSingle();
-        const profileName =
-          userProfile?.full_name ||
-          [userProfile?.first_name, userProfile?.last_name].filter(Boolean).join(' ');
-        if (alive) setSignupName(profileName || '');
-
         const { data, error } = await supabase
           .from('business_profiles')
           .select('*')
           .eq('user_id', user.id)
-          .order('created_at', { ascending: true })
           .limit(1);
         if (!alive || error || !data || data.length === 0) return;
         const record = data[0];
         setExistingBusinessId(record.id);
-        const meta = record.profile_meta || {};
         const normalize = (val, fallback = '') => (val === null || val === undefined ? fallback : val);
 
         setFormData((prev) => ({
@@ -240,13 +227,12 @@ const BusinessWizard = () => {
           industry: normalize(record.industry, prev.industry),
           state: normalize(record.state, prev.state),
           services_offered: normalize(record.services_offered, prev.services_offered),
-          annual_revenue_band: normalize(record.annual_revenue_band, prev.annual_revenue_band),
-          founded_year: normalize(meta.founded_year ?? record.founded_year, prev.founded_year),
+          annual_revenue: normalize(record.annual_revenue, prev.annual_revenue),
+          founded_year: normalize(record.founded_year, prev.founded_year),
           team_size: normalize(record.team_size, prev.team_size),
-          billing_model: normalize(meta.billing_model ?? record.billing_model, prev.billing_model),
-          top_challenge: normalize(meta.top_challenge, prev.top_challenge),
+          billing_model: normalize(record.billing_model, prev.billing_model),
+          top_challenge: normalize(record.top_challenge, prev.top_challenge),
         }));
-        setSignupName(profileName || record.owner_name || '');
       } catch (err) {
         console.warn('[BusinessWizard] preload failed:', err);
       }
@@ -264,8 +250,6 @@ const BusinessWizard = () => {
     try {
       const {
         founded_year,
-        billing_model,
-        top_challenge,
         ...profileRow
       } = formData;
 
@@ -275,19 +259,10 @@ const BusinessWizard = () => {
           : Number.parseInt(String(founded_year), 10);
       const founded_year_safe = Number.isFinite(foundedYearInt) ? foundedYearInt : null;
 
-      const profileMeta = {
-        founded_year: founded_year_safe,
-        billing_model,
-        top_challenge,
-      };
-
       const payload = {
         ...profileRow,
         user_id: user.id,
         team_size: parseInt(formData.team_size || '0', 10),
-        profile_meta: profileMeta,
-        owner_name: signupName || null,
-        owner_role: 'Owner',
         founded_year: founded_year_safe,
       };
       let businessId = existingBusinessId;
@@ -313,7 +288,7 @@ const BusinessWizard = () => {
           console.log("[BusinessWizard] saved profile", { businessId, payload });
           const { data: check, error: checkErr } = await supabase
             .from('business_profiles')
-            .select('id, owner_name, owner_role, founded_year')
+            .select('id, business_name, industry, founded_year')
             .eq('id', businessId)
             .single();
           console.log("[BusinessWizard] verify business_profiles", check, checkErr);
@@ -449,8 +424,8 @@ const BusinessWizard = () => {
               <div>
                 <Label>Annual revenue</Label>
                 <Dropdown
-                  value={formData.annual_revenue_band}
-                  onChange={(e)=>setField('annual_revenue_band', e.target.value)}
+                  value={formData.annual_revenue}
+                  onChange={(e)=>setField('annual_revenue', e.target.value)}
                   placeholder="Select..."
                   options={[{ value: '', label: 'Select...' }, ...revenueBands.map((b) => ({ value: b, label: b }))]}
                 />

@@ -400,11 +400,11 @@ async function getJobIdForProject({ db, businessId, realmId, qboProjectId }) {
 async function findBusinessOwnerUserId({ db, businessId }) {
   const { data, error } = await db
     .from("business_profiles")
-    .select("user_id, owner_id")
+    .select("user_id")
     .eq("id", businessId)
     .maybeSingle();
   if (error) return null;
-  return data?.user_id || data?.owner_id || null;
+  return data?.user_id || null;
 }
 
 export function normalizeQboProject(project = {}, { businessId, realmId, customerId = null, jobId = null, now = new Date() } = {}) {

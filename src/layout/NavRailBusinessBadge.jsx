@@ -44,8 +44,6 @@ export default function NavRailBusinessBadge() {
     industry: currentBusiness?.industry || "",
     state: currentBusiness?.state || "",
     team_size: currentBusiness?.team_size || "",
-    owner_name: currentBusiness?.owner_name || "",
-    owner_role: currentBusiness?.owner_role || "",
     founded_year: currentBusiness?.founded_year || "",
   });
 
@@ -57,8 +55,6 @@ export default function NavRailBusinessBadge() {
       industry: currentBusiness.industry || prev.industry,
       state: currentBusiness.state || prev.state,
       team_size: currentBusiness.team_size || prev.team_size,
-      owner_name: currentBusiness.owner_name || prev.owner_name,
-      owner_role: currentBusiness.owner_role || prev.owner_role,
       founded_year: currentBusiness.founded_year || prev.founded_year,
     }));
   }, [
@@ -66,8 +62,6 @@ export default function NavRailBusinessBadge() {
     currentBusiness?.industry,
     currentBusiness?.state,
     currentBusiness?.team_size,
-    currentBusiness?.owner_name,
-    currentBusiness?.owner_role,
     currentBusiness?.founded_year,
   ]);
 
@@ -75,12 +69,12 @@ export default function NavRailBusinessBadge() {
     let cancelled = false;
     const needsFetch =
       !!businessId &&
-      (!profile.business_name || !profile.owner_name || !profile.founded_year);
+      (!profile.business_name || !profile.founded_year);
     if (!needsFetch) return;
     (async () => {
       const { data, error } = await supabase
         .from("business_profiles")
-        .select("id,business_name,industry,state,team_size,owner_name,owner_role,founded_year")
+        .select("id,business_name,industry,state,team_size,founded_year")
         .eq("id", businessId)
         .single();
       if (cancelled) return;
@@ -91,8 +85,6 @@ export default function NavRailBusinessBadge() {
           industry: data.industry || "",
           state: data.state || "",
           team_size: data.team_size || "",
-          owner_name: data.owner_name || "",
-          owner_role: data.owner_role || "",
           founded_year: data.founded_year || "",
         }));
       }
@@ -228,9 +220,9 @@ export default function NavRailBusinessBadge() {
 
           <div className="grid grid-cols-2 gap-2 text-[11px] text-white/75">
             <div className="flex flex-col gap-1">
-              <span className="text-white/45 text-[10px] uppercase tracking-[0.04em]">Owner</span>
+              <span className="text-white/45 text-[10px] uppercase tracking-[0.04em]">State</span>
               <span className="truncate">
-                {profile.owner_name || "—"}
+                {profile.state || "—"}
               </span>
             </div>
             <div className="flex flex-col gap-1">
