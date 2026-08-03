@@ -8,6 +8,7 @@ import morgan from "morgan";
 // Accounting routers
 import quickbooksAuth from "./api/auth/quickbooksAuth.js";
 import socialAuthRouter from "./api/auth/socialAuth.js";
+import signupConfirmationRouter from "./api/auth/signupConfirmation.routes.js";
 import financialMetricsRoute from "./api/accounting/metrics.js";
 import pulseRoute from "./api/accounting/pulse.js";
 import forecastRouter from "./api/accounting/forecast.js";
@@ -182,6 +183,7 @@ app.use("/api/chats", chatsRoutes);
 app.use("/api/bizzy", bizzyFollowupsRouter);
 
 /* ------------------------------------ Accounting ----------------------------------- */
+app.use("/api/auth", signupConfirmationRouter);
 app.use("/auth", quickbooksAuth);
 app.use("/auth", socialAuthRouter);
 app.use("/api/accounting/metrics", financialMetricsRoute);
