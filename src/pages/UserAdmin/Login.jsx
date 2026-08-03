@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { login } from "../../services/authService";
 import { supabase } from "../../services/supabaseClient.js";
 import { useNavigate, Link, useLocation } from "react-router-dom";
-import { Mail, Lock, Eye, EyeOff, ArrowRight, CheckCircle2 } from "lucide-react";
+import { Mail, Lock, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle } from "lucide-react";
 import bizzyLogo from "../../assets/bizzy-logo.png";
 
 const BG =
@@ -222,8 +222,24 @@ export default function Login() {
             )}
 
             {!!error && (
-              <div className="mb-4 rounded-lg px-3 py-2 text-sm ring-1 ring-inset ring-rose-400/30 bg-rose-500/10 text-rose-200">
-                {error}
+              <div
+                role="alert"
+                className="
+                  mb-4 rounded-[14px] border border-white/[0.11]
+                  bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(255,255,255,0.026))]
+                  px-3.5 py-3 text-sm text-white/[0.86]
+                  shadow-[0_12px_28px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.07)]
+                "
+              >
+                <div className="flex gap-3">
+                  <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-amber-200/20 bg-amber-300/[0.08] text-amber-200/90">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-semibold leading-5 text-white/[0.92]">Account access paused</div>
+                    <div className="mt-0.5 leading-5 text-white/[0.62]">{error}</div>
+                  </div>
+                </div>
               </div>
             )}
 
