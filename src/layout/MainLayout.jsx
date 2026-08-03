@@ -38,6 +38,20 @@ const MainLayoutCore = ({ children }) => {
   const [currentBusiness, setCurrentBusiness] = useState(null);
   const [isProfileComplete, setIsProfileComplete] = useState(null);
 
+  const clearStoredBusiness = () => {
+    localStorage.removeItem('currentBusinessId');
+    localStorage.removeItem('business_id');
+    localStorage.removeItem('isProfileComplete');
+  };
+
+  const acceptBusiness = (business) => {
+    setCurrentBusiness(business);
+    setIsProfileComplete(true);
+    localStorage.setItem('isProfileComplete', 'true');
+    localStorage.setItem('currentBusinessId', business.id);
+    localStorage.setItem('business_id', business.id);
+  };
+
   /* Decide switcher accent:
      - Chrome (silver) on: Pulse(bizzy), Jobs(leads-jobs), Calendar, Bizzi Docs, Meet Bizzi, Settings/Sync
      - Email uses light blue
@@ -46,7 +60,7 @@ const MainLayoutCore = ({ children }) => {
   */
   useEffect(() => {
     const fetchCurrentBusiness = async () => {
-      if (!user) return;
+      if (!user?.id) return;
       try {
         const url = new URL(window.location.href);
         const requestedBusinessId =
@@ -54,34 +68,58 @@ const MainLayoutCore = ({ children }) => {
           localStorage.getItem('currentBusinessId') ||
           localStorage.getItem('business_id');
         if (requestedBusinessId) {
-          const { data: requestedBiz } = await supabase.from('business_profiles')
-            .select('*').eq('id', requestedBusinessId).maybeSingle();
+          const { data: requestedBiz } = await supabase
+            .from('business_profiles')
+            .select('*')
+            .eq('id', requestedBusinessId)
+            .eq('user_id', user.id)
+            .maybeSingle();
           if (requestedBiz) {
-            setCurrentBusiness(requestedBiz);
-            setIsProfileComplete(true);
-            localStorage.setItem('currentBusinessId', requestedBiz.id);
-            localStorage.setItem('business_id', requestedBiz.id);
+            acceptBusiness(requestedBiz);
             return;
           }
+        }
+
+        const { data: ownedBusiness, error: ownedBusinessError } = await supabase
+          .from('business_profiles')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('business_name', { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        if (!ownedBusinessError && ownedBusiness) {
+          acceptBusiness(ownedBusiness);
+          return;
         }
 
         const { data: link } = await supabase
           .from('user_business_link').select('business_id')
           .eq('user_id', user.id).eq('role','owner').limit(1).maybeSingle();
 
-        if (!link) { setIsProfileComplete(false); return; }
+        if (!link) {
+          setCurrentBusiness(null);
+          setIsProfileComplete(false);
+          clearStoredBusiness();
+          return;
+        }
 
         const { data: biz } = await supabase.from('business_profiles')
-          .select('*').eq('id', link.business_id).single();
+          .select('*').eq('id', link.business_id).eq('user_id', user.id).maybeSingle();
 
-        if (!biz) { setIsProfileComplete(false); return; }
+        if (!biz) {
+          setCurrentBusiness(null);
+          setIsProfileComplete(false);
+          clearStoredBusiness();
+          return;
+        }
 
-        setCurrentBusiness(biz);
-        setIsProfileComplete(true);
-        localStorage.setItem('currentBusinessId', biz.id);
+        acceptBusiness(biz);
       } catch (err) {
         console.error('Error fetching business:', err);
+        setCurrentBusiness(null);
         setIsProfileComplete(false);
+        clearStoredBusiness();
       }
     };
     fetchCurrentBusiness();

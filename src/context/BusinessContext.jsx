@@ -2,10 +2,12 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "../services/supabaseClient.js";
 import { ensureDemoBusinessNameStored } from "../services/demo/demoClient.js";
+import { useAuth } from "./AuthContext.jsx";
 
 export const BusinessContext = createContext(null);
 
 export const BusinessProvider = ({ children }) => {
+  const { user, loading: authLoading } = useAuth() || {};
   const [businessId, setBusinessIdState] = useState(null);
   const [currentBusiness, setCurrentBusiness] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -48,6 +50,7 @@ export const BusinessProvider = ({ children }) => {
       } else {
         localStorage.removeItem("currentBusinessId");
         localStorage.removeItem("business_id");
+        localStorage.removeItem("isProfileComplete");
         localStorage.removeItem("bizzy:businessName");
       }
     }
@@ -57,8 +60,20 @@ export const BusinessProvider = ({ children }) => {
   useEffect(() => {
     let alive = true;
     async function loadProfile() {
+      if (authLoading) return;
       if (!businessId) {
-        if (alive) setCurrentBusiness(null);
+        if (alive) {
+          setCurrentBusiness(null);
+          setLoading(false);
+        }
+        return;
+      }
+      if (!user?.id) {
+        if (alive) {
+          setBusinessIdState(null);
+          setCurrentBusiness(null);
+          setLoading(false);
+        }
         return;
       }
       try {
@@ -67,15 +82,48 @@ export const BusinessProvider = ({ children }) => {
           .from("business_profiles")
           .select("*")
           .eq("id", businessId)
-          .single();
+          .eq("user_id", user.id)
+          .maybeSingle();
 
         if (!alive) return;
         if (error) {
           console.warn("[BusinessContext] load profile error:", error);
           setCurrentBusiness(null);
-        } else {
+          setBusinessId(null);
+        } else if (data) {
           setCurrentBusiness(data || null);
           ensureDemoBusinessNameStored(data);
+        } else {
+          const { data: link, error: linkError } = await supabase
+            .from("user_business_link")
+            .select("business_id")
+            .eq("user_id", user.id)
+            .eq("business_id", businessId)
+            .limit(1)
+            .maybeSingle();
+
+          if (linkError || !link) {
+            if (linkError) console.warn("[BusinessContext] load business link error:", linkError);
+            setCurrentBusiness(null);
+            setBusinessId(null);
+            return;
+          }
+
+          const { data: linkedBusiness, error: linkedBusinessError } = await supabase
+            .from("business_profiles")
+            .select("*")
+            .eq("id", businessId)
+            .maybeSingle();
+
+          if (linkedBusinessError || !linkedBusiness) {
+            if (linkedBusinessError) console.warn("[BusinessContext] load linked profile error:", linkedBusinessError);
+            setCurrentBusiness(null);
+            setBusinessId(null);
+            return;
+          }
+
+          setCurrentBusiness(linkedBusiness);
+          ensureDemoBusinessNameStored(linkedBusiness);
         }
       } catch (e) {
         if (alive) {
@@ -88,7 +136,7 @@ export const BusinessProvider = ({ children }) => {
     }
     loadProfile();
     return () => { alive = false; };
-  }, [businessId]);
+  }, [authLoading, businessId, user?.id]);
 
   const value = useMemo(
     () => ({

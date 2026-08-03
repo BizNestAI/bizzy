@@ -1,6 +1,6 @@
 // Manual test checklist (DEV)
 // - With connected integrations and local onboarding flags, quickPromptMode must become "normal" within 1 refresh.
-// - If business_profiles is blocked by RLS or missing, quickPromptMode must still become "normal" using localStorage fallbacks.
+// - business_profiles must be the source of truth for profile completion.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabaseClient";
@@ -46,10 +46,7 @@ function readLocalFlag(key) {
 }
 
 function readLocalProfileFallback() {
-  if (typeof window === "undefined") return { businessProfileComplete: false };
-  const name = window.localStorage?.getItem(LOCAL_KEYS.businessName);
-  const industry = window.localStorage?.getItem(LOCAL_KEYS.industry);
-  return { businessProfileComplete: Boolean(name && industry) };
+  return { businessProfileComplete: false };
 }
 
 export async function markIntegrationsPageViewed(options = {}) {
@@ -189,21 +186,11 @@ async function fetchOnboardingStatus(businessId, contextBusiness = null) {
   const profileError = profileRes?.error;
 
   const localForce = readLocalFlag(LOCAL_KEYS.forceComplete);
-  const storageBusinessName =
-    typeof window !== "undefined" ? window.localStorage?.getItem(LOCAL_KEYS.businessName) : null;
-  const storageIndustry =
-    typeof window !== "undefined" ? window.localStorage?.getItem(LOCAL_KEYS.industry) : null;
-  const ctxBusinessName = contextBusiness?.business_name || contextBusiness?.businessName || null;
-  const ctxIndustry = contextBusiness?.industry || null;
   const localProfileFallback = readLocalProfileFallback();
   const businessProfileComplete = profile
-    ? Boolean(profile?.business_name && profile?.industry) ||
-      Boolean(profile?.business_name && localProfileFallback.businessProfileComplete) ||
-      Boolean(localForce)
-    : Boolean(ctxBusinessName && ctxIndustry) ||
-      Boolean(storageBusinessName && storageIndustry) ||
-      localProfileFallback.businessProfileComplete ||
-      Boolean(localForce);
+    ? Boolean(profile?.business_name && profile?.industry && profile?.state && profile?.services_offered) ||
+      Boolean(localProfileFallback.businessProfileComplete && localForce)
+    : false;
 
   const localViewed =
     readLocalFlag(LOCAL_KEYS.hasViewedIntegrations) ||

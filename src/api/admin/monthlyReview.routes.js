@@ -41,7 +41,7 @@ router.get("/businesses", async (req, res) => {
     const statusFilter = String(req.query.status || "all").trim();
     const { data: businesses, error } = await supabase
       .from("business_profiles")
-      .select("id,business_name,industry,created_at")
+      .select("id,business_name,industry")
       .order("business_name", { ascending: true });
 
     if (error) throw error;
@@ -86,7 +86,7 @@ router.get("/businesses/:businessId", async (req, res) => {
 
     const { data: business, error: bizErr } = await supabase
       .from("business_profiles")
-      .select("id,business_name,industry,created_at")
+      .select("id,business_name,industry")
       .eq("id", businessId)
       .maybeSingle();
     if (bizErr) throw bizErr;
