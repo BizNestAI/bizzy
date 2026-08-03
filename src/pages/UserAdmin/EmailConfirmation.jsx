@@ -266,7 +266,7 @@ export default function EmailConfirmation() {
                     onChange={(event) => setResendEmail(event.target.value)}
                     placeholder="you@company.com"
                     autoComplete="email"
-                    className="bizzy-login-input w-full rounded-[14px] border border-white/[0.13] bg-[#151817] py-3 pl-11 pr-3 text-sm text-white/[0.92] shadow-[inset_0_1px_0_rgba(255,255,255,0.05),inset_0_-8px_16px_rgba(0,0,0,0.16)] transition placeholder:text-white/[0.34] focus:border-emerald-300/30 focus:bg-[#171a19] focus:outline-none focus:ring-2 focus:ring-emerald-300/12"
+                    className="bizzy-login-input w-full rounded-[14px] border border-white/[0.13] bg-[#151817] py-3 pl-11 pr-3 text-sm text-white/[0.92] shadow-[inset_0_1px_0_rgba(255,255,255,0.05),inset_0_-8px_16px_rgba(0,0,0,0.16)] transition placeholder:text-white/[0.22] focus:border-emerald-300/30 focus:bg-[#171a19] focus:outline-none focus:ring-2 focus:ring-emerald-300/12"
                   />
                 </div>
                 {resendStatus ? <div className="text-sm text-white/[0.64]">{resendStatus}</div> : null}

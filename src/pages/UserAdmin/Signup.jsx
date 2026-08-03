@@ -14,7 +14,7 @@ const SHADOW =
 const baseInput =
   "bizzy-login-input w-full rounded-[14px] border border-white/[0.13] bg-[#151817] py-3 px-4 text-sm text-white/[0.92] " +
   "shadow-[inset_0_1px_0_rgba(255,255,255,0.05),inset_0_-8px_16px_rgba(0,0,0,0.16)] " +
-  "transition placeholder:text-white/[0.34] focus:border-emerald-300/30 focus:bg-[#171a19] focus:outline-none focus:ring-2 focus:ring-emerald-300/12";
+  "transition placeholder:text-white/[0.22] focus:border-emerald-300/30 focus:bg-[#171a19] focus:outline-none focus:ring-2 focus:ring-emerald-300/12";
 
 const labelClass = "mb-2 block text-[11px] font-semibold uppercase tracking-[0.14em] text-white/[0.48]";
 
