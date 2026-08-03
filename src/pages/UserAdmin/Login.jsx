@@ -1,6 +1,7 @@
 // src/pages/UserAdmin/Login.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { login } from "../../services/authService";
+import { supabase } from "../../services/supabaseClient.js";
 import { useNavigate, Link, useLocation } from "react-router-dom";
 import { Mail, Lock, Eye, EyeOff, ArrowRight, CheckCircle2 } from "lucide-react";
 import bizzyLogo from "../../assets/bizzy-logo.png";
@@ -32,6 +33,63 @@ function pickIds(result) {
   return out;
 }
 
+function pickUser(result) {
+  return result?.user || result?.data?.user || result?.session?.user || null;
+}
+
+function isConfirmedUser(user) {
+  return Boolean(user?.email_confirmed_at || user?.confirmed_at);
+}
+
+function clearStoredAuthState() {
+  localStorage.removeItem("access_token");
+  localStorage.removeItem("user_id");
+  localStorage.removeItem("business_id");
+  localStorage.removeItem("currentBusinessId");
+  localStorage.removeItem("isProfileComplete");
+}
+
+function friendlyLoginError(err) {
+  const message = String(err?.message || "").trim();
+  if (/email not confirmed|not confirmed|confirm your email/i.test(message)) {
+    return "Please confirm your email before logging in.";
+  }
+  if (/invalid login credentials|invalid credentials|user not found|no account|registered account/i.test(message)) {
+    return "We don't have a registered Bizzi account for that email.";
+  }
+  return message || "Login failed. Please try again.";
+}
+
+async function rejectLogin(message) {
+  clearStoredAuthState();
+  await supabase.auth.signOut();
+  throw new Error(message);
+}
+
+async function requireRegisteredProfile(user) {
+  if (!user?.id) {
+    await rejectLogin("Login succeeded but no user account was returned.");
+  }
+
+  if (!isConfirmedUser(user)) {
+    await rejectLogin("Please confirm your email before logging in.");
+  }
+
+  const { data, error } = await supabase
+    .from("user_profiles")
+    .select("id,email")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  const profileEmail = String(data?.email || "").trim().toLowerCase();
+  const authEmail = String(user.email || "").trim().toLowerCase();
+  if (!data?.id || !profileEmail || profileEmail !== authEmail) {
+    await rejectLogin("We don't have a registered Bizzi account for that email.");
+  }
+}
+
 export default function Login() {
   const emailInputRef = useRef(null);
   const [email, setEmail] = useState("");
@@ -55,12 +113,21 @@ export default function Login() {
     return () => window.clearTimeout(focusTimer);
   }, []);
 
+  useEffect(() => {
+    if (location.state?.authError) {
+      setError(location.state.authError);
+    }
+  }, [location.state]);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
       const resp = await login({ email, password });
+      const loggedInUser = pickUser(resp);
+      await requireRegisteredProfile(loggedInUser);
+
       const token = pickAccessToken(resp);
       if (!token) throw new Error("Login succeeded but no access token was returned.");
       localStorage.setItem("access_token", token);
@@ -72,7 +139,7 @@ export default function Login() {
       // Always send users to ChatHome after login
       navigate("/dashboard/bizzi/chat");
     } catch (err) {
-      setError(err?.message || "Login failed. Please try again.");
+      setError(friendlyLoginError(err));
     } finally {
       setLoading(false);
     }

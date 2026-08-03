@@ -1,7 +1,7 @@
 // src/pages/UserAdmin/BusinessWizard.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { createBusinessProfile, updateBusinessProfile } from '../../services/businessService';
+import { createBusinessProfile, ensureUserProfile, updateBusinessProfile } from '../../services/businessService';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../services/supabaseClient.js';
 import { ArrowRight, Info } from 'lucide-react';
@@ -248,6 +248,9 @@ const BusinessWizard = () => {
     setError('');
     setLoading(true);
     try {
+      const { error: userProfileError } = await ensureUserProfile(user);
+      if (userProfileError) throw userProfileError;
+
       const {
         founded_year,
         ...profileRow
