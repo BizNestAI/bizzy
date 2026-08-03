@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AlertTriangle, ArrowRight, CheckCircle2, Mail, RefreshCw } from "lucide-react";
 import { supabase } from "../../services/supabaseClient.js";
+import { resendSignupConfirmation } from "../../services/authService.js";
 import { useAuth } from "../../context/AuthContext.jsx";
 import bizzyLogo from "../../assets/bizzy-logo.png";
 
@@ -11,9 +12,6 @@ const BG =
   "linear-gradient(180deg, #060807 0%, #020303 62%, #000 100%)";
 const SHADOW =
   "0 26px 80px rgba(0,0,0,0.58), 0 0 0 1px rgba(255,255,255,0.055), inset 0 1px 0 rgba(255,255,255,0.08)";
-const REDIRECT_TO =
-  (typeof window !== "undefined" && `${window.location.origin}/auth/confirm`) ||
-  "http://localhost:5173/auth/confirm";
 
 function readParams() {
   if (typeof window === "undefined") return new URLSearchParams();
@@ -140,12 +138,7 @@ export default function EmailConfirmation() {
     setResending(true);
     setResendStatus("");
     try {
-      const { error } = await supabase.auth.resend({
-        type: "signup",
-        email,
-        options: { emailRedirectTo: REDIRECT_TO },
-      });
-      if (error) throw error;
+      await resendSignupConfirmation(email);
       setResendStatus("A new confirmation email has been sent.");
     } catch (error) {
       setResendStatus(error?.message || "Could not send another confirmation email.");

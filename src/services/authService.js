@@ -20,17 +20,69 @@ function getEnv() {
 /* -----------------------------------------------------------
    Signup (kept via Supabase client SDK)
 ----------------------------------------------------------- */
+function getAuthRedirectTo(path) {
+  return (
+    (typeof window !== 'undefined' && `${window.location.origin}${path}`) ||
+    `http://localhost:5173${path}`
+  );
+}
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function isExistingUserSignupResponse(data) {
+  const identities = data?.user?.identities;
+  return Array.isArray(identities) && identities.length === 0;
+}
+
+function isAlreadyRegisteredError(error) {
+  return /already registered|already exists|user already/i.test(error?.message || '');
+}
+
+function isConfirmationRateLimit(error) {
+  return /rate limit|too many|over_email_send_rate_limit|email rate/i.test(error?.message || '');
+}
+
+function isAlreadyConfirmedError(error) {
+  return /already confirmed|already verified|email.*confirmed|email.*verified/i.test(error?.message || '');
+}
+
+function toConfirmationSendError(error) {
+  if (isConfirmationRateLimit(error)) {
+    return 'A confirmation email was already sent recently. Wait a minute and try again.';
+  }
+  if (isAlreadyConfirmedError(error)) {
+    return 'This email already has a verified Bizzi account. Log in or reset your password.';
+  }
+  return error?.message || 'Error sending confirmation email';
+}
+
+export async function resendSignupConfirmation(email) {
+  const normalizedEmail = normalizeEmail(email);
+  const { data, error } = await supabase.auth.resend({
+    type: 'signup',
+    email: normalizedEmail,
+    options: { emailRedirectTo: getAuthRedirectTo('/auth/confirm') },
+  });
+
+  if (error) {
+    throw new Error(toConfirmationSendError(error));
+  }
+
+  return data;
+}
+
 export async function signUp(email, password, names = {}) {
+  const normalizedEmail = normalizeEmail(email);
   const first_name = (names?.firstName || "").trim();
   const last_name = (names?.lastName || "").trim();
   const full_name = [first_name, last_name].filter(Boolean).join(" ") || null;
-  const redirectTo =
-    (typeof window !== 'undefined' && `${window.location.origin}/auth/confirm`) ||
-    'http://localhost:5173/auth/confirm';
+  const redirectTo = getAuthRedirectTo('/auth/confirm');
 
   // Seed auth metadata so future sessions carry the user's name
   const { data, error } = await supabase.auth.signUp({
-    email,
+    email: normalizedEmail,
     password,
     options: {
       emailRedirectTo: redirectTo,
@@ -41,7 +93,18 @@ export async function signUp(email, password, names = {}) {
       },
     },
   });
-  if (error) throw error;
+  if (error) {
+    if (isAlreadyRegisteredError(error)) {
+      await resendSignupConfirmation(normalizedEmail);
+      return { user: null, session: null, confirmationResent: true };
+    }
+    throw error;
+  }
+
+  if (isExistingUserSignupResponse(data)) {
+    await resendSignupConfirmation(normalizedEmail);
+    return { ...data, confirmationResent: true };
+  }
 
   return data;
 }

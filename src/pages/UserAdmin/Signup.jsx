@@ -57,8 +57,9 @@ const Signup = () => {
 
     try {
       setLoading(true);
-      await signUp(email.trim(), password, { firstName: fn, lastName: ln });
-      setPendingEmail(email);
+      const normalizedEmail = email.trim().toLowerCase();
+      await signUp(normalizedEmail, password, { firstName: fn, lastName: ln });
+      setPendingEmail(normalizedEmail);
       setConfirmationSent(true);
     } catch (err) {
       setError(err?.message || "Sign up failed. Please try again.");
