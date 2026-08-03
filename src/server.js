@@ -94,7 +94,12 @@ if (process.env.NODE_ENV !== "production") {
 
 /* ---------------------------------------- CORS ---------------------------------------- */
 const allowlist = (() => {
-  const list = ["https://bizzi-ten.vercel.app"];
+  const list = [
+    "https://app.bizzios.com",
+    "https://bizzios.com",
+    "https://www.bizzios.com",
+    "https://bizzi-ten.vercel.app",
+  ];
   const raw = process.env.CORS_ORIGINS || process.env.CORS_ORIGIN || "";
   raw
     .split(",")
