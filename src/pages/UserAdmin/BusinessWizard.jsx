@@ -226,6 +226,14 @@ const BusinessWizard = () => {
   const [formData, setFormData] = useState(DEFAULT_FORM_DATA);
   const [existingBusinessId, setExistingBusinessId] = useState(null);
   const [draftReady, setDraftReady] = useState(false);
+  const [animateEntry] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const shouldAnimate = window.sessionStorage.getItem('bizzy:animate-setup-once') === '1';
+    if (shouldAnimate) {
+      window.sessionStorage.removeItem('bizzy:animate-setup-once');
+    }
+    return shouldAnimate;
+  });
   const draftStorageKey = useMemo(() => getDraftStorageKey(user?.id), [user?.id]);
 
   const accent = useMemo(() => ACCENT_HEX, []);
@@ -435,7 +443,7 @@ const BusinessWizard = () => {
 
   return (
     <div
-      className="bizzy-auth-page relative min-h-screen w-screen overflow-hidden text-white bizzy-bg-textured"
+      className={`${animateEntry ? 'bizzy-auth-page' : ''} relative min-h-screen w-screen overflow-hidden text-white bizzy-bg-textured`}
       style={{ '--accent': accent, background: AUTH_BG }}
     >
       <style>{`
@@ -469,7 +477,7 @@ const BusinessWizard = () => {
       <div className="relative z-10 h-screen w-full overflow-hidden">
         <div className="no-scrollbar h-full overflow-y-auto px-4 py-8 sm:py-10">
           <div
-            className="bizzy-auth-card-wrap relative mx-auto w-full max-w-4xl text-white"
+            className={`${animateEntry ? 'bizzy-auth-card-wrap' : ''} relative mx-auto w-full max-w-4xl text-white`}
           >
             {showBackToSettings ? (
             <div className="absolute right-0 top-1 z-10">

@@ -200,6 +200,9 @@ export default function Login() {
       if (businessId) localStorage.setItem("business_id", businessId);
 
       const postLoginRoute = await resolvePostLoginRoute(loggedInUser);
+      if (postLoginRoute === "/setup") {
+        sessionStorage.setItem("bizzy:animate-setup-once", "1");
+      }
       navigate(postLoginRoute, { replace: true });
     } catch (err) {
       setError(friendlyLoginError(err));
