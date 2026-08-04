@@ -20,6 +20,72 @@ const ACCENT_HEX = '#34d399'; // app financials green (Books)
 const CTA_BG = 'linear-gradient(180deg, rgba(245,247,251,0.16), rgba(245,247,251,0.07))';
 const CTA_TEXT = '#f5f7fb';
 const CTA_GLOW = '0 18px 44px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.10)';
+const DRAFT_SCHEMA_VERSION = 1;
+const DEFAULT_FORM_DATA = {
+  business_name: '',
+  founded_year: '',
+  industry: '',
+  team_size: '',
+  annual_revenue: '',
+  state: '',
+  services_offered: '',
+  billing_model: BILLING_MODELS[0],
+  top_challenge: '',
+};
+
+const getDraftStorageKey = (userId) =>
+  userId ? `bizzy:onboarding-draft:${userId}:v${DRAFT_SCHEMA_VERSION}` : null;
+
+const readDraft = (storageKey) => {
+  if (!storageKey || typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed.formData || null;
+  } catch (err) {
+    console.warn('[BusinessWizard] draft restore failed:', err);
+    return null;
+  }
+};
+
+const writeDraft = (storageKey, formData) => {
+  if (!storageKey || typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        formData,
+        updated_at: new Date().toISOString(),
+      })
+    );
+  } catch (err) {
+    console.warn('[BusinessWizard] draft save failed:', err);
+  }
+};
+
+const clearDraft = (storageKey) => {
+  if (!storageKey || typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(storageKey);
+  } catch {
+    // ignore storage failures
+  }
+};
+
+const hasDraftValues = (formData) =>
+  Boolean(
+    formData.business_name ||
+      formData.founded_year ||
+      formData.industry ||
+      formData.team_size ||
+      formData.annual_revenue ||
+      formData.state ||
+      formData.services_offered ||
+      formData.top_challenge ||
+      formData.billing_model !== DEFAULT_FORM_DATA.billing_model
+  );
 
 // ----- Small UI helpers -----
 const AUTH_BG =
@@ -157,18 +223,9 @@ const BusinessWizard = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const [formData, setFormData] = useState({
-    business_name: '',
-    founded_year: '',
-    industry: '',
-    team_size: '',
-    annual_revenue: '',
-    state: '',
-    services_offered: '',
-    billing_model: BILLING_MODELS[0],
-    top_challenge: '',
-  });
+  const [formData, setFormData] = useState(DEFAULT_FORM_DATA);
   const [existingBusinessId, setExistingBusinessId] = useState(null);
+  const draftStorageKey = useMemo(() => getDraftStorageKey(user?.id), [user?.id]);
 
   const accent = useMemo(() => ACCENT_HEX, []);
   const ctaStyle = useMemo(
@@ -215,9 +272,21 @@ const BusinessWizard = () => {
           .select('*')
           .eq('user_id', user.id)
           .limit(1);
-        if (!alive || error || !data || data.length === 0) return;
+        if (!alive || error) return;
+        if (!data || data.length === 0) {
+          const draft = readDraft(getDraftStorageKey(user.id));
+          if (draft && alive) {
+            setExistingBusinessId(null);
+            setFormData({
+              ...DEFAULT_FORM_DATA,
+              ...draft,
+            });
+          }
+          return;
+        }
         const record = data[0];
         setExistingBusinessId(record.id);
+        clearDraft(getDraftStorageKey(user.id));
         const normalize = (val, fallback = '') => (val === null || val === undefined ? fallback : val);
 
         setFormData((prev) => ({
@@ -241,6 +310,15 @@ const BusinessWizard = () => {
       alive = false;
     };
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!draftStorageKey || existingBusinessId) return;
+    if (!hasDraftValues(formData)) {
+      clearDraft(draftStorageKey);
+      return;
+    }
+    writeDraft(draftStorageKey, formData);
+  }, [draftStorageKey, existingBusinessId, formData]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -283,6 +361,7 @@ const BusinessWizard = () => {
       }
 
       if (businessId) {
+        clearDraft(draftStorageKey);
         localStorage.setItem('isProfileComplete', 'true');
         localStorage.setItem('currentBusinessId', businessId);
         localStorage.setItem('bizzy:business_name', payload.business_name || '');
