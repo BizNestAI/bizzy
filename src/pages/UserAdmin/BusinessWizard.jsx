@@ -225,6 +225,7 @@ const BusinessWizard = () => {
 
   const [formData, setFormData] = useState(DEFAULT_FORM_DATA);
   const [existingBusinessId, setExistingBusinessId] = useState(null);
+  const [draftReady, setDraftReady] = useState(false);
   const draftStorageKey = useMemo(() => getDraftStorageKey(user?.id), [user?.id]);
 
   const accent = useMemo(() => ACCENT_HEX, []);
@@ -251,7 +252,16 @@ const BusinessWizard = () => {
     }
   `;
 
-  const setField = (name, value) => setFormData(prev => ({ ...prev, [name]: value }));
+  const setField = (name, value) => {
+    setFormData((prev) => {
+      const next = { ...prev, [name]: value };
+      if (draftReady && draftStorageKey && !existingBusinessId) {
+        if (hasDraftValues(next)) writeDraft(draftStorageKey, next);
+        else clearDraft(draftStorageKey);
+      }
+      return next;
+    });
+  };
 
   const hasRequiredFields =
     formData.business_name &&
@@ -263,6 +273,7 @@ const BusinessWizard = () => {
   const canFinish = hasRequiredFields && !loading;
 
   useEffect(() => {
+    setDraftReady(false);
     if (!user?.id) return;
     let alive = true;
     (async () => {
@@ -272,7 +283,11 @@ const BusinessWizard = () => {
           .select('*')
           .eq('user_id', user.id)
           .limit(1);
-        if (!alive || error) return;
+        if (!alive) return;
+        if (error) {
+          setDraftReady(true);
+          return;
+        }
         if (!data || data.length === 0) {
           const draft = readDraft(getDraftStorageKey(user.id));
           if (draft && alive) {
@@ -282,6 +297,7 @@ const BusinessWizard = () => {
               ...draft,
             });
           }
+          if (alive) setDraftReady(true);
           return;
         }
         const record = data[0];
@@ -302,8 +318,10 @@ const BusinessWizard = () => {
           billing_model: normalize(record.billing_model, prev.billing_model),
           top_challenge: normalize(record.top_challenge, prev.top_challenge),
         }));
+        setDraftReady(true);
       } catch (err) {
         console.warn('[BusinessWizard] preload failed:', err);
+        if (alive) setDraftReady(true);
       }
     })();
     return () => {
@@ -312,13 +330,29 @@ const BusinessWizard = () => {
   }, [user?.id]);
 
   useEffect(() => {
-    if (!draftStorageKey || existingBusinessId) return;
+    if (!draftReady || !draftStorageKey || existingBusinessId) return;
     if (!hasDraftValues(formData)) {
       clearDraft(draftStorageKey);
       return;
     }
     writeDraft(draftStorageKey, formData);
-  }, [draftStorageKey, existingBusinessId, formData]);
+  }, [draftReady, draftStorageKey, existingBusinessId, formData]);
+
+  useEffect(() => {
+    if (!draftReady || !draftStorageKey || existingBusinessId) return undefined;
+    const saveCurrentDraft = () => {
+      if (hasDraftValues(formData)) writeDraft(draftStorageKey, formData);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') saveCurrentDraft();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', saveCurrentDraft);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', saveCurrentDraft);
+    };
+  }, [draftReady, draftStorageKey, existingBusinessId, formData]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
