@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { login } from "../../services/authService";
 import { supabase } from "../../services/supabaseClient.js";
+import { ensureUserProfile } from "../../services/businessService.js";
 import { useNavigate, Link, useLocation } from "react-router-dom";
 import { Mail, Lock, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle } from "lucide-react";
 import bizzyLogo from "../../assets/bizzy-logo.png";
@@ -75,6 +76,11 @@ async function requireRegisteredProfile(user) {
     await rejectLogin("Please confirm your email before logging in.");
   }
 
+  const authEmail = String(user.email || "").trim().toLowerCase();
+  if (!authEmail) {
+    await rejectLogin("Login succeeded but no user email was returned.");
+  }
+
   const { data, error } = await supabase
     .from("user_profiles")
     .select("id,email")
@@ -84,9 +90,13 @@ async function requireRegisteredProfile(user) {
   if (error) throw error;
 
   const profileEmail = String(data?.email || "").trim().toLowerCase();
-  const authEmail = String(user.email || "").trim().toLowerCase();
-  if (!data?.id || !profileEmail || profileEmail !== authEmail) {
-    await rejectLogin("We don't have a registered Bizzi account for that email.");
+  if (!data?.id || profileEmail !== authEmail) {
+    const { error: repairError } = await ensureUserProfile(user);
+    if (repairError) {
+      throw new Error(
+        "We found your verified account, but could not finish preparing your Bizzi profile. Please try again."
+      );
+    }
   }
 }
 
