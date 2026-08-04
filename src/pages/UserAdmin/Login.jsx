@@ -100,6 +100,59 @@ async function requireRegisteredProfile(user) {
   }
 }
 
+async function resolvePostLoginRoute(user) {
+  if (!user?.id) return "/setup";
+
+  const acceptBusiness = (businessId) => {
+    localStorage.setItem("isProfileComplete", "true");
+    localStorage.setItem("currentBusinessId", businessId);
+    localStorage.setItem("business_id", businessId);
+    return "/dashboard/bizzi/chat";
+  };
+
+  const requireSetup = () => {
+    localStorage.setItem("isProfileComplete", "false");
+    localStorage.removeItem("currentBusinessId");
+    localStorage.removeItem("business_id");
+    return "/setup";
+  };
+
+  const { data: ownedBusiness, error: ownedBusinessError } = await supabase
+    .from("business_profiles")
+    .select("id")
+    .eq("user_id", user.id)
+    .order("business_name", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (!ownedBusinessError && ownedBusiness?.id) {
+    return acceptBusiness(ownedBusiness.id);
+  }
+
+  const { data: link, error: linkError } = await supabase
+    .from("user_business_link")
+    .select("business_id")
+    .eq("user_id", user.id)
+    .eq("role", "owner")
+    .limit(1)
+    .maybeSingle();
+
+  if (!linkError && link?.business_id) {
+    const { data: linkedBusiness, error: linkedBusinessError } = await supabase
+      .from("business_profiles")
+      .select("id")
+      .eq("id", link.business_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (!linkedBusinessError && linkedBusiness?.id) {
+      return acceptBusiness(linkedBusiness.id);
+    }
+  }
+
+  return requireSetup();
+}
+
 export default function Login() {
   const emailInputRef = useRef(null);
   const [email, setEmail] = useState("");
@@ -146,8 +199,8 @@ export default function Login() {
       if (userId) localStorage.setItem("user_id", userId);
       if (businessId) localStorage.setItem("business_id", businessId);
 
-      // Always send users to ChatHome after login
-      navigate("/dashboard/bizzi/chat");
+      const postLoginRoute = await resolvePostLoginRoute(loggedInUser);
+      navigate(postLoginRoute, { replace: true });
     } catch (err) {
       setError(friendlyLoginError(err));
     } finally {

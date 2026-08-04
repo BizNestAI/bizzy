@@ -179,6 +179,15 @@ const MainLayoutCore = ({ children }) => {
     );
   }
 
+  if (isProfileComplete === null) {
+    return (
+      <div
+        className="min-h-screen bg-[var(--bg)] bizzy-bg-textured"
+        aria-label="Loading Bizzi workspace"
+      />
+    );
+  }
+
   return (
     <InsightsUnreadProvider userId={user?.id} businessId={businessId}>
       <div className={`min-h-screen h-screen ${textColor} font-sans relative`} style={{ paddingLeft: "var(--nav-w, 0px)" }}>
