@@ -2,7 +2,18 @@ import { getQBOClient } from "../../utils/qboClient.js";
 
 export async function fetchChartOfAccounts(businessId, opts = {}) {
   const includeSubaccounts = opts?.includeSubaccounts === true;
-  const qbo = await getQBOClient(businessId);
+  let qbo = null;
+  try {
+    qbo = await getQBOClient(businessId);
+  } catch (e) {
+    const expectedDisconnected = new Set([
+      "quickbooks_not_connected",
+      "quickbooks_needs_reconnect",
+      "quickbooks_missing_realm_id",
+    ]);
+    if (expectedDisconnected.has(e?.message)) return [];
+    throw e;
+  }
   if (!qbo) return [];
   try {
     const res = await new Promise((resolve, reject) => {

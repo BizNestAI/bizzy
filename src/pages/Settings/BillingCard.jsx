@@ -2,6 +2,29 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { apiUrl, safeFetch } from "../../utils/safeFetch";
 
+const BIZZI_ACCOUNTING_PLAN = {
+  title: "Bizzi Accounting",
+  subtitle: "For owner-operated and small trades businesses using QuickBooks Online.",
+  price: "$349",
+  interval: "/mo",
+  description:
+    "Bookkeeping automation, financial visibility, tax readiness, and a monthly human review layer in one subscription.",
+  features: [
+    "Ongoing transaction categorization",
+    "Reconciliation monitoring",
+    "Professional month-end books review",
+    "Cash-flow visibility",
+    "Job-profitability tracking",
+    "Accounts-receivable monitoring",
+    "Tax-deduction tracking",
+    "Estimated tax and reserve planning",
+    "Unlimited messaging",
+    "Ability to book financial-review calls",
+    "Dedicated accounting professional",
+    "Human review of unusual activity",
+  ],
+};
+
 /**
  * BillingCard – Checkout + Portal
  */
@@ -28,8 +51,10 @@ export default function BillingCard({ userId, businessId, status }) {
   const planTypeKey = "bizzi_human_review";
 
   const currentPlanName = useMemo(() => {
-    if (status?.plan_type === planTypeKey) return "Core";
-    if (status?.plan_label === "Bizzi + Human Review") return "Core";
+    if (status?.plan_type === planTypeKey) return BIZZI_ACCOUNTING_PLAN.title;
+    if (status?.plan_label === "Bizzi + Human Review" || status?.plan_label === "Core") {
+      return BIZZI_ACCOUNTING_PLAN.title;
+    }
     if (status?.plan_label) return status.plan_label;
     if (statusValue === "free") return "Free";
     return "Custom";
@@ -86,7 +111,10 @@ export default function BillingCard({ userId, businessId, status }) {
   const hasLiveSubscription = liveStatuses.has(statusValue);
   const hasActiveCoreSubscription =
     statusValue === "active" &&
-    (status?.plan_type === planTypeKey || status?.plan_label === "Core" || status?.plan_label === "Bizzi + Human Review");
+    (status?.plan_type === planTypeKey ||
+      status?.plan_label === BIZZI_ACCOUNTING_PLAN.title ||
+      status?.plan_label === "Core" ||
+      status?.plan_label === "Bizzi + Human Review");
   const canManageSubscription = canManagePortal && hasActiveCoreSubscription;
   const nextBillingDateValue =
     statusValue === "canceled" || status?.cancel_at_period_end ? "—" : formatDate(periodEndsAt);
@@ -224,231 +252,179 @@ export default function BillingCard({ userId, businessId, status }) {
   })();
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {(showPaymentFailed || showTrialEndingSoon) && (
-        <div className="space-y-2 rounded-2xl border border-white/10 bg-white/5 p-3 text-sm text-white/80 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
-          {showPaymentFailed && (
-            <div className="rounded-lg border border-amber-300/30 bg-amber-400/10 px-3 py-2 text-amber-100">
-              Payment issue detected. Update billing to keep Bizzi active.
-            </div>
-          )}
-          {showTrialEndingSoon && (
-            <div className="rounded-lg border border-teal-300/30 bg-teal-400/10 px-3 py-2 text-teal-100">
+        <div className="rounded-xl border border-white/[0.08] bg-white/[0.035] p-3 text-sm text-white/80">
+          {showPaymentFailed ? (
+            <div className="text-amber-100">Payment issue detected. Update billing to keep Bizzi active.</div>
+          ) : null}
+          {showTrialEndingSoon ? (
+            <div className="text-teal-100">
               Trial ending in {trialDaysRemaining} day{trialDaysRemaining === 1 ? "" : "s"}.
             </div>
-          )}
+          ) : null}
         </div>
       )}
 
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-lg font-semibold">Current Plan</div>
-            <p className="text-sm text-white/60">Plan details and upcoming billing dates.</p>
+      <div className="rounded-xl border border-white/[0.08] bg-white/[0.025] p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-sm uppercase tracking-[0.18em] text-white/45">Current Plan</div>
+            <div className="mt-2 text-xl font-semibold text-white/90">{currentPlanName}</div>
           </div>
-        </div>
-
-        <div className="mt-4 rounded-xl border border-white/10 bg-white/5 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-sm text-white/60">Plan</div>
-              <div className="mt-1 text-lg font-semibold text-white/90">{currentPlanName}</div>
-            </div>
-          </div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-              <div className="text-xs uppercase tracking-widest text-white/50">Next billing date</div>
-              <div className="mt-1 text-base font-semibold text-white/90">{nextBillingDateValue}</div>
-            </div>
-            <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-              <div className="text-xs uppercase tracking-widest text-white/50">Account state</div>
-              <div className="mt-1 text-base font-semibold text-white/90">{accountStateLabel}</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-4">
           <button
             type="button"
             onClick={() => setShowPlanDetails((prev) => !prev)}
-            className="group w-full rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/85 transition hover:bg-white/8"
+            className="rounded-full border border-white/[0.08] px-3 py-1.5 text-xs font-semibold text-white/65 transition hover:bg-white/[0.04] hover:text-white/85"
           >
-            <span className="flex items-center justify-center gap-2">
-              <span>{isCurrentPlan ? "Current Plan" : "Activate Bizzi"}</span>
-              <span className="text-xs text-white/60">{showPlanDetails ? "Hide details" : "View details"}</span>
-              <span className="text-xs text-white/50">{showPlanDetails ? "▲" : "▼"}</span>
-            </span>
+            {showPlanDetails ? "Hide details" : "Plan details"}
           </button>
         </div>
 
+        <div className="mt-5 grid gap-4 border-t border-white/[0.07] pt-4 sm:grid-cols-3">
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-white/40">Next billing date</div>
+            <div className="mt-1 text-base font-semibold text-white/85">{nextBillingDateValue}</div>
+          </div>
+          <div>
+            <div className="text-[11px] uppercase tracking-[0.18em] text-white/40">Account state</div>
+            <div className="mt-1 text-base font-semibold text-white/85">{accountStateLabel}</div>
+          </div>
+          <div className="sm:text-right">
+            {planButtonState.variant === "current" ? (
+              <div className="inline-flex rounded-full bg-emerald-300/12 px-3 py-1.5 text-sm font-semibold text-emerald-200">
+                Current subscription
+              </div>
+            ) : (
+              <button
+                onClick={planButtonState.action}
+                disabled={planButtonState.disabled}
+                className={[
+                  "inline-flex items-center justify-center rounded-full px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-55",
+                  planButtonState.variant === "activate"
+                    ? "bg-emerald-300 text-black hover:bg-emerald-200"
+                    : "border border-white/[0.1] bg-white/[0.04] text-white/85 hover:bg-white/[0.08]",
+                ].join(" ")}
+              >
+                {planButtonState.variant === "activate" ? "Activate Bizzi" : planButtonState.label}
+              </button>
+            )}
+          </div>
+        </div>
+
         {showPlanDetails ? (
-          <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-6">
-            <div className="flex justify-center">
-              <div className="w-full rounded-2xl border border-emerald-400/20 bg-black/20 p-6 shadow-[0_0_22px_rgba(16,185,129,0.15)]">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <div className="text-xl font-semibold">Core (Bizzi + Human Review)</div>
-                    <div className="mt-2 flex items-end gap-2">
-                      <span className="text-3xl font-semibold text-white">$169</span>
-                      <span className="text-xs uppercase tracking-wide text-white/60">USD / month</span>
+          <div className="mt-5 border-t border-white/[0.07] pt-5">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-semibold text-white">{BIZZI_ACCOUNTING_PLAN.title}</h3>
+                  {isCurrentPlan ? (
+                    <span className="rounded-full bg-emerald-300/12 px-2.5 py-1 text-xs font-semibold text-emerald-200">
+                      Current
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-white/60">
+                  {BIZZI_ACCOUNTING_PLAN.description}
+                </p>
+              </div>
+              <div className="flex items-end gap-2">
+                <span className="text-4xl font-semibold tracking-normal text-white">
+                  {BIZZI_ACCOUNTING_PLAN.price}
+                </span>
+                <span className="pb-1 text-base font-medium text-white/50">{BIZZI_ACCOUNTING_PLAN.interval}</span>
+              </div>
+            </div>
+            <ul className="mt-5 grid gap-x-6 gap-y-2 text-sm leading-6 text-white/70 sm:grid-cols-2">
+              {BIZZI_ACCOUNTING_PLAN.features.map((feature) => (
+                <li key={feature} className="flex items-start gap-2.5">
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300/85" aria-hidden="true" />
+                  <span>{feature}</span>
+                </li>
+              ))}
+            </ul>
+            {checkoutError ? <p className="mt-3 text-xs text-amber-200/90">{checkoutError}</p> : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="rounded-xl border border-white/[0.08] bg-white/[0.025] p-4 sm:p-5">
+        <div className="grid gap-5 lg:grid-cols-2">
+          <div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-white/90">Payment Method</div>
+                <p className="mt-1 text-xs text-white/50">Card on file for renewals.</p>
+              </div>
+              {canManageSubscription ? (
+                <button
+                  onClick={openPortal}
+                  disabled={busyAction !== null}
+                  className="inline-flex items-center rounded-full border border-white/[0.1] px-3 py-1.5 text-xs font-semibold text-white/75 transition hover:bg-white/[0.05] disabled:opacity-60"
+                >
+                  {busyAction === "portal" ? "Opening…" : "Manage"}
+                </button>
+              ) : null}
+            </div>
+            <div className="mt-3 text-sm text-white/75">
+              {loadingPaymentMethod ? (
+                <span className="text-white/45">Loading payment method…</span>
+              ) : paymentMethod ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold text-white/85">
+                    {String(paymentMethod.brand || "").toUpperCase()} ending in {paymentMethod.last4}
+                  </span>
+                  <span className="text-xs text-white/50">
+                    Expires {paymentMethod.exp_month}/{paymentMethod.exp_year}
+                  </span>
+                </div>
+              ) : (
+                <span className="text-white/45">No payment method on file.</span>
+              )}
+            </div>
+            {paymentMethodError ? <p className="mt-2 text-xs text-amber-200/90">{paymentMethodError}</p> : null}
+            {!canManageSubscription && hasActiveCoreSubscription ? (
+              <p className="mt-2 text-xs text-white/50">No billing portal available yet.</p>
+            ) : null}
+            {portalError ? <p className="mt-2 text-xs text-amber-200/90">{portalError}</p> : null}
+          </div>
+
+          <div className="border-t border-white/[0.07] pt-5 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0">
+            <div className="text-sm font-semibold text-white/90">Recent Invoices</div>
+            <p className="mt-1 text-xs text-white/50">Receipts and payment history.</p>
+            <div className="mt-3 space-y-2">
+              {loadingInvoices ? (
+                <div className="text-sm text-white/45">Loading invoices…</div>
+              ) : invoices && invoices.length ? (
+                invoices.slice(0, 5).map((inv) => (
+                  <div key={inv.id} className="flex flex-wrap items-center justify-between gap-2 text-sm text-white/75">
+                    <div>
+                      <div className="font-semibold text-white/85">Invoice {inv.number || inv.id}</div>
+                      <div className="text-xs text-white/45">{formatDate(inv.created_at)}</div>
                     </div>
-                    <div className="mt-3 text-sm text-white/70">
-                      Core gives you Bizzi's bookkeeping automation, financial visibility, and tax readiness tools, plus a
-                      monthly human review layer for added accuracy and confidence.
+                    <div className="text-right">
+                      <div>{inv.amount_paid ? "Paid" : "Due"} {formatMoney(inv.amount_paid || inv.amount_due, inv.currency)}</div>
+                      <div className="text-xs text-white/45">{inv.status}</div>
                     </div>
-                    {isCurrentPlan ? (
-                      <div className="mt-3 text-sm font-medium text-emerald-200">This is your current plan</div>
+                    {inv.hosted_invoice_url ? (
+                      <a
+                        href={inv.hosted_invoice_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-full border border-white/[0.1] px-3 py-1 text-xs text-white/75 hover:bg-white/[0.05]"
+                      >
+                        View
+                      </a>
                     ) : null}
                   </div>
-                </div>
-
-                {planButtonState.variant === "current" ? (
-                  <div className="mt-5 border-t border-white/10 pt-4 text-center text-sm font-medium text-white/55">
-                    Current subscription
-                  </div>
-                ) : (
-                  <button
-                    onClick={planButtonState.action}
-                    disabled={planButtonState.disabled}
-                    className={[
-                      "mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full border px-4 py-2.5 text-sm font-semibold transition disabled:opacity-60",
-                      planButtonState.variant === "activate"
-                        ? "border-emerald-300/60 bg-emerald-300/90 text-black shadow-[0_0_12px_rgba(16,185,129,0.35)] hover:opacity-90"
-                        : "border-white/15 bg-white/5 text-white/90 hover:bg-white/10",
-                    ].join(" ")}
-                  >
-                    {planButtonState.variant === "activate" ? "Activate Bizzi" : planButtonState.label}
-                  </button>
-                )}
-
-                <ul className="mt-5 space-y-2 text-sm text-white/75">
-                  <li className="flex items-start gap-2">
-                    <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300/80" aria-hidden="true" />
-                    Automated bookkeeping workflows
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300/80" aria-hidden="true" />
-                    Transaction categorization and organization
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300/80" aria-hidden="true" />
-                    Forecasting and financial visibility
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300/80" aria-hidden="true" />
-                    Trade-specific financial insights
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300/80" aria-hidden="true" />
-                    AI financial assistant
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="mt-1 h-2 w-2 rounded-full bg-emerald-300/80" aria-hidden="true" />
-                    Monthly human review layer
-                  </li>
-                </ul>
-              </div>
+                ))
+              ) : (
+                <div className="text-sm text-white/45">No invoices yet.</div>
+              )}
             </div>
-
-            {checkoutError ? (
-              <p className="mt-3 text-xs text-amber-200/90">{checkoutError}</p>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-lg font-semibold">Payment Method</div>
-            <p className="text-sm text-white/60">Card on file used for renewals and billing updates.</p>
-          </div>
-          {canManageSubscription ? (
-            <button
-              onClick={openPortal}
-              disabled={busyAction !== null}
-              className="inline-flex items-center gap-2 rounded-md border border-white/15 px-4 py-2 text-sm font-semibold text-white/90 transition hover:bg-white/5 disabled:opacity-60"
-            >
-              {busyAction === "portal" ? "Opening portal…" : "Manage Subscription"}
-            </button>
-          ) : null}
-        </div>
-        <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white/80">
-          {loadingPaymentMethod ? (
-            <span className="text-white/50">Loading payment method…</span>
-          ) : paymentMethod ? (
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="font-semibold text-white/90">
-                {String(paymentMethod.brand || "").toUpperCase()} ending in {paymentMethod.last4}
-              </div>
-              <div className="text-xs text-white/60">
-                Expires {paymentMethod.exp_month}/{paymentMethod.exp_year}
-              </div>
-            </div>
-          ) : (
-            <span className="text-white/50">No payment method on file.</span>
-          )}
-        </div>
-        {paymentMethodError ? (
-          <p className="mt-2 text-xs text-amber-200/90">{paymentMethodError}</p>
-        ) : null}
-        {!canManageSubscription && hasActiveCoreSubscription ? (
-          <p className="mt-2 text-xs text-white/50">No billing portal available yet.</p>
-        ) : null}
-        {portalError ? (
-          <p className="mt-2 text-xs text-amber-200/90">{portalError}</p>
-        ) : null}
-      </div>
-
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5 shadow-[0_0_18px_rgba(16,185,129,0.08)]">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-lg font-semibold">Recent Invoices</div>
-            <p className="text-sm text-white/60">Download receipts and payment history.</p>
+            {invoiceError ? <p className="mt-2 text-xs text-amber-200/90">{invoiceError}</p> : null}
           </div>
         </div>
-        <div className="mt-3 space-y-2">
-          {loadingInvoices ? (
-            <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white/50">
-              Loading invoices…
-            </div>
-          ) : invoices && invoices.length ? (
-            invoices.slice(0, 5).map((inv) => (
-              <div
-                key={inv.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white/80"
-              >
-                <div>
-                  <div className="text-white/90 font-semibold">Invoice {inv.number || inv.id}</div>
-                  <div className="text-xs text-white/50">{formatDate(inv.created_at)}</div>
-                </div>
-                <div className="text-right">
-                  <div className="text-white/80">
-                    {inv.amount_paid ? "Paid" : "Due"} {formatMoney(inv.amount_paid || inv.amount_due, inv.currency)}
-                  </div>
-                  <div className="text-xs text-white/50">{inv.status}</div>
-                </div>
-                {inv.hosted_invoice_url ? (
-                  <a
-                    href={inv.hosted_invoice_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-2 rounded-md border border-white/10 px-3 py-1 text-xs text-white/80 hover:bg-white/5"
-                  >
-                    View
-                  </a>
-                ) : null}
-              </div>
-            ))
-          ) : (
-            <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-white/50">
-              No invoices yet.
-            </div>
-          )}
-        </div>
-        {invoiceError ? (
-          <p className="mt-2 text-xs text-amber-200/90">{invoiceError}</p>
-        ) : null}
       </div>
     </div>
   );

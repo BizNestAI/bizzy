@@ -97,7 +97,7 @@ async function markOnboardingCompletedOnce(businessId) {
   return { error: null };
 }
 
-async function fetchOnboardingStatus(businessId, contextBusiness = null) {
+async function fetchOnboardingStatus(businessId) {
   if (!businessId) {
     return { ...INITIAL_STATE, loading: false };
   }
@@ -242,7 +242,6 @@ export default function useOnboardingStatus(options = {}) {
   const businessCtx = useBusiness() || {};
   const contextBusinessId =
     businessCtx?.currentBusiness?.id || businessCtx?.businessId || null;
-  const contextBusiness = businessCtx?.currentBusiness || null;
   const explicitBusinessId = options?.businessId || null;
   const businessId = explicitBusinessId || contextBusinessId || getStoredBusinessId();
 
@@ -255,18 +254,19 @@ export default function useOnboardingStatus(options = {}) {
     };
   }, []);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts = {}) => {
+    const silent = Boolean(opts?.silent);
     if (!businessId) {
       if (mountedRef.current) {
         setState({ ...INITIAL_STATE, loading: false });
       }
       return;
     }
-    if (mountedRef.current) {
+    if (mountedRef.current && !silent) {
       setState((prev) => ({ ...prev, loading: true, error: null }));
     }
     try {
-      const next = await fetchOnboardingStatus(businessId, contextBusiness);
+      const next = await fetchOnboardingStatus(businessId);
       if (mountedRef.current) {
         setState(next);
       }
@@ -275,27 +275,27 @@ export default function useOnboardingStatus(options = {}) {
         setState((prev) => ({ ...prev, loading: false, error: err }));
       }
     }
-  }, [businessId, contextBusiness]);
+  }, [businessId]);
 
   useEffect(() => {
     refresh();
-    const onFocus = () => refresh();
-    const onVisible = () => {
-      if (document.visibilityState === "visible") refresh();
-    };
+    const refreshSilently = () => refresh({ silent: true });
     const onStorage = (e) => {
-      if (!e || !e.key) refresh();
+      const relevantKeys = new Set([
+        "currentBusinessId",
+        "business_id",
+        ...Object.values(LOCAL_KEYS),
+      ]);
+      if (!e || !e.key || relevantKeys.has(e.key)) {
+        refreshSilently();
+      }
     };
-    const onQboConnected = () => refresh();
-    const onFlagsUpdated = () => refresh();
-    window.addEventListener("focus", onFocus);
-    window.addEventListener("visibilitychange", onVisible);
+    const onQboConnected = () => refreshSilently();
+    const onFlagsUpdated = () => refreshSilently();
     window.addEventListener("storage", onStorage);
     window.addEventListener("bizzy:qbo-connected", onQboConnected);
     window.addEventListener("bizzy:onboarding-flags-updated", onFlagsUpdated);
     return () => {
-      window.removeEventListener("focus", onFocus);
-      window.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("bizzy:qbo-connected", onQboConnected);
       window.removeEventListener("bizzy:onboarding-flags-updated", onFlagsUpdated);

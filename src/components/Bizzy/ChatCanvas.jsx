@@ -268,7 +268,7 @@ export default function ChatCanvas({
   topAnchorSelector,
   quickPromptMode = "normal",
 }) {
-  const { isCanvasOpen, closeCanvas } = useBizzyChatContext();
+  const { isCanvasOpen, leaveCanvas } = useBizzyChatContext();
   const canvasRightInset = Math.max(0, Math.round(Number(rightInset) || 0));
   const prevOverflowRef = useRef({ body: "", html: "" });
   const navWidth = useMemo(() => {
@@ -384,7 +384,6 @@ export default function ChatCanvas({
         10
       );
       const clamped = maxCol && Number.isFinite(maxCol) ? Math.min(w, maxCol) : w;
-      if (import.meta?.env?.DEV) console.log("[ChatCanvas] pill width:", clamped, "gutter:", Math.max(padL, padR));
       setContentWidth(clamped || null);
       setContentGutter(Math.max(padL, padR) || 0);
       const barRect = barMeasureRef.current?.getBoundingClientRect?.();
@@ -414,7 +413,7 @@ export default function ChatCanvas({
   const handleBackToDashboard = () => {
     // Only close the canvas; let the current route remain (e.g., stay on ChatHome).
     try {
-      closeCanvas?.();
+      leaveCanvas?.();
     } catch {}
   };
 

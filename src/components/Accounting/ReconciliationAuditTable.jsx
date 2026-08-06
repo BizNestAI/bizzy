@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import CardHeader from "../UI/CardHeader.jsx";
 import {
   getReconciliationTone,
@@ -21,6 +21,8 @@ const STATUS_OPTIONS = [
 
 const PANEL_BG = "#151717";
 const PANEL_BORDER = "rgba(255,255,255,0.06)";
+const filterControlClass =
+  "rounded-xl border border-white/10 bg-[#0d1110] px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400/40 focus:ring-2 focus:ring-emerald-400/20";
 
 function formatMoney(n) {
   if (n === null || n === undefined) return "—";
@@ -133,6 +135,62 @@ function resolveDescription(row) {
   );
 }
 
+function DarkFilterSelect({ id, label, value, options = [], onChange }) {
+  const [open, setOpen] = React.useState(false);
+  const selected = options.find((opt) => opt.value === value) || options[0] || null;
+
+  return (
+    <div className="relative" onBlur={() => setTimeout(() => setOpen(false), 120)}>
+      <button
+        id={id}
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={label}
+        onClick={() => setOpen((prev) => !prev)}
+        className={`${filterControlClass} flex w-full items-center justify-between gap-2 text-left`}
+      >
+        <span className="truncate">{selected?.label || label}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div
+          role="listbox"
+          aria-labelledby={id}
+          className="absolute left-0 right-0 z-40 mt-1 max-h-72 overflow-auto rounded-xl border border-white/10 bg-[#0b0f0e] py-1 text-sm text-slate-100 shadow-[0_18px_44px_rgba(0,0,0,0.48)]"
+        >
+          {options.map((opt) => {
+            const active = opt.value === value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onChange(opt.value);
+                  setOpen(false);
+                }}
+                className={[
+                  "flex w-full items-center gap-2 px-3 py-2 text-left transition hover:bg-white/[0.07]",
+                  active ? "bg-emerald-300/[0.1] text-white" : "text-slate-200",
+                ].join(" ")}
+              >
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${active ? "bg-emerald-300" : "bg-transparent"}`}
+                  aria-hidden="true"
+                />
+                <span className="truncate">{opt.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function amountClass(amount) {
   const value = Number(amount);
   if (!Number.isFinite(value) || value === 0) return "text-slate-100";
@@ -166,6 +224,7 @@ export default function ReconciliationAuditTable({
   selectedRunSummary,
   isHistoricalSnapshot = false,
   isClosing = false,
+  embeddedInHorizontalScroller = false,
   onRefresh,
   onCollapse,
   onReturnToLatest,
@@ -202,6 +261,16 @@ export default function ReconciliationAuditTable({
   const viewLabel = usingHistoricalRun
     ? `Viewing ${selectedMonthLabel}`
     : `Viewing latest monthly run: ${selectedMonthLabel}`;
+  const accountOptions = React.useMemo(
+    () => [
+      { value: "all", label: "All accounts" },
+      ...accounts.map((a) => ({
+        value: a.id,
+        label: accountMap.get(a.id) || a.name || a.id,
+      })),
+    ],
+    [accounts, accountMap]
+  );
 
   const emptyState = (() => {
     if (error || loading || !noResults) return null;
@@ -288,42 +357,35 @@ export default function ReconciliationAuditTable({
       </div>
 
       <div className="mt-4 grid gap-2 md:grid-cols-3">
-        <select
+        <DarkFilterSelect
+          id="reconciliation-audit-pipeline-status"
+          label="Pipeline state"
           value={filters.status}
-          onChange={(e) => setFilters((prev) => ({ ...prev, status: e.target.value }))}
-          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400/40"
-        >
-          {STATUS_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+          options={STATUS_OPTIONS}
+          onChange={(status) => setFilters((prev) => ({ ...prev, status }))}
+        />
 
-        <select
+        <DarkFilterSelect
+          id="reconciliation-audit-account"
+          label="Account"
           value={filters.account}
-          onChange={(e) => setFilters((prev) => ({ ...prev, account: e.target.value }))}
-          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-400/40"
-        >
-          <option value="all">All accounts</option>
-          {accounts.map((a) => (
-            <option key={a.id} value={a.id}>
-              {accountMap.get(a.id) || a.name || a.id}
-            </option>
-          ))}
-        </select>
+          options={accountOptions}
+          onChange={(account) => setFilters((prev) => ({ ...prev, account }))}
+        />
 
         <input
+          id="reconciliation-audit-search"
+          name="reconciliation_audit_search"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search merchant or description"
-          className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-emerald-400/40"
+          className={`${filterControlClass} placeholder:text-slate-500`}
         />
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-white/6 bg-[#111313]">
-        <div className="overflow-x-auto">
-          <table className="min-w-[1040px] w-full text-sm text-slate-100">
+        <div className={embeddedInHorizontalScroller ? "overflow-visible" : "overflow-x-auto"}>
+          <table className={`${embeddedInHorizontalScroller ? "min-w-[1160px]" : "min-w-[1040px]"} w-full text-sm text-slate-100`}>
             <thead className="bg-white/[0.03] text-[11px] uppercase tracking-[0.18em] text-slate-400">
               <tr className="border-b border-white/6">
                 <th className="px-3 py-2.5 text-left">Date</th>

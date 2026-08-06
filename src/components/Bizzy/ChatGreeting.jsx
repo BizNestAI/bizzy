@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { supabase } from "../../services/supabaseClient";
 import { getDailyGreeting } from "../../api/greetings/dailyGreeting";
+import { shouldSuppressTabRestoreMotion } from "../../utils/tabVisibilityMotionGuard";
 
 const STORAGE_KEY_PREFIX = "bizzy:chatGreeting:";
 const WARM_TEXT = "var(--text)";
@@ -17,7 +17,6 @@ export default function ChatGreeting({ className = "", textOverride = null, opac
   const storageKey = `${STORAGE_KEY_PREFIX}${today.stamp}`;
   const [displayed, setDisplayed] = useState("");
   const [visible, setVisible] = useState(false);
-  const [firstName, setFirstName] = useState("");
 
   useEffect(() => {
     const updateToday = () => {
@@ -41,46 +40,17 @@ export default function ChatGreeting({ className = "", textOverride = null, opac
     return () => clearTimeout(timeoutId);
   }, []);
 
-  useEffect(() => {
-    let alive = true;
-    async function loadFirstName() {
-      try {
-        const { data } = await supabase.auth.getSession();
-        const userId = data?.session?.user?.id;
-        if (!userId) return;
-        const { data: profile, error } = await supabase
-          .from("user_profiles")
-          .select("first_name,full_name")
-          .eq("id", userId)
-          .maybeSingle();
-        if (error) throw error;
-        const metaFull = data?.session?.user?.user_metadata?.full_name || "";
-        const rawFirst = profile?.first_name || "";
-        const fallbackFull = profile?.full_name || metaFull || "";
-        const name =
-          rawFirst.trim() ||
-          (fallbackFull || "").split(/\s+/)[0]?.trim() ||
-          "";
-        if (alive && name) setFirstName(name);
-      } catch (e) {
-        if (import.meta.env.DEV) console.warn("[ChatGreeting] failed to load first name", e);
-      }
-    }
-    loadFirstName();
-    return () => {
-      alive = false;
-    };
-  }, []);
-
   const combinedGreeting = useMemo(() => {
     if (textOverride) return textOverride;
-    return getDailyGreeting(today.stamp, firstName);
-  }, [firstName, today.stamp, textOverride]);
+    return getDailyGreeting(today.stamp);
+  }, [today.stamp, textOverride]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     setDisplayed(combinedGreeting);
-    setVisible(false);
+    const skipFade = shouldSuppressTabRestoreMotion();
+    setVisible(skipFade);
+    if (skipFade) return;
     // show after a short delay for fade-in
     const t = setTimeout(() => setVisible(true), 50);
     return () => clearTimeout(t);

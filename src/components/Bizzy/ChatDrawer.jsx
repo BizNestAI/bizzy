@@ -174,6 +174,8 @@ function ChatDrawerBody({
                   {/* Title / Rename field */}
                   <input
                     ref={(el) => { inputRefs.current[t.id] = el; }}
+                    id={`chat-title-${t.id}`}
+                    name={`chat-title-${t.id}`}
                     className={`bg-transparent w-full outline-none disabled:opacity-90 truncate
                       text-[12px] md:text-sm font-medium
                       ${isEditing ? 'ring-1 rounded px-1 bg-white/[0.03]' : ''}`}
@@ -311,6 +313,8 @@ function CollapsedHistoryTooltip({
     >
       <div className="mb-2">
         <input
+          id="chat-history-tooltip-search"
+          name="chat-history-tooltip-search"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder="Search chats"
@@ -657,6 +661,8 @@ const ChatDrawer = forwardRef(function ChatDrawer({
           )}
           {!collapsed && (
             <input
+              id="chat-history-search"
+              name="chat-history-search"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search chats"

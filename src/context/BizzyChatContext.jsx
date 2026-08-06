@@ -39,11 +39,70 @@ export const BizzyChatProvider = ({ children }) => {
   // ---------------- Biz / thread state ----------------
   const [businessId, setBusinessId] = useState(null);
   const [threadId, setThreadId] = useState(null);
+  const [chatGateNotice, setChatGateNotice] = useState(null);
 
   useEffect(() => {
     if (currentBusiness?.id) setBusinessId(currentBusiness.id);
     else setBusinessId(localStorage.getItem('currentBusinessId') || null);
   }, [currentBusiness?.id]);
+
+  const checkChatAccess = useCallback(async () => {
+    const resolvedBusinessId =
+      businessId ||
+      currentBusiness?.id ||
+      localStorage.getItem('currentBusinessId') ||
+      localStorage.getItem('business_id') ||
+      '';
+
+    if (!resolvedBusinessId) {
+      const notice = {
+        blocked: true,
+        title: 'Business required',
+        message: 'Select a business before asking Bizzi a question.',
+      };
+      setChatGateNotice(notice);
+      return { allowed: false, ...notice };
+    }
+
+    const url = new URL(apiUrl('/api/gpt/chat-access'));
+    url.searchParams.set('business_id', resolvedBusinessId);
+
+    let access = null;
+    try {
+      access = await safeFetch(url.toString(), {
+        headers: { 'x-business-id': resolvedBusinessId },
+      });
+    } catch (err) {
+      const notice = {
+        blocked: true,
+        title: 'Could not verify access',
+        message: 'Bizzi could not verify your subscription status. Try again in a moment.',
+      };
+      setChatGateNotice(notice);
+      return { allowed: false, error: err?.message, ...notice };
+    }
+
+    if (!access?.subscription_active) {
+      const used = Number(access?.usage_count || 0);
+      const limit = Number(access?.trial_limit || access?.limit || 2);
+      const remaining = Math.max(0, Number(access?.remaining ?? (limit - used)));
+      setChatGateNotice({
+        blocked: !access?.allowed,
+        title: access?.allowed ? 'Bizzi test questions' : 'Subscription required',
+        message: access?.allowed
+          ? `You have ${remaining} of ${limit} test questions left before a monthly subscription is required.`
+          : 'You have used both test questions. Start a monthly subscription to keep asking Bizzi questions.',
+      });
+    } else {
+      setChatGateNotice(null);
+    }
+
+    return access;
+  }, [businessId, currentBusiness?.id]);
+
+  const dismissChatGateNotice = useCallback(() => {
+    setChatGateNotice(null);
+  }, []);
 
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isChatMinimized, setIsChatMinimized] = useState(false);
@@ -66,18 +125,23 @@ export const BizzyChatProvider = ({ children }) => {
   const openCanvas = useCallback((mod) => {
     if (mod) setCanvasModule(mod);
     setCanvasOpen(true);
-    console.log('[Canvas] openCanvas() called; module =', mod);
   }, []);
+
+  const clearActiveThread = useCallback(() => {
+    setThreadId(null);
+    hydrate([]);
+    setSuppressNextUserBubble(false);
+    suppressedUserTextRef.current = null;
+  }, [hydrate]);
 
   const closeCanvas = useCallback(() => {
     setCanvasOpen(false);
-    console.log('[Canvas] closeCanvas() called');
   }, []);
 
-  // lifecycle log when the flag flips
-   useEffect(() => {
-     console.log('[Canvas] isCanvasOpen =', isCanvasOpen, 'canvasModule =', canvasModule);
-   }, [isCanvasOpen, canvasModule]);
+  const leaveCanvas = useCallback(() => {
+    setCanvasOpen(false);
+    clearActiveThread();
+  }, [clearActiveThread]);
 
    // simple debug shim
    useEffect(() => {
@@ -92,7 +156,6 @@ export const BizzyChatProvider = ({ children }) => {
          await hookSendMessage(text, { openCanvas: true, module });
        }
      };
-     console.log('[Canvas] debug shim: window.__bizzy ready:', window.__bizzy);
    }, []); // eslint-disable-line
 
   // ---------------- Auto title helper (unchanged) ----------------
@@ -130,20 +193,25 @@ export const BizzyChatProvider = ({ children }) => {
   // ---------------- Send message / intent ----------------
   const sendMessage = async (text, options = {}) => {
     if (!text || (typeof text === 'string' && !text.trim())) return;
+    const { newThread = false, ...messageOptions } = options || {};
 
     // keep legacy overlay wallet open-ish (not minimized) for consistency
     setIsChatOpen(true);
     setIsChatMinimized(false);
 
+    if (newThread) {
+      clearActiveThread();
+    }
+
     // If callers ask to open the canvas, do it immediately
-    if (options.openCanvas) {
-      openCanvas(options.module);
+    if (messageOptions.openCanvas) {
+      openCanvas(messageOptions.module);
     }
 
     return await hookSendMessage(text, {
-      ...options,
-      business_id: options.business_id ?? businessId,
-      threadId,
+      ...messageOptions,
+      business_id: messageOptions.business_id ?? businessId,
+      threadId: newThread ? null : threadId,
       onThreadCreated: async (id) => {
         setThreadId(id);
         refreshThreads();
@@ -231,6 +299,7 @@ export const BizzyChatProvider = ({ children }) => {
     meta = {},
     openFullCanvas = false,
     module,
+    newThread = false,
   }) => {
     if (!text) return;
 
@@ -239,8 +308,8 @@ export const BizzyChatProvider = ({ children }) => {
     setSuppressNextUserBubble(true);
     suppressedUserTextRef.current = (text || '').trim();
 
-    // Ensure a clean thread if we don't have one yet
-    if (!threadId) hydrate([]);
+    // Ensure a clean thread when starting from outside the active conversation.
+    if (newThread || !threadId) hydrate([]);
 
     if (openFullCanvas) {
       openCanvas(module);
@@ -251,6 +320,7 @@ export const BizzyChatProvider = ({ children }) => {
         intent,
         source,
         ...meta,
+        newThread,
       });
     } catch (e) {
       console.warn('[BizzyChat] startQuickPrompt failed:', e);
@@ -270,6 +340,7 @@ export const BizzyChatProvider = ({ children }) => {
       followUpPrompt,
       suggestedActions,
       clarify,
+      chatGateNotice,
 
       // thread
       threadId,
@@ -280,6 +351,8 @@ export const BizzyChatProvider = ({ children }) => {
       sendMessage,
       chooseIntent,
       openThread,
+      checkChatAccess,
+      dismissChatGateNotice,
 
       // overlay history controls
       openHistory,
@@ -301,6 +374,7 @@ export const BizzyChatProvider = ({ children }) => {
       canvasModule,
       openCanvas,
       closeCanvas,
+      leaveCanvas,
 
       // quick prompts
       startQuickPrompt,
@@ -312,10 +386,11 @@ export const BizzyChatProvider = ({ children }) => {
     }),
     [
       messages, isLoading, isGenerating, isFetchingThread, usageCount, error,
-      followUpPrompt, suggestedActions, clarify,
+      followUpPrompt, suggestedActions, clarify, chatGateNotice,
       threadId, threadsRefreshKey,
       isChatOpen, isChatMinimized,
       isCanvasOpen, canvasModule,
+      checkChatAccess, dismissChatGateNotice,
     ]
   );
 

@@ -190,7 +190,7 @@ const MainLayoutCore = ({ children }) => {
 
   return (
     <InsightsUnreadProvider userId={user?.id} businessId={businessId}>
-      <div className={`min-h-screen h-screen ${textColor} font-sans relative`} style={{ paddingLeft: "var(--nav-w, 0px)" }}>
+        <div className={`bizzy-app-shell min-h-screen h-screen ${textColor} font-sans relative`} style={{ paddingLeft: "var(--nav-w, 0px)" }}>
         {/* Single global background layer */}
         <div
           aria-hidden

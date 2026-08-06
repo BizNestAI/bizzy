@@ -1465,12 +1465,6 @@ router.get("/job-costing", requireAuth, async (req, res) => {
     const businessId = ensureBusinessId(req, res);
     if (!businessId) return;
     const payload = await fetchJobCostingRows(businessId);
-    if (globalThis.process?.env?.NODE_ENV !== "production") {
-      console.info("[JobCosting] posted Books transactions fetched", {
-        businessId,
-        count: Array.isArray(payload?.transactions) ? payload.transactions.length : 0,
-      });
-    }
     return res.json({ ok: true, ...payload });
   } catch (e) {
     console.error("[jobs.job-costing]", e);

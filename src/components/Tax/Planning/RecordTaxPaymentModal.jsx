@@ -74,7 +74,7 @@ export default function RecordTaxPaymentModal({
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
           <div className="grid gap-2.5 sm:grid-cols-2">
             <Field label="Jurisdiction" error={errors.jurisdiction}>
-              <select value={form.jurisdiction} onChange={(event) => update("jurisdiction", event.target.value)} className={inputClass()}>
+              <select name="jurisdiction" value={form.jurisdiction} onChange={(event) => update("jurisdiction", event.target.value)} className={inputClass()}>
                 <option value="federal">Federal</option>
                 <option value="state">State</option>
                 <option value="local">Local/county</option>
@@ -84,31 +84,31 @@ export default function RecordTaxPaymentModal({
             </Field>
             {form.jurisdiction === "state" ? (
               <Field label="State" error={errors.stateCode}>
-                <select value={form.stateCode} onChange={(event) => update("stateCode", event.target.value)} className={inputClass()}>
+                <select name="state_code" value={form.stateCode} onChange={(event) => update("stateCode", event.target.value)} className={inputClass()}>
                   <option value="">Select state</option>
                   {US_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
                 </select>
               </Field>
             ) : null}
             <Field label="Payment type" error={errors.paymentType}>
-              <select value={form.paymentType} onChange={(event) => update("paymentType", event.target.value)} className={inputClass()}>
+              <select name="payment_type" value={form.paymentType} onChange={(event) => update("paymentType", event.target.value)} className={inputClass()}>
                 {PAYMENT_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </Field>
             <Field label="Tax type">
-              <input value={form.taxType} onChange={(event) => update("taxType", event.target.value)} placeholder="Income tax, PTET, entity tax..." className={inputClass()} />
+              <input name="tax_type" value={form.taxType} onChange={(event) => update("taxType", event.target.value)} placeholder="Income tax, PTET, entity tax..." className={inputClass()} />
             </Field>
             <Field label="Payment date" error={errors.paymentDate}>
-              <input type="date" value={form.paymentDate} onChange={(event) => update("paymentDate", event.target.value)} className={inputClass()} />
+              <input name="payment_date" type="date" value={form.paymentDate} onChange={(event) => update("paymentDate", event.target.value)} className={inputClass()} />
             </Field>
             <Field label="Amount" error={errors.amount}>
-              <input type="number" min="0.01" step="0.01" value={form.amount} onChange={(event) => update("amount", event.target.value)} className={inputClass()} />
+              <input name="amount" type="number" min="0.01" step="0.01" value={form.amount} onChange={(event) => update("amount", event.target.value)} className={inputClass()} />
             </Field>
             <Field label="Tax year" error={errors.taxYear}>
-              <input type="number" min="2000" max="2100" value={form.taxYear} onChange={(event) => update("taxYear", event.target.value)} className={inputClass()} />
+              <input name="tax_year" type="number" min="2000" max="2100" value={form.taxYear} onChange={(event) => update("taxYear", event.target.value)} className={inputClass()} />
             </Field>
             <Field label="Quarter / period" error={errors.quarter}>
-              <select value={form.quarter} onChange={(event) => update("quarter", event.target.value)} className={inputClass()}>
+              <select name="quarter" value={form.quarter} onChange={(event) => update("quarter", event.target.value)} className={inputClass()}>
                 <option value="">Not applicable</option>
                 <option value="Q1">Q1</option>
                 <option value="Q2">Q2</option>
@@ -119,17 +119,16 @@ export default function RecordTaxPaymentModal({
               </select>
             </Field>
             <Field label="Source">
-              <select value={form.source} onChange={(event) => update("source", event.target.value)} className={inputClass()}>
+              <select name="source" value={form.source} onChange={(event) => update("source", event.target.value)} className={inputClass()}>
                 {PAYMENT_SOURCES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </Field>
             <Field label="Confirmation / reference number">
-              <input value={form.confirmationNumber} onChange={(event) => update("confirmationNumber", event.target.value)} className={inputClass()} />
+              <input name="confirmation_number" value={form.confirmationNumber} onChange={(event) => update("confirmationNumber", event.target.value)} className={inputClass()} />
             </Field>
-            <label className="block sm:col-span-2">
-              <span className="text-[11px] font-semibold text-white/70">Notes</span>
-              <textarea value={form.notes} onChange={(event) => update("notes", event.target.value)} rows={2} className={inputClass()} />
-            </label>
+            <Field label="Notes" className="sm:col-span-2">
+              <textarea name="notes" value={form.notes} onChange={(event) => update("notes", event.target.value)} rows={2} className={inputClass()} />
+            </Field>
           </div>
 
           <section id="tax-payment-history" className="mt-4 rounded-[16px] border border-white/10 bg-white/[0.03] p-3">
@@ -271,13 +270,19 @@ function paymentWarnings(form, { year, existingRows, projectedRemainingLiability
   return warnings;
 }
 
-function Field({ label, error, children }) {
+function Field({ label, error, children, className = "" }) {
+  const generatedId = React.useId().replace(/:/g, "");
+  const child = React.Children.only(children);
+  const id = child.props.id || child.props.name || `tax-payment-${generatedId}`;
+  const name = child.props.name || id.replace(/-/g, "_");
+  const field = React.isValidElement(child) ? React.cloneElement(child, { id, name }) : children;
+
   return (
-    <label className="block">
-      <span className="text-[11px] font-semibold text-white/70">{label}</span>
-      <div className="mt-1">{children}</div>
+    <div className={`block ${className}`}>
+      <label htmlFor={id} className="text-[11px] font-semibold text-white/70">{label}</label>
+      <div className="mt-1">{field}</div>
       {error ? <div className="mt-1 text-xs text-rose-100">{error}</div> : null}
-    </label>
+    </div>
   );
 }
 

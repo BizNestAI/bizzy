@@ -1,5 +1,5 @@
 // File: /src/components/layout/NavRail.jsx
-import React, { useMemo, useRef, useLayoutEffect } from 'react';
+import React, { useEffect, useMemo, useRef, useLayoutEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Sidebar from '../components/UserAdmin/Sidebar';
 import ChatDrawer from '../components/Bizzy/ChatDrawer';
@@ -8,6 +8,7 @@ import { useBusiness } from '../context/BusinessContext';
 import bizzyLogo from '../assets/bizzy-logo.png';
 import { ACCENT_HEX, ACCENT_SOFT } from '../config/accent';
 import NavRailBusinessBadge from './NavRailBusinessBadge';
+import { getDemoMode } from '../services/demo/demoClient.js';
 
 function moduleFromPath(path) {
   const seg = path.split('/')[2] || 'bizzy';
@@ -76,12 +77,28 @@ export default function NavRail({
   const asideRef = useRef(null);
   const chatDrawerRef = useRef(null);
   const collapsed = true;
+  const [dataMode, setDataMode] = useState(() => getDemoMode());
 
   useLayoutEffect(() => {
     const width = `${COLLAPSED_NAV_W}px`;
     document.documentElement.style.setProperty("--nav-w", width);
     document.documentElement.style.setProperty("--nav-collapsed", "1");
   }, []);
+
+  useEffect(() => {
+    const syncMode = (event) => {
+      const next = event?.detail || getDemoMode();
+      setDataMode(next || 'auto');
+    };
+    window.addEventListener('bizzy:demo-mode-changed', syncMode);
+    window.addEventListener('storage', syncMode);
+    return () => {
+      window.removeEventListener('bizzy:demo-mode-changed', syncMode);
+      window.removeEventListener('storage', syncMode);
+    };
+  }, []);
+
+  const isLiveMode = dataMode === 'live';
 
   return (
     <>
@@ -181,19 +198,40 @@ export default function NavRail({
           </div>
         </div>
 
-        {/* Bottom badge */}
+        {/* Bottom badges */}
         <div
+          className="items-center gap-2"
           style={{
             position: "absolute",
             left: 0,
             right: 0,
             bottom: 22,
             display: "flex",
+            flexDirection: "column",
             justifyContent: "center",
             pointerEvents: "auto",
             zIndex: 5,
           }}
         >
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard/settings')}
+            title={`Data source mode: ${isLiveMode ? 'Live' : 'Mock'}`}
+            aria-label={`Data source mode: ${isLiveMode ? 'Live' : 'Mock'}`}
+            className="inline-flex h-6 items-center gap-1.5 rounded-full px-2 text-[10px] font-semibold uppercase tracking-[0.12em] transition hover:bg-white/[0.045]"
+            style={{
+              color: isLiveMode ? 'rgba(167,243,208,0.9)' : 'rgba(255,255,255,0.62)',
+              background: isLiveMode ? 'rgba(16,185,129,0.055)' : 'rgba(255,255,255,0.028)',
+              boxShadow: '0 8px 20px rgba(0,0,0,0.14)',
+            }}
+          >
+            <span
+              aria-hidden
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: isLiveMode ? 'rgba(52,211,153,0.92)' : 'rgba(255,255,255,0.42)' }}
+            />
+            {isLiveMode ? 'Live' : 'Mock'}
+          </button>
           <NavRailBusinessBadge />
         </div>
       </aside>

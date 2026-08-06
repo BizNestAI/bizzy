@@ -144,6 +144,7 @@ export default function PNLArchiveViewer() {
         year: report.year,
         month: report.month,
         forceRefresh,
+        forceMock: usingDemo,
       };
       console.log("[PNLArchiveViewer] generatePdfOnDemand", payload, { apiBase: getApiBase() });
       const res = await apiFetch("/api/accounting/pnl/pdf", {
@@ -259,32 +260,32 @@ export default function PNLArchiveViewer() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6 pt-0 pb-8">
-      <div className="flex flex-col gap-2 mb-8">
+    <div className="mx-auto max-w-[1100px] pt-0 pb-8">
+      <div className="mb-8">
         <h1 className="text-[20px] sm:text-[22px] font-semibold tracking-[0.2em] text-white leading-tight">
           P&L Report Archive
         </h1>
-        <p className="text-sm text-[rgba(var(--accent-rgb),0.78)]">
+        <p className="mt-3 text-sm text-white/70">
           Your Profit &amp; Loss reports, ready for download or quick review.
         </p>
       </div>
 
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8 flex-wrap">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-5 mb-7 flex-wrap">
         <div className="flex flex-wrap gap-4 items-start">
           <div>
-            <label className="text-sm font-medium text-white/75 mb-1 block">Year</label>
+            <label className="text-xs font-medium text-white/62 mb-1 block">Year</label>
             <Listbox value={filteredYear} onChange={setFilteredYear}>
-              <div className="relative w-40">
-                <Listbox.Button className="bg-[#0f1115] text-white px-3 py-1.5 rounded-lg border border-white/12 w-full flex justify-between items-center hover:border-[rgba(var(--accent-rgb),0.4)] focus:outline-none focus:ring-0 focus-visible:ring-0 transition shadow-[0_12px_30px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.05)]">
-                  <span>{filteredYear || "All Years"}</span>
-                  <ChevronUpDownIcon className="h-5 w-5 text-white/70" />
+              <div className="relative w-36">
+                <Listbox.Button className="bg-[#0f1115] text-sm text-white px-3 py-1 rounded-md border border-white/12 w-full min-h-[34px] flex justify-between items-center hover:border-[rgba(var(--accent-rgb),0.4)] focus:outline-none focus:ring-0 focus-visible:ring-0 transition shadow-[0_10px_24px_rgba(0,0,0,0.36),inset_0_1px_0_rgba(255,255,255,0.045)]">
+                  <span className="truncate">{filteredYear || "All Years"}</span>
+                  <ChevronUpDownIcon className="h-4 w-4 shrink-0 text-white/58" />
                 </Listbox.Button>
                 <Listbox.Options className="absolute mt-1 z-10 bg-[#0b0d11] text-white border border-white/10 rounded-lg w-full shadow-lg backdrop-blur focus:outline-none focus:ring-0 focus-visible:ring-0">
-                  <Listbox.Option value={null} className="px-4 py-2 hover:bg-[rgba(var(--accent-rgb),0.12)] cursor-pointer">
+                  <Listbox.Option value={null} className="px-3 py-1.5 text-sm hover:bg-[rgba(var(--accent-rgb),0.12)] cursor-pointer">
                     All Years
                   </Listbox.Option>
                   {combinedYears.map((y) => (
-                    <Listbox.Option key={y} value={y} className="px-4 py-2 hover:bg-[rgba(var(--accent-rgb),0.12)] cursor-pointer">
+                    <Listbox.Option key={y} value={y} className="px-3 py-1.5 text-sm hover:bg-[rgba(var(--accent-rgb),0.12)] cursor-pointer">
                       {y}
                     </Listbox.Option>
                   ))}
@@ -294,19 +295,19 @@ export default function PNLArchiveViewer() {
           </div>
 
           <div>
-            <label className="text-sm font-medium text-white/75 mb-1 block">Month</label>
+            <label className="text-xs font-medium text-white/62 mb-1 block">Month</label>
             <Listbox value={filteredMonth} onChange={setFilteredMonth}>
-              <div className="relative w-44">
-                <Listbox.Button className="bg-[#0f1115] text-white px-3 py-1.5 rounded-lg border border-white/12 w-full flex justify-between items-center hover:border-[rgba(var(--accent-rgb),0.4)] focus:outline-none focus:ring-0 focus-visible:ring-0 transition shadow-[0_12px_30px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.05)]">
-                  <span>{filteredMonth || "All Months"}</span>
-                  <ChevronUpDownIcon className="h-5 w-5 text-white/70" />
+              <div className="relative w-40">
+                <Listbox.Button className="bg-[#0f1115] text-sm text-white px-3 py-1 rounded-md border border-white/12 w-full min-h-[34px] flex justify-between items-center hover:border-[rgba(var(--accent-rgb),0.4)] focus:outline-none focus:ring-0 focus-visible:ring-0 transition shadow-[0_10px_24px_rgba(0,0,0,0.36),inset_0_1px_0_rgba(255,255,255,0.045)]">
+                  <span className="truncate">{filteredMonth || "All Months"}</span>
+                  <ChevronUpDownIcon className="h-4 w-4 shrink-0 text-white/58" />
                 </Listbox.Button>
                 <Listbox.Options className="absolute mt-1 z-10 bg-[#0b0d11] text-white border border-white/10 rounded-lg w-full shadow-lg backdrop-blur focus:outline-none focus:ring-0 focus-visible:ring-0">
-                  <Listbox.Option value={null} className="px-4 py-2 hover:bg-[rgba(var(--accent-rgb),0.12)] cursor-pointer">
+                  <Listbox.Option value={null} className="px-3 py-1.5 text-sm hover:bg-[rgba(var(--accent-rgb),0.12)] cursor-pointer">
                     All Months
                   </Listbox.Option>
                   {MONTHS.slice(1).map((m) => (
-                    <Listbox.Option key={m} value={m} className="px-4 py-2 hover:bg-[rgba(var(--accent-rgb),0.12)] cursor-pointer">
+                    <Listbox.Option key={m} value={m} className="px-3 py-1.5 text-sm hover:bg-[rgba(var(--accent-rgb),0.12)] cursor-pointer">
                       {m}
                     </Listbox.Option>
                   ))}
@@ -343,31 +344,22 @@ export default function PNLArchiveViewer() {
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.2 }}
-                className="relative rounded-3xl border border-white/10 bg-white/4 backdrop-blur-sm p-4 flex flex-col gap-3 shadow-[0_18px_60px_rgba(0,0,0,0.35)]"
+                className="relative flex min-h-[92px] rounded-3xl border border-white/10 bg-white/4 backdrop-blur-sm p-4 shadow-[0_18px_60px_rgba(0,0,0,0.35)]"
                 style={{
                   boxShadow: "0 18px 60px rgba(0,0,0,0.35), 0 0 0 1px rgba(var(--accent-rgb),0.05)",
                 }}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-base font-semibold text-white">
+                <div className="flex w-full items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-base font-semibold leading-tight text-white">
                       {monthName} {report.year}
                     </p>
-                    <p className="text-xs text-gray-400 mt-1">
-                      Revenue: ${report.revenue?.toLocaleString() || "N/A"}
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      Net Profit: ${report.net_profit?.toLocaleString() || "N/A"}
-                    </p>
-                    <p className="text-[11px] text-gray-500 mt-1">
-                      Forecast included: {report.includes_forecast ? "Yes" : "No"}
-                    </p>
                   </div>
-                  <div className="flex flex-col gap-2">
+                  <div className="shrink-0">
                     <button
                       onClick={() => openPdf(report)}
                       disabled={loadingReportKey === `${report.year}-${report.month}`}
-                      className="bg-white/10 text-white font-semibold py-[3px] px-2 rounded-lg flex items-center gap-1 shadow-sm hover:bg-white/20 min-h-[26px] border border-white/15 disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="inline-flex h-9 w-[126px] items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-white/10 px-3 text-sm font-semibold text-white shadow-sm hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {loadingReportKey === `${report.year}-${report.month}` ? (
                         <Loader2 size={14} className="animate-spin" />

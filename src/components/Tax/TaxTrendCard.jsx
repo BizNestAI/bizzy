@@ -18,11 +18,13 @@ export default function TaxTrendCard({
   source,
   onRecordPayment,
   onViewCalculation,
+  headerActions = null,
 }) {
   const topMetrics = buildTopMetrics({ summary, asOfDate, payments, taxYear });
+  const statusSentence = summary.status?.sentence;
   return (
     <div className="rounded-[20px] border border-white/10 bg-gradient-to-br from-white/[0.06] via-white/[0.03] to-black/60 shadow-[0_18px_50px_rgba(0,0,0,0.35)] p-4 sm:p-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
             <div className="text-[12px] uppercase tracking-[0.14em] text-white/65">Tax trajectory</div>
@@ -32,15 +34,20 @@ export default function TaxTrendCard({
           <div className="text-[12px] font-semibold text-white/50">
             {asOfDate ? `As of ${formatDateLong(asOfDate)}` : "As-of date not available"}
           </div>
-          <p className="max-w-2xl text-[13px] leading-relaxed text-white/62">
-            {summary.status?.sentence || "Estimated cumulative tax obligation through the year. Solid periods are actual or current partial estimates; dashed periods are projected."}
-          </p>
+          {statusSentence ? (
+            <p className="max-w-2xl text-[13px] leading-relaxed text-white/62">
+              {statusSentence}
+            </p>
+          ) : null}
         </div>
-        <ConfidencePill
-          score={summary.confidenceScore}
-          level={summary.confidenceLevel}
-          tooltip={<ConfidenceTooltip health={summary.health} />}
-        />
+        <div className="flex flex-wrap items-center gap-2 lg:max-w-[460px] lg:justify-end">
+          {headerActions}
+          <ConfidencePill
+            score={summary.confidenceScore}
+            level={summary.confidenceLevel}
+            tooltip={<ConfidenceTooltip health={summary.health} />}
+          />
+        </div>
       </div>
 
       <div className="mt-5 space-y-4">

@@ -2,7 +2,10 @@
 import express from "express";
 import OpenAI from "openai";
 
-import { generateFinancialPulseSnapshot } from "./monthlyFinancialPulse.js";
+import {
+  generateFinancialPulseSnapshot,
+  shouldGenerateScheduledFinancialPulse,
+} from "./monthlyFinancialPulse.js";
 import { generateSuggestedMoves } from "../gpt/suggestedMovesEngine.js";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { upsertExpenseTotalsMonthly } from "../../services/expenseTotalsMonthly.js";
@@ -335,22 +338,24 @@ function buildMock({ user_id, business_id, today, generateInsights = MOCK_GEN })
   if (generateInsights) {
     (async () => {
       try {
-        await generateFinancialPulseSnapshot({
-          monthlyMetrics: {
+        if (shouldGenerateScheduledFinancialPulse(monthText)) {
+          await generateFinancialPulseSnapshot({
+            monthlyMetrics: {
+              business_id,
+              month: monthText,
+              total_revenue: cur.total_revenue,
+              total_expenses: cur.total_expenses,
+              net_profit: cur.net_profit,
+              profit_margin: cur.profit_margin,
+              top_spending_category: cur.top_spending_category
+            },
+            priorMonthMetrics: prior,
+            forecastData: {},
+            user_id,
             business_id,
-            month: monthText,
-            total_revenue: cur.total_revenue,
-            total_expenses: cur.total_expenses,
-            net_profit: cur.net_profit,
-            profit_margin: cur.profit_margin,
-            top_spending_category: cur.top_spending_category
-          },
-          priorMonthMetrics: prior,
-          forecastData: {},
-          user_id,
-          business_id,
-          month: monthText
-        });
+            month: monthText
+          });
+        }
         await generateSuggestedMoves({
           monthlyMetrics: cur,
           priorMonthMetrics: prior,
@@ -942,23 +947,26 @@ router.get("/", async (req, res) => {
           }
         }
 
-        // Insights (non-blocking)
-        await generateFinancialPulseSnapshot({
-          monthlyMetrics: {
+        // Monthly Brief generation is intentionally scheduled to avoid spending
+        // OpenAI credits on every metrics refresh.
+        if (shouldGenerateScheduledFinancialPulse(monthText)) {
+          await generateFinancialPulseSnapshot({
+            monthlyMetrics: {
+              business_id,
+              month: monthText,
+              total_revenue: totalRevenue,
+              total_expenses: totalExpenses,
+              net_profit: netProfit,
+              profit_margin: profitMargin,
+              top_spending_category: topExpenseName
+            },
+            priorMonthMetrics: prior || {},
+            forecastData: {},
+            user_id,
             business_id,
-            month: monthText,
-            total_revenue: totalRevenue,
-            total_expenses: totalExpenses,
-            net_profit: netProfit,
-            profit_margin: profitMargin,
-            top_spending_category: topExpenseName
-          },
-          priorMonthMetrics: prior || {},
-          forecastData: {},
-          user_id,
-          business_id,
-          month: monthText
-        }).catch(e => console.warn("[pulse] failed:", e?.message || e));
+            month: monthText
+          }).catch(e => console.warn("[pulse] failed:", e?.message || e));
+        }
 
         await generateSuggestedMoves({
           monthlyMetrics: {

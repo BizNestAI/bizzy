@@ -19,15 +19,13 @@ function seededRandom(seed) {
   return x - Math.floor(x);
 }
 
-export function getDailyGreeting(date = new Date(), firstName = "") {
+export function getDailyGreeting(date = new Date()) {
   try {
     const stamp =
       typeof date === "string" ? date : date?.toISOString?.() || new Date().toISOString();
     const daySeed = Math.floor(new Date(stamp).setHours(0, 0, 0, 0) / 86400000);
     const idx = Math.floor(seededRandom(daySeed) * LINES.length);
-    const base = LINES[idx] || FALLBACK;
-    const clean = (firstName || "").trim();
-    return clean ? `Hello, ${clean}. ${base}` : base;
+    return LINES[idx] || FALLBACK;
   } catch {
     return FALLBACK;
   }

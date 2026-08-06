@@ -220,8 +220,6 @@ export default function ExpenseBreakdownChart({
   }, [businessId, userId, monthKeySelected, year, month, demoData, forceLive]);
 
   const total = useMemo(() => (data || []).reduce((s, d) => s + Number(d.value || 0), 0), [data]);
-  const top = useMemo(() => (data || []).slice().sort((a, b) => b.value - a.value)[0], [data]);
-
   // measure (for legend sizing)
   const [measureRef, { width: w }] = useMeasure();
 
@@ -245,27 +243,27 @@ export default function ExpenseBreakdownChart({
   }
 
   const isMock = source === "mock";
-  const badgeClass =
-    isMock
-      ? "text-xs px-2 py-1 rounded-full border text-amber-300 border-amber-400/40"
-      : "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
+  const badgeClass = "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
 
   const isNarrow = (w || 0) < 430;
-  const chartH = isNarrow ? 132 : 158;
+  const chartH = isNarrow ? 158 : 188;
   const boxSize = Math.min(w || 0, chartH);
-  const baseR = Math.max(54, Math.floor(boxSize * (compact ? 0.38 : 0.42)));
+  const baseR = Math.max(64, Math.floor(boxSize * (compact ? 0.43 : 0.47)));
   const outerRadius = baseR;
-  const innerRadius = Math.floor(baseR * (compact ? 0.62 : 0.66));
+  const innerRadius = Math.floor(baseR * (compact ? 0.7 : 0.74));
 
   const overlayTotalCls = compact ? "text-[14px]" : "text-[16px]";
   const overlayMetaCls = compact ? "text-[10px]" : "text-[11px]";
 
   return (
-    <div className={`flex h-full flex-col rounded-xl border border-white/10 bg-[var(--panel)] p-4 shadow-[0_18px_40px_rgba(0,0,0,0.32)] ${className}`}>
+    <div
+      className={`flex h-full min-h-0 flex-col rounded-xl border border-white/10 bg-[var(--panel)] p-4 shadow-[0_18px_40px_rgba(0,0,0,0.32)] ${className}`}
+      style={{ height: "100%", minHeight: height }}
+    >
       {/* Consistent compact header (Pulse style) */}
       <CardHeader
         title="EXPENSE BREAKDOWN"
-        right={<span className={badgeClass}>{isMock ? "Mock" : "QuickBooks"}</span>}
+        right={isMock ? null : <span className={badgeClass}>QuickBooks</span>}
         size="sm"
         dense
         className="mb-2"
@@ -312,20 +310,18 @@ export default function ExpenseBreakdownChart({
               <div className={`font-semibold text-white ${overlayTotalCls}`}>
                 ${Number(total).toLocaleString()}
               </div>
-              {top?.name ? (
-                <div className={`${overlayMetaCls} max-w-[96px] truncate text-white/50`}>Top: {top.name}</div>
-              ) : null}
             </div>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto pr-1 [scrollbar-color:rgba(52,211,153,0.28)_transparent] [scrollbar-width:thin]">
+        <div className="min-h-0 flex-1 rounded-lg bg-black/[0.08] p-2">
+          <div className="h-full overflow-y-auto pr-1 [scrollbar-color:rgba(52,211,153,0.28)_transparent] [scrollbar-width:thin]">
           <div className={`grid min-w-0 gap-2 ${isNarrow ? "grid-cols-1" : "grid-cols-2"}`}>
           {data.map((d, i) => {
             const pct = total ? Math.round((Number(d.value) / total) * 100) : 0;
             const swatch = greenShade(i, data.length);
             return (
-              <div key={d.name} className="relative overflow-hidden rounded-md border border-white/[0.055] bg-white/[0.025] px-2.5 py-2">
+              <div key={d.name} className="relative overflow-hidden rounded-md bg-white/[0.025] px-2.5 py-2">
                 <div
                   className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 opacity-80"
                   style={{ width: `${Math.max(4, pct)}%`, backgroundColor: swatch }}
@@ -343,6 +339,7 @@ export default function ExpenseBreakdownChart({
               </div>
             );
           })}
+          </div>
           </div>
         </div>
       </div>

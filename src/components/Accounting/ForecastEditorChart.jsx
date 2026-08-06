@@ -57,7 +57,7 @@ const formatNumericMonthLabel = (value) => {
   return text;
 };
 
-export default function ForecastEditorChart({ userId, businessId, months = 12 }) {
+export default function ForecastEditorChart({ userId, businessId, months = 12, useDemoData = false, controls = null }) {
   const gradientId = useId().replace(/:/g, '');
   const [rows, setRows] = useState([]);
   const [draft, setDraft] = useState([]);
@@ -67,14 +67,13 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
   const [lastSavedAt, setLastSavedAt] = useState(null);
   const [asOfLabel, setAsOfLabel] = useState(formatAsOfDate(new Date()));
   const [error, setError] = useState('');
-  const [usingMock, setUsingMock] = useState(false);
   const [edited, setEdited] = useState(new Set());
   const mounted = useRef(false);
-  const isDemo = !businessId || shouldUseDemoData();
+  const isDemo = useDemoData || !businessId || shouldUseDemoData();
   const demoFinancials = useMemo(() => (isDemo ? getDemoData()?.financials || null : null), [isDemo]);
   const demoForecast = useMemo(() => buildDemoForecastFromFinancials(demoFinancials, months), [demoFinancials, months]);
 
-  const noBusinessSelected = !userId || !businessId;
+  const missingLiveBusiness = !isDemo && (!userId || !businessId);
 
   const fetchForecast = useCallback(
     async (opts = { forceModel: false }) => {
@@ -86,9 +85,8 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
         setRows(fallback);
         setDraft(fallback);
         setPreviousRows(null);
-        setLastSavedAt(new Date());
+        setLastSavedAt(null);
         setEdited(new Set());
-        setUsingMock(true);
         setLoading(false);
         setError('');
         return;
@@ -100,7 +98,6 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
         setPreviousRows(null);
         setLastSavedAt(null);
         setEdited(new Set());
-        setUsingMock(false);
         setLoading(false);
         return;
       }
@@ -121,17 +118,15 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
         setRows(normalized);
         setDraft(normalized);
         setPreviousRows(null);
-        setLastSavedAt(new Date());
+        setLastSavedAt(null);
         setEdited(new Set());
-        setUsingMock(data.some((r) => r.source === 'mock'));
       } catch (err) {
         const fallback = alignForecastHorizon(buildMockForecast(months), months);
         setRows(fallback);
         setDraft(fallback);
         setPreviousRows(null);
-        setLastSavedAt(new Date());
+        setLastSavedAt(null);
         setEdited(new Set());
-        setUsingMock(true);
         setError('Live forecast unavailable. Showing Bizzi sample data.');
         console.warn('[ForecastEditorChart] falling back to mock data:', err?.message);
       } finally {
@@ -299,31 +294,29 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
   const netLineColor = (headerStats?.monthlyNet ?? 0) >= 0 ? '#34d399' : '#f59e0b';
 
   return (
-    <div className="rounded-[32px] border border-emerald-300/12 bg-[linear-gradient(180deg,rgba(11,14,13,0.96)_0%,rgba(6,9,8,0.92)_100%)] px-5 py-6 text-white shadow-[0_35px_100px_rgba(0,0,0,0.55)]">
+    <div className="rounded-[28px] bg-[linear-gradient(180deg,rgba(11,14,13,0.96)_0%,rgba(6,9,8,0.92)_100%)] px-5 py-6 text-white shadow-[0_30px_82px_rgba(0,0,0,0.42)] ring-1 ring-white/[0.045]">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-[0.4em] text-white/60">Projection editor</p>
           <h2 className="mt-2 text-2xl font-semibold text-white">Monthly Cash Flow</h2>
         </div>
         <div className="flex flex-col items-start gap-2 lg:items-end lg:text-right">
-          <p className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-semibold text-white/62">
-            As of {asOfLabel}
-          </p>
+          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+            {controls}
+            <p className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-semibold text-white/62">
+              As of {asOfLabel}
+            </p>
+          </div>
           {error && (
             <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-rose-400/40 bg-rose-500/10 px-3 py-1 text-xs text-rose-200">
               <AlertTriangle size={14} /> {error}
             </div>
           )}
-          {usingMock && !error && (
-            <div className="inline-flex max-w-full items-center gap-2 rounded-full border border-amber-400/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-200">
-              Mock data — connect accounting to see live
-            </div>
-          )}
         </div>
       </div>
 
-      {headerStats && !noBusinessSelected && (
-        <div className="mt-5 grid grid-cols-1 overflow-hidden rounded-3xl border border-white/10 bg-black/24 shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_20px_52px_rgba(0,0,0,0.34)] sm:grid-cols-2 xl:grid-cols-4">
+      {headerStats && !missingLiveBusiness && (
+        <div className="mt-5 grid grid-cols-1 gap-px overflow-hidden rounded-2xl bg-white/[0.055] shadow-[0_18px_44px_rgba(0,0,0,0.22)] sm:grid-cols-2 xl:grid-cols-4">
           <ForecastMetric
             label="Avg monthly revenue"
             value={currency(headerStats.avgRevenue)}
@@ -351,12 +344,12 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
         </div>
       )}
 
-      <div className="mt-6 rounded-3xl border border-emerald-300/10 bg-[#070b0a]/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_20px_60px_rgba(0,0,0,0.35)]">
+      <div className="mt-6 rounded-2xl bg-[#070b0a]/72 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.025),0_18px_44px_rgba(0,0,0,0.26)]">
         {loading ? (
           <div className="flex h-64 items-center justify-center text-white/70">
             <Loader2 className="mr-2 animate-spin" /> Loading forecast…
           </div>
-        ) : noBusinessSelected ? (
+        ) : missingLiveBusiness ? (
           <div className="flex h-64 items-center justify-center text-white/60">Choose a business to view forecasts.</div>
         ) : (
           <ResponsiveContainer width="100%" height={320}>
@@ -416,8 +409,8 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
         )}
       </div>
 
-      <div className="mt-6 overflow-hidden rounded-3xl border border-emerald-300/10 bg-[#080d0b]/88 shadow-[0_22px_58px_rgba(0,0,0,0.38)]">
-        <div className="flex flex-col gap-3 border-b border-emerald-300/10 bg-emerald-300/[0.035] px-4 py-3 text-xs uppercase tracking-wide text-white/60 md:flex-row md:items-center md:justify-between md:gap-4">
+      <div className="mt-6 overflow-hidden rounded-2xl bg-[#080d0b]/84 shadow-[0_18px_44px_rgba(0,0,0,0.28)] ring-1 ring-white/[0.04]">
+        <div className="flex flex-col gap-3 bg-white/[0.025] px-4 py-3 text-xs uppercase tracking-wide text-white/60 md:flex-row md:items-center md:justify-between md:gap-4">
           <div className="flex items-center gap-3">
             <div className="font-semibold tracking-[0.22em] text-white/72">Editable table</div>
             <div className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] uppercase text-white/50">As of {asOfLabel}</div>
@@ -432,7 +425,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
                 size="sm"
                 label="Save all"
                 onClick={saveAll}
-                disabled={!hasEdits || saving || noBusinessSelected}
+                disabled={!hasEdits || saving || missingLiveBusiness}
                 variant="primary"
               />
               {hasEdits && (
@@ -455,7 +448,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
           <div className="custom-scrollbar max-h-[520px] overflow-auto pb-20 md:pb-4">
           <table className="min-w-[980px] w-full text-sm">
             <thead className="sticky top-0 z-10">
-              <tr className="border-b border-emerald-300/10 bg-[#0d1210] text-left text-white/70 shadow-[0_10px_24px_rgba(0,0,0,0.22)]">
+              <tr className="bg-[#0d1210] text-left text-white/70 shadow-[0_10px_24px_rgba(0,0,0,0.22)]">
                 <Th>Month</Th>
                 <Th>Revenue</Th>
                 <Th>Expenses</Th>
@@ -471,14 +464,14 @@ export default function ForecastEditorChart({ userId, businessId, months = 12 })
                 return (
                   <tr
                     key={r.month || idx}
-                    className={`border-b border-white/10 transition-colors hover:bg-white/[0.045] ${isEdited ? 'bg-emerald-300/[0.045]' : ''}`}
+                    className={`transition-colors hover:bg-white/[0.045] ${isEdited ? 'bg-emerald-300/[0.045]' : ''}`}
                   >
                     <Td className="whitespace-nowrap font-semibold text-white/86">{r.month_label || r.month}</Td>
                     <Td>
-                      <NumberInput value={r.revenue} onChange={(v) => handleCellChange(idx, 'revenue', v)} ariaLabel="Revenue" />
+                      <NumberInput value={r.revenue} onChange={(v) => handleCellChange(idx, 'revenue', v)} ariaLabel="Revenue" name={`forecast-revenue-${idx}`} />
                     </Td>
                     <Td>
-                      <NumberInput value={r.expenses} onChange={(v) => handleCellChange(idx, 'expenses', v)} ariaLabel="Expenses" />
+                      <NumberInput value={r.expenses} onChange={(v) => handleCellChange(idx, 'expenses', v)} ariaLabel="Expenses" name={`forecast-expenses-${idx}`} />
                     </Td>
                     <Td className="tabular-nums text-white/78">{currency(r.cash_in)}</Td>
                     <Td className="tabular-nums text-white/78">{currency(r.cash_out)}</Td>
@@ -549,7 +542,7 @@ function ForecastMetric({ label, value, note, tone = 'neutral' }) {
   const styles = toneStyles[tone] || toneStyles.neutral;
 
   return (
-    <div className="relative min-h-[104px] border-b border-white/10 px-4 py-4 last:border-b-0 sm:odd:border-r xl:border-b-0 xl:border-r xl:last:border-r-0">
+    <div className="relative min-h-[104px] bg-black/22 px-4 py-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 text-[10px] font-semibold uppercase leading-snug tracking-[0.16em] text-white/46">
           {label}
@@ -573,7 +566,7 @@ function Td({ children, className = '' }) {
   return <td className={`px-4 py-3 align-middle ${className}`}>{children}</td>;
 }
 
-function NumberInput({ value, onChange, ariaLabel }) {
+function NumberInput({ value, onChange, ariaLabel, name }) {
   const handleKey = (e) => {
     if (e.key === 'ArrowUp') onChange((+value || 0) + 100);
     if (e.key === 'ArrowDown') onChange(Math.max(0, (+value || 0) - 100));
@@ -582,6 +575,8 @@ function NumberInput({ value, onChange, ariaLabel }) {
     <input
       type="number"
       inputMode="numeric"
+      id={name}
+      name={name}
       value={value ?? 0}
       aria-label={ariaLabel}
       onChange={(e) => onChange(e.target.value)}

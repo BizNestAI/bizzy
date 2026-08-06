@@ -680,7 +680,12 @@ export async function generateBizzyResponse({
       hasViewedIntegrationsPage;
     const onboardingModeActive = onboardingCompletedOnce ? false : !onboardingComplete;
     const onboardingChecklist = buildOnboardingChecklist({ businessProfileComplete, qbConnected });
-    const onboardingHintId = parsedInput?.onboardingPromptId;
+    const onboardingHintId =
+      parsedInput?.onboardingPromptId ||
+      parsedInput?.context?.onboardingPromptId ||
+      parsedInput?.meta?.onboardingPromptId ||
+      parsedInput?.meta?.context?.onboardingPromptId ||
+      null;
     const onboardingMatch = identifyOnboardingPrompt(message, onboardingHintId);
     const showOnboardingTone = onboardingModeActive || !!onboardingMatch;
     const checklistText = formatChecklistText(onboardingChecklist);
@@ -950,24 +955,36 @@ export async function generateBizzyResponse({
       }
     }
 
-    console.log('[gpt] calling LLM');
     let bizzyReply = null;
     let lastResponseDebug = null;
+    const scriptedOnboardingReply = onboardingMatch?.response
+      ? [
+          onboardingMatch.response.trim(),
+          onboardingFollowUp ? onboardingFollowUp.trim() : '',
+        ].filter(Boolean).join('\n\n')
+      : null;
 
-    try {
-      if (openai) {
-        const completion = await openai.chat.completions.create({
-          model: BIZZY_CHAT_MODEL,
-          messages,
-          temperature: 0.7,
-          max_completion_tokens: 1400,
-        });
-        llmInvocation.actual_model = completion?.model || null;
-        llmInvocation.api = 'chat.completions';
-        bizzyReply = completion?.choices?.[0]?.message?.content?.trim() || null;
+    if (scriptedOnboardingReply) {
+      bizzyReply = scriptedOnboardingReply;
+      llmInvocation.skipped = true;
+      llmInvocation.reason = 'scripted_onboarding_prompt';
+    } else {
+      console.log('[gpt] calling LLM');
+      try {
+        if (openai) {
+          const completion = await openai.chat.completions.create({
+            model: BIZZY_CHAT_MODEL,
+            messages,
+            temperature: 0.7,
+            max_completion_tokens: 1400,
+          });
+          llmInvocation.actual_model = completion?.model || null;
+          llmInvocation.api = 'chat.completions';
+          bizzyReply = completion?.choices?.[0]?.message?.content?.trim() || null;
+        }
+      } catch (e) {
+        console.error('[OpenAI] completion failed:', e?.message || e);
       }
-    } catch (e) {
-      console.error('[OpenAI] completion failed:', e?.message || e);
     }
 
     if (!bizzyReply) {

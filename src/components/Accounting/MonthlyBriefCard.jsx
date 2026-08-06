@@ -1,7 +1,6 @@
 // File: /src/components/Accounting/MonthlyBriefCard.jsx
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import CardHeader from "../UI/CardHeader";
-import { RefreshCw } from "lucide-react";
 import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { apiFetch } from "../../utils/apiBase.js";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
@@ -9,6 +8,18 @@ import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.j
 function monthLabel(y, m) {
   if (!y || !m) return "";
   return new Date(y, m - 1, 1).toLocaleString(undefined, { month: "short", year: "numeric" });
+}
+function monthName(y, m) {
+  if (!y || !m) return "";
+  return new Date(y, m - 1, 1).toLocaleString(undefined, { month: "long" });
+}
+function previousMonthName(y, m) {
+  if (!y || !m) return "";
+  return new Date(y, m - 2, 1).toLocaleString(undefined, { month: "long" });
+}
+function demoGeneratedAt(y, m) {
+  if (!y || !m) return null;
+  return new Date(y, m - 1, 15, 9, 0, 0).toISOString();
 }
 function timeAgo(ts) {
   if (!ts) return "";
@@ -21,6 +32,18 @@ function timeAgo(ts) {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.round(hrs / 24);
   return `${days}d ago`;
+}
+function generatedDateLabel(ts) {
+  if (!ts) return "";
+  try {
+    return new Date(ts).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return "";
+  }
 }
 
 // normalize either camelCase or snake_case into a consistent shape
@@ -42,19 +65,31 @@ function normalizePulse(pulse) {
   };
 }
 
+function adaptDemoPulseToPeriod(pulse, year, month) {
+  if (!pulse) return null;
+  const current = monthName(year, month) || "this month";
+  const prior = previousMonthName(year, month) || "last month";
+  return {
+    ...pulse,
+    revenueSummary: `Revenue is pacing $48.2k for ${current}, +15% vs ${prior} from two kitchen projects.`,
+    spendingTrend: "Labor is elevated the next 10 days while both crews overlap; materials are normalizing after the Elm St delivery.",
+    varianceFromForecast: "Cash is ~$7k ahead of forecast thanks to a $12k invoice that landed early.",
+    createdAt: pulse.createdAt || demoGeneratedAt(year, month),
+  };
+}
+
 export default function MonthlyBriefCard({ userId, businessId }) {
   const { year, month } = useFinancialPeriod(businessId);
   const [pulse, setPulse] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [generatingPulse, setGeneratingPulse] = useState(false);
   const usingDemo = shouldUseDemoData();
 
   const demoPulse = useMemo(() => {
     if (!usingDemo) return null;
     const demo = getDemoData();
-    return normalizePulse(demo?.financials?.pulse || null);
-  }, [usingDemo]);
+    return adaptDemoPulseToPeriod(normalizePulse(demo?.financials?.pulse || null), year, month);
+  }, [month, usingDemo, year]);
 
   const label = useMemo(() => monthLabel(year, month), [year, month]);
 
@@ -109,34 +144,6 @@ export default function MonthlyBriefCard({ userId, businessId }) {
     await fetchPulse(ac.signal);
   }, [fetchPulse]);
 
-  const handleGeneratePulse = useCallback(async () => {
-    if (demoPulse) {
-      setPulse(demoPulse);
-      setError(null);
-      return;
-    }
-    if (!userId || !businessId || !year || !month) return;
-    setGeneratingPulse(true);
-    setError(null);
-    try {
-      await apiFetch(`/api/accounting/pulse/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-user-id": userId,
-          "x-business-id": businessId,
-        },
-        body: JSON.stringify({ user_id: userId, business_id: businessId, year, month }),
-      });
-      await fetchPulse();
-    } catch (err) {
-      console.error("[MonthlyBrief] generate pulse failed:", err);
-      setError(err.message || "Could not generate pulse snapshot.");
-    } finally {
-      setGeneratingPulse(false);
-    }
-  }, [businessId, demoPulse, fetchPulse, month, userId, year]);
-
   useEffect(() => {
     const ac = new AbortController();
     if (demoPulse) {
@@ -149,60 +156,46 @@ export default function MonthlyBriefCard({ userId, businessId }) {
   }, [demoPulse, fetchPulse]);
 
   const monthPill = (
-    <span className="text-xs px-2 py-0.5 rounded-full border border-emerald-400/30 text-emerald-300">
+    <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-200">
       {label || ""}
     </span>
   );
 
   const rightControls = (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-wrap items-center justify-end gap-2">
       {monthPill}
       {pulse?.createdAt && (
-        <span className="text-[11px] text-white/40">Updated {timeAgo(pulse.createdAt)}</span>
-      )}
-      {pulse ? (
-        <button
-          onClick={handleRefresh}
-          disabled={loading}
-          className="text-xs px-2 py-1 rounded-md border flex items-center gap-1 hover:bg-white/10 disabled:opacity-50"
-          title="Refresh pulse"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          Refresh
-        </button>
-      ) : (
-        <button
-          onClick={handleGeneratePulse}
-          disabled={generatingPulse}
-          className="text-xs px-2 py-1 rounded-md border flex items-center gap-1 hover:bg-white/10 disabled:opacity-50"
-          title="Generate pulse snapshot"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          {generatingPulse ? "Generating…" : "Generate pulse"}
-        </button>
+        <span className="rounded-full bg-white/[0.045] px-2.5 py-1 text-[11px] font-medium text-white/55" title={`Generated ${timeAgo(pulse.createdAt)}`}>
+          Generated {generatedDateLabel(pulse.createdAt)}
+        </span>
       )}
     </div>
   );
 
-  const summaryParts = useMemo(() => {
+  const briefContent = useMemo(() => {
     if (!pulse) return [];
-    const coreParts = [pulse.revenueSummary, pulse.spendingTrend, pulse.varianceFromForecast];
+    const lead = [pulse.revenueSummary, pulse.spendingTrend, pulse.varianceFromForecast]
+      .filter(Boolean)
+      .join(" ");
     const insightParts = Array.isArray(pulse.businessInsights) ? pulse.businessInsights : [];
     const forecastPart =
-      pulse.forecast && !coreParts.includes(pulse.forecast) ? [pulse.forecast] : [];
-    const parts = [...coreParts, ...insightParts, ...forecastPart].filter(Boolean);
-    return parts;
+      pulse.forecast && !lead.includes(pulse.forecast) ? [pulse.forecast] : [];
+    return {
+      lead,
+      observations: [...insightParts, ...forecastPart].filter(Boolean),
+    };
   }, [pulse]);
 
   return (
-    <div className="bg-zinc-900 border border-white/10 rounded-xl p-4 text-white shadow-lg">
+    <div className="overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(16,20,18,0.96),rgba(10,13,12,0.96))] text-white shadow-[0_22px_60px_rgba(0,0,0,0.36)]">
+      <div className="p-5">
       <CardHeader
         title="MONTHLY BRIEF"
         right={rightControls}
         size="sm"
         dense
-        className="mb-2"
-        titleClassName="text-[13px]"
+        className="mb-4"
+        titleClassName="text-[13px] tracking-[0.16em]"
       />
 
       {loading && !pulse ? (
@@ -215,7 +208,7 @@ export default function MonthlyBriefCard({ userId, businessId }) {
 
       {error ? (
         <div className="text-red-400 text-sm mb-3">
-          Could not load pulse.{" "}
+          Could not load brief.{" "}
           <button className="underline hover:no-underline" onClick={handleRefresh}>
             Retry
           </button>
@@ -223,21 +216,31 @@ export default function MonthlyBriefCard({ userId, businessId }) {
         </div>
       ) : null}
 
-      {/* Summary */}
-      <div>
-        <p className="text-sm font-semibold text-white/85 mb-1">Summary</p>
-        {summaryParts.length > 0 ? (
-          <ul className="list-disc list-outside pl-5 space-y-1 text-sm text-white/80">
-            {summaryParts.map((s, idx) => (
-              <li key={idx}>{s}</li>
+      <div className="space-y-4">
+        {briefContent?.lead ? (
+          <p className="max-w-4xl text-sm leading-6 text-white/82">
+            {briefContent.lead}
+          </p>
+        ) : null}
+
+        {briefContent?.observations?.length > 0 ? (
+          <div className="grid gap-2 md:grid-cols-2">
+            {briefContent.observations.map((s, idx) => (
+              <div key={idx} className="rounded-xl bg-white/[0.035] px-3 py-2.5 ring-1 ring-white/[0.045]">
+                <p className="text-sm leading-5 text-white/76">{s}</p>
+              </div>
             ))}
-          </ul>
+          </div>
         ) : (
           <p className="text-sm text-white/60">No data recorded for this period.</p>
         )}
-        {pulse?.motivationalMessage ? (
-          <p className="mt-3 text-sm italic text-white/60">{pulse.motivationalMessage}</p>
-        ) : null}
+      </div>
+      </div>
+
+      <div className="border-t border-white/[0.06] bg-black/12 px-5 py-2.5">
+        <p className="text-[11px] font-medium text-white/45">
+          Calculated on the 15th and 1st of every month.
+        </p>
       </div>
     </div>
   );

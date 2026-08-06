@@ -253,6 +253,16 @@ export default function useIntegrationManager(options = {}) {
         const res = await safeFetch(apiUrl(`/auth/status?business_id=${resolvedBusinessId}`));
         if (cancelled) return;
         const status = res?.connected ? STATUS.CONNECTED : res?.needs_setup || res?.has_row ? STATUS.AWAITING : STATUS.DISCONNECTED;
+        const hasConnectedBefore = Boolean(
+          res?.has_connected_before ||
+            res?.hasConnectedBefore ||
+            res?.previously_connected ||
+            res?.previouslyConnected ||
+            res?.connected ||
+            res?.disconnected_at ||
+            res?.connected_at ||
+            res?.realm_id
+        );
         updateProvider("quickbooks", {
           status,
           lastSync: res?.connected ? Date.now() : null,
@@ -260,6 +270,9 @@ export default function useIntegrationManager(options = {}) {
             env: res?.env || res?.qbo_env || null,
             companyName: res?.company_name || null,
             realmId: res?.realm_id || null,
+            connectedAt: res?.connected_at || null,
+            disconnectedAt: res?.disconnected_at || null,
+            hasConnectedBefore,
           },
         });
         if (status === STATUS.CONNECTED) {
@@ -314,6 +327,10 @@ export default function useIntegrationManager(options = {}) {
           status: STATUS.CONNECTED,
           lastSync: Date.now(),
           error: null,
+          info: {
+            realmId: qbRealmId || null,
+            hasConnectedBefore: true,
+          },
         });
         // Force live mode once QB is connected unless user explicitly picked demo
         try {
@@ -472,7 +489,10 @@ export default function useIntegrationManager(options = {}) {
             status: STATUS.CONNECTED,
             lastSync: Date.now(),
             error: null,
-            info: result?.info || null,
+            info:
+              provider === "quickbooks"
+                ? { ...(result?.info || {}), hasConnectedBefore: true }
+                : result?.info || null,
           });
         } else if (result?.status) {
           updateProvider(provider, { status: result.status, error: null });
@@ -520,7 +540,15 @@ export default function useIntegrationManager(options = {}) {
       } catch (e) {
         console.warn(`[integrations] ${provider} disconnect failed`, e?.message || e);
       } finally {
-        updateProvider(provider, { status: STATUS.DISCONNECTED, lastSync: null, error: null, info: null });
+        updateProvider(provider, {
+          status: STATUS.DISCONNECTED,
+          lastSync: null,
+          error: null,
+          info:
+            provider === "quickbooks"
+              ? { hasConnectedBefore: true, disconnectedAt: new Date().toISOString() }
+              : null,
+        });
       }
     },
     [resolvedBusinessId, updateProvider]

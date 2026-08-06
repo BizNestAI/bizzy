@@ -21,6 +21,7 @@ import { CHAT_BAR_MAX_W, CHAT_BAR_VW, CHAT_CONTENT_MAX_W, CHAT_CONTENT_VW } from
 import { useInsightsUnread } from "../insights/InsightsUnreadContext";
 import { useMemo } from "react";
 import { ACCENT_HEX } from "../config/accent";
+import { shouldSuppressTabRestoreMotion } from "../utils/tabVisibilityMotionGuard";
 
 const MotionDiv = motion.div;
 
@@ -186,6 +187,7 @@ const DashboardContent = ({ children }) => {
   const disableRails = inSettings || inMeetBizzi || inDocs || isMonthlyReviewAdmin;
   const showRail = onDashboard && !disableRails && !isChatHome;
   const showChat = !isMonthlyReviewAdmin && (onDashboard || isChatHome || inSettings || inMeetBizzi || inDocs);
+  const suppressRouteMotion = shouldSuppressTabRestoreMotion();
 
   const railStateRef = useRef(railOpen);
   const prevCanvasOpen = useRef(isCanvasOpen);
@@ -495,10 +497,14 @@ const DashboardContent = ({ children }) => {
                   <AnimatePresence mode="wait">
                     <MotionDiv
                       key={location.pathname}
-                      initial={{ opacity: 0, y: 30 }}
+                      initial={suppressRouteMotion ? false : { opacity: 0, y: 30 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 20 }}
-                      transition={{ duration: 0.22, ease: [0.22, 0.1, 0.25, 1] }}
+                      transition={
+                        suppressRouteMotion
+                          ? { duration: 0 }
+                          : { duration: 0.22, ease: [0.22, 0.1, 0.25, 1] }
+                      }
                       className="will-change-transform"
                     >
                       <div className="flex flex-col gap-4">

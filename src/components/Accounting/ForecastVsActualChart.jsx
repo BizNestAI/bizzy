@@ -28,13 +28,12 @@ function mape(rows, actualKey, forecastKey) {
   return Math.round((s / pts.length) * 1000) / 10;
 }
 
-export default function ForecastVsActualChart({ userId, businessId, months = 6 }) {
+export default function ForecastVsActualChart({ userId, businessId, months = 6, useDemoData = false }) {
   const [rows, setRows] = useState([]);
-  const [usingMock, setUsingMock] = useState(false);
   const [loading, setLoading] = useState(true);
   const [metric, setMetric] = useState('Revenue');
   const [error, setError] = useState('');
-  const isDemo = !businessId || shouldUseDemoData();
+  const isDemo = useDemoData || !businessId || shouldUseDemoData();
   const demoFinancials = useMemo(() => (isDemo ? getDemoData()?.financials || null : null), [isDemo]);
   const demoAccuracy = useMemo(() => buildAccuracyFromFinancials(demoFinancials, months), [demoFinancials, months]);
 
@@ -51,13 +50,11 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
             ? demoAccuracy
             : buildAccuracyFromFinancials(demoFinancials, months);
         setRows(alignToRollingWindow(base, months));
-        setUsingMock(true);
         setLoading(false);
         return;
       }
       if (!userId || !businessId) {
         setRows([]);
-        setUsingMock(false);
         setLoading(false);
         return;
       }
@@ -72,11 +69,9 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
         if (!data.length) throw new Error('no-data');
         if (ignore) return;
         setRows(alignToRollingWindow(data, months));
-        setUsingMock(Boolean(resp?.usingMock));
       } catch (err) {
         if (ignore) return;
         setRows(buildMockAccuracy(months));
-        setUsingMock(true);
         setError('Unable to load live accuracy. Showing sample comparison.');
         console.warn('[ForecastVsActualChart] falling back to mock data:', err?.message);
       } finally {
@@ -128,7 +123,7 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
   };
 
   return (
-    <div className="rounded-[32px] border border-emerald-300/12 bg-[linear-gradient(180deg,rgba(11,14,13,0.96)_0%,rgba(6,9,8,0.92)_100%)] px-5 py-6 text-white shadow-[0_35px_100px_rgba(0,0,0,0.55)]">
+    <div className="rounded-[28px] bg-[linear-gradient(180deg,rgba(11,14,13,0.96)_0%,rgba(6,9,8,0.92)_100%)] px-5 py-6 text-white shadow-[0_30px_82px_rgba(0,0,0,0.42)] ring-1 ring-white/[0.045]">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <p className="text-xs uppercase tracking-[0.4em] text-white/60">Accuracy radar</p>
@@ -138,14 +133,9 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
               <AlertTriangle size={14} /> {error}
             </div>
           )}
-          {usingMock && !error && (
-            <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-amber-400/40 bg-amber-500/10 px-3 py-1 text-xs text-amber-200">
-              Mock data — connect accounting to unlock live accuracy
-            </div>
-          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-full border border-white/12 bg-black/25 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_16px_36px_rgba(0,0,0,0.34)] backdrop-blur">
+          <div className="inline-flex rounded-full bg-black/25 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.045),0_14px_30px_rgba(0,0,0,0.24)] ring-1 ring-white/[0.055] backdrop-blur">
             {['Revenue', 'Expenses', 'Profit'].map((m) => (
               <button
                 key={m}
@@ -182,9 +172,9 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6 }
         <KpiCard compact label="Samples" value={rows.length ? `${rows.length} mo` : '—'} detail="Rolling window" tone="neutral" className="min-h-[108px]" />
       </div>
 
-      <div className="mt-6 rounded-3xl border border-emerald-300/10 bg-[#070b0a]/80 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03),0_20px_60px_rgba(0,0,0,0.35)]">
+      <div className="mt-6 rounded-2xl bg-[#070b0a]/72 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.025),0_18px_44px_rgba(0,0,0,0.26)]">
         {loading ? (
-          <div className="h-64 w-full rounded-2xl bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] backdrop-blur-xl p-4 animate-pulse">
+          <div className="h-64 w-full rounded-2xl bg-white/[0.05] shadow-[0_18px_40px_rgba(0,0,0,0.28)] ring-1 ring-white/[0.05] backdrop-blur-xl p-4 animate-pulse">
             <div className="space-y-3">
               <div className="h-3 w-32 bg-white/15 rounded-full" />
               <div className="h-5 w-48 bg-white/18 rounded-md" />

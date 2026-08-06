@@ -177,7 +177,6 @@ const KPIDashboardPanel = ({ userId, businessId: businessIdProp, onAskBizzy, yea
   const [data, setData] = useState(null);
   const [prev, setPrev] = useState(null);
   const [deltas, setDeltas] = useState(null);
-  const [source, setSource] = useState(null);
   const [monthText, setMonthText] = useState(null);
 
   const lastKeyRef = useRef(null);
@@ -207,25 +206,21 @@ const KPIDashboardPanel = ({ userId, businessId: businessIdProp, onAskBizzy, yea
 
         const norm = normalizeResponse(raw);
         let finalData = norm.data;
-        let finalSource = norm.source;
 
         const allEmpty = !finalData || Object.values(finalData).every(v => v === null || v === undefined);
         if (allEmpty) {
           finalData = !forceLive ? { ...SAFE_MOCK } : { ...EMPTY_DATA };
-          finalSource = !forceLive ? "mock" : null;
         }
 
         setData(finalData);
         setPrev(norm.prev);
         setDeltas(norm.deltas);
-        setSource(finalSource);
         setMonthText(norm.monthText);
         setStatus("success");
       } catch (e) {
         if (cancelled) return;
         console.warn("[KPIDashboardPanel] load error → using mock:", e?.message || e);
         setData(!forceLive ? { ...SAFE_MOCK } : { ...EMPTY_DATA });
-        setSource(!forceLive ? "mock" : null);
         setStatus("success");
       }
     }
@@ -251,9 +246,6 @@ const KPIDashboardPanel = ({ userId, businessId: businessIdProp, onAskBizzy, yea
   }, [deltas, data, prev]);
 
   const loading = status === "loading";
-  const isMock = source === "mock";
-  
-
   const prefersReducedMotion = typeof window !== "undefined"
     ? window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches
     : false;
@@ -268,12 +260,6 @@ const KPIDashboardPanel = ({ userId, businessId: businessIdProp, onAskBizzy, yea
         size="md"
         className="mb-1"
       />
-
-      {isMock && (
-        <p className="text-amber-300/90 text-xs">
-          Showing mock KPI data — connect QuickBooks to see live monthly KPIs.
-        </p>
-      )}
 
       <style>{`
         .tooltip-kpi {

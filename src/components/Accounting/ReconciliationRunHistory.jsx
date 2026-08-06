@@ -122,6 +122,7 @@ export default function ReconciliationRunHistory({
   latestRunId,
   loading,
   onSelectRun,
+  selectedRunAudit = null,
 }) {
   const monthlyRuns = [];
   const seenMonths = new Set();
@@ -144,7 +145,16 @@ export default function ReconciliationRunHistory({
 
       <div className="overflow-hidden rounded-2xl border border-white/6 bg-[#111313]">
         <div className="overflow-x-auto">
-          <table className="min-w-[980px] w-full text-sm text-slate-100">
+          <table className={`${selectedRunAudit ? "min-w-[1320px]" : "min-w-[980px]"} w-full table-fixed text-sm text-slate-100`}>
+            <colgroup>
+              <col className="w-[19%]" />
+              <col className="w-[35%]" />
+              <col className="w-[10%]" />
+              <col className="w-[11%]" />
+              <col className="w-[10%]" />
+              <col className="w-[8%]" />
+              <col className="w-[7%]" />
+            </colgroup>
             <thead className="bg-white/[0.03] text-[11px] uppercase tracking-[0.18em] text-slate-400">
               <tr className="border-b border-white/6">
                 <th className="px-3 py-3 text-left">Month</th>
@@ -177,36 +187,39 @@ export default function ReconciliationRunHistory({
                   const previousRun = monthlyRuns[idx + 1] || null;
                   const metrics = lifecycleMetrics(run);
                   return (
-                    <tr
-                      key={runId || `run-${idx}`}
-                      onClick={() => onSelectRun?.(run)}
-                      className={`cursor-pointer transition hover:bg-white/[0.03] ${
-                        isSelected ? "bg-emerald-500/[0.08]" : ""
-                      }`}
-                    >
-                      <td className="px-3 py-3">
-                        <div className="font-semibold text-slate-100">{formatMonth(resolveRunMonthDate(run))}</div>
-                        <div className="mt-1 text-[11px] text-slate-500">Run {formatDateTime(run.last_checked_at)}</div>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          {isLatest ? (
-                            <span className="inline-flex items-center rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-[2px] text-[10px] font-semibold leading-none text-emerald-100">
-                              Latest
-                            </span>
-                          ) : null}
-                          {isSelected ? (
-                            <span className="inline-flex items-center rounded-full border border-cyan-300/30 bg-cyan-400/10 px-2 py-[2px] text-[10px] font-semibold leading-none text-cyan-100">
-                              Active in audit
-                            </span>
-                          ) : null}
-                        </div>
-                      </td>
-                      <td className="px-3 py-3 text-[12px] leading-5 text-slate-400">{monthlyNotes(run, previousRun)}</td>
-                      <td className="px-3 py-3 text-right text-slate-200">{metrics.plaidTotal}</td>
-                      <td className="px-3 py-3 text-right text-slate-200">{metrics.categorized}</td>
-                      <td className="px-3 py-3 text-right text-slate-200">{metrics.posted}</td>
-                      <td className="px-3 py-3 text-right text-slate-200">{metrics.fullyReconciled}</td>
-                      <td className="px-3 py-3 text-right text-slate-200">{metrics.failedPosting}</td>
-                    </tr>
+                    <React.Fragment key={runId || `run-${idx}`}>
+                      <tr
+                        onClick={() => onSelectRun?.(run)}
+                        className="cursor-pointer transition hover:bg-white/[0.03]"
+                      >
+                        <td className="px-3 py-3">
+                          <div className="font-semibold text-slate-100">{formatMonth(resolveRunMonthDate(run))}</div>
+                          <div className="mt-1 text-[11px] text-slate-500">Run {formatDateTime(run.last_checked_at)}</div>
+                          <div className="mt-1 flex h-[18px] flex-wrap items-center gap-1.5">
+                            {isLatest ? (
+                              <span className="inline-flex items-center rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-[2px] text-[10px] font-semibold leading-none text-emerald-100">
+                                Latest
+                              </span>
+                            ) : null}
+                          </div>
+                        </td>
+                        <td className="px-3 py-3 text-[12px] leading-5 text-slate-400">{monthlyNotes(run, previousRun)}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.plaidTotal}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.categorized}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.posted}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.fullyReconciled}</td>
+                        <td className="px-3 py-3 text-right text-slate-200">{metrics.failedPosting}</td>
+                      </tr>
+                      {isSelected && selectedRunAudit ? (
+                        <tr className="bg-black/18">
+                          <td colSpan={7} className="px-3 py-4">
+                            <div className="w-full min-w-0">
+                              {selectedRunAudit}
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </React.Fragment>
                   );
                 })
               )}

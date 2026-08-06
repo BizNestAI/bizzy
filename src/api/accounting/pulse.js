@@ -1,7 +1,10 @@
 // File: /src/api/accounting/pulse.js
 import express from "express";
 import { supabase } from "../../services/supabaseAdmin.js";
-import { generateFinancialPulseSnapshot } from "./monthlyFinancialPulse.js";
+import {
+  generateFinancialPulseSnapshot,
+  shouldGenerateScheduledFinancialPulse,
+} from "./monthlyFinancialPulse.js";
 
 const router = express.Router();
 const ENV_MOCK = String(process.env.USE_MOCK_ACCOUNTING || "").toLowerCase() === "true";
@@ -91,6 +94,12 @@ router.get("/", async (req, res) => {
 
       // Optionally generate on the fly
       if (shouldGenerate) {
+        if (!shouldGenerateScheduledFinancialPulse(monthText)) {
+          return res.status(409).json({
+            error: "pulse_generation_not_scheduled",
+            message: "Monthly Brief generation only runs on the 15th for the current month and on the 1st for the previous month.",
+          });
+        }
         const out = await generateFinancialPulseSnapshot({
           monthlyMetrics: {}, // let the generator self-hydrate
           forecastData: {},
@@ -159,6 +168,13 @@ router.post("/generate", async (req, res) => {
 
     if (!user_id || !business_id || !monthText) {
       return res.status(400).json({ error: "Missing user_id, business_id, year or month" });
+    }
+
+    if (!shouldGenerateScheduledFinancialPulse(monthText)) {
+      return res.status(409).json({
+        error: "pulse_generation_not_scheduled",
+        message: "Monthly Brief generation only runs on the 15th for the current month and on the 1st for the previous month.",
+      });
     }
 
     const out = await generateFinancialPulseSnapshot({

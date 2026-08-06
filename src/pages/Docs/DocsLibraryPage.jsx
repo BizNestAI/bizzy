@@ -96,6 +96,7 @@ export default function DocsLibraryPage(props) {
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [requestId, setRequestId] = useState('');
   const [category, setCategory] = useState('all');
   const [q, setQ] = useState('');
@@ -206,6 +207,8 @@ export default function DocsLibraryPage(props) {
   // Create a Bizzy-native blank note and jump to it
   async function createBlankNote(editImmediately = false) {
     try {
+      setError('');
+      setNotice('');
       const newDoc = await createDoc({
         business_id: effectiveBusinessId,
         title: 'Untitled Note',
@@ -219,28 +222,27 @@ export default function DocsLibraryPage(props) {
         navigate(`/dashboard/bizzi-docs/${newDoc.id}${editImmediately ? '?edit=1' : ''}`);
       }
     } catch (e) {
-      console.error('createBlankNote failed', e);
-      alert('Could not create the note.');
+      const message = e?.message || 'Could not create the note.';
+      if (/read-only in demo mode/i.test(message)) {
+        setNotice('Demo Docs are read-only. Switch to a live business to create notes.');
+        return;
+      }
+      setError(message);
     }
   }
 
   return (
-    <div className="w-full px-4 pt-0 pb-28 bg-app text-primary min-h-screen">
-      {/* Full-width header */}
-      <div className="relative overflow-hidden rounded-2xl p-5 md:p-7">
-        <div className="relative flex items-start justify-start gap-4">
-          <div>
-            <h1 className="text-[20px] sm:text-[22px] font-semibold leading-tight tracking-[0.2em] text-[color:var(--text)] text-left">
-              Bizzi Docs Library
-            </h1>
-            <p className="mt-2 text-sm text-left text-white/70">
-              Your summaries, uploads, and references—searchable and organized.
-            </p>
-          </div>
+    <div className="w-full px-3 pt-2 pb-28 bg-app text-primary min-h-screen md:px-4">
+      <div className="mx-auto max-w-[1100px]">
+        <div className="mb-6">
+          <h1 className="text-[20px] sm:text-[22px] font-semibold leading-tight tracking-[0.2em] text-[color:var(--text)] text-left">
+            Bizzi Docs Library
+          </h1>
+          <p className="mt-3 text-sm text-left text-white/70">
+            Your summaries, uploads, and references - searchable and organized.
+          </p>
         </div>
-      </div>
 
-      <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6">
         {/* Controls bar */}
         <div className="mt-6 mb-6">
           <div className="flex flex-wrap items-center gap-3">
@@ -248,6 +250,8 @@ export default function DocsLibraryPage(props) {
             <div className="relative">
               <Search className="absolute left-2 top-2.5 h-4 w-4" style={{ color: TEXT_MUTED }} />
               <input
+                id="docs-library-search"
+                name="docs-library-search"
                 value={q}
                 onChange={(e)=>setQ(e.target.value)}
                 placeholder="Search title or content…"
@@ -315,6 +319,33 @@ export default function DocsLibraryPage(props) {
 
         {/* Content states */}
         <div className="mt-4">
+          {effectiveBusinessId && notice ? (
+            <div
+              className="mb-4 flex items-start justify-between gap-4 rounded-xl px-4 py-3"
+              style={{
+                background: 'linear-gradient(135deg, rgba(var(--accent-rgb),0.11), rgba(255,255,255,0.025))',
+                border: '1px solid rgba(var(--accent-rgb),0.22)',
+                boxShadow: '0 18px 42px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.05)',
+                color: TEXT_MAIN,
+              }}
+            >
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-white/90">{notice}</div>
+                <div className="mt-1 text-xs text-white/48">
+                  The sample documents remain available for preview.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNotice('')}
+                aria-label="Dismiss demo docs notice"
+                className="rounded-full border border-white/10 bg-black/20 p-1 text-white/52 transition hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : null}
+
           {!effectiveBusinessId && (
             <div
               className="rounded-xl p-5"

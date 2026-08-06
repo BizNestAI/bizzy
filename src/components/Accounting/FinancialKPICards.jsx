@@ -314,6 +314,7 @@ export default function FinancialKPICards({
           trend={kpi.trend}
           change={kpi.change}
           tone={getKpiTone(kpi)}
+          variant="financial"
           className="min-h-[148px] outline-none"
           multilineValue={kpi.label === "Top Spending Category"}
           valueClassName={kpi.label === "Top Spending Category" ? "text-[clamp(1.15rem,1.15vw,1.42rem)] leading-snug" : ""}
@@ -324,7 +325,8 @@ export default function FinancialKPICards({
 }
 
 function getKpiTone(kpi) {
-  if (kpi.trend === "down") return kpi.label === "Current Expenses" ? "amber" : "rose";
-  if (kpi.trend === "up") return kpi.label === "Current Expenses" ? "amber" : "emerald";
-  return kpi.tint || "neutral";
+  if (kpi.label === "Top Spending Category") return "neutral";
+  if (kpi.label === "Current Expenses") return "neutral";
+  if (kpi.trend === "down") return "neutral";
+  return "emerald";
 }

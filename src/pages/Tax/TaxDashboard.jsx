@@ -133,12 +133,9 @@ export default function TaxDashboard({ onAskBizzy }) {
           subtitle="Track your projected tax obligation, upcoming deadlines, payments, and deductions in one place."
           className="flex-1"
         />
-        <div className="mt-3">
-          {headerControls}
-        </div>
       </div>
 
-      <main className="relative z-0 mx-auto flex w-full max-w-[1200px] min-w-0 flex-col gap-7 overflow-x-hidden px-4 pt-3 pb-40">
+      <main className="relative z-0 mx-auto flex w-full max-w-[1200px] min-w-0 flex-col gap-7 overflow-x-hidden px-4 pt-1 pb-40">
         {initialLoading ? (
           <DashboardSkeleton />
         ) : (
@@ -171,6 +168,7 @@ export default function TaxDashboard({ onAskBizzy }) {
               source={tax.isDemo ? "demo" : "live"}
               onRecordPayment={() => setPaymentModalOpen(true)}
               onViewCalculation={viewCalculation}
+              headerActions={headerControls}
             />
             <CalculationPreview workpaper={tax.data?.workpaper} onViewCalculation={() => viewCalculation("total_tax_components")} />
 
@@ -399,7 +397,7 @@ function resolveOverviewStatus(model, isDemo) {
     return {
       tone: "good",
       label: "Demo scenario",
-      sentence: "Demo scenario showing how Bizzi will present your tax position.",
+      sentence: null,
     };
   }
   if (model.status.calculationStatus === "failed") {

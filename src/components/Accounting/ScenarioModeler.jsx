@@ -318,9 +318,6 @@ const ScenarioModeler = ({ baselineForecast = [], userId, businessId }) => {
             baselineData={basePrepared}
             scenarioData={scenarioForecast}
           />
-          {baselineForecast.length === 0 && (
-            <p className="mt-1 text-sm text-amber-300">Showing mock baseline — connect accounting to preview with live data.</p>
-          )}
         </>
       )}
     </motion.div>

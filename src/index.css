@@ -14,8 +14,8 @@
   --sidebar:   #080a09;     /* Sidebar */
   --input-bg:  #101211;     /* Chat/input surfaces */
   --input-border: rgba(255,255,255,0.12);
-  --chatbar-bg: #1b1b1b;
-  --chatbar-bg-2: #141414;
+  --chatbar-bg: var(--component-surface);
+  --chatbar-bg-2: var(--component-surface);
   --chatbar-border: rgba(255,255,255,0.18);
   --chatbar-border-strong: rgba(255,255,255,0.18);
   --chatbar-shadow: 0 18px 42px rgba(0,0,0,0.48), inset 0 1px 0 rgba(255,255,255,0.07);
@@ -89,8 +89,8 @@
   --sidebar: #080a09;
   --input-bg: #101211;
   --input-border: rgba(255,255,255,0.12);
-  --chatbar-bg: #1b1b1b;
-  --chatbar-bg-2: #141414;
+  --chatbar-bg: var(--component-surface);
+  --chatbar-bg-2: var(--component-surface);
   --chatbar-border: rgba(255,255,255,0.18);
   --chatbar-border-strong: rgba(255,255,255,0.18);
   --chatbar-shadow: 0 18px 42px rgba(0,0,0,0.48), inset 0 1px 0 rgba(255,255,255,0.07);
@@ -145,6 +145,62 @@
 .rounded-2xl.border[class*="bg-white/5"]:hover,
 .rounded-3xl.border[class*="bg-white/5"]:hover {
   background-color: var(--component-surface-hover) !important;
+}
+
+.bizzy-app-shell :where(
+  div[class*="rounded-"][class*="bg-white/"],
+  section[class*="rounded-"][class*="bg-white/"],
+  article[class*="rounded-"][class*="bg-white/"],
+  aside[class*="rounded-"][class*="bg-white/"],
+  main[class*="rounded-"][class*="bg-white/"],
+  div[class*="rounded-"][class*="bg-black/"],
+  section[class*="rounded-"][class*="bg-black/"],
+  article[class*="rounded-"][class*="bg-black/"],
+  aside[class*="rounded-"][class*="bg-black/"],
+  main[class*="rounded-"][class*="bg-black/"],
+  div[class*="rounded-"][class*="bg-zinc-"],
+  section[class*="rounded-"][class*="bg-zinc-"],
+  article[class*="rounded-"][class*="bg-zinc-"],
+  aside[class*="rounded-"][class*="bg-zinc-"],
+  main[class*="rounded-"][class*="bg-zinc-"],
+  div[class*="rounded-"][class*="bg-neutral-"],
+  section[class*="rounded-"][class*="bg-neutral-"],
+  article[class*="rounded-"][class*="bg-neutral-"],
+  aside[class*="rounded-"][class*="bg-neutral-"],
+  main[class*="rounded-"][class*="bg-neutral-"],
+  div[class*="rounded-"][class*="bg-[#"],
+  section[class*="rounded-"][class*="bg-[#"],
+  article[class*="rounded-"][class*="bg-[#"],
+  aside[class*="rounded-"][class*="bg-[#"],
+  main[class*="rounded-"][class*="bg-[#"],
+  div[class*="rounded-"][class*="bg-[rgba"],
+  section[class*="rounded-"][class*="bg-[rgba"],
+  article[class*="rounded-"][class*="bg-[rgba"],
+  aside[class*="rounded-"][class*="bg-[rgba"],
+  main[class*="rounded-"][class*="bg-[rgba"],
+  div[class*="rounded-"][class*="bg-[linear-gradient"],
+  section[class*="rounded-"][class*="bg-[linear-gradient"],
+  article[class*="rounded-"][class*="bg-[linear-gradient"],
+  aside[class*="rounded-"][class*="bg-[linear-gradient"],
+  main[class*="rounded-"][class*="bg-[linear-gradient"],
+  div[class*="rounded-"][class*="bg-gradient-"],
+  section[class*="rounded-"][class*="bg-gradient-"],
+  article[class*="rounded-"][class*="bg-gradient-"],
+  aside[class*="rounded-"][class*="bg-gradient-"],
+  main[class*="rounded-"][class*="bg-gradient-"]
+) {
+  background: var(--component-surface) !important;
+  background-image: none !important;
+}
+
+.bizzy-app-shell :where(
+  div[class*="rounded-"][class*="hover:bg-white/"]:hover,
+  section[class*="rounded-"][class*="hover:bg-white/"]:hover,
+  article[class*="rounded-"][class*="hover:bg-white/"]:hover,
+  aside[class*="rounded-"][class*="hover:bg-white/"]:hover,
+  main[class*="rounded-"][class*="hover:bg-white/"]:hover
+) {
+  background: var(--component-surface-hover) !important;
 }
 
 /* ✅ Full-height root so the center column can own scrolling */
@@ -695,6 +751,14 @@ body.pdf-modal-open .bizzy-qprompts {
 @media (prefers-reduced-motion: reduce){
   .bizzy-chathome .bizzy-quickprompt{ animation: none !important; }
   .bizzy-chathome .bizzy-chatbar-sheen{ display:none !important; }
+}
+
+.bizzy-tab-restored .bizzy-chathome,
+.bizzy-tab-restored .bizzy-chathome *,
+.bizzy-tab-restored .will-change-transform {
+  transition-duration: 0ms !important;
+  animation-duration: 0ms !important;
+  animation-delay: 0ms !important;
 }
 
 /* =========================================================

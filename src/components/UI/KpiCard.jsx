@@ -73,26 +73,41 @@ export default function KpiCard({
   valueClassName = "",
   compact = false,
   multilineValue = false,
+  variant = "default",
 }) {
   const styles = TONES[tone] || TONES.neutral;
+  const quiet = variant === "financial";
+  const quietTone = tone === "rose" ? "rose" : tone === "amber" ? "amber" : "emerald";
+  const quietMarkers = {
+    emerald: "bg-emerald-300/90 shadow-[0_0_10px_rgba(45,212,191,0.22)]",
+    amber: "bg-emerald-300/70",
+    rose: "bg-white/45",
+  };
+  const quietValue = {
+    emerald: "text-emerald-50",
+    amber: "text-white",
+    rose: "text-white",
+  };
 
   return (
     <div
       className={[
-        "group relative h-full overflow-hidden rounded-[20px] border bg-[var(--panel)] backdrop-blur-xl",
-        "transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-300/35",
-        styles.border,
-        styles.glow,
+        quiet
+          ? "group relative h-full overflow-hidden rounded-[18px] border border-white/[0.075] bg-[linear-gradient(180deg,rgba(17,21,19,0.96),rgba(9,12,11,0.94))] backdrop-blur-xl shadow-[0_18px_44px_rgba(0,0,0,0.28)]"
+          : "group relative h-full overflow-hidden rounded-[20px] border bg-[var(--panel)] backdrop-blur-xl",
+        quiet ? "transition-all duration-200 hover:border-emerald-300/18" : "transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-300/35",
+        quiet ? "" : styles.border,
+        quiet ? "" : styles.glow,
         compact ? "min-h-[108px] p-3.5" : "min-h-[132px] p-4 sm:p-4",
         className,
       ].join(" ")}
     >
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/[0.085] via-transparent to-black/15 opacity-95" />
-      <div className="pointer-events-none absolute -left-10 -top-12 h-28 w-28 rounded-full bg-emerald-300/[0.045] blur-2xl opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
-      <div className="pointer-events-none absolute inset-0 rounded-[20px] ring-1 ring-inset ring-white/[0.035]" />
+      <div className={`pointer-events-none absolute inset-0 ${quiet ? "bg-gradient-to-b from-white/[0.045] via-transparent to-black/10" : "bg-gradient-to-b from-white/[0.085] via-transparent to-black/15 opacity-95"}`} />
+      {!quiet && <div className="pointer-events-none absolute -left-10 -top-12 h-28 w-28 rounded-full bg-emerald-300/[0.045] blur-2xl opacity-0 transition-opacity duration-200 group-hover:opacity-100" />}
+      <div className={`pointer-events-none absolute inset-0 ${quiet ? "rounded-[18px] ring-1 ring-inset ring-white/[0.03]" : "rounded-[20px] ring-1 ring-inset ring-white/[0.035]"}`} />
       <div className="relative flex min-h-full flex-col">
         <div className="flex min-h-[2.35rem] items-start justify-between gap-3">
-          <div className="min-w-0 text-[10px] font-semibold uppercase leading-snug tracking-[0.13em] text-white/48">
+          <div className={`min-w-0 text-[10px] font-semibold uppercase leading-snug ${quiet ? "tracking-[0.16em] text-white/44" : "tracking-[0.13em] text-white/48"}`}>
             {label}
           </div>
           {icon ? (
@@ -100,7 +115,7 @@ export default function KpiCard({
               {icon}
             </div>
           ) : (
-            <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${styles.marker}`} />
+            <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${quiet ? quietMarkers[quietTone] : styles.marker}`} />
           )}
         </div>
 
@@ -109,7 +124,7 @@ export default function KpiCard({
             "mt-2 max-w-full font-extrabold leading-tight tracking-normal tabular-nums drop-shadow-[0_10px_24px_rgba(0,0,0,0.32)]",
             multilineValue ? "line-clamp-2" : "truncate",
             compact ? "text-[1.35rem] sm:text-[1.45rem]" : "text-[clamp(1.45rem,1.55vw,1.9rem)]",
-            styles.value,
+            quiet ? quietValue[quietTone] : styles.value,
             valueClassName,
           ].join(" ")}
         >

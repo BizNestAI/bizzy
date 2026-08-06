@@ -19,7 +19,6 @@ import { getDemoMode, setDemoMode, isTestingMode, setTestingMode } from "../../s
 import { logout as performLogout } from "../../services/authService";
 import { markIntegrationsPageViewed } from "../../hooks/useOnboardingStatus";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
-import BusinessSwitcher from "../../components/UserAdmin/BusinessSwitcher.jsx";
 import {
   getPlaidStatus,
   createPlaidLinkToken,
@@ -37,9 +36,10 @@ import {
 const NEUTRAL_BORDER = "rgba(255,255,255,0.105)";
 const SOFT_BORDER = "rgba(255,255,255,0.075)";
 const TEXT_MUTED = "var(--text-2)";
-const PANEL_BG = "rgba(17,19,18,0.78)";
 const ROW_BG = "rgba(255,255,255,0.032)";
 const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
+const INTEGRATION_ACTION_BUTTON_CLASS =
+  "inline-flex h-11 w-full items-center justify-center whitespace-nowrap rounded-xl px-4 text-sm font-semibold sm:w-[232px]";
 
 /** Tabs visible for MVP */
 const tabs = [
@@ -50,6 +50,12 @@ const tabs = [
 ];
 
 const CREDITS_CAP = 300;
+const EMPTY_BUSINESS_FORM = {
+  business_name: "",
+  industry: "",
+  team_size: "",
+  state: "",
+};
 
 export default function SettingsHome() {
   const SHOW_MARKETING_COMMS = false;
@@ -117,12 +123,7 @@ export default function SettingsHome() {
   const [profileError, setProfileError] = useState("");
 
   // Business
-  const [businessForm, setBusinessForm] = useState({
-    business_name: "",
-    industry: "",
-    team_size: "",
-    state: "",
-  });
+  const [businessForm, setBusinessForm] = useState(EMPTY_BUSINESS_FORM);
   const [savingBusiness, setSavingBusiness] = useState(false);
   const [bizSuccessMsg, setBizSuccessMsg] = useState("");
   const [bizErrorMsg, setBizErrorMsg] = useState("");
@@ -140,15 +141,54 @@ export default function SettingsHome() {
   }, [user]);
 
   useEffect(() => {
-    if (currentBusiness) {
+    let alive = true;
+
+    const fallback = {
+      business_name: currentBusiness?.business_name || "",
+      industry: currentBusiness?.industry || "",
+      team_size: currentBusiness?.team_size ?? "",
+      state: currentBusiness?.state || "",
+    };
+
+    const loadBusinessProfile = async () => {
+      if (!businessId) {
+        if (alive) setBusinessForm(EMPTY_BUSINESS_FORM);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("business_profiles")
+        .select("id,business_name,industry,team_size,state")
+        .eq("id", businessId)
+        .maybeSingle();
+
+      if (!alive) return;
+
+      if (error) {
+        console.warn("[settings] failed to load business profile", error);
+        setBusinessForm(fallback);
+        return;
+      }
+
+      const source = data || fallback;
       setBusinessForm({
-        business_name: currentBusiness.business_name || "",
-        industry: currentBusiness.industry || "",
-        team_size: currentBusiness.team_size || "",
-        state: currentBusiness.state || "",
+        business_name: source.business_name || "",
+        industry: source.industry || "",
+        team_size: source.team_size ?? "",
+        state: source.state || "",
       });
-    }
-  }, [currentBusiness]);
+
+      if (data?.id) {
+        setCurrentBusiness((prev) => ({ ...(prev || {}), ...data }));
+      }
+    };
+
+    loadBusinessProfile();
+
+    return () => {
+      alive = false;
+    };
+  }, [businessId, currentBusiness?.id, setCurrentBusiness]);
 
   useEffect(() => {
     const checkout = searchParams.get("checkout");
@@ -194,7 +234,7 @@ export default function SettingsHome() {
   };
 
   const handleSaveBusiness = async () => {
-    if (!currentBusiness?.id) return;
+    if (!businessId) return;
     setSavingBusiness(true);
     setBizSuccessMsg("");
     setBizErrorMsg("");
@@ -202,9 +242,12 @@ export default function SettingsHome() {
       ...businessForm,
       team_size: businessForm.team_size ? parseInt(businessForm.team_size, 10) : null,
     };
-    const { error } = await updateBusinessProfile(currentBusiness.id, payload);
+    const { data, error } = await updateBusinessProfile(businessId, payload);
     if (error) setBizErrorMsg("Failed to update business settings. Please try again.");
-    else setBizSuccessMsg("Business settings updated successfully.");
+    else {
+      setCurrentBusiness((prev) => ({ ...(prev || {}), ...(data || payload), id: businessId }));
+      setBizSuccessMsg("Business settings updated successfully.");
+    }
     setSavingBusiness(false);
   };
 
@@ -313,21 +356,21 @@ useEffect(() => {
 
   /* ---------------- Render ---------------- */
   return (
-    <div className="w-full px-3 md:px-4 pb-12 pt-[88px] bg-app text-primary" style={{ "--accent": "var(--accent)" }}>
+    <div className="w-full px-3 md:px-4 pb-12 pt-0 bg-app text-primary" style={{ "--accent": "var(--accent)" }}>
       {/* Header (aligned with page content) */}
-      <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6 mb-5">
+      <div className="mx-auto mb-5 max-w-[1100px]">
         <h1 className="text-[20px] sm:text-[22px] font-semibold tracking-[0.2em] text-[color:var(--text)] text-left">
           Settings
         </h1>
-        <p className="mt-1 text-sm text-left text-white/70">
+        <p className="mt-3 text-sm text-left text-white/70">
           Profile, business identity, integrations, and billing — all in one place.
         </p>
       </div>
 
-      <div className="max-w-6xl mx-auto px-3 md:px-4 lg:px-6">
+      <div className="mx-auto max-w-[1100px]">
       <section
-        className="mb-4 rounded-2xl border px-4 py-3"
-        style={{ background: "rgba(17,19,18,0.72)", borderColor: NEUTRAL_BORDER, boxShadow: "none" }}
+        className="mb-4 rounded-xl border px-4 py-3"
+        style={{ background: "rgba(17,19,18,0.52)", borderColor: SOFT_BORDER, boxShadow: "none" }}
       >
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0">
@@ -374,14 +417,14 @@ useEffect(() => {
                   key={key}
                   onClick={() => setActiveTab(key)}
                   aria-selected={active}
-                  className="group inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 active:outline-none active:ring-0"
+                  className="group inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-[13px] focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 active:outline-none active:ring-0"
                   style={
                     active
                       ? {
                           outline: "none",
                           transition: "none",
                           color: "var(--text)",
-                          border: `1px solid rgba(var(--accent-rgb),0.3)`,
+                          border: `1px solid rgba(var(--accent-rgb),0.24)`,
                           boxShadow: "none",
                           background: "rgba(var(--accent-rgb),0.1)",
                         }
@@ -389,8 +432,8 @@ useEffect(() => {
                           outline: "none",
                           transition: "none",
                           color: "var(--text)",
-                          border: `1px solid ${NEUTRAL_BORDER}`,
-                          background: "transparent",
+                          border: `1px solid ${SOFT_BORDER}`,
+                          background: "rgba(255,255,255,0.018)",
                         }
                   }
                 >
@@ -401,11 +444,11 @@ useEffect(() => {
             })}
             <button
               onClick={() => navigate('/setup?from=settings', { state: { fromSettings: true } })}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm border transition"
+              className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] transition"
               style={{
-                borderColor: NEUTRAL_BORDER,
+                borderColor: SOFT_BORDER,
                 color: "var(--text)",
-                background: "transparent",
+                background: "rgba(255,255,255,0.018)",
               }}
             >
               Review Business Setup
@@ -421,13 +464,13 @@ useEffect(() => {
           {activeTab === "Profile" && (
             <>
               <Section
-                className="col-start-1 col-span-12 md:col-span-6"
+                className="col-start-1 col-span-12 lg:col-span-7"
                 title="Your Profile"
                 subtitle="Keep your personal info up to date."
                 icon={User}
               >
-                <Field label="Full Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" /></Field>
-                <Field label="Email"><Input value={email} disabled /></Field>
+                <Field label="Full Name"><Input id="settings-full-name" name="full_name" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" /></Field>
+                <Field label="Email"><Input id="settings-email" name="email" autoComplete="email" value={email} disabled /></Field>
                 <div className="flex flex-wrap gap-3 pt-2">
                   <AccentButton onClick={handleSaveProfile} disabled={savingProfile} className="focus-visible:outline-none">
                     {savingProfile ? "Saving…" : "Save Changes"}
@@ -435,56 +478,29 @@ useEffect(() => {
                   <GhostButton onClick={handleResetPassword} className="focus-visible:outline-none">Send Reset Email</GhostButton>
                 </div>
                 <InlineMsg ok={profileSuccess} err={profileError} />
-              </Section>
 
-              <Section
-                className="col-start-1 col-span-12"
-                title="Sign out"
-                subtitle="Log out of Bizzi on this device."
-                icon={LogOut}
-              >
-                {!showLogoutConfirm ? (
-                  <button
-                    type="button"
-                    onClick={beginLogout}
-                    className="group inline-flex items-center gap-3 rounded-lg border px-4 py-3 text-left transition hover:border-white/20 hover:bg-white/5"
-                    style={{ borderColor: "rgba(255,255,255,0.12)", background: "rgba(12,16,22,0.85)" }}
-                  >
-                    <div className="grid h-9 w-9 place-items-center rounded-md bg-white/6 text-white/85">
-                      <LogOut className="h-4 w-4" />
-                    </div>
-                    <div className="pr-1">
-                      <p className="text-sm font-semibold text-white">Log out of Bizzi</p>
-                      <p className="text-xs" style={{ color: TEXT_MUTED }}>
-                        Ends your current session.
-                      </p>
-                    </div>
-                  </button>
-                ) : (
-                <div
-                  className="rounded-xl p-4"
-                  style={{
-                    border: `1px solid ${SOFT_BORDER}`,
-                    background: ROW_BG,
-                    boxShadow: "none",
-                  }}
-                >
-                  <div className="flex items-start gap-3">
+                <div className="mt-5 border-t border-white/[0.07] pt-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <p className="text-sm font-semibold" style={{ color: "var(--text)" }}>
-                        Ready to sign out?
-                      </p>
-                      <p className="text-xs mt-1" style={{ color: TEXT_MUTED }}>
-                          You’ll need to re-enter your credentials to get back into Bizzi.
-                        </p>
+                      <div className="flex items-center gap-2 text-sm font-semibold text-white/85">
+                        <LogOut className="h-4 w-4 text-white/55" />
+                        Account access
                       </div>
+                      <p className="mt-1 text-xs" style={{ color: TEXT_MUTED }}>
+                        Sign out of this device when you are finished.
+                      </p>
                     </div>
-                    <div className="flex flex-wrap gap-3">
+                    {!showLogoutConfirm ? (
+                      <GhostButton onClick={beginLogout}>
+                        Sign out
+                      </GhostButton>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
                         onClick={confirmLogout}
                         disabled={loggingOut}
-                        className="mt-4 px-4 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-60"
+                          className="rounded-xl px-4 py-2.5 text-sm font-semibold transition disabled:opacity-60"
                         style={{
                           background: "linear-gradient(120deg, rgba(80,82,86,0.95), rgba(45,47,52,0.9))",
                           color: "white",
@@ -493,13 +509,19 @@ useEffect(() => {
                       >
                         {loggingOut ? "Signing out…" : "Confirm sign out"}
                       </button>
-                      <GhostButton onClick={cancelLogout} disabled={loggingOut} className="mt-4">
+                        <GhostButton onClick={cancelLogout} disabled={loggingOut}>
                         Stay signed in
                       </GhostButton>
-                    </div>
-                    <InlineMsg err={logoutError} className="mt-3" />
+                      </div>
+                    )}
                   </div>
-                )}
+                  {showLogoutConfirm ? (
+                    <p className="mt-3 text-xs" style={{ color: TEXT_MUTED }}>
+                      You’ll need to re-enter your credentials to get back into Bizzi.
+                    </p>
+                  ) : null}
+                  <InlineMsg err={logoutError} className="mt-3" />
+                </div>
               </Section>
             </>
           )}
@@ -508,36 +530,24 @@ useEffect(() => {
           {activeTab === "Business" && (
             <>
               <Section
-                className="col-start-1 col-span-12 md:col-span-6"
-                title="Active Business"
-                subtitle="Switch which business you are viewing in Bizzi."
+                className="col-start-1 col-span-12"
+                title="Business"
+                subtitle="Manage the business Bizzi uses for dashboards and integrations."
                 icon={Building2}
               >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex flex-col gap-1">
-                    <p className="text-sm text-white/80">
-                      {currentBusiness?.business_name || "No business selected"}
+                <div className="border-b border-white/[0.07] pb-4">
+                  <div>
+                    <p className="text-sm font-semibold text-white/85">
+                      {businessForm.business_name || currentBusiness?.business_name || "No business selected"}
                     </p>
-                    <p className="text-xs" style={{ color: TEXT_MUTED }}>
-                      Select a business to update dashboards and integrations.
+                    <p className="mt-1 text-xs" style={{ color: TEXT_MUTED }}>
+                      This is the business currently active across your dashboards and integrations.
                     </p>
                   </div>
-                  <BusinessSwitcher
-                    currentBusiness={currentBusiness}
-                    setCurrentBusiness={setCurrentBusiness}
-                  />
                 </div>
-              </Section>
-
-              <Section
-                className="col-start-1 col-span-12 md:col-span-6"
-                title="Business Profile"
-                subtitle="This info helps Bizzi personalize insights and reports."
-                icon={Building2}
-              >
-                <Field label="Business Name"><Input name="business_name" value={businessForm.business_name} onChange={handleBusinessChange} /></Field>
-                <Field label="Industry"><Input name="industry" value={businessForm.industry} onChange={handleBusinessChange} /></Field>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <Field label="Business Name"><Input name="business_name" value={businessForm.business_name} onChange={handleBusinessChange} /></Field>
+                  <Field label="Industry"><Input name="industry" value={businessForm.industry} onChange={handleBusinessChange} /></Field>
                   <Field label="Team Size"><Input name="team_size" type="number" value={businessForm.team_size} onChange={handleBusinessChange} /></Field>
                   <Field label="State"><Input name="state" value={businessForm.state} onChange={handleBusinessChange} /></Field>
                 </div>
@@ -558,9 +568,9 @@ useEffect(() => {
                 className="col-start-1 col-span-12"
                 title="Accounting & Banking"
                 subtitle="Connect your books and bank data."
-              icon={PlugZap}
-            >
-              <IntegrationRow provider="quickbooks" manager={integrationManager} companyName={qbCompanyName} businessId={businessId} />
+                icon={PlugZap}
+              >
+                <IntegrationRow provider="quickbooks" manager={integrationManager} companyName={qbCompanyName} businessId={businessId} />
                 <PlaidIntegrationCard businessId={businessId} />
               </Section>
 
@@ -579,70 +589,64 @@ useEffect(() => {
                 </Section>
               ) : null}
 
-              <Section
-                className="col-start-1 col-span-12"
-                title="Operations"
-                subtitle="Jobber and field ops data."
-                icon={PlugZap}
-              >
-                <IntegrationRow provider="jobber" manager={integrationManager} disabled />
-              </Section>
             </>
           )}
 
           {/* -------- Billing -------- */}
-      {activeTab === "Billing" && (
+          {activeTab === "Billing" && (
             <Section
               className="col-start-1 col-span-12"
-          title="Subscription & Billing"
-          subtitle="Manage your plan, invoices, and credits."
-          icon={CreditCard}
-        >
-          {billingToast ? (
-            <div className="mb-3 rounded-lg border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
-              {billingToast}
-            </div>
-          ) : null}
-          {!businessId ? (
-            <div className="rounded-lg border px-3 py-2 text-sm text-white/60" style={{ borderColor: SOFT_BORDER, background: ROW_BG }}>
-              Select a business to manage billing.
-            </div>
-          ) : (
-            <>
-              <div className="rounded-xl border px-4 py-3"
-                style={{ borderColor: SOFT_BORDER, background: ROW_BG }}>
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-white/90">Bizzi credits usage</p>
-                    <p className="text-xs" style={{ color: TEXT_MUTED }}>
-                      Track how many Bizzi credits you’ve used this month.
-                    </p>
-                  </div>
-                  <span className="text-sm font-semibold text-white/85">
-                    {Math.min(usageCount || 0, CREDITS_CAP)}/{CREDITS_CAP}
-                  </span>
+              title="Subscription & Billing"
+              subtitle="Manage your plan, invoices, and credits."
+              icon={CreditCard}
+            >
+              {billingToast ? (
+                <div className="mb-3 rounded-lg border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-sm text-emerald-100">
+                  {billingToast}
                 </div>
-                <div className="mt-3 h-2 w-full rounded-full bg-white/5 overflow-hidden">
+              ) : null}
+              {!businessId ? (
+                <div className="rounded-lg border px-3 py-2 text-sm text-white/60" style={{ borderColor: SOFT_BORDER, background: ROW_BG }}>
+                  Select a business to manage billing.
+                </div>
+              ) : (
+                <>
                   <div
-                    className="h-full rounded-full bg-emerald-400/70 transition-all"
-                    style={{ width: `${Math.min((usageCount || 0) / CREDITS_CAP * 100, 100)}%` }}
-                  />
-                </div>
-              </div>
+                    className="rounded-xl border px-4 py-3"
+                    style={{ borderColor: SOFT_BORDER, background: ROW_BG }}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-white/90">Bizzi credits usage</p>
+                        <p className="text-xs" style={{ color: TEXT_MUTED }}>
+                          Track how many Bizzi credits you’ve used this month.
+                        </p>
+                      </div>
+                      <span className="text-sm font-semibold text-white/85">
+                        {Math.min(usageCount || 0, CREDITS_CAP)}/{CREDITS_CAP}
+                      </span>
+                    </div>
+                    <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-white/5">
+                      <div
+                        className="h-full rounded-full bg-emerald-400/70 transition-all"
+                        style={{ width: `${Math.min(((usageCount || 0) / CREDITS_CAP) * 100, 100)}%` }}
+                      />
+                    </div>
+                  </div>
 
-              <div className="mt-4">
-                <BillingCard
-                  userId={userId}
-                  businessId={businessId}
-                  status={billingStatus}
-                  onBillingRefresh={() => setBillingRefresh((v) => v + 1)}
-                />
-              </div>
-            </>
-          )}
-          {activeTab === "Billing" && loadingBilling ? (
-            <p className="text-xs mt-2" style={{ color: TEXT_MUTED }}>Loading billing status…</p>
-          ) : null}
+                  <div className="mt-4">
+                    <BillingCard
+                      userId={userId}
+                      businessId={businessId}
+                      status={billingStatus}
+                      onBillingRefresh={() => setBillingRefresh((v) => v + 1)}
+                    />
+                  </div>
+                </>
+              )}
+              {activeTab === "Billing" && loadingBilling ? (
+                <p className="text-xs mt-2" style={{ color: TEXT_MUTED }}>Loading billing status…</p>
+              ) : null}
             </Section>
           )}
         </div>
@@ -661,7 +665,7 @@ function ModeToggle({ active, onChange, disabled, labelOn = "On", labelOff = "Of
         "relative inline-flex items-center rounded-full border p-1 transition focus-visible:outline-none",
         disabled ? "opacity-50 cursor-not-allowed" : "hover:border-white/20",
       ].join(" ")}
-      style={{ width: 188, height: 44, background: "rgba(0,0,0,0.22)", borderColor: SOFT_BORDER }}
+      style={{ width: 172, height: 40, background: "rgba(0,0,0,0.18)", borderColor: SOFT_BORDER }}
     >
       <span
         className={[
@@ -737,6 +741,9 @@ function PlaidIntegrationCard({ businessId }) {
   const [mappingSaving, setMappingSaving] = useState({});
   const [mappingOverrides, setMappingOverrides] = useState({});
   const [mappingMessages, setMappingMessages] = useState({});
+  const isConnected = counts.accounts > 0;
+  const isDisconnected = !isConnected && hasDisconnected;
+  const isEmpty = !isConnected && !hasDisconnected;
 
   const fetchStatus = useCallback(async () => {
     if (!businessId) return;
@@ -775,6 +782,13 @@ function PlaidIntegrationCard({ businessId }) {
 
   const refreshMappings = useCallback(async () => {
     if (!businessId) return;
+    if (!isConnected) {
+      setMappingRows([]);
+      setQboPaymentAccounts([]);
+      setMappingError("");
+      setMappingLoading(false);
+      return;
+    }
     setMappingLoading(true);
     try {
       const [mappingsRes, qboRes] = await Promise.all([
@@ -790,7 +804,7 @@ function PlaidIntegrationCard({ businessId }) {
     } finally {
       setMappingLoading(false);
     }
-  }, [businessId]);
+  }, [businessId, isConnected]);
 
   useEffect(() => {
     refreshMappings();
@@ -921,9 +935,6 @@ function PlaidIntegrationCard({ businessId }) {
     return new Date(Math.max(...timestamps));
   }, [institutions]);
 
-  const isConnected = counts.accounts > 0;
-  const isDisconnected = !isConnected && hasDisconnected;
-  const isEmpty = !isConnected && !hasDisconnected;
   const mappingById = useMemo(() => {
     const map = new Map();
     (mappingRows || []).forEach((row) => {
@@ -1059,15 +1070,23 @@ function PlaidIntegrationCard({ businessId }) {
 
   return (
     <div
-      className="mt-4 border-t pt-4"
-      style={{ borderColor: SOFT_BORDER }}
+      className="mt-3 rounded-xl px-4 py-4"
+      style={{
+        background: ROW_BG,
+        border: `1px solid ${SOFT_BORDER}`,
+      }}
     >
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <LinkIcon className="h-4 w-4" style={{ color: "var(--accent)" }} />
             <span className="text-sm font-semibold">Plaid (Bank Sync)</span>
+            <StatusPill state={isConnected ? "connected" : "disconnected"} />
           </div>
-          <p className="text-xs text-white/60">
+          <p className="text-xs" style={{ color: TEXT_MUTED }}>
+            Sync bank transactions and account balances.
+          </p>
+          <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.55)" }}>
             {isDisconnected
               ? "Status: Disconnected"
               : `Connected: ${counts.institutions} institution${counts.institutions === 1 ? "" : "s"} · ${counts.accounts} account${counts.accounts === 1 ? "" : "s"}`}
@@ -1077,48 +1096,48 @@ function PlaidIntegrationCard({ businessId }) {
           ) : null}
         </div>
         {isConnected ? (
-          <div className="flex items-center gap-2">
-            <GhostButton onClick={openPlaid} disabled={linking} className="text-xs">
-              {linking ? "Opening…" : "Add another bank"}
-            </GhostButton>
-            {confirmDisconnectAll ? (
-              <>
-                <GhostButton
-                  onClick={handleDisconnectAll}
-                  disabled={disconnectingAll}
-                  className="text-xs text-rose-200 border-rose-400/40 hover:border-rose-300/60"
-                >
-                  {disconnectingAll ? "Disconnecting…" : "Confirm disconnect"}
-                </GhostButton>
-                <GhostButton
-                  onClick={() => setConfirmDisconnectAll(false)}
-                  className="text-xs"
-                >
-                  Cancel
-                </GhostButton>
-              </>
-            ) : (
+        <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
+          <GhostButton onClick={openPlaid} disabled={linking} className={INTEGRATION_ACTION_BUTTON_CLASS}>
+            {linking ? "Opening…" : "Add another bank"}
+          </GhostButton>
+          {confirmDisconnectAll ? (
+            <>
               <GhostButton
-                onClick={() => setConfirmDisconnectAll(true)}
-                className="text-xs text-rose-200 border-rose-400/40 hover:border-rose-300/60"
+                onClick={handleDisconnectAll}
+                disabled={disconnectingAll}
+                className={`${INTEGRATION_ACTION_BUTTON_CLASS} text-rose-200 border-rose-400/40 hover:border-rose-300/60`}
               >
-                Disconnect Plaid
+                {disconnectingAll ? "Disconnecting…" : "Confirm disconnect"}
               </GhostButton>
-            )}
-          </div>
-        ) : isDisconnected ? (
-          <div className="flex items-center gap-2">
-            <AccentButton onClick={openPlaid} disabled={linking} className="text-xs">
-              {linking ? "Opening…" : "Reconnect Plaid"}
-            </AccentButton>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2">
-            <AccentButton onClick={openPlaid} disabled={linking} className="text-xs">
-              {linking ? "Opening…" : "Connect Plaid"}
-            </AccentButton>
-          </div>
-        )}
+              <GhostButton
+                onClick={() => setConfirmDisconnectAll(false)}
+                className={INTEGRATION_ACTION_BUTTON_CLASS}
+              >
+                Cancel
+              </GhostButton>
+            </>
+          ) : (
+            <GhostButton
+              onClick={() => setConfirmDisconnectAll(true)}
+              className={`${INTEGRATION_ACTION_BUTTON_CLASS} text-rose-200 border-rose-400/40 hover:border-rose-300/60`}
+            >
+              Disconnect Plaid
+            </GhostButton>
+          )}
+        </div>
+      ) : isDisconnected ? (
+        <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
+          <AccentButton onClick={openPlaid} disabled={linking} className={INTEGRATION_ACTION_BUTTON_CLASS}>
+            {linking ? "Opening…" : "Reconnect Plaid"}
+          </AccentButton>
+        </div>
+      ) : (
+        <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
+          <AccentButton onClick={openPlaid} disabled={linking} className={INTEGRATION_ACTION_BUTTON_CLASS}>
+            {linking ? "Opening…" : "Connect Plaid"}
+          </AccentButton>
+        </div>
+      )}
       </div>
       {statusError ? (
         <p className="mt-1 text-[11px] text-white/50">{statusError}</p>
@@ -1434,8 +1453,8 @@ function DarkMappingDropdown({
 function Section({ title, subtitle, icon: Icon, children, className = "" }) {
   return (
     <div
-      className={`m-0 w-full rounded-2xl border p-4 sm:p-5 ${className}`}
-      style={{ background: PANEL_BG, border: `1px solid ${NEUTRAL_BORDER}`, boxShadow: "none" }}
+      className={`m-0 w-full rounded-xl border p-4 sm:p-5 ${className}`}
+      style={{ background: "rgba(17,19,18,0.58)", border: `1px solid ${SOFT_BORDER}`, boxShadow: "none" }}
     >
       <div className="flex items-start justify-between mb-2">
         <div className="flex items-center gap-2">
@@ -1450,9 +1469,11 @@ function Section({ title, subtitle, icon: Icon, children, className = "" }) {
 }
 
 function Field({ label, children }) {
+  const child = React.Children.only(children);
+  const childId = React.isValidElement(child) ? child.props.id || child.props.name : undefined;
   return (
     <div className="mb-3">
-      <label className="block text-[11px] uppercase tracking-wide mb-1" style={{ color: TEXT_MUTED }}>
+      <label htmlFor={childId} className="block text-[11px] uppercase tracking-wide mb-1" style={{ color: TEXT_MUTED }}>
         {label}
       </label>
       {children}
@@ -1461,9 +1482,14 @@ function Field({ label, children }) {
 }
 
 function Input(props) {
+  const generatedId = React.useId();
+  const id = props.id || props.name || generatedId;
+  const name = props.name || props.id || generatedId;
   return (
     <input
       {...props}
+      id={id}
+      name={name}
       className="w-full px-3 py-2 rounded-xl outline-none transition"
       style={{
         background: "var(--input-bg)",
@@ -1516,6 +1542,21 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
     provider === "quickbooks"
       ? companyName || qbStatus?.company_name || qbStatus?.companyName || ""
       : "";
+  const quickBooksWasConnected =
+    provider === "quickbooks" &&
+    Boolean(
+      state === "connected" ||
+        qbStatus?.hasConnectedBefore ||
+        qbStatus?.has_connected_before ||
+        qbStatus?.previouslyConnected ||
+        qbStatus?.previously_connected ||
+        qbStatus?.disconnectedAt ||
+        qbStatus?.disconnected_at ||
+        qbStatus?.connectedAt ||
+        qbStatus?.connected_at ||
+        qbStatus?.realmId ||
+        qbStatus?.realm_id
+    );
   const [showCompanyMismatch, setShowCompanyMismatch] = useState(false);
   const mismatchDismissedRef = useRef(false);
   const [backfillStatus, setBackfillStatus] = useState(null);
@@ -1565,7 +1606,9 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
       if (connecting) return "Connecting…";
       if (state === "connected") return "Disconnect QuickBooks";
       if (state === "awaiting") return "Finish setup";
-      if (state === "disconnected") return "Reconnect QuickBooks";
+      if (state === "disconnected") {
+        return quickBooksWasConnected ? "Reconnect QuickBooks" : meta?.cta || "Connect QuickBooks";
+      }
     }
     if (state === "connected") return "Disconnect";
     if (state === "error") return "Retry";
@@ -1617,7 +1660,7 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
   return (
     <div
       data-integration={provider || undefined}
-      className={`relative flex items-center justify-between rounded-xl px-3 py-3 mb-2 transition ${
+      className={`relative mb-3 flex flex-col gap-4 rounded-xl px-4 py-4 transition sm:flex-row sm:items-start sm:justify-between ${
         confirmDisconnect ? "z-40" : "z-0"
       }`}
       style={{
@@ -1625,8 +1668,8 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
         border: `1px solid ${SOFT_BORDER}`,
       }}
     >
-      <div className="flex flex-col gap-0.5 max-w-[65%]">
-        <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex flex-wrap items-center gap-2">
           <LinkIcon className="h-4 w-4" style={{ color: "var(--accent)" }} />
           <span className="text-sm font-semibold">{label}</span>
           <StatusPill state={state} />
@@ -1646,9 +1689,14 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
             Company file: {qbCompanyFile}
           </p>
         ) : null}
-        {provider === "quickbooks" && state === "disconnected" ? (
+        {provider === "quickbooks" && state === "disconnected" && quickBooksWasConnected ? (
           <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.55)" }}>
             Your historical data is still saved. Reconnect to resume posting.
+          </p>
+        ) : null}
+        {provider === "quickbooks" && state === "disconnected" && !quickBooksWasConnected ? (
+          <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.55)" }}>
+            Connect QuickBooks to start syncing your books.
           </p>
         ) : null}
         {provider === "quickbooks" && state === "connected" ? (
@@ -1687,14 +1735,14 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
           </div>
         ) : null}
       </div>
-      <div className="flex gap-2">
+      <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
         {disabled ? (
-          <GhostButton disabled>Coming soon</GhostButton>
+          <GhostButton disabled className={INTEGRATION_ACTION_BUTTON_CLASS}>Coming soon</GhostButton>
         ) : state === "connected" ? (
           <div className="relative">
             <GhostButton
               onClick={() => setConfirmDisconnect((p) => !p)}
-              className="transition"
+              className={`${INTEGRATION_ACTION_BUTTON_CLASS} transition`}
             >
               {ctaLabel()}
             </GhostButton>
@@ -1729,7 +1777,7 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
             ) : null}
           </div>
         ) : (
-          <AccentButton onClick={handleConnect} disabled={connecting}>
+          <AccentButton onClick={handleConnect} disabled={connecting} className={INTEGRATION_ACTION_BUTTON_CLASS}>
             {ctaLabel()}
           </AccentButton>
         )}

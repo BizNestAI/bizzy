@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import BizzyVoiceIcon from "./BizzyVoiceIcon";
 import BizzySubmitButton from "./BizzySubmitButton";
 import AskBizzyQuickPrompts from "./AskBizzyQuickPrompts";
+import ChatGateNotice from "./ChatGateNotice";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
 import { ONBOARDING_PROMPTS } from "../../config/chatQuickPrompts";
 import { CANVAS_COL_MAX, CANVAS_COL_PAD } from "../../config/chatCanvasLayout";
@@ -16,24 +17,31 @@ export default function ChatCanvasBar({
     openCanvas,
     currentModule = "bizzy",
     quickPrompts = [],
+    checkChatAccess,
+    chatGateNotice,
+    dismissChatGateNotice,
   } = useBizzyChatContext();
 
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const inputRef = useRef(null);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e?.preventDefault();
     const text = (input || "").trim();
-    if (!text) return;
+    if (!text || isLoading) return;
+    const access = await checkChatAccess?.();
+    if (!access?.allowed) return;
     setInput("");
-    sendMessage(text, { openCanvas: true, module: currentModule });
+    await sendMessage(text, { openCanvas: true, module: currentModule });
   };
 
-  const handlePromptClick = (text) => {
+  const handlePromptClick = async (text) => {
     if (!text || isLoading) return;
+    const access = await checkChatAccess?.();
+    if (!access?.allowed) return;
     setInput("");
-    sendMessage(text, { openCanvas: true, module: currentModule });
+    await sendMessage(text, { openCanvas: true, module: currentModule });
   };
 
   // Prefill chat input (e.g., follow-up suggestions)
@@ -44,17 +52,19 @@ export default function ChatCanvasBar({
       if (!text) return;
       setInput(text);
       if (autoSend && !isLoading) {
-        openCanvas(currentModule);
-        window.dispatchEvent(new Event("bizzy:open-chat"));
-        setTimeout(() => {
+        setTimeout(async () => {
+          const access = await checkChatAccess?.();
+          if (!access?.allowed) return;
+          openCanvas(currentModule);
+          window.dispatchEvent(new Event("bizzy:open-chat"));
           setInput("");
-          sendMessage(text, { openCanvas: true, module: currentModule });
+          await sendMessage(text, { openCanvas: true, module: currentModule });
         }, 0);
       }
     };
     window.addEventListener("bizzy:prefill-chat", handler);
     return () => window.removeEventListener("bizzy:prefill-chat", handler);
-  }, [currentModule, isLoading, sendMessage, openCanvas]);
+  }, [currentModule, isLoading, sendMessage, openCanvas, checkChatAccess]);
 
   const shellClassName = "bg-transparent text-white";
   const neutralShellBg = "linear-gradient(180deg, var(--chatbar-bg), var(--chatbar-bg-2))";
@@ -81,6 +91,13 @@ export default function ChatCanvasBar({
       </div>
       {/* Input bar */}
       <div data-bizzy-chatbar-shell data-bizzy-chatbar-measured>
+        {chatGateNotice ? (
+          <ChatGateNotice
+            notice={chatGateNotice}
+            onDismiss={dismissChatGateNotice}
+            className="mb-2"
+          />
+        ) : null}
         <form onSubmit={handleSubmit} className="mt-1">
           <div
             data-bizzy-chatbar-form
@@ -100,6 +117,8 @@ export default function ChatCanvasBar({
           >
             <textarea
               ref={inputRef}
+              id="bizzy-canvas-chat-input"
+              name="bizzy-canvas-chat-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {

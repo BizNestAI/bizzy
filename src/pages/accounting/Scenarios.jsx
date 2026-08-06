@@ -1,5 +1,5 @@
 // File: /src/pages/accounting/Scenarios.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight, Loader2, ShieldAlert, RefreshCw } from "lucide-react";
 import ScenarioModeler from "../../components/Accounting/ScenarioModeler.jsx";
@@ -94,11 +94,6 @@ export default function Scenarios({ businessId: propBusinessId, userId: propUser
     if (!noBusiness) loadBaseline();
   }, [noBusiness, userId, businessId]);
 
-  const isMock = useMemo(() => {
-    // crude: if rows don't have business_id we assume mock; harmless flag
-    return Array.isArray(baseline) && baseline.length && !("business_id" in (baseline[0] || {}));
-  }, [baseline]);
-
   return (
     <div className="space-y-8 p-6 text-white">
       {/* Header */}
@@ -163,12 +158,6 @@ export default function Scenarios({ businessId: propBusinessId, userId: propUser
         />
       )}
 
-      {/* Footnote */}
-      {isMock && !noBusiness && (
-        <p className="text-xs text-amber-300">
-          Using mock baseline — connect accounting to preview with live data.
-        </p>
-      )}
     </div>
   );
 }

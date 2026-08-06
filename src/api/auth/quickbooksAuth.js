@@ -561,6 +561,15 @@ router.get("/status", async (req, res) => {
     const has_row = !!(data && is_active);
     const connected = !!(data && is_active && data.access_token && data.refresh_token);
     const needs_setup = !!(data && is_active && (!data.realm_id || !data.refresh_token));
+    const has_connected_before = !!(
+      data &&
+      (data.disconnected_at ||
+        data.connected_at ||
+        data.realm_id ||
+        data.status === "disconnected" ||
+        data.access_token ||
+        data.refresh_token)
+    );
 
     if (process.env.NODE_ENV !== "production") {
       console.log("[auth/status]", {
@@ -568,6 +577,7 @@ router.get("/status", async (req, res) => {
         qbo_env_checked: envParam,
         connected,
         has_row,
+        has_connected_before,
       });
     }
 
@@ -582,7 +592,8 @@ router.get("/status", async (req, res) => {
       disconnected_at: data?.disconnected_at || null,
       company_name: data?.connected_company_name || data?.company_name || null,
       realm_id: data?.realm_id || null,
-      connected_at: data?.connected_at || data?.created_at || null,
+      connected_at: data?.connected_at || null,
+      has_connected_before,
       scope: data?.scope || null,
     });
   } catch (e) {

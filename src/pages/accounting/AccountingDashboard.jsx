@@ -331,9 +331,9 @@ export default function AccountingDashboard() {
   };
 
   // Heights tuned so charts are fully visible
-  const H_REVENUE = 300;
-  const H_EXPENSE = 380;
-  const H_PROFIT  = 380;
+  const H_REVENUE = 350;
+  const H_EXPENSE = 440;
+  const H_PROFIT  = 440;
 
   return (
     /**

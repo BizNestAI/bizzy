@@ -201,7 +201,7 @@ function mergeFollowupState(base = {}, override = {}) {
   };
 }
 
-function AgingChart({ rows, status, refreshing, onRefresh }) {
+function AgingChart({ rows, status, refreshing, onRefresh, showRefresh = true }) {
   const buckets = useMemo(() => buildAgingBuckets(rows), [rows]);
   const total = buckets.reduce((sum, bucket) => sum + bucket.total, 0);
   const max = Math.max(...buckets.map((bucket) => bucket.total), 1);
@@ -225,17 +225,19 @@ function AgingChart({ rows, status, refreshing, onRefresh }) {
               : "Waiting for the first QuickBooks AR sync"}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={refreshing}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-full border text-white/85 transition hover:bg-white/14 hover:border-white/50 focus:outline-none focus:ring-2 focus:ring-white/14 disabled:opacity-60"
-          style={{ borderColor: "rgba(255,255,255,0.22)", background: "rgba(18,18,20,0.86)" }}
-          aria-label="Refresh collections"
-          title="Refresh"
-        >
-          <RefreshCcw className={refreshing ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
-        </button>
+        {showRefresh ? (
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full border text-white/85 transition hover:bg-white/14 hover:border-white/50 focus:outline-none focus:ring-2 focus:ring-white/14 disabled:opacity-60"
+            style={{ borderColor: "rgba(255,255,255,0.22)", background: "rgba(18,18,20,0.86)" }}
+            aria-label="Refresh collections"
+            title="Refresh"
+          >
+            <RefreshCcw className={refreshing ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+          </button>
+        ) : null}
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[0.95fr,1.05fr]">
@@ -1844,6 +1846,8 @@ function NaturalLanguageAssignmentBar({
 
       <div className="mt-3 flex min-w-0 items-center rounded-full border border-white/10 bg-black/20 px-3 py-2 focus-within:border-emerald-300/45">
         <input
+          id="job-costing-assignment-instruction"
+          name="job_costing_assignment_instruction"
           value={instruction}
           onChange={(event) => setInstruction(event.target.value)}
           onKeyDown={(event) => {
@@ -2073,13 +2077,13 @@ function DarkFilterSelect({ value, onChange, options, ariaLabel, className = "",
   }, [open]);
 
   return (
-    <div ref={ref} className={`relative ${className}`}>
+    <div ref={ref} className={`relative ${open ? "z-[120]" : "z-0"} ${className}`}>
       <button
         type="button"
         aria-label={ariaLabel}
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className={`flex w-full items-center justify-between gap-3 rounded-[14px] border border-white/10 bg-[#0b0f0d] px-3 text-left font-medium text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] outline-none transition hover:border-emerald-300/25 hover:bg-[#0e1512] focus:border-emerald-300/45 ${
+        className={`flex w-full items-center justify-between gap-3 rounded-[14px] border border-white/10 bg-[#07100c] px-3 text-left font-medium text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] outline-none transition hover:border-emerald-300/25 hover:bg-[#0b1510] focus:border-emerald-300/45 ${
           compact ? "h-9 text-xs" : "py-2.5 text-sm"
         }`}
       >
@@ -2087,7 +2091,7 @@ function DarkFilterSelect({ value, onChange, options, ariaLabel, className = "",
         <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-white/45 transition ${open ? "rotate-90 text-emerald-200/75" : ""}`} />
       </button>
       {open ? (
-        <div className={`custom-scrollbar absolute left-0 right-0 top-[calc(100%+6px)] z-30 max-h-[220px] overflow-y-auto overscroll-contain rounded-[14px] border border-white/10 bg-[#0b0f0d] p-1 shadow-[0_18px_42px_rgba(0,0,0,0.55)] ${menuClassName}`}>
+        <div className={`custom-scrollbar absolute left-0 right-0 top-[calc(100%+6px)] z-[120] max-h-[220px] overflow-y-auto overscroll-contain rounded-[14px] border border-emerald-300/20 bg-[#07100c] p-1 shadow-[0_22px_56px_rgba(0,0,0,0.92)] ring-1 ring-black/70 ${menuClassName}`}>
           {options.map((option) => {
             const active = option.value === value;
             return (
@@ -3139,7 +3143,7 @@ function JobAssignmentBoard({
       ) : (
       <div className="relative z-10">
         <div className="flex max-h-[calc(100vh-430px)] min-h-[300px] flex-col overflow-hidden rounded-[18px] border border-white/10 bg-black/15">
-          <div className="shrink-0 border-b border-white/8 bg-[#1d231f]/95 px-3 py-2 backdrop-blur">
+          <div className="relative z-[110] shrink-0 border-b border-white/8 bg-[#1d231f]/95 px-3 py-2 backdrop-blur">
             <div className="grid gap-2 md:grid-cols-[auto_0.62fr_0.62fr_minmax(180px,1.1fr)_0.8fr]">
               <button
                 type="button"
@@ -3177,6 +3181,8 @@ function JobAssignmentBoard({
                 ]}
               />
               <input
+                id="job-costing-transaction-search"
+                name="job_costing_transaction_search"
                 value={transactionSearch}
                 onChange={(event) => setTransactionSearch(event.target.value)}
                 placeholder="Search vendor, memo, GL account"
@@ -3200,7 +3206,7 @@ function JobAssignmentBoard({
             ) : null}
           </div>
 
-          <div className="custom-scrollbar min-h-0 flex-1 overflow-auto overscroll-contain">
+          <div className="custom-scrollbar relative z-0 min-h-0 flex-1 overflow-auto overscroll-contain">
             <div className="w-full min-w-[720px]">
               <div className="hidden grid-cols-[20px_50px_142px_118px_58px_158px_126px] gap-1.5 border-b border-white/8 bg-white/[0.035] px-2 py-1.5 text-[9px] uppercase tracking-[0.12em] text-white/40 md:grid">
                 <div />
@@ -5690,32 +5696,38 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
         ].map(([key, label, required]) => (
           <label key={key} className="block">
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">{label}{required ? " *" : ""}</span>
-            <input value={form[key]} onChange={(event) => update(key, event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45" />
+            <input
+              id={`add-job-${key}`}
+              name={`add_job_${key}`}
+              value={form[key]}
+              onChange={(event) => update(key, event.target.value)}
+              className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45"
+            />
           </label>
         ))}
         <div className="grid gap-3 sm:grid-cols-2">
           <label>
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">Start date</span>
-            <input type="date" value={form.startDate} onChange={(event) => update("startDate", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45" />
+            <input id="add-job-startDate" name="add_job_startDate" type="date" value={form.startDate} onChange={(event) => update("startDate", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45" />
           </label>
           <label>
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">End date</span>
-            <input type="date" value={form.endDate} onChange={(event) => update("endDate", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45" />
+            <input id="add-job-endDate" name="add_job_endDate" type="date" value={form.endDate} onChange={(event) => update("endDate", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45" />
           </label>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label>
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">Target margin</span>
-            <input type="number" value={form.targetMargin} onChange={(event) => update("targetMargin", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45" />
+            <input id="add-job-targetMargin" name="add_job_targetMargin" type="number" value={form.targetMargin} onChange={(event) => update("targetMargin", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45" />
           </label>
           <label>
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">Contract/estimate value</span>
-            <input type="number" value={form.contractValue} onChange={(event) => update("contractValue", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45" />
+            <input id="add-job-contractValue" name="add_job_contractValue" type="number" value={form.contractValue} onChange={(event) => update("contractValue", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45" />
           </label>
         </div>
         <label>
           <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">Revenue basis</span>
-          <select value={form.revenueBasis} onChange={(event) => update("revenueBasis", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45">
+          <select id="add-job-revenueBasis" name="add_job_revenueBasis" value={form.revenueBasis} onChange={(event) => update("revenueBasis", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45">
             <option value="invoiced">Invoiced revenue</option>
             <option value="collected">Collected cash</option>
             <option value="contract_value">Contract value</option>
@@ -5724,7 +5736,7 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
         </label>
         <div className="rounded-[16px] border border-white/10 bg-white/[0.035] px-3 py-3">
           <div className="flex items-start gap-3">
-            <input type="checkbox" checked={false} disabled className="mt-1" aria-label="Create in QuickBooks too unavailable" />
+            <input id="add-job-createInQbo" name="add_job_createInQbo" type="checkbox" checked={false} disabled className="mt-1" aria-label="Create in QuickBooks too unavailable" />
             <span>
               <span className="block text-sm font-semibold text-white/82">Create in QuickBooks too</span>
               <span className="mt-0.5 block text-xs text-white/42">{qboCreateUnavailableMessage}</span>
@@ -5861,12 +5873,6 @@ function JobCostingPage({ businessId, usingDemo }) {
       setJobs(buildDemoJobCostingJobs(demoJobCostingTransactions));
       setChangeOrders([]);
       setPotentialChangeOrders([]);
-      if (import.meta.env.MODE !== "production") {
-        console.info("[JobCosting] posted Books transactions fetched", {
-          source: "demo.bookkeeping.transactions",
-          count: demoJobCostingTransactions.length,
-        });
-      }
       setLoading(false);
       return;
     }
@@ -5887,12 +5893,6 @@ function JobCostingPage({ businessId, usingDemo }) {
       setJobs(Array.isArray(summary?.jobs) ? summary.jobs : Array.isArray(data?.jobs) ? data.jobs : []);
       setChangeOrders(Array.isArray(changeOrderData?.change_orders) ? changeOrderData.change_orders : []);
       setPotentialChangeOrders(Array.isArray(potentialChangeOrderData?.potential_change_orders) ? potentialChangeOrderData.potential_change_orders : []);
-      if (import.meta.env.MODE !== "production") {
-        console.info("[JobCosting] posted Books transactions fetched", {
-          source: "/api/jobs/job-costing",
-          count: Array.isArray(data?.transactions) ? data.transactions.length : 0,
-        });
-      }
     } catch (e) {
       console.warn("[JobCosting] load failed", e?.message || e);
       setError(e?.message || "Failed to load job costing.");
@@ -7001,7 +7001,7 @@ function JobCostingPage({ businessId, usingDemo }) {
           <div className="rounded-[18px] border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">{error}</div>
         ) : null}
 
-        <div className="-mt-10 sm:-mt-12 lg:-mt-14">
+        <div className="-mt-16 sm:-mt-20 lg:-mt-24">
           <JobAssignmentBoard
             transactions={transactions}
             jobs={currentJobRows}
@@ -7754,6 +7754,7 @@ export default function JobsDashboard() {
             status={arStatus}
             refreshing={syncingAr}
             onRefresh={() => refreshAr({ force: true })}
+            showRefresh={!usingDemo && qbStatus === "connected"}
           />
         )}
 

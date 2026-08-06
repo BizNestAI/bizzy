@@ -237,7 +237,9 @@ function ChatHomeInner() {
   useEffect(() => {
     const t = setTimeout(() => closeCanvas?.(), 0);
     return () => clearTimeout(t);
-  }, [closeCanvas]);
+    // Run only on initial ChatHome mount. History clicks can open the canvas later.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const showCanvas = isCanvasOpen;
   const showHero = !showCanvas;

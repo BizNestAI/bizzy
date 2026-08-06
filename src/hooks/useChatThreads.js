@@ -1,6 +1,7 @@
 // File: /src/hooks/useChatThreads.js
 import { useEffect, useRef, useState, useCallback } from 'react';
 import apiBaseUrl from '../utils/apiBase.js';
+import { useAuth } from '../context/AuthContext.jsx';
 
 const DEBOUNCE_MS        = 300;
 const INITIAL_PAGE_SIZE  = 20;   // first page
@@ -8,6 +9,7 @@ const PAGE_SIZE          = 10;   // subsequent pages
 const SOFT_CAP           = 100;  // stop after this many rows (or when API says no more)
 
 export default function useChatThreads(businessId) {
+  const { user } = useAuth() || {};
   const [threads, setThreads] = useState([]);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState('');
@@ -24,7 +26,7 @@ export default function useChatThreads(businessId) {
   const hasMore = threads.length < effectiveTotal;
 
   const API_BASE = apiBaseUrl || '';
-  const userIdRef = useRef(localStorage.getItem('user_id') || '');
+  const userId = user?.id || localStorage.getItem('user_id') || '';
   const abortRef = useRef(null);
   const debounceRef = useRef(null);
 
@@ -43,7 +45,13 @@ export default function useChatThreads(businessId) {
   };
 
   const fetchList = useCallback(async ({ reset = false, customOffset, limitOverride } = {}) => {
-    if (!businessId) return;
+    if (!businessId || !userId) {
+      setThreads([]);
+      setTotal(0);
+      setOffset(0);
+      setError('');
+      return;
+    }
 
     // Determine next offset and limit
     const nextOffset = typeof customOffset === 'number'
@@ -82,7 +90,7 @@ export default function useChatThreads(businessId) {
       }
 
       const res = await fetch(url.toString(), {
-        headers: { 'x-business-id': businessId, 'x-user-id': userIdRef.current },
+        headers: { 'x-business-id': businessId, 'x-user-id': userId },
         signal: ac.signal,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -109,7 +117,7 @@ export default function useChatThreads(businessId) {
     } finally {
       setLoading(false);
     }
-  }, [API_BASE, businessId, q, offset]);
+  }, [API_BASE, businessId, userId, q, offset]);
 
   // Initial load / when business or search query changes
   const refresh = useCallback(() => {

@@ -1,5 +1,5 @@
 // src/pages/UserAdmin/BusinessWizard.jsx
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { createBusinessProfile, ensureUserProfile, updateBusinessProfile } from '../../services/businessService';
 import { useAuth } from '../../context/AuthContext';
@@ -21,6 +21,7 @@ const CTA_BG = 'linear-gradient(180deg, rgba(245,247,251,0.16), rgba(245,247,251
 const CTA_TEXT = '#f5f7fb';
 const CTA_GLOW = '0 18px 44px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.10)';
 const DRAFT_SCHEMA_VERSION = 1;
+const LAST_DRAFT_STORAGE_KEY = `bizzy:onboarding-draft:last-key:v${DRAFT_SCHEMA_VERSION}`;
 const DEFAULT_FORM_DATA = {
   business_name: '',
   founded_year: '',
@@ -50,9 +51,18 @@ const readDraft = (storageKey) => {
   }
 };
 
+const readInitialDraft = () => {
+  if (typeof window === 'undefined') return null;
+  const userId = window.localStorage.getItem('user_id');
+  const storageKey = getDraftStorageKey(userId);
+  const draft = readDraft(storageKey);
+  return draft ? { ...DEFAULT_FORM_DATA, ...draft } : null;
+};
+
 const writeDraft = (storageKey, formData) => {
   if (!storageKey || typeof window === 'undefined') return;
   try {
+    window.localStorage.setItem(LAST_DRAFT_STORAGE_KEY, storageKey);
     window.localStorage.setItem(
       storageKey,
       JSON.stringify({
@@ -69,6 +79,9 @@ const clearDraft = (storageKey) => {
   if (!storageKey || typeof window === 'undefined') return;
   try {
     window.localStorage.removeItem(storageKey);
+    if (window.localStorage.getItem(LAST_DRAFT_STORAGE_KEY) === storageKey) {
+      window.localStorage.removeItem(LAST_DRAFT_STORAGE_KEY);
+    }
   } catch {
     // ignore storage failures
   }
@@ -113,8 +126,9 @@ const Section = ({ title, subtitle, children }) => (
   </div>
 );
 
-const Label = ({ children, required = false }) => (
+const Label = ({ children, required = false, htmlFor }) => (
   <label
+    htmlFor={htmlFor}
     className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]"
     style={{ color: TEXT_MUTED }}
   >
@@ -126,22 +140,31 @@ const Label = ({ children, required = false }) => (
     )}
   </label>
 );
-const Input = ({ value, ...props }) => (
-  <input
-    {...props}
-    value={value ?? ''}
-    className={`h-10 w-full rounded-[13px] border border-white/[0.13] bg-[#111513] px-3 text-sm text-white/90 outline-none
-                shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_-8px_16px_rgba(0,0,0,0.14)]
-                transition placeholder:text-white/30
-                focus:border-emerald-300/30 focus:bg-[#151817] focus:ring-2 focus:ring-emerald-300/12 ${props.className||''}`}
-  />
-);
+const Input = ({ value, ...props }) => {
+  const generatedId = useId();
+  const id = props.id || props.name || generatedId;
+  const name = props.name || props.id || generatedId;
+  return (
+    <input
+      {...props}
+      id={id}
+      name={name}
+      value={value ?? ''}
+      className={`h-10 w-full rounded-[13px] border border-white/[0.13] bg-[#111513] px-3 text-sm text-white/90 outline-none
+                  shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_-8px_16px_rgba(0,0,0,0.14)]
+                  transition placeholder:text-white/30
+                  focus:border-emerald-300/30 focus:bg-[#151817] focus:ring-2 focus:ring-emerald-300/12 ${props.className||''}`}
+    />
+  );
+};
 const dropdownBaseClass =
   'h-10 w-full flex items-center justify-between gap-2 rounded-[13px] border border-white/[0.13] bg-[#111513] px-3 text-sm text-white/90 focus:outline-none transition shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_-8px_16px_rgba(0,0,0,0.14)]';
 
-const Dropdown = ({ value, onChange, options, placeholder = 'Select…', className = '', maxHeight = 240 }) => {
+const Dropdown = ({ id, value, onChange, options, placeholder = 'Select…', className = '', maxHeight = 240 }) => {
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
+  const generatedId = useId();
+  const buttonId = id || generatedId;
   const normalized = useMemo(() => {
     return (options || []).map((opt) =>
       typeof opt === 'string'
@@ -163,6 +186,7 @@ const Dropdown = ({ value, onChange, options, placeholder = 'Select…', classNa
   return (
     <div className={`relative ${className}`} ref={containerRef}>
       <button
+        id={buttonId}
         type="button"
         className={`${dropdownBaseClass} ${open ? 'border-[rgba(52,211,153,0.45)] ring-1 ring-[rgba(52,211,153,0.28)]' : ''}`}
         onClick={() => setOpen((o) => !o)}
@@ -207,13 +231,20 @@ const Dropdown = ({ value, onChange, options, placeholder = 'Select…', classNa
     </div>
   );
 };
-const TextArea = (props) => (
-  <textarea
-    {...props}
-    value={props.value || ''}
-    className="min-h-[84px] w-full rounded-[13px] border border-white/[0.13] bg-[#111513] px-3 py-2 text-sm text-white/90 outline-none transition placeholder:text-white/30 focus:border-emerald-300/30 focus:bg-[#151817] focus:ring-2 focus:ring-emerald-300/12"
-  />
-);
+const TextArea = (props) => {
+  const generatedId = useId();
+  const id = props.id || props.name || generatedId;
+  const name = props.name || props.id || generatedId;
+  return (
+    <textarea
+      {...props}
+      id={id}
+      name={name}
+      value={props.value || ''}
+      className="min-h-[84px] w-full rounded-[13px] border border-white/[0.13] bg-[#111513] px-3 py-2 text-sm text-white/90 outline-none transition placeholder:text-white/30 focus:border-emerald-300/30 focus:bg-[#151817] focus:ring-2 focus:ring-emerald-300/12"
+    />
+  );
+};
 // ----- Page -----
 const BusinessWizard = () => {
   const { user } = useAuth();
@@ -223,7 +254,7 @@ const BusinessWizard = () => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const [formData, setFormData] = useState(DEFAULT_FORM_DATA);
+  const [formData, setFormData] = useState(() => readInitialDraft() || DEFAULT_FORM_DATA);
   const [existingBusinessId, setExistingBusinessId] = useState(null);
   const [draftReady, setDraftReady] = useState(false);
   const [animateEntry] = useState(() => {
@@ -390,7 +421,7 @@ const BusinessWizard = () => {
       };
       let businessId = existingBusinessId;
       if (existingBusinessId) {
-        const { error: updateErr, data: updated } = await updateBusinessProfile(existingBusinessId, payload);
+        const { error: updateErr } = await updateBusinessProfile(existingBusinessId, payload);
         if (updateErr) throw updateErr;
       } else {
         const { data: createdBusiness, error: businessError } = await createBusinessProfile(payload);
@@ -515,9 +546,11 @@ const BusinessWizard = () => {
           >
             <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2">
               <div className="md:col-span-2">
-                <Label required>Business Name</Label>
+                <Label htmlFor="setup-business-name" required>Business Name</Label>
                 <Input
+                  id="setup-business-name"
                   name="business_name"
+                  autoComplete="organization"
                   value={formData.business_name}
                   onChange={(e)=>setField('business_name', e.target.value)}
                   placeholder="e.g., Summit Roofing & Repairs"
@@ -525,8 +558,9 @@ const BusinessWizard = () => {
                 />
               </div>
               <div>
-                <Label required>Industry</Label>
+                <Label htmlFor="setup-industry" required>Industry</Label>
                 <Dropdown
+                  id="setup-industry"
                   value={formData.industry}
                   onChange={(e)=>setField('industry', e.target.value)}
                   options={[{ value: '', label: 'Select industry' }, ...INDUSTRIES.map((i) => ({ value: i, label: i }))]}
@@ -534,8 +568,9 @@ const BusinessWizard = () => {
                 />
               </div>
               <div>
-                <Label required>Team size</Label>
+                <Label htmlFor="setup-team-size" required>Team size</Label>
                 <Input
+                  id="setup-team-size"
                   name="team_size"
                   type="number"
                   min={1}
@@ -546,8 +581,9 @@ const BusinessWizard = () => {
                 />
               </div>
               <div>
-                <Label>Annual revenue</Label>
+                <Label htmlFor="setup-annual-revenue">Annual revenue</Label>
                 <Dropdown
+                  id="setup-annual-revenue"
                   value={formData.annual_revenue}
                   onChange={(e)=>setField('annual_revenue', e.target.value)}
                   placeholder="Select..."
@@ -555,9 +591,11 @@ const BusinessWizard = () => {
                 />
               </div>
               <div>
-                <Label>Founded year</Label>
+                <Label htmlFor="setup-founded-year">Founded year</Label>
                 <Input
+                  id="setup-founded-year"
                   name="founded_year"
+                  autoComplete="off"
                   type="number"
                   min={1990}
                   max={new Date().getFullYear()}
@@ -567,8 +605,9 @@ const BusinessWizard = () => {
                 />
               </div>
               <div>
-                <Label required>State / province</Label>
+                <Label htmlFor="setup-state" required>State / province</Label>
                 <Dropdown
+                  id="setup-state"
                   value={formData.state}
                   onChange={(e)=>setField('state', e.target.value)}
                   options={[{ value: '', label: 'Select state' }, ...STATES.map((s) => ({ value: s, label: s }))]}
@@ -576,9 +615,11 @@ const BusinessWizard = () => {
                 />
               </div>
               <div>
-                <Label required>Services offered</Label>
+                <Label htmlFor="setup-services-offered" required>Services offered</Label>
                 <Input
+                  id="setup-services-offered"
                   name="services_offered"
+                  autoComplete="off"
                   value={formData.services_offered}
                   onChange={(e)=>setField('services_offered', e.target.value)}
                   placeholder="Remodeling, renovations, home repair"
@@ -586,8 +627,9 @@ const BusinessWizard = () => {
                 />
               </div>
               <div>
-                <Label>Billing model</Label>
+                <Label htmlFor="setup-billing-model">Billing model</Label>
                 <Dropdown
+                  id="setup-billing-model"
                   value={formData.billing_model}
                   onChange={(e)=>setField('billing_model', e.target.value)}
                   options={BILLING_MODELS}
@@ -595,13 +637,15 @@ const BusinessWizard = () => {
               </div>
               <div className="md:col-span-2">
                 <div className="mb-1.5 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-                  <Label>Biggest headache right now</Label>
+                  <Label htmlFor="setup-top-challenge">Biggest headache right now</Label>
                   <span className="text-[11px] text-white/40">
                     Optional, used to personalize Bizzi chat responses.
                   </span>
                 </div>
                 <TextArea
+                  id="setup-top-challenge"
                   name="top_challenge"
+                  autoComplete="off"
                   value={formData.top_challenge}
                   onChange={(e)=>setField('top_challenge', e.target.value)}
                   placeholder="Cash swings, lead quality, labor utilization, project margins, etc."

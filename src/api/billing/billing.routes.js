@@ -38,6 +38,59 @@ if (process.env.NODE_ENV !== "production") {
 
 const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || ""));
 
+function normalizeOrigin(value) {
+  const raw = String(value || "")
+    .split("#")[0]
+    .trim()
+    .replace(/\/+$/, "");
+  if (!raw) return null;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+function parseOriginList(...values) {
+  const origins = [];
+  values
+    .filter(Boolean)
+    .flatMap((value) => String(value).split(","))
+    .map(normalizeOrigin)
+    .filter(Boolean)
+    .forEach((origin) => {
+      if (!origins.includes(origin)) origins.push(origin);
+    });
+  return origins;
+}
+
+const CONFIGURED_APP_ORIGINS = parseOriginList(
+  APP_URL,
+  process.env.APP_BASE_URL,
+  process.env.FRONTEND_URL,
+  process.env.PUBLIC_APP_URL
+);
+
+const CONFIGURED_CORS_ORIGINS = parseOriginList(
+  process.env.CORS_ORIGINS,
+  process.env.CORS_ORIGIN,
+  "https://app.bizzios.com",
+  "https://bizzios.com",
+  "https://www.bizzios.com",
+  "https://bizzi-ten.vercel.app",
+  process.env.NODE_ENV !== "production" ? "http://localhost:5173" : null
+);
+
+function resolveReturnOrigin(req) {
+  const requestOrigin = normalizeOrigin(req.headers?.origin);
+  if (requestOrigin && CONFIGURED_CORS_ORIGINS.includes(requestOrigin)) {
+    return requestOrigin;
+  }
+  return CONFIGURED_APP_ORIGINS[0] || "http://localhost:5173";
+}
+
 function readIds(req) {
   const q = req.query || {};
   const b = req.body || {};
@@ -202,6 +255,144 @@ function projectBillingRow(row) {
   };
 }
 
+function compactUnique(values = []) {
+  const seen = new Set();
+  return values
+    .map((value) => (typeof value === "string" ? value.trim() : value))
+    .filter((value) => typeof value === "string" && value.length > 0)
+    .filter((value) => {
+      if (seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
+}
+
+function getBillingIdCandidates(row, key) {
+  if (!row) return [];
+  const activeKey = ACTIVE_BILLING_COLUMNS[key];
+  const inactiveSuffix = ACTIVE_SUFFIX === "test" ? "live" : "test";
+  const inactiveKey = `${key}_${inactiveSuffix}`;
+  return compactUnique([activeKey ? row[activeKey] : null, row[key], row[inactiveKey]]);
+}
+
+function getCustomerBusinessId(customer) {
+  return customer?.metadata?.businessId || customer?.metadata?.business_id || null;
+}
+
+function customerMatchesBusiness(customer, businessId) {
+  if (!customer || customer.deleted) return false;
+  const customerBusinessId = getCustomerBusinessId(customer);
+  return !customerBusinessId || customerBusinessId === businessId;
+}
+
+function getSubscriptionBusinessId(subscription) {
+  return subscription?.metadata?.businessId || subscription?.metadata?.business_id || null;
+}
+
+function subscriptionMatchesBusiness(subscription, businessId) {
+  if (!subscription) return false;
+  const subscriptionBusinessId = getSubscriptionBusinessId(subscription);
+  return !subscriptionBusinessId || subscriptionBusinessId === businessId;
+}
+
+async function getUserProfile(userId) {
+  if (!userId) return null;
+  const { data } = await supabase
+    .from("user_profiles")
+    .select("id,email,full_name,first_name,last_name")
+    .eq("id", userId)
+    .maybeSingle();
+  return data || null;
+}
+
+function buildCustomerUpdateParams(business, userProfile = null, customer = null) {
+  const businessName = business?.business_name || business?.name || null;
+  const profileEmail = userProfile?.email || null;
+  const existingMetadata = customer?.metadata || {};
+  const metadata = {
+    ...existingMetadata,
+    businessId: business.id,
+    business_id: business.id,
+  };
+  if (business?.user_id) metadata.userId = business.user_id;
+
+  const params = { metadata };
+  if (businessName && customer?.name !== businessName) params.name = businessName;
+  if (profileEmail && customer?.email !== profileEmail) params.email = profileEmail;
+  return params;
+}
+
+async function syncCustomerIdentity(customer, business, userProfile = null) {
+  if (!customer?.id || !business?.id) return customer;
+  const updateParams = buildCustomerUpdateParams(business, userProfile, customer);
+  const needsUpdate =
+    updateParams.name !== undefined ||
+    updateParams.email !== undefined ||
+    getCustomerBusinessId(customer) !== business.id ||
+    customer?.metadata?.business_id !== business.id ||
+    (business?.user_id && customer?.metadata?.userId !== business.user_id);
+
+  if (!needsUpdate) return customer;
+  return await stripe.customers.update(customer.id, updateParams);
+}
+
+async function resolveStripeCustomerForBusiness(business, billingRow = null, extraCustomerIds = []) {
+  if (!business?.id) return null;
+  const userProfile = await getUserProfile(business.user_id);
+  const activeBilling = projectBillingRow(billingRow);
+  const customerIds = compactUnique([
+    activeBilling.stripe_customer_id,
+    ...getBillingIdCandidates(billingRow, "stripe_customer_id"),
+    ...extraCustomerIds,
+  ]);
+
+  for (const customerId of customerIds) {
+    try {
+      const customer = await stripe.customers.retrieve(customerId);
+      if (!customer || customer.deleted) continue;
+      if (!customerMatchesBusiness(customer, business.id)) {
+        console.warn("[billing] ignoring Stripe customer for different business", {
+          businessId: business.id,
+          customerId,
+          customerBusinessId: getCustomerBusinessId(customer),
+        });
+        continue;
+      }
+      const syncedCustomer = await syncCustomerIdentity(customer, business, userProfile);
+      if (syncedCustomer?.id !== activeBilling.stripe_customer_id) {
+        await upsertBusinessBilling(business.id, { stripe_customer_id: syncedCustomer.id });
+      }
+      return syncedCustomer;
+    } catch (err) {
+      console.warn("[billing] customer candidate lookup failed", {
+        businessId: business.id,
+        customerId,
+        message: err?.message || err,
+      });
+    }
+  }
+
+  return null;
+}
+
+async function retrieveSubscriptionFromCandidates(subscriptionIds = []) {
+  for (const subscriptionId of compactUnique(subscriptionIds)) {
+    try {
+      return await stripe.subscriptions.retrieve(subscriptionId, {
+        expand: [
+          "default_payment_method",
+          "latest_invoice.default_payment_method",
+          "latest_invoice.payment_intent.payment_method",
+          "latest_invoice.charge",
+        ],
+      });
+    } catch {
+      // Try the next candidate. The active Stripe mode decides which ID will exist.
+    }
+  }
+  return null;
+}
+
 function mapPriceIdToPlanType(priceId) {
   if (!priceId) return null;
   if (priceId === PRICE_BIZZI_HUMAN_REVIEW_ACTIVE) return "bizzi_human_review";
@@ -209,7 +400,7 @@ function mapPriceIdToPlanType(priceId) {
 }
 
 function mapPlanLabel(planType) {
-  if (planType === "bizzi_human_review") return "Core";
+  if (planType === "bizzi_human_review") return "Bizzi Accounting";
   return null;
 }
 
@@ -241,12 +432,15 @@ async function getOrCreateStripeCustomer(business) {
     .eq("business_id", business.id)
     .maybeSingle();
 
-  const activeBilling = projectBillingRow(billingRow);
-  if (activeBilling.stripe_customer_id) return activeBilling.stripe_customer_id;
+  const existingCustomer = await resolveStripeCustomerForBusiness(business, billingRow);
+  if (existingCustomer?.id) return existingCustomer.id;
 
+  const userProfile = await getUserProfile(business.user_id);
+  const createParams = buildCustomerUpdateParams(business, userProfile, { metadata: {} });
   const customer = await stripe.customers.create({
-    name: business.business_name || business.name || undefined,
-    metadata: { businessId: business.id },
+    name: createParams.name,
+    email: createParams.email,
+    metadata: createParams.metadata,
   });
 
   await upsertBusinessBilling(business.id, { stripe_customer_id: customer.id });
@@ -287,6 +481,14 @@ billingRouter.get("/status", requireAuth, async (req, res) => {
     }
     const owns = await assertBusinessOwnership(user_id, business_id);
     if (!owns) return sendError(res, 403, "forbidden", "You do not own this business.");
+    const { data: business, error: businessError } = await supabase
+      .from("business_profiles")
+      .select("id,user_id,business_name")
+      .eq("id", business_id)
+      .maybeSingle();
+    if (businessError || !business) {
+      return sendError(res, 404, "business_not_found", "Business not found.");
+    }
     const { data } = await supabase
       .from("business_billing")
       .select("*")
@@ -308,18 +510,51 @@ billingRouter.get("/status", requireAuth, async (req, res) => {
       updated_at: null,
     };
     const payload = { ...fallback, ...projectBillingRow(data) };
-    if (payload.stripe_subscription_id && !payload.current_period_end) {
+    const customer = await resolveStripeCustomerForBusiness(business, data);
+    payload.stripe_customer_id = customer?.id || null;
+
+    if (payload.stripe_subscription_id) {
       try {
         const stripeSubscription = await stripe.subscriptions.retrieve(payload.stripe_subscription_id);
-        const derivedCurrentPeriodEnd = deriveSubscriptionEndIso(stripeSubscription);
-        if (derivedCurrentPeriodEnd) {
+        const subscriptionCustomerId =
+          typeof stripeSubscription?.customer === "string"
+            ? stripeSubscription.customer
+            : stripeSubscription?.customer?.id || null;
+        const subscriptionBelongsHere =
+          subscriptionMatchesBusiness(stripeSubscription, business_id) &&
+          (!payload.stripe_customer_id || !subscriptionCustomerId || subscriptionCustomerId === payload.stripe_customer_id);
+
+        if (!subscriptionBelongsHere) {
+          console.warn("[billing] ignoring Stripe subscription for different business", {
+            businessId: business_id,
+            subscriptionId: payload.stripe_subscription_id,
+            subscriptionBusinessId: getSubscriptionBusinessId(stripeSubscription),
+            subscriptionCustomerId,
+            customerId: payload.stripe_customer_id,
+          });
+          payload.stripe_subscription_id = null;
+          payload.subscription_status = "free";
+          payload.plan_type = null;
+          payload.plan_price_id = null;
+          payload.current_period_end = null;
+          payload.trial_end = null;
+          payload.cancel_at_period_end = false;
+        } else {
+          const priceId = stripeSubscription.items?.data?.[0]?.price?.id || null;
+          const derivedCurrentPeriodEnd = deriveSubscriptionEndIso(stripeSubscription);
           payload.current_period_end = derivedCurrentPeriodEnd;
           payload.subscription_status = mapSubStatus(stripeSubscription.status);
           payload.cancel_at_period_end = Boolean(stripeSubscription.cancel_at_period_end);
+          payload.plan_price_id = priceId;
+          payload.plan_type =
+            mapPriceIdToPlanType(priceId) ||
+            normalizePlanType(stripeSubscription?.metadata?.planType || stripeSubscription?.metadata?.plan_type || null);
           await upsertBusinessBilling(business_id, {
             current_period_end: derivedCurrentPeriodEnd,
             subscription_status: payload.subscription_status,
             cancel_at_period_end: payload.cancel_at_period_end,
+            plan_price_id: payload.plan_price_id,
+            plan_type: payload.plan_type,
           });
         }
       } catch (syncErr) {
@@ -396,7 +631,7 @@ billingRouter.post("/create-checkout-session", requireAuth, async (req, res) => 
 
     const { data: business, error: businessError } = await supabase
       .from("business_profiles")
-      .select("id,business_name")
+      .select("id,user_id,business_name")
       .eq("id", resolvedBusinessId)
       .maybeSingle();
     if (businessError || !business) {
@@ -420,7 +655,23 @@ billingRouter.post("/create-checkout-session", requireAuth, async (req, res) => 
       "incomplete",
       "incomplete_expired",
     ]);
-    if (blockingCheckoutStatuses.has(activeBilling.subscription_status)) {
+    const existingCustomer = await resolveStripeCustomerForBusiness(business, billingRow);
+    let hasBlockingSubscription = false;
+    if (blockingCheckoutStatuses.has(activeBilling.subscription_status) && activeBilling.stripe_subscription_id) {
+      try {
+        const existingSubscription = await stripe.subscriptions.retrieve(activeBilling.stripe_subscription_id);
+        const subscriptionCustomerId =
+          typeof existingSubscription?.customer === "string"
+            ? existingSubscription.customer
+            : existingSubscription?.customer?.id || null;
+        hasBlockingSubscription =
+          subscriptionMatchesBusiness(existingSubscription, resolvedBusinessId) &&
+          (!existingCustomer?.id || !subscriptionCustomerId || subscriptionCustomerId === existingCustomer.id);
+      } catch {
+        hasBlockingSubscription = false;
+      }
+    }
+    if (hasBlockingSubscription) {
       if (process.env.NODE_ENV !== "production") {
         console.log("[billing] checkout blocked: existing subscription", {
           businessId: resolvedBusinessId,
@@ -454,6 +705,8 @@ billingRouter.post("/create-checkout-session", requireAuth, async (req, res) => 
       });
     }
 
+    const returnOrigin = resolveReturnOrigin(req);
+
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       customer: customerId,
@@ -465,8 +718,8 @@ billingRouter.post("/create-checkout-session", requireAuth, async (req, res) => 
         metadata: { businessId: resolvedBusinessId, planType: resolvedPlanType },
       },
       metadata: { businessId: resolvedBusinessId, planType: resolvedPlanType },
-      success_url: `${APP_URL}/dashboard/settings?tab=Billing&checkout=success`,
-      cancel_url: `${APP_URL}/dashboard/settings?tab=Billing&checkout=cancel`,
+      success_url: `${returnOrigin}/dashboard/settings?tab=Billing&checkout=success`,
+      cancel_url: `${returnOrigin}/dashboard/settings?tab=Billing&checkout=cancel`,
     });
 
     return res.json({ ok: true, url: session.url });
@@ -491,26 +744,37 @@ billingRouter.post("/create-portal-session", requireAuth, async (req, res) => {
     const owns = await assertBusinessOwnership(user_id, resolvedBusinessId);
     if (!owns) return sendError(res, 403, "forbidden", "You do not own this business.");
 
+    const { data: business, error: businessError } = await supabase
+      .from("business_profiles")
+      .select("id,user_id,business_name")
+      .eq("id", resolvedBusinessId)
+      .maybeSingle();
+    if (businessError || !business) {
+      return sendError(res, 404, "business_not_found", "Business not found.");
+    }
+
     const { data: billingRow, error } = await supabase
       .from("business_billing")
       .select("*")
       .eq("business_id", resolvedBusinessId)
       .maybeSingle();
-    const activeBilling = projectBillingRow(billingRow);
+    const customer = await resolveStripeCustomerForBusiness(business, billingRow);
     if (process.env.NODE_ENV !== "production") {
       console.log("[billing] portal requested", {
         businessId: resolvedBusinessId,
         stripeMode,
-        hasCustomer: Boolean(activeBilling.stripe_customer_id),
+        hasCustomer: Boolean(customer?.id),
       });
     }
-    if (error || !activeBilling.stripe_customer_id) {
+    if (error || !customer?.id) {
       return sendError(res, 400, "no_billing_customer", "No billing customer found.");
     }
 
+    const returnOrigin = resolveReturnOrigin(req);
+
     const portal = await stripe.billingPortal.sessions.create({
-      customer: activeBilling.stripe_customer_id,
-      return_url: `${APP_URL}/dashboard/settings?tab=Billing`,
+      customer: customer.id,
+      return_url: `${returnOrigin}/dashboard/settings?tab=Billing`,
     });
     return res.json({ ok: true, url: portal.url });
   } catch (err) {
@@ -534,13 +798,23 @@ billingRouter.post("/cleanup-payment-methods", requireAuth, async (req, res) => 
     const owns = await assertBusinessOwnership(user_id, resolvedBusinessId);
     if (!owns) return sendError(res, 403, "forbidden", "You do not own this business.");
 
+    const { data: business, error: businessError } = await supabase
+      .from("business_profiles")
+      .select("id,user_id,business_name")
+      .eq("id", resolvedBusinessId)
+      .maybeSingle();
+    if (businessError || !business) {
+      return sendError(res, 404, "business_not_found", "Business not found.");
+    }
+
     const { data: billingRow, error } = await supabase
       .from("business_billing")
       .select("*")
       .eq("business_id", resolvedBusinessId)
       .maybeSingle();
     const activeBilling = projectBillingRow(billingRow);
-    if (error || !activeBilling.stripe_customer_id) {
+    const customer = await resolveStripeCustomerForBusiness(business, billingRow);
+    if (error || !customer?.id) {
       return sendError(res, 400, "no_billing_customer", "No billing customer found.");
     }
 
@@ -562,13 +836,13 @@ billingRouter.post("/cleanup-payment-methods", requireAuth, async (req, res) => 
     }
 
     const result = await dedupeCustomerCardPaymentMethods(
-      activeBilling.stripe_customer_id,
+      customer.id,
       preferredPaymentMethodId
     );
 
     return res.json({
       ok: true,
-      customer_id: activeBilling.stripe_customer_id,
+      customer_id: customer.id,
       total_methods_before: result?.totalMethods || 0,
       duplicate_groups: result?.duplicateGroups || 0,
       detached_count: result?.detachedPaymentMethodIds?.length || 0,
@@ -596,18 +870,27 @@ billingRouter.get("/invoices", requireAuth, async (req, res) => {
     const owns = await assertBusinessOwnership(user_id, business_id);
     if (!owns) return sendError(res, 403, "forbidden", "You do not own this business.");
 
+    const { data: business, error: businessError } = await supabase
+      .from("business_profiles")
+      .select("id,user_id,business_name")
+      .eq("id", business_id)
+      .maybeSingle();
+    if (businessError || !business) {
+      return sendError(res, 404, "business_not_found", "Business not found.");
+    }
+
     const { data: billingRow, error } = await supabase
       .from("business_billing")
       .select("*")
       .eq("business_id", business_id)
       .maybeSingle();
-    const activeBilling = projectBillingRow(billingRow);
-    if (error || !activeBilling.stripe_customer_id) {
+    const customer = await resolveStripeCustomerForBusiness(business, billingRow);
+    if (error || !customer?.id) {
       return res.json({ ok: true, rows: [] });
     }
 
     const invoices = await stripe.invoices.list({
-      customer: activeBilling.stripe_customer_id,
+      customer: customer.id,
       limit: 12,
     });
     const rows = (invoices?.data || []).map((inv) => ({
@@ -643,29 +926,152 @@ billingRouter.get("/payment-method", requireAuth, async (req, res) => {
     const owns = await assertBusinessOwnership(user_id, business_id);
     if (!owns) return sendError(res, 403, "forbidden", "You do not own this business.");
 
+    const { data: business, error: businessError } = await supabase
+      .from("business_profiles")
+      .select("id,user_id,business_name")
+      .eq("id", business_id)
+      .maybeSingle();
+    if (businessError || !business) {
+      return sendError(res, 404, "business_not_found", "Business not found.");
+    }
+
     const { data: billingRow, error } = await supabase
       .from("business_billing")
       .select("*")
       .eq("business_id", business_id)
       .maybeSingle();
-    const activeBilling = projectBillingRow(billingRow);
-    if (error || !activeBilling.stripe_customer_id) {
+    if (error || !billingRow) {
       return res.json({ ok: true, payment_method: null });
     }
 
-    const customer = await stripe.customers.retrieve(activeBilling.stripe_customer_id);
-    if (!customer || customer.deleted) {
-      return res.json({ ok: true, payment_method: null });
+    const activeBilling = projectBillingRow(billingRow);
+    const customerIdCandidates = compactUnique([
+      activeBilling.stripe_customer_id,
+      ...getBillingIdCandidates(billingRow, "stripe_customer_id"),
+    ]);
+    const subscriptionIdCandidates = compactUnique([
+      activeBilling.stripe_subscription_id,
+      ...getBillingIdCandidates(billingRow, "stripe_subscription_id"),
+    ]);
+
+    let subscription = await retrieveSubscriptionFromCandidates(subscriptionIdCandidates);
+    let subscriptionCustomerId =
+      typeof subscription?.customer === "string" ? subscription.customer : subscription?.customer?.id || null;
+    const customer = await resolveStripeCustomerForBusiness(
+      business,
+      billingRow,
+      compactUnique([subscriptionCustomerId, ...customerIdCandidates])
+    );
+    if (!customer) return res.json({ ok: true, payment_method: null });
+    if (
+      subscription &&
+      (!subscriptionMatchesBusiness(subscription, business_id) ||
+        (subscriptionCustomerId && subscriptionCustomerId !== customer.id))
+    ) {
+      console.warn("[billing] ignoring payment-method subscription for different business", {
+        businessId: business_id,
+        subscriptionId: subscription.id,
+        subscriptionBusinessId: getSubscriptionBusinessId(subscription),
+        subscriptionCustomerId,
+        customerId: customer.id,
+      });
+      subscription = null;
+      subscriptionCustomerId = null;
     }
-    const defaultPmId = customer?.invoice_settings?.default_payment_method || null;
+
     let card = null;
-    if (defaultPmId) {
-      const pm = await stripe.paymentMethods.retrieve(defaultPmId);
-      card = pm?.card || null;
+
+    const setCardFromPaymentMethod = (paymentMethod) => {
+      if (!card && paymentMethod?.card) card = paymentMethod.card;
+    };
+    const setCardFromSource = (source) => {
+      if (!card && source?.object === "card") card = source;
+    };
+    const setCardFromCharge = (charge) => {
+      if (!card && charge?.payment_method_details?.card) {
+        card = charge.payment_method_details.card;
+      }
+    };
+    const retrievePaymentMethod = async (paymentMethodRef) => {
+      const paymentMethodId =
+        typeof paymentMethodRef === "string" ? paymentMethodRef : paymentMethodRef?.id || null;
+      if (!paymentMethodId) return null;
+      try {
+        return await stripe.paymentMethods.retrieve(paymentMethodId);
+      } catch (err) {
+        console.warn("[billing] payment method retrieve failed", {
+          paymentMethodId,
+          message: err?.message || err,
+        });
+        return null;
+      }
+    };
+
+    const customerDefaultPaymentMethod = await retrievePaymentMethod(
+      customer?.invoice_settings?.default_payment_method || null
+    );
+    setCardFromPaymentMethod(customerDefaultPaymentMethod);
+
+    if (!card && customer?.default_source) {
+      try {
+        const sourceRef =
+          typeof customer.default_source === "string" ? customer.default_source : customer.default_source?.id || null;
+        const source = sourceRef ? await stripe.customers.retrieveSource(customer.id, sourceRef) : null;
+        setCardFromSource(source);
+      } catch (err) {
+        console.warn("[billing] customer source lookup failed", {
+          customerId: customer.id,
+          message: err?.message || err,
+        });
+      }
     }
+
+    if (!card) {
+      setCardFromPaymentMethod(subscription?.default_payment_method);
+      setCardFromPaymentMethod(subscription?.latest_invoice?.default_payment_method);
+      setCardFromCharge(subscription?.latest_invoice?.charge);
+
+      const invoicePaymentMethod = subscription?.latest_invoice?.payment_intent?.payment_method || null;
+      if (!card && invoicePaymentMethod) {
+        const paymentMethod = invoicePaymentMethod?.card
+          ? invoicePaymentMethod
+          : await retrievePaymentMethod(invoicePaymentMethod);
+        setCardFromPaymentMethod(paymentMethod);
+      }
+    }
+
+    if (!card) {
+      const invoiceQueries = [
+        subscription?.id ? { customer: customer.id, subscription: subscription.id } : null,
+        { customer: customer.id },
+      ].filter(Boolean);
+
+      for (const invoiceQuery of invoiceQueries) {
+        const invoiceList = await stripe.invoices.list({
+          ...invoiceQuery,
+          limit: 5,
+          expand: ["data.default_payment_method", "data.payment_intent.payment_method", "data.charge"],
+        });
+        const invoices = Array.isArray(invoiceList?.data) ? invoiceList.data : [];
+        for (const invoice of invoices) {
+          setCardFromPaymentMethod(invoice?.default_payment_method);
+          setCardFromCharge(invoice?.charge);
+          const invoicePaymentMethod = invoice?.payment_intent?.payment_method || null;
+          if (!card && invoicePaymentMethod) {
+            const paymentMethod = invoicePaymentMethod?.card
+              ? invoicePaymentMethod
+              : await retrievePaymentMethod(invoicePaymentMethod);
+            setCardFromPaymentMethod(paymentMethod);
+          }
+          if (card) break;
+        }
+        if (card) break;
+      }
+    }
+
     if (!card) {
       const pmList = await stripe.paymentMethods.list({
-        customer: activeBilling.stripe_customer_id,
+        customer: customer.id,
         type: "card",
         limit: 1,
       });

@@ -69,6 +69,32 @@ function buildMock(windowMonths) {
     revenue: base[i % base.length],
   }));
 }
+function buildSlidingDemoRows(windowMonths, sourceRows = [], valueKey = "revenue") {
+  const values = (sourceRows || [])
+    .map((row) => Number(row?.[valueKey] ?? 0))
+    .filter((value) => Number.isFinite(value));
+  const fallback = buildMock(windowMonths).map((row) => Number(row.revenue || 0));
+  const seriesValues = values.length ? values : fallback;
+  return windowMonths.map(({ year, month }, index) => ({
+    year,
+    month,
+    revenue: seriesValues[index % seriesValues.length] ?? 0,
+  }));
+}
+
+function niceRevenueCeiling(value) {
+  const padded = Math.max(60000, Number(value || 0) * 1.12);
+  if (padded <= 60000) return 60000;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(padded)));
+  const normalized = padded / magnitude;
+  const niceNormalized =
+    normalized <= 1.5 ? 1.5 :
+    normalized <= 2 ? 2 :
+    normalized <= 2.5 ? 2.5 :
+    normalized <= 5 ? 5 :
+    10;
+  return niceNormalized * magnitude;
+}
 
 /* ——— tiny measure hook (ResizeObserver) ——— */
 function useMeasure() {
@@ -131,17 +157,9 @@ export default function RevenueChart({
 
     async function fetchSeries() {
       if (demoData) {
-        const rows = (() => {
-          const map = new Map(
-            (demoData?.financials?.monthlyRevenue || []).map((r) => [r.month, Number(r.revenue || 0)])
-          );
-          if (!windowMonths.length) return [];
-          return windowMonths.map(({ year, month }) => ({
-            year,
-            month,
-            revenue: map.get(`${year}-${pad2(month)}`) ?? 0,
-          }));
-        })();
+        const rows = windowMonths.length
+          ? buildSlidingDemoRows(windowMonths, demoData?.financials?.monthlyRevenue, "revenue")
+          : [];
         if (!cancelled) {
           setSeries(toChartData(rows));
           setSource("demo");
@@ -295,20 +313,16 @@ export default function RevenueChart({
   if (!series || series.length === 0) return null;
 
   const isMock = source === "mock";
-  const badgeClass =
-    isMock
-      ? "text-xs px-2 py-1 rounded-full border text-amber-300 border-amber-400/40"
-      : "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
+  const badgeClass = "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
 
   // Responsive styling tweaks
-  const chartH = Math.max(200, height);
   const small = (w || 0) < 520;
 
   const xTickCount = small ? 6 : 12;
   const leftMargin = small ? 30 : 42;
   const rightMargin = small ? 12 : 22;
   const topMargin = 14;
-  const bottomMargin = small ? 42 : 34;
+  const bottomMargin = small ? 44 : 34;
 
   const lineColor = "#3BE6C7";
   const lineColorSoft = "rgba(59,230,199,0.28)";
@@ -320,15 +334,16 @@ export default function RevenueChart({
 
   const xTickStyle = { fill: tickColor, fontSize: small ? 10 : 11, fontWeight: 600, dy: 6 };
   const currentPoint = series[series.length - 1];
+  const yAxisMax = niceRevenueCeiling(Math.max(...series.map((row) => Number(row.revenue) || 0)));
 
   return (
-    <div className={`relative overflow-hidden rounded-xl border border-white/10 bg-[var(--panel)] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.42)] ${className}`}>
+    <div className={`relative flex h-full flex-col overflow-hidden rounded-xl border border-white/10 bg-[var(--panel)] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.42)] ${className}`}>
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/[0.035] via-transparent to-black/10" />
       {/* Compact CardHeader to match Pulse sizing */}
       <div className="relative">
         <CardHeader
           title="REVENUE — PRIOR 12 MONTHS"
-          right={<span className={badgeClass}>{isMock ? "Mock" : "QuickBooks"}</span>}
+          right={isMock ? null : <span className={badgeClass}>QuickBooks</span>}
           size="sm"
           dense
           className="mb-2"
@@ -336,7 +351,7 @@ export default function RevenueChart({
         />
       </div>
 
-      <div ref={measureRef} className="relative" style={{ height: chartH }}>
+      <div ref={measureRef} className="relative min-h-0 flex-1">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={series}
@@ -367,14 +382,17 @@ export default function RevenueChart({
               axisLine={false}
               interval={0}
               tickCount={xTickCount}
-              minTickGap={6}
+              minTickGap={4}
               tickMargin={10}
               tick={xTickStyle}
+              height={36}
             />
             <YAxis
               stroke={axisColor}
               tickLine={false}
               axisLine={false}
+              domain={[0, yAxisMax]}
+              tickCount={5}
               tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
               width={leftMargin + 4}
               tick={{ fill: tickColor, fontSize: small ? 10 : 11, fontWeight: 600 }}

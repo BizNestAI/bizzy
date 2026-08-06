@@ -35,6 +35,7 @@ import { InsightsUnreadProvider } from "./insights/InsightsUnreadContext"; // â¬
 
 import FullDashboardLayout from "./layout/FullDashboardLayout";
 import "./index.css";
+import { installTabVisibilityMotionGuard } from "./utils/tabVisibilityMotionGuard";
 
 import CalendarHub from "./pages/Calendar/CalendarHub.jsx";
 import EmailPage from "./pages/Email/EmailPage.jsx";
@@ -51,6 +52,8 @@ import MonthlyReviewConsole from "./pages/Admin/MonthlyReviewConsole.jsx";
 
 const AffordabilityPage = React.lazy(() => import("./pages/accounting/Affordability.jsx"));
 const ScenariosPage = React.lazy(() => import("./pages/accounting/Scenarios.jsx"));
+
+installTabVisibilityMotionGuard();
 
 /* -------------------------- Helpers / Wrappers -------------------------- */
 function WithUnreadProvider({ children }) {

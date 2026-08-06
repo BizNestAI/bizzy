@@ -14,6 +14,35 @@ function asDateText(mm) {
   return null;
 }
 function num(n, d = 0) { const v = Number(n); return Number.isFinite(v) ? v : d; }
+function nyParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const get = (type) => Number(parts.find((p) => p.type === type)?.value || 0);
+  return { year: get("year"), month: get("month"), day: get("day") };
+}
+function previousMonth({ year, month }) {
+  return month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+}
+export function scheduledPulseTargetMonth(date = new Date()) {
+  const current = nyParts(date);
+  if (current.day === 15) {
+    return { monthText: monthKey(current.year, current.month), cadence: "mid_month" };
+  }
+  if (current.day === 1) {
+    const target = previousMonth(current);
+    return { monthText: monthKey(target.year, target.month), cadence: "final" };
+  }
+  return null;
+}
+export function shouldGenerateScheduledFinancialPulse(month, date = new Date()) {
+  const monthText = asDateText(month) || month;
+  const target = scheduledPulseTargetMonth(date);
+  return !!target && target.monthText === monthText;
+}
 function cleanJsonString(s = "") {
   return String(s)
     .trim()
@@ -206,6 +235,7 @@ forecastData: ${JSON.stringify(forecastData)}
         user_id,
         business_id,
         month: monthText, // DATE column cast
+        created_at: new Date().toISOString(),
         revenue_summary: parsed.revenueSummary,
         spending_trend: parsed.spendingTrend,
         variance_from_forecast: parsed.varianceFromForecast,

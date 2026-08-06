@@ -164,6 +164,8 @@ export default function UploadDocModal({
             <input
               ref={inputRef}
               type="file"
+              id="bizzy-doc-upload-file"
+              name="bizzy-doc-upload-file"
               className="block w-full text-sm text-white/80"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -182,6 +184,8 @@ export default function UploadDocModal({
             <label className="block">
               <div className="text-xs text-white/60 mb-1">Title</div>
               <input
+                id="bizzy-doc-upload-title"
+                name="bizzy-doc-upload-title"
                 className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/90 focus:border-[var(--accent)] outline-none"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -192,6 +196,8 @@ export default function UploadDocModal({
             <label className="block">
               <div className="text-xs text-white/60 mb-1">Category</div>
               <select
+                id="bizzy-doc-upload-category"
+                name="bizzy-doc-upload-category"
                 className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/90 focus:border-[var(--accent)] outline-none"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
@@ -209,6 +215,8 @@ export default function UploadDocModal({
           <label className="block">
             <div className="text-xs text-white/60 mb-1">Tags (comma separated)</div>
             <input
+              id="bizzy-doc-upload-tags"
+              name="bizzy-doc-upload-tags"
               className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/90 focus:border-[var(--accent)] outline-none"
               value={tags}
               onChange={(e) => setTags(e.target.value)}

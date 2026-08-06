@@ -190,6 +190,8 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
                     </label>
                     <input
                       type="text"
+                      id={`operator-request-answer-${req.id}`}
+                      name={`operator-request-answer-${req.id}`}
                       value={answers[req.id] || ""}
                       onChange={(e) => handleChange(req.id, e.target.value)}
                       placeholder="e.g., materials for Elm St roof"

@@ -7,6 +7,13 @@ import { getQuickBooksAccessToken } from "../../services/quickbooksTokenService.
 
 const BUCKET = "financial-reports";
 const DEV_LOG = process.env.NODE_ENV !== "production";
+const MOCK_PDF_BASE64 =
+  "JVBERi0xLjQKJcTl8uXrp/Og0MTGCjEgMCBvYmoKPDwvVHlwZS9DYXRhbG9nCi9QYWdlcyAyIDAgUgovT3V0bGluZXMgMyAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzCi9LaWRzIFsgNCAwIFIgXQovQ291bnQgMT4+CmVuZG9iagozIDAgb2JqCjw8L1R5cGUvT3V0bGluZXMKL0NvdW50IDAgPj4KZW5kb2JqCjQgMCBvYmoKPDwvVHlwZS9QYWdlCi9NZWRpYUJveCBbMCAwIDU5NSA4NDJdCi9QYXJlbnQgMiAwIFIKL1Jlc291cmNlcyA8PC9Gb250IDw8L0YxIDUgMCBSPj4+PgovQ29udGVudHMgNiAwIFI+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlL0ZvbnQvU3VidHlwZS9UeXBlMQovTmFtZS9GMS9CYXNlRm9udC9IZWx2ZXRpY2E+PgplbmRvYmoKNiAwIG9iago8PC9MZW5ndGggMTQ1Pj4Kc3RyZWFtCkJUCjEwMCA3NzAgVGQKKE1vY2sgUHJvZml0ICYgTG9zcyBSZXBvcnQpIFRqCkVUCmJUCjEwMCA3MzAgVGQKKEdlbmVyYXRlZCBieSBCaXp6eSAtIERldm1vZGUgTW9jaykgVGoKRVQKQlQKMTAwIDcwMCBUZAooVGhpcyBpcyBhIHBsYWNlaG9sZGVyIFBERiB3aGlsZSB5b3Ugc3luYyBRQk8pIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKeHJlZgowIDcKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDgwIDAwMDAwIG4gCjAwMDAwMDAxNzggMDAwMDAgbiAKMDAwMDAwMDI1NiAwMDAwMCBuIAowMDAwMDAwNDc0IDAwMDAwIG4gCjAwMDAwMDA2MDIgMDAwMDAgbiAKdHJhaWxlcgo8PC9TaXplIDcKL1Jvb3QgMSAwIFIKL0luZm8gOCAwIFI+PgpzdGFydHhyZWYKNjY5CiUlRU9G";
+
+function mockRevenueForMonth(month) {
+  const base = [48000, 51000, 46500, 53000, 49500, 52000, 50500, 54000, 56000, 57500, 59000, 60500];
+  return base[(Number(month) - 1 + base.length) % base.length];
+}
 
 export function buildMonthWindow({ endYear, endMonth, window = 12 }) {
   const today = new Date();
@@ -381,12 +388,61 @@ async function storageFileExists(filePath) {
   return Array.isArray(data) && data.some((f) => f.name === fileName);
 }
 
-export async function ensurePnLPdf({ business_id, year, month, forceRefresh = false }) {
+export async function ensureMockPnLPdf({ business_id, year, month }) {
+  const monthStr = String(month).padStart(2, "0");
+  const filePath = `${business_id}/${year}-${monthStr}-pnl.pdf`;
+  const revenue = mockRevenueForMonth(month);
+  const netProfit = Math.round(revenue * 0.25);
+
+  const { error: uploadError } = await supabase.storage.from(BUCKET).upload(
+    filePath,
+    Buffer.from(MOCK_PDF_BASE64, "base64"),
+    {
+      contentType: "application/pdf",
+      upsert: true,
+    }
+  );
+  if (uploadError) {
+    const err = new Error(`mock_pnl_pdf_upload_failed: ${uploadError.message || uploadError}`);
+    err.code = "mock_pnl_pdf_upload_failed";
+    err.cause = uploadError;
+    throw err;
+  }
+
+  await upsertReportMetadata({
+    business_id,
+    year,
+    month,
+    revenue,
+    net_profit: netProfit,
+    storage_path: filePath,
+    generated_at: new Date().toISOString(),
+    source_start_date: `${year}-${monthStr}-01`,
+    source_end_date: new Date(year, Number(monthStr), 0).toISOString().slice(0, 10),
+    accounting_method: "Mock",
+  });
+
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(filePath, 60 * 5);
+  if (error || !data?.signedUrl) {
+    const err = new Error(`mock_pnl_pdf_signed_url_failed: ${error?.message || "missing_signed_url"}`);
+    err.code = "mock_pnl_pdf_signed_url_failed";
+    err.cause = error;
+    throw err;
+  }
+
+  return { storage_path: filePath, signed_url: data.signedUrl, source: "mock" };
+}
+
+export async function ensurePnLPdf({ business_id, year, month, forceRefresh = false, forceMock = false }) {
   const monthStr = String(month).padStart(2, "0");
   const filePath = `${business_id}/${year}-${monthStr}-pnl.pdf`;
   const startDate = `${year}-${monthStr}-01`;
   const endDate = new Date(year, Number(monthStr), 0).toISOString().slice(0, 10);
-  console.log("[pnlPdfService] ensurePnLPdf start", { business_id, year, month, filePath, forceRefresh });
+  console.log("[pnlPdfService] ensurePnLPdf start", { business_id, year, month, filePath, forceRefresh, forceMock });
+
+  if (forceMock) {
+    return ensureMockPnLPdf({ business_id, year, month });
+  }
 
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     console.error("[pnlPdfService] env missing", {

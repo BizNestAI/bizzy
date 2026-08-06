@@ -21,6 +21,18 @@ function buildMock(windowMonths){
   const months = windowMonths.length ? windowMonths : seqLastNMonths({year:new Date().getFullYear(), month:new Date().getMonth()+1, n:12});
   return months.map((m,i)=>({ year:m.year, month:m.month, profit: base[i%base.length] }));
 }
+function buildSlidingDemoRows(windowMonths, sourceRows = [], valueKey = "profit") {
+  const values = (sourceRows || [])
+    .map((row) => Number(row?.[valueKey] ?? 0))
+    .filter((value) => Number.isFinite(value));
+  const fallback = buildMock(windowMonths).map((row) => Number(row.profit || 0));
+  const seriesValues = values.length ? values : fallback;
+  return windowMonths.map(({ year, month }, index) => ({
+    year,
+    month,
+    profit: seriesValues[index % seriesValues.length] ?? 0,
+  }));
+}
 function coalesceProfit(payload){
   const obj = payload?.metrics ?? payload ?? {};
   const net = obj.netProfit ?? obj.net_profit;
@@ -79,14 +91,9 @@ export default function NetProfitChart({
 
     async function fetchSeries(){
       if (demoData) {
-        const map = new Map(
-          (demoData?.financials?.monthlyProfit || []).map((r) => [r.month, Number(r.profit || 0)])
-        );
-        const rows = windowMonths.map(({ year, month }) => ({
-          year,
-          month,
-          profit: map.get(`${year}-${pad2(month)}`) ?? 0,
-        }));
+        const rows = windowMonths.length
+          ? buildSlidingDemoRows(windowMonths, demoData?.financials?.monthlyProfit, "profit")
+          : [];
         if (!cancelled) {
           setSeries(toChartData(rows));
           setSource("demo");
@@ -218,27 +225,24 @@ export default function NetProfitChart({
   if(!series || !series.length) return null;
 
   const isMock = source === "mock";
-  const badgeClass =
-    isMock
-      ? "text-xs px-2 py-1 rounded-full border text-amber-300 border-amber-400/40"
-      : "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
+  const badgeClass = "text-xs px-2 py-1 rounded-full border text-emerald-300 border-emerald-400/40";
 
   // Responsive visuals
-  const chartH = Math.max(compact ? 318 : 308, height - (compact ? 24 : 42));
   const small = (w || 0) < 520;
+  const angledLabels = small || compact;
 
   const xTickCount  = small ? 6 : 12;              // months shown (we still force all labels)
-  const leftMargin  = small ? 38 : 56;
-  const rightMargin = small ? 14 : 24;
-  const topMargin   = compact ? 18 : 8;
-  const bottomMargin= small ? 28 : 38;             // month labels
+  const leftMargin  = small ? 18 : 24;
+  const rightMargin = small ? 4 : 6;
+  const topMargin   = compact ? 4 : 4;
+  const bottomMargin= angledLabels ? 26 : 24;      // month labels
 
-  const xTickStyle  = { fill: "rgba(255,255,255,0.66)", fontSize: small ? 11 : 13, fontWeight: 700 };
+  const xTickStyle  = { fill: "rgba(255,255,255,0.66)", fontSize: small ? 10 : 11, fontWeight: 700 };
 
   // Compute a reasonable barSize from width (12 months)
   const paddingPerBar = small ? 1 : 1;
   const approxBarSize = Math.max(
-    compact ? 18 : 22,
+    compact ? 22 : 24,
     Math.floor(((w || 0) - leftMargin - rightMargin) / 12) - paddingPerBar - (compact ? 4 : 0)
   );
 
@@ -246,18 +250,18 @@ export default function NetProfitChart({
   const BAR_COLOR = "#00D59C";
 
   return (
-    <div className={`flex h-full flex-col rounded-xl border border-white/10 bg-[var(--panel)] p-5 shadow-[0_18px_40px_rgba(0,0,0,0.32)] ${className}`}>
+    <div className={`flex h-full flex-col rounded-xl border border-white/10 bg-[var(--panel)] px-3 pb-1 pt-4 shadow-[0_18px_40px_rgba(0,0,0,0.32)] ${className}`}>
       {/* Compact CardHeader to match Pulse sizing */}
       <CardHeader
         title="NET PROFIT"
-        right={<span className={badgeClass}>{isMock ? "Mock" : "QuickBooks"}</span>}
+        right={isMock ? null : <span className={badgeClass}>QuickBooks</span>}
         size="sm"
         dense
-        className={compact ? "mb-3" : "mb-1"}
+        className="mb-1"
         titleClassName="text-[13px]" // safe override if supported
       />
 
-      <div ref={measureRef} className="min-h-0 flex-1" style={{ height: chartH }}>
+      <div ref={measureRef} className="min-h-0 flex-1">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={series}
@@ -275,15 +279,17 @@ export default function NetProfitChart({
               axisLine={false}
               interval={0}       // force all month labels
               tickCount={xTickCount}
-              tickMargin={12}
+              tickMargin={4}
               minTickGap={0}
-              height={38}
+              angle={angledLabels ? -35 : 0}
+              textAnchor={angledLabels ? "end" : "middle"}
+              height={angledLabels ? 34 : 30}
             />
             <YAxis
               tick={{ fill: "rgba(255,255,255,0.62)", fontSize: small ? 11 : 13, fontWeight: 700 }}
               tickLine={false}
               axisLine={false}
-              width={leftMargin + 4}
+              width={leftMargin + 2}
               tickFormatter={(v)=>`$${(v/1000).toFixed(0)}k`}
             />
             <Tooltip

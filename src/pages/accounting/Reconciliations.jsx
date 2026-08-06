@@ -480,6 +480,68 @@ export default function Reconciliations() {
   const displayTxnError = usingDemoData ? null : txnError;
   const isHistoricalSnapshot = Boolean(selectedRunId && displayLatestRunId && selectedRunId !== displayLatestRunId);
 
+  const renderAuditTable = () => selectedRunId ? (
+    <ReconciliationAuditTable
+      accounts={activeAccounts}
+      accountMap={accountMap}
+      filters={filters}
+      setFilters={setFilters}
+      searchInput={searchInput}
+      setSearchInput={setSearchInput}
+      refreshing={displayLoadingTxns}
+      loading={displayLoadingTxns}
+      error={displayTxnError}
+      rows={displayRows}
+      total={displayTotal}
+      page={page}
+      pageSize={pageSize}
+      latestRunId={displayLatestRunId}
+      selectedRunId={selectedRunId}
+      selectedRunSummary={displaySelectedRunSummary}
+      isHistoricalSnapshot={isHistoricalSnapshot}
+      isClosing={auditClosing}
+      embeddedInHorizontalScroller
+      onReturnToLatest={() => {
+        if (auditCollapseTimerRef.current) {
+          clearTimeout(auditCollapseTimerRef.current);
+          auditCollapseTimerRef.current = null;
+        }
+        setAuditClosing(false);
+        if (!displayLatestRunId) return;
+        setSelectedRunId(displayLatestRunId);
+        setSelectedRunSummary(usingDemoData ? demoRunHistory[0] || null : statusData.latest_run || null);
+        setPage(1);
+        if (!usingDemoData) {
+          loadTransactions({ runIdOverride: displayLatestRunId, pageOverride: 1 });
+        }
+      }}
+      onRefresh={async () => {
+        if (usingDemoData) return;
+        await loadStatus({ selectedRunIdOverride: selectedRunId });
+        await loadRunHistory();
+        await loadTransactions({ runIdOverride: selectedRunId, pageOverride: page });
+      }}
+      onCollapse={() => {
+        if (auditClosing) return;
+        setAuditClosing(true);
+        if (auditCollapseTimerRef.current) {
+          clearTimeout(auditCollapseTimerRef.current);
+        }
+        auditCollapseTimerRef.current = setTimeout(() => {
+          setSelectedRunId(null);
+          setSelectedRunSummary(null);
+          setTxns([]);
+          setTotalTxns(0);
+          setPage(1);
+          setAuditClosing(false);
+          auditCollapseTimerRef.current = null;
+        }, AUDIT_COLLAPSE_ANIMATION_MS);
+      }}
+      onPrevPage={() => handleAuditPageChange(page - 1)}
+      onNextPage={() => handleAuditPageChange(page + 1)}
+    />
+  ) : null;
+
   const renderMonthlyAudit = () => (
     <div className="space-y-4">
       <ReconciliationRunHistory
@@ -487,6 +549,7 @@ export default function Reconciliations() {
         selectedRunId={selectedRunId}
         latestRunId={displayLatestRunId}
         loading={displayLoadingRunHistory}
+        selectedRunAudit={renderAuditTable()}
         onSelectRun={(run) => {
           if (auditCollapseTimerRef.current) {
             clearTimeout(auditCollapseTimerRef.current);
@@ -494,61 +557,8 @@ export default function Reconciliations() {
           }
           setAuditClosing(false);
           const runId = run?.run_id || run?.id || null;
-          setSelectedRunId(runId);
-          setSelectedRunSummary(run || null);
-          setPage(1);
-          if (!usingDemoData) {
-            loadTransactions({ runIdOverride: runId, pageOverride: 1 });
-          }
-        }}
-      />
-
-      {selectedRunId ? (
-        <ReconciliationAuditTable
-          accounts={activeAccounts}
-          accountMap={accountMap}
-          filters={filters}
-          setFilters={setFilters}
-          searchInput={searchInput}
-          setSearchInput={setSearchInput}
-          refreshing={displayLoadingTxns}
-          loading={displayLoadingTxns}
-          error={displayTxnError}
-          rows={displayRows}
-          total={displayTotal}
-          page={page}
-          pageSize={pageSize}
-          latestRunId={displayLatestRunId}
-          selectedRunId={selectedRunId}
-          selectedRunSummary={displaySelectedRunSummary}
-          isHistoricalSnapshot={isHistoricalSnapshot}
-          isClosing={auditClosing}
-          onReturnToLatest={() => {
-            if (auditCollapseTimerRef.current) {
-              clearTimeout(auditCollapseTimerRef.current);
-              auditCollapseTimerRef.current = null;
-            }
-            setAuditClosing(false);
-            if (!displayLatestRunId) return;
-            setSelectedRunId(displayLatestRunId);
-            setSelectedRunSummary(usingDemoData ? demoRunHistory[0] || null : statusData.latest_run || null);
-            setPage(1);
-            if (!usingDemoData) {
-              loadTransactions({ runIdOverride: displayLatestRunId, pageOverride: 1 });
-            }
-          }}
-          onRefresh={async () => {
-            if (usingDemoData) return;
-            await loadStatus({ selectedRunIdOverride: selectedRunId });
-            await loadRunHistory();
-            await loadTransactions({ runIdOverride: selectedRunId, pageOverride: page });
-          }}
-          onCollapse={() => {
-            if (auditClosing) return;
+          if (runId && runId === selectedRunId) {
             setAuditClosing(true);
-            if (auditCollapseTimerRef.current) {
-              clearTimeout(auditCollapseTimerRef.current);
-            }
             auditCollapseTimerRef.current = setTimeout(() => {
               setSelectedRunId(null);
               setSelectedRunSummary(null);
@@ -558,11 +568,16 @@ export default function Reconciliations() {
               setAuditClosing(false);
               auditCollapseTimerRef.current = null;
             }, AUDIT_COLLAPSE_ANIMATION_MS);
-          }}
-          onPrevPage={() => handleAuditPageChange(page - 1)}
-          onNextPage={() => handleAuditPageChange(page + 1)}
-        />
-      ) : null}
+            return;
+          }
+          setSelectedRunId(runId);
+          setSelectedRunSummary(run || null);
+          setPage(1);
+          if (!usingDemoData) {
+            loadTransactions({ runIdOverride: runId, pageOverride: 1 });
+          }
+        }}
+      />
     </div>
   );
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { getClarificationRequests, submitClarificationAnswers } from "../../services/bookkeeping/bookkeepingClient";
-import { Check } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Check } from "lucide-react";
 
 export default function OperatorStatusCard({
   count = 0,
@@ -53,6 +53,32 @@ export default function OperatorStatusCard({
     const val = Number(amt);
     const formatted = Math.abs(val).toFixed(2);
     return val < 0 ? `($${formatted})` : `$${formatted}`;
+  };
+
+  const getMoneyDirection = (amt) => {
+    const val = Number(amt);
+    if (!Number.isFinite(val) || val === 0) {
+      return {
+        label: "Neutral",
+        tone: "text-white/55 border-white/12 bg-white/[0.04]",
+        amountClass: "text-white/70",
+        Icon: null,
+      };
+    }
+    if (val < 0) {
+      return {
+        label: "Money out",
+        tone: "text-rose-100/85 border-rose-300/18 bg-rose-300/[0.06]",
+        amountClass: "text-rose-100/80",
+        Icon: ArrowUpRight,
+      };
+    }
+    return {
+      label: "Money in",
+      tone: "text-emerald-100/85 border-emerald-300/20 bg-emerald-300/[0.07]",
+      amountClass: "text-emerald-100/85",
+      Icon: ArrowDownLeft,
+    };
   };
 
   const formatMonthLabel = (reqs) => {
@@ -276,6 +302,9 @@ export default function OperatorStatusCard({
                 const merchant = txn.merchant_name || txn.counterparty_name || "Unknown merchant";
                 const answered = (answers[req.id] || "").trim().length >= 3;
                 const canSubmit = answered;
+                const direction = getMoneyDirection(txn.amount);
+                const DirectionIcon = direction.Icon;
+                const promptLabel = Number(txn.amount) > 0 ? "What was this deposit for?" : "What was this charge for?";
                 return (
                   <div
                     key={req.id}
@@ -288,18 +317,26 @@ export default function OperatorStatusCard({
               </div>
               <div className="text-[11px] text-white/70 flex items-center gap-3">
                 {txn.date && <span>{txn.date}</span>}
-                <span>{txn.amount !== undefined ? formatAmount(txn.amount) : ""}</span>
+                <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold leading-none ${direction.tone}`}>
+                  {DirectionIcon ? <DirectionIcon size={11} strokeWidth={2.2} aria-hidden="true" /> : null}
+                  {direction.label}
+                </span>
+                <span className={`font-semibold ${direction.amountClass}`}>
+                  {txn.amount !== undefined ? formatAmount(txn.amount) : ""}
+                </span>
               </div>
               <div className="truncate text-[11px] text-white/60 leading-snug">{memo || "No memo available"}</div>
             </div>
             <div className="w-[300px] max-w-[45%] space-y-1">
               <label className="block text-[10px] uppercase tracking-[0.12em] text-white/60">
-                What was this charge for?
+                {promptLabel}
               </label>
               <div className="flex items-center gap-2">
                 <div className="relative w-full">
                   <input
                     type="text"
+                    id={`operator-status-answer-${req.id}`}
+                    name={`operator-status-answer-${req.id}`}
                     value={answers[req.id] || ""}
                     onChange={(e) => handleChange(req.id, e.target.value)}
                     placeholder="e.g., materials for Elm St roof"
