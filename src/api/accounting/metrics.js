@@ -30,6 +30,8 @@ const EMBED_ACCOUNTS = String(process.env.EMBED_ACCOUNTS || "").toLowerCase() ==
 router.get("/latest-month", async (req, res) => {
   try {
     const business_id =
+      req.business?.id ||
+      req.auth?.businessId ||
       req.query?.business_id ||
       req.query?.businessId ||
       req.headers["x-business-id"] ||
@@ -67,9 +69,9 @@ function readIds(req) {
   const h = req.headers || {};
   const b = req.body || {};
   const user_id =
-    q.user_id || q.userId || b.user_id || b.userId || h["x-user-id"] || null;
+    req.auth?.userId || req.user?.id || q.user_id || q.userId || b.user_id || b.userId || h["x-user-id"] || null;
   const business_id =
-    q.business_id || q.businessId || b.business_id || b.businessId || h["x-business-id"] || null;
+    req.business?.id || req.auth?.businessId || q.business_id || q.businessId || b.business_id || b.businessId || h["x-business-id"] || null;
   return { user_id, business_id };
 }
 

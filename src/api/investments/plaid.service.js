@@ -7,6 +7,9 @@ const hasPlaid = !!(process.env.PLAID_CLIENT_ID && process.env.PLAID_SECRET);
 
 export function getPlaidClient() {
   if (!hasPlaid) return null;
+  if (process.env.NODE_ENV === 'production' && !process.env.PLAID_ENV) {
+    throw new Error('PLAID_ENV must be configured in production.');
+  }
   const config = new Configuration({
     basePath: PlaidEnvironments[process.env.PLAID_ENV || 'sandbox'],
     baseOptions: {
@@ -72,7 +75,7 @@ export async function plaidOrMockAccountsHoldings(user_id) {
 
   for (const it of items) {
     let access_token = null;
-    try { access_token = decrypt(it.access_token_enc); } catch { /* token missing or key mismatch */ }
+    try { access_token = decrypt(it.access_token_enc); } catch { /* fail closed for this item */ }
     if (!access_token) {
       out.push({ institution: it.institution_name || 'Plaid Institution', accounts: [], holdings: [] });
       continue;

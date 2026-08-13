@@ -22,8 +22,8 @@ export { runLLM }           from './runLLM.js';       // keep ONLY this, do not 
 export function normalizeRequest(req, res, next) {
   try {
     const b = req.body ?? {};
-    const user_id     = b.user_id || req.header('x-user-id') || 'demo-user';
-    const business_id = b.business_id || req.header('x-business-id') || null;
+    const user_id     = req.auth?.userId || req.user?.id || b.user_id || req.header('x-user-id') || 'demo-user';
+    const business_id = req.business?.id || req.auth?.businessId || b.business_id || req.header('x-business-id') || null;
     const message     = (b.message || '').toString().trim();
 
     if (!message) return res.status(400).json({ error: 'missing_message' });

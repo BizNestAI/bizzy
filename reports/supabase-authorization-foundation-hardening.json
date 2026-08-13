@@ -1,0 +1,104 @@
+{
+  "date": "2026-08-09",
+  "status": "pre_execution",
+  "migration": "supabase/migrations/20260811_harden_authorization_foundation_rls.sql",
+  "objects": {
+    "business_profiles": {
+      "classification": "AUTHORIZATION_FOUNDATION",
+      "current_rls": "enabled",
+      "current_dangerous_grants": ["anon=ALL", "authenticated=ALL"],
+      "removed_policies": [
+        "Enable insert for authenticated users only",
+        "User can manage their own business profile"
+      ],
+      "created_policies": [
+        {
+          "name": "business_profiles_member_select",
+          "command": "SELECT",
+          "role": "authenticated",
+          "predicate": "owner or explicit member"
+        },
+        {
+          "name": "business_profiles_manager_update",
+          "command": "UPDATE",
+          "role": "authenticated",
+          "predicate": "owner or owner/admin membership"
+        }
+      ],
+      "target_grants": {
+        "anon": [],
+        "authenticated": ["SELECT", "UPDATE"],
+        "service_role": ["ALL"]
+      },
+      "integrity_protections": [
+        "business_profiles.id immutable",
+        "business_profiles.user_id immutable"
+      ]
+    },
+    "user_business_link": {
+      "classification": "AUTHORIZATION_FOUNDATION",
+      "current_rls": "enabled",
+      "current_dangerous_grants": ["anon=ALL", "authenticated=ALL"],
+      "removed_policies": [
+        "Enable insert for authenticated users only",
+        "Allow owner to select their business link"
+      ],
+      "created_policies": [
+        {
+          "name": "user_business_link_self_or_manager_select",
+          "command": "SELECT",
+          "role": "authenticated",
+          "predicate": "own membership row or owner/admin manager of business"
+        }
+      ],
+      "target_grants": {
+        "anon": [],
+        "authenticated": ["SELECT"],
+        "service_role": ["ALL"]
+      },
+      "integrity_protections": [
+        "user_business_link.id immutable",
+        "user_business_link.user_id immutable",
+        "user_business_link.business_id immutable",
+        "user_business_link.role immutable"
+      ]
+    }
+  },
+  "helper_functions": [
+    {
+      "name": "public.bizzi_current_user_is_business_member(uuid)",
+      "security": "SECURITY DEFINER",
+      "search_path": "pg_catalog, public",
+      "user_authority": "auth.uid()",
+      "execute_grants": ["authenticated", "service_role"]
+    },
+    {
+      "name": "public.bizzi_current_user_can_manage_business(uuid)",
+      "security": "SECURITY DEFINER",
+      "search_path": "pg_catalog, public",
+      "user_authority": "auth.uid()",
+      "execute_grants": ["authenticated", "service_role"]
+    }
+  ],
+  "expected_runtime_behavior": {
+    "anonymous_select_business_profiles": "DENIED",
+    "anonymous_insert_business_profiles": "DENIED",
+    "user_a_select_business_b": "DENIED",
+    "user_a_update_business_b": "DENIED",
+    "user_a_change_business_a_user_id_to_user_b": "DENIED",
+    "user_a_attach_self_to_business_b": "DENIED",
+    "user_a_assign_self_owner_admin_business_b": "DENIED",
+    "user_a_add_user_b_to_business_a_from_browser": "DENIED",
+    "service_role_onboarding_rpc": "ALLOWED"
+  },
+  "application_compatibility": {
+    "frontend_business_profile_reads": "preserved for owned/member businesses",
+    "frontend_business_profile_updates": "preserved for owner/admin-managed businesses, identity fields immutable",
+    "frontend_initial_business_insert": "removed in prior prompt; backend onboarding endpoint used",
+    "frontend_initial_membership_insert": "removed in prior prompt; backend onboarding RPC used",
+    "frontend_membership_management_writes": "not found as a legitimate current flow"
+  },
+  "runtime_validation_required": true,
+  "production_executed": false,
+  "staging_executed": false
+}

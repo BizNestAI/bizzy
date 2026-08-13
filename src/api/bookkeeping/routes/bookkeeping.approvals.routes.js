@@ -9,16 +9,8 @@ const router = Router();
 
 router.post("/approve", requireAuth, async (req, res) => {
   const raw = req.body || {};
-  const businessId =
-    raw.business_id ||
-    raw.businessId ||
-    req.query?.business_id ||
-    req.headers?.["x-business-id"] ||
-    req.user?.business_id ||
-    null;
-  if (!businessId) {
-    return res.status(400).json({ ok: false, error: "missing_business_id" });
-  }
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
 
   const items = raw.items || raw.transactions || raw.approvals || [];
   const nowIso = new Date().toISOString();
@@ -233,18 +225,10 @@ router.post("/approve", requireAuth, async (req, res) => {
 
 router.post("/undo", requireAuth, async (req, res) => {
   const raw = req.body || {};
-  const businessId =
-    raw.business_id ||
-    raw.businessId ||
-    req.query?.business_id ||
-    req.headers?.["x-business-id"] ||
-    req.user?.business_id ||
-    null;
+  const businessId = ensureBusinessId(req, res);
   const txnId = raw.txnId || raw.transaction_id || raw.transactionId || raw.id || null;
 
-  if (!businessId) {
-    return res.status(400).json({ ok: false, error: "missing_business_id" });
-  }
+  if (!businessId) return;
   if (!txnId) {
     return res.status(400).json({ ok: false, error: "missing_transaction_id" });
   }

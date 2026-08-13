@@ -1557,6 +1557,9 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
         qbStatus?.realmId ||
         qbStatus?.realm_id
     );
+  const quickBooksRealmAlreadyConnected =
+    provider === "quickbooks" &&
+    (status?.error === "realm_already_connected" || status?.info?.realmAlreadyConnected);
   const [showCompanyMismatch, setShowCompanyMismatch] = useState(false);
   const mismatchDismissedRef = useRef(false);
   const [backfillStatus, setBackfillStatus] = useState(null);
@@ -1697,6 +1700,13 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
         {provider === "quickbooks" && state === "disconnected" && !quickBooksWasConnected ? (
           <p className="text-[11px]" style={{ color: "rgba(255,255,255,0.55)" }}>
             Connect QuickBooks to start syncing your books.
+          </p>
+        ) : null}
+        {quickBooksRealmAlreadyConnected ? (
+          <p className="max-w-xl text-[11px] text-amber-200/90">
+            {qbStatus?.message ||
+              status?.info?.message ||
+              "That QuickBooks company is already connected to another Bizzi business. Disconnect it there first, or choose a different QuickBooks sandbox company."}
           </p>
         ) : null}
         {provider === "quickbooks" && state === "connected" ? (

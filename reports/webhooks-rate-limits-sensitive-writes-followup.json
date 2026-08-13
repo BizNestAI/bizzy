@@ -1,0 +1,89 @@
+{
+  "date": "2026-08-11",
+  "verdict": "READY_FOR_FINAL_SECURITY_AUDIT",
+  "production_access": "not_performed",
+  "fixes": [
+    {
+      "area": "stripe_webhook_replay",
+      "summary": "Added durable service-role-only stripe_webhook_events table with unique event_id and wired billing webhook to claim event.id before side effects.",
+      "files": [
+        "supabase/migrations/20260817_add_stripe_webhook_event_idempotency.sql",
+        "src/api/billing/billing.routes.js"
+      ]
+    },
+    {
+      "area": "multipart_upload_limits",
+      "summary": "Added explicit global file size/count limits and bid attachment route-level size validation.",
+      "files": [
+        "src/server.js",
+        "src/api/jobCosting/routes/jobCosting.bidBuilder.routes.js"
+      ]
+    },
+    {
+      "area": "mass_assignment",
+      "summary": "Replaced manual investment position request-body spread with explicit allowlist and server-derived user_id.",
+      "files": ["src/api/investments/investments.controller.js"]
+    },
+    {
+      "area": "high_cost_routes",
+      "summary": "Added targeted rate limits to QBO/job-costing, insights, and change-order recommendation endpoints.",
+      "files": [
+        "src/api/Jobs/jobs.routes.js",
+        "src/api/insights/insights.routes.js",
+        "src/api/jobCosting/routes/jobCosting.changeOrders.routes.js"
+      ]
+    }
+  ],
+  "tests": {
+    "focused": [
+      {
+        "command": "node --test tests/webhooksRateLimitsSensitiveWrites.security.test.js",
+        "result": "PASS",
+        "passed": 10,
+        "failed": 0
+      },
+      {
+        "command": "node --test tests/qboSecurity.test.js",
+        "result": "PASS",
+        "passed": 14,
+        "failed": 0
+      },
+      {
+        "command": "node --test tests/privateRouteMounts.security.test.js",
+        "result": "PASS",
+        "passed": 5,
+        "failed": 0
+      },
+      {
+        "command": "node --test tests/authTenant.middleware.test.js",
+        "result": "PASS",
+        "passed": 13,
+        "failed": 0
+      }
+    ],
+    "syntax_checks": "PASS",
+    "full_suite": {
+      "command": "npm test",
+      "result": "FAIL_UNRELATED_UI_STATIC_TESTS",
+      "tests": 692,
+      "passed": 686,
+      "failed": 3,
+      "skipped": 3,
+      "failing_tests": [
+        "tests/sidebarNavigationUi.test.js:5",
+        "tests/taxConfidenceExplanationUi.test.js:72",
+        "tests/taxWorkpaperUi.test.js:52"
+      ]
+    }
+  },
+  "required_answers": {
+    "can_valid_stripe_webhook_be_replayed_to_duplicate_state": "NO",
+    "webhook_idempotency_durable_across_restarts": "YES",
+    "multipart_uploads_size_count_bounded": "YES",
+    "confirmed_sensitive_mass_assignment_remaining": "NO",
+    "users_can_override_protected_ownership_tenant_role_fields": "NO confirmed path in reviewed scope",
+    "major_high_cost_endpoints_reasonably_abuse_limited": "YES",
+    "weakened_auth_rls_security_boundaries": "NO",
+    "remaining_prompt_9_launch_blockers": "NO"
+  }
+}

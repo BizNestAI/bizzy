@@ -1,8 +1,5 @@
 import { supabase } from '../../services/supabaseAdmin.js';
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabaseKey = process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-
 function resolveTableName(table) {
   if (!table) throw new Error('Table reference is required');
   if (typeof table === 'string') return table;

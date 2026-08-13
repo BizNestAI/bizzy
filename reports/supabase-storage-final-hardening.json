@@ -1,0 +1,63 @@
+{
+  "date": "2026-08-11",
+  "scope": [
+    "bizzy-docs",
+    "financial-reports",
+    "bid-attachments"
+  ],
+  "productionConnected": false,
+  "migrationExecuted": false,
+  "migration": "supabase/migrations/20260818_harden_storage_tenant_isolation.sql",
+  "pathModel": "<business_id>/...",
+  "authorizationModel": "auth.uid() plus public.bizzi_current_user_is_business_member(first_path_segment_uuid)",
+  "buckets": [
+    {
+      "bucket": "bizzy-docs",
+      "public": false,
+      "browserAllowed": ["select", "insert"],
+      "browserDenied": ["crossTenantSelect", "crossTenantInsert", "update", "delete", "anonymousAccess"],
+      "backendAccess": "service_role full access",
+      "notes": "Preserves current browser document upload/download workflow for authorized business members."
+    },
+    {
+      "bucket": "financial-reports",
+      "public": false,
+      "browserAllowed": ["selectSignedOwnBusiness"],
+      "browserDenied": ["insert", "update", "delete", "crossTenantSelect", "anonymousAccess"],
+      "backendAccess": "service_role upload/list/signed URL",
+      "notes": "P&L viewer direct browser signing fallback removed; backend report endpoint is the preferred path."
+    },
+    {
+      "bucket": "bid-attachments",
+      "public": false,
+      "browserAllowed": ["selectSignedOwnBusiness"],
+      "browserDenied": ["insert", "update", "delete", "crossTenantSelect", "anonymousAccess"],
+      "backendAccess": "service_role upload/delete/signed URL",
+      "notes": "Public URL generation removed; backend signs only expected bucket paths under the authorized business prefix."
+    }
+  ],
+  "runtimeHarnessAdded": {
+    "file": "scripts/runStagingTwoTenantRlsAttackTest.js",
+    "tests": [
+      "own-business list/download/signed URL",
+      "own-business upload for bizzy-docs",
+      "foreign-business list/download/signed URL denied",
+      "foreign-business upload/overwrite/delete denied",
+      "anonymous list/download/signed URL/upload/overwrite/delete denied"
+    ]
+  },
+  "requiredAnswers": {
+    "canUserAListBusinessBObjects": "expected NO after migration; runtime test added",
+    "canUserADownloadBusinessBObjects": "expected NO after migration; runtime test added",
+    "canUserAUploadIntoBusinessBPath": "expected NO after migration; runtime test added",
+    "canUserAOverwriteBusinessBFiles": "expected NO after migration; runtime test added",
+    "canUserADeleteBusinessBFiles": "expected NO after migration; runtime test added",
+    "canAnonymousUsersAccessPrivateFiles": "expected NO after migration; runtime test added",
+    "areAllThreeBucketsPrivate": "YES in proposed migration",
+    "doesBidAttachmentsStillUsePublicUrl": "NO",
+    "canUserRequestSignedUrlForAnotherTenantObject": "expected NO after migration; backend check and runtime test added",
+    "areOwnBusinessWorkflowsPreserved": "YES by design",
+    "stagingPrerequisite": "Apply supabase/migrations/20260818_harden_storage_tenant_isolation.sql before rerunning the harness."
+  },
+  "status": "READY_FOR_STAGING"
+}

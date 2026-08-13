@@ -1,0 +1,248 @@
+{
+  "date": "2026-08-11",
+  "verdict": "PASS WITH FIXES",
+  "production_access": "not_performed",
+  "corrections_made": [
+    {
+      "severity": "HIGH",
+      "area": "internal_admin_authorization",
+      "files": ["src/api/admin/monthlyReview.routes.js"],
+      "summary": "Internal monthly-review admin access no longer trusts self-editable user_profiles.role and now requires configured allowlisted admin email after authentication."
+    },
+    {
+      "severity": "MEDIUM",
+      "area": "signup_confirmation_abuse",
+      "files": ["src/api/auth/signupConfirmation.routes.js", "src/api/_shared/rateLimit.js"],
+      "summary": "Added app-side rate limiting to the unauthenticated signup-confirmation preflight endpoint."
+    },
+    {
+      "severity": "MEDIUM",
+      "area": "ai_provider_cost_abuse",
+      "files": [
+        "src/api/gpt/brain/gpt.routes.js",
+        "src/api/marketing/marketing.routes.js",
+        "src/api/integrations/plaid.routes.js",
+        "src/api/_shared/rateLimit.js"
+      ],
+      "summary": "Added shared route-level throttles to GPT generation, marketing generation, and Plaid link/exchange/sync routes."
+    },
+    {
+      "severity": "MEDIUM",
+      "area": "gmail_oauth_state",
+      "files": ["src/api/email/gmail.auth.js"],
+      "summary": "Removed production hardcoded state-secret fallback, added timing-safe state HMAC verification, and enforced 10-minute OAuth state expiry."
+    }
+  ],
+  "endpoint_inventory": [
+    {
+      "route": "POST /api/billing/webhook",
+      "source": "Stripe",
+      "authentication_required": false,
+      "signature_required": true,
+      "raw_body_required": true,
+      "writes_state": true,
+      "replay_protection": "partial_idempotent_writes_no_processed_event_table_found",
+      "rate_limited": false
+    },
+    {
+      "route": "POST /api/qbo/webhooks/job-costing",
+      "source": "QuickBooks",
+      "authentication_required": false,
+      "signature_required": true,
+      "raw_body_required": true,
+      "writes_state": true,
+      "replay_protection": "event_hash_duplicate_detection",
+      "rate_limited": false
+    },
+    {
+      "route": "GET /auth/quickbooks",
+      "source": "QuickBooks OAuth initiation",
+      "authentication_required": true,
+      "business_authorization_required": true,
+      "signature_required": false,
+      "writes_state": true,
+      "replay_protection": "persisted_oauth_state",
+      "rate_limited": false
+    },
+    {
+      "route": "GET /auth/callback",
+      "source": "QuickBooks OAuth callback",
+      "authentication_required": false,
+      "signature_required": false,
+      "writes_state": true,
+      "replay_protection": "single_use_persisted_oauth_state",
+      "rate_limited": false
+    },
+    {
+      "route": "GET /api/email/callback",
+      "source": "Google/Gmail OAuth callback",
+      "authentication_required": false,
+      "signature_required": "hmac_state",
+      "writes_state": true,
+      "replay_protection": "signed_timed_state_oauth_code_one_time",
+      "rate_limited": false
+    },
+    {
+      "route": "POST /api/auth/signup-confirmation",
+      "source": "Supabase auth preflight",
+      "authentication_required": false,
+      "signature_required": false,
+      "writes_state": "may_resend_confirmation",
+      "replay_protection": "not_applicable",
+      "rate_limited": true
+    },
+    {
+      "route": "POST /api/integrations/plaid/link-token",
+      "source": "Plaid",
+      "authentication_required": true,
+      "business_authorization_required": true,
+      "signature_required": false,
+      "writes_state": false,
+      "replay_protection": "not_applicable",
+      "rate_limited": true
+    },
+    {
+      "route": "POST /api/integrations/plaid/exchange",
+      "source": "Plaid",
+      "authentication_required": true,
+      "business_authorization_required": true,
+      "signature_required": false,
+      "writes_state": true,
+      "replay_protection": "service_scoped",
+      "rate_limited": true
+    },
+    {
+      "route": "POST /api/integrations/plaid/sync",
+      "source": "Plaid",
+      "authentication_required": true,
+      "business_authorization_required": true,
+      "signature_required": false,
+      "writes_state": true,
+      "replay_protection": "service_scoped",
+      "rate_limited": true
+    },
+    {
+      "route": "POST /api/tax/scheduler/run-daily",
+      "source": "internal_scheduler",
+      "authentication_required": true,
+      "internal_secret_required": true,
+      "writes_state": true,
+      "rate_limited": "secret_gated"
+    },
+    {
+      "route": "POST /api/tax/scheduler/run-weekly",
+      "source": "internal_scheduler",
+      "authentication_required": true,
+      "internal_secret_required": true,
+      "writes_state": true,
+      "rate_limited": "secret_gated"
+    }
+  ],
+  "findings": [
+    {
+      "severity": "HIGH",
+      "status": "fixed",
+      "title": "Internal admin access trusted self-editable profile role",
+      "affected": ["src/api/admin/monthlyReview.routes.js"],
+      "remaining_risk": "Operational admin email allowlist must remain restricted."
+    },
+    {
+      "severity": "MEDIUM",
+      "status": "fixed",
+      "title": "Signup confirmation preflight lacked app-side rate limit",
+      "affected": ["src/api/auth/signupConfirmation.routes.js"],
+      "remaining_risk": "Consider generic response semantics to further reduce enumeration."
+    },
+    {
+      "severity": "MEDIUM",
+      "status": "fixed",
+      "title": "High-cost GPT, marketing, and Plaid routes lacked app-side throttles",
+      "affected": [
+        "src/api/gpt/brain/gpt.routes.js",
+        "src/api/marketing/marketing.routes.js",
+        "src/api/integrations/plaid.routes.js"
+      ],
+      "remaining_risk": "Additional expensive routes should receive route-specific limits."
+    },
+    {
+      "severity": "MEDIUM",
+      "status": "fixed",
+      "title": "Gmail OAuth state had hardcoded production fallback and no expiry",
+      "affected": ["src/api/email/gmail.auth.js"],
+      "remaining_risk": "State is not persisted and consumed single-use."
+    },
+    {
+      "severity": "MEDIUM",
+      "status": "open",
+      "title": "Stripe webhook lacks durable processed-event idempotency table",
+      "affected": ["src/api/billing/billing.routes.js"],
+      "recommended_action": "Persist Stripe event IDs before/with side effects."
+    },
+    {
+      "severity": "MEDIUM",
+      "status": "open",
+      "title": "Multipart upload limits are not explicit",
+      "affected": ["src/server.js"],
+      "recommended_action": "Set file-size/file-count limits per upload route."
+    }
+  ],
+  "tests": {
+    "focused": [
+      {
+        "command": "node --test tests/webhooksRateLimitsSensitiveWrites.security.test.js",
+        "result": "PASS",
+        "passed": 7,
+        "failed": 0
+      },
+      {
+        "command": "node --test tests/qboSecurity.test.js",
+        "result": "PASS",
+        "passed": 14,
+        "failed": 0
+      },
+      {
+        "command": "node --test tests/privateRouteMounts.security.test.js",
+        "result": "PASS",
+        "passed": 5,
+        "failed": 0
+      },
+      {
+        "command": "node --test tests/authTenant.middleware.test.js",
+        "result": "PASS",
+        "passed": 13,
+        "failed": 0
+      }
+    ],
+    "full_suite": {
+      "command": "npm test",
+      "result": "FAIL_UNRELATED_UI_STATIC_TESTS",
+      "tests": 689,
+      "passed": 683,
+      "failed": 3,
+      "skipped": 3,
+      "failing_tests": [
+        "sidebarNavigationUi.test.js: sidebar orders Jobs above Tax",
+        "taxConfidenceExplanationUi.test.js: dashboard keeps confidence breakdown in the trajectory header pill and links tax surfaces to the workpaper route",
+        "taxWorkpaperUi.test.js: workpaper rows recursively expand and show full traceability detail on hover"
+      ]
+    }
+  },
+  "required_answers": {
+    "can_attacker_forge_provider_webhook": "NO for Stripe/QBO; UNKNOWN/NOT_APPLICABLE for Plaid because no receiver route was found.",
+    "can_valid_webhook_be_replayed_to_duplicate_side_effects": "POSSIBLE for Stripe; QBO has duplicate event-hash handling.",
+    "stripe_webhooks_verified": "YES",
+    "quickbooks_webhooks_verified": "YES",
+    "plaid_webhooks_verified": "NOT_APPLICABLE",
+    "sensitive_public_endpoints_rate_limited": "PARTIAL",
+    "auth_flows_high_volume_abuse": "PARTIAL; Supabase direct auth relies on Supabase limits, signup confirmation now has app throttling.",
+    "authenticated_user_provider_cost_abuse": "REDUCED_NOT_ELIMINATED",
+    "protected_fields_mass_assignment": "NO_CONFIRMED_CRITICAL_PATH; LEGACY_PATHS_NEED_REVIEW",
+    "idor_by_guessing_id": "NO_CONFIRMED_ROUTE_BYPASS",
+    "browser_internal_cron_admin": "NO for reviewed scheduler/admin routes",
+    "destructive_writes_authenticated_authorized": "MOSTLY; stronger route-specific rate/role checks recommended",
+    "billing_state_authoritative": "YES; Stripe replay idempotency should be strengthened",
+    "request_sizes_bounded": "PARTIAL",
+    "new_security_regressions": "NO",
+    "phase_ready_for_launch": "PASS_WITH_FIXES"
+  }
+}

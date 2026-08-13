@@ -2,6 +2,8 @@
 import fetch from "node-fetch";
 import { supabase } from "./supabaseAdmin.js";
 import { qbClientId, qbClientSecret, qboEnvName } from "../utils/qboEnv.js";
+import { encryptQboToken, resolveStoredQboToken } from "./quickbooks/qboTokenCrypto.js";
+import { redactQboSecrets } from "./quickbooks/qboSecurity.js";
 
 const TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
 const ONE_MINUTE_MS = 60 * 1000;
@@ -24,6 +26,52 @@ async function getLatestTokenRow(business_id) {
 
   if (error) throw new Error(`[qboTokens] lookup failed: ${error.message || error}`);
   return data || null;
+}
+
+async function persistEncryptedTokenFields({ business_id, access_token, refresh_token }) {
+  const payload = {};
+  if (access_token) payload.access_token = access_token;
+  if (refresh_token) payload.refresh_token = refresh_token;
+  if (!Object.keys(payload).length) return;
+  const { error } = await supabase
+    .from("quickbooks_tokens")
+    .update(payload)
+    .eq("business_id", business_id)
+    .eq("qbo_env", qboEnvName);
+  if (error) throw error;
+}
+
+export async function decryptQuickBooksTokenRow(row) {
+  if (!row) return null;
+  const updates = {};
+  const accessToken = row.access_token
+    ? await resolveStoredQboToken({
+        storedToken: row.access_token,
+        persistEncrypted: async (encrypted) => {
+          updates.access_token = encrypted;
+        },
+      })
+    : null;
+  const refreshToken = row.refresh_token
+    ? await resolveStoredQboToken({
+        storedToken: row.refresh_token,
+        persistEncrypted: async (encrypted) => {
+          updates.refresh_token = encrypted;
+        },
+      })
+    : null;
+  if (Object.keys(updates).length) {
+    await persistEncryptedTokenFields({ business_id: row.business_id, ...updates });
+  }
+  return { ...row, access_token: accessToken, refresh_token: refreshToken };
+}
+
+export function encryptQuickBooksTokenPayload(payload = {}) {
+  return {
+    ...payload,
+    access_token: payload.access_token ? encryptQboToken(payload.access_token) : payload.access_token,
+    refresh_token: payload.refresh_token ? encryptQboToken(payload.refresh_token) : payload.refresh_token,
+  };
 }
 
 function computeAccessExpiresAt(row) {
@@ -70,7 +118,8 @@ export async function refreshQuickBooksTokens(business_id, currentRefreshToken =
   }
 
   const refreshPromise = (async () => {
-  const existing = await getLatestTokenRow(business_id);
+  const existingRaw = await getLatestTokenRow(business_id);
+  const existing = existingRaw ? await decryptQuickBooksTokenRow(existingRaw) : null;
   const refresh_token = existing?.refresh_token || currentRefreshToken;
   if (!refresh_token) throw new Error("Missing refresh token for QuickBooks");
   if (!existing?.realm_id) throw new Error("Missing realm_id for QuickBooks connection");
@@ -96,14 +145,13 @@ export async function refreshQuickBooksTokens(business_id, currentRefreshToken =
   try { json = text ? JSON.parse(text) : null; } catch { json = null; }
 
   if (!res.ok) {
-    console.error("[qboTokens] refresh failed", {
+    console.error("[qboTokens] refresh failed", redactQboSecrets({
       business_id,
       status: res.status,
-      body: json || text?.slice(0, 300),
-    });
+      provider_error_code: json?.error || json?.errorCode || null,
+    }));
     const err = new Error(`QuickBooks refresh failed (${res.status})`);
     err.status = res.status;
-    err.body = json || text;
     throw err;
   }
 
@@ -129,7 +177,7 @@ export async function refreshQuickBooksTokens(business_id, currentRefreshToken =
     ? new Date(now + Number(x_refresh_token_expires_in) * 1000).toISOString()
     : null;
 
-  const payload = {
+  const payload = encryptQuickBooksTokenPayload({
     business_id,
     qbo_env: qboEnvName,
     access_token,
@@ -142,7 +190,7 @@ export async function refreshQuickBooksTokens(business_id, currentRefreshToken =
     company_name: existing?.company_name || null,
     access_token_expires_at: accessExpiresAt,
     refresh_token_expires_at: refreshExpiresAt,
-  };
+  });
 
   if (Object.prototype.hasOwnProperty.call(existing || {}, "connected_company_name")) {
     payload.connected_company_name = existing?.connected_company_name || null;
@@ -154,10 +202,10 @@ export async function refreshQuickBooksTokens(business_id, currentRefreshToken =
     payload.connected_at = existing?.connected_at || null;
   }
 
-  await supabase.from("quickbooks_tokens").upsert(payload, { onConflict: "business_id,qbo_env" });
+  await supabase.from("quickbooks_tokens").upsert(payload, { onConflict: "business_id" });
 
   console.info("[qboTokens] refresh succeeded", { business_id, status: res.status });
-  return { ...payload };
+  return { ...payload, access_token, refresh_token: nextRefresh };
   })();
 
   refreshLocks.set(lockKey, refreshPromise);
@@ -172,7 +220,7 @@ export async function refreshQuickBooksTokens(business_id, currentRefreshToken =
  * Return a valid access token for a business, refreshing if expired/near-expired.
  */
 export async function getQuickBooksAccessToken(business_id) {
-  const row = await getLatestTokenRow(business_id);
+  const row = await decryptQuickBooksTokenRow(await getLatestTokenRow(business_id));
   if (!row?.access_token || !row?.refresh_token) {
     throw new Error("quickbooks_not_connected");
   }
@@ -203,7 +251,7 @@ export async function getQuickBooksAccessToken(business_id) {
  * fn receives (accessToken, context) and should return the API result.
  */
 export async function withQuickBooksAuth(business_id, fn) {
-  const baseRow = await getLatestTokenRow(business_id);
+  const baseRow = await decryptQuickBooksTokenRow(await getLatestTokenRow(business_id));
   if (!baseRow?.refresh_token || !baseRow?.access_token) {
     throw new Error("quickbooks_not_connected");
   }
@@ -231,5 +279,9 @@ export async function withQuickBooksAuth(business_id, fn) {
 
 // Optional utility export for other modules that need the raw row (safely)
 export async function getLatestQuickBooksTokenRow(business_id) {
+  return decryptQuickBooksTokenRow(await getLatestTokenRow(business_id));
+}
+
+export async function getLatestQuickBooksTokenRowEncrypted(business_id) {
   return getLatestTokenRow(business_id);
 }

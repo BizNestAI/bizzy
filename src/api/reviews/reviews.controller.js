@@ -11,7 +11,8 @@ import { supabase } from '../../services/supabaseAdmin.js';
 
 // GET /api/reviews/summary?business_id=&range=30d
 export const getSummary = asyncHandler(async (req, res) => {
-  const { business_id, range = '30d' } = req.query || {};
+  const { range = '30d' } = req.query || {};
+  const business_id = req.business?.id || req.auth?.businessId || req.query?.business_id;
   if (!business_id) return sendErr(res, 400, 'business_id required');
 
   const stats = await getReviewStats({ business_id, range });
@@ -44,14 +45,14 @@ export const getSummary = asyncHandler(async (req, res) => {
 
 // GET /api/reviews
 export const getReviews = asyncHandler(async (req, res) => {
-  const params = listReviewsQuery.parse(req.query);
+  const params = listReviewsQuery.parse({ ...(req.query || {}), business_id: req.business?.id || req.auth?.businessId || req.query?.business_id });
   const result = await listReviews(params);
   return sendOk(res, result);
 });
 
 // GET /api/reviews/stats
 export const getStats = asyncHandler(async (req, res) => {
-  const params = statsQuery.parse(req.query);
+  const params = statsQuery.parse({ ...(req.query || {}), business_id: req.business?.id || req.auth?.businessId || req.query?.business_id });
   const result = await getReviewStats(params);
   return sendOk(res, result);
 });
@@ -65,13 +66,9 @@ export const postReply = asyncHandler(async (req, res) => {
     .from('reviews')
     .select('*')
     .eq('id', id)
+    .eq('business_id', req.business?.id || req.auth?.businessId)
     .single();
   if (error || !r) throw new HttpError(404, 'Review not found');
-
-  // Tenant guard: ensure caller provided matching business_id (if present)
-  if (body.business_id && r.business_id !== body.business_id) {
-    throw new HttpError(403, 'Forbidden for this business');
-  }
 
   const draft = body.draft_text || buildReplyDraft({
     rating: r.rating, themes: r.themes, body: r.body, author_name: r.author_name
@@ -87,7 +84,8 @@ export const postReply = asyncHandler(async (req, res) => {
   const { error: upErr } = await req.supabase
     .from('reviews')
     .update({ owner_replied: true, reply_text: draft, replied_at: new Date().toISOString() })
-    .eq('id', id);
+    .eq('id', id)
+    .eq('business_id', req.business?.id || req.auth?.businessId);
   if (upErr) throw upErr;
 
   return sendOk(res, { ok: true, draft, fallback: send.fallback || null });
@@ -95,13 +93,13 @@ export const postReply = asyncHandler(async (req, res) => {
 
 // POST /api/reviews/requests
 export const postRequest = asyncHandler(async (req, res) => {
-  const payload = requestBody.parse(req.body);
+  const payload = requestBody.parse({ ...(req.body || {}), business_id: req.business?.id || req.auth?.businessId });
   return sendOk(res, { ok: true, queued: true, payload }); // stub ack
 });
 
 // GET /api/reviews/insights
 export const getInsights = asyncHandler(async (req, res) => {
-  const { business_id } = statsQuery.parse(req.query);
+  const { business_id } = statsQuery.parse({ ...(req.query || {}), business_id: req.business?.id || req.auth?.businessId || req.query?.business_id });
   const insights = await buildReviewInsights(business_id);
   await emitInsights(business_id, insights);
   return sendOk(res, insights);
@@ -109,14 +107,15 @@ export const getInsights = asyncHandler(async (req, res) => {
 
 // POST /api/reviews/import/csv
 export const postImportCsv = asyncHandler(async (req, res) => {
-  const payload = csvImportBody.parse(req.body);
+  const payload = csvImportBody.parse({ ...(req.body || {}), business_id: req.business?.id || req.auth?.businessId });
   const result = await importCsvBase64(payload);
   return sendOk(res, { ok: true, ...result });
 });
 
 // POST /api/reviews/ingest
 export const postIngestNormalized = asyncHandler(async (req, res) => {
-  const { business_id, source, items } = req.body || {};
+  const { source, items } = req.body || {};
+  const business_id = req.business?.id || req.auth?.businessId || null;
   if (!business_id || !source || !Array.isArray(items)) {
     return sendErr(res, 400, 'Invalid payload');
   }

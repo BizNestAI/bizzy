@@ -37,7 +37,7 @@ function buildMock(windowMonths) {
 router.get("/", async (req, res) => {
   try {
     const q = req.query || {};
-    const business_id = q.business_id || q.businessId || req.headers["x-business-id"] || null;
+    const business_id = req.business?.id || req.auth?.businessId || q.business_id || q.businessId || req.headers["x-business-id"] || null;
     const end_year = Number(q.end_year || q.year || new Date().getFullYear());
     const end_month = Number(q.end_month || q.month || new Date().getMonth() + 1);
     const window = Math.max(1, Math.min(24, Number(q.window || 12)));

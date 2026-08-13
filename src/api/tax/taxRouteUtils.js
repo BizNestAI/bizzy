@@ -15,7 +15,7 @@ import { sendTaxError } from "./taxHttp.js";
  * Return the authenticated Supabase user id attached by requireAuth.
  */
 export function getAuthenticatedUserId(req) {
-  return req?.user?.id || req?.user?.sub || req?.user?.user_id || null;
+  return req?.auth?.userId || req?.user?.id || req?.user?.sub || req?.user?.user_id || null;
 }
 
 /**
@@ -46,8 +46,9 @@ export function resolveTaxBusinessId(req) {
 }
 
 /**
- * Check business_profiles ownership for the authenticated user.
- * The current canonical minimum rule is business_profiles.id + user_id.
+ * Check canonical business access for the authenticated user.
+ * Owner: business_profiles.id + user_id.
+ * Member: user_business_link.user_id + business_id.
  */
 export async function assertTaxBusinessAccess({ req, businessId, supabase = defaultSupabase }) {
   const userId = getAuthenticatedUserId(req);
@@ -73,7 +74,17 @@ export async function assertTaxBusinessAccess({ req, businessId, supabase = defa
     throw notFoundError("business_not_found", "Business was not found.", { businessId });
   }
   if (String(data.user_id) !== String(userId)) {
-    throw forbiddenBusinessError("You do not have access to this business.", { businessId });
+    const { data: membership, error: membershipError } = await supabase
+      .from("user_business_link")
+      .select("user_id,business_id")
+      .eq("user_id", userId)
+      .eq("business_id", businessId)
+      .limit(1)
+      .maybeSingle();
+
+    if (membershipError || !membership) {
+      throw forbiddenBusinessError("You do not have access to this business.", { businessId });
+    }
   }
 
   const context = { businessId: data.id, userId };

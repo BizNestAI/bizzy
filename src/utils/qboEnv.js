@@ -3,6 +3,9 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const env = process.env.QB_ENVIRONMENT || "production";
+if (!["sandbox", "production"].includes(env)) {
+  throw new Error("QB_ENVIRONMENT must be either sandbox or production.");
+}
 export const qboEnvName = env;
 export const isSandbox = env === "sandbox";
 
@@ -25,6 +28,10 @@ export const qbProdClientId = prodClientId;
 export const qbClientId = isSandbox ? sandboxClientId : prodClientId;
 export const qbClientSecret = isSandbox ? sandboxClientSecret : prodClientSecret;
 export const qbRedirectUri = isSandbox ? sandboxRedirectUri : prodRedirectUri;
+
+if (process.env.NODE_ENV === "production" && qboEnvName !== "production") {
+  throw new Error("QB_ENVIRONMENT must be production when NODE_ENV is production.");
+}
 
 if (process.env.NODE_ENV !== "production") {
   console.log("[QBO] env:", env, "redirect:", qbRedirectUri);

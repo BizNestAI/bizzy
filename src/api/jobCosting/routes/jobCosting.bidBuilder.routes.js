@@ -21,6 +21,7 @@ const requireRouteAuth = (req, res, next) => authMiddleware(req, res, next);
 const BID_STATUS_VALUES = new Set(["draft", "sent", "won", "lost", "converted", "archived"]);
 const OUTCOME_VALUES = new Set(["won", "lost", "no_response", "revised"]);
 const BID_ATTACHMENT_BUCKET = globalThis.process?.env?.BID_ATTACHMENTS_BUCKET || "bid-attachments";
+const MAX_BID_ATTACHMENT_BYTES = Number(globalThis.process?.env?.MAX_BID_ATTACHMENT_BYTES || globalThis.process?.env?.MAX_UPLOAD_FILE_SIZE_BYTES || 10 * 1024 * 1024);
 
 const BID_LIST_SELECT = [
   "id",
@@ -100,7 +101,7 @@ function sanitizeFileName(value) {
 }
 
 function getBusinessId(req) {
-  return req.get("x-business-id") || req.query.business_id || req.body?.business_id || req.body?.businessId || req.user?.business_id || null;
+  return req.business?.id || req.auth?.businessId || req.user?.business_id || req.get("x-business-id") || req.query.business_id || req.body?.business_id || req.body?.businessId || null;
 }
 
 function ensureBusinessId(req, res) {
@@ -279,6 +280,12 @@ async function uploadAttachmentFile({ businessId, bidId, file }) {
     error.code = "attachment_file_required";
     throw error;
   }
+  if (file.truncated || Number(file.size || file.data.length || 0) > MAX_BID_ATTACHMENT_BYTES) {
+    const error = new Error("Attachment file is too large.");
+    error.status = 413;
+    error.code = "attachment_file_too_large";
+    throw error;
+  }
 
   const fileName = sanitizeFileName(file.name);
   const storagePath = `${businessId}/${bidId}/${Date.now()}-${fileName}`;
@@ -296,14 +303,43 @@ async function uploadAttachmentFile({ businessId, bidId, file }) {
     throw uploadError;
   }
 
-  const { data } = supabaseClient.storage.from(BID_ATTACHMENT_BUCKET).getPublicUrl(storagePath);
   return {
-    file_url: data?.publicUrl || storagePath,
+    file_url: null,
     storage_bucket: BID_ATTACHMENT_BUCKET,
     storage_path: storagePath,
     file_name: normalizeText(file.name) || fileName,
     mime_type: file.mimetype || "application/octet-stream",
   };
+}
+
+async function attachSignedUrl(attachment, businessId) {
+  if (!attachment) return attachment;
+  const storageBucket = normalizeText(attachment.storage_bucket);
+  const storagePath = normalizeText(attachment.storage_path);
+  if (!storageBucket || !storagePath) return attachment;
+  if (storageBucket !== BID_ATTACHMENT_BUCKET || !storagePath.startsWith(`${businessId}/`)) {
+    return attachment;
+  }
+
+  const { data, error } = await supabaseClient.storage
+    .from(storageBucket)
+    .createSignedUrl(storagePath, 60 * 5);
+  if (error || !data?.signedUrl) {
+    return {
+      ...attachment,
+      signed_url: null,
+      signed_url_error: "unavailable",
+    };
+  }
+  return {
+    ...attachment,
+    signed_url: data.signedUrl,
+    signed_url_expires_in: 60 * 5,
+  };
+}
+
+async function attachSignedUrls(attachments = [], businessId) {
+  return Promise.all((attachments || []).map((attachment) => attachSignedUrl(attachment, businessId)));
 }
 
 async function fetchBidAttachments(businessId, bidId) {
@@ -675,7 +711,7 @@ router.post("/bids/:id/attachments", requireRouteAuth, async (req, res) => {
       .single();
     if (error) throw error;
 
-    return res.status(201).json({ ok: true, attachment: data });
+    return res.status(201).json({ ok: true, attachment: await attachSignedUrl(data, businessId) });
   } catch (error) {
     console.error("[job-costing.bid-builder.attachments.create]", error);
     return sendRouteError(res, error, "bid_attachment_create_failed");
@@ -688,7 +724,7 @@ router.get("/bids/:id/attachments", requireRouteAuth, async (req, res) => {
     if (!businessId) return;
 
     await fetchBidWithLineItems(businessId, req.params.id);
-    const attachments = await fetchBidAttachments(businessId, req.params.id);
+    const attachments = await attachSignedUrls(await fetchBidAttachments(businessId, req.params.id), businessId);
     return res.json({ ok: true, attachments });
   } catch (error) {
     console.error("[job-costing.bid-builder.attachments.list]", error);

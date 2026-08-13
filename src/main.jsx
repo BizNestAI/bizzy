@@ -98,6 +98,30 @@ function ChatRedirect() {
   return <Navigate to={`/dashboard/bizzi/chat${search}`} replace />;
 }
 
+function RootRedirect() {
+  const location = useLocation();
+  const search = location?.search || "";
+  const hash = location?.hash || "";
+  const params = new URLSearchParams(search || "");
+  const hashParams = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+  const hasAuthConfirmationParams =
+    params.has("code") ||
+    params.has("token_hash") ||
+    params.has("error") ||
+    params.has("error_code") ||
+    hashParams.has("access_token") ||
+    hashParams.has("refresh_token") ||
+    hashParams.has("token_hash") ||
+    hashParams.has("error") ||
+    hashParams.has("error_code");
+
+  if (hasAuthConfirmationParams) {
+    return <Navigate to={`/auth/confirm${search}${hash}`} replace />;
+  }
+
+  return <Navigate to="/dashboard/bizzi/chat" replace />;
+}
+
 function LegacyDocRedirect() {
   const { id } = useParams();
   const location = useLocation();
@@ -135,7 +159,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <PeriodProvider syncUrl writeUrl autoSnapToCurrentMonth>
           <Routes>
             {/* Public / auth */}
-            <Route path="/" element={<Navigate to="/dashboard/bizzi/chat" replace />} />
+            <Route path="/" element={<RootRedirect />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/auth/confirm" element={<EmailConfirmation />} />

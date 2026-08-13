@@ -1,0 +1,258 @@
+{
+  "date": "2026-08-11",
+  "scope": "Strict read-only final pre-launch security audit of application code, Supabase schema/report artifacts, and prior security test evidence.",
+  "production_connections_made": false,
+  "files_modified_for_audit_only": [
+    "reports/final-prelaunch-security-audit.md",
+    "reports/final-prelaunch-security-audit.json"
+  ],
+  "verdict": "FAIL - LAUNCH BLOCKERS REMAIN",
+  "runtime_baselines": {
+    "supabase_two_tenant_harness": {
+      "verdict": "PASS - TWO-TENANT ISOLATION VERIFIED",
+      "passed": 570,
+      "failed": 0,
+      "source": "reports/supabase-two-tenant-runtime-security-test.md"
+    },
+    "production_public_database": {
+      "verdict": "PASS",
+      "source": "reports/supabase-production-final-security-verification.md"
+    },
+    "storage": {
+      "verdict": "NOT CERTIFIED",
+      "staging_buckets_observed": 0,
+      "staging_storage_policies_observed": 0,
+      "source": "reports/supabase-storage-hardening.md"
+    }
+  },
+  "findings": [
+    {
+      "id": "STOR-001",
+      "severity": "HIGH",
+      "title": "Supabase Storage is used by launch-scope code but is not runtime-certified",
+      "affected": [
+        "src/services/bizzyDocs/storageUploads.js",
+        "src/pages/Docs/DocDetail.jsx",
+        "src/components/BizzyDocs/UploadDocModal.jsx",
+        "src/components/Accounting/PNLArchiveViewer.jsx",
+        "src/api/accounting/pnlPdfService.js",
+        "src/api/jobCosting/routes/jobCosting.bidBuilder.routes.js",
+        "storage bucket: bizzy-docs",
+        "storage bucket: financial-reports",
+        "storage bucket: bid-attachments"
+      ],
+      "exploit_prerequisites": "Authenticated customer with knowledge or discovery of another business storage path, or anonymous access if a future bucket is public.",
+      "realistic_attack": "User A attempts to list, download, sign, overwrite, upload into, or delete objects under Business B's path. Bid attachments currently return public URLs if the bucket is public.",
+      "impact": "Potential customer document, financial report, or job attachment exposure or tampering if buckets are created without strict storage.objects policies.",
+      "existing_mitigations": [
+        "Document metadata APIs use requireAuth and requireBusinessAccess.",
+        "Object paths encode business_id.",
+        "Backend P&L signing is tenant scoped before service-role storage access."
+      ],
+      "actual_weakness": "No real Storage bucket or policy state has been runtime-tested; current code includes direct browser Storage access that depends on future policies.",
+      "recommended_correction": "Create private buckets, add path-scoped Storage RLS policies, remove or backend-proxy direct browser signing where appropriate, replace bid attachment public URLs with signed URLs, and run two-tenant Storage attack tests.",
+      "confidence": "HIGH",
+      "launch_blocker": true
+    },
+    {
+      "id": "STRIPE-001",
+      "severity": "HIGH",
+      "title": "Stripe idempotency table migration is an operational prerequisite for the current webhook handler",
+      "affected": [
+        "POST /api/billing/webhook",
+        "src/api/billing/billing.routes.js",
+        "src/api/billing/stripeWebhookIdempotency.js",
+        "supabase/migrations/20260817_add_stripe_webhook_event_idempotency.sql",
+        "public.stripe_webhook_events"
+      ],
+      "exploit_prerequisites": "Valid Stripe webhook delivery or normal Stripe billing event.",
+      "realistic_attack": "If code is deployed before the table exists, a valid signed webhook fails during idempotency claim after signature verification.",
+      "impact": "Billing/subscription state may not update from valid Stripe events. This is fail-closed and not a cross-tenant exposure.",
+      "existing_mitigations": [
+        "Raw-body Stripe signature verification happens before event claim.",
+        "Migration defines unique event_id, status fields, RLS, no browser grants, and service-role access."
+      ],
+      "actual_weakness": "This read-only audit cannot prove the migration is applied in the launch database.",
+      "recommended_correction": "Apply and verify the migration in staging and production before deploying the current webhook code.",
+      "confidence": "MEDIUM",
+      "launch_blocker": true
+    },
+    {
+      "id": "RATE-001",
+      "severity": "MEDIUM",
+      "title": "Application rate limits are in-memory and per-process",
+      "affected": [
+        "src/api/_shared/rateLimit.js",
+        "src/api/tax/taxSecurity.js",
+        "GPT, insights, marketing, Plaid, QBO/job-costing, docs summarization, and tax routes"
+      ],
+      "exploit_prerequisites": "Anonymous access for public/auth flows or a valid customer account for private high-cost routes.",
+      "realistic_attack": "Attacker distributes requests across IPs, instances, or restarts to exceed intended per-minute limits.",
+      "impact": "Provider cost abuse and external API quota pressure.",
+      "existing_mitigations": [
+        "Major high-cost routes are authenticated and tenant scoped.",
+        "Route-level limits exist.",
+        "File upload size/count limits exist."
+      ],
+      "actual_weakness": "Rate-limit state is not durable or shared across horizontally scaled instances.",
+      "recommended_correction": "Move launch-critical limits to Redis/Upstash/gateway/WAF before broad self-serve traffic.",
+      "confidence": "HIGH",
+      "launch_blocker": false
+    },
+    {
+      "id": "GMAIL-001",
+      "severity": "MEDIUM",
+      "title": "Gmail OAuth state is signed and time-limited but not durable or single-use",
+      "affected": [
+        "GET /api/email/connect",
+        "GET /api/email/callback",
+        "src/api/email/gmail.auth.js"
+      ],
+      "exploit_prerequisites": "Attacker obtains a valid Gmail OAuth callback URL or state within the validity window.",
+      "realistic_attack": "Replay of signed state is attempted. The Google authorization code should be one-time, but Bizzi does not record and consume a nonce.",
+      "impact": "Defense-in-depth replay gap around Gmail OAuth.",
+      "existing_mitigations": [
+        "HMAC state",
+        "Timing-safe comparison",
+        "Timestamp expiry",
+        "Production requires a state secret",
+        "Server-side token exchange and encrypted storage"
+      ],
+      "actual_weakness": "No persisted nonce/consume-once table equivalent to the QuickBooks OAuth state flow.",
+      "recommended_correction": "Move Gmail OAuth state to durable one-time storage with expiry and consume semantics.",
+      "confidence": "MEDIUM",
+      "launch_blocker": false
+    },
+    {
+      "id": "TEST-001",
+      "severity": "MEDIUM",
+      "title": "Storage attack paths are not covered by the runtime security harness",
+      "affected": [
+        "scripts/runStagingTwoTenantRlsAttackTest.js",
+        "storage bucket: bizzy-docs",
+        "storage bucket: financial-reports",
+        "storage bucket: bid-attachments"
+      ],
+      "exploit_prerequisites": "Staging buckets and policies exist.",
+      "realistic_attack": "User A attempts Business B object list/download/upload/overwrite/delete and anonymous access.",
+      "impact": "Lack of regression coverage for the customer-file boundary.",
+      "existing_mitigations": [
+        "No false Storage pass was claimed while staging buckets were absent."
+      ],
+      "actual_weakness": "The 570-test harness certifies database/RLS and RPC/view grants, not Storage objects.",
+      "recommended_correction": "Extend the harness after staging buckets are created with real two-tenant Storage tests.",
+      "confidence": "HIGH",
+      "launch_blocker": true
+    },
+    {
+      "id": "BILLING-001",
+      "severity": "LOW",
+      "title": "Stripe mark-processed failure after successful side effects can cause later retry of an already-applied event",
+      "affected": [
+        "src/api/billing/billing.routes.js",
+        "src/api/billing/stripeWebhookIdempotency.js"
+      ],
+      "exploit_prerequisites": "Rare database/network failure after billing side effects succeed but before idempotency row is marked processed.",
+      "realistic_attack": "A stale processing lease is later reclaimed and the same event runs again.",
+      "impact": "Operational duplicate processing risk for future non-idempotent event types; current reviewed billing writes are mostly Stripe-derived upserts/updates.",
+      "existing_mitigations": [
+        "Unique event_id prevents concurrent duplicate processing.",
+        "Processed events are skipped.",
+        "Stripe is authoritative."
+      ],
+      "actual_weakness": "No cross-system transaction couples Stripe side effects and idempotency marking.",
+      "recommended_correction": "Keep webhook side effects idempotent and add tests for every new event type.",
+      "confidence": "MEDIUM",
+      "launch_blocker": false
+    },
+    {
+      "id": "DB-001",
+      "severity": "INFO",
+      "title": "Production public database/RLS layer is certified by prior runtime and snapshot review",
+      "affected": [
+        "supabase/live_schema_snapshot.sql",
+        "reports/supabase-production-final-security-verification.md",
+        "reports/supabase-two-tenant-runtime-security-test.md"
+      ],
+      "result": "PASS",
+      "launch_blocker": false
+    },
+    {
+      "id": "SECRET-001",
+      "severity": "INFO",
+      "title": "No browser-visible server credential path was found in the reviewed frontend graph",
+      "affected": [
+        "src/services/supabaseClient.js",
+        "src/services/supabaseAdmin.js",
+        "frontend env usage under src"
+      ],
+      "result": "No known server secret exposed to browser code.",
+      "launch_blocker": false
+    },
+    {
+      "id": "AUTH-001",
+      "severity": "INFO",
+      "title": "Canonical API authentication and tenant middleware are present on major private mounts",
+      "affected": [
+        "src/server.js",
+        "src/api/gpt/middlewares/requireAuth.js",
+        "src/api/_shared/tenantAuth.js",
+        "tests/privateRouteMounts.security.test.js"
+      ],
+      "result": "Major business-scoped mounts use requireAuth plus requireBusinessAccess; production auth bypass flags are blocked at startup.",
+      "launch_blocker": false
+    }
+  ],
+  "area_assessment": {
+    "authentication": "No private-operation auth bypass found in reviewed major mounts.",
+    "tenant_authorization": "API and direct Supabase database paths are protected by canonical middleware and hardened RLS.",
+    "idor": "Major object routes are behind tenant context or query by authorized business.",
+    "frontend_secrets": "No server secret in reviewed browser env/code path.",
+    "server_secrets": "Global error handling and provider redaction reduce leakage.",
+    "service_role": "Broad usage exists but major browser entrypoints establish auth/tenant context first.",
+    "supabase_rls": "Production public database/RLS layer previously verified as pass; Storage excluded.",
+    "oauth_providers": "QBO/Plaid strong; Gmail state should be upgraded to durable one-time state.",
+    "webhooks_replay": "Stripe/QBO signatures verified before mutation; Stripe idempotency requires migration application.",
+    "rate_limits_abuse": "Meaningful route limits exist but are per-process.",
+    "mass_assignment": "No obvious direct request-body database write pattern found.",
+    "billing": "Client cannot set paid state directly in reviewed routes.",
+    "error_logging": "Production global errors are sanitized.",
+    "cors_csrf": "CORS allowlist is narrow; bearer-token model limits CSRF risk.",
+    "input_validation": "No command injection path found; upload size/count limits exist.",
+    "storage": "Not certified and launch-blocking if file features are enabled.",
+    "dependency_supply_chain": "No dependency audit was run during this read-only prompt.",
+    "production_configuration": "Production startup blocks dev auth bypass flags; QBO production mode enforced in production.",
+    "test_coverage": "Strong security tests exist; Storage runtime tests are missing."
+  },
+  "required_answers": {
+    "can_logged_in_customer_access_only_authorized_businesses": "YES for reviewed API/database paths; UNKNOWN for Storage until bucket policies are created and tested.",
+    "can_browser_obtain_third_party_secret_or_server_credential": "NO known path found.",
+    "can_user_a_read_or_mutate_user_b_business_b_private_data": "NO through reviewed database/API paths; UNKNOWN through Storage until certified.",
+    "can_user_a_elevate_tenant_role_or_ownership": "NO known path found.",
+    "can_anonymous_users_obtain_private_customer_information": "NO through reviewed API/database paths; UNKNOWN for future Storage bucket configuration.",
+    "can_provider_tokens_be_retrieved_from_frontend_api_database_browser_access": "NO known path found.",
+    "can_service_role_usage_be_abused_cross_tenant": "NO confirmed abuse path found, but service-role usage remains high impact and depends on route-level checks.",
+    "can_private_api_route_be_invoked_without_valid_authentication": "NO confirmed private-route bypass found in reviewed major mounts.",
+    "can_sensitive_write_be_performed_without_tenant_authorization": "NO confirmed path found.",
+    "can_webhooks_be_forged_or_replayed_dangerously": "NO for Stripe/QBO forgery. Stripe replay protection requires the idempotency migration to be applied.",
+    "are_high_cost_endpoints_protected_against_obvious_abuse": "PARTIAL; authenticated and rate-limited, but rate limits are in-memory/per-process.",
+    "can_billing_subscription_state_be_forged_by_client": "NO known path found.",
+    "do_production_errors_disclose_sensitive_implementation_details": "NO confirmed production path.",
+    "is_cors_csrf_configuration_safe_for_actual_auth_model": "YES for bearer-token API usage with current allowlist; keep credentialed origins narrow.",
+    "does_unresolved_storage_issue_expose_customer_files": "UNKNOWN; not launch-certified.",
+    "are_there_any_critical_findings": "NO",
+    "are_there_any_high_findings": "YES",
+    "known_security_issue_blocking_first_customer_onboarding": "YES if Storage-backed customer file features are enabled.",
+    "application_reasonably_secure_for_initial_production_customers": "PARTIAL; database/API core is strong, Storage must be locked down or disabled.",
+    "safe_to_launch_from_security_perspective": "NO unless Storage-backed features are disabled or Storage policies/tests are completed and Stripe migration is confirmed applied."
+  },
+  "launch_requirements_before_pass": [
+    "Create/copy staging Storage buckets for bizzy-docs, financial-reports, and bid-attachments.",
+    "Make buckets private unless explicitly accepted as public.",
+    "Add storage.objects policies scoped by business path and canonical membership.",
+    "Replace bid-attachments getPublicUrl with backend signed URLs or disable the feature.",
+    "Remove or backend-proxy browser financial-reports.createSignedUrl fallback, or prove policies safely constrain it.",
+    "Extend and run two-tenant Storage attack tests.",
+    "Confirm 20260817_add_stripe_webhook_event_idempotency.sql is applied before deploying current Stripe webhook code."
+  ]
+}

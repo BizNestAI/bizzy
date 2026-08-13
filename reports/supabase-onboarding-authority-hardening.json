@@ -1,0 +1,68 @@
+{
+  "verdict": "PASS_WITH_BLOCKERS",
+  "database_touched": false,
+  "migration_created": "supabase/migrations/20260808_initial_business_onboarding_authority.sql",
+  "migration_executed": false,
+  "rls_or_existing_grants_changed": false,
+  "new_backend_endpoint": {
+    "method": "POST",
+    "path": "/api/onboarding/business",
+    "auth": "requireAuth",
+    "business_access_required": false,
+    "authority_source": "req.auth.userId"
+  },
+  "browser_writes_removed": [
+    "business_profiles initial INSERT from browser",
+    "user_business_link initial owner INSERT from browser",
+    "browser-supplied role for initial owner membership",
+    "browser-supplied user_id in BusinessWizard business payloads"
+  ],
+  "transaction_mechanism": {
+    "type": "service-role-only PostgreSQL RPC",
+    "function": "public.create_initial_business_for_user",
+    "search_path": "pg_catalog, public",
+    "replay_protection": "pg_catalog.pg_advisory_xact_lock keyed by authenticated user id",
+    "existing_business_behavior": "INITIAL_BUSINESS_ALREADY_EXISTS conflict; no existing business update or reuse",
+    "execute_grants": "service_role only"
+  },
+  "policies_ready_for_6e_review": {
+    "business_profiles": [
+      "Enable insert for authenticated users only",
+      "User can manage their own business profile"
+    ],
+    "user_business_link": [
+      "Enable insert for authenticated users only"
+    ]
+  },
+  "remaining_blockers": [
+    "Apply the new RPC migration in staging/production after review.",
+    "Run ownership integrity diagnostics before RLS lockdown.",
+    "Finalize strict owner/admin update policy for existing business_profiles edits.",
+    "Review user_profiles/profiles bootstrap compatibility."
+  ],
+  "tests": {
+    "added": [
+      "tests/onboardingAuthority.security.test.js"
+    ],
+    "commands_run": [
+      "node --test tests/onboardingAuthority.security.test.js",
+      "node --test tests/rlsCompatibilityPrep.security.test.js",
+      "node --test tests/authTenant.middleware.test.js tests/privateRouteMounts.security.test.js",
+      "node --test tests/plaidSecurity.test.js tests/qboSecurity.test.js tests/privateRouteMounts.security.test.js",
+      "npm test"
+    ],
+    "results": {
+      "onboarding_authority": "9/9 passed",
+      "rls_compatibility_prep": "7/7 passed",
+      "auth_tenant_private_routes": "18/18 passed",
+      "plaid_qbo_private_routes": "35/35 passed",
+      "npm_test": "615 passed, 3 failed, 3 skipped",
+      "npm_test_failures": [
+        "tests/sidebarNavigationUi.test.js: sidebar orders Jobs above Tax",
+        "tests/taxConfidenceExplanationUi.test.js: dashboard keeps confidence breakdown in the trajectory header pill and links tax surfaces to the workpaper route",
+        "tests/taxWorkpaperUi.test.js: workpaper rows recursively expand and show full traceability detail on hover"
+      ],
+      "npm_test_failure_classification": "legacy UI failures unrelated to onboarding authority hardening"
+    }
+  }
+}

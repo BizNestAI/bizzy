@@ -1,6 +1,7 @@
 // File: /src/services/calendar/calendar.service.js
 import dayjs from 'dayjs';
 import crypto from 'node:crypto';
+import { supabase } from '../supabaseAdmin.js';
 import { db } from './db.js';
 import { generateMockCalendarEvents } from '../../api/calendar/mock/events.mock.js';
 
@@ -70,9 +71,10 @@ export async function createEvent(draft) {
   return data;
 }
 
-export async function updateEvent(id, patch) {
+export async function updateEvent(id, patch, { business_id } = {}) {
   const existing = await db.findById('calendar_events', id);
   if (!existing) throw new Error('Not found');
+  if (business_id && existing.business_id !== business_id) throw new Error('Not found');
 
   const updated = {
     ...existing,
@@ -98,8 +100,12 @@ function normalizePatch(patch) {
   return out;
 }
 
-export async function deleteEvent(id) {
-  await db.delete('calendar_reminders', null); // optional cleanup by trigger
+export async function deleteEvent(id, { business_id } = {}) {
+  const existing = await db.findById('calendar_events', id);
+  if (!existing) throw new Error('Not found');
+  if (business_id && existing.business_id !== business_id) throw new Error('Not found');
+
+  await supabase.from('calendar_reminders').delete().eq('event_id', id);
   await db.delete('calendar_events', id);
 }
 

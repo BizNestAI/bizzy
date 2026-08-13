@@ -173,7 +173,6 @@ test("server mounts the central tax router behind requireAuth only", () => {
 function makeBusinessSupabase(rows) {
   return {
     from(table) {
-      assert.equal(table, "business_profiles");
       const query = {
         filters: [],
         select() {
@@ -183,8 +182,12 @@ function makeBusinessSupabase(rows) {
           this.filters.push({ field, value });
           return this;
         },
+        limit() {
+          return this;
+        },
         async maybeSingle() {
-          const found = rows.find((row) =>
+          const tableRows = table === "business_profiles" ? rows : [];
+          const found = tableRows.find((row) =>
             this.filters.every((filter) => String(row[filter.field]) === String(filter.value))
           );
           return { data: found || null, error: null };

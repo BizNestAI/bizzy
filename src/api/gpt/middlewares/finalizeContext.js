@@ -8,9 +8,9 @@ export async function finalizeContext(req, _res, next) {
 
     const bundle = req.bizzy.contextBundle || {};
     const user_id =
-      req.body?.user_id || req.header('x-user-id') || 'demo-user';
+      req.auth?.userId || req.user?.id || req.body?.user_id || req.header('x-user-id') || 'demo-user';
     const business_id =
-      req.body?.business_id || req.header('x-business-id') || null;
+      req.business?.id || req.auth?.businessId || req.body?.business_id || req.header('x-business-id') || null;
     const intent  = req.bizzy.intent || req.body?.intent || req.body?.type || 'general';
     const message = req.body?.message || '';
     const hint    = req.body?.context || req.body?.parsedInput || null;

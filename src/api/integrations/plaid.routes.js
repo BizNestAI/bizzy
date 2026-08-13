@@ -5,24 +5,30 @@ import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { getPlaidClient } from "../../services/plaid/plaidClient.js";
 import { runReconciliationOnceForBusiness } from "../../cron/reconciliation.cron.js";
 import {
+  redactPlaidSecrets,
+  safePlaidClientMessage,
+  safePlaidErrorPayload,
+} from "../../services/plaid/plaidSecurity.js";
+import { resolveStoredPlaidAccessToken } from "../../services/plaid/plaidTokenCrypto.js";
+import {
   createLinkToken,
   exchangePublicToken,
   getPlaidStatus,
 } from "../../services/plaid/plaidIntegrationService.js";
+import { createRateLimiter } from "../_shared/rateLimit.js";
 
 const router = Router();
+const plaidMutationRateLimit = createRateLimiter({
+  windowMs: 60_000,
+  max: Number(process.env.PLAID_ROUTE_RATE_LIMIT_PER_MINUTE || 20),
+  code: "plaid_rate_limited",
+  message: "Too many Plaid requests. Try again shortly.",
+});
 
 function readBusinessId(req) {
-  const b = req.body || {};
-  const q = req.query || {};
-  const h = req.headers || {};
   return (
-    b.business_id ||
-    b.businessId ||
-    q.business_id ||
-    q.businessId ||
-    h["x-business-id"] ||
-    req.user?.business_id ||
+    req.business?.id ||
+    req.auth?.businessId ||
     null
   );
 }
@@ -39,10 +45,9 @@ function ensureBusinessId(req, res) {
 function allowDeleteData(req) {
   const requested = req.body?.deleteData === true;
   if (!requested) return false;
-  const adminHeader = String(req.headers?.["x-bizzi-admin"] || "").toLowerCase() === "true";
   const adminKey = process.env.ADMIN_API_KEY && req.headers?.["x-admin-key"] === process.env.ADMIN_API_KEY;
-  const flagEnabled = process.env.PLAID_DELETE_DATA_ENABLED === "true";
-  return adminHeader || adminKey || flagEnabled;
+  if (adminKey) return true;
+  return process.env.NODE_ENV !== "production" && process.env.PLAID_DELETE_DATA_ENABLED === "true";
 }
 
 router.get("/status", requireAuth, async (req, res) => {
@@ -53,26 +58,26 @@ router.get("/status", requireAuth, async (req, res) => {
     const status = await getPlaidStatus({ businessId });
     return res.json(status);
   } catch (err) {
-    console.error("[plaid] status failed", err?.message || err);
+    console.error("[plaid] status failed", redactPlaidSecrets(err?.message || err));
     return res.status(500).json({ ok: false, error: "plaid_status_failed" });
   }
 });
 
-router.post("/link-token", requireAuth, async (req, res) => {
+router.post("/link-token", requireAuth, plaidMutationRateLimit, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   try {
-    const userId = req.user?.id || req.user?.user_id || null;
+    const userId = req.auth?.userId || req.user?.id || req.user?.user_id || null;
     const linkToken = await createLinkToken({ businessId, userId });
     if (!linkToken) throw new Error("link_token_missing");
     return res.json({ ok: true, link_token: linkToken });
   } catch (err) {
-    console.error("[plaid] link token failed", err?.message || err);
+    console.error("[plaid] link token failed", redactPlaidSecrets(err?.message || err));
     return res.status(500).json({ ok: false, error: "plaid_link_token_failed" });
   }
 });
 
-router.post("/exchange", requireAuth, async (req, res) => {
+router.post("/exchange", requireAuth, plaidMutationRateLimit, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const publicToken = req.body?.public_token;
@@ -83,33 +88,27 @@ router.post("/exchange", requireAuth, async (req, res) => {
     const metadata = req.body?.metadata || null;
     const result = await exchangePublicToken({
       businessId,
-      userId: req.user?.id || null,
+      userId: req.auth?.userId || req.user?.id || null,
       publicToken,
       metadata,
     });
     return res.json({ ok: true, ...result });
   } catch (err) {
-    const plaidErr = err?.response?.data || err?.data || null;
     console.error("[plaid][exchange] failed", {
       business_id: businessId,
       has_public_token: !!publicToken,
-      plaid: plaidErr,
+      plaid: redactPlaidSecrets(safePlaidErrorPayload(err)),
       message: err?.message,
     });
     return res.status(500).json({
       ok: false,
       error: "plaid_exchange_failed",
-      message:
-        plaidErr?.error_message ||
-        plaidErr?.display_message ||
-        err?.message ||
-        "exchange_failed",
-      plaid: plaidErr || null,
+      message: safePlaidClientMessage(err, "exchange_failed"),
     });
   }
 });
 
-router.post("/sync", requireAuth, async (req, res) => {
+router.post("/sync", requireAuth, plaidMutationRateLimit, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   try {
@@ -119,26 +118,17 @@ router.post("/sync", requireAuth, async (req, res) => {
     runReconciliationOnceForBusiness(businessId, { force: true, preferQboBalance: false }).catch(() => {});
     return res.json(result);
   } catch (err) {
-    const plaid = err?.response?.data || err?.data || null;
     const supa = err?.supabase || err?.cause || null;
     console.error("[plaid][sync] failed", {
       business_id: businessId,
       message: err?.message,
-      plaid,
-      supabase: supa,
-      stack: err?.stack,
+      plaid: redactPlaidSecrets(safePlaidErrorPayload(err)),
+      supabase: redactPlaidSecrets(supa?.message || supa || null),
     });
     return res.status(500).json({
       ok: false,
       error: "plaid_sync_failed",
-      message:
-        plaid?.error_message ||
-        plaid?.display_message ||
-        supa?.message ||
-        err?.message ||
-        "sync_failed",
-      plaid: plaid || null,
-      supabase: supa || null,
+      message: safePlaidClientMessage(err, supa?.message || "sync_failed"),
     });
   }
 });
@@ -166,9 +156,19 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
 
     if (plaid && item?.plaid_access_token) {
       try {
-        await plaid.itemRemove({ access_token: item.plaid_access_token });
+        const accessToken = await resolveStoredPlaidAccessToken({
+          storedToken: item.plaid_access_token,
+          persistEncrypted: async (encrypted) => {
+            await supabase
+              .from("plaid_items")
+              .update({ plaid_access_token: encrypted, updated_at: new Date().toISOString() })
+              .eq("business_id", businessId)
+              .eq("plaid_item_id", plaidItemId);
+          },
+        });
+        await plaid.itemRemove({ access_token: accessToken });
       } catch (e) {
-        console.warn("[plaid][disconnect-item] item_remove failed", e?.message || e);
+        console.warn("[plaid][disconnect-item] item_remove failed", redactPlaidSecrets(e?.message || e));
       }
     }
 
@@ -262,11 +262,11 @@ router.post("/disconnect-item", requireAuth, async (req, res) => {
       delete_data: false,
     });
   } catch (err) {
-    console.error("[plaid][disconnect-item] failed", err?.message || err);
+    console.error("[plaid][disconnect-item] failed", redactPlaidSecrets(err?.message || err));
     return res.status(500).json({
       ok: false,
       error: "plaid_disconnect_item_failed",
-      message: err?.message || "disconnect_item_failed",
+      message: "disconnect_item_failed",
     });
   }
 });
@@ -289,12 +289,22 @@ router.post("/disconnect", requireAuth, async (req, res) => {
     for (const item of items || []) {
       if (plaid && item?.plaid_access_token) {
         try {
-          await plaid.itemRemove({ access_token: item.plaid_access_token });
+          const accessToken = await resolveStoredPlaidAccessToken({
+            storedToken: item.plaid_access_token,
+            persistEncrypted: async (encrypted) => {
+              await supabase
+                .from("plaid_items")
+                .update({ plaid_access_token: encrypted, updated_at: new Date().toISOString() })
+                .eq("business_id", businessId)
+                .eq("plaid_item_id", item.plaid_item_id);
+            },
+          });
+          await plaid.itemRemove({ access_token: accessToken });
           removedItems += 1;
         } catch (e) {
           errors.push({
             item_id: item.plaid_item_id,
-            message: e?.response?.data?.error_message || e?.message || "item_remove_failed",
+            message: safePlaidClientMessage(e, "item_remove_failed"),
           });
         }
       } else {
@@ -373,11 +383,11 @@ router.post("/disconnect", requireAuth, async (req, res) => {
       delete_data: false,
     });
   } catch (err) {
-    console.error("[plaid][disconnect] failed", err?.message || err);
+    console.error("[plaid][disconnect] failed", redactPlaidSecrets(err?.message || err));
     return res.status(500).json({
       ok: false,
       error: "plaid_disconnect_failed",
-      message: err?.message || "disconnect_failed",
+      message: "disconnect_failed",
     });
   }
 });

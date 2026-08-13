@@ -1,13 +1,15 @@
 // /src/services/authService.js
 import { supabase } from './supabaseClient.js';
 import { apiFetch } from '../utils/apiBase.js';
+import { getAuthRedirectTo, normalizeSupabaseProjectUrl } from './authUrlConfig.js';
+import { clearStoredAuthAndBusinessState } from './authSessionCleanup.js';
 
 /* -----------------------------------------------------------
    Env helpers (frontend)
 ----------------------------------------------------------- */
 function getEnv() {
   const env = (typeof import.meta !== 'undefined' && import.meta.env) || {};
-  const url = (env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const url = normalizeSupabaseProjectUrl(env.VITE_SUPABASE_URL);
   const anon = (env.VITE_SUPABASE_ANON_KEY || '').trim();
   if (!url || !anon) {
     throw new Error(
@@ -16,16 +18,6 @@ function getEnv() {
     );
   }
   return { url, anon };
-}
-
-/* -----------------------------------------------------------
-   Signup (kept via Supabase client SDK)
------------------------------------------------------------ */
-function getAuthRedirectTo(path) {
-  return (
-    (typeof window !== 'undefined' && `${window.location.origin}${path}`) ||
-    `http://localhost:5173${path}`
-  );
 }
 
 function normalizeEmail(email) {
@@ -109,6 +101,13 @@ export async function resendSignupConfirmation(email) {
 
 export async function signUp(email, password, names = {}) {
   const normalizedEmail = normalizeEmail(email);
+  clearStoredAuthAndBusinessState();
+  try {
+    await supabase.auth.signOut({ scope: 'local' });
+  } catch {
+    // Local stale auth/business state has already been cleared.
+  }
+
   const first_name = (names?.firstName || "").trim();
   const last_name = (names?.lastName || "").trim();
   const full_name = [first_name, last_name].filter(Boolean).join(" ") || null;
@@ -205,9 +204,11 @@ export async function login({ email, password }) {
    Logout
 ----------------------------------------------------------- */
 export async function logout() {
-  await supabase.auth.signOut();
-  localStorage.removeItem('currentBusinessId');
-  localStorage.removeItem('isProfileComplete');
+  try {
+    await supabase.auth.signOut();
+  } finally {
+    clearStoredAuthAndBusinessState();
+  }
 }
 
 /* -----------------------------------------------------------

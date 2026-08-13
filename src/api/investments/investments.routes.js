@@ -14,6 +14,7 @@ import { runRetirementProjection } from './retirement.controller.js';
 import { getWealthMoves, refreshWealthMoves } from './wealthMoves.controller.js';
 import { fetchWealthPulse, refreshWealthPulseHandler } from './wealthPulse.controller.js';
 import { runMonthlyJobIfFirstOfMonth } from './wealthPulse.service.js';
+import { requireBusinessAccess } from '../_shared/tenantAuth.js';
 
 const router = Router();
 const USE_MOCKS = process.env.MOCK_INVESTMENTS === 'true';
@@ -27,8 +28,8 @@ function isUuid(v) {
 
 /**
  * ensureAuthIds:
- * - Prefer req.user.id (set by your auth middleware) and require it to be a UUID.
- * - Accept x-user-id / query/body user_id ONLY if it’s a UUID.
+ * - Prefer req.auth.userId (set by canonical auth middleware) and require it to be a UUID.
+ * - Legacy user_id inputs never establish identity.
  * - business_id is optional; if present and not a UUID, return 400.
  * This avoids 22P02 (invalid input syntax for type uuid) in Supabase.
  */
@@ -38,17 +39,16 @@ function ensureAuthIds(req, res, next) {
   const b = req.body || {};
 
   const rawUser =
+    req.auth?.userId ||
     req.user?.id ||
-    q.user_id ||
-    q.userId ||
-    h['x-user-id'] ||
-    b.user_id ||
     null;
 
   if (!rawUser) return res.status(401).json({ ok: false, error: 'missing_user_id' });
   if (!isUuid(rawUser)) return res.status(400).json({ ok: false, error: 'invalid_user_id_format' });
 
   const rawBiz =
+    req.business?.id ||
+    req.auth?.businessId ||
     req.user?.business_id ||
     q.business_id ||
     q.businessId ||
@@ -63,6 +63,8 @@ function ensureAuthIds(req, res, next) {
   req.ctx = { userId: rawUser, businessId: rawBiz || null };
   return next();
 }
+
+const requireVerifiedBusiness = requireBusinessAccess();
 
 function noStore(res) {
   res.set('Cache-Control', 'no-store');
@@ -220,11 +222,11 @@ router.post('/positions/manual', ensureAuthIds, (req, res, next) => { noStore(re
 /* ──────────────────────────────────────────────────────────────
  * PLAID + AGGREGATOR
  * ────────────────────────────────────────────────────────────── */
-router.post('/plaid/create-link-token', ensureAuthIds, createLinkToken);
-router.post('/plaid/exchange-public-token', ensureAuthIds, exchangePublicToken);
-router.post('/sync', ensureAuthIds, syncBalances);
+router.post('/plaid/create-link-token', ensureAuthIds, requireVerifiedBusiness, createLinkToken);
+router.post('/plaid/exchange-public-token', ensureAuthIds, requireVerifiedBusiness, exchangePublicToken);
+router.post('/sync', ensureAuthIds, requireVerifiedBusiness, syncBalances);
 
-router.get('/balances', ensureAuthIds, async (req, res) => {
+router.get('/balances', ensureAuthIds, requireVerifiedBusiness, async (req, res) => {
   try {
     if (USE_MOCKS) { noStore(res); return res.json(mockBalances()); }
     noStore(res);
@@ -236,7 +238,7 @@ router.get('/balances', ensureAuthIds, async (req, res) => {
   }
 });
 
-router.get('/asset-allocation', ensureAuthIds, async (req, res) => {
+router.get('/asset-allocation', ensureAuthIds, requireVerifiedBusiness, async (req, res) => {
   try {
     if (USE_MOCKS) { noStore(res); return res.json(mockAllocation()); }
     noStore(res);
@@ -248,7 +250,7 @@ router.get('/asset-allocation', ensureAuthIds, async (req, res) => {
   }
 });
 
-router.get('/accounts-holdings', ensureAuthIds, async (req, res) => {
+router.get('/accounts-holdings', ensureAuthIds, requireVerifiedBusiness, async (req, res) => {
   try {
     noStore(res);
     return getAccountsHoldings(req, res);

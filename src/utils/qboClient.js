@@ -7,7 +7,9 @@ import {
   getLatestQuickBooksTokenRow,
 } from "../services/quickbooksTokenService.js";
 
-const QB_DEBUG = String(process.env.QB_DEBUG || "").toLowerCase() === "true";
+const QB_DEBUG =
+  process.env.NODE_ENV !== "production" &&
+  String(process.env.QB_DEBUG || "").toLowerCase() === "true";
 
 /**
  * Fetch QuickBooks tokens from Supabase for the given business ID

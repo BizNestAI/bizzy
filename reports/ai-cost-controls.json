@@ -1,0 +1,73 @@
+{
+  "verdict": "AI COST CONTROLS: READY FOR LAUNCH",
+  "main_chat_model": "gpt-5.6-terra",
+  "paid_query_limit_preserved": 300,
+  "pricing_usd_per_million": {
+    "gpt-5.6-terra": {
+      "input": 2.5,
+      "cached_input": 0.25,
+      "output": 15
+    }
+  },
+  "usage_fields_recorded": [
+    "model",
+    "input_tokens",
+    "cached_input_tokens",
+    "cache_write_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "estimated_openai_cost_usd",
+    "query_count"
+  ],
+  "telemetry_privacy": {
+    "stores_prompts": false,
+    "stores_responses": false,
+    "browser_cost_analytics_exposed": false
+  },
+  "telemetry_idempotency": {
+    "request_id_unique": true,
+    "duplicate_request_id_increments_usage": false
+  },
+  "context_limits": {
+    "recent_thread_messages": 6,
+    "fallback_recent_query_messages": 12,
+    "fallback_recent_used_messages": 6,
+    "older_summary_chars": 600,
+    "chat_history_message_chars": 4000,
+    "context_builder_string_chars": 8000,
+    "context_builder_array_items": 100,
+    "main_output_max_completion_tokens": 1400,
+    "safety_guard_input_chars": 120000
+  },
+  "representative_costs": [
+    { "input_tokens": 3000, "output_tokens": 500, "cost_per_request_usd": 0.015, "cost_300_queries_usd": 4.5 },
+    { "input_tokens": 8000, "output_tokens": 800, "cost_per_request_usd": 0.032, "cost_300_queries_usd": 9.6 },
+    { "input_tokens": 20000, "output_tokens": 1200, "cost_per_request_usd": 0.068, "cost_300_queries_usd": 20.4 },
+    { "input_tokens": 30000, "output_tokens": 1400, "cost_per_request_usd": 0.096, "cost_300_queries_usd": 28.8 }
+  ],
+  "internal_warnings": {
+    "warning_usd": 20,
+    "elevated_warning_usd": 35,
+    "blocks_chat": false
+  },
+  "tests": {
+    "focused": "pass",
+    "syntax": "pass",
+    "webhook_security_regression": "pass",
+    "full_suite": {
+      "command": "npm test",
+      "pass": 706,
+      "fail": 3,
+      "skipped": 3,
+      "known_unrelated_failures": [
+        "tests/sidebarNavigationUi.test.js: sidebar orders Jobs above Tax",
+        "tests/taxConfidenceExplanationUi.test.js: dashboard keeps confidence breakdown in the trajectory header pill and links tax surfaces to the workpaper route",
+        "tests/taxWorkpaperUi.test.js: workpaper rows recursively expand and show full traceability detail on hover"
+      ]
+    }
+  },
+  "auxiliary_model_changes": [],
+  "auxiliary_model_recommendations": [
+    "Consider explicitly setting BIZZY_GPT_SUGGEST_MODEL to a cheaper model before launch if uncategorized transaction suggestions become high-volume."
+  ]
+}

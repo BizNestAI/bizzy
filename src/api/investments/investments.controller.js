@@ -13,7 +13,7 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const nowISO = () => new Date().toISOString();
 
 function getUserId(req) {
-  const id = req.ctx?.userId || req.user?.id || req.header('x-user-id') || req.query.user_id || req.body?.user_id;
+  const id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
   if (id) return id;
   if (process.env.MOCK_INVESTMENTS === 'true') return 'demo-user';
   const err = new Error('missing_user_id'); err.status = 401; throw err;
@@ -78,7 +78,15 @@ export async function uploadCsv(req, res) {
 export async function upsertManual(req, res) {
   try {
     const user_id = getUserId(req);
-    const body = { ...req.body, user_id };
+    const body = {
+      user_id,
+      account_name: req.body?.account_name || req.body?.accountName,
+      ticker: req.body?.ticker,
+      name: req.body?.name,
+      quantity: req.body?.quantity,
+      average_price: req.body?.average_price ?? req.body?.averagePrice,
+      cost_basis_total: req.body?.cost_basis_total ?? req.body?.costBasisTotal,
+    };
     await upsertManualPosition(body);
 
     // echo a lightweight confirmation for UX

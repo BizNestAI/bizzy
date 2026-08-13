@@ -50,8 +50,7 @@ function mockWealthPulsePayload(year, month) {
 
 export async function fetchWealthPulse(req, res) {
   try {
-    const user_id =
-      req.header('x-user-id') || req.query.user_id || req.body?.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(400).json({ error: 'missing_user_id' });
 
     const year  = req.query.year  || req.body?.year;
@@ -77,8 +76,7 @@ export async function fetchWealthPulse(req, res) {
 
 export async function refreshWealthPulseHandler(req, res) {
   try {
-    const user_id =
-      req.header('x-user-id') || req.query.user_id || req.body?.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(400).json({ error: 'missing_user_id' });
 
     const year  = req.query.year  || req.body?.year;

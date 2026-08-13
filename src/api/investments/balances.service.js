@@ -37,13 +37,12 @@ export async function plaidCreateLinkToken(user_id) {
 export async function plaidExchangePublicToken(user_id, public_token) {
   const plaid = getPlaidClient();
   if (!plaid) {
-    await saveLinkedItemTokenEnc(user_id, 'plaid', 'mock-item', 'mock-access-token', 'Plaid Linked');
-    return { mock: true, item_id: 'mock-item', access_token_saved: true };
+    return { mock: true, item_id: 'mock-item', credential_saved: true };
   }
   const resp = await plaid.itemPublicTokenExchange({ public_token });
   const { item_id, access_token } = resp.data;
   await saveLinkedItemTokenEnc(user_id, 'plaid', item_id, access_token, 'Plaid Linked');
-  return { item_id, access_token_saved: true };
+  return { item_id, credential_saved: true };
 }
 
 /**

@@ -347,6 +347,8 @@ export async function runQboSync({ businessId, year: yearOverride, month: monthO
 router.post("/sync", async (req, res) => {
   try {
     const businessId =
+      req.business?.id ||
+      req.auth?.businessId ||
       req.query?.business_id ||
       req.query?.businessId ||
       req.body?.business_id ||

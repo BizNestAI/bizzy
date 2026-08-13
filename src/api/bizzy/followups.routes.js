@@ -20,7 +20,7 @@ const RATE_MAX = 20;
 const rateBucket = new Map();
 function rateLimit(req, res, next) {
   const key =
-    req.header('x-user-id') ||
+    req.auth?.userId ||
     req.header('x-session-id') ||
     req.header('x-forwarded-for') ||
     req.ip ||

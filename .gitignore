@@ -7,12 +7,10 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-<<<<<<< HEAD
-=======
 # Environment variables
->>>>>>> 1b30995 (Add core Bizzy app structure and dashboards)
 .env
 .env.*
+!.env.example
 
 node_modules
 dist

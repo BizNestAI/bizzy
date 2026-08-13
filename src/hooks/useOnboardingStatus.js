@@ -107,7 +107,7 @@ async function fetchOnboardingStatus(businessId) {
   try {
     profileRes = await supabase
       .from("business_profiles")
-      .select("id,business_name,industry")
+      .select("id,business_name,industry,state,services_offered")
       .eq("id", businessId)
       .maybeSingle();
   } catch (err) {
@@ -119,32 +119,15 @@ async function fetchOnboardingStatus(businessId) {
   try {
     const res = await safeFetch(apiUrl(`/auth/status?business_id=${businessId}`), { method: "GET" });
     qbConnected = Boolean(res?.connected);
-    if (qbConnected && typeof window !== "undefined") {
-      window.localStorage.setItem(LOCAL_KEYS.qbConnected, "true");
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(LOCAL_KEYS.qbConnected, qbConnected ? "true" : "false");
     }
   } catch (err) {
     if (import.meta.env.DEV) {
-      console.warn("[useOnboardingStatus] auth/status fetch failed, falling back", err);
+      console.warn("[useOnboardingStatus] auth/status fetch failed", err);
     }
-    // 1) local flag fallback
+    // Local-only continuity fallback. Do not query server-only QBO credential tables from the browser.
     qbConnected = qbConnected || Boolean(readLocalFlag(LOCAL_KEYS.qbConnected));
-    // 2) Supabase fallback (best effort; ignore errors)
-    if (!qbConnected) {
-      try {
-        const { data, error } = await supabase
-          .from("quickbooks_tokens")
-          .select("business_id")
-          .eq("business_id", businessId)
-          .eq("is_active", true)
-          .eq("status", "active")
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        if (!error && data) qbConnected = true;
-      } catch {
-        /* ignore */
-      }
-    }
   }
 
   // Plaid connection: prefer authenticated status API (avoids RLS issues on client)
@@ -162,25 +145,11 @@ async function fetchOnboardingStatus(businessId) {
     }
   } catch (err) {
     if (import.meta.env.DEV) {
-      console.warn("[useOnboardingStatus] plaid status fetch failed, falling back", err);
+      console.warn("[useOnboardingStatus] plaid status fetch failed", err);
     }
-    // Supabase best-effort fallback (may be blocked by RLS)
-    try {
-      const { data, error } = await supabase
-        .from("plaid_items")
-        .select("plaid_item_id")
-        .eq("business_id", businessId)
-        .eq("is_active", true)
-        .limit(1);
-      if (!error && Array.isArray(data) && data.length > 0) {
-        plaidConnected = true;
-      }
-    } catch {
-      /* ignore */
-    }
+    // Local-only continuity fallback. Do not query server-only Plaid credential tables from the browser.
     plaidConnected = plaidConnected || Boolean(readLocalFlag(LOCAL_KEYS.plaidConnected));
   }
-  plaidConnected = plaidConnected || Boolean(readLocalFlag(LOCAL_KEYS.plaidConnected));
 
   const profile = profileRes?.data || null;
   const profileError = profileRes?.error;
@@ -305,12 +274,14 @@ export default function useOnboardingStatus(options = {}) {
   const quickPromptMode = useMemo(() => {
     if (!businessId) return "normal";
     if (state.loading) return "onboarding";
-    if (state.onboardingCompletedOnce) return "normal";
     if (!state.qbConnected || !state.plaidConnected) return "onboarding";
+    if (state.onboardingComplete) return "normal";
     if (state.businessProfileComplete && state.hasViewedIntegrationsPage) return "normal";
+    if (state.onboardingCompletedOnce) return "normal";
     return "onboarding";
   }, [
     state.loading,
+    state.onboardingComplete,
     state.onboardingCompletedOnce,
     state.qbConnected,
     state.plaidConnected,

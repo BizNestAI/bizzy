@@ -1,5 +1,6 @@
 // /src/services/supabaseClient.js
 import { createClient } from '@supabase/supabase-js';
+import { normalizeSupabaseProjectUrl } from './authUrlConfig.js';
 
 const isServer = typeof window === 'undefined';
 if (isServer) {
@@ -11,9 +12,10 @@ if (isServer) {
 const vite = (typeof import.meta !== 'undefined' && import.meta.env) || {};
 const injected = (typeof window !== 'undefined' && window.__VITE) || {};
 
-const url =
+const url = normalizeSupabaseProjectUrl(
   vite.VITE_SUPABASE_URL ??
-  injected.VITE_SUPABASE_URL;
+  injected.VITE_SUPABASE_URL
+);
 
 const anonKey =
   vite.VITE_SUPABASE_ANON_KEY ??
@@ -29,6 +31,20 @@ if (!url || !anonKey) {
   // Avoid hard-crashing the UI; your auth calls will fail visibly anyway.
 }
 
-// Create a single shared client
-export const supabase = createClient(url, anonKey);
+const sessionStorageAdapter =
+  typeof window !== 'undefined' && window.sessionStorage
+    ? window.sessionStorage
+    : undefined;
+
+// Create a single shared client. Auth sessions intentionally use
+// sessionStorage, not localStorage: refreshes and same-tab OAuth redirects keep
+// the login, but closing the tab/window clears the session.
+export const supabase = createClient(url, anonKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: sessionStorageAdapter,
+  },
+});
 export default supabase;

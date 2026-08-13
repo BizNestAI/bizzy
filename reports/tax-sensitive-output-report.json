@@ -1,7 +1,7 @@
 {
   "status": "skipped",
   "runtimeExecuted": false,
-  "generatedAt": "2026-07-19T17:05:44.452Z",
+  "generatedAt": "2026-08-12T15:26:00.634Z",
   "reason": "TAX_OUTPUT_SAFETY_ENABLED is not true.",
   "missingEnvironment": [
     "TEST_SUPABASE_URL",
@@ -17,7 +17,7 @@
   },
   "staticScan": {
     "status": "pass",
-    "findingCount": 8,
+    "findingCount": 9,
     "findings": [
       {
         "file": "src/api/tax/calculateTaxLiability.js",
@@ -50,6 +50,14 @@
         "severity": "medium",
         "message": "Tax code references error details; runtime scanner verifies exposure.",
         "preview": "details: error?.details,"
+      },
+      {
+        "file": "src/services/tax/state/stateTaxEngine 2.js",
+        "line": 54,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "configSet = { stateCode: state, configs: {}, missing: [{ code: err.code, details: err.details }], warnings: [], supportLevel: TAX_RULE_SUPPO"
       },
       {
         "file": "src/services/tax/state/stateTaxEngine.js",

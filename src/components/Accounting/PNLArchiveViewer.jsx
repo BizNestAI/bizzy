@@ -125,16 +125,6 @@ export default function PNLArchiveViewer() {
     });
   }, [reports, filteredYear, filteredMonth]);
 
-  function isCanonicalPnlKey(path) {
-    if (!path || !currentBusiness?.id) return false;
-    const bizId = currentBusiness.id;
-    const escapedBiz = bizId.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
-    const stripped = String(path).replace(/^financial-reports\//, "");
-    if (stripped.startsWith("backfill/")) return false;
-    const exact = new RegExp(`^${escapedBiz}/\\d{4}-\\d{2}-pnl\\.pdf$`);
-    return exact.test(stripped);
-  }
-
   async function generatePdfOnDemand(report, { forceRefresh = false } = {}) {
     if (!currentBusiness?.id) return { error: "missing_business" };
     try {
@@ -181,34 +171,9 @@ export default function PNLArchiveViewer() {
       storage_path: report.storage_path,
     });
 
-    const storagePath = report.storage_path ? String(report.storage_path).replace(/^financial-reports\//, "") : "";
-    const isLegacy = storagePath.startsWith("backfill/");
-    const trySign = isCanonicalPnlKey(storagePath) && !isLegacy;
-
-    const shouldSkipSign = !usingDemo;
-
     try {
       let signedUrl = null;
       let source = "bizzi";
-
-      if (trySign && storagePath && !shouldSkipSign) {
-        try {
-          const { data, error } = await supabase.storage
-            .from("financial-reports")
-            .createSignedUrl(storagePath, 60 * 5);
-          if (!error && data?.signedUrl) {
-            signedUrl = data.signedUrl;
-          } else {
-            const msg = error?.message || "";
-            const isNotFound = msg.toLowerCase().includes("not found") || error?.statusCode === 400;
-            if (!isNotFound) {
-              console.warn("[PNLArchiveViewer] canonical path but sign failed; falling back to generate", { error, data });
-            }
-          }
-        } catch (err) {
-          console.warn("[PNLArchiveViewer] signed url attempt failed", err?.message || err);
-        }
-      }
 
       if (!signedUrl) {
         const generated = await generatePdfOnDemand(report, { forceRefresh: !usingDemo });

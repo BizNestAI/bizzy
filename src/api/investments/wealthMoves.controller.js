@@ -5,7 +5,7 @@ import { generateWealthMoves } from './wealthMoves.service.js';
 
 export async function getWealthMoves(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.query.user_id || req.body.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(400).json({ error: 'missing_user_id' });
 
     // force=1 to re-generate this month
@@ -21,7 +21,7 @@ export async function getWealthMoves(req, res) {
 
 export async function refreshWealthMoves(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.body.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(400).json({ error: 'missing_user_id' });
 
     const payload = await generateWealthMoves(user_id, { force: true });

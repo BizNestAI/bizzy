@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { login } from "../../services/authService";
 import { supabase } from "../../services/supabaseClient.js";
 import { ensureUserProfile } from "../../services/businessService.js";
+import { clearStoredAuthAndBusinessState } from "../../services/authSessionCleanup.js";
 import { useNavigate, Link, useLocation } from "react-router-dom";
 import { Mail, Lock, Eye, EyeOff, ArrowRight, CheckCircle2, AlertCircle } from "lucide-react";
 import bizzyLogo from "../../assets/bizzy-logo.png";
@@ -25,29 +26,12 @@ function pickAccessToken(result) {
   return null;
 }
 
-function pickIds(result) {
-  const out = {};
-  const user = result?.user || result?.data?.user || result?.session?.user;
-  if (user?.id) out.userId = user.id;
-  if (result?.business_id) out.businessId = result.business_id;
-  if (result?.data?.business_id) out.businessId = result.data.business_id;
-  return out;
-}
-
 function pickUser(result) {
   return result?.user || result?.data?.user || result?.session?.user || null;
 }
 
 function isConfirmedUser(user) {
   return Boolean(user?.email_confirmed_at || user?.confirmed_at);
-}
-
-function clearStoredAuthState() {
-  localStorage.removeItem("access_token");
-  localStorage.removeItem("user_id");
-  localStorage.removeItem("business_id");
-  localStorage.removeItem("currentBusinessId");
-  localStorage.removeItem("isProfileComplete");
 }
 
 function friendlyLoginError(err) {
@@ -62,7 +46,7 @@ function friendlyLoginError(err) {
 }
 
 async function rejectLogin(message) {
-  clearStoredAuthState();
+  clearStoredAuthAndBusinessState();
   await supabase.auth.signOut();
   throw new Error(message);
 }
@@ -193,11 +177,6 @@ export default function Login() {
 
       const token = pickAccessToken(resp);
       if (!token) throw new Error("Login succeeded but no access token was returned.");
-      localStorage.setItem("access_token", token);
-
-      const { userId, businessId } = pickIds(resp);
-      if (userId) localStorage.setItem("user_id", userId);
-      if (businessId) localStorage.setItem("business_id", businessId);
 
       const postLoginRoute = await resolvePostLoginRoute(loggedInUser);
       if (postLoginRoute === "/setup") {

@@ -1,0 +1,88 @@
+{
+  "verdict": "READY_FOR_STAGING_REVIEW",
+  "migration": "supabase/migrations/20260815_harden_views_rpc_functions.sql",
+  "scope": {
+    "included": [
+      "public views",
+      "public RPC/function EXECUTE grants",
+      "SECURITY DEFINER search_path hardening",
+      "runtime harness view/RPC attack cases"
+    ],
+    "excluded": [
+      "table RLS policy changes",
+      "default privileges",
+      "sequences",
+      "storage",
+      "production execution"
+    ]
+  },
+  "views": [
+    { "name": "ar_aging", "classification": "BACKEND_ONLY", "target_access": "service_role_only", "security_invoker": true },
+    { "name": "ar_aging_v2", "classification": "BACKEND_ONLY", "target_access": "service_role_only", "security_invoker": true },
+    { "name": "billing_customer_overview", "classification": "BACKEND_ONLY", "target_access": "service_role_only", "security_invoker": true },
+    { "name": "expense_categories", "classification": "BACKEND_ONLY", "target_access": "service_role_only", "security_invoker": true },
+    { "name": "insights_history", "classification": "BACKEND_ONLY", "target_access": "service_role_only", "security_invoker": true },
+    { "name": "jobs_profitability", "classification": "BACKEND_ONLY", "target_access": "service_role_only", "security_invoker": true },
+    { "name": "positions_view", "classification": "BACKEND_ONLY", "target_access": "service_role_only", "security_invoker": true }
+  ],
+  "functions": [
+    { "name": "acquire_posting_lock(uuid,text,timestamptz,int,text)", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "acquire_posting_lock(uuid,uuid,timestamptz,int,text)", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "apply_tax_classification_override", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "billing_effective_bool", "classification": "BACKEND_ONLY_HELPER", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "billing_effective_status", "classification": "BACKEND_ONLY_HELPER", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "billing_effective_text", "classification": "BACKEND_ONLY_HELPER", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "billing_effective_timestamptz", "classification": "BACKEND_ONLY_HELPER", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "bizzy_docs_tsv_update", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "bizzi_current_user_is_business_member", "classification": "RLS_HELPER", "authenticated_execute": true, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "bizzi_current_user_can_manage_business", "classification": "RLS_HELPER", "authenticated_execute": true, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "claim_contractor_cfo_insight_run", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "claim_scheduled_job_lock", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "claim_tax_recalculation_requests", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "compute_days_overdue", "classification": "BACKEND_ONLY_HELPER", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "create_initial_business_for_user", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "finalize_tax_calculation_run", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "get_tax_deduction_transaction_drilldown", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "gpt_messages_after_delete_trg", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "handle_confirmed_auth_user_profile", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "is_member", "classification": "BACKEND_ONLY_LEGACY_HELPER", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "match_bizzy_memory", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "match_memories", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "prevent_business_profile_identity_reassignment", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "prevent_completed_tax_run_mutation", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "prevent_notification_tenant_reassignment", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "prevent_user_business_link_identity_reassignment", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "recalc_thread_last_message", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "refresh_billing_identity_summary", "classification": "BACKEND_ONLY_RPC", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "refresh_billing_identity_summary_from_billing", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "refresh_billing_identity_summary_from_business_profile", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "refresh_billing_identity_summary_from_user_profile", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "set_bid_estimate_line_items_updated_at", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "set_bid_estimates_updated_at", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "set_job_costing_updated_at", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "set_job_financial_updated_at", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "set_job_margin_targets_updated_at", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "set_job_transaction_assignments_updated_at", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "set_updated_at", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "set_user_profiles_full_name", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "sync_tax_payment_year_fields", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "tax_user_owns_business", "classification": "RLS_HELPER", "authenticated_execute": true, "anon_execute": false, "service_role_execute": true, "search_path_hardened": true },
+    { "name": "tc_sync_txn_fields_from_bank_transactions", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "touch_gpt_thread_updated_at", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true },
+    { "name": "touch_tax_recalculation_requests_updated_at", "classification": "BACKGROUND_INTERNAL", "authenticated_execute": false, "anon_execute": false, "service_role_execute": true }
+  ],
+  "runtime_harness_additions": [
+    "server-only view SELECT denial for authenticated users",
+    "server-only view SELECT denial for anonymous users",
+    "RLS helper own-tenant true checks",
+    "RLS helper foreign-tenant false checks",
+    "backend-only RPC denial for authenticated users",
+    "backend-only RPC denial for anonymous users"
+  ],
+  "remaining_follow_up": [
+    "Apply migration to staging and rerun scripts/runStagingTwoTenantRlsAttackTest.js",
+    "Handle default privileges in a later phase",
+    "Handle sequences/storage in later phases",
+    "Optionally move RLS helpers out of public in a future policy rewrite"
+  ]
+}

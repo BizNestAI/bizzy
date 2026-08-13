@@ -7,6 +7,8 @@ const router = express.Router();
 
 function readBusinessId(req) {
   return (
+    req.business?.id ||
+    req.auth?.businessId ||
     req.query?.business_id ||
     req.query?.businessId ||
     req.headers["x-business-id"] ||

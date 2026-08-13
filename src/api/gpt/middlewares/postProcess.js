@@ -61,8 +61,8 @@ export async function postProcess(req, res, next) {
     // Context for the intent's postProcess hook
     const ctx = {
       intent,
-      user_id: req.body?.user_id || req.header('x-user-id') || null,
-      business_id: req.body?.business_id || req.header('x-business-id') || null,
+      user_id: req.auth?.userId || req.user?.id || req.body?.user_id || req.header('x-user-id') || null,
+      business_id: req.business?.id || req.auth?.businessId || req.body?.business_id || req.header('x-business-id') || null,
       bundle: req.bizzy?.contextBundle || {},
       supabase,  // allow side-effects if the intent needs to store something
       req,       // in case the intent needs headers, route, etc.

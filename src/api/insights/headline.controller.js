@@ -141,8 +141,8 @@ function chooseHeadline({ acc, tax, deadline, rng }) {
 /* ----------------------- Controller entrypoint --------------------- */
 export async function getDailyHeadline(req, res) {
   try {
-    const business_id = req.query.business_id || req.query.businessId || req.headers['x-business-id'];
-    const user_id     = req.query.user_id     || req.query.userId     || req.headers['x-user-id'];
+    const business_id = req.business?.id || req.auth?.businessId || req.query.business_id || req.query.businessId || req.headers['x-business-id'];
+    const user_id     = req.auth?.userId || req.user?.id || req.query.user_id || req.query.userId || req.headers['x-user-id'];
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
     // Legacy dashboard-only endpoint. Every DB read/write is business-scoped, and

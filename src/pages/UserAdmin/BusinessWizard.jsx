@@ -1,7 +1,7 @@
 // src/pages/UserAdmin/BusinessWizard.jsx
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { createBusinessProfile, ensureUserProfile, updateBusinessProfile } from '../../services/businessService';
+import { createInitialBusinessProfile, ensureUserProfile, updateBusinessProfile } from '../../services/businessService';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../services/supabaseClient.js';
 import { ArrowRight, Info } from 'lucide-react';
@@ -415,7 +415,6 @@ const BusinessWizard = () => {
 
       const payload = {
         ...profileRow,
-        user_id: user.id,
         team_size: parseInt(formData.team_size || '0', 10),
         founded_year: founded_year_safe,
       };
@@ -424,13 +423,21 @@ const BusinessWizard = () => {
         const { error: updateErr } = await updateBusinessProfile(existingBusinessId, payload);
         if (updateErr) throw updateErr;
       } else {
-        const { data: createdBusiness, error: businessError } = await createBusinessProfile(payload);
-        if (businessError) throw businessError;
-        businessId = createdBusiness?.[0]?.id;
-        const { error: linkError } = await supabase
-          .from('user_business_link')
-          .insert([{ user_id: user.id, business_id: businessId, role: 'owner' }]);
-        if (linkError) throw linkError;
+        const { data: createdBusiness, error: businessError } = await createInitialBusinessProfile(payload);
+        if (businessError?.code === 'INITIAL_BUSINESS_ALREADY_EXISTS') {
+          const { data: existingRows, error: existingErr } = await supabase
+            .from('business_profiles')
+            .select('id, business_name, industry, founded_year')
+            .eq('user_id', user.id)
+            .limit(1);
+          if (existingErr) throw existingErr;
+          businessId = existingRows?.[0]?.id;
+          if (!businessId) throw businessError;
+        } else if (businessError) {
+          throw businessError;
+        } else {
+          businessId = createdBusiness?.[0]?.id;
+        }
       }
 
       if (businessId) {

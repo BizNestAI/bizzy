@@ -1,0 +1,72 @@
+{
+  "scope": "Security Prompt 6L-A",
+  "status": "BLOCKED",
+  "production_connected": false,
+  "storage_policy_migration_created": false,
+  "source_of_truth": {
+    "storage_buckets_rows": 0,
+    "storage_policy_rows": 0
+  },
+  "conclusion": "Storage should be deferred until required buckets are created or copied into the staging Preview Branch.",
+  "current_staging_state": {
+    "has_bizzy_docs_bucket": false,
+    "has_financial_reports_bucket": false,
+    "has_bid_attachments_bucket": false,
+    "has_storage_rls_policies": false
+  },
+  "required_bucket_models": [
+    {
+      "bucket": "bizzy-docs",
+      "classification": "PRIVATE_BUSINESS",
+      "public": false,
+      "path_tenancy": "<business_id>/<sha256>.<ext>",
+      "required_authorization": "public.bizzi_current_user_is_business_member(first_path_segment::uuid)",
+      "browser_operations_required_by_current_code": ["upload", "download"],
+      "anonymous_access": "deny"
+    },
+    {
+      "bucket": "financial-reports",
+      "classification": "PRIVATE_BUSINESS",
+      "public": false,
+      "path_tenancy": "<business_id>/<year-month>-pnl.pdf",
+      "required_authorization": "prefer backend signing; any browser signing must be path-scoped through business membership",
+      "browser_operations_required_by_current_code": ["limited createSignedUrl fallback"],
+      "anonymous_access": "deny"
+    },
+    {
+      "bucket": "bid-attachments",
+      "classification": "PRIVATE_BUSINESS_PREFERRED_WITH_APP_CHANGE",
+      "public": false,
+      "path_tenancy": "<business_id>/<bid_estimate_id>/<timestamp>-<file>",
+      "required_authorization": "backend tenant authorization before upload/delete/sign",
+      "current_blocker": "route returns getPublicUrl and docs currently assume a public bucket",
+      "browser_operations_required_by_current_code": [],
+      "anonymous_access": "deny"
+    }
+  ],
+  "get_public_url_safety": {
+    "bizzy-docs": "unsafe",
+    "financial-reports": "unsafe",
+    "bid-attachments": "unsafe unless explicitly accepted as public by product/security"
+  },
+  "runtime_tests_deferred": [
+    "User A list Business B prefix",
+    "User A download Business B object",
+    "User A upload into Business B path",
+    "User A overwrite Business B object",
+    "User A delete Business B object",
+    "Anonymous list/download/upload attempts",
+    "Backend signed URL issuance authorization"
+  ],
+  "final_answers": {
+    "can_user_a_list_business_b_files": "NO_CURRENT_BUCKETS_NOT_CERTIFIED",
+    "can_user_a_download_business_b_files": "NO_CURRENT_BUCKETS_NOT_CERTIFIED",
+    "can_user_a_upload_into_business_b_path": "NO_CURRENT_BUCKETS_NOT_CERTIFIED",
+    "can_user_a_overwrite_business_b_files": "NO_CURRENT_BUCKETS_NOT_CERTIFIED",
+    "can_user_a_delete_business_b_files": "NO_CURRENT_BUCKETS_NOT_CERTIFIED",
+    "can_anonymous_users_access_private_files": "NO_CURRENT_BUCKETS_NOT_CERTIFIED",
+    "is_bid_attachments_intentionally_public": "NOT_SAFELY_CERTIFIED",
+    "are_signed_url_issuance_paths_tenant_authorized": "PARTIAL",
+    "is_storage_safe_for_staging_runtime_validation": "NO"
+  }
+}

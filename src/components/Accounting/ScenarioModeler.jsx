@@ -8,7 +8,7 @@ import {
   saveScenarioToSupabase,
   loadUserScenarios,
   loadScenarioItems,
-} from '../../services/accounting/scenarioService.js';
+} from '../../services/accounting/scenarioClient.js';
 
 const TYPE_OPTIONS = [
   { value: 'revenue',      label: 'Revenue (+$)' },

@@ -1,0 +1,109 @@
+{
+  "date": "2026-08-09",
+  "status": "pre_execution",
+  "migration": "supabase/migrations/20260812_lock_down_server_only_integrations.sql",
+  "production_executed": false,
+  "staging_executed": false,
+  "tables": [
+    {
+      "table": "quickbooks_tokens",
+      "classification": "SERVER_ONLY_CREDENTIAL",
+      "reason": "QBO access token, refresh token, realm binding, token expiry metadata",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "plaid_items",
+      "classification": "SERVER_ONLY_CREDENTIAL",
+      "reason": "Plaid access token, item id, sync cursor, connection status",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "linked_financial_items",
+      "classification": "SERVER_ONLY_CREDENTIAL",
+      "reason": "Legacy linked financial item encrypted access token",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "oauth_connection_states",
+      "classification": "SERVER_ONLY_OAUTH_STATE",
+      "reason": "OAuth state hash, user/business binding, expiry, replay metadata",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "email_accounts",
+      "classification": "SERVER_ONLY_INTEGRATION_METADATA",
+      "reason": "Gmail integration account metadata paired with server-side token storage",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "bank_sync_runs",
+      "classification": "SERVER_ONLY_SYNC_STATE",
+      "reason": "Plaid/bank sync run state",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "qbo_backfill_jobs",
+      "classification": "SERVER_ONLY_SYNC_STATE",
+      "reason": "QBO backfill job state",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "qbo_cdc_cursors",
+      "classification": "SERVER_ONLY_SYNC_STATE",
+      "reason": "QBO CDC cursor state",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "qbo_entity_sync_runs",
+      "classification": "SERVER_ONLY_SYNC_STATE",
+      "reason": "QBO entity sync run state",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "qbo_job_costing_backfill_runs",
+      "classification": "SERVER_ONLY_SYNC_STATE",
+      "reason": "QBO job costing backfill state",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "qbo_job_costing_daily_sync_state",
+      "classification": "SERVER_ONLY_SYNC_STATE",
+      "reason": "QBO job costing daily sync state",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    },
+    {
+      "table": "qbo_webhook_events",
+      "classification": "SERVER_ONLY_WEBHOOK_STATE",
+      "reason": "QBO webhook event processing state",
+      "frontend_direct_access_required": false,
+      "target_access": "service_role_only"
+    }
+  ],
+  "not_in_live_snapshot": [
+    {
+      "table": "email_account_secrets",
+      "note": "Referenced by server code, but not present in supabase/live_schema_snapshot.sql."
+    }
+  ],
+  "migration_effects": {
+    "enable_rls": true,
+    "revoke_public": true,
+    "revoke_anon": true,
+    "revoke_authenticated": true,
+    "retain_service_role": true,
+    "create_browser_policies": false,
+    "change_customer_data": false
+  },
+  "runtime_validation_required": true
+}

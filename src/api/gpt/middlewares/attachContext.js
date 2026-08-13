@@ -80,8 +80,8 @@ export async function attachContext(req, _res, next) {
     if (mod && typeof mod.recipe === 'function') {
       // Build ctx for recipe
       const ctx = {
-        user_id: req.body?.user_id || req.header('x-user-id') || null,
-        business_id: req.body?.business_id || req.header('x-business-id') || null,
+        user_id: req.auth?.userId || req.user?.id || req.body?.user_id || req.header('x-user-id') || null,
+        business_id: req.business?.id || req.auth?.businessId || req.body?.business_id || req.header('x-business-id') || null,
         supabase,
         message: req.body?.message || '',
         route: req.originalUrl || '',

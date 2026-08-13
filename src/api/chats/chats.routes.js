@@ -9,12 +9,17 @@ const router = Router();
 
 function readTenant(req) {
   const user_id =
+    req.auth?.userId ||
+    req.user?.id ||
     req.header('x-user-id') ||
     req.query.user_id ||
     req.body?.user_id ||
     null;
 
   const business_id =
+    req.business?.id ||
+    req.auth?.businessId ||
+    req.user?.business_id ||
     req.header('x-business-id') ||
     req.query.business_id ||
     req.body?.business_id ||
@@ -42,7 +47,8 @@ async function tenantGuard(req, res, next) {
     if (!user_id || !business_id) {
       return res.status(400).json({ error: 'missing_user_or_business' });
     }
-    const ok = await assertMembership(user_id, business_id);
+    const alreadyVerified = req.business?.id && req.auth?.userId;
+    const ok = alreadyVerified || await assertMembership(user_id, business_id);
     if (!ok) return res.status(403).json({ error: 'forbidden' });
     req.tenant = { user_id, business_id };
     next();

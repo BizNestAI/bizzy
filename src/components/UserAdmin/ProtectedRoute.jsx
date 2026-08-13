@@ -2,17 +2,10 @@ import React, { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../services/supabaseClient.js";
+import { clearStoredAuthAndBusinessState } from "../../services/authSessionCleanup.js";
 
 function isConfirmedUser(user) {
   return Boolean(user?.email_confirmed_at || user?.confirmed_at);
-}
-
-function clearStoredAuthState() {
-  localStorage.removeItem("access_token");
-  localStorage.removeItem("user_id");
-  localStorage.removeItem("business_id");
-  localStorage.removeItem("currentBusinessId");
-  localStorage.removeItem("isProfileComplete");
 }
 
 const ProtectedRoute = ({ children }) => {
@@ -32,7 +25,7 @@ const ProtectedRoute = ({ children }) => {
       }
 
       if (!isConfirmedUser(user)) {
-        clearStoredAuthState();
+        clearStoredAuthAndBusinessState();
         await supabase.auth.signOut();
         if (!cancelled) {
           setAccessState({
@@ -55,7 +48,7 @@ const ProtectedRoute = ({ children }) => {
       const allowed = !error && Boolean(data?.id) && profileEmail === authEmail;
 
       if (!allowed) {
-        clearStoredAuthState();
+        clearStoredAuthAndBusinessState();
         await supabase.auth.signOut();
       }
 

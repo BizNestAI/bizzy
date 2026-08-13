@@ -125,8 +125,8 @@ export default async function listHandler(req, res) {
       voice = 'bizzi',     // ⬅️ new: 'bizzi' | 'none'
     } = req.query;
 
-    const biz  = businessId || business_id || req.header('x-business-id') || null;
-    const uid  = userId || user_id || null;
+    const biz  = req.business?.id || req.auth?.businessId || businessId || business_id || req.header('x-business-id') || null;
+    const uid  = req.auth?.userId || req.user?.id || userId || user_id || null;
     const acct = accountId || account_id || null;
 
     if (!biz) {

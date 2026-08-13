@@ -1,0 +1,194 @@
+{
+  "prompt": "SECURITY PROMPT 6N-A",
+  "scope": "Read-only final production public schema security verification",
+  "source_of_truth": "supabase/live_schema_snapshot.sql",
+  "no_supabase_connection": true,
+  "no_sql_executed": true,
+  "no_code_or_migration_changes": true,
+  "verdict": "PASS",
+  "runtime_baseline": {
+    "source": "reports/supabase-two-tenant-runtime-security-test.md",
+    "environment": "staging",
+    "verdict": "PASS — TWO-TENANT ISOLATION VERIFIED",
+    "total": 570,
+    "passed": 570,
+    "failed": 0
+  },
+  "production_snapshot_inventory": {
+    "public_tables": 138,
+    "public_views": 7,
+    "public_functions": 44,
+    "security_definer_functions": 14,
+    "rls_enabled_tables": 136,
+    "rls_disabled_tables": [
+      {
+        "table": "prices_cache",
+        "classification": "GLOBAL_REFERENCE_CACHE",
+        "browser_grants": [
+          "anon:ALL",
+          "authenticated:ALL"
+        ],
+        "blocking": false
+      },
+      {
+        "table": "securities",
+        "classification": "GLOBAL_REFERENCE_CATALOG",
+        "browser_grants": [
+          "anon:ALL",
+          "authenticated:ALL"
+        ],
+        "blocking": false
+      }
+    ],
+    "policies": 157,
+    "public_function_grants": 0,
+    "anon_function_grants": 0,
+    "authenticated_function_grants": [
+      "tax_user_owns_business(uuid)",
+      "bizzi_current_user_is_business_member(uuid)",
+      "bizzi_current_user_can_manage_business(uuid)"
+    ],
+    "browser_sequence_grants": 0
+  },
+  "area_classification": {
+    "authentication_foundation": "VERIFIED_SAFE_BY_RUNTIME",
+    "business_membership_ownership": "VERIFIED_SAFE_BY_RUNTIME",
+    "tenant_financial_data": "VERIFIED_SAFE_BY_RUNTIME",
+    "user_private_data": "VERIFIED_SAFE_BY_RUNTIME_AND_STATIC_REVIEW",
+    "credential_server_only_tables": "SAFE_BY_STATIC_REVIEW",
+    "views": "VERIFIED_SAFE_BY_RUNTIME_AND_STATIC_REVIEW",
+    "rpcs_functions": "VERIFIED_SAFE_BY_RUNTIME_AND_STATIC_REVIEW",
+    "security_definer_functions": "SAFE_BY_STATIC_REVIEW",
+    "default_privileges": "SAFE_BY_STATIC_REVIEW",
+    "sequences": "SAFE_BY_STATIC_REVIEW",
+    "public_schema_privileges": "SAFE_BY_STATIC_REVIEW",
+    "anonymous_access": "SAFE_BY_STATIC_REVIEW",
+    "direct_frontend_supabase_usage": "SAFE_BY_STATIC_REVIEW",
+    "storage": "DEFERRED_OPERATIONAL"
+  },
+  "policy_quality": {
+    "using_true_found": false,
+    "with_check_true_found": false,
+    "business_id_equals_auth_uid_found": false,
+    "unsafe_permissive_policies_remaining": false
+  },
+  "authorization_foundation": {
+    "business_profiles": {
+      "rls_enabled": true,
+      "authenticated_grants": [
+        "SELECT",
+        "UPDATE"
+      ],
+      "anonymous_access": false,
+      "select_rule": "bizzi_current_user_is_business_member(id)",
+      "update_rule": "bizzi_current_user_can_manage_business(id)",
+      "identity_reassignment_trigger": true
+    },
+    "user_business_link": {
+      "rls_enabled": true,
+      "authenticated_grants": [
+        "SELECT"
+      ],
+      "anonymous_access": false,
+      "write_grants_to_authenticated": false,
+      "identity_reassignment_trigger": true
+    }
+  },
+  "credential_tables": {
+    "server_only_tables": [
+      "quickbooks_tokens",
+      "plaid_items",
+      "linked_financial_items",
+      "oauth_connection_states",
+      "email_accounts",
+      "qbo_cdc_cursors",
+      "qbo_entity_sync_runs",
+      "qbo_job_costing_backfill_runs",
+      "qbo_job_costing_daily_sync_state",
+      "qbo_webhook_events",
+      "integration_connections",
+      "plaid_accounts",
+      "plaid_qbo_account_mappings",
+      "qbo_posted_transactions"
+    ],
+    "browser_grants_found": false,
+    "browser_policies_found": false
+  },
+  "views": {
+    "names": [
+      "ar_aging",
+      "ar_aging_v2",
+      "billing_customer_overview",
+      "expense_categories",
+      "insights_history",
+      "jobs_profitability",
+      "positions_view"
+    ],
+    "security_invoker": true,
+    "browser_grants_found": false,
+    "service_role_only": true
+  },
+  "default_privileges": {
+    "future_tables_browser_grants": false,
+    "future_functions_browser_grants": false,
+    "future_sequences_browser_grants": false,
+    "future_objects_granted_to": [
+      "postgres",
+      "service_role"
+    ]
+  },
+  "schema_privileges": {
+    "browser_usage_on_public": true,
+    "browser_create_on_public": false
+  },
+  "sequences": {
+    "explicit_service_role_only": [
+      "expense_category_map_id_seq",
+      "expense_totals_monthly_id_seq",
+      "tax_snapshots_id_seq"
+    ],
+    "browser_sequence_grants": []
+  },
+  "original_findings_comparison": {
+    "critical": {
+      "original": 38,
+      "status": "remediated for public database/RLS surfaces visible in snapshot and covered by staging runtime tests"
+    },
+    "high": {
+      "original": 6,
+      "status": "remediated for tested database isolation surfaces"
+    },
+    "medium": {
+      "original": 92,
+      "status": "remediated or reduced to defense-in-depth follow-up; Storage deferred"
+    },
+    "low": {
+      "original": 2,
+      "status": "remaining reference/cache least-privilege review for prices_cache and securities"
+    }
+  },
+  "required_answers": {
+    "can_user_a_read_unrelated_business_b_data": "NO",
+    "can_user_a_mutate_unrelated_business_b_data": "NO",
+    "can_user_a_attach_themselves_to_business_b": "NO",
+    "can_user_a_elevate_to_owner_admin_business_b": "NO",
+    "can_anonymous_users_read_private_customer_data": "NO",
+    "can_browser_roles_access_provider_credentials": "NO",
+    "unsafe_permissive_rls_policies_remain": "NO",
+    "rls_disabled_private_tables_with_browser_grants_remain": "NO",
+    "can_any_view_bypass_isolation": "NO",
+    "can_any_browser_callable_rpc_bypass_isolation": "NO",
+    "security_definer_hardened": "YES",
+    "default_privileges_safe": "YES",
+    "schema_and_sequence_privileges_least_privilege": "YES_FOR_SCHEMA_CREATE_AND_SEQUENCES",
+    "frontend_supabase_usage_compatible": "YES",
+    "known_public_database_launch_blocker": "NO",
+    "public_database_rls_ready_for_launch": "YES_WITH_STORAGE_DEFERRED"
+  },
+  "remaining_launch_items": [
+    "Create/copy expected Storage buckets into staging, add policies, and run Storage attack tests before launch.",
+    "Consider future table-grant least-privilege cleanup for RLS-protected tables with broad grants.",
+    "Review write privileges on global reference/cache tables prices_cache and securities if browser writes are not intended.",
+    "Production runtime attack testing was not executed in this prompt."
+  ]
+}

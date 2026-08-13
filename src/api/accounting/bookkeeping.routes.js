@@ -15,9 +15,9 @@ function readCtx(req) {
   const q = req.query || {};
   const h = req.headers || {};
   return {
-    userId: b.userId || b.user_id || q.userId || q.user_id || req.user?.id || null,
+    userId: req.auth?.userId || req.user?.id || b.userId || b.user_id || q.userId || q.user_id || null,
     businessId:
-      b.businessId || b.business_id || q.businessId || q.business_id || h["x-business-id"] || req.user?.business_id || null,
+      req.business?.id || req.auth?.businessId || req.user?.business_id || b.businessId || b.business_id || q.businessId || q.business_id || h["x-business-id"] || null,
   };
 }
 
@@ -184,7 +184,7 @@ router.post("/uncategorized/suggest", requireAuth, async (req, res) => {
     ].join("\n");
 
     const completion = await openai.chat.completions.create({
-      model: process.env.BIZZY_GPT_SUGGEST_MODEL || "gpt-5.1",
+      model: process.env.BIZZY_GPT_SUGGEST_MODEL || "gpt-5.6-terra",
       messages: [
         { role: "system", content: system },
         { role: "user", content: prompt },

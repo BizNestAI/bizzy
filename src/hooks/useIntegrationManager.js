@@ -261,7 +261,7 @@ export default function useIntegrationManager(options = {}) {
             res?.connected ||
             res?.disconnected_at ||
             res?.connected_at ||
-            res?.realm_id
+            res?.realm_id_present
         );
         updateProvider("quickbooks", {
           status,
@@ -269,7 +269,7 @@ export default function useIntegrationManager(options = {}) {
           info: {
             env: res?.env || res?.qbo_env || null,
             companyName: res?.company_name || null,
-            realmId: res?.realm_id || null,
+            realmIdPresent: Boolean(res?.realm_id_present),
             connectedAt: res?.connected_at || null,
             disconnectedAt: res?.disconnected_at || null,
             hasConnectedBefore,
@@ -338,7 +338,19 @@ export default function useIntegrationManager(options = {}) {
         } catch {
           /* ignore */
         }
-      } else if (qbFlag === "callback_failed") {
+      } else if (qbError === "realm_already_connected") {
+        updateProvider("quickbooks", {
+          status: STATUS.DISCONNECTED,
+          error: "realm_already_connected",
+          info: {
+            realmAlreadyConnected: true,
+            message:
+              qbMessage ||
+              "That QuickBooks company is already connected to another Bizzi business. Disconnect it there first, or choose a different QuickBooks sandbox company.",
+            realmId: qbRealmId || null,
+          },
+        });
+      } else if (qbFlag === "callback_failed" || qbError === "callback_failed") {
         updateProvider("quickbooks", { status: STATUS.ERROR, error: "QuickBooks connect failed." });
       } else if (qbError === "company_mismatch") {
         updateProvider("quickbooks", {
@@ -378,10 +390,19 @@ export default function useIntegrationManager(options = {}) {
         case "quickbooks": {
           const urlObj = new URL(apiUrl("/auth/quickbooks"));
           urlObj.searchParams.set("business_id", resolvedBusinessId || "default");
+          urlObj.searchParams.set("format", "json");
+          urlObj.searchParams.set("return_to", "/dashboard/settings?tab=Integrations");
           if (options?.forceSwitchCompany) {
             urlObj.searchParams.set("forceSwitchCompany", "true");
           }
-          const url = urlObj.toString();
+          const payload = await safeFetch(urlObj.toString(), {
+            method: "GET",
+            headers: { Accept: "application/json" },
+          });
+          const url = payload?.redirectUrl || payload?.url;
+          if (!url || !/^https:\/\/(?:appcenter|developer|accounts)\.intuit\.com\//i.test(url)) {
+            throw new Error("QuickBooks authorization URL unavailable");
+          }
           if (typeof window !== "undefined") {
             window.location.assign(url); // keep same tab to avoid duplicate Bizzi tabs
             toast({

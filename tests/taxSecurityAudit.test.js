@@ -96,19 +96,33 @@ test("shared Tax business authorization denies cross-business access", async () 
   process.env.SUPABASE_URL ||= "http://localhost:54321";
   process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
   const { assertTaxBusinessAccess } = await import("../src/api/tax/taxRouteUtils.js");
-  const supabase = makeBusinessSupabase([
-    { id: "11111111-1111-4111-8111-111111111111", user_id: "user-a" },
-    { id: "22222222-2222-4222-8222-222222222222", user_id: "user-b" },
-  ]);
+  const businessA = "11111111-1111-4111-8111-111111111111";
+  const businessB = "22222222-2222-4222-8222-222222222222";
+  const sharedBusiness = "33333333-3333-4333-8333-333333333333";
+  const supabase = makeBusinessSupabase({
+    business_profiles: [
+      { id: businessA, user_id: "user-a" },
+      { id: businessB, user_id: "user-b" },
+      { id: sharedBusiness, user_id: "user-b" },
+    ],
+    user_business_link: [
+      { user_id: "user-a", business_id: sharedBusiness },
+    ],
+  });
   await assert.doesNotReject(() => assertTaxBusinessAccess({
     req: { user: { id: "user-a" } },
-    businessId: "11111111-1111-4111-8111-111111111111",
+    businessId: businessA,
+    supabase,
+  }));
+  await assert.doesNotReject(() => assertTaxBusinessAccess({
+    req: { user: { id: "user-a" } },
+    businessId: sharedBusiness,
     supabase,
   }));
   await assert.rejects(
     () => assertTaxBusinessAccess({
       req: { user: { id: "user-a" } },
-      businessId: "22222222-2222-4222-8222-222222222222",
+      businessId: businessB,
       supabase,
     }),
     (err) => err.status === 403 && err.code === "business_access_denied"
@@ -143,19 +157,22 @@ function mockRes() {
   };
 }
 
-function makeBusinessSupabase(rows) {
+function makeBusinessSupabase(seed) {
+  const rowsByTable = Array.isArray(seed) ? { business_profiles: seed, user_business_link: [] } : seed;
   return {
     from(table) {
-      assert.equal(table, "business_profiles");
+      const filters = [];
       return {
-        row: null,
         select() { return this; },
         eq(column, value) {
-          this.row = rows.find((item) => item[column] === value) || null;
+          filters.push([column, value]);
           return this;
         },
+        limit() { return this; },
         async maybeSingle() {
-          return { data: this.row, error: null };
+          const rows = rowsByTable[table] || [];
+          const row = rows.find((item) => filters.every(([column, value]) => item[column] === value)) || null;
+          return { data: row, error: null };
         },
       };
     },

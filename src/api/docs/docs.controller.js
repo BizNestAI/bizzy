@@ -59,7 +59,12 @@ const fail = (req, res, status, error, meta) => res.status(status).json({ error,
  * ────────────────────────────────────────────────────────────── */
 export async function summarizeAndSaveDoc(req, res) {
   try {
-    const parsed = summarizePayload.parse(req.body);
+    const trustedBody = {
+      ...(req.body || {}),
+      business_id: req.business?.id || req.auth?.businessId || req.body?.business_id,
+      user_id: req.auth?.userId || req.user?.id || req.body?.user_id,
+    };
+    const parsed = summarizePayload.parse(trustedBody);
     const { business_id, user_id, category, title, messages } = parsed;
 
     // LLM call (with internal truncation and validation)
@@ -113,7 +118,7 @@ export async function summarizeAndSaveDoc(req, res) {
  * ────────────────────────────────────────────────────────────── */
 export async function listDocsController(req, res) {
   try {
-    const businessId = req?.ctx?.businessId || req?.query?.business_id;
+    const businessId = req.business?.id || req.auth?.businessId || req?.ctx?.businessId || req?.query?.business_id;
     if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
 
     const parsed = listQuery.safeParse(req.query || {});
@@ -163,7 +168,7 @@ export async function listDocsController(req, res) {
  * ────────────────────────────────────────────────────────────── */
 export async function getDocController(req, res) {
   try {
-    const businessId = req?.ctx?.businessId || req?.query?.business_id;
+    const businessId = req.business?.id || req.auth?.businessId || req?.ctx?.businessId || req?.query?.business_id;
     if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
 
     const { id } = req.params;
@@ -187,7 +192,7 @@ export async function getDocController(req, res) {
  * ────────────────────────────────────────────────────────────── */
 export async function getFacetsController(req, res) {
   try {
-    const businessId = req?.ctx?.businessId || req?.query?.business_id;
+    const businessId = req.business?.id || req.auth?.businessId || req?.ctx?.businessId || req?.query?.business_id;
     if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
 
     const cats = ['general', 'financials', 'tax', 'marketing', 'investments'];

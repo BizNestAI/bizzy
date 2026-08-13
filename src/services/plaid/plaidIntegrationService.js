@@ -1,5 +1,6 @@
 import { supabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
+import { encryptPlaidAccessToken } from "./plaidTokenCrypto.js";
 
 const devLog = (tag, payload) => {
   if (process.env.NODE_ENV !== "production") {
@@ -8,14 +9,17 @@ const devLog = (tag, payload) => {
 };
 
 export async function createLinkToken({ businessId, userId }) {
+  if (!userId) throw new Error("plaid_link_token_user_required");
   const plaid = getPlaidClient();
   if (!plaid) throw new Error("plaid_not_configured");
   const resp = await plaid.linkTokenCreate({
-    user: { client_user_id: String(userId || businessId) },
+    user: { client_user_id: String(userId) },
     client_name: "Bizzi",
     products: ["transactions"],
     country_codes: ["US"],
     language: "en",
+    ...(process.env.PLAID_WEBHOOK_URL ? { webhook: process.env.PLAID_WEBHOOK_URL } : {}),
+    ...(process.env.PLAID_REDIRECT_URI ? { redirect_uri: process.env.PLAID_REDIRECT_URI } : {}),
   });
   const linkToken = resp?.data?.link_token;
   devLog("link_token_created", { businessId, userId, has_token: !!linkToken });
@@ -111,11 +115,22 @@ export async function exchangePublicToken({ businessId, userId, publicToken, met
   const institution_id = institution?.institution_id || institution?.id || null;
   const nowIso = new Date().toISOString();
 
+  const { data: foreignItem, error: foreignItemErr } = await supabase
+    .from("plaid_items")
+    .select("business_id,plaid_item_id")
+    .eq("plaid_item_id", item_id)
+    .neq("business_id", businessId)
+    .maybeSingle();
+  if (foreignItemErr) throw foreignItemErr;
+  if (foreignItem?.plaid_item_id) {
+    throw new Error("plaid_item_already_linked");
+  }
+
   const basePayload = {
     business_id: businessId,
     user_id: userId || null,
     plaid_item_id: item_id,
-    plaid_access_token: access_token,
+    plaid_access_token: encryptPlaidAccessToken(access_token),
     institution_id,
     institution_name,
     status: "connected",

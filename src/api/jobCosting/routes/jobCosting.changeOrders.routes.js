@@ -5,6 +5,7 @@ import { recommendChangeOrderPrice as defaultRecommendPrice } from "../../../ser
 import { buildChangeOrderDraft as defaultBuildDraft } from "../../../services/jobCosting/changeOrderDraftService.js";
 import { detectPotentialChangeOrders as defaultDetectPotential } from "../../../services/jobCosting/potentialChangeOrderDetector.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../../services/insights/contractorCfoTriggerService.js";
+import { createRateLimiter } from "../../_shared/rateLimit.js";
 
 const router = express.Router();
 let supabaseClient = defaultSupabaseClient;
@@ -22,6 +23,12 @@ export function __setChangeOrderRouteTestDeps(deps = {}) {
 }
 
 const requireRouteAuth = (req, res, next) => authMiddleware(req, res, next);
+const changeOrderHighCostRateLimit = createRateLimiter({
+  windowMs: 60_000,
+  max: Number(process.env.CHANGE_ORDER_HIGH_COST_RATE_LIMIT_PER_MINUTE || 10),
+  code: "change_order_rate_limited",
+  message: "Too many change order requests. Try again shortly.",
+});
 
 const CHANGE_ORDER_SELECT = [
   "id",
@@ -90,7 +97,7 @@ function normalizeText(value) {
 }
 
 function getBusinessId(req) {
-  return req.get("x-business-id") || req.query.business_id || req.body?.business_id || req.body?.businessId || req.user?.business_id || null;
+  return req.business?.id || req.auth?.businessId || req.user?.business_id || req.get("x-business-id") || req.query.business_id || req.body?.business_id || req.body?.businessId || null;
 }
 
 function ensureBusinessId(req, res) {
@@ -532,7 +539,7 @@ router.get("/jobs/:jobId/change-orders", requireRouteAuth, async (req, res) => {
   }
 });
 
-router.post("/change-orders/recommend-price", requireRouteAuth, async (req, res) => {
+router.post("/change-orders/recommend-price", requireRouteAuth, changeOrderHighCostRateLimit, async (req, res) => {
   try {
     const businessId = ensureBusinessId(req, res);
     if (!businessId) return;

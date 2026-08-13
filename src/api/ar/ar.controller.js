@@ -8,7 +8,7 @@ function getBusinessId(req) {
   const { business_id, businessId } = req.body || {};
   const { business_id: qBusinessId, businessId: qBusinessIdAlt } = req.query || {};
   const headerId = req.headers?.["x-business-id"];
-  return business_id || businessId || qBusinessId || qBusinessIdAlt || headerId || null;
+  return req.business?.id || req.auth?.businessId || business_id || businessId || qBusinessId || qBusinessIdAlt || headerId || null;
 }
 
 function sendError(res, status, message, detailsOrErr = null) {

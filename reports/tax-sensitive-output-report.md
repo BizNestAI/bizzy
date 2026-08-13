@@ -2,13 +2,13 @@
 
 Status: **skipped**
 Runtime executed: **no**
-Generated at: 2026-07-19T17:05:44.452Z
+Generated at: 2026-08-12T15:26:00.634Z
 Target: test
 
 ## Static Companion Scan
 
 Status: **pass**
-Findings: 8
+Findings: 9
 
 | File | Line | Severity | Category | Preview |
 | --- | ---: | --- | --- | --- |
@@ -16,6 +16,7 @@ Findings: 8
 | src/api/tax/taxHttp.js | 34 | medium | error_details_rendering | action: safe ? err?.details?.action \|\| err?.action \|\| null : null, |
 | src/api/tax/taxHttp.js | 39 | medium | error_details_rendering | if (safe && err?.details && isSafeDetails(err.details)) { |
 | src/services/tax/security/taxResponseSafetyScanner.js | 71 | medium | error_details_rendering | details: error?.details, |
+| src/services/tax/state/stateTaxEngine 2.js | 54 | medium | error_details_rendering | configSet = { stateCode: state, configs: {}, missing: [{ code: err.code, details: err.details }], warnings: [], supportLevel: TAX_RULE_SUPPO |
 | src/services/tax/state/stateTaxEngine.js | 54 | medium | error_details_rendering | configSet = { stateCode: state, configs: {}, missing: [{ code: err.code, details: err.details }], warnings: [], supportLevel: TAX_RULE_SUPPO |
 | src/services/tax/stateTaxRule.repository.js | 94 | medium | error_details_rendering | missing.push({ ruleType, code: err.code \|\| "unsupported_state_tax_rule", details: err.details }); |
 | src/services/tax/taxRuleConfig.repository.js | 95 | medium | error_details_rendering | missing.push({ ruleType, code: err.code \|\| "tax_rule_config_missing", details: err.details }); |

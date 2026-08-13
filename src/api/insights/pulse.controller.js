@@ -92,7 +92,7 @@ function round1(n) { return Math.round(n * 10) / 10; }
 
 export async function getPulse(req, res) {
   try {
-    const business_id = req.query.business_id || req.query.businessId || req.headers['x-business-id'];
+    const business_id = req.business?.id || req.auth?.businessId || req.query.business_id || req.query.businessId || req.headers['x-business-id'];
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
     // Legacy dashboard-only endpoint. Signals are business-scoped through the

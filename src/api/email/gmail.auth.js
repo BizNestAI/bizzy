@@ -11,19 +11,42 @@ const GMAIL_SCOPES = [
 ];
 
 const APP_BASE = process.env.APP_BASE_URL || 'http://localhost:5173';
-const STATE_SECRET = process.env.STATE_SECRET || process.env.ENCRYPTION_KEY || 'state-secret';
+const STATE_SECRET =
+  process.env.GMAIL_OAUTH_STATE_SECRET ||
+  process.env.STATE_SECRET ||
+  process.env.ENCRYPTION_KEY ||
+  (process.env.NODE_ENV === 'production' ? '' : 'dev-state-secret');
+const STATE_MAX_AGE_MS = 10 * 60 * 1000;
+
+function requireStateSecret() {
+  if (!STATE_SECRET) {
+    throw new Error('GMAIL_OAUTH_STATE_SECRET_REQUIRED');
+  }
+}
 
 // HMAC sign/verify of state JSON
 function signState(payload) {
+  requireStateSecret();
   const json = JSON.stringify(payload);
   const h = crypto.createHmac('sha256', STATE_SECRET).update(json).digest('hex');
   return Buffer.from(JSON.stringify({ json, h }), 'utf8').toString('base64url');
 }
 function verifyState(b64) {
+  requireStateSecret();
   const { json, h } = JSON.parse(Buffer.from(b64, 'base64url').toString('utf8'));
   const check = crypto.createHmac('sha256', STATE_SECRET).update(json).digest('hex');
-  if (check !== h) throw new Error('Invalid OAuth state');
-  return JSON.parse(json);
+  const expected = Buffer.from(check, 'hex');
+  const actual = Buffer.from(String(h || ''), 'hex');
+  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+    throw new Error('Invalid OAuth state');
+  }
+
+  const payload = JSON.parse(json);
+  const issuedAt = Number(payload?.ts);
+  if (!Number.isFinite(issuedAt) || Date.now() - issuedAt > STATE_MAX_AGE_MS || issuedAt > Date.now() + 60_000) {
+    throw new Error('Expired OAuth state');
+  }
+  return payload;
 }
 
 export async function connect(req, res) {

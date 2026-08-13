@@ -5,7 +5,7 @@ export async function runLLM(req, _res, next) {
   const t0 = Date.now();
   try {
     req.bizzy = req.bizzy || {};
-    const user_id  = req.bizzy.user_id || req.body?.user_id || req.header('x-user-id') || 'demo-user';
+    const user_id  = req.auth?.userId || req.user?.id || req.bizzy.user_id || req.body?.user_id || req.header('x-user-id') || 'demo-user';
     const message  = req.bizzy.message || req.body?.message || '';
     const intent   = req.bizzy.intent || req.body?.intent || req.body?.type || 'general';
 
@@ -21,6 +21,7 @@ export async function runLLM(req, _res, next) {
       parsedInput,
       styleMessages,
       personaMessage,
+      business_id: req.business?.id || req.auth?.businessId || req.bizzy.business_id || null,
     });
 
     req.bizzy.llmResult = result;

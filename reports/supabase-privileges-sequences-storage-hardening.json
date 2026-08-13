@@ -1,0 +1,79 @@
+{
+  "scope": "Security Prompt 6L",
+  "production_connected": false,
+  "migration_executed": false,
+  "baseline_runtime_result": {
+    "verdict": "PASS - TWO-TENANT ISOLATION VERIFIED",
+    "passed": 570,
+    "failed": 0
+  },
+  "migration": "supabase/migrations/20260816_harden_default_privileges_sequences_schema.sql",
+  "default_privileges": {
+    "owner_role": "postgres",
+    "schema": "public",
+    "current_risk": "future tables/functions/sequences inherit broad browser grants",
+    "target": "no default browser grants; service_role retains backend access"
+  },
+  "schema_privileges": {
+    "public_schema": {
+      "browser_usage": "preserved",
+      "browser_create": "revoked"
+    }
+  },
+  "sequence_inventory": [
+    {
+      "sequence": "expense_category_map_id_seq",
+      "owning_table": "expense_category_map",
+      "browser_required": false,
+      "target": "service_role_only"
+    },
+    {
+      "sequence": "expense_totals_monthly_id_seq",
+      "owning_table": "expense_totals_monthly",
+      "browser_required": false,
+      "target": "service_role_only"
+    },
+    {
+      "sequence": "tax_snapshots_id_seq",
+      "owning_table": "tax_snapshots",
+      "browser_required": false,
+      "target": "service_role_only"
+    }
+  ],
+  "table_grant_mismatches": [
+    {
+      "table": "expense_category_map",
+      "issue": "anon/authenticated ALL grants and no confirmed frontend dependency",
+      "target": "RLS enabled, service_role only"
+    }
+  ],
+  "storage": {
+    "snapshot_includes_storage_schema": false,
+    "audit_script": "scripts/auditStagingPrivilegesAndStorage.sql",
+    "buckets_from_code": [
+      {
+        "bucket": "bizzy-docs",
+        "classification": "PRIVATE_BUSINESS",
+        "status": "needs staging storage policy verification"
+      },
+      {
+        "bucket": "financial-reports",
+        "classification": "PRIVATE_BUSINESS",
+        "status": "needs staging storage policy verification"
+      },
+      {
+        "bucket": "bid-attachments",
+        "classification": "UNKNOWN_REQUIRES_DECISION",
+        "status": "public URL behavior requires product/security decision"
+      }
+    ]
+  },
+  "tests_added": [
+    "tests/defaultPrivilegesSequencesStorage.security.test.js"
+  ],
+  "remaining_runtime_tests": [
+    "default privilege synthetic object test in staging, if a safe SQL execution helper is approved",
+    "storage bucket cross-tenant list/download/upload/remove tests after Storage policies are inventoried"
+  ],
+  "verdict": "READY_FOR_STAGING_REVIEW_WITH_STORAGE_FOLLOW_UP"
+}

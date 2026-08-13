@@ -49,7 +49,7 @@ function scoreInsight(ins) {
 export async function getTop3Alerts(req, res) {
   try {
     const business_id =
-      req.query.business_id || req.query.businessId || req.headers['x-business-id'];
+      req.business?.id || req.auth?.businessId || req.query.business_id || req.query.businessId || req.headers['x-business-id'];
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
     // Legacy dashboard-only endpoint. All DB reads are scoped by business_id,

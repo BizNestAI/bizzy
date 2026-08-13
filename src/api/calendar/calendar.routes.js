@@ -1,5 +1,7 @@
 // File: /src/api/calendar/calendar.routes.js
 import { Router } from 'express';
+import { requireAuth } from '../gpt/middlewares/requireAuth.js';
+import { requireBusinessAccess } from '../_shared/tenantAuth.js';
 import {
   healthRoute,
   getEvents,
@@ -26,15 +28,17 @@ const router = Router();
 
 router.get('/health', healthRoute);
 
-router.get('/events', getEvents);
-router.post('/events', postEvent);
-router.patch('/events/:id', patchEvent);
-router.delete('/events/:id', delEvent);
+const privateBusinessRoute = [requireAuth, requireBusinessAccess()];
 
-router.get('/agenda', getAgendaRoute);
-router.get('/agenda-range', getAgendaRangeRoute);
-router.get('/agenda-glance', getAgendaGlanceRoute);
+router.get('/events', ...privateBusinessRoute, getEvents);
+router.post('/events', ...privateBusinessRoute, postEvent);
+router.patch('/events/:id', ...privateBusinessRoute, patchEvent);
+router.delete('/events/:id', ...privateBusinessRoute, delEvent);
 
-router.post('/quick-create', quickCreateRoute);
+router.get('/agenda', ...privateBusinessRoute, getAgendaRoute);
+router.get('/agenda-range', ...privateBusinessRoute, getAgendaRangeRoute);
+router.get('/agenda-glance', ...privateBusinessRoute, getAgendaGlanceRoute);
+
+router.post('/quick-create', requireAuth, quickCreateRoute);
 
 export default router;

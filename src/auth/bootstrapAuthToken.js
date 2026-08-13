@@ -1,23 +1,29 @@
 // src/auth/bootstrapAuthToken.js
 import { createClient } from '@supabase/supabase-js';
+import { normalizeSupabaseProjectUrl } from '../services/authUrlConfig.js';
 
 export const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
+  normalizeSupabaseProjectUrl(import.meta.env.VITE_SUPABASE_URL),
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+      storage:
+        typeof window !== 'undefined' && window.sessionStorage
+          ? window.sessionStorage
+          : undefined,
+    },
+  }
 );
 
 export async function bootstrapAuthToken() {
-  // pick up existing session (after refresh / redirect)
-  const { data: { session } } = await supabase.auth.getSession();
-  if (session?.access_token) {
-    localStorage.setItem('access_token', session.access_token);
-  }
-
-  // keep it fresh on sign-in / refresh / sign-out
+  // Keep legacy localStorage token state cleared. API calls should read the
+  // current sessionStorage-backed Supabase session instead of persisted tokens.
+  localStorage.removeItem('access_token');
   supabase.auth.onAuthStateChange((_event, session) => {
-    if (session?.access_token) {
-      localStorage.setItem('access_token', session.access_token);
-    } else {
+    if (!session?.access_token) {
       localStorage.removeItem('access_token');
     }
   });

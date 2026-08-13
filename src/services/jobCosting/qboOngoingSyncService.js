@@ -6,6 +6,7 @@ import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
 import { runQboJobCostingSync } from "./qboJobCostingSyncService.js";
 import { generateJobCandidatesForBusiness } from "./jobIdentityResolver.js";
 import { runQboProjectsSync } from "./qboProjectsService.js";
+export { redactQboSecrets } from "../quickbooks/qboSecurity.js";
 
 export const QBO_JOB_COSTING_WEBHOOK_ENTITIES = [
   "Customer",
@@ -180,7 +181,7 @@ export async function storeQuickBooksWebhookEvents({
     }
 
     const businessId = await findBusinessIdForRealm({ realmId: event.realm_id, db });
-    const newerEvent = await findNewerWebhookEvent({ db, event });
+    const newerEvent = businessId ? await findNewerWebhookEvent({ db, event }) : null;
     const payloadRow = {
       business_id: businessId,
       realm_id: event.realm_id,
@@ -193,7 +194,7 @@ export async function storeQuickBooksWebhookEvents({
       entity_id: event.entity_id,
       operation: event.operation,
       last_updated_at: event.last_updated_at,
-      processing_status: newerEvent ? "skipped" : "queued",
+      processing_status: !businessId || newerEvent ? "skipped" : "queued",
       superseded_by_event_id: newerEvent?.id || null,
       out_of_order: Boolean(newerEvent),
       raw_payload: {

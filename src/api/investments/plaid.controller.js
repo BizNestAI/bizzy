@@ -3,6 +3,7 @@
 // otherwise falls back to plaid.service.js + local composition.
 
 import { getPlaidClient, plaidOrMockAccountsHoldings, saveLinkedItemTokenEnc } from './plaid.service.js';
+import { redactPlaidSecrets } from '../../services/plaid/plaidSecurity.js';
 
 const hasPlaid = !!(process.env.PLAID_CLIENT_ID && process.env.PLAID_SECRET);
 const DEV_FALLBACK =
@@ -34,7 +35,7 @@ async function ensureBalancesSvc() {
 /* ----------------------------- Link token ----------------------------- */
 export async function createLinkToken(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.body?.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(401).json({ error: 'missing_user_id' });
 
     const svc = await ensureBalancesSvc();
@@ -73,7 +74,7 @@ export async function createLinkToken(req, res) {
 /* ------------------------ Exchange public token ----------------------- */
 export async function exchangePublicToken(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.body?.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(401).json({ error: 'missing_user_id' });
 
     const { public_token, institution_name = 'Plaid Institution' } = req.body ?? {};
@@ -86,17 +87,16 @@ export async function exchangePublicToken(req, res) {
     }
 
     if (!hasPlaid) {
-      await saveLinkedItemTokenEnc(user_id, 'plaid', 'stub-item', 'stub-access-token', institution_name);
-      return res.json({ access_token: 'stub-access-token', item_id: 'stub-item', mode: 'mock' });
+      return res.json({ item_id: 'stub-item', mode: 'mock', connected: true });
     }
 
     const plaid = getPlaidClient();
     const exchange = await plaid.itemPublicTokenExchange({ public_token });
     const { access_token, item_id } = exchange.data;
     await saveLinkedItemTokenEnc(user_id, 'plaid', item_id, access_token, institution_name);
-    return res.json({ access_token, item_id, mode: 'plaid' });
+    return res.json({ item_id, mode: 'plaid', connected: true });
   } catch (err) {
-    console.error('[plaid.controller] exchangePublicToken', err);
+    console.error('[plaid.controller] exchangePublicToken', redactPlaidSecrets(err?.response?.data || err?.message || err));
     res.status(500).json({ error: 'exchange_failed' });
   }
 }
@@ -104,7 +104,7 @@ export async function exchangePublicToken(req, res) {
 /* ------------------------ Accounts + holdings ------------------------- */
 export async function getAccountsHoldings(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.query?.user_id || req.body?.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(401).json({ error: 'missing_user_id' });
     const data = await plaidOrMockAccountsHoldings(user_id);
     res.set('Cache-Control', 'no-store');
@@ -118,7 +118,7 @@ export async function getAccountsHoldings(req, res) {
 /* ----------------------------- Sync balances -------------------------- */
 export async function syncBalances(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.body?.user_id || req.query?.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(401).json({ error: 'missing_user_id' });
 
     const svc = await ensureBalancesSvc();
@@ -140,7 +140,7 @@ export async function syncBalances(req, res) {
 /* --------------------------- Latest balances -------------------------- */
 export async function getBalancesLatest(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.query?.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(401).json({ error: 'missing_user_id' });
 
     const svc = await ensureBalancesSvc();
@@ -182,7 +182,7 @@ export async function getBalancesLatest(req, res) {
 /* ------------------------- Asset allocation --------------------------- */
 export async function getAssetAllocationSummary(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.query?.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(401).json({ error: 'missing_user_id' });
 
     const svc = await ensureBalancesSvc();

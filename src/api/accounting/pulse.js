@@ -58,8 +58,8 @@ function normalizePulse(row, monthText = null) {
 router.get("/", async (req, res) => {
   try {
     const q = req.query || {};
-    const user_id = q.user_id || q.userId || req.header("x-user-id") || null;
-    const business_id = q.business_id || q.businessId || req.header("x-business-id") || null;
+    const user_id = req.auth?.userId || req.user?.id || q.user_id || q.userId || req.header("x-user-id") || null;
+    const business_id = req.business?.id || req.auth?.businessId || q.business_id || q.businessId || req.header("x-business-id") || null;
     const year = Number(q.year || 0);
     const month = Number(q.month || 0);
     const monthText = year && month ? monthKey(year, month) : null;
@@ -159,9 +159,9 @@ router.post("/generate", async (req, res) => {
     const b = req.body || {};
     const q = req.query || {};
     const user_id =
-      b.user_id || b.userId || q.user_id || q.userId || req.header("x-user-id") || null;
+      req.auth?.userId || req.user?.id || b.user_id || b.userId || q.user_id || q.userId || req.header("x-user-id") || null;
     const business_id =
-      b.business_id || b.businessId || q.business_id || q.businessId || req.header("x-business-id") || null;
+      req.business?.id || req.auth?.businessId || b.business_id || b.businessId || q.business_id || q.businessId || req.header("x-business-id") || null;
     const year = Number(b.year || q.year || 0);
     const month = Number(b.month || q.month || 0);
     const monthText = year && month ? monthKey(year, month) : null;

@@ -1,0 +1,68 @@
+{
+  "status": "NOT_EXECUTED",
+  "productionConnectedDuringHarnessCreation": false,
+  "harness": "scripts/runProductionStorageSecurityVerification.js",
+  "reportWillBeOverwrittenOnExecution": true,
+  "buckets": [
+    {
+      "id": "bizzy-docs",
+      "private": true,
+      "pathModel": "<business_id>/__security_test__/<run-id>/...",
+      "ownBusinessDirectUploadExpected": true,
+      "ownBusinessReadSignExpected": true,
+      "foreignBusinessAccessExpected": false,
+      "anonymousAccessExpected": false
+    },
+    {
+      "id": "financial-reports",
+      "private": true,
+      "pathModel": "<business_id>/__security_test__/<run-id>/...",
+      "ownBusinessDirectUploadExpected": false,
+      "ownBusinessReadSignExpected": true,
+      "foreignBusinessAccessExpected": false,
+      "anonymousAccessExpected": false
+    },
+    {
+      "id": "bid-attachments",
+      "private": true,
+      "pathModel": "<business_id>/__security_test__/<run-id>/...",
+      "ownBusinessDirectUploadExpected": false,
+      "ownBusinessReadSignExpected": true,
+      "foreignBusinessAccessExpected": false,
+      "anonymousAccessExpected": false
+    }
+  ],
+  "requiredEnvironment": [
+    "PRODUCTION_STORAGE_SECURITY_TEST_ENABLED",
+    "PRODUCTION_STORAGE_TEST_SUPABASE_URL",
+    "PRODUCTION_STORAGE_TEST_SUPABASE_ANON_KEY",
+    "PRODUCTION_STORAGE_TEST_SUPABASE_SERVICE_ROLE_KEY",
+    "PRODUCTION_STORAGE_TEST_USER_A_EMAIL",
+    "PRODUCTION_STORAGE_TEST_USER_A_PASSWORD",
+    "PRODUCTION_STORAGE_TEST_USER_A_ID",
+    "PRODUCTION_STORAGE_TEST_BUSINESS_A_ID",
+    "PRODUCTION_STORAGE_TEST_USER_B_EMAIL",
+    "PRODUCTION_STORAGE_TEST_USER_B_PASSWORD",
+    "PRODUCTION_STORAGE_TEST_USER_B_ID",
+    "PRODUCTION_STORAGE_TEST_BUSINESS_B_ID"
+  ],
+  "safetyControls": {
+    "explicitEnableFlagRequired": true,
+    "createsUsersOrBusinesses": false,
+    "deletesUsersOrBusinesses": false,
+    "serviceRoleUsedOnlyForSetupVerificationCleanup": true,
+    "attackerClientsUseAnonOrAuthenticatedSessions": true,
+    "mutationsRequireGeneratedSecurityMarker": "__security_test__",
+    "cleanupRestrictedToObjectsCreatedDuringRun": true,
+    "abortsOnMissingSyntheticIdentityConfiguration": true,
+    "abortsOnCrossMembershipBetweenSyntheticTenants": true
+  },
+  "staticVerification": {
+    "storageMigration": "supabase/migrations/20260818_harden_storage_tenant_isolation.sql",
+    "migrationCreatesPrivateBuckets": true,
+    "migrationUsesCanonicalBusinessMembershipHelper": true,
+    "bidAttachmentsPublicUrlRemoved": true,
+    "financialReportsBrowserDirectSigningFallbackRemoved": true
+  },
+  "verdict": "HARNESS_READY_NOT_EXECUTED"
+}

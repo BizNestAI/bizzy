@@ -3,12 +3,14 @@ export function readBusinessId(req) {
   const q = req.query || {};
   const h = req.headers || {};
   return (
+    req.business?.id ||
+    req.auth?.businessId ||
+    req.user?.business_id ||
     b.business_id ||
     b.businessId ||
     q.business_id ||
     q.businessId ||
     h["x-business-id"] ||
-    req.user?.business_id ||
     null
   );
 }

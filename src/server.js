@@ -9,6 +9,7 @@ import morgan from "morgan";
 import quickbooksAuth from "./api/auth/quickbooksAuth.js";
 import socialAuthRouter from "./api/auth/socialAuth.js";
 import signupConfirmationRouter from "./api/auth/signupConfirmation.routes.js";
+import onboardingRouter from "./api/onboarding/onboarding.routes.js";
 import financialMetricsRoute from "./api/accounting/metrics.js";
 import pulseRoute from "./api/accounting/pulse.js";
 import forecastRouter from "./api/accounting/forecast.js";
@@ -65,7 +66,9 @@ import taxRouter from "./api/tax/index.js";
 
 import bizzyInsightRouter from "./api/gpt/brain/bizzyInsight.js";
 import { requireAuth } from "./api/gpt/middlewares/requireAuth.js";
+import { requireBusinessAccess } from "./api/_shared/tenantAuth.js";
 import plaidIntegrationsRouter from "./api/integrations/plaid.routes.js";
+import { buildSafeErrorResponse, redactErrorForLog } from "./api/_shared/safeErrorResponse.js";
 
 /* 🔹 NEW: Hero insights router */
 import heroInsightsRouter from "./api/hero-insights/router.js";
@@ -73,6 +76,8 @@ import monthlyReviewAdminRouter from "./api/admin/monthlyReview.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 5050;
+const MAX_UPLOAD_FILE_SIZE_BYTES = Number(process.env.MAX_UPLOAD_FILE_SIZE_BYTES || 10 * 1024 * 1024);
+const MAX_UPLOAD_FILE_COUNT = Number(process.env.MAX_UPLOAD_FILE_COUNT || 5);
 
 app.disable("x-powered-by");
 
@@ -157,15 +162,46 @@ if (process.env.NODE_ENV !== "test") app.use(morgan("tiny"));
 
 /* ------------------------------------ Body parsers ------------------------------------ */
 app.use(express.json({ limit: "5mb" }));
-app.use(fileUpload({ useTempFiles: false }));
+app.use(fileUpload({
+  useTempFiles: false,
+  limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },
+  abortOnLimit: true,
+  responseOnLimit: "Uploaded file is too large.",
+}));
+app.use((req, res, next) => {
+  if (!req.files) return next();
+  const files = Object.values(req.files).flatMap((item) => Array.isArray(item) ? item : [item]);
+  if (files.length > MAX_UPLOAD_FILE_COUNT) {
+    return res.status(413).json({
+      ok: false,
+      error: "too_many_files",
+      message: `Upload at most ${MAX_UPLOAD_FILE_COUNT} files at a time.`,
+    });
+  }
+  return next();
+});
 
 /* ------------------------------------ Healthcheck ------------------------------------- */
 app.get("/healthz", (_req, res) => res.status(200).json({ ok: true }));
 
 /* ------------------------ Dev bypass for Investments (no token) ------------------------ */
+const PROD_AUTH_BYPASS_FLAGS = [
+  ["ALLOW_DEV_NO_TOKEN", process.env.ALLOW_DEV_NO_TOKEN],
+  ["MOCK_INVESTMENTS", process.env.MOCK_INVESTMENTS],
+].filter(([, value]) => value === "true");
+if (process.env.NODE_ENV === "production" && PROD_AUTH_BYPASS_FLAGS.length) {
+  throw new Error(
+    `[server] Auth bypass flags cannot be enabled in production: ${PROD_AUTH_BYPASS_FLAGS
+      .map(([key]) => key)
+      .join(", ")}`
+  );
+}
 const DEV_BYPASS =
-  process.env.ALLOW_DEV_NO_TOKEN === "true" ||
-  process.env.MOCK_INVESTMENTS === "true";
+  process.env.NODE_ENV !== "production" &&
+  (process.env.ALLOW_DEV_NO_TOKEN === "true" ||
+    process.env.MOCK_INVESTMENTS === "true");
+
+const requireBusinessContext = requireBusinessAccess();
 app.use((req, _res, next) => {
   if (DEV_BYPASS && req.path.startsWith("/api/investments")) {
     if (!req.headers["x-user-id"])
@@ -179,30 +215,31 @@ app.use((req, _res, next) => {
 
 /* ---------------------------------- GPT & Chats ---------------------------------- */
 app.use("/api/gpt", gptRoutes);
-app.use("/api/chats", chatsRoutes);
-app.use("/api/bizzy", bizzyFollowupsRouter);
+app.use("/api/chats", requireAuth, requireBusinessContext, chatsRoutes);
+app.use("/api/bizzy", requireAuth, bizzyFollowupsRouter);
 
 /* ------------------------------------ Accounting ----------------------------------- */
 app.use("/api/auth", signupConfirmationRouter);
+app.use("/api/onboarding", onboardingRouter);
 app.use("/auth", quickbooksAuth);
 app.use("/auth", socialAuthRouter);
-app.use("/api/accounting/metrics", financialMetricsRoute);
-app.use("/api/accounting/pulse", pulseRoute);
-app.use("/api/accounting/moves", movesRoute);
-app.use("/api/accounting/expense-breakdown", expenseBreakdownRouter);
-app.use("/api/accounting/revenue-series", revenueSeriesRouter);
-app.use("/api/accounting/profit-series", profitSeriesRouter);
-app.use("/api/accounting/reports-sync", reportsSyncRouter);
-app.use("/api/accounting/pnl", pnlPdfRouter);
-app.use("/api/accounting/forecast", forecastRouter);
-app.use("/api/accounting/forecast-accuracy", forecastAccuracyRouter);
-app.use("/api/accounting/scenarios", scenariosRouter);
-app.use("/api/accounting", bookkeepingRouter);
-app.use("/api/qbo", qboSyncRouter);
-app.use("/api/qbo/backfill", qboBackfillRouter);
-app.use("/api/ar", arRouter);
-app.use("/api/bookkeeping", bookkeepingPlaidRouter);
-app.post("/api/accounting/affordabilityCheck", affordabilityCheckHandler);
+app.use("/api/accounting/metrics", requireAuth, requireBusinessContext, financialMetricsRoute);
+app.use("/api/accounting/pulse", requireAuth, requireBusinessContext, pulseRoute);
+app.use("/api/accounting/moves", requireAuth, requireBusinessContext, movesRoute);
+app.use("/api/accounting/expense-breakdown", requireAuth, requireBusinessContext, expenseBreakdownRouter);
+app.use("/api/accounting/revenue-series", requireAuth, requireBusinessContext, revenueSeriesRouter);
+app.use("/api/accounting/profit-series", requireAuth, requireBusinessContext, profitSeriesRouter);
+app.use("/api/accounting/reports-sync", requireAuth, requireBusinessContext, reportsSyncRouter);
+app.use("/api/accounting/pnl", requireAuth, requireBusinessContext, pnlPdfRouter);
+app.use("/api/accounting/forecast", requireAuth, requireBusinessContext, forecastRouter);
+app.use("/api/accounting/forecast-accuracy", requireAuth, requireBusinessContext, forecastAccuracyRouter);
+app.use("/api/accounting/scenarios", requireAuth, requireBusinessContext, scenariosRouter);
+app.use("/api/accounting", requireAuth, requireBusinessContext, bookkeepingRouter);
+app.use("/api/qbo", requireAuth, requireBusinessContext, qboSyncRouter);
+app.use("/api/qbo/backfill", requireAuth, requireBusinessContext, qboBackfillRouter);
+app.use("/api/ar", requireAuth, requireBusinessContext, arRouter);
+app.use("/api/bookkeeping", requireAuth, requireBusinessContext, bookkeepingPlaidRouter);
+app.post("/api/accounting/affordabilityCheck", requireAuth, requireBusinessContext, affordabilityCheckHandler);
 
 /* ----------------------- Bizzy Insight (requires auth) ----------------------- */
 app.use("/api/gpt/brain/bizzyInsight", requireAuth, bizzyInsightRouter);
@@ -215,24 +252,24 @@ app.get("/api/email/callback", gmailOAuthCallback);
 app.use("/api/email", requireAuth, emailRouter);
 
 /* ------------------------------------ Marketing ------------------------------------ */
-app.use("/api/marketing", marketingRouter);
+app.use("/api/marketing", requireAuth, requireBusinessContext, marketingRouter);
 
-app.use("/api/jobs", jobsRoutes);
-app.use("/api/job-costing", jobCostingChangeOrdersRouter);
-app.use("/api/job-costing", jobCostingBidBuilderRouter);
-app.use("/api/job-costing", jobsRoutes);
+app.use("/api/jobs", requireAuth, requireBusinessContext, jobsRoutes);
+app.use("/api/job-costing", requireAuth, requireBusinessContext, jobCostingChangeOrdersRouter);
+app.use("/api/job-costing", requireAuth, requireBusinessContext, jobCostingBidBuilderRouter);
+app.use("/api/job-costing", requireAuth, requireBusinessContext, jobsRoutes);
 
 /* --------------------------- Investments & Calendar --------------------------- */
 app.use("/api/investments", requireAuth, investmentsRouter);
 app.use("/api/calendar", calendarRoutes);
-app.use("/api/integrations/plaid", plaidIntegrationsRouter);
 app.get("/api/integrations/plaid/_ping", (_req, res) =>
   res.json({ ok: true, at: "plaid_routes_ping" })
 );
+app.use("/api/integrations/plaid", requireAuth, requireBusinessContext, plaidIntegrationsRouter);
 
 /* -------------------------------- Reviews, Docs, Insights ------------------------------- */
-app.use("/api/reviews", reviewsRouter);
-app.use("/api/docs", docsRouter);
+app.use("/api/reviews", requireAuth, requireBusinessContext, reviewsRouter);
+app.use("/api/docs", requireAuth, requireBusinessContext, docsRouter);
 app.use("/api/insights", insightsRoutes);
 
 /* -------------------------------- Tax (authenticated) -------------------------------- */
@@ -270,11 +307,14 @@ app.use("/api", (req, res, next) => {
 
 /* ------------------------------------ Error handler ------------------------------------- */
 app.use((err, _req, res, _next) => {
-  console.error("[server] unhandled error:", err);
-  const status = err.status || 500;
-  const message = err.message || "Internal Server Error";
-  const meta = err.meta || null;
-  res.status(status).json({ ok: false, error: message, meta });
+  console.error("[server] unhandled error:", redactErrorForLog({
+    message: err?.message || err,
+    code: err?.code || err?.errorCode || null,
+    status: err?.status || err?.statusCode || null,
+    meta: err?.meta || null,
+  }));
+  const { status, body } = buildSafeErrorResponse(err);
+  res.status(status).json(body);
 });
 
 app.listen(PORT, () => {

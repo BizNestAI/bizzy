@@ -944,14 +944,13 @@ async function requireInternalAdmin(req, res, next) {
 
     const { data, error } = await supabase
       .from("user_profiles")
-      .select("role,email")
+      .select("email")
       .eq("id", req.user.id)
       .maybeSingle();
     if (error) throw error;
 
-    const role = String(data?.role || "").toLowerCase();
     const profileEmail = String(data?.email || email).toLowerCase();
-    if (allowedEmails.has(profileEmail) || ["admin", "internal_admin", "bizzy_admin", "super_admin"].includes(role)) {
+    if (allowedEmails.has(profileEmail)) {
       return next();
     }
 
@@ -1144,15 +1143,14 @@ async function resolveInternalReviewer(email) {
 
   const { data, error } = await supabase
     .from("user_profiles")
-    .select("id,email,role")
+    .select("id,email")
     .ilike("email", normalizedEmail)
     .maybeSingle();
   if (error) throw error;
 
-  const role = String(data?.role || "").toLowerCase();
   const profileEmail = String(data?.email || normalizedEmail).toLowerCase();
-  if (allowedEmails.has(profileEmail) || ["admin", "internal_admin", "bizzy_admin", "super_admin"].includes(role)) {
-    return { id: data?.id || null, email: profileEmail, role };
+  if (allowedEmails.has(profileEmail)) {
+    return { id: data?.id || null, email: profileEmail, role: "internal_admin" };
   }
   return null;
 }

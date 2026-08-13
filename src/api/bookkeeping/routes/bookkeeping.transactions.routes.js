@@ -217,15 +217,9 @@ export async function fetchBookkeepingTransactions({
 /* ----------------------------- Grace edits ----------------------------- */
 router.patch("/transactions/:transactionId", requireAuth, async (req, res) => {
   const raw = req.body || {};
-  const businessId =
-    raw.business_id ||
-    raw.businessId ||
-    req.query?.business_id ||
-    req.headers?.["x-business-id"] ||
-    req.user?.business_id ||
-    null;
+  const businessId = ensureBusinessId(req, res);
   const transactionId = req.params?.transactionId;
-  if (!businessId) return res.status(400).json({ ok: false, error: "missing_business_id" });
+  if (!businessId) return;
   if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
 
   try {

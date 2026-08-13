@@ -1,7 +1,21 @@
 import express from "express";
 import { getAdminClient } from "../../services/supabaseAdmin.js";
+import { createRateLimiter } from "../_shared/rateLimit.js";
 
 const router = express.Router();
+const signupConfirmationRateLimit = createRateLimiter({
+  windowMs: 60_000,
+  max: 5,
+  key: (req) => {
+    const email = normalizeEmail(req.body?.email);
+    const ip = String(req.headers?.["x-forwarded-for"] || req.ip || req.socket?.remoteAddress || "unknown")
+      .split(",")[0]
+      .trim();
+    return `signup-confirmation:${ip}:${email || "unknown"}`;
+  },
+  code: "signup_confirmation_rate_limited",
+  message: "A confirmation request was already sent recently. Wait a minute and try again.",
+});
 
 function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
@@ -50,7 +64,7 @@ async function resendSignupEmail(email, redirectTo) {
   if (error) throw error;
 }
 
-router.post("/signup-confirmation", async (req, res, next) => {
+router.post("/signup-confirmation", signupConfirmationRateLimit, async (req, res, next) => {
   try {
     const email = normalizeEmail(req.body?.email);
     const redirectTo =

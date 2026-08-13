@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient.js';
+import { authenticatedFetch } from './api/authenticatedFetch.js';
 
 export const ensureUserProfile = async (user) => {
   if (!user?.id || !user?.email) {
@@ -34,13 +35,22 @@ export const ensureUserProfile = async (user) => {
 };
 
 export const createBusinessProfile = async (profile) => {
-  const { data, error } = await supabase
-    .from('business_profiles')
-    .insert([profile])
-    .select(); // ✅ Returns the inserted row(s)
-
-  return { data, error };
+  try {
+    const json = await authenticatedFetch('/api/onboarding/business', {
+      method: 'POST',
+      body: profile,
+    });
+    return { data: json?.business ? [json.business] : [], error: null };
+  } catch (err) {
+    const message = err?.message || 'Could not create your business profile.';
+    const wrapped = new Error(message);
+    wrapped.code = err?.code || null;
+    wrapped.status = err?.status || null;
+    return { data: null, error: wrapped };
+  }
 };
+
+export const createInitialBusinessProfile = createBusinessProfile;
 
 export const updateBusinessProfile = async (businessId, updates) => {
   const { data, error } = await supabase

@@ -2,7 +2,7 @@ import { listContributionsYTD, upsertContributionsYTD } from './contributionsYtd
 
 export async function getContributionsYTD(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.query.user_id || req.body.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(400).json({ error: 'missing_user_id' });
     const year = req.query.year || req.body.year;
     const out = await listContributionsYTD(user_id, year);
@@ -15,7 +15,7 @@ export async function getContributionsYTD(req, res) {
 
 export async function upsertContributionsYTDHandler(req, res) {
   try {
-    const user_id = req.header('x-user-id') || req.query.user_id || req.body.user_id;
+    const user_id = req.auth?.userId || req.ctx?.userId || req.user?.id || null;
     if (!user_id) return res.status(400).json({ error: 'missing_user_id' });
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
     const result = await upsertContributionsYTD(user_id, rows);

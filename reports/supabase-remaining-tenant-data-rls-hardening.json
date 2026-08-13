@@ -1,0 +1,85 @@
+{
+  "date": "2026-08-09",
+  "prompt": "6H",
+  "status": "READY_FOR_STAGING_REVIEW",
+  "migration": "supabase/migrations/20260813_harden_remaining_tenant_data_rls.sql",
+  "supabase_connected": false,
+  "migration_executed": false,
+  "tables": [
+    {
+      "table": "bank_transactions",
+      "tenant_key": "business_id",
+      "classification": "BUSINESS_TENANT_BROWSER_READ_SERVER_WRITE",
+      "browser_allowed": ["SELECT"],
+      "browser_denied": ["INSERT", "UPDATE", "DELETE"],
+      "authorization_rule": "public.bizzi_current_user_is_business_member(business_id)",
+      "backend_service_role_compatible": true
+    },
+    {
+      "table": "ar_open_items",
+      "tenant_key": "business_id",
+      "classification": "BUSINESS_TENANT_BROWSER_READ_SERVER_WRITE",
+      "browser_allowed": ["SELECT"],
+      "browser_denied": ["INSERT", "UPDATE", "DELETE"],
+      "authorization_rule": "public.bizzi_current_user_is_business_member(business_id)",
+      "backend_service_role_compatible": true
+    },
+    {
+      "table": "invoices",
+      "tenant_key": "business_id",
+      "classification": "BUSINESS_TENANT_BROWSER_READ_SERVER_WRITE",
+      "browser_allowed": ["SELECT"],
+      "browser_denied": ["INSERT", "UPDATE", "DELETE"],
+      "authorization_rule": "public.bizzi_current_user_is_business_member(business_id)",
+      "backend_service_role_compatible": true
+    },
+    {
+      "table": "financial_metrics",
+      "tenant_key": "business_id",
+      "classification": "BUSINESS_TENANT_BROWSER_READ_SERVER_WRITE",
+      "browser_allowed": ["SELECT"],
+      "browser_denied": ["INSERT", "UPDATE", "DELETE"],
+      "authorization_rule": "public.bizzi_current_user_is_business_member(business_id)",
+      "backend_service_role_compatible": true
+    },
+    {
+      "table": "tax_snapshots",
+      "tenant_key": "business_id",
+      "classification": "BUSINESS_TENANT_BROWSER_READ_SERVER_WRITE",
+      "browser_allowed": ["SELECT"],
+      "browser_denied": ["INSERT", "UPDATE", "DELETE", "SEQUENCE_USAGE"],
+      "authorization_rule": "public.bizzi_current_user_is_business_member(business_id)",
+      "backend_service_role_compatible": true
+    },
+    {
+      "table": "bizzy_memory",
+      "tenant_key": "user_id",
+      "classification": "USER_PRIVATE_BROWSER_READ_SERVER_WRITE",
+      "browser_allowed": ["SELECT"],
+      "browser_denied": ["INSERT", "UPDATE", "DELETE"],
+      "authorization_rule": "user_id = auth.uid()",
+      "backend_service_role_compatible": true
+    },
+    {
+      "table": "gpt_usage",
+      "tenant_key": "user_id",
+      "classification": "USER_PRIVATE_BROWSER_READ_SERVER_WRITE",
+      "browser_allowed": ["SELECT"],
+      "browser_denied": ["INSERT", "UPDATE", "DELETE"],
+      "authorization_rule": "user_id = auth.uid()",
+      "backend_service_role_compatible": true
+    }
+  ],
+  "related_bypass_paths_closed": {
+    "views": ["ar_aging", "ar_aging_v2"],
+    "functions": ["match_bizzy_memory", "match_memories"]
+  },
+  "tests": {
+    "focused": {
+      "command": "node --test tests/remainingTenantDataRlsMigration.security.test.js",
+      "passed": 8,
+      "failed": 0
+    }
+  },
+  "runtime_validation_required": true
+}

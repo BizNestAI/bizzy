@@ -163,8 +163,8 @@ function createSupabaseMock(initial = {}) {
           store.__uploads.push({ bucket, path, bytes: data?.length || 0, options });
           return { data: { path }, error: null };
         },
-        getPublicUrl(path) {
-          return { data: { publicUrl: `https://storage.test/object/public/${bucket}/${path}` } };
+        async createSignedUrl(path, expiresIn) {
+          return { data: { signedUrl: `https://storage.test/object/sign/${bucket}/${path}?exp=${expiresIn}` }, error: null };
         },
         async remove(paths) {
           store.__removed.push({ bucket, paths });
@@ -488,6 +488,7 @@ describe("job costing bid builder routes", () => {
     });
     assert.equal(metadata.status, 201);
     assert.equal(metadata.body.attachment.storage_path, "external/path/photo.jpg");
+    assert.equal(metadata.body.attachment.signed_url, undefined);
 
     const uploaded = await request(app, `/api/job-costing/bids/${BID_ID}/attachments`, {
       method: "POST",
@@ -503,6 +504,9 @@ describe("job costing bid builder routes", () => {
     assert.equal(uploaded.status, 201);
     assert.equal(uploaded.body.attachment.storage_bucket, "bid-attachments");
     assert.equal(uploaded.body.attachment.storage_path.includes(`${BUSINESS_ID}/${BID_ID}/`), true);
+    assert.equal(uploaded.body.attachment.file_url, null);
+    assert.match(uploaded.body.attachment.signed_url, /^https:\/\/storage\.test\/object\/sign\/bid-attachments\//);
+    assert.doesNotMatch(uploaded.body.attachment.signed_url, /\/object\/public\//);
     assert.equal(mockSupabase.store.__uploads.length, 1);
 
     const list = await request(app, `/api/job-costing/bids/${BID_ID}/attachments`);

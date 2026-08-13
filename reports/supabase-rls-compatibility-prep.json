@@ -1,0 +1,64 @@
+{
+  "verdict": "PASS_WITH_BLOCKERS",
+  "database_touched": false,
+  "migrations_created": false,
+  "rls_or_grants_changed": false,
+  "blockers_fixed": [
+    {
+      "table": "quickbooks_tokens",
+      "source": "src/hooks/useOnboardingStatus.js",
+      "before": "browser fallback read",
+      "after": "backend /auth/status only, with local UI continuity fallback"
+    },
+    {
+      "table": "plaid_items",
+      "source": "src/hooks/useOnboardingStatus.js",
+      "before": "browser fallback read",
+      "after": "backend /api/integrations/plaid/status only, with local UI continuity fallback"
+    }
+  ],
+  "server_only_tables_no_frontend_root_direct_read": [
+    "quickbooks_tokens",
+    "plaid_items",
+    "linked_financial_items",
+    "oauth_connection_states",
+    "email_accounts",
+    "email_account_secrets"
+  ],
+  "remaining_foundation_blockers": [
+    {
+      "table": "business_profiles",
+      "reason": "created and updated from browser onboarding code"
+    },
+    {
+      "table": "user_business_link",
+      "reason": "initial owner membership is inserted from browser onboarding code"
+    },
+    {
+      "table": "user_profiles",
+      "reason": "auth trigger exists, but browser bootstrap still upserts user profile"
+    }
+  ],
+  "recommended_future_onboarding_authority": "Authenticated backend API creates/updates business_profiles and creates first owner user_business_link using req.auth.userId.",
+  "tests": {
+    "added": [
+      "tests/rlsCompatibilityPrep.security.test.js"
+    ],
+    "commands_run": [
+      "node --test tests/rlsCompatibilityPrep.security.test.js",
+      "node --test tests/plaidSecurity.test.js tests/qboSecurity.test.js tests/privateRouteMounts.security.test.js",
+      "npm test"
+    ],
+    "results": {
+      "compatibility_prep": "7/7 passed",
+      "plaid_qbo_private_route_security": "35/35 passed",
+      "npm_test": "606 passed, 3 failed, 3 skipped",
+      "npm_test_failures": [
+        "tests/sidebarNavigationUi.test.js: sidebar orders Jobs above Tax",
+        "tests/taxConfidenceExplanationUi.test.js: dashboard keeps confidence breakdown in the trajectory header pill and links tax surfaces to the workpaper route",
+        "tests/taxWorkpaperUi.test.js: workpaper rows recursively expand and show full traceability detail on hover"
+      ],
+      "npm_test_failure_classification": "legacy UI test failures unrelated to RLS compatibility prep"
+    }
+  }
+}

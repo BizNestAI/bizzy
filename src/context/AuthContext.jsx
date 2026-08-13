@@ -1,5 +1,6 @@
 import React, { createContext, useState, useEffect, useMemo, useContext } from "react";
 import { supabase } from "../services/supabaseClient.js";
+import { clearStoredAuthAndBusinessState, clearStoredBusinessState } from "../services/authSessionCleanup.js";
 
 const AuthContext = createContext();
 
@@ -15,15 +16,29 @@ export const AuthProvider = ({ children }) => {
         if (typeof window !== "undefined") {
           const url = new URL(window.location.href);
           const code = url.searchParams.get("code");
+          const hash = url.hash?.startsWith("#") ? url.hash.slice(1) : "";
+          const hashParams = new URLSearchParams(hash);
+          const hasAuthCallbackParams =
+            code ||
+            url.searchParams.has("token_hash") ||
+            url.searchParams.has("error") ||
+            url.searchParams.has("error_code") ||
+            hashParams.has("access_token") ||
+            hashParams.has("refresh_token") ||
+            hashParams.has("token_hash") ||
+            hashParams.has("error") ||
+            hashParams.has("error_code");
           const routeHandlesAuthCode = url.pathname === "/auth/confirm" || url.pathname === "/reset-password";
-          if (code && !routeHandlesAuthCode) {
-            const { error } = await supabase.auth.exchangeCodeForSession(code);
-            if (error) throw error;
-            url.searchParams.delete("code");
-            window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+          if (hasAuthCallbackParams && !routeHandlesAuthCode) {
+            clearStoredBusinessState();
+            window.location.replace(`/auth/confirm${url.search}${url.hash}`);
+            return;
           }
         }
         const { data } = await supabase.auth.getSession();
+        if (!data?.session) {
+          clearStoredAuthAndBusinessState();
+        }
         if (mounted) {
           setSession(data.session);
           setLoading(false);

@@ -8,6 +8,8 @@ import {
 } from "./stripe.js";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
+import { requireBusinessAccess } from "../_shared/tenantAuth.js";
+import { claimStripeWebhookEventForProcessing } from "./stripeWebhookIdempotency.js";
 
 const APP_URL = process.env.APP_URL || process.env.APP_BASE_URL || "http://localhost:5173";
 const ACTIVE_SUFFIX = stripeMode === "test" ? "test" : "live";
@@ -37,6 +39,8 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 const isUuid = (v) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || ""));
+const STRIPE_WEBHOOK_EVENTS_TABLE = "stripe_webhook_events";
+const STRIPE_WEBHOOK_LEASE_MS = Number(process.env.STRIPE_WEBHOOK_LEASE_MS || 5 * 60 * 1000);
 
 function normalizeOrigin(value) {
   const raw = String(value || "")
@@ -95,8 +99,8 @@ function readIds(req) {
   const q = req.query || {};
   const b = req.body || {};
   const h = req.headers || {};
-  const user_id = req.user?.id || b.user_id || q.user_id || h["x-user-id"] || null;
-  const business_id = b.businessId || b.business_id || q.business_id || q.businessId || h["x-business-id"] || null;
+  const user_id = req.auth?.userId || req.user?.id || null;
+  const business_id = req.business?.id || req.auth?.businessId || req.user?.business_id || b.businessId || b.business_id || q.business_id || q.businessId || h["x-business-id"] || null;
   return { user_id, business_id };
 }
 
@@ -126,6 +130,37 @@ async function upsertBusinessBilling(businessId, payload = {}) {
     ...scopedPayload,
   };
   await supabase.from("business_billing").upsert(row, { onConflict: "business_id" });
+}
+
+async function markStripeWebhookEventProcessed(eventId) {
+  if (!eventId) return;
+  const { error } = await supabase
+    .from(STRIPE_WEBHOOK_EVENTS_TABLE)
+    .update({
+      processing_status: "processed",
+      processed_at: new Date().toISOString(),
+      processing_started_at: null,
+      error_code: null,
+      error_message: null,
+    })
+    .eq("event_id", eventId);
+  if (error) throw error;
+}
+
+async function markStripeWebhookEventFailed(eventId, err) {
+  if (!eventId) return;
+  const { error } = await supabase
+    .from(STRIPE_WEBHOOK_EVENTS_TABLE)
+    .update({
+      processing_status: "failed",
+      failed_at: new Date().toISOString(),
+      error_code: String(err?.code || err?.name || "stripe_webhook_handler_failed").slice(0, 120),
+      error_message: String(err?.message || "Stripe webhook handler failed.").slice(0, 500),
+    })
+    .eq("event_id", eventId);
+  if (error) {
+    console.error("[stripe] webhook idempotency failure mark failed", error?.message || error);
+  }
 }
 
 async function syncBillingFromSubscription(businessId, subscriptionId) {
@@ -466,12 +501,13 @@ function mapSubStatus(status) {
 }
 
 export const billingRouter = express.Router();
+const requireVerifiedBillingBusiness = [requireAuth, requireBusinessAccess()];
 
 // JSON for normal endpoints
 billingRouter.use(express.json());
 
 // Lightweight status endpoint
-billingRouter.get("/status", requireAuth, async (req, res) => {
+billingRouter.get("/status", ...requireVerifiedBillingBusiness, async (req, res) => {
   const { business_id, user_id } = readIds(req);
   if (!business_id) return sendError(res, 400, "missing_business_id", "Business id is required.");
   if (!isUuid(business_id)) return sendError(res, 400, "invalid_ids", "Invalid business id.");
@@ -601,7 +637,7 @@ billingRouter.get("/status", requireAuth, async (req, res) => {
 });
 
 // Create Checkout session (14-day trial)
-billingRouter.post("/create-checkout-session", requireAuth, async (req, res) => {
+billingRouter.post("/create-checkout-session", ...requireVerifiedBillingBusiness, async (req, res) => {
   try {
     const { user_id, business_id } = readIds(req);
     const { planType, businessId } = req.body || {};
@@ -729,7 +765,7 @@ billingRouter.post("/create-checkout-session", requireAuth, async (req, res) => 
   }
 });
 
-billingRouter.post("/create-portal-session", requireAuth, async (req, res) => {
+billingRouter.post("/create-portal-session", ...requireVerifiedBillingBusiness, async (req, res) => {
   try {
     const { user_id, business_id } = readIds(req);
     const { businessId } = req.body || {};
@@ -783,7 +819,7 @@ billingRouter.post("/create-portal-session", requireAuth, async (req, res) => {
   }
 });
 
-billingRouter.post("/cleanup-payment-methods", requireAuth, async (req, res) => {
+billingRouter.post("/cleanup-payment-methods", ...requireVerifiedBillingBusiness, async (req, res) => {
   try {
     const { user_id, business_id } = readIds(req);
     const { businessId } = req.body || {};
@@ -860,7 +896,7 @@ billingRouter.post("/cleanup-payment-methods", requireAuth, async (req, res) => 
   }
 });
 
-billingRouter.get("/invoices", requireAuth, async (req, res) => {
+billingRouter.get("/invoices", ...requireVerifiedBillingBusiness, async (req, res) => {
   try {
     const { user_id, business_id } = readIds(req);
     if (!business_id) return sendError(res, 400, "missing_business_id", "Business id is required.");
@@ -916,7 +952,7 @@ billingRouter.get("/invoices", requireAuth, async (req, res) => {
   }
 });
 
-billingRouter.get("/payment-method", requireAuth, async (req, res) => {
+billingRouter.get("/payment-method", ...requireVerifiedBillingBusiness, async (req, res) => {
   try {
     const { user_id, business_id } = readIds(req);
     if (!business_id) return sendError(res, 400, "missing_business_id", "Business id is required.");
@@ -1144,6 +1180,34 @@ export async function billingWebhookHandler(req, res) {
     });
   }
 
+  let eventClaim;
+  try {
+    eventClaim = await claimStripeWebhookEventForProcessing({
+      supabaseClient: supabase,
+      event,
+      stripeMode,
+      leaseMs: STRIPE_WEBHOOK_LEASE_MS,
+      tableName: STRIPE_WEBHOOK_EVENTS_TABLE,
+    });
+  } catch (err) {
+    console.error("[stripe] webhook idempotency claim failed", err?.message || err);
+    return res.status(500).json({
+      ok: false,
+      error: "webhook_idempotency_failed",
+      message: "Webhook replay protection failed.",
+    });
+  }
+
+  if (!eventClaim?.claimed) {
+    if (process.env.NODE_ENV !== "production") {
+      console.log("[billing][webhook] duplicate Stripe event skipped", {
+        eventId: event.id || null,
+        eventType: event.type || null,
+      });
+    }
+    return res.json({ received: true, duplicate: true });
+  }
+
   const touchBilling = async (businessId, fields = {}) => {
     if (!businessId) return;
     await upsertBusinessBilling(businessId, fields);
@@ -1287,11 +1351,23 @@ export async function billingWebhookHandler(req, res) {
         break;
     }
   } catch (err) {
+    await markStripeWebhookEventFailed(event.id, err);
     console.error("[stripe] webhook handler error", err);
     return res.status(500).json({
       ok: false,
       error: "webhook_handler_failed",
       message: "Webhook handler failed.",
+    });
+  }
+
+  try {
+    await markStripeWebhookEventProcessed(event.id);
+  } catch (err) {
+    console.error("[stripe] webhook idempotency mark processed failed", err?.message || err);
+    return res.status(500).json({
+      ok: false,
+      error: "webhook_idempotency_update_failed",
+      message: "Webhook replay protection update failed.",
     });
   }
 

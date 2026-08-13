@@ -9,6 +9,8 @@ import { generateAllInsights } from './generators/runAll.js';
 import { generateContractorCfoInsights } from './generators/contractorCfo.generators.js';
 import { markInsightFeedback } from '../../services/insights/insightDedupeService.js';
 import { requireAuth } from '../gpt/middlewares/requireAuth.js';
+import { requireBusinessAccess } from '../_shared/tenantAuth.js';
+import { createRateLimiter } from '../_shared/rateLimit.js';
 
 const router = Router();
 const DEFAULT_INSIGHTS_MODULE = 'contractor_cfo';
@@ -26,6 +28,8 @@ function parseSnoozeUntil(value) {
 
 function readBusinessId(req) {
   return (
+    req.business?.id ||
+    req.auth?.businessId ||
     req.body?.businessId ||
     req.body?.business_id ||
     req.query?.businessId ||
@@ -35,6 +39,14 @@ function readBusinessId(req) {
     null
   );
 }
+
+const privateBusinessRoute = [requireAuth, requireBusinessAccess()];
+const insightGenerationRateLimit = createRateLimiter({
+  windowMs: 60_000,
+  max: Number(process.env.INSIGHTS_GENERATION_RATE_LIMIT_PER_MINUTE || 10),
+  code: 'insights_rate_limited',
+  message: 'Too many insight generation requests. Try again shortly.',
+});
 
 function parseForce(value) {
   if (value === true) return true;
@@ -62,9 +74,9 @@ router.use((req, _res, next) => {
 // Legacy dashboard-only endpoints. The live InsightsRail uses /list only.
 // Auth is required and all controller reads/writes must be scoped by businessId/x-business-id.
 // These endpoints are kept for old dashboard widgets and must only return contractor_cfo payloads.
-router.get('/headline', requireAuth, getDailyHeadline);
-router.get('/pulse', requireAuth, getPulse);
-router.get('/top3', requireAuth, getTop3Alerts);
+router.get('/headline', ...privateBusinessRoute, getDailyHeadline);
+router.get('/pulse', ...privateBusinessRoute, getPulse);
+router.get('/top3', ...privateBusinessRoute, getTop3Alerts);
 
 /**
  * GET /api/insights/list
@@ -75,10 +87,10 @@ router.get('/top3', requireAuth, getTop3Alerts);
  *   - Applies Bizzi voice by default; set voice=none to return neutral/system phrasing
  *   - Returns { items: [...] }
  */
-router.get('/list', listHandler);
+router.get('/list', ...privateBusinessRoute, listHandler);
 
 // POST /api/insights/generate
-router.post('/generate', requireAuth, async (req, res) => {
+router.post('/generate', ...privateBusinessRoute, insightGenerationRateLimit, async (req, res) => {
   try {
     const businessId = readBusinessId(req);
     if (!businessId) return res.status(400).json({ error: 'missing businessId' });
@@ -92,7 +104,7 @@ router.post('/generate', requireAuth, async (req, res) => {
   }
 });
 
-router.post('/contractor-cfo/run', requireAuth, async (req, res) => {
+router.post('/contractor-cfo/run', ...privateBusinessRoute, insightGenerationRateLimit, async (req, res) => {
   try {
     const businessId = readBusinessId(req);
     if (!businessId) return res.status(400).json({ ok: false, error: 'missing businessId' });
@@ -107,10 +119,10 @@ router.post('/contractor-cfo/run', requireAuth, async (req, res) => {
 });
 
 // POST /api/insights/seen  { ids: string[], userId? }
-router.post('/seen', async (req, res) => {
+router.post('/seen', ...privateBusinessRoute, async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
-    const userId = req.body?.userId || req.header('x-user-id') || null;
+    const userId = req.auth?.userId || req.user?.id || null;
     const businessId = readBusinessId(req);
     if (!ids.length || !userId) return res.status(400).json({ ok: false, error: 'missing ids/userId' });
     if (!businessId) return res.status(400).json({ ok: false, error: 'missing businessId' });
@@ -154,7 +166,7 @@ router.post('/seen', async (req, res) => {
  * POST /api/insights/mark-read { id, userId? }
  * Tries `insights` first; falls back to `insights_history` if necessary.
  */
-router.post('/mark-read', async (req, res) => {
+router.post('/mark-read', ...privateBusinessRoute, async (req, res) => {
   try {
     const { id } = req.body || {};
     const businessId = readBusinessId(req);
@@ -198,10 +210,10 @@ router.post('/mark-read', async (req, res) => {
  * POST /api/insights/snooze { id, until, businessId? }
  * Tries `insights` first; falls back to `insights_history` if necessary.
  */
-router.post('/snooze', async (req, res) => {
+router.post('/snooze', ...privateBusinessRoute, async (req, res) => {
   try {
     const { id, until } = req.body || {};
-    const businessId = req.body?.businessId || req.query?.businessId || req.header('x-business-id') || null;
+    const businessId = readBusinessId(req);
     if (!id || !until) return res.status(400).json({ error: 'missing id/until' });
     if (!businessId) return res.status(400).json({ error: 'missing businessId' });
 
@@ -244,12 +256,12 @@ router.post('/snooze', async (req, res) => {
 /**
  * POST /api/insights/feedback { insightId, feedback, userId?, notes?, businessId? }
  */
-router.post('/feedback', async (req, res) => {
+router.post('/feedback', ...privateBusinessRoute, async (req, res) => {
   try {
-    const businessId = req.body?.businessId || req.query?.businessId || req.header('x-business-id') || null;
+    const businessId = readBusinessId(req);
     const insightId = req.body?.insightId || req.body?.id || null;
     const feedback = req.body?.feedback || null;
-    const userId = req.body?.userId || req.header('x-user-id') || null;
+    const userId = req.auth?.userId || req.user?.id || null;
     const notes = req.body?.notes || null;
 
     if (!businessId) return res.status(400).json({ ok: false, error: 'missing businessId' });

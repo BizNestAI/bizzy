@@ -14,6 +14,8 @@ const activeRuns = new Set();
 
 function readBusinessId(req) {
   return (
+    req.business?.id ||
+    req.auth?.businessId ||
     req.body?.business_id ||
     req.body?.businessId ||
     req.query?.business_id ||
@@ -25,10 +27,11 @@ function readBusinessId(req) {
 
 function readUserId(req) {
   return (
+    req.auth?.userId ||
+    req.user?.id ||
     req.body?.user_id ||
     req.body?.userId ||
     req.headers["x-user-id"] ||
-    req.user?.id ||
     null
   );
 }

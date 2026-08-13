@@ -1,6 +1,7 @@
 import { supabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
 import { triggerContractorCfoInsightsBestEffort } from "../insights/contractorCfoTriggerService.js";
+import { resolveStoredPlaidAccessToken } from "./plaidTokenCrypto.js";
 
 function normalizeDate(d) {
   if (!d) return null;
@@ -133,10 +134,20 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
     const added = [];
     const modified = [];
     const removed = [];
+    const accessToken = await resolveStoredPlaidAccessToken({
+      storedToken: item.plaid_access_token,
+      persistEncrypted: async (encrypted) => {
+        await supabase
+          .from("plaid_items")
+          .update({ plaid_access_token: encrypted, updated_at: nowIso() })
+          .eq("business_id", businessId)
+          .eq("plaid_item_id", item.plaid_item_id);
+      },
+    });
 
     while (hasMore) {
       const resp = await plaid.transactionsSync({
-        access_token: item.plaid_access_token,
+        access_token: accessToken,
         cursor: cursor || undefined,
       });
       const d = resp?.data || {};

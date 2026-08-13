@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { AlertTriangle, ArrowRight, CheckCircle2, Mail, RefreshCw } from "lucide-react";
 import { supabase } from "../../services/supabaseClient.js";
 import { resendSignupConfirmation } from "../../services/authService.js";
+import { clearStoredBusinessState } from "../../services/authSessionCleanup.js";
 import { useAuth } from "../../context/AuthContext.jsx";
 import bizzyLogo from "../../assets/bizzy-logo.png";
 
@@ -57,6 +58,8 @@ export default function EmailConfirmation() {
   useEffect(() => {
     let alive = true;
     async function confirm() {
+      clearStoredBusinessState();
+
       const initialError = params.get("error") || params.get("error_code") || params.get("error_description");
       if (initialError) {
         const status = classifyError(params, null);
@@ -66,6 +69,8 @@ export default function EmailConfirmation() {
 
       const code = params.get("code");
       const tokenHash = params.get("token_hash");
+      const accessToken = params.get("access_token");
+      const refreshToken = params.get("refresh_token");
       const type = params.get("type");
 
       try {
@@ -78,14 +83,18 @@ export default function EmailConfirmation() {
             type: type === "email" || type === "signup" ? "signup" : "email",
           });
           if (error) throw error;
+        } else if (accessToken && refreshToken) {
+          const { error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          if (error) throw error;
         } else {
-          const { data } = await supabase.auth.getSession();
-          if (!data?.session) {
-            if (alive) setState({ status: "invalid", message: "" });
-            return;
-          }
+          if (alive) setState({ status: "invalid", message: "" });
+          return;
         }
 
+        clearStoredBusinessState();
         if (typeof window !== "undefined") {
           window.history.replaceState({}, document.title, "/auth/confirm");
         }

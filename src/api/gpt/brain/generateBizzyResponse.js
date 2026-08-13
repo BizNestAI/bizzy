@@ -2,6 +2,7 @@
 import { supabase } from '../../../services/supabaseAdmin.js';
 import { qboEnvName } from '../../../utils/qboEnv.js';
 import OpenAI from 'openai';
+import { randomUUID } from 'node:crypto';
 import { retrieveRelevantMemories, storeMemory } from './bizzyMemoryService.js';
 import { buildBizzySystemPrompt, buildBizzySystemMessages } from './bizzySystemPrompt.js';
 import { getEmbedding } from '../../../utils/openaiEmbedding.js';
@@ -18,13 +19,19 @@ import {
   buildOnboardingGuide,
   buildOnboardingToneBlock,
 } from '../../../config/onboardingPromptBank.js';
+import {
+  applyMainChatContextBudget,
+  buildMainChatUsageTelemetry,
+  maybeLogMainChatCostWarning,
+  recordMainChatUsage,
+} from './chatCostControls.js';
 
 // 👉 NEW: demo-mode helpers
 import { isDemoMode, loadDemoData } from '../../../services/demo/loadDemoData.js';
 
 const openaiKey = process.env.OPENAI_API_KEY || '';
 const openai = openaiKey ? new OpenAI({ apiKey: openaiKey }) : null;
-const BIZZY_CHAT_MODEL = process.env.BIZZY_GPT_MODEL || 'gpt-5.1';
+const BIZZY_CHAT_MODEL = process.env.BIZZY_GPT_MODEL || 'gpt-5.6-terra';
 const isGpt5Model = /^gpt-5/i.test(BIZZY_CHAT_MODEL || '');
 const FREE_CHAT_LIMIT = 2;
 const PAID_CHAT_LIMIT = 300;
@@ -94,7 +101,16 @@ async function getBusinessBillingForUser(userId, businessId) {
     return { ok: false, status: 404, error: 'business_not_found', message: 'Business not found.' };
   }
   if (business.user_id !== userId) {
-    return { ok: false, status: 403, error: 'forbidden', message: 'You do not own this business.' };
+    const { data: membership, error: membershipError } = await supabase
+      .from('user_business_link')
+      .select('user_id,business_id')
+      .eq('user_id', userId)
+      .eq('business_id', businessId)
+      .limit(1)
+      .maybeSingle();
+    if (membershipError || !membership) {
+      return { ok: false, status: 403, error: 'forbidden', message: 'You do not have access to this business.' };
+    }
   }
 
   const { data: billingRow, error: billingError } = await supabase
@@ -149,33 +165,6 @@ export async function getBizzyChatAccess({ user_id, business_id } = {}) {
         ? "You've reached the current 300-query monthly limit."
         : 'Your two test questions are used. Subscribe to keep asking Bizzi questions.',
   };
-}
-
-async function incrementMonthlyUsage(userId) {
-  if (!userId) return null;
-  const month = getCurrentUsageMonth();
-  const nowIso = new Date().toISOString();
-  const { data: usageData, error: fetchError } = await supabase
-    .from('gpt_usage')
-    .select('query_count')
-    .eq('user_id', userId)
-    .eq('month', month)
-    .maybeSingle();
-  if (fetchError && fetchError.code !== 'PGRST116') throw fetchError;
-  const nextCount = (usageData?.query_count || 0) + 1;
-  const { error: upsertError } = await supabase
-    .from('gpt_usage')
-    .upsert(
-      {
-        user_id: userId,
-        month,
-        query_count: nextCount,
-        last_used: nowIso,
-      },
-      { onConflict: 'user_id,month' }
-    );
-  if (upsertError) throw upsertError;
-  return nextCount;
 }
 
 function flattenMessageContent(content) {
@@ -920,13 +909,20 @@ export async function generateBizzyResponse({
             .filter((m) => m.content)
         : [];
 
-    const messages = [
+    const rawMessages = [
       ...(onboardingToneBlock ? [{ role: 'system', content: onboardingToneBlock }] : []),
       ...personaAndStyle,
       ...(onboardingGuide ? [{ role: 'system', content: onboardingGuide }] : []),
       ...chatHistoryFormatted,
       { role: 'user', content: message },
     ];
+    const contextBudget = applyMainChatContextBudget(rawMessages);
+    const messages = contextBudget.messages;
+    llmInvocation.context_budget = {
+      trimmed: contextBudget.trimmed,
+      input_chars: contextBudget.input_chars,
+      max_chars: contextBudget.max_chars,
+    };
 
     // Ensure a thread id exists (unchanged)
     let localThreadId = threadId || null;
@@ -957,6 +953,7 @@ export async function generateBizzyResponse({
 
     let bizzyReply = null;
     let lastResponseDebug = null;
+    let openaiUsageTelemetry = null;
     const scriptedOnboardingReply = onboardingMatch?.response
       ? [
           onboardingMatch.response.trim(),
@@ -980,6 +977,7 @@ export async function generateBizzyResponse({
           });
           llmInvocation.actual_model = completion?.model || null;
           llmInvocation.api = 'chat.completions';
+          openaiUsageTelemetry = buildMainChatUsageTelemetry(completion, BIZZY_CHAT_MODEL);
           bizzyReply = completion?.choices?.[0]?.message?.content?.trim() || null;
         }
       } catch (e) {
@@ -1115,6 +1113,19 @@ export async function generateBizzyResponse({
         onboarding_mode_active: showOnboardingTone,
         ...(webContext ? { web_context_preview: webContext.slice(0, 200) } : {}),
       },
+      internalTelemetry: {
+        request_id: randomUUID(),
+        openai_usage: openaiUsageTelemetry || {
+          model: scriptedOnboardingReply ? 'scripted_onboarding_prompt' : BIZZY_CHAT_MODEL,
+          input_tokens: 0,
+          cached_input_tokens: 0,
+          cache_write_tokens: 0,
+          output_tokens: 0,
+          reasoning_tokens: 0,
+          total_tokens: 0,
+          estimated_openai_cost_usd: 0,
+        },
+      },
     };
   } catch (error) {
     console.error('❌ Unhandled error in Bizzy GPT core:', error);
@@ -1135,7 +1146,7 @@ export async function generateBizzyResponse({
 export async function generateBizzyResponseHandler(req, res) {
   try {
     const { message, type } = req.body ?? {};
-    const user_id = req.user?.id || req.body?.user_id || null;
+    const user_id = req.auth?.userId || req.user?.id || null;
     const styleMessages  = Array.isArray(req.bizzy?.systemMessages) ? req.bizzy.systemMessages : [];
     const normalizedType = type || req.body?.intent || req.bizzy?.intent || null;
     const personaMessage = typeof req.bizzy?.personaMessage === 'string' ? req.bizzy.personaMessage : null;
@@ -1145,7 +1156,7 @@ export async function generateBizzyResponseHandler(req, res) {
     const parsedInput = { ...bundle, ...clientCtx };
 
     const incomingThreadId = req.body?.thread_id || null;
-    const business_id = req.body?.business_id || req.header('x-business-id') || null;
+    const business_id = req.business?.id || req.auth?.businessId || null;
     const dataMode = normalizeDataMode(
       req.body?.data_mode ||
       req.body?.dataMode ||
@@ -1177,6 +1188,25 @@ export async function generateBizzyResponseHandler(req, res) {
 
     let threadIdToUse = incomingThreadId;
     let fallbackTitleUsed = null;
+
+    if (threadIdToUse && business_id) {
+      const { data: thread, error: threadError } = await supabase
+        .from('gpt_threads')
+        .select('id,business_id')
+        .eq('id', threadIdToUse)
+        .eq('business_id', business_id)
+        .maybeSingle();
+      if (threadError || !thread) {
+        return res.status(404).json({
+          ok: false,
+          error: 'thread_not_found',
+          responseText: 'That conversation was not found.',
+          suggestedActions: [],
+          followUpPrompt: '',
+          meta: { thread_id: incomingThreadId || null },
+        });
+      }
+    }
 
     if (!threadIdToUse && business_id) {
       try {
@@ -1211,11 +1241,12 @@ export async function generateBizzyResponseHandler(req, res) {
       business_id,
       dataMode,
     });
+    const { internalTelemetry, ...publicResult } = result || {};
 
-    result.meta = {
-      ...(result.meta || {}),
-      intent: normalizedType || result.meta?.intent || 'general',
-      thread_id: threadIdToUse || result.meta?.thread_id || null,
+    publicResult.meta = {
+      ...(publicResult.meta || {}),
+      intent: normalizedType || publicResult.meta?.intent || 'general',
+      thread_id: threadIdToUse || publicResult.meta?.thread_id || null,
     };
 
     // Auto-title (unchanged)
@@ -1223,7 +1254,7 @@ export async function generateBizzyResponseHandler(req, res) {
       if (!incomingThreadId && threadIdToUse) {
         const title = await generateThreadTitle({
           userText: req.body?.message || '',
-          assistantText: result?.responseText || '',
+          assistantText: publicResult?.responseText || '',
         });
         if (title) {
           const { data: latest } = await supabase
@@ -1245,14 +1276,29 @@ export async function generateBizzyResponseHandler(req, res) {
     } catch {}
 
     try {
-      if (!result?.meta?.error && user_id) {
-        await incrementMonthlyUsage(user_id);
+      if (!publicResult?.meta?.error && user_id) {
+        const usageRecord = await recordMainChatUsage({
+          supabaseClient: supabase,
+          userId: user_id,
+          businessId: business_id,
+          month: getCurrentUsageMonth(),
+          telemetry: internalTelemetry?.openai_usage || {},
+          requestId: internalTelemetry?.request_id || null,
+        });
+        maybeLogMainChatCostWarning({
+          userId: user_id,
+          businessId: business_id,
+          month: getCurrentUsageMonth(),
+          model: internalTelemetry?.openai_usage?.model || BIZZY_CHAT_MODEL,
+          queryCount: usageRecord?.query_count,
+          estimatedMonthlyCostUsd: usageRecord?.estimated_openai_cost_usd,
+        });
       }
     } catch (usageError) {
       console.warn('[gpt handler] usage increment failed:', usageError?.message || usageError);
     }
 
-    return res.json({ ...result });
+    return res.json({ ...publicResult });
   } catch (e) {
     const debug = req.headers['x-debug'] === '1' || req.query.debug === '1';
     console.error('[gpt handler] hard error:', e);
@@ -1270,8 +1316,8 @@ export async function generateBizzyResponseHandler(req, res) {
 
 export async function getBizzyChatAccessHandler(req, res) {
   try {
-    const user_id = req.user?.id || req.query?.user_id || req.header('x-user-id') || null;
-    const business_id = req.query?.business_id || req.query?.businessId || req.header('x-business-id') || null;
+    const user_id = req.auth?.userId || req.user?.id || null;
+    const business_id = req.business?.id || req.auth?.businessId || null;
     const access = await getBizzyChatAccess({ user_id, business_id });
     return res.status(access.ok ? 200 : (access.status || 400)).json(access);
   } catch (e) {

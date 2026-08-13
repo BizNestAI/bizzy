@@ -1,6 +1,7 @@
 import express from "express";
 import { supabase } from "../../services/supabaseAdmin.js";
 import {
+  redactQboSecrets,
   processQueuedQboWebhookEvents,
   storeQuickBooksWebhookEvents,
   verifyQuickBooksWebhookSignature,
@@ -62,11 +63,11 @@ export async function quickBooksJobCostingWebhookHandler(req, res) {
     });
     enqueueWebhookProcessor();
   } catch (error) {
-    console.error("[qbo-job-costing-webhook]", error);
+    console.error("[qbo-job-costing-webhook]", redactQboSecrets(error?.message || error));
     res.status(500).json({
       ok: false,
       error: "qbo_webhook_store_failed",
-      message: error?.message || "Failed to store QuickBooks webhook event.",
+      message: "Failed to store QuickBooks webhook event.",
     });
   }
 }

@@ -30,7 +30,8 @@ export function healthRoute(_req, res) {
 /** GET /api/calendar/events?business_id=&from=&to=&module=all */
 export async function getEvents(req, res) {
   try {
-    const { business_id, from, to, module = 'all' } = req.query;
+    const { from, to, module = 'all' } = req.query;
+    const business_id = req.business?.id || req.auth?.businessId || req.query?.business_id;
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
     const fromISO = from ? new Date(from).toISOString() : isoDayStart(new Date());
@@ -59,7 +60,11 @@ export async function postEvent(req, res) {
   try {
     const { draft } = req.body || {};
     if (!draft) return res.status(400).json({ error: 'missing draft' });
-    const data = await createEvent(draft);
+    const data = await createEvent({
+      ...draft,
+      business_id: req.business?.id || req.auth?.businessId || draft.business_id,
+      user_id: req.auth?.userId || req.user?.id || draft.user_id,
+    });
     res.json({ data });
   } catch (e) {
     console.error('[calendar] postEvent error:', e);
@@ -74,7 +79,7 @@ export async function patchEvent(req, res) {
     const { patch } = req.body || {};
     if (!id) return res.status(400).json({ error: 'missing id' });
     if (!patch) return res.status(400).json({ error: 'missing patch' });
-    const data = await updateEvent(id, patch);
+    const data = await updateEvent(id, patch, { business_id: req.business?.id || req.auth?.businessId });
     res.json({ data });
   } catch (e) {
     console.error('[calendar] patchEvent error:', e);
@@ -87,7 +92,7 @@ export async function delEvent(req, res) {
   try {
     const { id } = req.params;
     if (!id) return res.status(400).json({ error: 'missing id' });
-    await deleteEvent(id);
+    await deleteEvent(id, { business_id: req.business?.id || req.auth?.businessId });
     res.json({ ok: true });
   } catch (e) {
     console.error('[calendar] delEvent error:', e);
@@ -101,7 +106,8 @@ export async function delEvent(req, res) {
  * - FAIL-SOFT: returns { today: [], next: [] } on error (200 OK)
  */
 export async function getAgendaRoute(req, res) {
-  const { business_id, module = 'all', date } = req.query;
+  const { module = 'all', date } = req.query;
+  const business_id = req.business?.id || req.auth?.businessId || req.query?.business_id;
   try {
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
@@ -137,7 +143,8 @@ export async function getAgendaRoute(req, res) {
  * - FAIL-SOFT: returns { items: [] } on error (200 OK)
  */
 export async function getAgendaRangeRoute(req, res) {
-  const { business_id, module = 'all', from, to } = req.query;
+  const { module = 'all', from, to } = req.query;
+  const business_id = req.business?.id || req.auth?.businessId || req.query?.business_id;
   try {
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
@@ -172,7 +179,8 @@ export async function getAgendaRangeRoute(req, res) {
  * - FAIL-SOFT: returns {} or { items: [] } on error (200 OK)
  */
 export async function getAgendaGlanceRoute(req, res) {
-  const { business_id, module = 'all' } = req.query;
+  const { module = 'all' } = req.query;
+  const business_id = req.business?.id || req.auth?.businessId || req.query?.business_id;
   try {
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 

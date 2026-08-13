@@ -89,23 +89,32 @@ function buildExplanationSummary({
   return `${label} does not yet have enough data for a reliable reconciliation verdict.`;
 }
 
+export function countRowsByPlaidAccount(rows = []) {
+  const counts = new Map();
+  (rows || []).forEach((row) => {
+    if (!row?.plaid_account_id) return;
+    counts.set(row.plaid_account_id, (counts.get(row.plaid_account_id) || 0) + 1);
+  });
+  return counts;
+}
+
 async function fetchPendingCounts(businessId) {
   const pendingCounts = new Map();
-  const { data, error } = await supabase
-    .from("bank_transactions")
-    .select("plaid_account_id,count:id")
-    .eq("business_id", businessId)
-    .eq("is_archived", false)
-    .eq("pending", true)
-    .group("plaid_account_id");
-  if (error) {
+  try {
+    const rows = await fetchAllRows((from, to) =>
+      supabase
+        .from("bank_transactions")
+        .select("plaid_account_id")
+        .eq("business_id", businessId)
+        .eq("is_archived", false)
+        .eq("pending", true)
+        .range(from, to)
+    );
+    return countRowsByPlaidAccount(rows);
+  } catch (error) {
     console.warn("[recon] pending fetch failed", error.message || error);
     return pendingCounts;
   }
-  (data || []).forEach((row) => {
-    if (row.plaid_account_id) pendingCounts.set(row.plaid_account_id, Number(row.count) || 0);
-  });
-  return pendingCounts;
 }
 
 async function fetchNeedsReviewCounts(businessId) {
