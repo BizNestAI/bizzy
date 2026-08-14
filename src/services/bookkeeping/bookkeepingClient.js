@@ -24,7 +24,7 @@ export async function getTransactions(businessId, params = {}) {
     headers: withBizHeaders(businessId),
   });
   if (Array.isArray(res)) return res;
-  return res?.rows || res?.items || [];
+  return res || { rows: [] };
 }
 
 export async function getTransactionCounts(businessId, params = {}) {

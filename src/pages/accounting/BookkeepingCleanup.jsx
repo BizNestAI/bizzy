@@ -190,7 +190,25 @@ function SummaryCard({ value, label, subtext }) {
   );
 }
 
+function formatShortDate(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${mm}-${dd}-${d.getFullYear()}`;
+}
+
 function AccountCard({ account, selected, onClick }) {
+  const firstImported = formatShortDate(account.firstImportedTransactionDate);
+  const latestImported = formatShortDate(account.latestImportedTransactionDate);
+  const importRange =
+    firstImported && latestImported
+      ? firstImported === latestImported
+        ? `Imported ${firstImported}`
+        : `Imported ${firstImported} to ${latestImported}`
+      : null;
+
   return (
     <button
       type="button"
@@ -209,6 +227,7 @@ function AccountCard({ account, selected, onClick }) {
         ) : null}
       </div>
       <div className="text-base font-semibold text-slate-50">{account.name}</div>
+      {importRange ? <div className="text-[11px] text-slate-400">{importRange}</div> : null}
     </button>
   );
 }
@@ -454,6 +473,12 @@ function BookkeepingCleanup() {
   }, [loadClarifications]);
 
   const accountCards = useMemo(() => {
+    if (!usingDemo) {
+      return accounts.map((a) => {
+        const key = getAcctKey(a);
+        return { ...a, toReview: Number(a.toReview || 0), _key: key };
+      });
+    }
     const counts = transactions.reduce((acc, txn) => {
       const key = getTxnAccountKey(txn);
       if (matchesBooksTab(txn, "needs_review")) {
@@ -465,7 +490,7 @@ function BookkeepingCleanup() {
       const key = getAcctKey(a);
       return { ...a, toReview: counts[key] || a.toReview || 0, _key: key };
     });
-  }, [accounts, transactions]);
+  }, [accounts, transactions, usingDemo]);
   const accountCardsReady = useMemo(() => {
     if (usingDemo) return true;
     return accountCards.length > 0;
@@ -615,19 +640,32 @@ function BookkeepingCleanup() {
     );
   }, [accountFilter, dateRange, tabCounts, transactions, usingDemo]);
 
-  const visibleTransactions = filteredTransactions.slice(0, rowsPerPage);
   const start = (page - 1) * rowsPerPage;
-  const paged = filteredTransactions.slice(start, start + rowsPerPage);
-  const tableTransactions = paged.length ? paged : (usingDemo ? filteredTransactions.slice(start, start + rowsPerPage) : []);
+  const tableTransactions = usingDemo ? filteredTransactions.slice(start, start + rowsPerPage) : filteredTransactions;
   const categorizedTransactions = useMemo(
     () => transactions.filter((t) => ["approved", "auto_approved", "posted"].includes(t.status)),
     [transactions]
   );
-  const feedRows = showCategorized ? categorizedTransactions.slice(start, start + rowsPerPage) : tableTransactions;
+  const feedRows = showCategorized
+    ? usingDemo
+      ? categorizedTransactions.slice(start, start + rowsPerPage)
+      : categorizedTransactions
+    : tableTransactions;
   const selectableRows = feedRows.filter((t) => t?.status !== "posted");
   const selectableIds = selectableRows.map((t) => t.id);
   const allVisibleSelected = selectableRows.length > 0 && selectableRows.every((txn) => selectedIds.has(txn.id));
-  const pageCount = Math.max(1, Math.ceil((showCategorized ? categorizedTransactions.length : filteredTransactions.length) / rowsPerPage));
+  const pageCount = Math.max(
+    1,
+    Math.ceil(
+      (usingDemo
+        ? showCategorized
+          ? categorizedTransactions.length
+          : filteredTransactions.length
+        : typeof totalCount === "number"
+        ? totalCount
+        : filteredTransactions.length) / rowsPerPage
+    )
+  );
   const isHandledTab = activeTab === "handled";
   const isEmpty = !loadingTxns && feedRows.length === 0;
   const showLoadingState = !plaidNeverConnected && (loadingTxns || (!accountFilter && !usingDemo));
@@ -1129,7 +1167,7 @@ function BookkeepingCleanup() {
   useEffect(() => {
     setSelectedIds(new Set());
     setPage(1);
-  }, [accountFilter, activeTab, dateRange, showCategorized]);
+  }, [accountFilter, activeTab, dateRange, rowsPerPage, showCategorized]);
 
   useEffect(() => {
     if (!canRunAI) setSelectedIds(new Set());

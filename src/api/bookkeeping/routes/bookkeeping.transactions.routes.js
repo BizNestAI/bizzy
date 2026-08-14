@@ -387,7 +387,7 @@ router.get("/transactions", requireAuth, async (req, res) => {
   const pageSize = Math.min(Math.max(parseInt(req.query?.page_size, 10) || 25, 1), 200);
 
   try {
-    const { rows } = await fetchBookkeepingTransactions({
+    const { rows, totalCount } = await fetchBookkeepingTransactions({
       businessId,
       statusFilter,
       accountId,
@@ -400,7 +400,18 @@ router.get("/transactions", requireAuth, async (req, res) => {
       console.info("[bookkeeping][transactions] returning", { count: rows.length, sample: rows[0] });
     }
 
-    return res.json(rows);
+    return res.json({
+      ok: true,
+      rows,
+      totalCount,
+      total_count: totalCount,
+      meta: {
+        page,
+        page_size: pageSize,
+        total_count: totalCount,
+        page_count: Math.max(1, Math.ceil(totalCount / pageSize)),
+      },
+    });
   } catch (err) {
     console.error("[bookkeeping][transactions] failed", err?.message || err);
     return res.status(500).json({

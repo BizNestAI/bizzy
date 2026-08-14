@@ -1,7 +1,6 @@
 const RESTORE_SUPPRESS_MS = 1200;
 
 let installed = false;
-let lastHiddenAt = 0;
 let lastVisibleAt = 0;
 let restoreTimer = null;
 
@@ -21,24 +20,14 @@ export function installTabVisibilityMotionGuard() {
   if (installed || typeof document === "undefined" || typeof window === "undefined") return;
   installed = true;
 
-  const handleVisibilityChange = () => {
-    if (document.visibilityState === "hidden") {
-      lastHiddenAt = Date.now();
-      return;
-    }
-
-    if (lastHiddenAt > 0) {
-      setRestoredClass();
-    }
-  };
-
   const handlePageShow = (event) => {
     if (event?.persisted) {
       setRestoredClass();
     }
   };
 
-  document.addEventListener("visibilitychange", handleVisibilityChange);
+  // Normal tab switching should not make the app feel like it refreshed.
+  // Only suppress motion when the browser restores a page from bfcache.
   window.addEventListener("pageshow", handlePageShow);
 }
 

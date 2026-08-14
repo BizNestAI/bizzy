@@ -42,23 +42,41 @@ router.get("/accounts", requireAuth, async (req, res) => {
 
     const { data: txnStatusData, error: txnErr } = await supabase
       .from("bank_transactions")
-      .select("plaid_account_id, transaction_categorizations(status)")
+      .select("plaid_account_id,date,transaction_categorizations(status)")
       .eq("business_id", businessId)
       .eq("is_archived", false);
     if (txnErr) throw txnErr;
 
     const reviewCounts = {};
+    const transactionStats = {};
     (txnStatusData || []).forEach((row) => {
       const acct = row.plaid_account_id;
+      if (!acct) return;
       const status = row.transaction_categorizations?.[0]?.status || null;
       const needsReview = !status || status === "needs_review" || status === "uncategorized";
       if (needsReview) {
         reviewCounts[acct] = (reviewCounts[acct] || 0) + 1;
       }
+      const stats = transactionStats[acct] || {
+        first_imported_transaction_date: null,
+        latest_imported_transaction_date: null,
+        imported_transaction_count: 0,
+      };
+      stats.imported_transaction_count += 1;
+      if (row.date) {
+        if (!stats.first_imported_transaction_date || row.date < stats.first_imported_transaction_date) {
+          stats.first_imported_transaction_date = row.date;
+        }
+        if (!stats.latest_imported_transaction_date || row.date > stats.latest_imported_transaction_date) {
+          stats.latest_imported_transaction_date = row.date;
+        }
+      }
+      transactionStats[acct] = stats;
     });
 
     const mapped = (accounts || []).map((a) => {
       const balance = a?.current_balance ?? a?.available_balance ?? a?.limit_balance ?? null;
+      const stats = transactionStats[a.plaid_account_id] || {};
       return {
         id: a.plaid_account_id,
         name: a.name || a.official_name || "Bank account",
@@ -68,6 +86,9 @@ router.get("/accounts", requireAuth, async (req, res) => {
         balance: balance != null ? Number(balance) : null,
         currency: a?.iso_currency_code || null,
         toReview: reviewCounts[a.plaid_account_id] || 0,
+        importedTransactionCount: stats.imported_transaction_count || 0,
+        firstImportedTransactionDate: stats.first_imported_transaction_date || null,
+        latestImportedTransactionDate: stats.latest_imported_transaction_date || null,
         connected_at: a.connected_at || null,
         created_at: a.created_at || null,
         last_synced_at: null,
