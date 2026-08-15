@@ -8,6 +8,7 @@ const BUSINESS_FIELD_ALLOWLIST = [
   "billing_model",
   "founded_year",
   "top_challenge",
+  "bookkeeping_start_date",
 ];
 
 const REQUIRED_FIELDS = [
@@ -44,11 +45,19 @@ function cleanInteger(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function cleanDate(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const text = String(value).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
+}
+
 export function sanitizeInitialBusinessPayload(body = {}) {
   const out = {};
   for (const field of BUSINESS_FIELD_ALLOWLIST) {
     if (field === "team_size" || field === "founded_year") {
       out[field] = cleanInteger(body[field]);
+    } else if (field === "bookkeeping_start_date") {
+      out[field] = cleanDate(body[field]);
     } else {
       out[field] = cleanString(body[field]);
     }
@@ -91,6 +100,7 @@ function mapRpcRow(row = {}) {
     billing_model: row.billing_model,
     founded_year: row.founded_year,
     top_challenge: row.top_challenge,
+    bookkeeping_start_date: row.bookkeeping_start_date || null,
     membership_role: row.membership_role || "owner",
   };
 }
@@ -149,6 +159,18 @@ export async function createInitialBusinessForAuthenticatedUser({
     err.code = "BUSINESS_ONBOARDING_INVALID_RESULT";
     err.safeMessage = "Business onboarding could not be completed.";
     throw err;
+  }
+
+  if (profile.bookkeeping_start_date) {
+    const { data: updated, error: updateErr } = await supabase
+      .from("business_profiles")
+      .update({ bookkeeping_start_date: profile.bookkeeping_start_date })
+      .eq("id", row.id)
+      .eq("user_id", userId)
+      .select("id,user_id,business_name,industry,team_size,annual_revenue,state,services_offered,billing_model,founded_year,top_challenge,bookkeeping_start_date")
+      .maybeSingle();
+    if (updateErr) throw updateErr;
+    if (updated?.id) return mapRpcRow({ ...row, ...updated });
   }
 
   return mapRpcRow(row);

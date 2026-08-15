@@ -115,6 +115,7 @@ test("browser supplied user_id, business_id, and role are removed from sanitized
   assert.deepEqual(Object.keys(sanitized).sort(), [
     "annual_revenue",
     "billing_model",
+    "bookkeeping_start_date",
     "business_name",
     "founded_year",
     "industry",

@@ -7,6 +7,7 @@ import { getQBOClient } from "../../utils/qboClient.js";
 import { runBooksPostOnce } from "../../jobs/booksPost.cron.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
 
 const router = Router();
 
@@ -558,6 +559,14 @@ router.patch("/runs/:runId/transactions/:transactionId/account", async (req, res
       .maybeSingle();
     if (bankErr) throw bankErr;
     if (!bankTxn) return res.status(404).json({ ok: false, error: "transaction_not_found" });
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, run.business_id);
+    if (!isTransactionInActiveBookkeepingScope(bankTxn, bookkeepingStartDate)) {
+      return res.status(400).json({
+        ok: false,
+        error: "transaction_before_bookkeeping_start_date",
+        bookkeeping_start_date: bookkeepingStartDate,
+      });
+    }
 
     const { data: previous } = await supabase
       .from("transaction_categorizations")
@@ -695,6 +704,14 @@ router.post("/runs/:runId/transactions/:transactionId/retry-qbo-sync", async (re
       .maybeSingle();
     if (bankErr) throw bankErr;
     if (!bankTxn) return res.status(404).json({ ok: false, error: "transaction_not_found" });
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, run.business_id);
+    if (!isTransactionInActiveBookkeepingScope(bankTxn, bookkeepingStartDate)) {
+      return res.status(400).json({
+        ok: false,
+        error: "transaction_before_bookkeeping_start_date",
+        bookkeeping_start_date: bookkeepingStartDate,
+      });
+    }
 
     const { data: current, error: catErr } = await supabase
       .from("transaction_categorizations")
@@ -1297,11 +1314,13 @@ async function buildSummaries(businessId, month) {
 async function buildMonthlySourceLedger(businessId, month) {
   const [start, end] = monthBounds(month);
   const [prevStart, prevEnd] = previousMonthBounds(month);
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   // Monthly Review intentionally uses the same source records as Books Review:
   // active bank_transactions for the transaction date month plus their
   // transaction_categorizations rows. Do not switch this to report/P&L rows.
   const bankRows = await safeRows(() =>
-    supabase
+    applyActiveBookkeepingScope(
+      supabase
       .from("bank_transactions")
       .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,counterparty_name,amount,signed_amount,direction,pending,is_archived")
       .eq("business_id", businessId)
@@ -1309,6 +1328,8 @@ async function buildMonthlySourceLedger(businessId, month) {
       .gte("date", start)
       .lt("date", end)
       .order("date", { ascending: true }),
+      bookkeepingStartDate
+    ),
     "Monthly source ledger transactions"
   );
   const txnIds = bankRows.map((row) => row.id).filter(Boolean);
@@ -1323,13 +1344,16 @@ async function buildMonthlySourceLedger(businessId, month) {
       )
     : [];
   const previousBankRows = await safeRows(() =>
-    supabase
+    applyActiveBookkeepingScope(
+      supabase
       .from("bank_transactions")
       .select("id,date,name,merchant_name,counterparty_name,amount,signed_amount,is_archived")
       .eq("business_id", businessId)
       .eq("is_archived", false)
       .gte("date", prevStart)
       .lt("date", prevEnd),
+      bookkeepingStartDate
+    ),
     "Previous month source ledger transactions"
   );
   const previousTxnIds = previousBankRows.map((row) => row.id).filter(Boolean);
@@ -1823,6 +1847,7 @@ async function buildForecastEvidence(businessId, month) {
 
 async function buildJobCostingEvidence(businessId, month) {
   const [start, end] = monthBounds(month);
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const assignments = await safeRows(() =>
     supabase
       .from("job_transaction_assignments")
@@ -1834,15 +1859,16 @@ async function buildJobCostingEvidence(businessId, month) {
   );
   const assignmentTxnIds = new Set(assignments.map((row) => row.transaction_id).filter(Boolean));
 
-  const bankRows = await safeRows(() =>
-    supabase
+  const bankRows = await safeRows(() => {
+    let query = supabase
       .from("bank_transactions")
       .select("id,date,amount,name,merchant_name,is_archived")
       .eq("business_id", businessId)
       .gte("date", start)
-      .lt("date", end),
-    "Job costing bank transactions"
-  );
+      .lt("date", end);
+    query = applyActiveBookkeepingScope(query, bookkeepingStartDate);
+    return query;
+  }, "Job costing bank transactions");
   const bankIds = bankRows.map((row) => row.id).filter(Boolean);
   const catRows = bankIds.length
     ? await safeRows(() =>

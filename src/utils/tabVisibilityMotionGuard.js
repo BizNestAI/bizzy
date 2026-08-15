@@ -20,6 +20,12 @@ export function installTabVisibilityMotionGuard() {
   if (installed || typeof document === "undefined" || typeof window === "undefined") return;
   installed = true;
 
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === "visible") {
+      setRestoredClass();
+    }
+  };
+
   const handlePageShow = (event) => {
     if (event?.persisted) {
       setRestoredClass();
@@ -27,7 +33,8 @@ export function installTabVisibilityMotionGuard() {
   };
 
   // Normal tab switching should not make the app feel like it refreshed.
-  // Only suppress motion when the browser restores a page from bfcache.
+  // Suppress page-entry motion when Chrome resumes the tab or restores bfcache.
+  document.addEventListener("visibilitychange", handleVisibilityChange);
   window.addEventListener("pageshow", handlePageShow);
 }
 

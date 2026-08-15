@@ -3,6 +3,7 @@ import { normalizeTaxYear } from "./taxDomain.js";
 import { notFoundError, validationError } from "./taxErrors.js";
 import { getTaxEligibilityReason } from "./taxTransactionEligibility.js";
 import { normalizePostedTransactionForTax } from "./taxTransactionNormalizer.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../bookkeeping/bookkeepingScope.js";
 
 const CHUNK_SIZE = 500;
 const BANK_PAGE_SIZE = 1000;
@@ -34,6 +35,7 @@ export async function getPostedTransactionForTax({ supabase, businessId, transac
   if (!businessId) throw validationError("missing_business_id", "businessId is required.");
   if (!transactionId) throw validationError("missing_transaction_id", "transactionId is required.");
 
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const { data: bankTransaction, error } = await supabase
     .from("bank_transactions")
     .select(BANK_SELECT)
@@ -42,6 +44,12 @@ export async function getPostedTransactionForTax({ supabase, businessId, transac
     .maybeSingle();
   if (error) throw error;
   if (!bankTransaction) throw notFoundError("transaction_not_found", "Posted transaction was not found.");
+  if (!isTransactionInActiveBookkeepingScope(bankTransaction, bookkeepingStartDate)) {
+    throw notFoundError("posted_tax_transaction_not_found", "Eligible posted transaction was not found.", {
+      reason: "transaction_before_bookkeeping_start_date",
+      bookkeeping_start_date: bookkeepingStartDate,
+    });
+  }
 
   const related = await fetchRelatedRows({ supabase, businessId, transactionIds: [transactionId] });
   const row = buildTaxRow({
@@ -168,6 +176,7 @@ export async function getPostedTransactionSourceHealth({ supabase, businessId, t
 }
 
 async function fetchBankRows({ supabase, businessId, range, accountId, direction, includeArchivedPending = false }) {
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   let query = supabase
     .from("bank_transactions")
     .select(BANK_SELECT)
@@ -177,6 +186,7 @@ async function fetchBankRows({ supabase, businessId, range, accountId, direction
     .order("date", { ascending: false })
     .order("created_at", { ascending: false })
     .order("id", { ascending: false });
+  query = applyActiveBookkeepingScope(query, bookkeepingStartDate);
 
   if (!includeArchivedPending) {
     query = query.eq("is_archived", false).eq("pending", false);

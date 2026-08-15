@@ -1,4 +1,5 @@
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../bookkeeping/bookkeepingScope.js";
 import {
   isCostTransaction,
   isRevenueTransaction,
@@ -436,9 +437,10 @@ export async function backfillLegacyAssignmentFinancialRoles({ businessId, db = 
       .limit(limit);
     if (error && !isMissingSchemaError(error)) throw error;
     const transactionIds = Array.from(new Set((assignments || []).map((row) => row.transaction_id).filter(Boolean)));
+    const bookkeepingStartDate = await getBookkeepingStartDate(db, businessId);
     const evidenceIds = Array.from(new Set((assignments || []).map((row) => row.revenue_evidence_id).filter(Boolean)));
     const [{ data: transactions }, { data: categorizations }, { data: evidenceRows }] = await Promise.all([
-      transactionIds.length ? db.from("bank_transactions").select("*").eq("business_id", businessId).in("id", transactionIds) : { data: [] },
+      transactionIds.length ? applyActiveBookkeepingScope(db.from("bank_transactions").select("*").eq("business_id", businessId), bookkeepingStartDate).in("id", transactionIds) : { data: [] },
       transactionIds.length ? db.from("transaction_categorizations").select("*").eq("business_id", businessId).in("transaction_id", transactionIds) : { data: [] },
       evidenceIds.length ? db.from("job_revenue_evidence").select("*").eq("business_id", businessId).in("id", evidenceIds) : { data: [] },
     ]);

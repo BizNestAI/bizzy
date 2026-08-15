@@ -7,6 +7,7 @@ import {
 } from "../taxDomain.js";
 import { validationError } from "../taxErrors.js";
 import { round2 } from "./taxableIncomeDomain.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../../bookkeeping/bookkeepingScope.js";
 
 export const PAGE_SIZE = 1000;
 
@@ -111,14 +112,18 @@ export async function fetchAllClassifications({ supabase, businessId, taxYear })
 
 export async function fetchBankTransactions({ supabase, businessId, transactionIds }) {
   const map = new Map();
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   for (let i = 0; i < transactionIds.length; i += 500) {
     const chunk = transactionIds.slice(i, i + 500);
     if (!chunk.length) continue;
-    const { data, error } = await supabase
+    const { data, error } = await applyActiveBookkeepingScope(
+      supabase
       .from("bank_transactions")
       .select("id,business_id,date,pending,is_archived,signed_amount,direction,merchant_name,counterparty_name,name,plaid_transaction_id")
       .eq("business_id", businessId)
-      .in("id", chunk);
+      .in("id", chunk),
+      bookkeepingStartDate
+    );
     if (error) throw error;
     for (const row of data || []) map.set(String(row.id), row);
   }

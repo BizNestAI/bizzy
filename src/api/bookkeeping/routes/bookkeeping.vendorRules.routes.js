@@ -3,6 +3,7 @@ import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { looksLikeTaxonomyLandmineMemo, canonicalTxnDirection, computeMemoPrefixForLearning } from "../../../services/bookkeeping/vendorRuleLearner.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
+import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
 
 const router = Router();
 
@@ -86,15 +87,19 @@ router.post("/vendor-rules/from-transaction", requireAuth, async (req, res) => {
   if (!accountName) return res.status(400).json({ ok: false, error: "missing_account_name" });
 
   try {
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
     const { data: bankTxn, error: txnErr } = await supabase
       .from("bank_transactions")
-      .select("id,merchant_entity_id,name,merchant_name,counterparty_name,amount,direction,category_primary,personal_finance_category,qbo_entity_type,qbo_entity_id")
+      .select("id,date,merchant_entity_id,name,merchant_name,counterparty_name,amount,direction,category_primary,personal_finance_category,qbo_entity_type,qbo_entity_id")
       .eq("business_id", businessId)
       .eq("is_archived", false)
       .eq("id", txnId)
       .maybeSingle();
     if (txnErr) throw txnErr;
     if (!bankTxn) return res.status(404).json({ ok: false, error: "transaction_not_found" });
+    if (!isTransactionInActiveBookkeepingScope(bankTxn, bookkeepingStartDate)) {
+      return res.status(400).json({ ok: false, error: "transaction_before_bookkeeping_start_date" });
+    }
 
     const { data: catRow } = await supabase
       .from("transaction_categorizations")

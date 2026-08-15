@@ -2,6 +2,7 @@
 // Evaluates Plaid bank_transactions + Bizzi categ/posting metadata to populate reconciliation_runs + reconciliation_items.
 
 import { supabase } from "../supabaseAdmin.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "./bookkeepingScope.js";
 
 const CHUNK_SIZE = 500;
 const NOW = () => new Date().toISOString();
@@ -601,6 +602,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
   const plaidAccountId = opts.plaid_account_id || null;
   const nowTs = Date.now();
   const normalizedOpts = { ...opts, include_pending: includePending, include_archived: includeArchived };
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const runId = await prepareMonthlyRun({
     businessId,
     scope,
@@ -620,6 +622,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
       .eq("business_id", businessId)
       .gte("date", start)
       .lte("date", end);
+    bankQuery = applyActiveBookkeepingScope(bankQuery, bookkeepingStartDate);
     if (!includeArchived) bankQuery = bankQuery.eq("is_archived", false);
     if (plaidAccountId) bankQuery = bankQuery.eq("plaid_account_id", plaidAccountId);
     const { data: bankRows, error: bankErr } = await bankQuery;
@@ -807,6 +810,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
           .from("bank_transactions")
           .select("id,is_archived")
           .eq("business_id", businessId)
+          .gte("date", bookkeepingStartDate || "0001-01-01")
           .in("id", relatedTxnIds);
         if (relatedBankErr) throw relatedBankErr;
         activeHistoryTxnIds = new Set(

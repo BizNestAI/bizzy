@@ -9,6 +9,8 @@ import { ensureQboVendorForTransaction } from "../services/bookkeeping/qboVendor
 import { plaidEnvName } from "../services/plaid/plaidClient.js";
 import { triggerContractorCfoInsightsBestEffort } from "../services/insights/contractorCfoTriggerService.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../services/tax/taxChangeEvents.js";
+import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../services/bookkeeping/bookkeepingScope.js";
+import { getAutoPostToQuickBooks } from "../services/bookkeeping/autoPostControl.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
@@ -498,15 +500,25 @@ async function postToQbo(item, bankTxn, qbo, mapping) {
   throw new Error("invalid_qbo_account_mapping_type");
 }
 
-async function handleItem(item) {
+export async function handleItem(item, options = {}) {
   const businessId = item.business_id;
   const txnId = item.transaction_id;
+  const manual = options?.manual === true;
 
   if (item.status === "posted" || item.qbo_txn_id) {
     return;
   }
+  if (!manual) {
+    const autoPostEnabled = await getAutoPostToQuickBooks(supabase, businessId);
+    if (!autoPostEnabled) {
+      if (process.env.NODE_ENV !== "production") {
+        log.info("[books-post] auto-post disabled; skipping transaction", { businessId, txnId });
+      }
+      return;
+    }
+  }
   const nextAttempt = item?.meta?.next_post_attempt_at ? Date.parse(item.meta.next_post_attempt_at) : null;
-  if (nextAttempt && nextAttempt > Date.now()) {
+  if (!manual && nextAttempt && nextAttempt > Date.now()) {
     return;
   }
 
@@ -514,6 +526,41 @@ async function handleItem(item) {
   const bank = bankTxns[txnId] || null;
   if (!bank) {
     throw new Error("missing_bank_transaction");
+  }
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  if (!isTransactionInActiveBookkeepingScope(bank, bookkeepingStartDate)) {
+    await insertPostAttempt({
+      businessId,
+      transactionId: txnId,
+      status: "skipped",
+      errorMessage: "transaction_before_bookkeeping_start_date",
+      retryCount: Number(item?.meta?.post_retry_count || 0) || null,
+      postAfter: item?.post_after || null,
+      payloadSummary: summarizePayload(item, bank, null),
+      responseSummary: {
+        reason: "transaction_before_bookkeeping_start_date",
+        bookkeeping_start_date: bookkeepingStartDate,
+      },
+    });
+    await supabase
+      .from("transaction_categorizations")
+      .update({
+        status: "ignored",
+        post_after: null,
+        post_error: "transaction_before_bookkeeping_start_date",
+        last_post_attempt_at: new Date().toISOString(),
+        meta: {
+          ...(item.meta || {}),
+          post_block_reason: "transaction_before_bookkeeping_start_date",
+          bookkeeping_start_date: bookkeepingStartDate,
+          posting_in_progress: false,
+          next_post_attempt_at: null,
+          post_retry_count: null,
+        },
+      })
+      .eq("business_id", businessId)
+      .eq("transaction_id", txnId);
+    return;
   }
 
   const mapping = await getQboAccountForPlaidAccount(businessId, bank?.plaid_account_id);
@@ -638,12 +685,12 @@ async function handleItem(item) {
   await supabase
     .from("transaction_categorizations")
     .update({
-      meta: { ...(item.meta || {}), post_idempotency_key: idempotencyKey, posting_in_progress: true },
+      meta: { ...(item.meta || {}), post_idempotency_key: idempotencyKey, posting_in_progress: true, manual_post: manual === true },
       last_post_attempt_at: nowIso,
     })
     .eq("business_id", businessId)
     .eq("transaction_id", txnId);
-  item.meta = { ...(item.meta || {}), post_idempotency_key: idempotencyKey, posting_in_progress: true };
+  item.meta = { ...(item.meta || {}), post_idempotency_key: idempotencyKey, posting_in_progress: true, manual_post: manual === true };
 
   // Best-effort vendor resolution/creation after lock and fresh meta
   try {
@@ -741,6 +788,7 @@ async function handleItem(item) {
         posting_in_progress: false,
         post_retry_count: null,
         next_post_attempt_at: null,
+        manual_post: manual === true,
       },
     })
     .eq("business_id", businessId)
@@ -832,6 +880,66 @@ async function markFailed(item, message) {
     .eq("transaction_id", item.transaction_id);
 }
 
+export async function postSingleBookkeepingTransactionNow({ businessId, transactionId }) {
+  if (!businessId) throw new Error("missing_business_id");
+  if (!transactionId) throw new Error("missing_transaction_id");
+
+  const { data: item, error } = await supabase
+    .from("transaction_categorizations")
+    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id")
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!item) {
+    const err = new Error("transaction_not_found");
+    err.status = 404;
+    throw err;
+  }
+  if (item.status === "posted" || item.qbo_txn_id) {
+    return { ok: true, already_posted: true, transaction_id: transactionId, qbo_txn_id: item.qbo_txn_id || null };
+  }
+  if (!["approved", "auto_approved", "failed"].includes(item.status)) {
+    const err = new Error("transaction_not_handled");
+    err.status = 400;
+    throw err;
+  }
+  if (!item.final_qbo_account_id && !item?.meta?.cc_payment_cc_qbo_account_id) {
+    const err = new Error("missing_final_qbo_account");
+    err.status = 400;
+    throw err;
+  }
+
+  try {
+    await handleItem(item, { manual: true });
+  } catch (err) {
+    await markFailed(item, err?.message || "manual_post_failed");
+    err.status = err.status || 400;
+    throw err;
+  }
+
+  const { data: posted, error: postedErr } = await supabase
+    .from("transaction_categorizations")
+    .select("transaction_id,status,qbo_txn_id,qbo_txn_type,posted_at,post_error")
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .maybeSingle();
+  if (postedErr) throw postedErr;
+  if (!posted?.qbo_txn_id || posted.status !== "posted") {
+    const err = new Error(posted?.post_error || "manual_post_not_completed");
+    err.status = 400;
+    throw err;
+  }
+  return {
+    ok: true,
+    transaction_id: transactionId,
+    status: posted.status,
+    qbo_txn_id: posted.qbo_txn_id || null,
+    qbo_txn_type: posted.qbo_txn_type || null,
+    posted_at: posted.posted_at || null,
+  };
+}
+
 async function runOnce(options = {}) {
   const businessId = options?.businessId || null;
   const force = options?.force === true;
@@ -843,20 +951,36 @@ async function runOnce(options = {}) {
     eligible: 0,
     skipped: 0,
     attempted: 0,
+    auto_post_disabled: 0,
   };
   try {
+    if (businessId) {
+      const autoPostEnabled = await getAutoPostToQuickBooks(supabase, businessId);
+      if (!autoPostEnabled) {
+        summary.auto_post_disabled = 1;
+        return summary;
+      }
+    }
     const pending = await fetchPending(businessId, { force });
     summary.pending = pending.length;
     if (!pending.length) return summary;
 
     const nowTs = Date.now();
-    const duePending = force
+    let duePending = force
       ? pending || []
       : (pending || []).filter((item) => {
           const next = item?.meta?.next_post_attempt_at ? Date.parse(item.meta.next_post_attempt_at) : null;
           if (next && next > nowTs) return false;
           return true;
         });
+    const dueBusinessIds = Array.from(new Set((duePending || []).map((item) => item.business_id).filter(Boolean)));
+    const autoPostByBusiness = {};
+    for (const biz of dueBusinessIds) {
+      autoPostByBusiness[biz] = await getAutoPostToQuickBooks(supabase, biz);
+    }
+    const autoPostDisabledRows = duePending.filter((item) => autoPostByBusiness[item.business_id] !== true);
+    duePending = duePending.filter((item) => autoPostByBusiness[item.business_id] === true);
+    summary.auto_post_disabled = autoPostDisabledRows.length;
     summary.due = duePending.length;
     if (!duePending.length) return summary;
 

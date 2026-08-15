@@ -1,6 +1,7 @@
 import { supabase } from "../supabaseAdmin.js";
 import { getQboAccountForPlaidAccount } from "./accountMapping.js";
 import { fetchQboAccountBalance } from "./qboAccounts.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "./bookkeepingScope.js";
 
 const SENTINEL_ACCOUNT_ID = "__recon_sentinel__";
 
@@ -100,14 +101,18 @@ export function countRowsByPlaidAccount(rows = []) {
 
 async function fetchPendingCounts(businessId) {
   const pendingCounts = new Map();
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   try {
     const rows = await fetchAllRows((from, to) =>
-      supabase
+      applyActiveBookkeepingScope(
+        supabase
         .from("bank_transactions")
         .select("plaid_account_id")
         .eq("business_id", businessId)
         .eq("is_archived", false)
-        .eq("pending", true)
+        .eq("pending", true),
+        bookkeepingStartDate
+      )
         .range(from, to)
     );
     return countRowsByPlaidAccount(rows);
@@ -119,16 +124,20 @@ async function fetchPendingCounts(businessId) {
 
 async function fetchNeedsReviewCounts(businessId) {
   const needsCounts = new Map();
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const sixtyDaysAgo = daysAgoIso(60);
   let txRows = [];
   try {
     txRows = await fetchAllRows((from, to) =>
-      supabase
+      applyActiveBookkeepingScope(
+        supabase
         .from("bank_transactions")
         .select("id,plaid_account_id")
         .eq("business_id", businessId)
         .eq("is_archived", false)
-        .gte("date", sixtyDaysAgo)
+        .gte("date", sixtyDaysAgo),
+        bookkeepingStartDate
+      )
         .range(from, to)
     );
   } catch (txErr) {
@@ -162,6 +171,7 @@ async function fetchNeedsReviewCounts(businessId) {
 
 async function fetchApprovedWaitingCounts(businessId) {
   const waitingCounts = new Map();
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   let catRows = [];
   try {
     catRows = await fetchAllRows((from, to) =>
@@ -188,6 +198,7 @@ async function fetchApprovedWaitingCounts(businessId) {
         .select("id,plaid_account_id")
         .eq("business_id", businessId)
         .eq("is_archived", false)
+        .gte("date", bookkeepingStartDate || "0001-01-01")
         .in("id", slice);
       if (bankErr) {
         console.warn("[recon] waiting-to-post bank fetch failed", bankErr.message || bankErr);
@@ -207,6 +218,7 @@ async function fetchApprovedWaitingCounts(businessId) {
 
 async function fetchPostedStats(businessId) {
   const postedStats = new Map(); // acct -> { count, sum, lastPostedAt }
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const ninetyDaysAgo = daysAgoIso(90);
   let catRows = [];
   try {
@@ -235,6 +247,7 @@ async function fetchPostedStats(businessId) {
       .select("id,plaid_account_id,amount")
       .eq("business_id", businessId)
       .eq("is_archived", false)
+      .gte("date", bookkeepingStartDate || "0001-01-01")
       .in("id", slice);
     if (bankErr) {
       console.warn("[recon] posted bank fetch failed", bankErr.message || bankErr);

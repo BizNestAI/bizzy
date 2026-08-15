@@ -32,6 +32,7 @@ const DEFAULT_FORM_DATA = {
   services_offered: '',
   billing_model: BILLING_MODELS[0],
   top_challenge: '',
+  bookkeeping_start_date: '',
 };
 
 const getDraftStorageKey = (userId) =>
@@ -97,6 +98,7 @@ const hasDraftValues = (formData) =>
       formData.state ||
       formData.services_offered ||
       formData.top_challenge ||
+      formData.bookkeeping_start_date ||
       formData.billing_model !== DEFAULT_FORM_DATA.billing_model
   );
 
@@ -351,6 +353,7 @@ const BusinessWizard = () => {
           industry: normalize(record.industry, prev.industry),
           state: normalize(record.state, prev.state),
           services_offered: normalize(record.services_offered, prev.services_offered),
+          bookkeeping_start_date: normalize(record.bookkeeping_start_date, prev.bookkeeping_start_date),
           annual_revenue: normalize(record.annual_revenue, prev.annual_revenue),
           founded_year: normalize(record.founded_year, prev.founded_year),
           team_size: normalize(record.team_size, prev.team_size),
@@ -640,6 +643,17 @@ const BusinessWizard = () => {
                   value={formData.billing_model}
                   onChange={(e)=>setField('billing_model', e.target.value)}
                   options={BILLING_MODELS}
+                />
+              </div>
+              <div>
+                <Label htmlFor="setup-bookkeeping-start">When should Bizzi start managing your books?</Label>
+                <Input
+                  id="setup-bookkeeping-start"
+                  name="bookkeeping_start_date"
+                  autoComplete="off"
+                  type="date"
+                  value={formData.bookkeeping_start_date}
+                  onChange={(e)=>setField('bookkeeping_start_date', e.target.value)}
                 />
               </div>
               <div className="md:col-span-2">

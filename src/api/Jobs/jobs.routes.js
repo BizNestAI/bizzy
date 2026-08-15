@@ -3,6 +3,7 @@ import { supabase } from "../../services/supabaseAdmin.js"; // your existing hel
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { createRateLimiter } from "../_shared/rateLimit.js";
 import { fetchBookkeepingTransactions, normalizePostedBookTransaction } from "../bookkeeping/routes/bookkeeping.transactions.routes.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
 import { generateJobAssignmentSuggestionsForBusiness } from "../../services/jobCosting/jobAssignmentSuggestionEngine.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../services/insights/contractorCfoTriggerService.js";
 import {
@@ -1012,6 +1013,7 @@ async function fetchJobCostingRows(businessId) {
 }
 
 async function fetchPostedTransactionForAssignment(businessId, transactionId) {
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const [{ data: transaction, error: txnErr }, { data: categorization, error: catErr }] = await Promise.all([
     supabase
       .from("bank_transactions")
@@ -1033,6 +1035,12 @@ async function fetchPostedTransactionForAssignment(businessId, transactionId) {
     const e = new Error("Transaction was not found for this business.");
     e.status = 404;
     e.code = "transaction_not_found";
+    throw e;
+  }
+  if (!isTransactionInActiveBookkeepingScope(transaction, bookkeepingStartDate)) {
+    const e = new Error("Transaction is before the bookkeeping start date.");
+    e.status = 400;
+    e.code = "transaction_before_bookkeeping_start_date";
     throw e;
   }
   const isPosted = categorization?.status === "posted" || Boolean(categorization?.qbo_txn_id);
@@ -1204,12 +1212,16 @@ async function fetchJobSummaries(businessId) {
   let transactionMap = {};
   let categorizationMap = {};
   if (transactionIds.length) {
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
     const [{ data: transactions, error: txnErr }, { data: categorizations, error: catErr }] = await Promise.all([
-      supabase
+      applyActiveBookkeepingScope(
+        supabase
         .from("bank_transactions")
         .select("id,business_id,amount,direction,is_archived")
         .eq("business_id", businessId)
-        .eq("is_archived", false)
+        .eq("is_archived", false),
+        bookkeepingStartDate
+      )
         .in("id", transactionIds),
       supabase
         .from("transaction_categorizations")

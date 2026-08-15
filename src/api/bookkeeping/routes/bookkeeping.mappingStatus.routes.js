@@ -4,6 +4,7 @@ import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.js";
 import { suggestQboAccountForPlaidAccount } from "../../../services/bookkeeping/accountMapping.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../../../services/bookkeeping/bookkeepingScope.js";
 
 const router = Router();
 
@@ -35,6 +36,7 @@ router.get("/mapping-status", requireAuth, async (req, res) => {
 
   try {
     const nowIso = new Date().toISOString();
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
     const { data: catRows, error: catErr } = await supabase
       .from("transaction_categorizations")
       .select("transaction_id,status,post_after,qbo_txn_id")
@@ -62,12 +64,15 @@ router.get("/mapping-status", requireAuth, async (req, res) => {
       });
     }
 
-    const { data: bankRows, error: bankErr } = await supabase
+    const { data: bankRows, error: bankErr } = await applyActiveBookkeepingScope(
+      supabase
       .from("bank_transactions")
-      .select("id,plaid_account_id")
+      .select("id,plaid_account_id,date")
       .eq("business_id", businessId)
       .eq("is_archived", false)
-      .in("id", txnIds);
+      .in("id", txnIds),
+      bookkeepingStartDate
+    );
     if (bankErr) throw bankErr;
 
     const plaidIds = Array.from(

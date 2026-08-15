@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { getTaxEligibilityReason, isTaxClassificationCandidate } from "../src/services/tax/taxTransactionEligibility.js";
 import { normalizePostedTransactionForTax } from "../src/services/tax/taxTransactionNormalizer.js";
 import {
+  getPostedTransactionForTax,
   listPostedTransactionsForTax,
   listUnclassifiedPostedTransactions,
 } from "../src/services/tax/taxPostedTransaction.repository.js";
@@ -80,6 +81,38 @@ test("repository enforces business and year isolation with deterministic orderin
   });
   const result = await listPostedTransactionsForTax({ supabase, businessId: BUSINESS_ID, taxYear: 2026, limit: 10 });
   assert.deepEqual(result.rows.map((row) => row.transactionId), ["newer", "older"]);
+});
+
+test("direct posted tax transaction detail rejects pre-cutoff transactions", async () => {
+  const supabase = makeSupabase({
+    business_profiles: [{ id: BUSINESS_ID, bookkeeping_start_date: "2026-07-01" }],
+    bank_transactions: [bankTxn({ id: "pre-cutoff", date: "2026-06-30" })],
+    transaction_categorizations: [cat({ transaction_id: "pre-cutoff", status: "posted", qbo_txn_id: "qbo-pre" })],
+  });
+
+  await assert.rejects(
+    () => getPostedTransactionForTax({ supabase, businessId: BUSINESS_ID, transactionId: "pre-cutoff" }),
+    (err) => err?.code === "posted_tax_transaction_not_found"
+      && err?.details?.reason === "transaction_before_bookkeeping_start_date"
+  );
+});
+
+test("direct posted tax transaction detail keeps post-cutoff and null-cutoff legacy behavior", async () => {
+  const withCutoff = makeSupabase({
+    business_profiles: [{ id: BUSINESS_ID, bookkeeping_start_date: "2026-07-01" }],
+    bank_transactions: [bankTxn({ id: "post-cutoff", date: "2026-07-01" })],
+    transaction_categorizations: [cat({ transaction_id: "post-cutoff", status: "posted", qbo_txn_id: "qbo-post" })],
+  });
+  const post = await getPostedTransactionForTax({ supabase: withCutoff, businessId: BUSINESS_ID, transactionId: "post-cutoff" });
+  assert.equal(post.transactionId, "post-cutoff");
+
+  const legacy = makeSupabase({
+    business_profiles: [{ id: BUSINESS_ID, bookkeeping_start_date: null }],
+    bank_transactions: [bankTxn({ id: "legacy-pre", date: "2026-06-30" })],
+    transaction_categorizations: [cat({ transaction_id: "legacy-pre", status: "posted", qbo_txn_id: "qbo-legacy" })],
+  });
+  const legacyRow = await getPostedTransactionForTax({ supabase: legacy, businessId: BUSINESS_ID, transactionId: "legacy-pre" });
+  assert.equal(legacyRow.transactionId, "legacy-pre");
 });
 
 test("repository paginates over more than 1000 posted rows", async () => {

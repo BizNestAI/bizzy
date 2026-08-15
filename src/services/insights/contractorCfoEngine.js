@@ -8,6 +8,7 @@ import {
   shouldInsertInsight,
 } from './insightDedupeService.js';
 import { buildTaxInsightContext } from './context/buildTaxInsightContext.js';
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from '../bookkeeping/bookkeepingScope.js';
 
 const MODULE = 'contractor_cfo';
 const DEFAULT_TRIGGER = 'scheduled';
@@ -175,11 +176,12 @@ function isActiveCategorization(row) {
 }
 
 async function loadActiveBankTransactionIds(snapshot, limit = 1000) {
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, snapshot.businessId);
   const rows = await safeRows(
     snapshot,
     'bank_transactions_active_ids',
     'bank_transactions',
-    (q) => q.eq('is_archived', false).limit(limit)
+    (q) => applyActiveBookkeepingScope(q.eq('is_archived', false), bookkeepingStartDate).limit(limit)
   );
   snapshot.meta.sources.bank_transactions_active_ids = rows.length;
   return new Set(rows.map((row) => row.id).filter(Boolean));

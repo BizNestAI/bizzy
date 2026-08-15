@@ -52,6 +52,58 @@ export async function runPostingNow(businessId, options = {}) {
   return res;
 }
 
+export async function postTransactionToQuickBooks(businessId, transactionId) {
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/posting/transactions/${encodeURIComponent(transactionId)}`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId }),
+  });
+  if (res && res.ok === false) {
+    throw new Error(res.message || res.error || "manual_post_failed");
+  }
+  return res;
+}
+
+export async function getAutoPostStatus(businessId) {
+  return safeFetch(apiUrl("/api/bookkeeping/posting/auto-post"), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+}
+
+export async function updateAutoPostStatus(businessId, { enabled, confirmBacklog = false } = {}) {
+  let res;
+  try {
+    res = await safeFetch(apiUrl("/api/bookkeeping/posting/auto-post"), {
+      method: "PATCH",
+      headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        business_id: businessId,
+        enabled: enabled === true,
+        confirm_backlog: confirmBacklog === true,
+      }),
+    });
+  } catch (err) {
+    const body = err?.body || {};
+    if (err?.status === 409 && body?.requires_confirmation) {
+      const wrapped = new Error(body.message || body.error || "auto_post_backlog_confirmation_required");
+      wrapped.code = body.error || "auto_post_backlog_confirmation_required";
+      wrapped.requiresConfirmation = true;
+      wrapped.handledBacklogCount = Number(body.handled_backlog_count || 0);
+      throw wrapped;
+    }
+    throw err;
+  }
+  if (res && res.ok === false) {
+    const err = new Error(res.message || res.error || "auto_post_update_failed");
+    err.code = res.error || null;
+    err.requiresConfirmation = res.requires_confirmation === true;
+    err.handledBacklogCount = Number(res.handled_backlog_count || 0);
+    throw err;
+  }
+  return res;
+}
+
 export async function getQboCoa(businessId) {
   return safeFetch(apiUrl("/api/bookkeeping/qbo/coa"), {
     method: "GET",

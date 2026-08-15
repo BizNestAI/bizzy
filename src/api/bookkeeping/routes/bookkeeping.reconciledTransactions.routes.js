@@ -2,6 +2,7 @@ import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../../../services/bookkeeping/bookkeepingScope.js";
 
 const router = Router();
 
@@ -34,6 +35,7 @@ router.get("/reconciled-transactions", requireAuth, async (req, res) => {
   const dateTo = parseDate(req.query?.date_to);
 
   try {
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
     // Correctness-first implementation:
     // fetch the posted categorizations in posted_at order, apply bank-row filters,
     // then paginate the fully filtered result set. This can later move to an RPC/view
@@ -68,6 +70,7 @@ router.get("/reconciled-transactions", requireAuth, async (req, res) => {
       .eq("business_id", businessId)
       .eq("is_archived", false)
       .in("id", candidateIds);
+    bankQuery = applyActiveBookkeepingScope(bankQuery, bookkeepingStartDate);
     if (plaidAccountId) bankQuery = bankQuery.eq("plaid_account_id", plaidAccountId);
     if (dateFrom) bankQuery = bankQuery.gte("date", dateFrom);
     if (dateTo) bankQuery = bankQuery.lte("date", dateTo);

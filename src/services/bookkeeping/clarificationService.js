@@ -2,6 +2,8 @@ import { supabase } from "../supabaseAdmin.js";
 import { fetchChartOfAccounts } from "./qboAccounts.js";
 import { mapIntentToCoa } from "./intentToCoaMapper.js";
 import { computeMemoPrefixForLearning, canonicalTxnDirection, cleanMemoForPrefix } from "./vendorRuleLearner.js";
+import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
+import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "./autoPostControl.js";
 
 const GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
 
@@ -19,7 +21,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
   const { data: exactRow, error: exactErr } = await supabase
     .from("bank_transactions")
     .select(
-      "id,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
+      "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
     )
     .eq("business_id", businessId)
     .eq("id", transactionId)
@@ -70,7 +72,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
       supabase
         .from("bank_transactions")
         .select(
-          "id,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
+          "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
         )
         .eq("business_id", businessId)
         .eq("is_archived", false)
@@ -87,7 +89,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
       supabase
         .from("bank_transactions")
         .select(
-          "id,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
+          "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
         )
         .eq("business_id", businessId)
         .eq("is_archived", false)
@@ -103,7 +105,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
     const { data, error } = await supabase
       .from("bank_transactions")
       .select(
-        "id,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
+        "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
       )
       .eq("business_id", businessId)
       .eq("is_archived", false)
@@ -531,6 +533,8 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
     catMeta[row.transaction_id] = row.meta || {};
   });
 
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  const autoPostEnabled = await getAutoPostToQuickBooks(supabase, businessId);
   const coaAccounts = await fetchChartOfAccounts(businessId, { includeSubaccounts: true });
 
   const results = [];
@@ -564,6 +568,17 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
       unmapped += 1;
       continue;
     }
+    if (!isTransactionInActiveBookkeepingScope(txn, bookkeepingStartDate)) {
+      results.push({
+        request_id: ans.request_id,
+        transaction_id: ans.transaction_id,
+        canonical_transaction_id: canonicalTxnId,
+        error: "transaction_before_bookkeeping_start_date",
+        bookkeeping_start_date: bookkeepingStartDate,
+      });
+      unmapped += 1;
+      continue;
+    }
     const answerText = (ans.answer_text || "").trim();
     if (answerText.length < 2 || answerText.length > 200) {
       results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "invalid_answer_length" });
@@ -590,7 +605,7 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
       finalId = mapping.account.id;
       finalName = mapping.account.name;
       status = baseMeta.safe_to_auto_post === true ? "auto_approved" : "approved";
-      post_after = new Date(Date.now() + GRACE_HOURS * 60 * 60 * 1000).toISOString();
+      post_after = computePostAfterForAutoPost(autoPostEnabled, GRACE_HOURS);
       mappedFlag = true;
     } else {
       baseMeta.clarification_unmapped = true;

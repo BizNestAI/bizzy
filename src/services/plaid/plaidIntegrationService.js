@@ -16,6 +16,7 @@ export async function createLinkToken({ businessId, userId }) {
     user: { client_user_id: String(userId) },
     client_name: "Bizzi",
     products: ["transactions"],
+    transactions: { days_requested: 365 },
     country_codes: ["US"],
     language: "en",
     ...(process.env.PLAID_WEBHOOK_URL ? { webhook: process.env.PLAID_WEBHOOK_URL } : {}),

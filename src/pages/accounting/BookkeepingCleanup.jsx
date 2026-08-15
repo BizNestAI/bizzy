@@ -20,6 +20,9 @@ import {
   getMappingStatus,
   getClarificationRequests,
   runPostingNow,
+  postTransactionToQuickBooks,
+  getAutoPostStatus,
+  updateAutoPostStatus,
 } from "../../services/bookkeeping/bookkeepingClient.js";
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
@@ -202,12 +205,14 @@ function formatShortDate(dateStr) {
 function AccountCard({ account, selected, onClick }) {
   const firstImported = formatShortDate(account.firstImportedTransactionDate);
   const latestImported = formatShortDate(account.latestImportedTransactionDate);
+  const activeStart = formatShortDate(account.bookkeepingStartDate || account.bookkeeping_start_date);
   const importRange =
     firstImported && latestImported
       ? firstImported === latestImported
-        ? `Imported ${firstImported}`
-        : `Imported ${firstImported} to ${latestImported}`
+        ? `Imported range: ${firstImported}`
+        : `Imported range: ${firstImported} to ${latestImported}`
       : null;
+  const activeRange = activeStart ? `Active books start: ${activeStart}` : "Active books start: all imported dates";
 
   return (
     <button
@@ -228,6 +233,7 @@ function AccountCard({ account, selected, onClick }) {
       </div>
       <div className="text-base font-semibold text-slate-50">{account.name}</div>
       {importRange ? <div className="text-[11px] text-slate-400">{importRange}</div> : null}
+      <div className="text-[11px] text-slate-500">{activeRange}</div>
     </button>
   );
 }
@@ -408,6 +414,10 @@ function BookkeepingCleanup() {
   const showPostedToast = () => window.alert("Already posted to QuickBooks.");
   const [mappingStatus, setMappingStatus] = useState(null);
   const [loadingMappingStatus, setLoadingMappingStatus] = useState(false);
+  const [autoPostStatus, setAutoPostStatus] = useState({ auto_post_to_quickbooks: false, handled_backlog_count: 0 });
+  const [loadingAutoPost, setLoadingAutoPost] = useState(false);
+  const [savingAutoPost, setSavingAutoPost] = useState(false);
+  const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [clarRequests, setClarRequests] = useState([]);
   const [clarCount, setClarCount] = useState(null);
   const [clarOpen, setClarOpen] = useState(false);
@@ -425,6 +435,63 @@ function BookkeepingCleanup() {
       setLoadingMappingStatus(false);
     }
   }, [businessId, usingDemo]);
+
+  const loadAutoPostStatus = useCallback(async () => {
+    if (!businessId || usingDemo) return;
+    setLoadingAutoPost(true);
+    try {
+      const res = await getAutoPostStatus(businessId);
+      setAutoPostStatus(res || { auto_post_to_quickbooks: false, handled_backlog_count: 0 });
+    } catch (e) {
+      console.warn("[bookkeeping] auto-post status fetch failed", e?.message || e);
+      setAutoPostStatus((prev) => ({ ...(prev || {}), auto_post_to_quickbooks: false }));
+    } finally {
+      setLoadingAutoPost(false);
+    }
+  }, [businessId, usingDemo]);
+
+  const handleToggleAutoPost = useCallback(async () => {
+    if (!businessId || usingDemo || savingAutoPost) return;
+    const nextEnabled = autoPostStatus?.auto_post_to_quickbooks !== true;
+    if (nextEnabled) {
+      const count = Number(autoPostStatus?.handled_backlog_count || 0);
+      const backlogLine = count
+        ? `\n\nYou currently have ${count} handled transactions waiting. These will become eligible for QuickBooks posting after a fresh grace period.`
+        : "";
+      const confirmed = window.confirm(
+        `Turn on automatic QuickBooks posting?\n\nEligible transactions will move through Bizzi's posting grace period before being sent to QuickBooks. You'll have time to review and correct them before they're posted.${backlogLine}`
+      );
+      if (!confirmed) return;
+    }
+    setSavingAutoPost(true);
+    try {
+      let res;
+      try {
+        res = await updateAutoPostStatus(businessId, { enabled: nextEnabled, confirmBacklog: nextEnabled });
+      } catch (err) {
+        if (nextEnabled && err?.requiresConfirmation) {
+          const count = Number(err.handledBacklogCount || 0);
+          const backlogLine = count
+            ? `\n\nYou currently have ${count} handled transactions waiting. These will become eligible for QuickBooks posting after a fresh grace period.`
+            : "";
+          const confirmed = window.confirm(
+            `Turn on automatic QuickBooks posting?\n\nEligible transactions will move through Bizzi's posting grace period before being sent to QuickBooks. You'll have time to review and correct them before they're posted.${backlogLine}`
+          );
+          if (!confirmed) return;
+          res = await updateAutoPostStatus(businessId, { enabled: true, confirmBacklog: true });
+        } else {
+          throw err;
+        }
+      }
+      setAutoPostStatus(res || { auto_post_to_quickbooks: nextEnabled, handled_backlog_count: 0 });
+      setCountsRefreshKey((v) => v + 1);
+    } catch (e) {
+      console.warn("[bookkeeping] auto-post update failed", e?.message || e);
+      window.alert(e?.message || "Could not update Auto-post.");
+    } finally {
+      setSavingAutoPost(false);
+    }
+  }, [autoPostStatus?.auto_post_to_quickbooks, businessId, savingAutoPost, usingDemo]);
 
   const loadTabCounts = useCallback(async () => {
     if (usingDemo) return;
@@ -835,6 +902,43 @@ function BookkeepingCleanup() {
     }
   };
 
+  const handleManualPostTransaction = async (txnId) => {
+    if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
+    const txn = transactions.find((t) => t.id === txnId);
+    if (!txn) return;
+    const amount = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0;
+    const accountName = txn.glAccountName || txn.final_qbo_account_name || txn.suggestedAccountName || txn.currentAccount || "Unselected";
+    const context = [
+      `Date: ${txn.date || "Unknown"}`,
+      `Description/payee: ${txn.description || txn.vendor || txn.payee || "Unknown"}`,
+      `Amount: ${amount < 0 ? "-" : "+"}$${Math.abs(amount).toFixed(2)}`,
+      `Category/account: ${accountName}`,
+    ].join("\n");
+    const confirmed = window.confirm(
+      `Post this transaction to QuickBooks?\n\nThis will send this transaction to your connected QuickBooks company now.\n\n${context}`
+    );
+    if (!confirmed) return;
+
+    setPostingTransactionIds((prev) => new Set(prev).add(txnId));
+    try {
+      await postTransactionToQuickBooks(businessId, txnId);
+      await reloadTransactions();
+      setCountsRefreshKey((value) => value + 1);
+      await loadMappingStatus();
+      window.alert("Transaction posted to QuickBooks.");
+    } catch (err) {
+      console.warn("[bookkeeping] manual post failed", err?.message || err);
+      window.alert(err?.message || "QuickBooks rejected the transaction. It was not marked Posted.");
+      await reloadTransactions();
+    } finally {
+      setPostingTransactionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(txnId);
+        return next;
+      });
+    }
+  };
+
   useEffect(() => {
     setSelectedIds(new Set());
     setPage(1);
@@ -1157,7 +1261,8 @@ function BookkeepingCleanup() {
     if (usingDemo) return;
     reloadAccounts();
     reloadCoa();
-  }, [usingDemo, reloadAccounts, reloadCoa]);
+    loadAutoPostStatus();
+  }, [usingDemo, reloadAccounts, reloadCoa, loadAutoPostStatus]);
 
   useEffect(() => {
     if (usingDemo) return;
@@ -1441,6 +1546,23 @@ function BookkeepingCleanup() {
               >
                 Rules
               </button>
+              <button
+                type="button"
+                disabled={savingAutoPost || loadingAutoPost}
+                onClick={handleToggleAutoPost}
+                className={`rounded-full px-4 py-1.5 min-w-[132px] text-center border transition ${
+                  autoPostStatus?.auto_post_to_quickbooks === true
+                    ? "border-emerald-400/50 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
+                    : "border-white/10 text-slate-200 hover:border-[var(--accent-line)] hover:bg-[var(--panel)]"
+                } ${savingAutoPost || loadingAutoPost ? "cursor-not-allowed opacity-60" : ""}`}
+                title={
+                  autoPostStatus?.auto_post_to_quickbooks === true
+                    ? "Eligible handled transactions can post to QuickBooks after the grace period."
+                    : "Handled transactions will not be automatically posted to QuickBooks."
+                }
+              >
+                Auto-post · {autoPostStatus?.auto_post_to_quickbooks === true ? "On" : "Off"}
+              </button>
             </>
           ) : null}
         </div>
@@ -1554,6 +1676,8 @@ function BookkeepingCleanup() {
               toggleRow={toggleRow}
               onApprove={handleApprove}
               onUndo={handleUndo}
+              onManualPost={handleManualPostTransaction}
+              postingTransactionIds={postingTransactionIds}
               accounts={groupedChartAccounts}
               onAccountChange={handleAccountChange}
               page={page}

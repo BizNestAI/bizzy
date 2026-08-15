@@ -318,13 +318,9 @@ export function useInsightsStore({
     return () => clearInterval(id);
   }, [fetchInsights, refreshMs]);
 
-  // Pull new when window regains focus/online
-  useEffect(() => {
-    const onFocus = () => fetchInsights({ append: true });
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, [fetchInsights]);
-
+  // Pull new when the browser comes back online. Avoid focus-based refreshes:
+  // switching away to another tab and back should not make the app feel like
+  // the active page reloaded.
   useEffect(() => {
     const onOnline = () => fetchInsights({ append: true });
     window.addEventListener('online', onOnline);

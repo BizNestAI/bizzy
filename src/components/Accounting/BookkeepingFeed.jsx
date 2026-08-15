@@ -4,7 +4,7 @@ import ReactDOM from "react-dom";
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
-const MIN_COL_WIDTHS = [36, 90, 160, 140, 150, 100, 170]; // px floors per column
+const MIN_COL_WIDTHS = [36, 90, 160, 140, 150, 100, 230]; // px floors per column
 
 export function CoaDropdown({ value, suggestedId, suggestedName, accounts, onChange, status, disabled }) {
   const [open, setOpen] = React.useState(false);
@@ -229,6 +229,8 @@ export default function BookkeepingFeed({
   toggleRow,
   onApprove,
   onUndo,
+  onManualPost,
+  postingTransactionIds,
   accounts = [],
   onAccountChange,
   panelBg,
@@ -241,7 +243,7 @@ export default function BookkeepingFeed({
   readOnly = false,
 }) {
   // Column widths (px) — draggable like QuickBooks
-  const [colWidths, setColWidths] = React.useState([36, 90, 220, 160, 170, 100, 180]);
+  const [colWidths, setColWidths] = React.useState([36, 90, 220, 160, 170, 100, 250]);
   const containerRef = React.useRef(null);
   const scrollAreaRef = React.useRef(null);
   const [containerWidth, setContainerWidth] = React.useState(null);
@@ -503,6 +505,7 @@ export default function BookkeepingFeed({
               !txn.qboEntityId &&
               payeeConfidence === "high";
             const isPosted = txn.status === "posted";
+            const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
 
             return (
               <div
@@ -600,23 +603,34 @@ export default function BookkeepingFeed({
                 {isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
-                  <>
+                  <div className="flex items-center justify-center gap-1">
                     <button
                       className="inline-flex items-center justify-center rounded-full border border-amber-300/60 bg-amber-500/15 px-2 py-[3px] text-[10px] font-medium text-amber-100 hover:bg-amber-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={readOnly}
+                      disabled={readOnly || isPosting}
                       onClick={() => {
-                        if (readOnly) return;
+                        if (readOnly || isPosting) return;
                         onUndo && onUndo(txn.id);
                       }}
                     >
                       Undo
+                    </button>
+                    <button
+                      className="inline-flex items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/15 px-2 py-[3px] text-[10px] font-medium text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                      disabled={readOnly || isPosting}
+                      onClick={() => {
+                        if (readOnly || isPosting) return;
+                        onManualPost && onManualPost(txn.id);
+                      }}
+                      title={readOnly ? "Billing required to post transactions." : "Post this handled transaction to QuickBooks now."}
+                    >
+                      {isPosting ? "Posting..." : "Post to QuickBooks"}
                     </button>
                     {txn.status === "auto_approved" ? (
                       <span className="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2 py-[2px] text-[9px] font-semibold text-emerald-100">
                         Auto-approved
                       </span>
                     ) : null}
-                  </>
+                  </div>
                 ) : (
                  <button
                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/14 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/24 hover:border-emerald-300/90 active:scale-[0.99] disabled:opacity-45 disabled:cursor-not-allowed shadow-[0_2px_6px_rgba(0,0,0,0.2)] transition-transform"

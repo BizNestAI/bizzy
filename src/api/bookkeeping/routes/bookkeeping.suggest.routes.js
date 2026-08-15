@@ -15,6 +15,8 @@ import { mapIntentToCoa, resolveIntentKey } from "../../../services/bookkeeping/
 import { createQboCoaAccountIfNeeded } from "../../../services/bookkeeping/qboCoaCreationService.js";
 import { createOrUpdateClarificationRequest } from "../../../services/bookkeeping/clarificationService.js";
 import { computeMemoPrefixForLearning } from "../../../services/bookkeeping/vendorRuleLearner.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
+import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "../../../services/bookkeeping/autoPostControl.js";
 
 const router = Router();
 
@@ -127,7 +129,7 @@ function shouldForceCanonicalIntentAccount(intent = "", mappedAccountName = "") 
   return Boolean(canonical) && canonical !== mapped;
 }
 
-function applyAutoApproval({ status, confidence, meta = {}, checkHit = {}, suggestedAcct = {}, taxonomyType = null, nowIso, reason, autoApprove = false, txnId = null }) {
+function applyAutoApproval({ status, confidence, meta = {}, checkHit = {}, suggestedAcct = {}, taxonomyType = null, nowIso, reason, autoApprove = false, autoPostEnabled = false, txnId = null }) {
   const conf = String(confidence || "").toLowerCase();
   const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution", "cc_payment"];
   if (checkHit?.is_check) return { status, meta, finalAcctId: undefined, finalAcctName: undefined, postAfter: undefined, decidedBy: undefined, decidedAt: undefined };
@@ -144,7 +146,7 @@ function applyAutoApproval({ status, confidence, meta = {}, checkHit = {}, sugge
   ) {
     const finalAcctId = suggestedAcct?.id || null;
     const finalAcctName = suggestedAcct?.name || null;
-    const postAfter = new Date(Date.now() + GRACE_HOURS * 60 * 60 * 1000).toISOString();
+    const postAfter = computePostAfterForAutoPost(autoPostEnabled, GRACE_HOURS);
     const decidedBy = "bizzi";
     const decidedAt = nowIso;
     const nextMeta = {
@@ -155,6 +157,7 @@ function applyAutoApproval({ status, confidence, meta = {}, checkHit = {}, sugge
       txnId,
       reason: nextMeta.auto_approve_reason,
       post_after: postAfter,
+      auto_post_to_quickbooks: autoPostEnabled === true,
     });
     return {
       status: "auto_approved",
@@ -703,7 +706,7 @@ function enforceCheckNeverAutoApprove(meta = {}) {
   return { ...meta, safe_to_auto_post: false, auto_approve_reason: null };
 }
 
-async function findTransferPairTxnId(businessId, row) {
+async function findTransferPairTxnId(businessId, row, { bookkeepingStartDate = null, allowHistoricalContext = false } = {}) {
   const amount = Number(row.amount || 0);
   if (!Number.isFinite(amount) || amount === 0) return null;
   const targetAmount = -amount;
@@ -742,13 +745,18 @@ async function findTransferPairTxnId(businessId, row) {
     const catPrimary = (candidate.category_primary || "").toUpperCase();
     const memo = [candidate.name, candidate.merchant_name, candidate.counterparty_name].filter(Boolean).join(" ").toLowerCase();
     if (pfc.startsWith("TRANSFER") || catPrimary.startsWith("TRANSFER") || matchesToken(memo)) {
-      return candidate.id;
+      const inActiveScope = isTransactionInActiveBookkeepingScope(candidate, bookkeepingStartDate);
+      if (!inActiveScope && !allowHistoricalContext) return null;
+      return {
+        txnId: candidate.id,
+        historicalContextOnly: !inActiveScope,
+      };
     }
   }
   return null;
 }
 
-async function findRefundOriginalTxn({ businessId, refundTxn }) {
+async function findRefundOriginalTxn({ businessId, refundTxn, bookkeepingStartDate = null, allowHistoricalContext = false }) {
   const amt = Number(refundTxn.amount || 0);
   if (!Number.isFinite(amt) || amt === 0) return null;
   const targetAmount = -amt;
@@ -806,6 +814,8 @@ async function findRefundOriginalTxn({ businessId, refundTxn }) {
 
   const candidate = scored[0]?.row || null;
   if (!candidate) return null;
+  const inActiveScope = isTransactionInActiveBookkeepingScope(candidate, bookkeepingStartDate);
+  if (!inActiveScope && !allowHistoricalContext) return null;
 
   const { data: catRow } = await supabase
     .from("transaction_categorizations")
@@ -822,6 +832,7 @@ async function findRefundOriginalTxn({ businessId, refundTxn }) {
     txnId: candidate.id,
     accountId,
     accountName,
+    historicalContextOnly: !inActiveScope,
   };
 }
 
@@ -931,6 +942,8 @@ router.post("/suggest", requireAuth, async (req, res) => {
   }
 
   try {
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+    const autoPostEnabled = await getAutoPostToQuickBooks(supabase, businessId);
     // Fetch COA
     const coa = await fetchChartOfAccounts(businessId, { includeSubaccounts: true });
     const coaMap = (coa || []).reduce((acc, c) => {
@@ -959,7 +972,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
     const taxonomyContext = { ownerTokens };
 
     // Step A: base transactions to consider
-    const txQuery = supabase
+    let txQuery = supabase
       .from("bank_transactions")
       .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel")
       .eq("business_id", businessId)
@@ -970,6 +983,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
       if (rangeStart) txQuery.gte("date", normalizeDate(rangeStart));
       if (accountId) txQuery.eq("plaid_account_id", accountId);
     }
+    txQuery = applyActiveBookkeepingScope(txQuery, bookkeepingStartDate);
     const { data: txns, error: txErr } = await txQuery;
     if (txErr) throw txErr;
 
@@ -1243,11 +1257,17 @@ router.post("/suggest", requireAuth, async (req, res) => {
             }
             mergedMeta.suggestion_source = mergedMeta.suggestion_source || "taxonomy";
             if (taxHit.type === "transfer_internal") {
-              const pairId = await findTransferPairTxnId(businessId, row);
-              if (pairId) {
-                mergedMeta.transfer_pair_txn_id = pairId;
+              const pair = await findTransferPairTxnId(businessId, row, {
+                bookkeepingStartDate,
+                allowHistoricalContext: true,
+              });
+              if (pair?.txnId) {
+                mergedMeta.transfer_pair_txn_id = pair.txnId;
                 mergedMeta.transfer_pair_confidence = "high";
-                mergedMeta.transfer_pair_notes = "Matched opposite-side transfer by amount/date";
+                mergedMeta.transfer_pair_notes = pair.historicalContextOnly
+                  ? "Matched opposite-side transfer by amount/date as historical context only"
+                  : "Matched opposite-side transfer by amount/date";
+                mergedMeta.transfer_pair_historical_context_only = !!pair.historicalContextOnly;
               }
             }
             if (taxHit.type === "owner_draw" || taxHit.type === "owner_contribution") {
@@ -1257,12 +1277,18 @@ router.post("/suggest", requireAuth, async (req, res) => {
               mergedMeta.owner_move_equity_account_name = suggested?.name || null;
             }
             if (taxHit.type === "refund") {
-              const orig = await findRefundOriginalTxn({ businessId, refundTxn: row });
+              const orig = await findRefundOriginalTxn({
+                businessId,
+                refundTxn: row,
+                bookkeepingStartDate,
+                allowHistoricalContext: true,
+              });
               if (orig) {
                 mergedMeta.refund_match_source = "prior_txn";
                 mergedMeta.refund_original_txn_id = orig.txnId;
                 mergedMeta.refund_original_account_id = orig.accountId;
                 mergedMeta.refund_original_account_name = orig.accountName;
+                mergedMeta.refund_original_historical_context_only = !!orig.historicalContextOnly;
               } else {
                 mergedMeta.refund_match_source = "none";
               }
@@ -1453,6 +1479,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           nowIso,
           reason,
           autoApprove,
+          autoPostEnabled,
           txnId: row.id,
         });
         const nextStatus = canUpgrade ? autoResult.status : existingCat.status;
@@ -1486,7 +1513,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           payload.status = "auto_approved";
           payload.final_qbo_account_id = suggestedId || null;
           payload.final_qbo_account_name = suggestedName || null;
-          payload.post_after = autoResult.postAfter || new Date(Date.now() + GRACE_HOURS * 60 * 60 * 1000).toISOString();
+          payload.post_after = autoResult.postAfter === undefined ? computePostAfterForAutoPost(autoPostEnabled, GRACE_HOURS) : autoResult.postAfter;
           payload.decided_by = "bizzi";
           payload.decided_at = nowIso;
         }
@@ -1535,11 +1562,17 @@ router.post("/suggest", requireAuth, async (req, res) => {
         };
 
         if (taxHit.type === "transfer_internal") {
-          const pairId = await findTransferPairTxnId(businessId, row);
-          if (pairId) {
-            mergedMeta.transfer_pair_txn_id = pairId;
+          const pair = await findTransferPairTxnId(businessId, row, {
+            bookkeepingStartDate,
+            allowHistoricalContext: true,
+          });
+          if (pair?.txnId) {
+            mergedMeta.transfer_pair_txn_id = pair.txnId;
             mergedMeta.transfer_pair_confidence = "high";
-            mergedMeta.transfer_pair_notes = "Matched opposite-side transfer by amount/date";
+            mergedMeta.transfer_pair_notes = pair.historicalContextOnly
+              ? "Matched opposite-side transfer by amount/date as historical context only"
+              : "Matched opposite-side transfer by amount/date";
+            mergedMeta.transfer_pair_historical_context_only = !!pair.historicalContextOnly;
           }
         }
 
@@ -1598,13 +1631,19 @@ router.post("/suggest", requireAuth, async (req, res) => {
           status = "needs_review";
           reasonPrefix = `Taxonomy: ${taxHit.type} (${taxHit.confidence}) — Owner move (equity). Suggested: ${suggestedAcct?.name || "none"}.`;
         } else if (taxHit.type === "refund") {
-          const orig = await findRefundOriginalTxn({ businessId, refundTxn: row });
+          const orig = await findRefundOriginalTxn({
+            businessId,
+            refundTxn: row,
+            bookkeepingStartDate,
+            allowHistoricalContext: true,
+          });
           if (orig?.accountId) {
             suggestedAcct = { id: orig.accountId, name: orig.accountName };
             mergedMeta.refund_match_source = "prior_txn";
             mergedMeta.refund_original_txn_id = orig.txnId;
             mergedMeta.refund_original_account_id = orig.accountId;
             mergedMeta.refund_original_account_name = orig.accountName;
+            mergedMeta.refund_original_historical_context_only = !!orig.historicalContextOnly;
             const shortId = typeof orig.txnId === "string" ? orig.txnId.slice(0, 8) : orig.txnId;
             reasonPrefix = `Refund detected — matched prior transaction category ${orig.accountName || "unknown"}${shortId ? ` (txn ${shortId})` : ""}.`;
           } else {
@@ -1639,6 +1678,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           nowIso,
           reason: mergedMeta.auto_approve_reason || "taxonomy",
           autoApprove,
+          autoPostEnabled,
           txnId: row.id,
         });
         if (autoResult.status === "auto_approved" && !checkHit.is_check) autoApproved += 1;
@@ -1819,6 +1859,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
               nowIso,
               reason: vendorMeta.auto_approve_reason || "vendor_rule",
               autoApprove,
+              autoPostEnabled,
               txnId: row.id,
             });
             if (autoResult.status === "auto_approved" && !checkHit.is_check) autoApproved += 1;
@@ -1949,6 +1990,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
             nowIso,
             reason: hintMeta.auto_approve_reason || "universal_hint",
             autoApprove,
+            autoPostEnabled,
             txnId: row.id,
           });
           const hintSuspense = isSuspenseAccount({
@@ -2104,6 +2146,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
                   nowIso,
                   reason: hintMeta.auto_approve_reason || "universal_hint",
                   autoApprove,
+                  autoPostEnabled,
                   txnId: row.id,
                 });
                 const createdSuspense = isSuspenseAccount({
@@ -2296,6 +2339,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
         nowIso,
         reason: newMeta.auto_approve_reason || "model_high",
         autoApprove,
+        autoPostEnabled,
         txnId: row.id,
       });
       if (autoResult.status === "auto_approved" && !checkHit.is_check) autoApproved += 1;

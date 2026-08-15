@@ -40,6 +40,7 @@ const ROW_BG = "rgba(255,255,255,0.032)";
 const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
 const INTEGRATION_ACTION_BUTTON_CLASS =
   "inline-flex h-11 w-full items-center justify-center whitespace-nowrap rounded-xl px-4 text-sm font-semibold sm:w-[232px]";
+const PLAID_STATUS_CACHE_VERSION = 1;
 
 /** Tabs visible for MVP */
 const tabs = [
@@ -55,7 +56,56 @@ const EMPTY_BUSINESS_FORM = {
   industry: "",
   team_size: "",
   state: "",
+  bookkeeping_start_date: "",
 };
+
+function plaidStatusCacheKey(businessId) {
+  return businessId ? `bizzy:plaid-status:${businessId}` : null;
+}
+
+function readPlaidStatusCache(businessId) {
+  if (typeof window === "undefined") return null;
+  const key = plaidStatusCacheKey(businessId);
+  if (!key) return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.version !== PLAID_STATUS_CACHE_VERSION) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePlaidStatusCache(businessId, payload) {
+  if (typeof window === "undefined") return;
+  const key = plaidStatusCacheKey(businessId);
+  if (!key) return;
+  try {
+    window.localStorage.setItem(
+      key,
+      JSON.stringify({
+        version: PLAID_STATUS_CACHE_VERSION,
+        savedAt: Date.now(),
+        ...payload,
+      })
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function clearPlaidStatusCache(businessId) {
+  if (typeof window === "undefined") return;
+  const key = plaidStatusCacheKey(businessId);
+  if (!key) return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
 
 export default function SettingsHome() {
   const SHOW_MARKETING_COMMS = false;
@@ -148,6 +198,7 @@ export default function SettingsHome() {
       industry: currentBusiness?.industry || "",
       team_size: currentBusiness?.team_size ?? "",
       state: currentBusiness?.state || "",
+      bookkeeping_start_date: currentBusiness?.bookkeeping_start_date || "",
     };
 
     const loadBusinessProfile = async () => {
@@ -158,7 +209,7 @@ export default function SettingsHome() {
 
       const { data, error } = await supabase
         .from("business_profiles")
-        .select("id,business_name,industry,team_size,state")
+        .select("id,business_name,industry,team_size,state,bookkeeping_start_date")
         .eq("id", businessId)
         .maybeSingle();
 
@@ -176,6 +227,7 @@ export default function SettingsHome() {
         industry: source.industry || "",
         team_size: source.team_size ?? "",
         state: source.state || "",
+        bookkeeping_start_date: source.bookkeeping_start_date || "",
       });
 
       if (data?.id) {
@@ -235,12 +287,21 @@ export default function SettingsHome() {
 
   const handleSaveBusiness = async () => {
     if (!businessId) return;
+    const currentStartDate = currentBusiness?.bookkeeping_start_date || "";
+    const nextStartDate = businessForm.bookkeeping_start_date || "";
+    if (currentStartDate && nextStartDate && nextStartDate < currentStartDate) {
+      const confirmed = window.confirm(
+        "Moving the bookkeeping start date earlier will make older imported transactions eligible for active review. Bizzi will not automatically approve or post those transactions. Continue?"
+      );
+      if (!confirmed) return;
+    }
     setSavingBusiness(true);
     setBizSuccessMsg("");
     setBizErrorMsg("");
     const payload = {
       ...businessForm,
       team_size: businessForm.team_size ? parseInt(businessForm.team_size, 10) : null,
+      bookkeeping_start_date: businessForm.bookkeeping_start_date || null,
     };
     const { data, error } = await updateBusinessProfile(businessId, payload);
     if (error) setBizErrorMsg("Failed to update business settings. Please try again.");
@@ -550,6 +611,9 @@ useEffect(() => {
                   <Field label="Industry"><Input name="industry" value={businessForm.industry} onChange={handleBusinessChange} /></Field>
                   <Field label="Team Size"><Input name="team_size" type="number" value={businessForm.team_size} onChange={handleBusinessChange} /></Field>
                   <Field label="State"><Input name="state" value={businessForm.state} onChange={handleBusinessChange} /></Field>
+                  <Field label="When should Bizzi start managing your books?">
+                    <Input name="bookkeeping_start_date" type="date" value={businessForm.bookkeeping_start_date} onChange={handleBusinessChange} />
+                  </Field>
                 </div>
                 <div className="pt-2">
                   <AccentButton onClick={handleSaveBusiness} disabled={savingBusiness} className="focus-visible:outline-none">
@@ -724,16 +788,17 @@ function PlaidIntegrationCard({ businessId }) {
     () => (businessId ? `bizzy:plaid-mapping-overrides:${businessId}` : null),
     [businessId]
   );
-  const [loading, setLoading] = useState(false);
+  const initialCachedStatus = useMemo(() => readPlaidStatusCache(businessId), [businessId]);
+  const [loading, setLoading] = useState(() => !initialCachedStatus);
   const [linking, setLinking] = useState(false);
   const [disconnectingItem, setDisconnectingItem] = useState(null);
   const [disconnectingAll, setDisconnectingAll] = useState(false);
   const [confirmDisconnectAll, setConfirmDisconnectAll] = useState(false);
   const [confirmDisconnectByAccount, setConfirmDisconnectByAccount] = useState({});
-  const [institutions, setInstitutions] = useState([]);
-  const [counts, setCounts] = useState({ institutions: 0, accounts: 0 });
+  const [institutions, setInstitutions] = useState(() => initialCachedStatus?.institutions || []);
+  const [counts, setCounts] = useState(() => initialCachedStatus?.counts || { institutions: 0, accounts: 0 });
   const [statusError, setStatusError] = useState("");
-  const [hasDisconnected, setHasDisconnected] = useState(false);
+  const [hasDisconnected, setHasDisconnected] = useState(() => Boolean(initialCachedStatus?.hasDisconnected));
   const [mappingRows, setMappingRows] = useState([]);
   const [mappingLoading, setMappingLoading] = useState(false);
   const [mappingError, setMappingError] = useState("");
@@ -745,39 +810,67 @@ function PlaidIntegrationCard({ businessId }) {
   const isDisconnected = !isConnected && hasDisconnected;
   const isEmpty = !isConnected && !hasDisconnected;
 
-  const fetchStatus = useCallback(async () => {
+  useEffect(() => {
+    const cached = readPlaidStatusCache(businessId);
+    if (cached) {
+      setInstitutions(cached.institutions || []);
+      setCounts(cached.counts || { institutions: 0, accounts: 0 });
+      setHasDisconnected(Boolean(cached.hasDisconnected));
+      setLoading(false);
+    } else {
+      setInstitutions([]);
+      setCounts({ institutions: 0, accounts: 0 });
+      setHasDisconnected(false);
+      setLoading(Boolean(businessId));
+    }
+    setStatusError("");
+  }, [businessId]);
+
+  const fetchStatus = useCallback(async ({ showLoading = false } = {}) => {
     if (!businessId) return;
-    setLoading(true);
+    if (showLoading) setLoading(true);
     try {
       const res = await getPlaidStatus(businessId);
       if (res?.ok === false) {
         console.warn("[plaid][status] backend error", res?.error || res?.message);
         setStatusError("Plaid status unavailable. Try syncing again.");
-        setInstitutions(res?.institutions || []);
-        setCounts({ institutions: 0, accounts: 0 });
-        setHasDisconnected(false);
+        if (!readPlaidStatusCache(businessId)) {
+          setInstitutions(res?.institutions || []);
+          setCounts({ institutions: 0, accounts: 0 });
+          setHasDisconnected(false);
+        }
       } else {
         setStatusError("");
         const acctCount = res?.accounts_count || 0;
         const instCount = acctCount > 0 ? res?.institutions_count || 0 : 0;
-        setInstitutions(acctCount > 0 ? res?.institutions || [] : []);
-        setCounts({
+        const nextInstitutions = acctCount > 0 ? res?.institutions || [] : [];
+        const nextCounts = {
           institutions: instCount,
           accounts: acctCount,
+        };
+        const nextHasDisconnected = Boolean(res?.has_disconnected);
+        setInstitutions(nextInstitutions);
+        setCounts(nextCounts);
+        setHasDisconnected(nextHasDisconnected);
+        writePlaidStatusCache(businessId, {
+          institutions: nextInstitutions,
+          counts: nextCounts,
+          hasDisconnected: nextHasDisconnected,
         });
-        setHasDisconnected(Boolean(res?.has_disconnected));
       }
     } catch (err) {
       console.warn("[plaid][status] failed", err);
       setStatusError("Plaid status unavailable. Try syncing again.");
-      setHasDisconnected(false);
+      if (!readPlaidStatusCache(businessId)) {
+        setHasDisconnected(false);
+      }
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [businessId]);
 
   useEffect(() => {
-    fetchStatus();
+    fetchStatus({ showLoading: !readPlaidStatusCache(businessId) });
   }, [fetchStatus]);
 
   const refreshMappings = useCallback(async () => {
@@ -889,6 +982,15 @@ function PlaidIntegrationCard({ businessId }) {
       } catch {
         /* ignore */
       }
+      clearPlaidStatusCache(businessId);
+      setInstitutions([]);
+      setCounts({ institutions: 0, accounts: 0 });
+      setHasDisconnected(true);
+      writePlaidStatusCache(businessId, {
+        institutions: [],
+        counts: { institutions: 0, accounts: 0 },
+        hasDisconnected: true,
+      });
       setConfirmDisconnectAll(false);
       await fetchStatus();
       await refreshMappings();
@@ -918,7 +1020,7 @@ function PlaidIntegrationCard({ businessId }) {
         /* ignore */
       }
       setConfirmDisconnectByAccount({});
-      await fetchStatus();
+      await fetchStatus({ showLoading: false });
       await refreshMappings();
     } catch (err) {
       console.warn("[plaid][disconnect-item] failed", err);

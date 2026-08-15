@@ -1,5 +1,6 @@
 import { supabase } from "../supabaseAdmin.js";
 import { recommendChangeOrderPrice } from "./changeOrderPricingService.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../bookkeeping/bookkeepingScope.js";
 import {
   isCostTransaction as classifyCostTransaction,
   isRevenueTransaction as classifyRevenueTransaction,
@@ -126,14 +127,18 @@ async function fetchExistingSuggestionKeys(businessId) {
 async function fetchTransactionContext(businessId, transactionIds) {
   const ids = Array.from(new Set((transactionIds || []).filter(Boolean).map(String)));
   if (!ids.length) return { transactionMap: new Map(), categorizationMap: new Map() };
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
 
   const [{ data: transactions, error: txnErr }, { data: categorizations, error: catErr }] = await Promise.all([
-    supabase
+    applyActiveBookkeepingScope(
+      supabase
       .from("bank_transactions")
       .select("id,business_id,date,name,merchant_name,counterparty_name,amount,direction,is_archived")
       .eq("business_id", businessId)
       .eq("is_archived", false)
       .in("id", ids),
+      bookkeepingStartDate
+    ),
     supabase
       .from("transaction_categorizations")
       .select("*")

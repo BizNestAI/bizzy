@@ -5,6 +5,7 @@ import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { resolvePayee } from "../../../services/bookkeeping/payeeResolver.js";
 import { learnVendorRuleFromTransaction } from "../../../services/bookkeeping/vendorRuleLearner.js";
 import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
 
 /* global process */
 const router = Router();
@@ -54,7 +55,7 @@ function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   }
 
   if (handledView) {
-    return ["approved", "auto_approved"].includes(status);
+    return ["approved", "auto_approved", "failed"].includes(status);
   }
 
   if (!status || status === "needs_review" || status === "uncategorized") return true;
@@ -153,8 +154,9 @@ export async function fetchBookkeepingTransactions({
   page = 1,
   pageSize = 25,
 } = {}) {
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   // Step A: fetch bank transactions
-  const txQuery = supabase
+  let txQuery = supabase
     .from("bank_transactions")
     .select(
       "id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,counterparties,counterparty_name,counterparty_source,counterparty_confidence,qbo_entity_type,qbo_entity_id,amount,signed_amount,direction,pending,category_primary,category_detailed,personal_finance_category"
@@ -165,6 +167,7 @@ export async function fetchBookkeepingTransactions({
 
   const rangeStart = computeRangeStart(rangeParam);
   if (rangeStart) txQuery.gte("date", normalizeDate(rangeStart));
+  txQuery = applyActiveBookkeepingScope(txQuery, bookkeepingStartDate);
   if (accountId) txQuery.eq("plaid_account_id", accountId);
 
   const { data: baseRows, error: txErr } = await txQuery;
@@ -241,14 +244,22 @@ router.patch("/transactions/:transactionId", requireAuth, async (req, res) => {
 
     const nowIso = new Date().toISOString();
     const nextPostAfter = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
     const { data: bankTxn, error: bankErr } = await supabase
       .from("bank_transactions")
-      .select("id,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category")
+      .select("id,date,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category")
       .eq("business_id", businessId)
       .eq("is_archived", false)
       .eq("id", transactionId)
       .maybeSingle();
     if (bankErr) throw bankErr;
+    if (!isTransactionInActiveBookkeepingScope(bankTxn, bookkeepingStartDate)) {
+      return res.status(400).json({
+        ok: false,
+        error: "transaction_before_bookkeeping_start_date",
+        bookkeeping_start_date: bookkeepingStartDate,
+      });
+    }
 
     const checkHit = isCheck(bankTxn || {});
     const nextFinalId = raw.final_qbo_account_id || raw.finalAccountId || raw.newAccountId || null;
@@ -329,7 +340,8 @@ router.get("/transactions/counts", requireAuth, async (req, res) => {
   const rangeParam = (req.query?.range || "this_month").toLowerCase();
 
   try {
-    const txQuery = supabase
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+    let txQuery = supabase
       .from("bank_transactions")
       .select("id")
       .eq("business_id", businessId)
@@ -337,6 +349,7 @@ router.get("/transactions/counts", requireAuth, async (req, res) => {
 
     const rangeStart = computeRangeStart(rangeParam);
     if (rangeStart) txQuery.gte("date", normalizeDate(rangeStart));
+    txQuery = applyActiveBookkeepingScope(txQuery, bookkeepingStartDate);
     if (accountId) txQuery.eq("plaid_account_id", accountId);
 
     const { data: baseRows, error: txErr } = await txQuery;
@@ -434,7 +447,8 @@ router.post("/enrich-counterparties", requireAuth, async (req, res) => {
   const rangeStart = txnIds ? null : computeRangeStart(rangeParam);
 
   try {
-    const txQuery = supabase
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+    let txQuery = supabase
       .from("bank_transactions")
       .select(
         "id,business_id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparties,direction,counterparty_name,counterparty_source,counterparty_confidence,qbo_entity_type,qbo_entity_id"
@@ -447,6 +461,7 @@ router.post("/enrich-counterparties", requireAuth, async (req, res) => {
       if (rangeStart) txQuery.gte("date", normalizeDate(rangeStart));
       if (accountId) txQuery.eq("plaid_account_id", accountId);
     }
+    txQuery = applyActiveBookkeepingScope(txQuery, bookkeepingStartDate);
 
     const { data: txns, error: txErr } = await txQuery;
     if (txErr) throw txErr;

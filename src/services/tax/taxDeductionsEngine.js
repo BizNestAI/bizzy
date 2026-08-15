@@ -9,6 +9,7 @@ import { validationError } from "./taxErrors.js";
 import { TAX_DEDUCTIONS_ENGINE_VERSION } from "./taxEngineVersions.js";
 import { countPostedTransactionsForTax } from "./taxPostedTransaction.repository.js";
 import { getTaxCategoryMeta, sortTaxCategories } from "./taxCategoryCatalog.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../bookkeeping/bookkeepingScope.js";
 
 const PAGE_SIZE = 1000;
 const INCLUDED_STATUSES = new Set([
@@ -147,14 +148,18 @@ async function fetchAllClassifications({ supabase, businessId, taxYear }) {
 
 async function fetchBankTransactions({ supabase, businessId, transactionIds }) {
   const map = new Map();
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   for (let i = 0; i < transactionIds.length; i += 500) {
     const chunk = transactionIds.slice(i, i + 500);
     if (!chunk.length) continue;
-    const { data, error } = await supabase
+    const { data, error } = await applyActiveBookkeepingScope(
+      supabase
       .from("bank_transactions")
       .select("id,business_id,date,pending,is_archived,signed_amount,direction,merchant_name,counterparty_name,name")
       .eq("business_id", businessId)
-      .in("id", chunk);
+      .in("id", chunk),
+      bookkeepingStartDate
+    );
     if (error) throw error;
     for (const row of data || []) map.set(String(row.id), row);
   }

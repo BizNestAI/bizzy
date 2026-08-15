@@ -14,6 +14,7 @@ import { deriveReviewReasons } from "./taxClassificationReview.service.js";
 import { getTaxCategoryMeta } from "./taxCategoryCatalog.js";
 import { getTaxProfile, computeTaxProfileCompleteness } from "./taxProfile.service.js";
 import { getRequiredFederalTaxConfigSet } from "./taxRuleConfig.repository.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../bookkeeping/bookkeepingScope.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -346,14 +347,18 @@ function lastDayOfMonth(month) {
 
 async function fetchBankMap({ supabase, businessId, ids }) {
   const map = new Map();
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   for (let i = 0; i < ids.length; i += 500) {
     const chunk = ids.slice(i, i + 500);
     if (!chunk.length) continue;
-    const { data, error } = await supabase
+    const { data, error } = await applyActiveBookkeepingScope(
+      supabase
       .from("bank_transactions")
       .select("id,business_id,date,authorized_date,pending,is_archived,name,merchant_name,counterparty_name,signed_amount,amount,direction,category_primary,category_detailed,payment_channel,transaction_type,created_at")
       .eq("business_id", businessId)
-      .in("id", chunk);
+      .in("id", chunk),
+      bookkeepingStartDate
+    );
     if (error) throw error;
     for (const row of data || []) map.set(String(row.id), row);
   }

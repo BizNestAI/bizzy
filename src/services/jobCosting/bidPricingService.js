@@ -1,4 +1,5 @@
 import { supabase } from "../supabaseAdmin.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../bookkeeping/bookkeepingScope.js";
 import {
   isCostTransaction as classifyCostTransaction,
   isRevenueTransaction as classifyRevenueTransaction,
@@ -163,6 +164,7 @@ async function fetchOptional(table, buildQuery) {
 }
 
 async function fetchHistoricalData(businessId) {
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const jobs = await fetchOptional("jobs", (query) =>
     query.select("*").eq("business_id", businessId).limit(300)
   );
@@ -176,10 +178,13 @@ async function fetchHistoricalData(businessId) {
   const [transactions, categorizations, changeOrders, bids, outcomes] = await Promise.all([
     transactionIds.length
       ? fetchOptional("bank_transactions", (query) =>
-          query
+          applyActiveBookkeepingScope(
+            query
             .select("id,business_id,date,name,merchant_name,counterparty_name,amount,direction,is_archived")
             .eq("business_id", businessId)
-            .in("id", transactionIds)
+            .in("id", transactionIds),
+            bookkeepingStartDate
+          )
         )
       : [],
     transactionIds.length

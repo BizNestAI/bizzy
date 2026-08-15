@@ -3,6 +3,7 @@ import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.js";
+import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../../../services/bookkeeping/bookkeepingScope.js";
 
 const router = Router();
 
@@ -15,6 +16,7 @@ router.get("/accounts", requireAuth, async (req, res) => {
   if (!businessId) return;
 
   try {
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
     const { data: accounts, error } = await supabase
       .from("plaid_accounts")
       .select(
@@ -40,23 +42,27 @@ router.get("/accounts", requireAuth, async (req, res) => {
       .limit(1)
       .maybeSingle();
 
-    const { data: txnStatusData, error: txnErr } = await supabase
+    let txnStatusQuery = supabase
       .from("bank_transactions")
       .select("plaid_account_id,date,transaction_categorizations(status)")
       .eq("business_id", businessId)
       .eq("is_archived", false);
+    txnStatusQuery = applyActiveBookkeepingScope(txnStatusQuery, bookkeepingStartDate);
+    const { data: txnStatusData, error: txnErr } = await txnStatusQuery;
     if (txnErr) throw txnErr;
+
+    const { data: importedTxnData, error: importedTxnErr } = await supabase
+      .from("bank_transactions")
+      .select("plaid_account_id,date")
+      .eq("business_id", businessId)
+      .eq("is_archived", false);
+    if (importedTxnErr) throw importedTxnErr;
 
     const reviewCounts = {};
     const transactionStats = {};
-    (txnStatusData || []).forEach((row) => {
+    (importedTxnData || []).forEach((row) => {
       const acct = row.plaid_account_id;
       if (!acct) return;
-      const status = row.transaction_categorizations?.[0]?.status || null;
-      const needsReview = !status || status === "needs_review" || status === "uncategorized";
-      if (needsReview) {
-        reviewCounts[acct] = (reviewCounts[acct] || 0) + 1;
-      }
       const stats = transactionStats[acct] || {
         first_imported_transaction_date: null,
         latest_imported_transaction_date: null,
@@ -72,6 +78,15 @@ router.get("/accounts", requireAuth, async (req, res) => {
         }
       }
       transactionStats[acct] = stats;
+    });
+    (txnStatusData || []).forEach((row) => {
+      const acct = row.plaid_account_id;
+      if (!acct) return;
+      const status = row.transaction_categorizations?.[0]?.status || null;
+      const needsReview = !status || status === "needs_review" || status === "uncategorized";
+      if (needsReview) {
+        reviewCounts[acct] = (reviewCounts[acct] || 0) + 1;
+      }
     });
 
     const mapped = (accounts || []).map((a) => {
@@ -89,6 +104,7 @@ router.get("/accounts", requireAuth, async (req, res) => {
         importedTransactionCount: stats.imported_transaction_count || 0,
         firstImportedTransactionDate: stats.first_imported_transaction_date || null,
         latestImportedTransactionDate: stats.latest_imported_transaction_date || null,
+        bookkeepingStartDate,
         connected_at: a.connected_at || null,
         created_at: a.created_at || null,
         last_synced_at: null,
@@ -100,6 +116,7 @@ router.get("/accounts", requireAuth, async (req, res) => {
       accounts: mapped,
       meta: {
         last_sync_at: syncRun?.finished_at || syncRun?.started_at || healthRow?.plaid_last_sync_at || null,
+        bookkeeping_start_date: bookkeepingStartDate,
       },
     });
   } catch (err) {

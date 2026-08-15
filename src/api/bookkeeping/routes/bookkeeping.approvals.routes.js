@@ -4,6 +4,8 @@ import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { learnVendorRuleFromTransaction } from "../../../services/bookkeeping/vendorRuleLearner.js";
 import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
+import { getBookkeepingStartDate, getTransactionsOutsideActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
+import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "../../../services/bookkeeping/autoPostControl.js";
 
 const router = Router();
 
@@ -14,7 +16,8 @@ router.post("/approve", requireAuth, async (req, res) => {
 
   const items = raw.items || raw.transactions || raw.approvals || [];
   const nowIso = new Date().toISOString();
-  const postAfter = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const autoPostEnabled = await getAutoPostToQuickBooks(supabase, businessId);
+  const postAfter = computePostAfterForAutoPost(autoPostEnabled, 24);
 
   const txnIds = (items || [])
     .map((item) => item?.txnId || item?.transaction_id || item?.transactionId || item?.id)
@@ -42,7 +45,7 @@ router.post("/approve", requireAuth, async (req, res) => {
 
   const { data: bankTxns, error: bankErr } = await supabase
     .from("bank_transactions")
-    .select("id,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category,plaid_account_id")
+    .select("id,date,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category,plaid_account_id")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .in("id", txnIds);
@@ -54,6 +57,16 @@ router.post("/approve", requireAuth, async (req, res) => {
     acc[row.id] = row;
     return acc;
   }, {});
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  const preCutoffIds = getTransactionsOutsideActiveBookkeepingScope(bankTxns || [], bookkeepingStartDate).map((row) => row.id);
+  if (preCutoffIds.length) {
+    return res.status(400).json({
+      ok: false,
+      error: "transaction_before_bookkeeping_start_date",
+      bookkeeping_start_date: bookkeepingStartDate,
+      transactions: preCutoffIds,
+    });
+  }
 
   const missingCheckFinals = [];
 
