@@ -417,6 +417,7 @@ function BookkeepingCleanup() {
   const [autoPostStatus, setAutoPostStatus] = useState({ auto_post_to_quickbooks: false, handled_backlog_count: 0 });
   const [loadingAutoPost, setLoadingAutoPost] = useState(false);
   const [savingAutoPost, setSavingAutoPost] = useState(false);
+  const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [clarRequests, setClarRequests] = useState([]);
   const [clarCount, setClarCount] = useState(null);
@@ -450,40 +451,27 @@ function BookkeepingCleanup() {
     }
   }, [businessId, usingDemo]);
 
-  const handleToggleAutoPost = useCallback(async () => {
+  const updateAutoPost = useCallback(async ({ enabled, confirmBacklog = false }) => {
     if (!businessId || usingDemo || savingAutoPost) return;
-    const nextEnabled = autoPostStatus?.auto_post_to_quickbooks !== true;
-    if (nextEnabled) {
-      const count = Number(autoPostStatus?.handled_backlog_count || 0);
-      const backlogLine = count
-        ? `\n\nYou currently have ${count} handled transactions waiting. These will become eligible for QuickBooks posting after a fresh grace period.`
-        : "";
-      const confirmed = window.confirm(
-        `Turn on automatic QuickBooks posting?\n\nEligible transactions will move through Bizzi's posting grace period before being sent to QuickBooks. You'll have time to review and correct them before they're posted.${backlogLine}`
-      );
-      if (!confirmed) return;
-    }
     setSavingAutoPost(true);
     try {
       let res;
       try {
-        res = await updateAutoPostStatus(businessId, { enabled: nextEnabled, confirmBacklog: nextEnabled });
+        res = await updateAutoPostStatus(businessId, { enabled, confirmBacklog });
       } catch (err) {
-        if (nextEnabled && err?.requiresConfirmation) {
-          const count = Number(err.handledBacklogCount || 0);
-          const backlogLine = count
-            ? `\n\nYou currently have ${count} handled transactions waiting. These will become eligible for QuickBooks posting after a fresh grace period.`
-            : "";
-          const confirmed = window.confirm(
-            `Turn on automatic QuickBooks posting?\n\nEligible transactions will move through Bizzi's posting grace period before being sent to QuickBooks. You'll have time to review and correct them before they're posted.${backlogLine}`
-          );
-          if (!confirmed) return;
-          res = await updateAutoPostStatus(businessId, { enabled: true, confirmBacklog: true });
+        if (enabled && err?.requiresConfirmation) {
+          setAutoPostStatus((prev) => ({
+            ...(prev || {}),
+            handled_backlog_count: Number(err.handledBacklogCount || prev?.handled_backlog_count || 0),
+          }));
+          setAutoPostConfirmOpen(true);
+          return;
         } else {
           throw err;
         }
       }
-      setAutoPostStatus(res || { auto_post_to_quickbooks: nextEnabled, handled_backlog_count: 0 });
+      setAutoPostStatus(res || { auto_post_to_quickbooks: enabled, handled_backlog_count: 0 });
+      setAutoPostConfirmOpen(false);
       setCountsRefreshKey((v) => v + 1);
     } catch (e) {
       console.warn("[bookkeeping] auto-post update failed", e?.message || e);
@@ -491,7 +479,21 @@ function BookkeepingCleanup() {
     } finally {
       setSavingAutoPost(false);
     }
-  }, [autoPostStatus?.auto_post_to_quickbooks, businessId, savingAutoPost, usingDemo]);
+  }, [businessId, savingAutoPost, usingDemo]);
+
+  const handleToggleAutoPost = useCallback(async () => {
+    if (!businessId || usingDemo || savingAutoPost) return;
+    const nextEnabled = autoPostStatus?.auto_post_to_quickbooks !== true;
+    if (nextEnabled) {
+      setAutoPostConfirmOpen(true);
+      return;
+    }
+    await updateAutoPost({ enabled: false, confirmBacklog: false });
+  }, [autoPostStatus?.auto_post_to_quickbooks, businessId, savingAutoPost, updateAutoPost, usingDemo]);
+
+  const confirmEnableAutoPost = useCallback(async () => {
+    await updateAutoPost({ enabled: true, confirmBacklog: true });
+  }, [updateAutoPost]);
 
   const loadTabCounts = useCallback(async () => {
     if (usingDemo) return;
@@ -1722,6 +1724,64 @@ function BookkeepingCleanup() {
           </>
         )}
       </BillingGate>
+      {autoPostConfirmOpen ? (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="auto-post-confirm-title">
+          <button
+            type="button"
+            aria-label="Cancel Auto-post confirmation"
+            className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
+            onClick={() => {
+              if (!savingAutoPost) setAutoPostConfirmOpen(false);
+            }}
+          />
+          <div
+            className="relative w-full max-w-[520px] rounded-2xl border p-5 text-slate-100 shadow-[0_28px_90px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.04)]"
+            style={{ background: "rgba(17,19,18,0.96)", borderColor: "rgba(16,185,129,0.28)" }}
+          >
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-400/[0.12] text-emerald-200">
+                <UploadCloud className="h-4 w-4" strokeWidth={2} />
+              </div>
+              <div className="min-w-0">
+                <h2 id="auto-post-confirm-title" className="text-base font-semibold text-white">
+                  Turn on automatic QuickBooks posting?
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  Eligible transactions will move through Bizzi&apos;s posting grace period before being sent to QuickBooks.
+                  You&apos;ll have time to review and correct them before they&apos;re posted.
+                </p>
+              </div>
+            </div>
+
+            {Number(autoPostStatus?.handled_backlog_count || 0) > 0 ? (
+              <div className="mt-4 rounded-xl border border-amber-300/24 bg-amber-300/[0.08] px-3 py-2.5 text-sm leading-5 text-amber-50/88">
+                You currently have{" "}
+                <span className="font-semibold text-amber-100">{Number(autoPostStatus?.handled_backlog_count || 0)}</span>{" "}
+                handled transactions waiting. These will become eligible for QuickBooks posting after a fresh grace period.
+              </div>
+            ) : null}
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={savingAutoPost}
+                onClick={() => setAutoPostConfirmOpen(false)}
+                className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingAutoPost}
+                onClick={confirmEnableAutoPost}
+                className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingAutoPost ? "Turning on..." : "Turn on Auto-post"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <ClarificationModal
         open={clarOpen}
         onClose={() => {
