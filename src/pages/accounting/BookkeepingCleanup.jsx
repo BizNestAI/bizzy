@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, CircleAlert, UploadCloud } from "lucide-react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
@@ -494,6 +495,34 @@ function BookkeepingCleanup() {
   const confirmEnableAutoPost = useCallback(async () => {
     await updateAutoPost({ enabled: true, confirmBacklog: true });
   }, [updateAutoPost]);
+
+  useEffect(() => {
+    if (!autoPostConfirmOpen || typeof document === "undefined") return undefined;
+    const html = document.documentElement;
+    const body = document.body;
+    const appShell = document.querySelector(".bizzy-app-shell");
+    const previous = {
+      htmlOverflow: html.style.overflow,
+      bodyOverflow: body.style.overflow,
+      appOverflow: appShell?.style?.overflow || "",
+    };
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    if (appShell) appShell.style.overflow = "hidden";
+
+    const onKeyDown = (event) => {
+      if (event.key === "Escape" && !savingAutoPost) {
+        setAutoPostConfirmOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      html.style.overflow = previous.htmlOverflow;
+      body.style.overflow = previous.bodyOverflow;
+      if (appShell) appShell.style.overflow = previous.appOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [autoPostConfirmOpen, savingAutoPost]);
 
   const loadTabCounts = useCallback(async () => {
     if (usingDemo) return;
@@ -1724,64 +1753,88 @@ function BookkeepingCleanup() {
           </>
         )}
       </BillingGate>
-      {autoPostConfirmOpen ? (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="auto-post-confirm-title">
-          <button
-            type="button"
-            aria-label="Cancel Auto-post confirmation"
-            className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
-            onClick={() => {
-              if (!savingAutoPost) setAutoPostConfirmOpen(false);
-            }}
-          />
-          <div
-            className="relative w-full max-w-[520px] rounded-2xl border p-5 text-slate-100 shadow-[0_28px_90px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.04)]"
-            style={{ background: "rgba(17,19,18,0.96)", borderColor: "rgba(16,185,129,0.28)" }}
-          >
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-400/[0.12] text-emerald-200">
-                <UploadCloud className="h-4 w-4" strokeWidth={2} />
-              </div>
-              <div className="min-w-0">
-                <h2 id="auto-post-confirm-title" className="text-base font-semibold text-white">
-                  Turn on automatic QuickBooks posting?
-                </h2>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
-                  Eligible transactions will move through Bizzi&apos;s posting grace period before being sent to QuickBooks.
-                  You&apos;ll have time to review and correct them before they&apos;re posted.
-                </p>
-              </div>
-            </div>
+      {typeof document !== "undefined"
+        ? createPortal(
+            <AnimatePresence>
+              {autoPostConfirmOpen ? (
+                <motion.div
+                  className="fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="auto-post-confirm-title"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18, ease: [0.22, 0.1, 0.25, 1] }}
+                >
+                  <motion.button
+                    type="button"
+                    aria-label="Cancel Auto-post confirmation"
+                    className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
+                    onClick={() => {
+                      if (!savingAutoPost) setAutoPostConfirmOpen(false);
+                    }}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.18 }}
+                  />
+                  <motion.div
+                    className="relative w-full max-w-[520px] rounded-2xl border p-5 text-slate-100 shadow-[0_28px_90px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.04)]"
+                    style={{ background: "rgba(17,19,18,0.96)", borderColor: "rgba(16,185,129,0.28)" }}
+                    initial={{ opacity: 0, y: 18, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: [0.16, 0.84, 0.44, 1] }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-400/[0.12] text-emerald-200">
+                        <UploadCloud className="h-4 w-4" strokeWidth={2} />
+                      </div>
+                      <div className="min-w-0">
+                        <h2 id="auto-post-confirm-title" className="text-base font-semibold text-white">
+                          Turn on automatic QuickBooks posting?
+                        </h2>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">
+                          Eligible transactions will move through Bizzi&apos;s posting grace period before being sent to QuickBooks.
+                          You&apos;ll have time to review and correct them before they&apos;re posted.
+                        </p>
+                      </div>
+                    </div>
 
-            {Number(autoPostStatus?.handled_backlog_count || 0) > 0 ? (
-              <div className="mt-4 rounded-xl border border-amber-300/24 bg-amber-300/[0.08] px-3 py-2.5 text-sm leading-5 text-amber-50/88">
-                You currently have{" "}
-                <span className="font-semibold text-amber-100">{Number(autoPostStatus?.handled_backlog_count || 0)}</span>{" "}
-                handled transactions waiting. These will become eligible for QuickBooks posting after a fresh grace period.
-              </div>
-            ) : null}
+                    {Number(autoPostStatus?.handled_backlog_count || 0) > 0 ? (
+                      <div className="mt-4 rounded-xl border border-amber-300/24 bg-amber-300/[0.08] px-3 py-2.5 text-sm leading-5 text-amber-50/88">
+                        You currently have{" "}
+                        <span className="font-semibold text-amber-100">{Number(autoPostStatus?.handled_backlog_count || 0)}</span>{" "}
+                        handled transactions waiting. These will become eligible for QuickBooks posting after a fresh grace period.
+                      </div>
+                    ) : null}
 
-            <div className="mt-5 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                disabled={savingAutoPost}
-                onClick={() => setAutoPostConfirmOpen(false)}
-                className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={savingAutoPost}
-                onClick={confirmEnableAutoPost}
-                className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {savingAutoPost ? "Turning on..." : "Turn on Auto-post"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+                    <div className="mt-5 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        disabled={savingAutoPost}
+                        onClick={() => setAutoPostConfirmOpen(false)}
+                        className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08] disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingAutoPost}
+                        onClick={confirmEnableAutoPost}
+                        className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {savingAutoPost ? "Turning on..." : "Turn on Auto-post"}
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>,
+            document.body
+          )
+        : null}
       <ClarificationModal
         open={clarOpen}
         onClose={() => {
