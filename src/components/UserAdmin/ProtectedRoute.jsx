@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../services/supabaseClient.js";
@@ -12,6 +12,7 @@ const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
   const location = useLocation();
   const [accessState, setAccessState] = useState({ checking: true, allowed: false, message: "" });
+  const verifiedUserKeyRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -20,7 +21,14 @@ const ProtectedRoute = ({ children }) => {
       if (loading) return;
 
       if (!user) {
+        verifiedUserKeyRef.current = null;
         setAccessState({ checking: false, allowed: false, message: "" });
+        return;
+      }
+
+      const userKey = `${user.id || ""}:${String(user.email || "").trim().toLowerCase()}`;
+      if (accessState.allowed && verifiedUserKeyRef.current === userKey) {
+        setAccessState((prev) => ({ ...prev, checking: false }));
         return;
       }
 
@@ -48,8 +56,11 @@ const ProtectedRoute = ({ children }) => {
       const allowed = !error && Boolean(data?.id) && profileEmail === authEmail;
 
       if (!allowed) {
+        verifiedUserKeyRef.current = null;
         clearStoredAuthAndBusinessState();
         await supabase.auth.signOut();
+      } else {
+        verifiedUserKeyRef.current = userKey;
       }
 
       if (!cancelled) {
@@ -61,19 +72,23 @@ const ProtectedRoute = ({ children }) => {
       }
     }
 
-    setAccessState({ checking: true, allowed: false, message: "" });
+    setAccessState((prev) =>
+      prev.allowed
+        ? { ...prev, checking: true, message: "" }
+        : { checking: true, allowed: false, message: "" }
+    );
     verifyAppAccount();
 
     return () => {
       cancelled = true;
     };
-  }, [loading, user]);
+  }, [loading, user?.id, user?.email, accessState.allowed]);
 
   if (!loading && !user) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  if (loading || accessState.checking) {
+  if (loading || (accessState.checking && !accessState.allowed)) {
     return <div className="min-h-screen bg-black" />;
   }
 

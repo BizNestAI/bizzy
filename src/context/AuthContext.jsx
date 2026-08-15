@@ -51,8 +51,15 @@ export const AuthProvider = ({ children }) => {
 
     loadSession();
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      setSession((prevSession) => {
+        const sameUser =
+          prevSession?.user?.id &&
+          nextSession?.user?.id &&
+          prevSession.user.id === nextSession.user.id;
+        if (event === "TOKEN_REFRESHED" && sameUser) return prevSession;
+        return nextSession;
+      });
       setLoading(false);
     });
 
