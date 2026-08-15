@@ -1550,10 +1550,12 @@ function BookkeepingCleanup() {
                 type="button"
                 disabled={savingAutoPost || loadingAutoPost}
                 onClick={handleToggleAutoPost}
-                className={`rounded-full px-4 py-1.5 min-w-[132px] text-center border transition ${
+                role="switch"
+                aria-checked={autoPostStatus?.auto_post_to_quickbooks === true}
+                className={`group inline-flex min-w-[174px] items-center justify-between gap-3 rounded-full border px-3 py-1.5 text-left text-xs font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_24px_rgba(0,0,0,0.24)] transition ${
                   autoPostStatus?.auto_post_to_quickbooks === true
-                    ? "border-emerald-400/50 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15"
-                    : "border-white/10 text-slate-200 hover:border-[var(--accent-line)] hover:bg-[var(--panel)]"
+                    ? "border-emerald-300/45 bg-emerald-400/[0.12] text-emerald-50 hover:border-emerald-200/65 hover:bg-emerald-400/[0.16]"
+                    : "border-white/12 bg-white/[0.035] text-slate-200 hover:border-white/22 hover:bg-white/[0.06]"
                 } ${savingAutoPost || loadingAutoPost ? "cursor-not-allowed opacity-60" : ""}`}
                 title={
                   autoPostStatus?.auto_post_to_quickbooks === true
@@ -1561,7 +1563,32 @@ function BookkeepingCleanup() {
                     : "Handled transactions will not be automatically posted to QuickBooks."
                 }
               >
-                Auto-post · {autoPostStatus?.auto_post_to_quickbooks === true ? "On" : "Off"}
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="whitespace-nowrap text-slate-100">Auto-post</span>
+                  <span
+                    className={`whitespace-nowrap text-[11px] ${
+                      autoPostStatus?.auto_post_to_quickbooks === true ? "text-emerald-200" : "text-slate-400"
+                    }`}
+                  >
+                    {autoPostStatus?.auto_post_to_quickbooks === true ? "On" : "Off"}
+                  </span>
+                </span>
+                <span
+                  aria-hidden="true"
+                  className={`relative h-5 w-9 shrink-0 rounded-full border transition ${
+                    autoPostStatus?.auto_post_to_quickbooks === true
+                      ? "border-emerald-300/50 bg-emerald-300/25"
+                      : "border-white/12 bg-black/30"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full shadow-[0_3px_10px_rgba(0,0,0,0.45)] transition-all ${
+                      autoPostStatus?.auto_post_to_quickbooks === true
+                        ? "left-[17px] bg-emerald-200"
+                        : "left-[2px] bg-slate-400"
+                    }`}
+                  />
+                </span>
               </button>
             </>
           ) : null}
