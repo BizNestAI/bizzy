@@ -179,6 +179,35 @@ const CATEGORY_OPTIONS = ["Materials", "Fuel", "Tools", "Overhead", "Meals", "Ot
 const JOB_OPTIONS = ["Elm St. Kitchen", "Greenway Roof", "General Overhead"];
 const PANEL_BG = "#151717";
 const PANEL_BORDER = "rgba(255,255,255,0.06)";
+const BOOKS_TXN_CACHE_PREFIX = "bizzi:books-review:transactions:";
+const BOOKS_TXN_CACHE_TTL_MS = 5 * 60 * 1000;
+
+function buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage }) {
+  if (!businessId || !accountFilter) return null;
+  return `${BOOKS_TXN_CACHE_PREFIX}${[businessId, accountFilter, activeTab, dateRange, page, rowsPerPage]
+    .map((part) => encodeURIComponent(String(part || "")))
+    .join(":")}`;
+}
+
+function readTransactionPageCache(cacheKey) {
+  if (!cacheKey || typeof window === "undefined" || !window.sessionStorage) return null;
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(cacheKey) || "null");
+    if (!parsed || Date.now() - Number(parsed.cachedAt || 0) > BOOKS_TXN_CACHE_TTL_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeTransactionPageCache(cacheKey, payload) {
+  if (!cacheKey || typeof window === "undefined" || !window.sessionStorage) return;
+  try {
+    window.sessionStorage.setItem(cacheKey, JSON.stringify({ ...payload, cachedAt: Date.now() }));
+  } catch {
+    // Cache failures should never block bookkeeping.
+  }
+}
 
 function SummaryCard({ value, label, subtext }) {
   return (
@@ -302,6 +331,8 @@ function BookkeepingCleanup() {
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingTxns, setLoadingTxns] = useState(false);
+  const [backgroundRefreshingTxns, setBackgroundRefreshingTxns] = useState(false);
+  const [categorizationStatus, setCategorizationStatus] = useState(null);
   const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null });
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
   const [postingNow, setPostingNow] = useState(false);
@@ -765,8 +796,26 @@ function BookkeepingCleanup() {
     )
   );
   const isHandledTab = activeTab === "handled";
-  const isEmpty = !loadingTxns && feedRows.length === 0;
-  const showLoadingState = !plaidNeverConnected && (loadingTxns || (!accountFilter && !usingDemo));
+  const hasVisibleRows = feedRows.length > 0;
+  const isPreparingCategories = Boolean(categorizationStatus);
+  const isEmpty = !loadingTxns && !isPreparingCategories && feedRows.length === 0;
+  const showLoadingState =
+    !plaidNeverConnected &&
+    !hasVisibleRows &&
+    (loadingTxns || isPreparingCategories || (!accountFilter && !usingDemo));
+  const categorizationMessage = useMemo(() => {
+    if (!categorizationStatus) return null;
+    if (categorizationStatus.phase === "enriching") {
+      return "Identifying payees before Bizzi prepares category suggestions.";
+    }
+    if (categorizationStatus.phase === "suggesting") {
+      if (categorizationStatus.initial) {
+        return `Preparing category suggestions for ${categorizationStatus.count} imported transactions. You can keep working while this finishes.`;
+      }
+      return "Checking for new category suggestions in the background.";
+    }
+    return null;
+  }, [categorizationStatus]);
   const pendingCount = useMemo(() => {
     return transactions.filter(
       (t) => t.status === "needs_review" || t.status === "uncategorized" || !t.status
@@ -1083,7 +1132,18 @@ function BookkeepingCleanup() {
       setTotalCount(0);
       return;
     }
-    setLoadingTxns(true);
+    const cacheKey = buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage });
+    const cachedPage = readTransactionPageCache(cacheKey);
+    if (cachedPage && Array.isArray(cachedPage.rows)) {
+      setTransactions(cachedPage.rows);
+      setTotalCount(typeof cachedPage.totalCount === "number" ? cachedPage.totalCount : cachedPage.rows.length);
+      setLoadingTxns(false);
+      setBackgroundRefreshingTxns(true);
+    } else {
+      setLoadingTxns(true);
+      setBackgroundRefreshingTxns(false);
+    }
+    setCategorizationStatus(null);
     const normalizeTxns = (txns = []) =>
       txns.map((t) => {
         const status = t.status || "needs_review";
@@ -1184,6 +1244,9 @@ function BookkeepingCleanup() {
       }
       setTransactions(normalized);
       setTotalCount(nextTotal);
+      writeTransactionPageCache(cacheKey, { rows: normalized, totalCount: nextTotal });
+      setLoadingTxns(false);
+      setBackgroundRefreshingTxns(false);
 
       const key = `${dateRange}|${accountFilter || "all"}`;
       if (canRunAI) {
@@ -1198,6 +1261,7 @@ function BookkeepingCleanup() {
           );
         if (needsEnrichment) {
           try {
+            setCategorizationStatus({ phase: "enriching" });
             await enrichCounterparties(businessId, {
               range: dateRange,
               account_id: accountFilter,
@@ -1214,6 +1278,7 @@ function BookkeepingCleanup() {
             const nextTotal3 = computeTotal(res3, normalized3);
             setTransactions(normalized3);
             setTotalCount(nextTotal3);
+            writeTransactionPageCache(cacheKey, { rows: normalized3, totalCount: nextTotal3 });
             latestNormalized = normalized3;
             enrichRanRef.current = key;
           } catch (errEnrich) {
@@ -1243,6 +1308,15 @@ function BookkeepingCleanup() {
             console.info("[Books] running suggest for missing transactions");
           }
           try {
+            const suggestionCandidateCount = latestNormalized.filter((t) => {
+              const s = (t.status || "needs_review").toLowerCase();
+              return (s === "needs_review" || s === "uncategorized") && !(t.glAccountId || t.suggestedAccountId);
+            }).length;
+            setCategorizationStatus({
+              phase: "suggesting",
+              count: suggestionCandidateCount || latestNormalized.length,
+              initial: suggestionCandidateCount >= 10,
+            });
             const suggestPayload = {
               range: dateRange,
               account_id: accountFilter,
@@ -1263,6 +1337,7 @@ function BookkeepingCleanup() {
             setTransactions(normalized2);
             const nextTotal2 = computeTotal(res2, normalized2);
             setTotalCount(nextTotal2);
+            writeTransactionPageCache(cacheKey, { rows: normalized2, totalCount: nextTotal2 });
             const stillMissingSuggestions = normalized2.some((t) => {
               const s = (t.status || "needs_review").toLowerCase();
               if (!(s === "needs_review" || s === "uncategorized")) return false;
@@ -1284,6 +1359,8 @@ function BookkeepingCleanup() {
       console.warn("[bookkeeping] transactions load failed", e?.message || e);
     } finally {
       setLoadingTxns(false);
+      setBackgroundRefreshingTxns(false);
+      setCategorizationStatus(null);
       setCountsRefreshKey((value) => value + 1);
     }
   }, [activeTab, accountFilter, businessId, canRunAI, dateRange, disableAutoApprove, page, rowsPerPage, usingDemo, loadMappingStatus]);
@@ -1583,6 +1660,7 @@ function BookkeepingCleanup() {
                 onClick={handleToggleAutoPost}
                 role="switch"
                 aria-checked={autoPostStatus?.auto_post_to_quickbooks === true}
+                aria-label={`Auto-post · ${autoPostStatus?.auto_post_to_quickbooks === true ? "On" : "Off"}`}
                 className={`group inline-flex min-w-[174px] items-center justify-between gap-3 rounded-full border px-3 py-1.5 text-left text-xs font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_24px_rgba(0,0,0,0.24)] transition ${
                   autoPostStatus?.auto_post_to_quickbooks === true
                     ? "border-emerald-300/45 bg-emerald-400/[0.12] text-emerald-50 hover:border-emerald-200/65 hover:bg-emerald-400/[0.16]"
@@ -1665,6 +1743,32 @@ function BookkeepingCleanup() {
         </div>
       )}
 
+      {!usingDemo && hasVisibleRows && (categorizationMessage || backgroundRefreshingTxns) ? (
+        <div
+          className="mb-2 flex items-center gap-3 rounded-xl border px-3 py-2 text-xs text-slate-300"
+          style={{
+            background: "rgba(16,185,129,0.07)",
+            borderColor: "rgba(16,185,129,0.22)",
+          }}
+        >
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-300">
+            <div className="flex gap-[4px]">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300 animate-dot-bounce" style={{ animationDelay: "0ms" }} />
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300 animate-dot-bounce" style={{ animationDelay: "120ms" }} />
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300 animate-dot-bounce" style={{ animationDelay: "240ms" }} />
+            </div>
+          </div>
+          <div>
+            <p className="font-semibold text-slate-100">
+              {categorizationMessage ? "Preparing category suggestions" : "Refreshing transactions"}
+            </p>
+            <p className="text-slate-400">
+              {categorizationMessage || "Updating this feed in the background without hiding your current rows."}
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={`${activeTab}:${dateRange}:${rowsPerPage}:${accountFilter || "all"}:${page}`}
@@ -1698,8 +1802,12 @@ function BookkeepingCleanup() {
                   <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-dot-bounce" style={{ animationDelay: "240ms" }} />
                 </div>
               </div>
-              <p className="text-sm font-medium text-slate-100">Loading transactions…</p>
-              <p className="max-w-md text-xs text-slate-400">Fetching the latest for this account.</p>
+              <p className="text-sm font-medium text-slate-100">
+                {categorizationMessage ? "Preparing category suggestions..." : "Loading transactions..."}
+              </p>
+              <p className="max-w-md text-xs text-slate-400">
+                {categorizationMessage || "Fetching the latest for this account."}
+              </p>
             </div>
           ) : (!usingDemo && isEmpty && !hasAnyPending) ? (
             activeTab === "posted" ? (

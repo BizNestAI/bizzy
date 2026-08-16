@@ -73,11 +73,14 @@ addVendors(
     "Sam's Club Fuel",
     "Circle K",
     "Speedway",
+    "Sppedway",
     "Pilot Travel Center",
     "Flying J",
     "Love's Travel Stop",
     "QuikTrip",
+    "QuickTrip",
     "Wawa",
+    "Spinx",
     "Casey's",
     "Sunoco",
     "GetGo",
@@ -90,7 +93,7 @@ addVendors(
 );
 
 // Travel - rideshare
-addVendors(["Uber", "Lyft", "Via"], {
+addVendors(["Uber", "Lyft", "Via", "Lime"], {
   intents: ["transportation", "rideshare"],
   primary: "transportation",
   confidence: "high",
@@ -200,7 +203,17 @@ addVendors(
 
 // Big box / retail / warehouse
 addVendors(
-  ["Amazon", "Amazon Marketplace", "Walmart", "Target", "Costco", "Sam's Club", "BJ's Wholesale", "Kroger", "Safeway", "Albertsons", "Publix", "Meijer", "H-E-B", "Aldi", "Lidl", "Trader Joe's"],
+  ["Amazon", "Amazon Marketplace", "Costco", "Costco Wholesale"],
+  { intents: ["materials"], primary: "materials", confidence: "medium", notes: "Warehouse supplies / materials; review if personal or grocery-only" }
+);
+
+addVendors(
+  ["Walmart", "Target", "Walgreens", "Walgreens Pharmacy"],
+  { intents: ["materials"], primary: "materials", confidence: "medium", notes: "Retail supplies / materials; review if personal-only" }
+);
+
+addVendors(
+  ["Costco", "Sam's Club", "BJ's Wholesale", "Kroger", "Safeway", "Albertsons", "Meijer", "H-E-B", "Aldi", "Lidl", "Trader Joe's"],
   { intents: ["supplies"], primary: "supplies", confidence: "medium" }
 );
 
@@ -337,8 +350,133 @@ addVendors(
     "IHOP",
     "Denny's",
     "Waffle House",
+    "Publix",
+    "Whole Foods",
+    "Whole Foods Market",
+    "Lowes Foods",
+    "DoorDash",
+    "Uber Eats",
+    "Crumbl",
+    "Micro Mart",
+    "Short Stop",
+    "PoppyCox",
   ],
   { intents: ["meals"], primary: "meals", confidence: "high" }
+);
+
+// QuickBooks / Intuit deposits and merchant fees
+UNIVERSAL_VENDOR_HINTS.push(
+  {
+    key: "intuit_deposit_invoice_revenue",
+    match: { type: "contains", value: "deposit intuit" },
+    canonical: "Intuit Deposit",
+    intents: ["sales"],
+    primary_intent: "sales",
+    confidence: "high",
+    notes: "QuickBooks/Intuit invoice deposit; generally sales revenue",
+  },
+  {
+    key: "intuit_deposit_invoice_revenue_reverse",
+    match: { type: "contains", value: "intuit deposit" },
+    canonical: "Intuit Deposit",
+    intents: ["sales"],
+    primary_intent: "sales",
+    confidence: "high",
+    notes: "QuickBooks/Intuit invoice deposit; generally sales revenue",
+  },
+  {
+    key: "intuit_transaction_fee",
+    match: { type: "contains", value: "tran fee intuit" },
+    canonical: "Intuit Transaction Fee",
+    intents: ["bank_fees"],
+    primary_intent: "bank_fees",
+    confidence: "high",
+    notes: "QuickBooks/Intuit card or ACH processing fee",
+  },
+  {
+    key: "intuit_transaction_fee_reverse",
+    match: { type: "contains", value: "intuit transaction fee" },
+    canonical: "Intuit Transaction Fee",
+    intents: ["bank_fees"],
+    primary_intent: "bank_fees",
+    confidence: "high",
+    notes: "QuickBooks/Intuit card or ACH processing fee",
+  }
+);
+
+// Utilities with specific account intent
+UNIVERSAL_VENDOR_HINTS.push(
+  {
+    key: "att_internet_services",
+    match: { type: "contains", value: "at t" },
+    canonical: "AT&T",
+    intents: ["internet_services", "utilities"],
+    primary_intent: "internet_services",
+    confidence: "high",
+    notes: "Internet / telecom utility",
+  },
+  {
+    key: "att_payment_internet_services",
+    match: { type: "contains", value: "payment att" },
+    canonical: "AT&T",
+    intents: ["internet_services", "utilities"],
+    primary_intent: "internet_services",
+    confidence: "high",
+    notes: "Internet / telecom utility payment",
+  },
+  {
+    key: "duke_energy_electric",
+    match: { type: "contains", value: "duke energy" },
+    canonical: "Duke Energy",
+    intents: ["electric", "utilities"],
+    primary_intent: "electric",
+    confidence: "high",
+    notes: "Electric utility",
+  },
+  {
+    key: "dukeenergy_electric",
+    match: { type: "contains", value: "dukeenergy" },
+    canonical: "Duke Energy",
+    intents: ["electric", "utilities"],
+    primary_intent: "electric",
+    confidence: "high",
+    notes: "Electric utility",
+  }
+);
+
+// Vehicle charging
+UNIVERSAL_VENDOR_HINTS.push(
+  {
+    key: "tesla_vehicle_charging",
+    match: { type: "regex", value: "\\btesla\\b|\\btesla\\s+moto\\b|\\bsupercharger\\b" },
+    canonical: "Tesla",
+    intents: ["gas_charging", "vehicle_expense"],
+    primary_intent: "gas_charging",
+    confidence: "high",
+    notes: "Vehicle charging / fuel equivalent",
+  },
+  {
+    key: "chargeonsite_vehicle_charging",
+    match: { type: "contains", value: "chargeonsite" },
+    canonical: "ChargeOnSite",
+    intents: ["gas_charging", "vehicle_expense"],
+    primary_intent: "gas_charging",
+    confidence: "high",
+    notes: "Tesla/EV charging service",
+  }
+);
+
+// Credit card rewards / cash back
+UNIVERSAL_VENDOR_HINTS.push(
+  {
+    key: "cash_back_rewards_income",
+    match: { type: "regex", value: "\\bcash\\s*back\\b|\\bcashback\\b|\\b(?:automatic\\s+)?statement\\s+credit\\b|\\brewards?\\s+credit\\b" },
+    canonical: "Cash Back Rewards",
+    intents: ["other_income"],
+    primary_intent: "other_income",
+    confidence: "medium",
+    notes: "Likely credit-card rewards or cashback income",
+  }
 );
 
 // Software / SaaS / productivity
@@ -350,6 +488,7 @@ addVendors(
     "Amazon Web Services",
     "AWS",
     "Google Workspace",
+    "Workspace",
     "Google Cloud",
     "GCP",
     "Alphabet",
@@ -376,8 +515,21 @@ addVendors(
     "Sentry",
     "Rollbar",
     "Figma",
+    "Instantly",
+    "Atlassian",
     "Adobe",
     "Adobe Creative Cloud",
+    "Apple",
+    "Apple.com/Bill",
+    "OpenAI",
+    "ChatGPT",
+    "Paramount+",
+    "Paramount Plus",
+    "YouTubeTV",
+    "YouTube TV",
+    "Spotify",
+    "Railway",
+    "Supabase",
     "Canva",
     "Notion",
     "Asana",
@@ -419,6 +571,18 @@ addVendors(
     confidence: "medium",
     notes: "SaaS / tools",
   }
+);
+
+// Entertainment / tickets / recreation
+addVendors(
+  ["AMC", "AMC Theatres", "AMC Theaters", "Prime Video", "PlayStation", "Playstation Network", "Sony PlayStation", "Ticketmaster", "Fandango", "Gametime", "Rebill Gametime", "Monster Mini Golf"],
+  { intents: ["entertainment"], primary: "entertainment", confidence: "medium", notes: "Entertainment, tickets, or recreation" }
+);
+
+// Clothing / apparel
+addVendors(
+  ["Nordstrom", "Dillards", "Dillard's"],
+  { intents: ["clothing"], primary: "clothing", confidence: "medium", notes: "Clothing / apparel" }
 );
 
 // Marketing / ads / marketplaces
@@ -598,10 +762,10 @@ UNIVERSAL_VENDOR_HINTS.push(
   },
   {
     key: "building_permit_regex",
-    match: { type: "regex", value: "\\b(?:city of|county of|township of|department of buildings|building dept|dob|state licensing board|secretary of state)\\b" },
+    match: { type: "regex", value: "\\b(?:city of|county of|township of|department of buildings|building dept|dob|state licensing board|secretary of state|filings?\\s+[a-z]{2}\\s+secretary|secretary\\s+of\\s+state)\\b" },
     canonical: "Municipal / Licensing Agency",
-    intents: ["permits_fees"],
-    primary_intent: "permits_fees",
+    intents: ["business_licensing_fees", "permits_fees"],
+    primary_intent: "business_licensing_fees",
     confidence: "medium",
     notes: "Municipal, permit, registration, or licensing fee",
   }
@@ -757,8 +921,20 @@ addVendors(
 
 // Tolls / parking
 addVendors(
-  ["ParkMobile", "ParkWhiz", "LAZ Parking", "SP Plus", "Impark", "EZPass", "SunPass", "FasTrak", "PayByPhone"],
-  { intents: ["parking_tolls"], primary: "parking_tolls", confidence: "medium" }
+  ["ParkMobile", "Park Mobile", "ParkMobile CDOT Pay", "CDOT Pay", "NC Quick Pass", "Quick Pass", "ParkWhiz", "LAZ Parking", "SP Plus", "Impark", "EZPass", "SunPass", "FasTrak", "PayByPhone"],
+  { intents: ["parking_tolls"], primary: "parking_tolls", confidence: "high" }
+);
+
+UNIVERSAL_VENDOR_HINTS.push(
+  {
+    key: "parking_mobile_meter_payment",
+    match: { type: "regex", value: "\\bpark\\s*mobile\\b|\\bparkmobile\\b|\\bcdot\\s+pay\\b|\\bparking\\b|\\bpark\\b|\\blot\\b" },
+    canonical: "Parking",
+    intents: ["parking_tolls"],
+    primary_intent: "parking_tolls",
+    confidence: "high",
+    notes: "Parking or toll payment",
+  }
 );
 
 // Restaurants local/fast casual more

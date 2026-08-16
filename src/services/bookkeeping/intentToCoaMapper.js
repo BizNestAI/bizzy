@@ -2,10 +2,15 @@ const INTENT_ALIASES = {
   lodging: "travel",
   car_rental: "travel",
   parking: "parking_tolls",
+  parking_toll: "parking_tolls",
   tolls: "parking_tolls",
   general_supplies: "supplies",
   equipment: "tools",
   subscriptions: "software",
+  subscription: "software",
+  streaming: "software",
+  productivity: "software",
+  apparel: "clothing",
   ads: "advertising",
   leads: "advertising",
   food_supplies: "materials",
@@ -15,6 +20,24 @@ const INTENT_ALIASES = {
   medical: "office_supplies",
   training: "office_supplies",
   postage: "shipping",
+  wifi: "internet_services",
+  internet: "internet_services",
+  telecom: "internet_services",
+  utilities_internet: "internet_services",
+  electricity: "electric",
+  electric_utility: "electric",
+  ev_charging: "gas_charging",
+  vehicle_charging: "gas_charging",
+  business_license: "business_licensing_fees",
+  business_licensing: "business_licensing_fees",
+  licensing_fees: "business_licensing_fees",
+  permits: "business_licensing_fees",
+  permit_fees: "business_licensing_fees",
+  quickbooks_revenue: "sales",
+  invoice_revenue: "sales",
+  cashback: "other_income",
+  cash_back: "other_income",
+  rewards: "other_income",
 };
 
 export function resolveIntentKey(intent = "") {
@@ -24,33 +47,41 @@ export function resolveIntentKey(intent = "") {
 
 const INTENT_KEYWORDS = {
   airfare: ["airfare", "airline", "airlines", "flight", "flights"],
-  transportation: ["transportation", "rideshare", "uber", "lyft", "taxi", "cab"],
-  meals: ["meals", "meal", "meals and entertainment", "meals entertainment", "dining", "restaurant", "restaurants", "coffee"],
-  fuel: ["fuel", "gas", "gasoline", "diesel"],
+  transportation: ["transportation", "rideshare", "uber", "lyft", "taxi", "cab", "scooter", "bike share", "lime"],
+  meals: ["meals", "meal", "meals and entertainment", "meals entertainment", "dining", "restaurant", "restaurants", "fast food", "convenience store", "coffee", "grocery", "bakery", "smoothie", "grill", "mcdonald", "chick fil a", "chipotle", "cava", "panera", "publix", "whole foods", "lowes foods", "doordash", "uber eats", "crumbl", "short stop", "micro mart", "poppycox", "bonefish"],
+  fuel: ["fuel", "gas", "gasoline", "diesel", "gas station", "fuel station", "quiktrip", "quicktrip", "speedway", "sppedway", "circle k", "wawa", "spinx", "sheetz"],
+  gas_charging: ["gas charging", "gas and charging", "fuel charging", "charging", "ev charging", "supercharger", "chargeonsite", "vehicle charging"],
   supplies: ["supplies", "supply", "general supplies"],
-  materials: ["materials", "material", "job materials", "cogs", "cost of goods", "construction", "supplies and materials", "supplies materials", "hardware"],
+  materials: ["materials", "material", "job materials", "cogs", "cost of goods", "construction", "supplies and materials", "supplies materials", "hardware", "amazon"],
   tools: ["tools", "tool", "equipment", "equip", "small tools", "tool rental"],
-  software: ["software", "subscriptions", "saas", "cloud", "licensing"],
+  software: ["software", "subscriptions", "subscription", "saas", "cloud", "streaming", "productivity", "workspace", "atlassian", "apple", "adobe", "openai", "chatgpt", "youtube tv", "youtubetv", "paramount", "zoom", "figma", "instantly", "spotify", "railway", "canva", "supabase"],
+  entertainment: ["entertainment", "tickets", "ticket", "movies", "movie", "cinema", "event", "events", "concert", "golf", "arcade", "theater", "theatre", "amc", "prime video", "playstation", "ticketmaster", "fandango", "gametime"],
+  clothing: ["clothing", "apparel", "uniforms", "clothes", "wardrobe", "nordstrom", "dillards", "dillard"],
   advertising: ["advertising", "marketing", "ads", "ad", "promotion", "lead", "leads", "yelp", "angi", "homeadvisor", "thumbtack"],
   travel: ["travel", "airfare", "lodging", "hotel", "airline", "flight", "rental car", "uber", "lyft"],
   insurance: ["insurance"],
   equipment_rental: ["equipment rental", "equipment rentals", "rental", "rentals", "tool rental", "truck rental", "jobsite rental"],
   subcontractors: ["subcontractors", "subcontractor", "contract labor", "outside labor"],
   permits_fees: ["permits", "permit", "permit fees", "licenses", "license", "licensing", "inspection fees", "municipal fees"],
+  business_licensing_fees: ["business licensing fees", "business licensing", "license fees", "licensing fees", "filing fees", "filings", "secretary of state", "state filing", "registration fees"],
   waste_disposal: ["waste disposal", "dump fees", "dump fee", "landfill", "disposal", "hauling", "trash", "debris removal"],
   uniforms_laundry: ["uniforms", "uniform", "laundry", "workwear", "work clothes"],
   safety_ppe: ["safety", "ppe", "personal protective equipment", "gloves", "hard hats", "respirators"],
-  bank_fees: ["bank fees", "service charge", "service fee", "bank charge", "processing fees"],
+  bank_fees: ["bank fees", "bank charges", "bank charges and fees", "service charge", "service fee", "bank charge", "processing fees", "transaction fee", "tran fee"],
   payment_processing: ["processing", "merchant fees", "payment processing", "stripe", "square", "paypal fees"],
   payroll: ["payroll", "wages"],
   utilities: ["utilities", "telecom", "internet"],
+  internet_services: ["wifi", "wi fi", "internet", "internet services", "broadband", "fiber", "telecom", "phone"],
+  electric: ["electric", "electricity", "electric utility", "power", "energy"],
   vehicle_expense: ["auto", "vehicle", "fleet", "vehicle expense", "vehicle maintenance", "auto repair", "repair", "maintenance", "oil change", "tires", "tire"],
   security: ["security", "alarm", "monitoring"],
   shipping: ["shipping", "postage", "delivery"],
   office_supplies: ["office supplies", "office", "stationery"],
   cleaning: ["cleaning", "janitorial"],
-  parking_tolls: ["parking", "toll", "tolls"],
+  parking_tolls: ["parking", "park", "lot", "parking lot", "surface lot", "parkmobile", "park mobile", "parking meter", "parking pay", "cdot pay", "toll", "tolls"],
   interest_income: ["interest income", "interest"],
+  sales: ["sales", "sales income", "revenue", "income", "service income"],
+  other_income: ["other income", "cash back", "cashback", "statement credit", "automatic statement credit", "rewards", "reward income", "credit card rewards"],
 };
 
 const RELATED_INTENT_KEYS = {
@@ -58,12 +89,14 @@ const RELATED_INTENT_KEYS = {
   transportation: ["vehicle_expense", "travel", "parking_tolls"],
   travel: ["vehicle_expense", "parking_tolls"],
   vehicle_expense: ["travel", "fuel", "parking_tolls"],
+  gas_charging: ["fuel", "vehicle_expense"],
   parking_tolls: ["vehicle_expense", "travel"],
   materials: ["tools"],
   supplies: ["office_supplies", "materials"],
   tools: ["materials"],
   equipment_rental: ["tools", "materials"],
-  permits_fees: ["office_supplies"],
+  permits_fees: ["business_licensing_fees", "office_supplies"],
+  business_licensing_fees: ["permits_fees"],
   waste_disposal: ["materials"],
   uniforms_laundry: ["supplies", "office_supplies"],
   safety_ppe: ["supplies", "tools"],
@@ -71,6 +104,12 @@ const RELATED_INTENT_KEYS = {
   fuel: ["vehicle_expense", "travel"],
   office_supplies: ["materials"],
   software: ["office_supplies"],
+  entertainment: ["meals"],
+  clothing: ["uniforms_laundry", "supplies"],
+  other_income: ["interest_income"],
+  utilities: ["internet_services", "electric"],
+  internet_services: ["utilities"],
+  electric: ["utilities"],
   shipping: ["materials"],
 };
 
@@ -82,9 +121,20 @@ const STRICT_PRIMARY_ONLY_INTENTS = new Set([
   "equipment_rental",
   "subcontractors",
   "permits_fees",
+  "business_licensing_fees",
   "waste_disposal",
   "uniforms_laundry",
   "safety_ppe",
+  "gas_charging",
+  "fuel",
+  "meals",
+  "parking_tolls",
+  "software",
+  "entertainment",
+  "clothing",
+  "other_income",
+  "internet_services",
+  "electric",
 ]);
 
 function normalizeCoaName(name = "") {
@@ -107,13 +157,22 @@ function scoreAccount(intentKey, keywords, acct) {
   let reason = null;
   let matchedCount = 0;
 
+  if (name === intentKey.replace(/_/g, " ")) {
+    score += 100;
+    reason = "intent_exact_account";
+  }
+
   keywords.forEach((kw) => {
     const k = kw.toLowerCase();
     if (!k) return;
     const lenBonus = k.length / 10;
     const exactRe = new RegExp(`\\b${escapeRegExp(k)}\\b`, "i");
     let matched = false;
-    if (exactRe.test(name)) {
+    if (name === k) {
+      score += 150 + lenBonus;
+      reason = "keyword_exact_account";
+      matched = true;
+    } else if (exactRe.test(name)) {
       score += 100 + lenBonus;
       reason = "keyword_exact";
       matched = true;
@@ -143,15 +202,19 @@ function scoreAccount(intentKey, keywords, acct) {
     "transportation",
     "meals",
     "fuel",
+    "gas_charging",
     "supplies",
     "materials",
     "tools",
     "software",
+    "entertainment",
+    "clothing",
     "advertising",
     "travel",
     "insurance",
     "equipment_rental",
     "permits_fees",
+    "business_licensing_fees",
     "waste_disposal",
     "uniforms_laundry",
     "safety_ppe",
@@ -159,6 +222,8 @@ function scoreAccount(intentKey, keywords, acct) {
     "payment_processing",
     "payroll",
     "utilities",
+    "internet_services",
+    "electric",
     "vehicle_expense",
     "security",
     "shipping",
@@ -170,7 +235,7 @@ function scoreAccount(intentKey, keywords, acct) {
   if (cogsIntents.has(intentKey)) {
     if (acctType.includes("cost of goods") || acctType.includes("cogs")) score += 20;
     if (acctType.includes("income")) score -= 50;
-  } else if (intentKey === "interest_income") {
+  } else if (intentKey === "interest_income" || intentKey === "sales" || intentKey === "other_income") {
     if (acctType.includes("income")) score += 20;
     if (acctType.includes("expense") || acctType.includes("cost")) score -= 50;
   } else if (expenseIntents.has(intentKey)) {

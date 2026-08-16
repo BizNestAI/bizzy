@@ -68,22 +68,39 @@ export function looksLikeTransfer(tx = {}) {
 export function looksLikeCcPayment(tx = {}, context = {}) {
   const memo = getMemo(tx);
   const outflow = isOutflow(tx);
+  const inflow = isInflow(tx);
   const hasMerchantSignal = Boolean(normalizeText(tx.merchant_name) || normalizeText(tx.counterparty_name));
+  const currentAccountType = normalizeText(context?.currentAccountType || "");
+  const currentAccountSubtype = normalizeText(context?.currentAccountSubtype || "");
+  const currentAccountIsCredit =
+    currentAccountType.includes("credit") ||
+    currentAccountSubtype.includes("credit") ||
+    currentAccountSubtype.includes("credit card");
+  const hasCreditCardPair = context?.hasCreditCardPaymentPair === true;
+  const issuerHit =
+    /\b(?:amex|american express|discover|chase|visa|mastercard|master card|credit crd|credit card|cc)\b/.test(memo);
   const strongHigh = [
     "credit card payment",
     "card payment",
     "cc payment",
+    "cc pmt",
     "payment received",
     "online payment",
     "automatic payment",
     "autopay",
     "auto pay",
+    "mobile payment",
+    "e payment",
+    "e-payment",
+    "epay",
+    "epayment",
+    "ach pmt",
   ];
   const memoHasStrongHigh = strongHigh.some((p) => memo.includes(p));
   const memoHasThankYou = memo.includes("thank you");
   const memoHasMedium =
     memo.includes("payment") &&
-    (memo.includes("card") || memo.includes("cc") || /\bvisa\b|\bmastercard\b|\bamex\b/.test(memo));
+    (memo.includes("card") || memo.includes("cc") || issuerHit);
   const contextTargetIsCredit = Array.isArray(context?.targetAccountTypes)
     ? context.targetAccountTypes.includes("credit")
     : false;
@@ -91,7 +108,22 @@ export function looksLikeCcPayment(tx = {}, context = {}) {
   const hasHigh =
     memoHasStrongHigh ||
     (memoHasThankYou && memo.includes("payment")) ||
-    (memoHasStrongHigh && memo.includes("ach") && (memo.includes("card") || memo.includes("credit")));
+    (memoHasStrongHigh && memo.includes("ach") && (memo.includes("card") || memo.includes("credit"))) ||
+    (issuerHit && /\b(?:payment|pmt|epay|epayment|e-payment|autopay|ach)\b/.test(memo));
+
+  if (hasCreditCardPair && (outflow || currentAccountIsCredit) && (hasHigh || memoHasMedium || issuerHit || memo.includes("payment"))) {
+    return {
+      confidence: "high",
+      notes: "Matched opposite-side credit card payment by amount/date and payment memo",
+    };
+  }
+
+  if (currentAccountIsCredit && inflow && (memoHasStrongHigh || memoHasThankYou || memoHasMedium)) {
+    return {
+      confidence: "high",
+      notes: "Credit account inflow with payment language",
+    };
+  }
 
   if (hasHigh && outflow) {
     if (hasMerchantSignal && memoHasThankYou && !memoHasStrongHigh && !memo.includes("payment")) {

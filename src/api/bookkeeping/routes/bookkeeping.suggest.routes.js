@@ -36,6 +36,7 @@ const UNIVERSAL_COA_ALLOWLIST = new Set([
   "travel",
   "vehicle_expense",
   "fuel",
+  "gas_charging",
   "meals",
   "software",
   "advertising",
@@ -43,10 +44,13 @@ const UNIVERSAL_COA_ALLOWLIST = new Set([
   "equipment_rental",
   "subcontractors",
   "permits_fees",
+  "business_licensing_fees",
   "waste_disposal",
   "uniforms_laundry",
   "safety_ppe",
   "utilities",
+  "internet_services",
+  "electric",
   "office_supplies",
   "supplies",
   "cleaning",
@@ -54,6 +58,7 @@ const UNIVERSAL_COA_ALLOWLIST = new Set([
   "shipping",
   "bank_fees",
   "payment_processing",
+  "sales",
 ]);
 
 function isUniversalIntentAllowlisted(intent = "") {
@@ -66,16 +71,20 @@ const UNIVERSAL_AUTO_APPROVE_ALLOWLIST = new Set([
   "travel",
   "vehicle_expense",
   "fuel",
+  "gas_charging",
   "meals",
   "software",
   "advertising",
   "insurance",
   "equipment_rental",
   "permits_fees",
+  "business_licensing_fees",
   "waste_disposal",
   "uniforms_laundry",
   "safety_ppe",
   "utilities",
+  "internet_services",
+  "electric",
   "office_supplies",
   "supplies",
   "cleaning",
@@ -83,6 +92,7 @@ const UNIVERSAL_AUTO_APPROVE_ALLOWLIST = new Set([
   "shipping",
   "bank_fees",
   "payment_processing",
+  "sales",
 ]);
 
 function isUniversalIntentAutoApproveAllowed(intent = "") {
@@ -96,6 +106,7 @@ function intentToStandardAccountName(intent = "") {
     transportation: "Transportation",
     vehicle_expense: "Vehicle Expense",
     fuel: "Fuel",
+    gas_charging: "Gas/Charging",
     meals: "Meals & Entertainment",
     software: "Software Subscriptions",
     advertising: "Advertising",
@@ -103,16 +114,20 @@ function intentToStandardAccountName(intent = "") {
     equipment_rental: "Equipment Rental",
     subcontractors: "Subcontractors",
     permits_fees: "Permits & Fees",
+    business_licensing_fees: "Business Licensing Fees",
     waste_disposal: "Waste Disposal",
     uniforms_laundry: "Uniforms & Laundry",
     safety_ppe: "Safety & PPE",
     utilities: "Utilities",
+    internet_services: "Internet Services",
+    electric: "Electric",
     office_supplies: "Office Supplies",
     cleaning: "Cleaning",
     parking_tolls: "Parking & Tolls",
     shipping: "Shipping",
     bank_fees: "Bank Fees",
     payment_processing: "Payment Processing Fees",
+    sales: "Sales",
     travel: "Travel",
     supplies: "Supplies",
     materials: "Supplies & Materials",
@@ -639,6 +654,84 @@ async function fetchPlaidAccount(businessId, plaidAccountId) {
   return data || null;
 }
 
+function plaidAccountLooksCredit(acct = {}) {
+  const type = normalizeName(acct.type || "");
+  const subtype = normalizeName(acct.subtype || "");
+  const name = normalizeName(`${acct.name || ""} ${acct.official_name || ""}`);
+  return (
+    type.includes("credit") ||
+    subtype.includes("credit") ||
+    subtype.includes("credit card") ||
+    /\b(?:amex|american express|discover|visa|mastercard|master card|credit card|chase card)\b/.test(name)
+  );
+}
+
+function hasCreditCardPaymentMemoSignal(row = {}) {
+  const memo = normalizeName([row.name, row.merchant_name, row.counterparty_name].filter(Boolean).join(" "));
+  const issuer = /\b(?:amex|american express|discover|chase|visa|mastercard|master card|credit crd|credit card|cc)\b/.test(memo);
+  const payment = /\b(?:payment|pmt|epay|epayment|e payment|e-payment|autopay|auto pay|ach|mobile payment|thank you)\b/.test(memo);
+  return issuer && payment;
+}
+
+async function findCreditCardPaymentPairTxnId(businessId, row, { bookkeepingStartDate = null, allowHistoricalContext = false } = {}) {
+  const amount = Number(row.amount || 0);
+  if (!Number.isFinite(amount) || amount === 0) return null;
+  if (!row.plaid_account_id) return null;
+  if (!hasCreditCardPaymentMemoSignal(row)) return null;
+  const baseDate = row.date ? new Date(row.date) : null;
+  if (!baseDate || Number.isNaN(baseDate.getTime())) return null;
+  const EPS = 0.01;
+  const targetAmount = -amount;
+  const start = new Date(baseDate);
+  start.setDate(start.getDate() - 3);
+  const end = new Date(baseDate);
+  end.setDate(end.getDate() + 3);
+
+  const { data, error } = await supabase
+    .from("bank_transactions")
+    .select("id,plaid_account_id,amount,date,name,merchant_name,counterparty_name")
+    .eq("business_id", businessId)
+    .eq("is_archived", false)
+    .neq("plaid_account_id", row.plaid_account_id)
+    .gte("amount", targetAmount - EPS)
+    .lte("amount", targetAmount + EPS)
+    .gte("date", start.toISOString().slice(0, 10))
+    .lte("date", end.toISOString().slice(0, 10))
+    .limit(10);
+  if (error || !data?.length) return null;
+
+  const accountIds = [...new Set(data.map((candidate) => candidate.plaid_account_id).filter(Boolean))];
+  if (!accountIds.length) return null;
+  const { data: acctRows, error: acctErr } = await supabase
+    .from("plaid_accounts")
+    .select("plaid_account_id,name,official_name,type,subtype")
+    .eq("business_id", businessId)
+    .in("plaid_account_id", accountIds);
+  if (acctErr) return null;
+  const acctById = new Map((acctRows || []).map((acct) => [String(acct.plaid_account_id), acct]));
+
+  const scored = (data || [])
+    .map((candidate) => {
+      const acct = acctById.get(String(candidate.plaid_account_id));
+      const creditAcct = plaidAccountLooksCredit(acct);
+      const candidateMemoSignal = hasCreditCardPaymentMemoSignal(candidate) || /mobile payment|thank you|payment/.test(normalizeName(candidate.name || ""));
+      const dateDiff = Math.abs((new Date(row.date) - new Date(candidate.date)) / (1000 * 60 * 60 * 24));
+      return { candidate, creditAcct, candidateMemoSignal, dateDiff };
+    })
+    .filter((entry) => entry.creditAcct && (entry.candidateMemoSignal || hasCreditCardPaymentMemoSignal(row)))
+    .sort((a, b) => a.dateDiff - b.dateDiff);
+
+  const hit = scored[0]?.candidate || null;
+  if (!hit) return null;
+  const inActiveScope = isTransactionInActiveBookkeepingScope(hit, bookkeepingStartDate);
+  if (!inActiveScope && !allowHistoricalContext) return null;
+  return {
+    txnId: hit.id,
+    pairedPlaidAccountId: hit.plaid_account_id,
+    historicalContextOnly: !inActiveScope,
+  };
+}
+
 function matchQboAccountByMaskOrName(qboAccounts = [], plaidAcct = {}) {
   if (!Array.isArray(qboAccounts) || !qboAccounts.length || !plaidAcct) return { account: null, confidence: "low", notes: "no_accounts" };
   const mask = plaidAcct.mask ? String(plaidAcct.mask) : "";
@@ -990,6 +1083,17 @@ router.post("/suggest", requireAuth, async (req, res) => {
     const ids = (txns || []).map((t) => t.id);
     if (!ids.length) return res.json({ ok: true, updated: 0, auto_approved: 0, skipped: 0, sample: [] });
 
+    const plaidAccountIds = [...new Set((txns || []).map((t) => t.plaid_account_id).filter(Boolean))];
+    let plaidAccountMap = new Map();
+    if (plaidAccountIds.length) {
+      const { data: plaidAcctRows } = await supabase
+        .from("plaid_accounts")
+        .select("plaid_account_id,name,official_name,type,subtype")
+        .eq("business_id", businessId)
+        .in("plaid_account_id", plaidAccountIds);
+      plaidAccountMap = new Map((plaidAcctRows || []).map((acct) => [String(acct.plaid_account_id), acct]));
+    }
+
     // Existing categs
     const { data: existing, error: catErr } = await supabase
       .from("transaction_categorizations")
@@ -1236,9 +1340,21 @@ router.post("/suggest", requireAuth, async (req, res) => {
           }
         : {};
       const baseMetaWithCheck = { ...metaBase, ...checkMeta };
+      const plaidAcctForTxn = plaidAccountMap.get(String(row.plaid_account_id)) || null;
+      const ccPaymentPair = await findCreditCardPaymentPairTxnId(businessId, row, {
+        bookkeepingStartDate,
+        allowHistoricalContext: true,
+      });
+      const rowTaxonomyContext = {
+        ...taxonomyContext,
+        currentAccountType: plaidAcctForTxn?.type || null,
+        currentAccountSubtype: plaidAcctForTxn?.subtype || null,
+        hasCreditCardPaymentPair: Boolean(ccPaymentPair?.txnId),
+        targetAccountTypes: ccPaymentPair?.txnId || plaidAccountLooksCredit(plaidAcctForTxn) ? ["credit"] : [],
+      };
       rowBranch = "existing_categorization";
         if (existingCat && existingCat.suggested_qbo_account_id) {
-        const taxHit = classifyTaxonomy(row, taxonomyContext);
+        const taxHit = classifyTaxonomy(row, rowTaxonomyContext);
         let mergedMeta = { ...baseMetaWithCheck };
         mergedMeta.user_approval_backed = hasSimilarUserApproval;
         mergedMeta.user_approval_match_type = similarUserApproval?.match_type || null;
@@ -1275,6 +1391,11 @@ router.post("/suggest", requireAuth, async (req, res) => {
               const suggested = equityAcct || fallbacks.ama || null;
               mergedMeta.owner_move_equity_account_id = suggested?.id || null;
               mergedMeta.owner_move_equity_account_name = suggested?.name || null;
+            }
+            if (taxHit.type === "cc_payment" && ccPaymentPair?.txnId) {
+              mergedMeta.cc_payment_pair_txn_id = ccPaymentPair.txnId;
+              mergedMeta.cc_payment_pair_plaid_account_id = ccPaymentPair.pairedPlaidAccountId || null;
+              mergedMeta.cc_payment_pair_historical_context_only = !!ccPaymentPair.historicalContextOnly;
             }
             if (taxHit.type === "refund") {
               const orig = await findRefundOriginalTxn({
@@ -1544,7 +1665,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
       }
 
       rowBranch = "taxonomy";
-      const taxHit = classifyTaxonomy(row, taxonomyContext);
+      const taxHit = classifyTaxonomy(row, rowTaxonomyContext);
       if (taxHit) {
         const taxonomyMeta = buildTaxonomyMeta(taxHit);
         let mergedMeta = {
@@ -1588,6 +1709,11 @@ router.post("/suggest", requireAuth, async (req, res) => {
             : `Taxonomy: ${taxHit.type}${taxHit.subtype ? `/${taxHit.subtype}` : ""} (${taxHit.confidence}) — Suggested: ${safeFallback?.name || "none"}`;
 
         if (taxHit.type === "cc_payment") {
+          if (ccPaymentPair?.txnId) {
+            mergedMeta.cc_payment_pair_txn_id = ccPaymentPair.txnId;
+            mergedMeta.cc_payment_pair_plaid_account_id = ccPaymentPair.pairedPlaidAccountId || null;
+            mergedMeta.cc_payment_pair_historical_context_only = !!ccPaymentPair.historicalContextOnly;
+          }
           ccMapping = await resolveCcPaymentMapping({ businessId, txnRow: row, coa, coaMap });
           if (ccMapping?.creditCardAccountRef) {
             suggestedAcct = ccMapping.creditCardAccountRef;

@@ -211,6 +211,20 @@ export function CoaDropdown({ value, suggestedId, suggestedName, accounts, onCha
   );
 }
 
+function getTransactionMemo(txn = {}) {
+  return (
+    txn.description ||
+    txn.full_description ||
+    txn.fullDescription ||
+    txn.original_description ||
+    txn.originalDescription ||
+    txn.name ||
+    txn.merchant_name ||
+    txn.merchantName ||
+    ""
+  );
+}
+
 function ConfidenceBadge({ level }) {
   const styles = {
     high: "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40",
@@ -337,6 +351,7 @@ export default function BookkeepingFeed({
     "checked:after:opacity-100";
   const [accountSelections, setAccountSelections] = React.useState(() => new Map());
   const [sort, setSort] = React.useState({ column: null, direction: null }); // direction: 'asc' | 'desc' | null
+  const [expandedRowId, setExpandedRowId] = React.useState(null);
 
   React.useEffect(() => {
     let changed = false;
@@ -402,6 +417,10 @@ export default function BookkeepingFeed({
   const renderSortIndicator = (column) => {
     if (sort.column !== column || !sort.direction) return null;
     return <span className="ml-1 text-[10px] text-white/60">{sort.direction === "asc" ? "↑" : "↓"}</span>;
+  };
+
+  const toggleExpandedRow = (txnId) => {
+    setExpandedRowId((prev) => (prev === txnId ? null : txnId));
   };
 
   return (
@@ -506,21 +525,34 @@ export default function BookkeepingFeed({
               payeeConfidence === "high";
             const isPosted = txn.status === "posted";
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
+            const isExpanded = expandedRowId === txn.id;
+            const fullMemo = getTransactionMemo(txn) || "No bank memo available.";
 
             return (
+              <React.Fragment key={txn.id}>
               <div
-                key={txn.id}
-                className="grid items-center px-3 py-2 text-[11px] text-slate-100 border-b divide-x divide-[rgba(255,255,255,0.06)] transition-colors"
+                className="grid cursor-pointer items-center px-3 py-2 text-[11px] text-slate-100 border-b divide-x divide-[rgba(255,255,255,0.06)] transition-colors"
                 style={{
                   background: panelBg,
                   borderColor: panelBorder,
                   transition: "background 120ms ease",
                   gridTemplateColumns: gridTemplate,
                 }}
+                role="button"
+                tabIndex={0}
+                aria-expanded={isExpanded}
+                aria-label={`Show full memo for ${txn.description || "transaction"}`}
+                onClick={() => toggleExpandedRow(txn.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleExpandedRow(txn.id);
+                  }
+                }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = ROW_HOVER_BG)}
                 onMouseLeave={(e) => (e.currentTarget.style.background = panelBg)}
               >
-              <div className="flex items-center justify-center">
+              <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
                 <input
                   type="checkbox"
                   disabled={isPosted || readOnly}
@@ -536,6 +568,14 @@ export default function BookkeepingFeed({
               <div className="text-slate-300 truncate">{fmtDate(txn.date)}</div>
               <div className="min-w-0 pl-2 text-[10px] font-medium text-slate-50 truncate leading-tight whitespace-nowrap" title={txn.description || ""}>
                 <div className="flex items-center gap-2">
+                  <span
+                    className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.03] text-[11px] text-slate-300 transition ${
+                      isExpanded ? "rotate-90 border-emerald-400/40 text-emerald-300" : ""
+                    }`}
+                    aria-hidden="true"
+                  >
+                    ›
+                  </span>
                   <span className="truncate">{txn.description || "—"}</span>
                   {txn.is_check ? (
                     <span
@@ -599,7 +639,7 @@ export default function BookkeepingFeed({
                   return `${isOutflow ? "-" : "+"}$${abs.toFixed(2)}`;
                 })()}
               </div>
-              <div className="flex justify-center">
+              <div className="flex justify-center" onClick={(e) => e.stopPropagation()}>
                 {isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
@@ -657,6 +697,31 @@ export default function BookkeepingFeed({
                 )}
              </div>
            </div>
+           <div
+             className={`overflow-hidden border-b transition-[max-height,opacity] duration-200 ease-out ${
+               isExpanded ? "max-h-40 opacity-100" : "max-h-0 opacity-0"
+             }`}
+             style={{ background: "rgba(15,17,20,0.92)", borderColor: panelBorder }}
+             aria-hidden={!isExpanded}
+           >
+             <div className="px-3 py-3">
+               <div
+                 className="rounded-xl border px-4 py-3"
+                 style={{
+                   background: "rgba(255,255,255,0.025)",
+                   borderColor: "rgba(16,185,129,0.18)",
+                 }}
+               >
+                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                   Full bank memo
+                 </div>
+                 <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
+                   {fullMemo}
+                 </div>
+               </div>
+             </div>
+           </div>
+           </React.Fragment>
           );
           })}
         </div>
