@@ -14,15 +14,15 @@ const devLog = (tag, payload) => {
 };
 
 const normalize = (str = "") => (str || "").toLowerCase().replace(/[^a-z0-9\s&-]+/g, " ").replace(/\s+/g, " ").trim();
+const CLARIFICATION_TXN_SELECT =
+  "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category,pending,accounting_review_required,accounting_review_reason";
 
 async function resolveCanonicalTransactionForClarification({ businessId, transactionId }) {
   if (!businessId || !transactionId) return null;
 
   const { data: exactRow, error: exactErr } = await supabase
     .from("bank_transactions")
-    .select(
-      "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
-    )
+    .select(CLARIFICATION_TXN_SELECT)
     .eq("business_id", businessId)
     .eq("id", transactionId)
     .maybeSingle();
@@ -71,9 +71,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
     const replacement = await pickReplacement(
       supabase
         .from("bank_transactions")
-        .select(
-          "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
-        )
+        .select(CLARIFICATION_TXN_SELECT)
         .eq("business_id", businessId)
         .eq("is_archived", false)
         .or(
@@ -88,9 +86,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
     const replacement = await pickReplacement(
       supabase
         .from("bank_transactions")
-        .select(
-          "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
-        )
+        .select(CLARIFICATION_TXN_SELECT)
         .eq("business_id", businessId)
         .eq("is_archived", false)
         .or(
@@ -104,9 +100,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
   if (exactRow.duplicate_fingerprint) {
     const { data, error } = await supabase
       .from("bank_transactions")
-      .select(
-        "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category"
-      )
+      .select(CLARIFICATION_TXN_SELECT)
       .eq("business_id", businessId)
       .eq("is_archived", false)
       .eq("duplicate_fingerprint", exactRow.duplicate_fingerprint)
@@ -565,6 +559,40 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
         });
       }
       results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "canonical_transaction_not_found" });
+      unmapped += 1;
+      continue;
+    }
+    if (txn.pending === true) {
+      await supabase
+        .from("transaction_categorizations")
+        .upsert(
+          {
+            business_id: businessId,
+            transaction_id: canonicalTxnId,
+            status: "needs_review",
+            post_after: null,
+            post_error: "pending_transaction_not_postable",
+            pending_blocked_at: nowIso,
+            meta: { ...(catMeta[canonicalTxnId] || {}), post_block_reason: "pending_transaction_not_postable" },
+          },
+          { onConflict: "business_id,transaction_id" }
+        );
+      results.push({
+        request_id: ans.request_id,
+        transaction_id: ans.transaction_id,
+        canonical_transaction_id: canonicalTxnId,
+        error: "pending_transaction_not_postable",
+      });
+      unmapped += 1;
+      continue;
+    }
+    if (txn.accounting_review_required === true) {
+      results.push({
+        request_id: ans.request_id,
+        transaction_id: ans.transaction_id,
+        canonical_transaction_id: canonicalTxnId,
+        error: "plaid_accounting_review_required",
+      });
       unmapped += 1;
       continue;
     }

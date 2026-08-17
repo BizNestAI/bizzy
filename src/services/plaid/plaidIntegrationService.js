@@ -1,6 +1,7 @@
 import { supabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
 import { encryptPlaidAccessToken } from "./plaidTokenCrypto.js";
+import { buildPhysicalAccountIdentity } from "./plaidCanonicalIdentity.js";
 
 const devLog = (tag, payload) => {
   if (process.env.NODE_ENV !== "production") {
@@ -41,7 +42,112 @@ async function hydrateConnectedAt(businessId, accounts) {
   return map;
 }
 
-export async function fetchAndUpsertAccounts({ businessId, plaidItemId, accessToken }) {
+async function resolvePhysicalAccount({ businessId, plaidItemId, institution, account }) {
+  const identity = buildPhysicalAccountIdentity({
+    account,
+    item: {
+      business_id: businessId,
+      institution_id: institution?.institution_id || institution?.id || null,
+      institution_name: institution?.name || null,
+      plaid_env: plaidEnvName,
+    },
+    plaidEnv: plaidEnvName,
+  });
+  const nowIso = new Date().toISOString();
+  const plaidAccountId = account?.account_id || null;
+
+  let candidate = null;
+  let candidateIds = [];
+  if (identity.strong) {
+    const { data, error } = await supabase
+      .from("plaid_physical_accounts")
+      .select("id,current_plaid_item_id,current_plaid_account_id,previous_plaid_item_ids,previous_plaid_account_ids")
+      .eq("business_id", businessId)
+      .eq("plaid_env", identity.plaid_env)
+      .eq("institution_id", identity.institution_id)
+      .eq("account_mask", identity.account_mask)
+      .eq("account_type", identity.account_type)
+      .eq("account_subtype", identity.account_subtype)
+      .neq("status", "merged");
+    if (error) throw error;
+    candidateIds = (data || []).map((row) => row.id).filter(Boolean);
+    if ((data || []).length === 1) candidate = data[0];
+  }
+
+  if (candidate?.id) {
+    const prevItems = new Set(candidate.previous_plaid_item_ids || []);
+    const prevAccounts = new Set(candidate.previous_plaid_account_ids || []);
+    if (candidate.current_plaid_item_id && candidate.current_plaid_item_id !== plaidItemId) {
+      prevItems.add(candidate.current_plaid_item_id);
+    }
+    if (candidate.current_plaid_account_id && candidate.current_plaid_account_id !== plaidAccountId) {
+      prevAccounts.add(candidate.current_plaid_account_id);
+    }
+    const { error } = await supabase
+      .from("plaid_physical_accounts")
+      .update({
+        institution_name: identity.institution_name,
+        normalized_account_name: identity.normalized_account_name,
+        current_plaid_item_id: plaidItemId,
+        current_plaid_account_id: plaidAccountId,
+        previous_plaid_item_ids: Array.from(prevItems),
+        previous_plaid_account_ids: Array.from(prevAccounts),
+        confidence: "high",
+        status: "active",
+        needs_confirmation: false,
+        last_seen_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq("business_id", businessId)
+      .eq("id", candidate.id);
+    if (error) throw error;
+    return {
+      physical_account_id: candidate.id,
+      relink_status: "linked_existing",
+      relink_confidence: "high",
+      relink_candidate_ids: [],
+    };
+  }
+
+  const needsConfirmation = identity.strong && candidateIds.length > 1;
+  const insertPayload = {
+    business_id: businessId,
+    plaid_env: identity.plaid_env,
+    institution_id: identity.institution_id,
+    institution_name: identity.institution_name,
+    account_mask: identity.account_mask,
+    account_type: identity.account_type,
+    account_subtype: identity.account_subtype,
+    normalized_account_name: identity.normalized_account_name,
+    current_plaid_item_id: plaidItemId,
+    current_plaid_account_id: plaidAccountId,
+    previous_plaid_item_ids: [],
+    previous_plaid_account_ids: [],
+    confidence: identity.strong && !needsConfirmation ? "high" : "probable",
+    status: needsConfirmation ? "needs_confirmation" : "active",
+    needs_confirmation: needsConfirmation,
+    duplicate_candidate_ids: candidateIds,
+    metadata: {
+      identity_protection: needsConfirmation ? "ambiguous_relink_requires_confirmation" : "new_physical_account",
+    },
+    last_seen_at: nowIso,
+    updated_at: nowIso,
+  };
+  const { data: inserted, error } = await supabase
+    .from("plaid_physical_accounts")
+    .insert(insertPayload)
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  return {
+    physical_account_id: inserted?.id || null,
+    relink_status: needsConfirmation ? "probable_duplicate_requires_confirmation" : "new_physical_account",
+    relink_confidence: insertPayload.confidence,
+    relink_candidate_ids: candidateIds,
+  };
+}
+
+export async function fetchAndUpsertAccounts({ businessId, plaidItemId, accessToken, institution: linkedInstitution = null }) {
   if (!accessToken || !businessId || !plaidItemId) return { count: 0 };
   const plaid = getPlaidClient();
   if (!plaid) throw new Error("plaid_not_configured");
@@ -52,27 +158,45 @@ export async function fetchAndUpsertAccounts({ businessId, plaidItemId, accessTo
 
   const existingConnected = await hydrateConnectedAt(businessId, accounts);
 
-  const rows = accounts.map((acc) => ({
-    business_id: businessId,
-    plaid_item_id: plaidItemId,
-    plaid_env: plaidEnvName,
-    plaid_account_id: acc.account_id,
-    name: acc.name || acc.official_name || "Account",
-    official_name: acc.official_name || null,
-    mask: acc.mask || null,
-    type: acc.type || null,
-    subtype: acc.subtype || null,
-    iso_currency_code: acc.balances?.iso_currency_code || null,
-    unofficial_currency_code: acc.balances?.unofficial_currency_code || null,
-    current_balance: acc.balances?.current || null,
-    available_balance: acc.balances?.available || null,
-    limit_balance: acc.balances?.limit || null,
-    is_active: true,
-    disconnected_at: null,
-    updated_at: nowIso,
-    last_sync_at: nowIso,
-    connected_at: existingConnected[acc.account_id] || nowIso,
-  }));
+  const itemInfo = accountsResp?.data?.item || {};
+  const institution = {
+    institution_id: linkedInstitution?.institution_id || linkedInstitution?.id || itemInfo.institution_id || null,
+    name: linkedInstitution?.name || null,
+  };
+  const rows = [];
+  for (const acc of accounts) {
+    const physical = await resolvePhysicalAccount({
+      businessId,
+      plaidItemId,
+      institution,
+      account: acc,
+    });
+    rows.push({
+      business_id: businessId,
+      plaid_item_id: plaidItemId,
+      plaid_env: plaidEnvName,
+      plaid_account_id: acc.account_id,
+      physical_account_id: physical.physical_account_id,
+      relink_status: physical.relink_status,
+      relink_confidence: physical.relink_confidence,
+      relink_candidate_ids: physical.relink_candidate_ids,
+      name: acc.name || acc.official_name || "Account",
+      official_name: acc.official_name || null,
+      mask: acc.mask || null,
+      type: acc.type || null,
+      subtype: acc.subtype || null,
+      iso_currency_code: acc.balances?.iso_currency_code || null,
+      unofficial_currency_code: acc.balances?.unofficial_currency_code || null,
+      current_balance: acc.balances?.current || null,
+      available_balance: acc.balances?.available || null,
+      limit_balance: acc.balances?.limit || null,
+      is_active: true,
+      disconnected_at: null,
+      updated_at: nowIso,
+      last_sync_at: nowIso,
+      connected_at: existingConnected[acc.account_id] || nowIso,
+    });
+  }
 
   const upsertOnce = async () => {
     const { error } = await supabase
@@ -89,7 +213,7 @@ export async function fetchAndUpsertAccounts({ businessId, plaidItemId, accessTo
       devLog("missing_columns_retry", {
         reason: "plaid_accounts missing connected_at/last_sync_at; retrying without",
       });
-      const stripped = rows.map(({ connected_at, last_sync_at, ...rest }) => rest);
+      const stripped = rows.map(({ connected_at: _connected_at, last_sync_at: _last_sync_at, ...rest }) => rest);
       const { error: retryErr } = await supabase
         .from("plaid_accounts")
         .upsert(stripped, { onConflict: "business_id,plaid_account_id" });
@@ -157,6 +281,7 @@ export async function exchangePublicToken({ businessId, userId, publicToken, met
     businessId,
     plaidItemId: item_id,
     accessToken: access_token,
+    institution,
   });
 
   devLog("exchange_complete", {

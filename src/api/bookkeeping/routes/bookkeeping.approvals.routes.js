@@ -45,7 +45,7 @@ router.post("/approve", requireAuth, async (req, res) => {
 
   const { data: bankTxns, error: bankErr } = await supabase
     .from("bank_transactions")
-    .select("id,date,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category,plaid_account_id")
+    .select("id,date,name,merchant_name,counterparty_name,transaction_type,check_number,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,category_primary,personal_finance_category,plaid_account_id,pending,accounting_review_required,accounting_review_reason")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .in("id", txnIds);
@@ -57,6 +57,33 @@ router.post("/approve", requireAuth, async (req, res) => {
     acc[row.id] = row;
     return acc;
   }, {});
+  const pendingIds = (bankTxns || []).filter((row) => row.pending === true).map((row) => row.id);
+  if (pendingIds.length) {
+    await supabase
+      .from("transaction_categorizations")
+      .update({
+        status: "needs_review",
+        post_after: null,
+        post_error: "pending_transaction_not_postable",
+        pending_blocked_at: nowIso,
+        updated_at: nowIso,
+      })
+      .eq("business_id", businessId)
+      .in("transaction_id", pendingIds);
+    return res.status(400).json({
+      ok: false,
+      error: "pending_transaction_not_postable",
+      transactions: pendingIds,
+    });
+  }
+  const reviewIds = (bankTxns || []).filter((row) => row.accounting_review_required === true).map((row) => row.id);
+  if (reviewIds.length) {
+    return res.status(400).json({
+      ok: false,
+      error: "plaid_accounting_review_required",
+      transactions: reviewIds,
+    });
+  }
   const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const preCutoffIds = getTransactionsOutsideActiveBookkeepingScope(bankTxns || [], bookkeepingStartDate).map((row) => row.id);
   if (preCutoffIds.length) {
@@ -259,14 +286,12 @@ router.post("/undo", requireAuth, async (req, res) => {
         updated_at: nowIso,
         post_after: null,
         post_error: null,
-        qbo_txn_id: null,
-        qbo_txn_type: null,
-        posted_at: null,
-        // NOTE: reconciled_at is preserved for auditability; undo does not void/delete in QBO.
+        // QBO posting evidence is intentionally preserved. Undo does not void,
+        // delete, reverse, or make a posted transaction eligible to post again.
       })
       .eq("business_id", businessId)
       .eq("transaction_id", txnId)
-      .select("business_id,transaction_id,status,final_qbo_account_id,final_qbo_account_name");
+      .select("business_id,transaction_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,qbo_txn_type,posted_at");
 
     if (updateErr) throw updateErr;
 
@@ -288,13 +313,10 @@ router.post("/undo", requireAuth, async (req, res) => {
             updated_at: nowIso,
             post_after: null,
             post_error: null,
-            qbo_txn_id: null,
-            qbo_txn_type: null,
-            posted_at: null,
           },
           { onConflict: "business_id,transaction_id" }
         )
-        .select("business_id,transaction_id,status,final_qbo_account_id,final_qbo_account_name");
+        .select("business_id,transaction_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,qbo_txn_type,posted_at");
       if (insertErr) throw insertErr;
       rows = inserted || [];
       updated_count = rows.length;

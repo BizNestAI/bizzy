@@ -81,9 +81,9 @@ test("manual row-level posting uses the shared QBO posting path while auto-post 
 
   assert.match(route, /router\.post\("\/posting\/transactions\/:transactionId"/);
   assert.match(route, /assertTaxBusinessAccess\(\{ req, businessId, supabase \}\)/);
-  assert.match(route, /postSingleBookkeepingTransactionNow\(\{ businessId, transactionId \}\)/);
+  assert.match(route, /postSingleBookkeepingTransactionNow\(\{ businessId, transactionId, confirmPostAnyway \}\)/);
   assert.match(cron, /export async function postSingleBookkeepingTransactionNow/);
-  assert.match(cron, /await handleItem\(item, \{ manual: true \}\)/);
+  assert.match(cron, /await handleItem\(item, \{ manual: true, confirmPostAnyway \}\)/);
   assert.match(cron, /if \(!manual\)[\s\S]*?getAutoPostToQuickBooks/);
   assert.match(client, /postTransactionToQuickBooks/);
   assert.match(page, /Post this transaction to QuickBooks\?/);

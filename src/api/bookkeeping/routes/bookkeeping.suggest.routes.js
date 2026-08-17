@@ -17,6 +17,7 @@ import { createOrUpdateClarificationRequest } from "../../../services/bookkeepin
 import { computeMemoPrefixForLearning } from "../../../services/bookkeeping/vendorRuleLearner.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
 import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "../../../services/bookkeeping/autoPostControl.js";
+import { canAutoHandle } from "../../../services/bookkeeping/autoHandlingPolicy.js";
 
 const router = Router();
 
@@ -144,29 +145,61 @@ function shouldForceCanonicalIntentAccount(intent = "", mappedAccountName = "") 
   return Boolean(canonical) && canonical !== mapped;
 }
 
-function applyAutoApproval({ status, confidence, meta = {}, checkHit = {}, suggestedAcct = {}, taxonomyType = null, nowIso, reason, autoApprove = false, autoPostEnabled = false, txnId = null }) {
-  const conf = String(confidence || "").toLowerCase();
-  const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution", "cc_payment"];
-  if (checkHit?.is_check) return { status, meta, finalAcctId: undefined, finalAcctName: undefined, postAfter: undefined, decidedBy: undefined, decidedAt: undefined };
-  const taxType = (taxonomyType || meta?.taxonomy_type || meta?.meta?.taxonomy_type || "").toLowerCase();
-  if (blockedTaxonomy.includes(taxType)) {
-    return { status, meta, finalAcctId: undefined, finalAcctName: undefined, postAfter: undefined, decidedBy: undefined, decidedAt: undefined };
-  }
-  if (
-    autoApprove === true &&
-    meta.safe_to_auto_post === true &&
-    conf === "high" &&
-    suggestedAcct?.id &&
-    suggestedAcct?.name
-  ) {
+function applyAutoApproval({
+  status,
+  confidence,
+  meta = {},
+  checkHit = {},
+  suggestedAcct = {},
+  taxonomyType = null,
+  nowIso,
+  reason,
+  autoApprove = false,
+  autoPostEnabled = false,
+  txnId = null,
+  transaction = {},
+  businessContext = {},
+  evidence = {},
+}) {
+  const decision = canAutoHandle(
+    transaction || {},
+    {
+      source: evidence.source || meta.suggestion_source || reason || "unknown",
+      confidence,
+      accountId: suggestedAcct?.id || evidence.accountId || null,
+      accountName: suggestedAcct?.name || evidence.accountName || null,
+      taxonomyType,
+      isCheck: checkHit?.is_check === true,
+      meta,
+      reason,
+      safeToAutoHandle: evidence.safeToAutoHandle === true || meta.safe_to_auto_handle === true,
+      verifiedCcPayment: evidence.verifiedCcPayment === true,
+      allowTaxonomyAutoHandle: evidence.allowTaxonomyAutoHandle === true,
+      weakRule: evidence.weakRule === true,
+    },
+    businessContext || {}
+  );
+  const decisionMeta = {
+    ...meta,
+    safe_to_auto_handle: decision.eligible === true,
+    auto_handle_decision: {
+      eligible: decision.eligible === true,
+      confidence: decision.confidence,
+      source: decision.source,
+      reason: decision.reason,
+      at: nowIso,
+    },
+  };
+  if (autoApprove === true && decision.eligible === true && suggestedAcct?.id && suggestedAcct?.name) {
     const finalAcctId = suggestedAcct?.id || null;
     const finalAcctName = suggestedAcct?.name || null;
     const postAfter = computePostAfterForAutoPost(autoPostEnabled, GRACE_HOURS);
     const decidedBy = "bizzi";
     const decidedAt = nowIso;
     const nextMeta = {
-      ...meta,
-      auto_approve_reason: meta.auto_approve_reason || reason || "model_high",
+      ...decisionMeta,
+      auto_approve_reason: decisionMeta.auto_approve_reason || reason || decision.reason || "auto_handle_policy",
+      auto_handled_reason: decision.reason,
     };
     devLog("auto_approved", {
       txnId,
@@ -184,7 +217,7 @@ function applyAutoApproval({ status, confidence, meta = {}, checkHit = {}, sugge
       decidedAt,
     };
   }
-  return { status, meta, finalAcctId: undefined, finalAcctName: undefined, postAfter: undefined, decidedBy: undefined, decidedAt: undefined };
+  return { status, meta: decisionMeta, finalAcctId: undefined, finalAcctName: undefined, postAfter: undefined, decidedBy: undefined, decidedAt: undefined };
 }
 
 function firstDayOfMonth() {
@@ -796,7 +829,7 @@ async function resolveCcPaymentMapping({ businessId, txnRow, coa, coaMap }) {
 }
 
 function enforceCheckNeverAutoApprove(meta = {}) {
-  return { ...meta, safe_to_auto_post: false, auto_approve_reason: null };
+  return { ...meta, safe_to_auto_handle: false, safe_to_auto_post: false, auto_approve_reason: null };
 }
 
 async function findTransferPairTxnId(businessId, row, { bookkeepingStartDate = null, allowHistoricalContext = false } = {}) {
@@ -1067,7 +1100,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
     // Step A: base transactions to consider
     let txQuery = supabase
       .from("bank_transactions")
-      .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel")
+      .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel,pending,accounting_review_required,accounting_review_reason")
       .eq("business_id", businessId)
       .eq("is_archived", false);
     if (txnIds && txnIds.length) {
@@ -1079,11 +1112,30 @@ router.post("/suggest", requireAuth, async (req, res) => {
     txQuery = applyActiveBookkeepingScope(txQuery, bookkeepingStartDate);
     const { data: txns, error: txErr } = await txQuery;
     if (txErr) throw txErr;
+    const nowTs = Date.now();
+    const blockedPendingIds = (txns || []).filter((t) => t.pending === true).map((t) => t.id).filter(Boolean);
+    if (blockedPendingIds.length) {
+      await supabase
+        .from("transaction_categorizations")
+        .upsert(
+          blockedPendingIds.map((transactionId) => ({
+            business_id: businessId,
+            transaction_id: transactionId,
+            status: "needs_review",
+            post_after: null,
+            post_error: "pending_transaction_not_postable",
+            pending_blocked_at: new Date().toISOString(),
+            meta: { post_block_reason: "pending_transaction_not_postable" },
+          })),
+          { onConflict: "business_id,transaction_id" }
+        );
+    }
+    const eligibleTxns = (txns || []).filter((t) => t.pending !== true && t.accounting_review_required !== true);
 
-    const ids = (txns || []).map((t) => t.id);
+    const ids = eligibleTxns.map((t) => t.id);
     if (!ids.length) return res.json({ ok: true, updated: 0, auto_approved: 0, skipped: 0, sample: [] });
 
-    const plaidAccountIds = [...new Set((txns || []).map((t) => t.plaid_account_id).filter(Boolean))];
+    const plaidAccountIds = [...new Set(eligibleTxns.map((t) => t.plaid_account_id).filter(Boolean))];
     let plaidAccountMap = new Map();
     if (plaidAccountIds.length) {
       const { data: plaidAcctRows } = await supabase
@@ -1253,9 +1305,10 @@ router.post("/suggest", requireAuth, async (req, res) => {
 
       const conf = String(confidenceOverride || payload?.confidence || meta?.confidence || "").toLowerCase();
       const safeToAutoPost = meta?.safe_to_auto_post ?? payload?.meta?.safe_to_auto_post ?? null;
+      const safeToAutoHandle = meta?.safe_to_auto_handle ?? payload?.meta?.safe_to_auto_handle ?? null;
       const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution"];
       const taxType = String(taxonomyType || meta?.taxonomy_type || payload?.meta?.taxonomy_type || "").toLowerCase();
-      if (safeToAutoPost === true && conf === "high" && !checkHit?.is_check && !blockedTaxonomy.includes(taxType)) {
+      if ((safeToAutoHandle === true || safeToAutoPost === true) && conf === "high" && !checkHit?.is_check && !blockedTaxonomy.includes(taxType)) {
         return;
       }
       const suggestedId = payload?.suggested_qbo_account_id || null;
@@ -1294,6 +1347,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
         vendor_rule_id: vendorRule?.id || null,
         universal_hint_key: universalHintKey || null,
         post_block_reason: meta?.post_block_reason || payload?.meta?.post_block_reason || null,
+        safe_to_auto_handle: safeToAutoHandle === true,
         safe_to_auto_post: safeToAutoPost === true,
       };
 
@@ -1322,7 +1376,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
       await maybeQueueClarification({ payload, txn, ...ctx });
     };
 
-    for (const row of txns || []) {
+    for (const row of eligibleTxns || []) {
       let rowBranch = "init";
       try {
       const checkHit = isCheck(row);
@@ -1368,6 +1422,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
               ...taxonomyMeta,
             };
             if (metaBase?.auto_approve_reason === "manual_user") {
+              mergedMeta.safe_to_auto_handle = true;
               mergedMeta.safe_to_auto_post = true;
               mergedMeta.auto_approve_reason = "manual_user";
             }
@@ -1436,7 +1491,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           });
           metaBackfilled += 1;
         }
-        if (mergedMeta.safe_to_auto_post !== true && mergedMeta.safe_to_auto_post !== false) {
+        if (mergedMeta.safe_to_auto_handle !== true && mergedMeta.safe_to_auto_handle !== false) {
           const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution"];
           const taxType = String(mergedMeta.taxonomy_type || "").toLowerCase();
           const suggested = ensureAccountName({
@@ -1458,9 +1513,11 @@ router.post("/suggest", requireAuth, async (req, res) => {
             !suggestedSuspense &&
             !!suggestedNameResolved
           ) {
+            mergedMeta.safe_to_auto_handle = true;
             mergedMeta.safe_to_auto_post = true;
             mergedMeta.auto_approve_reason = mergedMeta.auto_approve_reason || "model_high";
           } else {
+            mergedMeta.safe_to_auto_handle = false;
             mergedMeta.safe_to_auto_post = false;
           }
         }
@@ -1566,9 +1623,10 @@ router.post("/suggest", requireAuth, async (req, res) => {
           const source = String(mergedMeta.suggestion_source || "");
           highConfidencePromote =
             String(existingCat.confidence || "").toLowerCase() === "high" &&
-            mergedMeta.safe_to_auto_post === false &&
+            mergedMeta.safe_to_auto_handle === false &&
             (source === "vendor_rule" || source === "universal_hint");
           if (vendorRulePromote || universalPromote || highConfidencePromote) {
+            mergedMeta.safe_to_auto_handle = true;
             mergedMeta.safe_to_auto_post = true;
             mergedMeta.auto_approve_reason = "promotion_pass";
             promotionSource = source || "unknown";
@@ -1602,6 +1660,17 @@ router.post("/suggest", requireAuth, async (req, res) => {
           autoApprove,
           autoPostEnabled,
           txnId: row.id,
+          transaction: row,
+          businessContext: { suspenseIds },
+          evidence: {
+            source: mergedMeta.suggestion_source || "existing_suggestion",
+            safeToAutoHandle: mergedMeta.safe_to_auto_handle === true,
+            verifiedCcPayment:
+              mergedMeta.taxonomy_type === "cc_payment" &&
+              mergedMeta.cc_payment_mapping_confidence === "high" &&
+              mergedMeta.cc_payment_bank_qbo_account_id &&
+              mergedMeta.cc_payment_cc_qbo_account_id,
+          },
         });
         const nextStatus = canUpgrade ? autoResult.status : existingCat.status;
         if (promotionSource && autoResult.status === "auto_approved") {
@@ -1673,6 +1742,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           ...taxonomyMeta,
         };
         if (metaBase?.auto_approve_reason === "manual_user") {
+          mergedMeta.safe_to_auto_handle = true;
           mergedMeta.safe_to_auto_post = true;
           mergedMeta.auto_approve_reason = "manual_user";
         }
@@ -1728,10 +1798,12 @@ router.post("/suggest", requireAuth, async (req, res) => {
           mergedMeta.cc_payment_mapping_notes = ccMapping?.notes || null;
           const mappingHigh = ccMapping?.confidence === "high" && mergedMeta.cc_payment_bank_qbo_account_id && mergedMeta.cc_payment_cc_qbo_account_id;
           if (mappingHigh) {
+            mergedMeta.safe_to_auto_handle = true;
             mergedMeta.safe_to_auto_post = true;
             if (!metaBase?.auto_approve_reason) mergedMeta.auto_approve_reason = mergedMeta.auto_approve_reason || "taxonomy";
           } else {
             if (metaBase?.auto_approve_reason !== "manual_user") {
+              mergedMeta.safe_to_auto_handle = false;
               mergedMeta.safe_to_auto_post = false;
               mergedMeta.auto_approve_reason = metaBase?.auto_approve_reason || null;
             }
@@ -1748,6 +1820,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           suggestedAcct = equityAcct || fallbacks.ama || null;
           mergedMeta.owner_move_equity_account_id = suggestedAcct?.id || null;
           mergedMeta.owner_move_equity_account_name = suggestedAcct?.name || null;
+          mergedMeta.safe_to_auto_handle = false;
           mergedMeta.safe_to_auto_post = metaBase?.auto_approve_reason === "manual_user" ? true : false;
           if (metaBase?.auto_approve_reason === "manual_user") {
             mergedMeta.auto_approve_reason = "manual_user";
@@ -1777,6 +1850,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
             mergedMeta.refund_match_source = "none";
             reasonPrefix = `Taxonomy: refund (${taxHit.confidence}) — Refund detected. Suggested: ${suggestedAcct?.name || "none"}. Review before posting.`;
           }
+          mergedMeta.safe_to_auto_handle = false;
           mergedMeta.safe_to_auto_post = false;
           mergedMeta.post_block_reason = mergedMeta.post_block_reason || "refund_posting_not_supported";
           mergedMeta.auto_approve_reason = metaBase?.auto_approve_reason === "manual_user" ? "manual_user" : null;
@@ -1806,6 +1880,17 @@ router.post("/suggest", requireAuth, async (req, res) => {
           autoApprove,
           autoPostEnabled,
           txnId: row.id,
+          transaction: row,
+          businessContext: { suspenseIds },
+          evidence: {
+            source: "taxonomy",
+            safeToAutoHandle: mergedMeta.safe_to_auto_handle === true,
+            verifiedCcPayment:
+              taxHit.type === "cc_payment" &&
+              mergedMeta.cc_payment_mapping_confidence === "high" &&
+              mergedMeta.cc_payment_bank_qbo_account_id &&
+              mergedMeta.cc_payment_cc_qbo_account_id,
+          },
         });
         if (autoResult.status === "auto_approved" && !checkHit.is_check) autoApproved += 1;
 
@@ -1957,10 +2042,12 @@ router.post("/suggest", requireAuth, async (req, res) => {
               vendor_rule_counterparty_name: vendorRule.counterparty_name || null,
               vendor_rule_coa_id: vendorSuggested.id || null,
               vendor_rule_coa_name: vendorSuggested.name || null,
+              safe_to_auto_handle: vendorSafeToAutoPost,
               safe_to_auto_post: vendorSafeToAutoPost,
               auto_approve_reason: vendorAutoApproveReason,
             };
             if (metaBase?.auto_approve_reason === "manual_user") {
+              vendorMeta.safe_to_auto_handle = metaBase.safe_to_auto_handle === true || metaBase.safe_to_auto_post === true;
               vendorMeta.safe_to_auto_post = metaBase.safe_to_auto_post === true;
               vendorMeta.auto_approve_reason = metaBase.auto_approve_reason;
               vendorMeta.suggestion_source = metaBase.suggestion_source || vendorMeta.suggestion_source;
@@ -1987,6 +2074,13 @@ router.post("/suggest", requireAuth, async (req, res) => {
               autoApprove,
               autoPostEnabled,
               txnId: row.id,
+              transaction: row,
+              businessContext: { suspenseIds },
+              evidence: {
+                source: "vendor_rule",
+                safeToAutoHandle: vendorMeta.safe_to_auto_handle === true,
+                weakRule: ruleConf === "low",
+              },
             });
             if (autoResult.status === "auto_approved" && !checkHit.is_check) autoApproved += 1;
 
@@ -2080,12 +2174,22 @@ router.post("/suggest", requireAuth, async (req, res) => {
           const strongPrimaryIntentMatch =
             mappedIntent.match_source === "primary" &&
             (mappedIntent.match_reason === "keyword_exact" || mappedIntent.match_reason === "keyword_startswith");
-          const allowAuto =
-            hintConfidenceHigh &&
-            strongPrimaryIntentMatch &&
+          const learnedRecurringMatch =
+            hasSimilarUserApproval &&
+            String(similarUserApproval?.final_qbo_account_id || "") === String(hintSuggested.id || "") &&
             isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
-            !checkHit.is_check &&
             isUniversalHintAutoApproveSafe(universalHint);
+          const allowAuto =
+            !checkHit.is_check &&
+            (
+              (
+                hintConfidenceHigh &&
+                strongPrimaryIntentMatch &&
+                isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
+                isUniversalHintAutoApproveSafe(universalHint)
+              ) ||
+              learnedRecurringMatch
+            );
           const hintMeta = {
             ...baseMetaWithCheck,
             suggestion_source: "universal_hint",
@@ -2104,8 +2208,9 @@ router.post("/suggest", requireAuth, async (req, res) => {
             },
             intent_to_coa_match: { match_reason: mappedIntent.match_reason },
           };
+          hintMeta.safe_to_auto_handle = allowAuto;
           hintMeta.safe_to_auto_post = allowAuto;
-          hintMeta.auto_approve_reason = allowAuto ? "universal_hint" : null;
+          hintMeta.auto_approve_reason = allowAuto ? (learnedRecurringMatch ? "learned_recurring" : "universal_hint") : null;
           const autoResult = applyAutoApproval({
             status: "needs_review",
             confidence: allowAuto ? "high" : mappedConfidence,
@@ -2118,6 +2223,12 @@ router.post("/suggest", requireAuth, async (req, res) => {
             autoApprove,
             autoPostEnabled,
             txnId: row.id,
+            transaction: row,
+            businessContext: { suspenseIds },
+            evidence: {
+              source: learnedRecurringMatch ? "learned_recurring" : "universal_hint",
+              safeToAutoHandle: hintMeta.safe_to_auto_handle === true,
+            },
           });
           const hintSuspense = isSuspenseAccount({
             acctId: hintSuggested.id,
@@ -2256,12 +2367,28 @@ router.post("/suggest", requireAuth, async (req, res) => {
                   intent_to_coa_match: { match_reason: created.match_reason || "created_coa" },
                 };
                 const allowAuto =
-                  (universalHint?.confidence || "").toLowerCase() === "high" &&
-                  isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
                   !checkHit.is_check &&
-                  isUniversalHintAutoApproveSafe(universalHint);
+                  (
+                    (
+                      (universalHint?.confidence || "").toLowerCase() === "high" &&
+                      isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
+                      isUniversalHintAutoApproveSafe(universalHint)
+                    ) ||
+                    (
+                      hasSimilarUserApproval &&
+                      String(similarUserApproval?.final_qbo_account_id || "") === String(createdSuggested.id || "") &&
+                      isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
+                      isUniversalHintAutoApproveSafe(universalHint)
+                    )
+                  );
+                const learnedRecurringMatch =
+                  allowAuto &&
+                  (universalHint?.confidence || "").toLowerCase() !== "high" &&
+                  hasSimilarUserApproval &&
+                  String(similarUserApproval?.final_qbo_account_id || "") === String(createdSuggested.id || "");
+                hintMeta.safe_to_auto_handle = allowAuto;
                 hintMeta.safe_to_auto_post = allowAuto;
-                hintMeta.auto_approve_reason = allowAuto ? "universal_hint" : null;
+                hintMeta.auto_approve_reason = allowAuto ? (learnedRecurringMatch ? "learned_recurring" : "universal_hint") : null;
                 const autoResult = applyAutoApproval({
                   status: "needs_review",
                   confidence: allowAuto ? "high" : (universalHint.confidence || "medium"),
@@ -2274,6 +2401,12 @@ router.post("/suggest", requireAuth, async (req, res) => {
                   autoApprove,
                   autoPostEnabled,
                   txnId: row.id,
+                  transaction: row,
+                  businessContext: { suspenseIds },
+                  evidence: {
+                    source: learnedRecurringMatch ? "learned_recurring" : "universal_hint",
+                    safeToAutoHandle: hintMeta.safe_to_auto_handle === true,
+                  },
                 });
                 const createdSuspense = isSuspenseAccount({
                   acctId: createdSuggested.id,
@@ -2431,6 +2564,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           : "unknown";
       let newMeta = {
         ...baseMetaWithCheck,
+        safe_to_auto_handle: confidence === "high",
         safe_to_auto_post: confidence === "high",
         auto_approve_reason: confidence === "high" ? "model_high" : null,
         suggestion_source: suggestionSource,
@@ -2439,6 +2573,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
         },
       };
       if (metaBase?.auto_approve_reason === "manual_user") {
+        newMeta.safe_to_auto_handle = metaBase.safe_to_auto_handle === true || metaBase.safe_to_auto_post === true;
         newMeta.safe_to_auto_post = metaBase.safe_to_auto_post === true;
         newMeta.auto_approve_reason = metaBase.auto_approve_reason;
         newMeta.suggestion_source = metaBase.suggestion_source || suggestionSource;
@@ -2467,6 +2602,12 @@ router.post("/suggest", requireAuth, async (req, res) => {
         autoApprove,
         autoPostEnabled,
         txnId: row.id,
+        transaction: row,
+        businessContext: { suspenseIds },
+        evidence: {
+          source: suggestionSource,
+          safeToAutoHandle: newMeta.safe_to_auto_handle === true,
+        },
       });
       if (autoResult.status === "auto_approved" && !checkHit.is_check) autoApproved += 1;
 
