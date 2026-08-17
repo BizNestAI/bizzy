@@ -1,5 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom";
+import { RotateCcw, UploadCloud } from "lucide-react";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
@@ -602,9 +603,9 @@ export default function BookkeepingFeed({
                   </button>
                 ) : null}
               </div>
-              <div className="flex items-center gap-1 text-slate-200 text-[11px] leading-tight whitespace-nowrap overflow-visible relative z-[120]">
+              <div className="flex flex-col items-stretch gap-1 text-slate-200 text-[11px] leading-tight whitespace-nowrap overflow-visible relative z-[120]">
                 {isPosted ? (
-                  <span className="inline-flex items-center rounded-full px-2 py-[2px] text-[10px] font-semibold bg-emerald-500/10 text-emerald-200 border border-emerald-500/40">
+                  <span className="inline-flex w-fit items-center rounded-full px-2 py-[2px] text-[10px] font-semibold bg-emerald-500/10 text-emerald-200 border border-emerald-500/40">
                     Posted to QuickBooks
                   </span>
                 ) : null}
@@ -626,6 +627,11 @@ export default function BookkeepingFeed({
                 ) : (
                   <span className="text-slate-400 text-[11px] truncate">{txn.currentAccount}</span>
                 )}
+                {txn.status === "auto_approved" ? (
+                  <span className="inline-flex w-fit items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-wide text-emerald-200/90">
+                    Auto-approved
+                  </span>
+                ) : null}
               </div>
               <div
                 className={`pr-4 text-right font-semibold whitespace-nowrap ${
@@ -643,33 +649,33 @@ export default function BookkeepingFeed({
                 {isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
-                  <div className="flex items-center justify-center gap-1">
+                  <div className="flex items-center justify-center gap-1.5">
                     <button
-                      className="inline-flex items-center justify-center rounded-full border border-amber-300/60 bg-amber-500/15 px-2 py-[3px] text-[10px] font-medium text-amber-100 hover:bg-amber-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
                       disabled={readOnly || isPosting}
                       onClick={() => {
                         if (readOnly || isPosting) return;
                         onUndo && onUndo(txn.id);
                       }}
+                      title={readOnly ? "Billing required to edit transactions." : "Undo approval"}
+                      aria-label="Undo approval"
                     >
+                      <RotateCcw size={11} strokeWidth={2.2} aria-hidden="true" />
                       Undo
                     </button>
                     <button
-                      className="inline-flex items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/15 px-2 py-[3px] text-[10px] font-medium text-emerald-100 hover:bg-emerald-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold text-emerald-100/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-emerald-300/65 hover:bg-emerald-500/16 disabled:cursor-not-allowed disabled:opacity-45"
                       disabled={readOnly || isPosting}
                       onClick={() => {
                         if (readOnly || isPosting) return;
                         onManualPost && onManualPost(txn.id);
                       }}
                       title={readOnly ? "Billing required to post transactions." : "Post this handled transaction to QuickBooks now."}
+                      aria-label="Post to QuickBooks"
                     >
-                      {isPosting ? "Posting..." : "Post to QuickBooks"}
+                      <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
+                      {isPosting ? "Posting..." : "Post"}
                     </button>
-                    {txn.status === "auto_approved" ? (
-                      <span className="ml-2 rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2 py-[2px] text-[9px] font-semibold text-emerald-100">
-                        Auto-approved
-                      </span>
-                    ) : null}
                   </div>
                 ) : (
                  <button
