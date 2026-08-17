@@ -21,3 +21,15 @@ test("Books Review caches the current transaction page across quick re-entry", (
   assert.match(source, /setBackgroundRefreshingTxns\(true\)/);
   assert.match(source, /Updating this feed in the background without hiding your current rows/);
 });
+
+test("Books Review bulk approval uses live COA accounts and selected vendors instead of mock placeholders", () => {
+  assert.doesNotMatch(source, /Elm St\. Kitchen/);
+  assert.doesNotMatch(source, /CATEGORY_OPTIONS/);
+  assert.doesNotMatch(source, /JOB_OPTIONS/);
+  assert.match(source, /import BookkeepingFeed, \{ CoaDropdown \}/);
+  assert.match(source, /const \[bulkAccountId, setBulkAccountId\] = useState\(""\)/);
+  assert.match(source, /accounts=\{groupedChartAccounts\}/);
+  assert.match(source, /const selectedVendorLabel = useMemo/);
+  assert.match(source, /newAccountId: bulkAccountId/);
+  assert.match(source, /newAccountName: accountName/);
+});

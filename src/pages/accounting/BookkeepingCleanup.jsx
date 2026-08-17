@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { CheckCircle2, CircleAlert, UploadCloud } from "lucide-react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext.jsx";
-import BookkeepingFeed from "../../components/Accounting/BookkeepingFeed.jsx";
+import BookkeepingFeed, { CoaDropdown } from "../../components/Accounting/BookkeepingFeed.jsx";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
 import { AnimatePresence, motion } from "framer-motion";
 import BillingGate, { getBillingAccess, resolveStatusValue } from "../../components/Billing/BillingGate.jsx";
@@ -175,8 +175,6 @@ const PAGE_SIZE_OPTIONS = [
   { value: 100, label: "100 per page" },
 ];
 
-const CATEGORY_OPTIONS = ["Materials", "Fuel", "Tools", "Overhead", "Meals", "Other"];
-const JOB_OPTIONS = ["Elm St. Kitchen", "Greenway Roof", "General Overhead"];
 const PANEL_BG = "#151717";
 const PANEL_BORDER = "rgba(255,255,255,0.06)";
 const BOOKS_TXN_CACHE_PREFIX = "bizzi:books-review:transactions:";
@@ -438,8 +436,7 @@ function BookkeepingCleanup() {
   const [accountFilter, setAccountFilter] = useState(() => (usingDemo ? getAcctKey(DEMO_ACCOUNT_LIST[0]) : null));
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [selectedIds, setSelectedIds] = useState(new Set());
-  const [bulkCategory, setBulkCategory] = useState("Materials");
-  const [bulkJob, setBulkJob] = useState("Elm St. Kitchen");
+  const [bulkAccountId, setBulkAccountId] = useState("");
   const [showCategorized, setShowCategorized] = useState(false);
   const [page, setPage] = useState(1);
   const [showChecksOnly, setShowChecksOnly] = useState(false);
@@ -640,6 +637,28 @@ function BookkeepingCleanup() {
     () => transactions.filter((t) => selectedIds.has(t.id)),
     [transactions, selectedIds]
   );
+  const selectedVendorLabel = useMemo(() => {
+    if (!selectedTransactions.length) return "No transactions selected";
+    const vendorNames = selectedTransactions
+      .map((txn) => txn.vendor || txn.payee || txn.merchantName || txn.counterpartyName || null)
+      .filter(Boolean);
+    const uniqueNames = [...new Set(vendorNames.map((name) => String(name).trim()).filter(Boolean))];
+    if (selectedTransactions.length === 1) return uniqueNames[0] || "No vendor assigned";
+    if (uniqueNames.length === 1) return uniqueNames[0];
+    return `${uniqueNames.length || selectedTransactions.length} vendors selected`;
+  }, [selectedTransactions]);
+  const selectedAccountId = useMemo(() => {
+    const accountIds = selectedTransactions
+      .map((txn) => txn.glAccountId || txn.final_qbo_account_id || txn.suggestedAccountId || null)
+      .filter(Boolean);
+    const uniqueIds = [...new Set(accountIds.map((id) => String(id)))];
+    return uniqueIds.length === 1 ? uniqueIds[0] : "";
+  }, [selectedTransactions]);
+  const selectedSignature = useMemo(() => Array.from(selectedIds).sort().join("|"), [selectedIds]);
+
+  useEffect(() => {
+    setBulkAccountId(selectedSignature ? selectedAccountId : "");
+  }, [selectedAccountId, selectedSignature]);
 
   const needsReviewChecks = useMemo(
     () => transactions.filter((t) => t.is_check && (t.status === "needs_review" || t.status === "uncategorized")),
@@ -950,18 +969,48 @@ function BookkeepingCleanup() {
     }
   };
 
-  const handleBulkApprove = () => {
-    if (!canRunAI) return;
-    console.log("Bulk approve", Array.from(selectedIds), "category", bulkCategory, "job", bulkJob);
-    setSelectedIds(new Set());
-  };
+  const handleBulkApprove = async () => {
+    if (!canRunAI || !selectedTransactions.length || !bulkAccountId) return;
+    const account = chartAccounts.find((a) => String(a.id) === String(bulkAccountId));
+    const accountName = account?.name || bulkAccountId;
+    const selectedTxnIds = selectedTransactions.map((txn) => txn.id);
 
-  const handleBulkSetCategory = (value) => {
-    setBulkCategory(value);
-  };
+    if (usingDemo) {
+      setTransactions((prev) =>
+        prev.map((txn) =>
+          selectedTxnIds.includes(txn.id)
+            ? {
+                ...txn,
+                status: "approved",
+                glAccountId: bulkAccountId,
+                glAccountName: accountName,
+              }
+            : txn
+        )
+      );
+      setSelectedIds(new Set());
+      return;
+    }
 
-  const handleBulkSetJob = (value) => {
-    setBulkJob(value);
+    if (!businessId) return;
+    try {
+      await approveTransactions(
+        businessId,
+        selectedTxnIds.map((txnId) => ({
+          txnId,
+          newAccountId: bulkAccountId,
+          newAccountName: accountName,
+        }))
+      );
+      setSelectedIds(new Set());
+      setCountsRefreshKey((value) => value + 1);
+      await reloadAccounts();
+      await reloadTransactions();
+      await loadMappingStatus();
+    } catch (e) {
+      console.warn("[bookkeeping] bulk approve failed", e?.message || e);
+      window.alert(e?.message || "Could not approve selected transactions.");
+    }
   };
 
   const handleRunPostingNow = async () => {
@@ -1720,21 +1769,34 @@ function BookkeepingCleanup() {
           className="mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs sm:text-sm text-slate-200"
           style={{ background: PANEL_BG, borderColor: PANEL_BORDER }}
         >
-          <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 text-[12px] text-slate-300">
+          <div className="flex min-w-0 flex-col sm:flex-row sm:items-center gap-1 sm:gap-3 text-[12px] text-slate-300">
             <span className="font-semibold text-slate-100">Selected: {selectedIds.size} {selectedIds.size === 1 ? "transaction" : "transactions"}</span>
             {selectedTransactions[0] ? (
-              <span className="text-slate-400">
+              <span className="min-w-0 truncate text-slate-400">
                 {selectedTransactions[0].description || selectedTransactions[0].vendor} • {selectedTransactions[0].vendor || "—"} •{" "}
                 {Number(selectedTransactions[0].amount || 0) < 0 ? "-" : "+"}${Math.abs(Number(selectedTransactions[0].amount || 0)).toFixed(2)}
               </span>
             ) : null}
           </div>
-          <div className="flex items-center gap-2">
-            <Select value={bulkCategory} onChange={handleBulkSetCategory} options={CATEGORY_OPTIONS.map((c) => ({ value: c, label: c }))} />
-            <Select value={bulkJob} onChange={handleBulkSetJob} options={JOB_OPTIONS.map((j) => ({ value: j, label: j }))} />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <div className="w-[230px] max-w-full">
+              <CoaDropdown
+                value={bulkAccountId}
+                accounts={groupedChartAccounts}
+                onChange={setBulkAccountId}
+                status="needs_review"
+                disabled={!canRunAI}
+              />
+            </div>
+            <div
+              className="inline-flex min-h-[34px] max-w-[220px] items-center rounded-full border border-white/10 bg-black/20 px-3 text-xs font-medium text-slate-300"
+              title={selectedVendorLabel}
+            >
+              <span className="truncate">{selectedVendorLabel}</span>
+            </div>
             <button
               onClick={handleBulkApprove}
-              disabled={!canRunAI}
+              disabled={!canRunAI || !bulkAccountId}
               className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Approve Selected

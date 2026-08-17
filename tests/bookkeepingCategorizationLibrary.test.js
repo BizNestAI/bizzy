@@ -54,6 +54,23 @@ test("specific utility vendors prefer specific utility accounts", () => {
   const att = hintFor("PAYMENT ATT PAYT patrick gebhard");
   assert.equal(att.primary_intent, "internet_services");
   assert.equal(mapIntentToCoa({ intent: att.primary_intent, coaAccounts: coa }).qbo_account_name, "Internet Services");
+  assert.equal(
+    mapIntentToCoa({
+      intent: att.primary_intent,
+      coaAccounts: [
+        { id: "phone", name: "Phone Bill", type: "Expense" },
+        { id: "internet", name: "Internet", type: "Expense" },
+      ],
+    }).qbo_account_name,
+    "Internet"
+  );
+  assert.equal(
+    mapIntentToCoa({
+      intent: att.primary_intent,
+      coaAccounts: [{ id: "phone", name: "Phone Bill", type: "Expense" }],
+    }),
+    null
+  );
 
   const duke = hintFor("BILL PAY DUKEENERGY ********5612 RE");
   assert.equal(duke.primary_intent, "electric");

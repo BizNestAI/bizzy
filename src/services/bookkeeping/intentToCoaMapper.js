@@ -71,7 +71,7 @@ const INTENT_KEYWORDS = {
   payment_processing: ["processing", "merchant fees", "payment processing", "stripe", "square", "paypal fees"],
   payroll: ["payroll", "wages"],
   utilities: ["utilities", "telecom", "internet"],
-  internet_services: ["wifi", "wi fi", "internet", "internet services", "broadband", "fiber", "telecom", "phone"],
+  internet_services: ["wifi", "wi fi", "internet", "internet services", "broadband", "fiber", "telecom"],
   electric: ["electric", "electricity", "electric utility", "power", "energy"],
   vehicle_expense: ["auto", "vehicle", "fleet", "vehicle expense", "vehicle maintenance", "auto repair", "repair", "maintenance", "oil change", "tires", "tire"],
   security: ["security", "alarm", "monitoring"],

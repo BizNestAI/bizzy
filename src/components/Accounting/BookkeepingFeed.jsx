@@ -628,7 +628,7 @@ export default function BookkeepingFeed({
                 )}
               </div>
               <div
-                className={`text-right font-semibold whitespace-nowrap ${
+                className={`pr-4 text-right font-semibold whitespace-nowrap ${
                   (Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0) < 0 ? "text-rose-400" : "text-emerald-400"
                 }`}
               >
@@ -639,7 +639,7 @@ export default function BookkeepingFeed({
                   return `${isOutflow ? "-" : "+"}$${abs.toFixed(2)}`;
                 })()}
               </div>
-              <div className="flex justify-center" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-center pl-4" onClick={(e) => e.stopPropagation()}>
                 {isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
