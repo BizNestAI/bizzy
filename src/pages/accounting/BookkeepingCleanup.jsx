@@ -17,6 +17,7 @@ import {
   undoTransaction,
   updateHandledTransaction,
   suggestTransactions,
+  reconsiderNeedsReviewTransactions,
   enrichCounterparties,
   getMappingStatus,
   getClarificationRequests,
@@ -336,6 +337,7 @@ function BookkeepingCleanup() {
   const [postingNow, setPostingNow] = useState(false);
   const [postingRunSummary, setPostingRunSummary] = useState(null);
   const suggestRanRef = useRef(null);
+  const reconsiderRanRef = useRef(null);
   const enrichRanRef = useRef(null);
   const accountOverrides = useRef(new Map());
   const accountScrollRef = useRef(null);
@@ -430,7 +432,6 @@ function BookkeepingCleanup() {
     }
   }, [rawTransactions, guessAccountId, usingDemo]);
 
-  const [disableAutoApprove, setDisableAutoApprove] = useState(false);
   const [activeTab, setActiveTab] = useState("needs_review");
   const [dateRange, setDateRange] = useState("all");
   const [accountFilter, setAccountFilter] = useState(() => (usingDemo ? getAcctKey(DEMO_ACCOUNT_LIST[0]) : null));
@@ -846,11 +847,6 @@ function BookkeepingCleanup() {
     return total !== null ? total > 0 : effectivePending > 0;
   }, [totalCount, pendingCount, filteredTransactions.length]);
 
-  const toggleAutoApprove = () => {
-    if (!canRunAI) return;
-    setDisableAutoApprove((v) => !v);
-  };
-
   const toggleRow = (id) => {
     if (!canRunAI) return;
     const next = new Set(selectedIds);
@@ -1073,6 +1069,7 @@ function BookkeepingCleanup() {
     setPage(1);
     setTotalCount(null);
     suggestRanRef.current = null;
+    reconsiderRanRef.current = null;
     setShowChecksOnly(false);
     if (!usingDemo && businessId) {
       loadMappingStatus();
@@ -1370,7 +1367,6 @@ function BookkeepingCleanup() {
               range: dateRange,
               account_id: accountFilter,
             };
-            if (disableAutoApprove === true) suggestPayload.auto_approve = false;
             const suggestRes = await suggestTransactions(businessId, suggestPayload);
             // refresh to pick up suggestions after enrichment has populated stronger vendor identity
             const res2 = await fetchTransactions(businessId, {
@@ -1402,6 +1398,78 @@ function BookkeepingCleanup() {
             suggestRanRef.current = null;
           }
         }
+
+        const reconsiderKey = `${dateRange}|${accountFilter || "all"}`;
+        const reconsiderCursorKey = `books-review-reconsider:${businessId}:${dateRange}:${accountFilter || "all"}`;
+        const storedReconsiderCursor =
+          typeof window !== "undefined" ? window.localStorage?.getItem(reconsiderCursorKey) || null : null;
+        const shouldRunReconsider =
+          ((!reconsiderRanRef.current || reconsiderRanRef.current !== reconsiderKey) || Boolean(storedReconsiderCursor)) &&
+          (Boolean(storedReconsiderCursor) || latestNormalized.some((t) => {
+            const s = (t.status || "needs_review").toLowerCase();
+            return s === "needs_review" || s === "uncategorized";
+          }));
+        if (shouldRunReconsider) {
+          try {
+            setCategorizationStatus({ phase: "suggesting", count: latestNormalized.length, initial: false });
+            const maxBatchesPerPass = 5;
+            let cursor = storedReconsiderCursor;
+            let promotedTotal = 0;
+            let processedTotal = 0;
+            let moreRemaining = false;
+            const seenCursors = new Set();
+            for (let batch = 0; batch < maxBatchesPerPass; batch += 1) {
+              const reconsiderRes = await reconsiderNeedsReviewTransactions(businessId, {
+                range: dateRange,
+                account_id: accountFilter || null,
+                cursor,
+                limit: 200,
+                source: "books_review_background",
+              });
+              promotedTotal += Number(reconsiderRes?.promoted || 0);
+              processedTotal += Number(reconsiderRes?.processed || 0);
+              const nextCursor = reconsiderRes?.next_cursor || null;
+              if (!nextCursor || seenCursors.has(nextCursor) || nextCursor === cursor) {
+                cursor = null;
+                moreRemaining = false;
+                break;
+              }
+              seenCursors.add(nextCursor);
+              cursor = nextCursor;
+              moreRemaining = true;
+            }
+            if (typeof window !== "undefined") {
+              if (cursor) window.localStorage?.setItem(reconsiderCursorKey, cursor);
+              else window.localStorage?.removeItem(reconsiderCursorKey);
+            }
+            reconsiderRanRef.current = moreRemaining ? null : reconsiderKey;
+            if (moreRemaining && typeof window !== "undefined") {
+              window.setTimeout(() => {
+                reconsiderRanRef.current = null;
+                reloadTransactions();
+              }, 1500);
+            }
+            if (promotedTotal > 0 || processedTotal > 0) {
+              const res4 = await fetchTransactions(businessId, {
+                status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
+                account_id: accountFilter,
+                range: dateRange,
+                page,
+                page_size: rowsPerPage,
+              });
+              const txns4 = extractTxns(res4);
+              const normalized4 = normalizeTxns(txns4);
+              latestNormalized = normalized4;
+              setTransactions(normalized4);
+              const nextTotal4 = computeTotal(res4, normalized4);
+              setTotalCount(nextTotal4);
+              writeTransactionPageCache(cacheKey, { rows: normalized4, totalCount: nextTotal4 });
+            }
+          } catch (errReconsider) {
+            console.warn("[bookkeeping] reconsider suggestions failed", errReconsider?.message || errReconsider);
+            reconsiderRanRef.current = null;
+          }
+        }
       }
       await loadMappingStatus();
     } catch (e) {
@@ -1412,7 +1480,7 @@ function BookkeepingCleanup() {
       setCategorizationStatus(null);
       setCountsRefreshKey((value) => value + 1);
     }
-  }, [activeTab, accountFilter, businessId, canRunAI, dateRange, disableAutoApprove, page, rowsPerPage, usingDemo, loadMappingStatus]);
+  }, [activeTab, accountFilter, businessId, canRunAI, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus]);
 
   useEffect(() => {
     if (usingDemo) return;
@@ -1561,21 +1629,20 @@ function BookkeepingCleanup() {
 
       {!plaidNeverConnected && accountCardsReady && activeTab === "needs_review" && categorizedSuggestionCount > 0 ? (
         <div
-          className="flex items-center justify-between gap-4 border rounded-xl px-4 py-3 mt-4"
-          style={{ background: PANEL_BG, borderColor: "rgba(16, 185, 129, 0.2)" }}
+          className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3"
+          style={{ background: "rgba(16, 185, 129, 0.055)", borderColor: "rgba(16, 185, 129, 0.22)" }}
         >
-          <div className="flex-1">
-            <div className="text-sm text-slate-200 font-semibold">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-slate-100">
               Bizzi has suggested categories for {categorizedSuggestionCount} transactions.
             </div>
-            <div className="text-xs text-slate-400">Review and approve below to keep your books clean.</div>
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-400">
             {needsReviewChecks.length > 0 ? (
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  className="inline-flex items-center gap-2 rounded-full border border-slate-600/60 bg-white/5 px-3 py-1 text-[12px] text-slate-100 hover:bg-white/10"
+                  className="inline-flex items-center gap-2 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1 text-[12px] text-amber-100 hover:bg-amber-300/[0.12]"
                   onClick={() => setShowChecksOnly(true)}
                   title="Checks often need one quick clarification before posting."
                 >
@@ -1592,18 +1659,6 @@ function BookkeepingCleanup() {
                 ) : null}
               </div>
             ) : null}
-            <span>Auto-approve high-confidence matches</span>
-            <button
-              onClick={toggleAutoApprove}
-              disabled={!canRunAI}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs border ${
-                disableAutoApprove ? "text-slate-400" : "border-emerald-400 bg-emerald-500/10 text-emerald-300"
-              } ${!canRunAI ? "opacity-50 cursor-not-allowed" : ""}`}
-              style={{ borderColor: disableAutoApprove ? PANEL_BORDER : undefined }}
-            >
-              <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />
-              {disableAutoApprove ? "Off" : "On"}
-            </button>
           </div>
         </div>
       ) : null}

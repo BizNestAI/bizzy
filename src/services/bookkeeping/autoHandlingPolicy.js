@@ -8,6 +8,15 @@ const HIGH_RISK_TAXONOMY_TYPES = new Set([
 const POSTABLE_SPECIAL_TAXONOMY_TYPES = new Set(["cc_payment"]);
 
 const REVIEW_ACCOUNT_NAME_RE = /ask my accountant|uncategorized/i;
+const ROUTINE_EXPENSE_BLOCKED_TAXONOMY_TYPES = new Set([
+  ...HIGH_RISK_TAXONOMY_TYPES,
+  "cc_payment",
+  "loan_payment",
+  "loan_principal",
+  "payroll",
+]);
+const ROUTINE_EXPENSE_LANDMINE_RE =
+  /\b(?:payroll|salary|wages|paychex|adp payroll|owner draw|owner contribution|loan principal|principal payment|credit card payment|cc payment|autopay payment)\b/i;
 
 export function isReviewAccount({ accountId, accountName, suspenseIds = [] } = {}) {
   if (!accountId) return true;
@@ -45,6 +54,116 @@ function allow(reason, extras = {}) {
   };
 }
 
+function isNormalOutflow(transaction = {}) {
+  const direction = String(transaction?.direction || "").toUpperCase();
+  if (direction === "OUTFLOW") return true;
+  if (direction === "INFLOW") return false;
+  const signed = Number(transaction?.signed_amount);
+  if (Number.isFinite(signed) && signed !== 0) return signed < 0;
+  const amount = Number(transaction?.amount);
+  if (Number.isFinite(amount) && amount !== 0) return amount < 0;
+  return false;
+}
+
+export function isRoutineExpenseFullyResolved(transaction = {}, categorizationEvidence = {}, businessContext = {}) {
+  const evidence = categorizationEvidence || {};
+  const meta = evidence.meta || {};
+  const source = evidence.source || evidence.suggestion_source || "unknown";
+  const confidence = normalizeConfidence(evidence.confidence || meta.confidence);
+  const taxonomyType = String(evidence.taxonomyType || meta.taxonomy_type || "").toLowerCase();
+  const accountId = evidence.accountId || evidence.suggested_qbo_account_id || null;
+  const accountName = evidence.accountName || evidence.suggested_qbo_account_name || null;
+
+  const blocked = (reason) => block(reason, { confidence, source, evidence });
+
+  if (transaction?.pending === true) return blocked("pending_transaction_not_postable");
+  if (evidence.inBookkeepingScope === false || meta.transaction_before_bookkeeping_start_date === true) {
+    return blocked("outside_bookkeeping_scope");
+  }
+  if (!isNormalOutflow(transaction)) return blocked("not_normal_outflow");
+  if (transaction?.accounting_review_required === true || meta.accounting_review_required === true) {
+    return blocked("plaid_accounting_review_required");
+  }
+  if (evidence.isCheck === true || meta.is_check === true) return blocked("check_requires_review");
+  if (evidence.requiresClarification === true || meta.requires_clarification === true) {
+    return blocked("clarification_required");
+  }
+  if (meta.possible_qbo_duplicate === true || evidence.possibleQboDuplicate === true) {
+    return blocked("possible_qbo_duplicate");
+  }
+  if (
+    meta.vendor_review_required === true ||
+    meta.vendor_mapping_required === true ||
+    meta.vendor_ambiguous === true ||
+    evidence.vendorReviewRequired === true ||
+    evidence.vendorMappingRequired === true ||
+    evidence.vendorAmbiguous === true
+  ) {
+    return blocked("vendor_review_required");
+  }
+  if (ROUTINE_EXPENSE_BLOCKED_TAXONOMY_TYPES.has(taxonomyType)) {
+    return blocked(`${taxonomyType}_requires_review`);
+  }
+  const memo = [
+    transaction?.name,
+    transaction?.merchant_name,
+    transaction?.counterparty_name,
+    meta.memo,
+  ].filter(Boolean).join(" ");
+  if (ROUTINE_EXPENSE_LANDMINE_RE.test(memo)) return blocked("routine_expense_landmine_requires_review");
+  if (isReviewAccount({ accountId, accountName, suspenseIds: businessContext.suspenseIds })) {
+    return blocked("review_or_suspense_account");
+  }
+
+  const canonicalAccountKey =
+    evidence.canonicalAccountKey ||
+    meta.canonical_account_key ||
+    meta.suggested_canonical_account_key ||
+    null;
+  const canonicalAccountResolved =
+    evidence.canonicalAccountResolved === true ||
+    (
+      Boolean(canonicalAccountKey) &&
+      Boolean(accountId) &&
+      evidence.canonicalAccountReviewRequired !== true &&
+      meta.canonical_account_review_required !== true &&
+      meta.canonical_mapping_review_required !== true
+    );
+  if (!canonicalAccountResolved) return blocked("canonical_account_not_resolved");
+
+  const canonicalVendorId = evidence.canonicalVendorId || meta.canonical_vendor_id || transaction?.canonical_vendor_id || null;
+  const canonicalVendorReliable =
+    evidence.canonicalVendorReliable === true ||
+    meta.canonical_vendor_reliable === true ||
+    (
+      Boolean(canonicalVendorId) &&
+      evidence.weakVendorEvidence !== true &&
+      meta.vendor_review_required !== true &&
+      meta.vendor_mapping_required !== true &&
+      meta.vendor_ambiguous !== true
+    );
+  const merchantEvidenceStrong =
+    evidence.merchantEvidenceStrong === true ||
+    Boolean(transaction?.merchant_entity_id) ||
+    Boolean(transaction?.qbo_entity_id && String(transaction?.qbo_entity_type || "").toLowerCase() === "vendor");
+  if (!canonicalVendorReliable && !merchantEvidenceStrong) {
+    return blocked("routine_vendor_or_merchant_evidence_not_strong");
+  }
+
+  return allow("routine_expense_fully_resolved", {
+    confidence: "high",
+    source,
+    evidence: {
+      ...evidence,
+      canonicalAccountResolved: true,
+      canonicalAccountKey,
+      canonicalVendorId,
+      canonicalVendorReliable,
+      merchantEvidenceStrong,
+    },
+  });
+}
+
 export function canAutoHandle(transaction = {}, categorizationEvidence = {}, businessContext = {}) {
   const evidence = categorizationEvidence || {};
   const source = evidence.source || evidence.suggestion_source || "unknown";
@@ -69,6 +188,16 @@ export function canAutoHandle(transaction = {}, categorizationEvidence = {}, bus
   if (meta.possible_qbo_duplicate === true || evidence.possibleQboDuplicate === true) {
     return block("possible_qbo_duplicate", { confidence, source, evidence });
   }
+  if (
+    meta.vendor_review_required === true ||
+    meta.vendor_mapping_required === true ||
+    meta.vendor_ambiguous === true ||
+    evidence.vendorReviewRequired === true ||
+    evidence.vendorMappingRequired === true ||
+    evidence.vendorAmbiguous === true
+  ) {
+    return block("vendor_review_required", { confidence, source, evidence });
+  }
   if (HIGH_RISK_TAXONOMY_TYPES.has(taxonomyType)) {
     return block(`${taxonomyType}_requires_review`, { confidence, source, evidence });
   }
@@ -90,6 +219,9 @@ export function canAutoHandle(transaction = {}, categorizationEvidence = {}, bus
   if (isReviewAccount({ accountId, accountName, suspenseIds: businessContext.suspenseIds })) {
     return block("review_or_suspense_account", { confidence, source, evidence });
   }
+
+  const routineDecision = isRoutineExpenseFullyResolved(transaction, evidence, businessContext);
+  if (routineDecision.eligible === true) return routineDecision;
 
   const safeToAutoHandle = evidence.safeToAutoHandle === true || meta.safe_to_auto_handle === true;
   if (safeToAutoHandle && confidence === "high") {
@@ -116,5 +248,6 @@ export function canAutoHandle(transaction = {}, categorizationEvidence = {}, bus
 
 export default {
   canAutoHandle,
+  isRoutineExpenseFullyResolved,
   isReviewAccount,
 };

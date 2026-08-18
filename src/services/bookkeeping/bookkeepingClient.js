@@ -206,6 +206,28 @@ export async function suggestTransactions(businessId, payload = {}) {
   return res;
 }
 
+export async function reconsiderNeedsReviewTransactions(businessId, payload = {}) {
+  const body = {
+    business_id: businessId,
+    ...payload,
+  };
+  if (process.env.NODE_ENV !== "production") {
+    console.info("[bookkeepingClient] reconsider suggestions payload", body);
+  }
+  const res = await safeFetch(apiUrl("/api/bookkeeping/suggest/reconsider"), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  if (process.env.NODE_ENV !== "production") {
+    console.info("[bookkeepingClient] reconsider suggestions response", res);
+  }
+  if (res && res.ok === false) {
+    throw new Error(res.message || res.error || "reconsider_failed");
+  }
+  return res;
+}
+
 export async function enrichCounterparties(businessId, payload = {}) {
   const body = {
     business_id: businessId,

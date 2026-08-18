@@ -876,6 +876,84 @@ export async function resolveCanonicalQboAccount({
   }
 }
 
+export async function validateCanonicalQboAccountForPromotion({
+  businessId,
+  intent = null,
+  canonicalAccountKey = null,
+  transactionId = null,
+  source = "promotion_revalidation",
+  allowCreate = false,
+  dependencies = {},
+} = {}) {
+  const getQBOClient = dependencies.getQBOClient || getDefaultQboClient;
+  if (!businessId) throw new Error("missing_business_id");
+
+  const resolved = await resolveCanonicalQboAccount({
+    businessId,
+    intent,
+    canonicalAccountKey,
+    transactionId,
+    source,
+    allowCreate,
+    dependencies,
+  });
+  if (!resolved?.ok || resolved.review_required === true || !resolved?.canonical || !resolved?.account?.id) {
+    return {
+      ok: false,
+      status: resolved?.status || CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW,
+      reason: resolved?.reason || "canonical_account_not_resolved",
+      canonical: resolved?.canonical || null,
+      account: resolved?.account || null,
+      review_required: true,
+    };
+  }
+
+  let liveAccounts = [];
+  try {
+    const live = await fetchLiveQboAccounts({ businessId, getQBOClient });
+    liveAccounts = live.accounts || [];
+  } catch (err) {
+    return {
+      ok: false,
+      status: CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW,
+      reason: err?.message || "qbo_coa_revalidation_failed",
+      canonical: resolved.canonical,
+      account: resolved.account,
+      review_required: true,
+    };
+  }
+
+  const liveAccount = liveAccounts.find((account) => String(account.id) === String(resolved.account.id));
+  if (!liveAccount || liveAccount.active === false) {
+    return {
+      ok: false,
+      status: CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW,
+      reason: "canonical_qbo_account_missing_or_inactive",
+      canonical: resolved.canonical,
+      account: resolved.account,
+      review_required: true,
+    };
+  }
+  if (!qboAccountCompatibleForApproval(resolved.canonical, liveAccount)) {
+    return {
+      ok: false,
+      status: CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW,
+      reason: "canonical_qbo_account_type_incompatible",
+      canonical: resolved.canonical,
+      account: liveAccount,
+      review_required: true,
+    };
+  }
+
+  return {
+    ...resolved,
+    ok: true,
+    account: liveAccount,
+    review_required: false,
+    revalidated: true,
+  };
+}
+
 export async function fetchCanonicalAccountMappingsForBusiness({ businessId, month = null, dependencies = {} } = {}) {
   const supabase = dependencies.supabase || await getDefaultSupabase();
   if (!businessId) return { rows: [], history: [] };
@@ -1033,6 +1111,7 @@ async function fetchCanonicalUsage({ supabase, businessId }) {
 
 export default {
   resolveCanonicalQboAccount,
+  validateCanonicalQboAccountForPromotion,
   fetchCanonicalAccountMappingsForBusiness,
   approveExistingQboAccountForCanonical,
   createPreferredQboAccountForCanonical,

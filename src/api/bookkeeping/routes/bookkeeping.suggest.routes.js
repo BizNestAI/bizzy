@@ -12,12 +12,17 @@ import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { getUniversalVendorHintForTransaction } from "../../../services/bookkeeping/universalVendorHintMatcher.js";
 import { resolveIntentKey } from "../../../services/bookkeeping/intentToCoaMapper.js";
-import { resolveCanonicalQboAccount } from "../../../services/bookkeeping/canonicalQboAccountResolver.js";
+import {
+  resolveCanonicalQboAccount,
+  validateCanonicalQboAccountForPromotion,
+} from "../../../services/bookkeeping/canonicalQboAccountResolver.js";
 import { createOrUpdateClarificationRequest } from "../../../services/bookkeeping/clarificationService.js";
 import { computeMemoPrefixForLearning } from "../../../services/bookkeeping/vendorRuleLearner.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
 import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "../../../services/bookkeeping/autoPostControl.js";
 import { canAutoHandle } from "../../../services/bookkeeping/autoHandlingPolicy.js";
+import { resolveCanonicalVendorForTransaction } from "../../../services/bookkeeping/canonicalVendorService.js";
+import { reconsiderNeedsReviewTransactions } from "../../../services/bookkeeping/routineExpenseReconsiderationService.js";
 
 const router = Router();
 
@@ -172,6 +177,7 @@ function applyAutoApproval({
       isCheck: checkHit?.is_check === true,
       meta,
       reason,
+      ...evidence,
       safeToAutoHandle: evidence.safeToAutoHandle === true || meta.safe_to_auto_handle === true,
       verifiedCcPayment: evidence.verifiedCcPayment === true,
       allowTaxonomyAutoHandle: evidence.allowTaxonomyAutoHandle === true,
@@ -433,6 +439,58 @@ function buildUserApprovalContext(approvedCats = [], bankTxnMap = {}) {
   }
 
   return context;
+}
+
+async function resolveCanonicalVendorEvidenceForPromotion({ businessId, row, taxonomyMeta = {} }) {
+  const providerStrong = Boolean(row?.merchant_entity_id);
+  const qboVendorStrong = Boolean(row?.qbo_entity_id && String(row?.qbo_entity_type || "").toLowerCase() === "vendor");
+  const providerNamed = Boolean(row?.merchant_name || row?.counterparty_name);
+  if (row?.canonical_vendor_id) {
+    return {
+      canonicalVendorId: row.canonical_vendor_id,
+      canonicalVendorReliable: providerStrong || qboVendorStrong || providerNamed,
+      merchantEvidenceStrong: providerStrong || qboVendorStrong,
+      canonicalVendorResolutionReason: "transaction_canonical_vendor",
+    };
+  }
+  if (!providerStrong && !qboVendorStrong && !providerNamed) {
+    return {
+      canonicalVendorId: null,
+      canonicalVendorReliable: false,
+      merchantEvidenceStrong: false,
+      canonicalVendorResolutionReason: "no_provider_vendor_signal",
+    };
+  }
+  try {
+    const resolved = await resolveCanonicalVendorForTransaction({
+      db: supabase,
+      businessId,
+      bankTxn: row,
+      taxonomyMeta,
+    });
+    const canonicalVendorId = resolved?.canonicalVendor?.id || resolved?.canonical_vendor_id || null;
+    const weak = resolved?.reason === "weak_memo_evidence" || resolved?.needsReview === true || resolved?.skipped === true;
+    return {
+      canonicalVendorId,
+      canonicalVendorReliable: Boolean(canonicalVendorId) && !weak && (providerStrong || qboVendorStrong || providerNamed),
+      merchantEvidenceStrong: providerStrong || qboVendorStrong,
+      weakVendorEvidence: weak,
+      canonicalVendorResolutionReason: resolved?.reason || null,
+    };
+  } catch (err) {
+    devLog("canonical_vendor_promotion_evidence_failed", {
+      business_id: businessId,
+      txn_id: row?.id || null,
+      error: err?.message || String(err),
+    });
+    return {
+      canonicalVendorId: null,
+      canonicalVendorReliable: false,
+      merchantEvidenceStrong: false,
+      weakVendorEvidence: true,
+      canonicalVendorResolutionReason: "canonical_vendor_resolution_failed",
+    };
+  }
 }
 
 function findSimilarUserApproval(context, txn = {}) {
@@ -1031,7 +1089,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
     // Step A: base transactions to consider
     let txQuery = supabase
       .from("bank_transactions")
-      .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel,pending,accounting_review_required,accounting_review_reason")
+      .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel,pending,accounting_review_required,accounting_review_reason,canonical_vendor_id,qbo_entity_type,qbo_entity_id")
       .eq("business_id", businessId)
       .eq("is_archived", false);
     if (txnIds && txnIds.length) {
@@ -1520,7 +1578,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
             protected_bizzi_grace_eligible: protectedBizziGraceEligible,
           });
         } else {
-        const suggestedAcct = suggestedId ? { id: suggestedId, name: suggestedNameResolved || "" } : null;
+        let suggestedAcct = suggestedId ? { id: suggestedId, name: suggestedNameResolved || "" } : null;
         const protectedStatuses = ["approved", "auto_approved", "posted"];
         const canUpgrade = !protectedStatuses.includes(statusLower) || protectedBizziGraceEligible;
         const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution"];
@@ -1579,6 +1637,69 @@ router.post("/suggest", requireAuth, async (req, res) => {
             : existingCat.confidence || "low";
         const reevaluatedBaseStatus = protectedBizziGraceEligible ? "needs_review" : (existingCat.status || "needs_review");
         const reason = mergedMeta.auto_approve_reason || mergedMeta.suggestion_source || "model_high";
+        const existingHintMeta = mergedMeta.universal_hint || {};
+        const existingSafeUniversal = existingHintMeta?.key
+          ? isUniversalHintAutoApproveSafe({
+              match_type: existingHintMeta.match_type,
+              matched_value: existingHintMeta.matched_value,
+              canonical_vendor: existingHintMeta.canonical_vendor,
+            })
+          : false;
+        const canonicalVendorEvidence = await resolveCanonicalVendorEvidenceForPromotion({
+          businessId,
+          row,
+          taxonomyMeta: mergedMeta,
+        });
+        const canonicalAccountKey =
+          existingCat.suggested_canonical_account_key ||
+          existingCat.final_canonical_account_key ||
+          mergedMeta.canonical_account_key ||
+          existingHintMeta.canonical_account_key ||
+          null;
+        let canonicalAccountValidation = null;
+        if (canonicalAccountKey) {
+          canonicalAccountValidation = await validateCanonicalQboAccountForPromotion({
+            businessId,
+            canonicalAccountKey,
+            transactionId: row.id,
+            source: "page_suggest_existing",
+            allowCreate: false,
+          });
+        }
+        const validatedAccount = canonicalAccountValidation?.ok && canonicalAccountValidation?.account?.id
+          ? {
+              id: String(canonicalAccountValidation.account.id),
+              name: canonicalAccountValidation.account.name || canonicalAccountValidation.account.fullyQualifiedName || "",
+            }
+          : null;
+        const validatedSuspense = validatedAccount
+          ? isSuspenseAccount({
+              acctId: validatedAccount.id,
+              acctName: validatedAccount.name,
+              suspenseIds,
+            })
+          : true;
+        const canonicalAccountResolved =
+          canonicalAccountValidation?.ok === true &&
+          canonicalAccountValidation.review_required !== true &&
+          Boolean(canonicalAccountValidation.canonical?.canonical_account_key && validatedAccount?.id) &&
+          !validatedSuspense;
+        suggestedAcct = canonicalAccountKey ? (canonicalAccountResolved ? validatedAccount : null) : suggestedAcct;
+        const merchantEvidenceStrong =
+          canonicalVendorEvidence.merchantEvidenceStrong === true ||
+          Boolean(row.merchant_entity_id) ||
+          (
+            Boolean(row.merchant_name) &&
+            mergedMeta.suggestion_source === "universal_hint" &&
+            existingSafeUniversal === true
+          );
+        mergedMeta.canonical_vendor_id = canonicalVendorEvidence.canonicalVendorId || mergedMeta.canonical_vendor_id || null;
+        mergedMeta.canonical_vendor_reliable = canonicalVendorEvidence.canonicalVendorReliable === true;
+        mergedMeta.canonical_vendor_resolution_reason = canonicalVendorEvidence.canonicalVendorResolutionReason || null;
+        mergedMeta.canonical_coa_resolved = canonicalAccountResolved;
+        mergedMeta.canonical_coa_revalidation_reason = canonicalAccountValidation?.reason || canonicalAccountValidation?.status || null;
+        mergedMeta.canonical_coa_revalidation_status = canonicalAccountValidation?.status || null;
+        mergedMeta.merchant_evidence_strong = merchantEvidenceStrong;
         const autoResult = applyAutoApproval({
           status: reevaluatedBaseStatus,
           confidence: confidenceForAutoApproval,
@@ -1601,6 +1722,18 @@ router.post("/suggest", requireAuth, async (req, res) => {
               mergedMeta.cc_payment_mapping_confidence === "high" &&
               mergedMeta.cc_payment_bank_qbo_account_id &&
               mergedMeta.cc_payment_cc_qbo_account_id,
+            canonicalVendorId: canonicalVendorEvidence.canonicalVendorId || null,
+            canonicalVendorReliable: canonicalVendorEvidence.canonicalVendorReliable === true,
+            weakVendorEvidence: canonicalVendorEvidence.weakVendorEvidence === true,
+            merchantEvidenceStrong,
+            canonicalAccountResolved,
+            canonicalAccountKey: canonicalAccountValidation?.canonical?.canonical_account_key || canonicalAccountKey,
+            canonicalAccountReviewRequired:
+              canonicalAccountResolved !== true ||
+              mergedMeta.canonical_account_review_required === true ||
+              mergedMeta.canonical_mapping_review_required === true,
+            inBookkeepingScope: true,
+            reconsiderationSource: "page_suggest_existing",
           },
         });
         const nextStatus = canUpgrade ? autoResult.status : existingCat.status;
@@ -1615,9 +1748,9 @@ router.post("/suggest", requireAuth, async (req, res) => {
         const payload = {
           business_id: businessId,
           transaction_id: row.id,
-          suggested_qbo_account_id: suggestedId || null,
-          suggested_qbo_account_name: suggestedName || null,
-          suggested_canonical_account_key: existingCat.suggested_canonical_account_key || existingCat.final_canonical_account_key || mergedMeta.canonical_account_key || null,
+          suggested_qbo_account_id: validatedAccount?.id || suggestedId || null,
+          suggested_qbo_account_name: validatedAccount?.name || suggestedName || null,
+          suggested_canonical_account_key: canonicalAccountValidation?.canonical?.canonical_account_key || existingCat.suggested_canonical_account_key || existingCat.final_canonical_account_key || mergedMeta.canonical_account_key || null,
           confidence:
             canUpgrade && autoResult.status === "auto_approved" && (vendorRulePromote || universalPromote)
               ? "high"
@@ -1634,8 +1767,8 @@ router.post("/suggest", requireAuth, async (req, res) => {
         }
         if (canUpgrade && autoResult.status === "auto_approved") {
           payload.status = "auto_approved";
-          payload.final_qbo_account_id = suggestedId || null;
-          payload.final_qbo_account_name = suggestedName || null;
+          payload.final_qbo_account_id = validatedAccount?.id || null;
+          payload.final_qbo_account_name = validatedAccount?.name || null;
           payload.final_canonical_account_key = payload.suggested_canonical_account_key || null;
           payload.post_after = autoResult.postAfter === undefined ? computePostAfterForAutoPost(autoPostEnabled, GRACE_HOURS) : autoResult.postAfter;
           payload.decided_by = "bizzi";
@@ -2090,11 +2223,12 @@ router.post("/suggest", requireAuth, async (req, res) => {
           const mappedConfidence = universalHint.confidence || "medium";
           const hintConfidenceHigh = (universalHint?.confidence || "").toLowerCase() === "high";
           const strongPrimaryIntentMatch = canonicalResolution.review_required !== true;
+          const safeUniversalHint = isUniversalHintAutoApproveSafe(universalHint);
           const learnedRecurringMatch =
             hasSimilarUserApproval &&
             String(similarUserApproval?.final_qbo_account_id || "") === String(hintSuggested.id || "") &&
             isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
-            isUniversalHintAutoApproveSafe(universalHint);
+            safeUniversalHint;
           const allowAuto =
             !checkHit.is_check &&
             (
@@ -2102,10 +2236,26 @@ router.post("/suggest", requireAuth, async (req, res) => {
                 hintConfidenceHigh &&
                 strongPrimaryIntentMatch &&
                 isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
-                isUniversalHintAutoApproveSafe(universalHint)
+                safeUniversalHint
               ) ||
               learnedRecurringMatch
             );
+          const canonicalVendorEvidence = await resolveCanonicalVendorEvidenceForPromotion({
+            businessId,
+            row,
+            taxonomyMeta: {
+              ...baseMetaWithCheck,
+              suggestion_source: "universal_hint",
+              canonical_account_key: canonicalResolution.canonical?.canonical_account_key || null,
+            },
+          });
+          const canonicalAccountResolved =
+            canonicalResolution.review_required !== true &&
+            Boolean(canonicalResolution.canonical?.canonical_account_key && hintSuggested.id);
+          const merchantEvidenceStrong =
+            canonicalVendorEvidence.merchantEvidenceStrong === true ||
+            Boolean(row.merchant_entity_id) ||
+            (Boolean(row.merchant_name) && safeUniversalHint === true);
           const hintMeta = {
             ...baseMetaWithCheck,
             suggestion_source: "universal_hint",
@@ -2136,6 +2286,11 @@ router.post("/suggest", requireAuth, async (req, res) => {
             },
             canonical_account_key: canonicalResolution.canonical?.canonical_account_key || null,
             intent_to_coa_match: { match_reason: canonicalResolution.status || "canonical_resolved" },
+            canonical_coa_resolved: canonicalAccountResolved,
+            canonical_vendor_id: canonicalVendorEvidence.canonicalVendorId || null,
+            canonical_vendor_reliable: canonicalVendorEvidence.canonicalVendorReliable === true,
+            canonical_vendor_resolution_reason: canonicalVendorEvidence.canonicalVendorResolutionReason || null,
+            merchant_evidence_strong: merchantEvidenceStrong,
           };
           hintMeta.safe_to_auto_handle = allowAuto;
           hintMeta.safe_to_auto_post = allowAuto;
@@ -2157,6 +2312,15 @@ router.post("/suggest", requireAuth, async (req, res) => {
             evidence: {
               source: learnedRecurringMatch ? "learned_recurring" : "universal_hint",
               safeToAutoHandle: hintMeta.safe_to_auto_handle === true,
+              canonicalVendorId: canonicalVendorEvidence.canonicalVendorId || null,
+              canonicalVendorReliable: canonicalVendorEvidence.canonicalVendorReliable === true,
+              weakVendorEvidence: canonicalVendorEvidence.weakVendorEvidence === true,
+              merchantEvidenceStrong,
+              canonicalAccountResolved,
+              canonicalAccountKey: canonicalResolution.canonical?.canonical_account_key || null,
+              canonicalAccountReviewRequired: canonicalResolution.review_required === true,
+              inBookkeepingScope: true,
+              reconsiderationSource: "page_suggest_universal",
             },
           });
           const hintSuspense = isSuspenseAccount({
@@ -2494,6 +2658,31 @@ router.post("/suggest", requireAuth, async (req, res) => {
       stack: err?.stack || null,
     });
     return res.status(500).json({ ok: false, error: "suggest_failed", message: err?.message || "failed" });
+  }
+});
+
+router.post("/suggest/reconsider", requireAuth, async (req, res) => {
+  const body = req.body || {};
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    const result = await reconsiderNeedsReviewTransactions(businessId, {
+      range: body.range || req.query?.range || "this_month",
+      dateFrom: body.date_from || body.dateFrom || null,
+      dateTo: body.date_to || body.dateTo || null,
+      accountId: body.account_id || body.accountId || null,
+      cursor: body.cursor || null,
+      limit: body.limit || 200,
+      source: body.source || "api_reconsideration",
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error("[bookkeeping][suggest][reconsider] failed", {
+      business_id: businessId,
+      message: err?.message || String(err),
+    });
+    return res.status(500).json({ ok: false, error: "reconsider_failed", message: err?.message || "failed" });
   }
 });
 
