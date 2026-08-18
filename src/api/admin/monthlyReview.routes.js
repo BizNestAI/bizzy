@@ -8,6 +8,7 @@ import { runBooksPostOnce } from "../../jobs/booksPost.cron.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
+import { fetchCanonicalAccountMappingsForBusiness } from "../../services/bookkeeping/canonicalQboAccountResolver.js";
 
 const router = Router();
 
@@ -100,6 +101,7 @@ router.get("/businesses/:businessId", async (req, res) => {
     const auditEvents = await fetchAuditEvents(run.id);
     const reminders = await fetchReminders(run.id);
     const sourceLedger = await buildMonthlySourceLedger(businessId, month);
+    const canonicalCoa = await buildCanonicalCoaEvidence(businessId, month);
     const pnlReport = await fetchMonthlyPnlReport(businessId, month);
     const finalizationGuard = buildFinalizationGuard(sourceLedger);
     const currentEvidence = buildCurrentReviewEvidence(summaries, sourceLedger);
@@ -127,6 +129,7 @@ router.get("/businesses/:businessId", async (req, res) => {
       changed_since_finalized: changedSinceFinalized,
       readiness,
       finalization_guard: finalizationGuard,
+      canonical_chart_of_accounts: canonicalCoa,
       active_lock: describeActiveLock(run),
       access: {
         internal_admin_only: true,
@@ -1311,6 +1314,26 @@ async function buildSummaries(businessId, month) {
   };
 }
 
+async function buildCanonicalCoaEvidence(businessId, month) {
+  const result = await fetchCanonicalAccountMappingsForBusiness({ businessId, month });
+  const rows = result.rows || [];
+  const history = result.history || [];
+  const created = rows.filter((row) => row.status === "created_by_bizzi");
+  const mapped = rows.filter((row) => row.status === "existing_exact" || row.status === "existing_approved_equivalent");
+  const review = rows.filter((row) => row.status === "needs_review");
+  return {
+    summary: {
+      created_by_bizzi_count: created.length,
+      mapped_existing_count: mapped.length,
+      needs_review_count: review.length,
+    },
+    created_by_bizzi: created,
+    mapped_existing: mapped,
+    needs_review: review,
+    recent_history: history.slice(0, 25),
+  };
+}
+
 async function buildMonthlySourceLedger(businessId, month) {
   const [start, end] = monthBounds(month);
   const [prevStart, prevEnd] = previousMonthBounds(month);
@@ -1337,7 +1360,7 @@ async function buildMonthlySourceLedger(businessId, month) {
     ? await safeRows(() =>
         supabase
           .from("transaction_categorizations")
-          .select("transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,qbo_txn_type,posted_at,post_after,confidence,reason,post_error,meta")
+          .select("transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key,final_qbo_account_id,final_qbo_account_name,final_canonical_account_key,qbo_txn_id,qbo_txn_type,posted_at,post_after,confidence,reason,post_error,meta")
           .eq("business_id", businessId)
           .in("transaction_id", txnIds),
         "Monthly source ledger categorizations"

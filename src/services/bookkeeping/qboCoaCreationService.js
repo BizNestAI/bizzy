@@ -1,6 +1,5 @@
-import { supabase } from "../supabaseAdmin.js";
-import { getQBOClient } from "../../utils/qboClient.js";
-import { fetchChartOfAccounts } from "./qboAccounts.js";
+import { getCanonicalAccountForIntent, isApprovedEquivalentName, normalizeCanonicalName } from "./canonicalCoaRegistry.js";
+import { resolveCanonicalQboAccount } from "./canonicalQboAccountResolver.js";
 
 const devLog = (tag, payload) => {
   if (process.env.NODE_ENV !== "production") {
@@ -124,124 +123,38 @@ export function findExistingCoaMatch(coaAccounts = [], candidateName = "") {
   return null;
 }
 
-function isNameClean(name) {
-  if (!name || name.length < 3 || name.length > 50) return false;
-  if (!/^[a-z0-9\s&-]+$/i.test(name)) return false;
-  const normalized = normalizeCoaName(name);
-  if ((normalized.match(/\d/g) || []).length >= Math.max(2, normalized.length * 0.4)) return false;
-  const badTokens = ["trip", "#", "store", "pos", "debit", "credit", "payment", "invoice", "order", "ach", "sq *"];
-  if (badTokens.some((t) => normalized.includes(normalizeCoaName(t)))) return false;
-  if (looksLikeVendorName(name)) return false;
-  return true;
-}
-
-async function logCreation({ businessId, account, accountType, createdBy = "bizzi", source = "suggest", meta = {} }) {
-  try {
-    await supabase.from("qbo_coa_creations").upsert(
-      {
-        business_id: businessId,
-        qbo_account_id: account?.id || account?.Id,
-        qbo_account_name: account?.name || account?.Name,
-        account_type: accountType,
-        created_by: createdBy || "bizzi",
-        source: source || "suggest",
-        meta,
-      },
-      { onConflict: "business_id,qbo_account_id" }
-    );
-    return true;
-  } catch (err) {
-    devLog("log_failed", { message: err?.message });
-    return false;
-  }
-}
-
-async function createQboAccount(businessId, payload) {
-  const qbo = await getQBOClient(businessId);
-  if (!qbo) throw new Error("qbo_client_unavailable");
-  const fn = qbo.account && typeof qbo.account.create === "function" ? qbo.account.create : qbo.createAccount;
-  if (!fn) throw new Error("qbo_create_not_supported");
-  const attemptCreate = (body) =>
-    new Promise((resolve, reject) => {
-      fn.call(qbo, body, (err, data) => {
-        if (err) return reject(err);
-        const acct = data?.Account || data?.account || data || null;
-        if (!acct?.Id && !acct?.id) return reject(new Error("qbo_create_missing_id"));
-        resolve({
-          id: acct.Id || acct.id,
-          name: acct.Name || body.Name,
-          type: acct.AccountType || body.AccountType,
-        });
-      });
-    });
-
-  try {
-    return await attemptCreate(payload);
-  } catch (err) {
-    if ((payload?.AccountType || payload?.accountType) === "Cost of Goods Sold") {
-      const retryPayload = { ...payload, AccountType: "CostOfGoodsSold" };
-      devLog("retry_cogs_alias", {});
-      return await attemptCreate(retryPayload);
-    }
-    throw err;
-  }
-}
-
 export async function createQboCoaAccountIfNeeded({ businessId, candidateName, intent, source = "suggest", createdBy = "bizzi", meta = {} }) {
-  const coa = await fetchChartOfAccounts(businessId, { includeSubaccounts: true });
-  const existing = findExistingCoaMatch(coa, candidateName);
-  if (existing) {
-    devLog("duplicate_block", { candidateName, existing: existing.name, reason: existing.match_reason });
-    return { ok: true, created: false, account: existing, match_reason: existing.match_reason };
+  void createdBy;
+  const canonical = getCanonicalAccountForIntent(intent);
+  if (!canonical) {
+    return { ok: false, created: false, reason: "unknown_canonical_account", message: "No approved Bizzi canonical account exists for this intent." };
   }
-
-  if (!isNameClean(candidateName)) {
-    devLog("name_rejected", { candidateName });
-    return { ok: false, created: false, reason: "unclean_name", message: "Account name looks too specific (vendor-like)." };
+  const candidateNorm = normalizeCanonicalName(candidateName);
+  const preferredNorm = normalizeCanonicalName(canonical.preferred_account_name);
+  if (candidateNorm && candidateNorm !== preferredNorm && !isApprovedEquivalentName(canonical.canonical_account_key, candidateName)) {
+    return { ok: false, created: false, reason: "candidate_not_canonical", message: "Requested account name is not an approved canonical account or equivalent." };
   }
-
-  const typeChoice = chooseAccountTypeFromIntent(intent);
-  if (!typeChoice) {
-    devLog("type_uncertain", { intent });
-    return { ok: false, created: false, reason: "uncertain_type", message: "Bizzi isn't confident what account type this should be." };
-  }
-
-  const payload = {
-    Name: candidateName.trim(),
-    AccountType: typeChoice.accountType,
-  };
-
-  let createdAccount = null;
-  try {
-    createdAccount = await createQboAccount(businessId, payload);
-  } catch (err) {
-    devLog("create_failed", { message: err?.message, payload });
+  const resolved = await resolveCanonicalQboAccount({
+    businessId,
+    intent,
+    transactionId: meta?.transaction_id || null,
+    source,
+  });
+  if (!resolved?.ok || !resolved?.account?.id) {
     return {
       ok: false,
       created: false,
-      reason: err?.message || "qbo_create_failed",
-      message: "QuickBooks rejected the account creation request.",
+      reason: resolved?.reason || "canonical_resolution_failed",
+      message: "Canonical account requires review before creation or mapping.",
     };
   }
-
-  const logged = await logCreation({
-    businessId,
-    account: createdAccount,
-    accountType: createdAccount?.type || typeChoice.accountType,
-    createdBy,
-    source,
-    meta: {
-      ...meta,
-      reason: meta?.reason || null,
-      intent,
-    },
-  });
-
   return {
     ok: true,
-    created: true,
-    account: createdAccount,
-    logged,
+    created: resolved.created === true,
+    account: resolved.account,
+    logged: true,
+    match_reason: resolved.status,
+    canonical_account_key: resolved.canonical?.canonical_account_key || canonical.canonical_account_key,
   };
 }
 

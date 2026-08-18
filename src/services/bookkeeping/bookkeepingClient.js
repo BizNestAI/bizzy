@@ -429,6 +429,16 @@ export async function getQboCoaCreations(businessId, params = {}) {
   });
 }
 
+export async function getCanonicalQboCoa(businessId, params = {}) {
+  const search = new URLSearchParams();
+  if (params.month) search.set("month", String(params.month));
+  const qs = search.toString() ? `?${search.toString()}` : "";
+  return safeFetch(apiUrl(`/api/bookkeeping/qbo/canonical-coa${qs}`), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+}
+
 export async function getQboPaymentAccounts(businessId) {
   return safeFetch(apiUrl("/api/bookkeeping/qbo/payment-accounts"), {
     method: "GET",
@@ -466,6 +476,7 @@ export default {
   getAccounts,
   getTransactions,
   getQboCoa,
+  getCanonicalQboCoa,
   approveTransactions,
   undoTransaction,
   updateHandledTransaction,

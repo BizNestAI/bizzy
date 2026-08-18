@@ -29,16 +29,18 @@ router.post("/approve", requireAuth, async (req, res) => {
 
   const { data: existingMetaRows } = await supabase
     .from("transaction_categorizations")
-    .select("transaction_id,meta,suggested_qbo_account_id,suggested_qbo_account_name")
+    .select("transaction_id,meta,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key")
     .eq("business_id", businessId)
     .in("transaction_id", txnIds);
   const existingMetaMap = {};
   const suggestedIdMap = {};
   const suggestedNameMap = {};
+  const suggestedCanonicalMap = {};
   (existingMetaRows || []).forEach((row) => {
     existingMetaMap[row.transaction_id] = row.meta || {};
     suggestedIdMap[row.transaction_id] = row.suggested_qbo_account_id || null;
     suggestedNameMap[row.transaction_id] = row.suggested_qbo_account_name || null;
+    suggestedCanonicalMap[row.transaction_id] = row.suggested_canonical_account_key || row.meta?.canonical_account_key || null;
   });
 
   const warnings = [];
@@ -102,6 +104,7 @@ router.post("/approve", requireAuth, async (req, res) => {
       const txnId = item?.txnId || item?.transaction_id || item?.transactionId || item?.id;
       const explicitFinalId = item?.newAccountId || item?.final_qbo_account_id || item?.finalAccountId || null;
       const explicitFinalName = item?.newAccountName || item?.final_qbo_account_name || item?.finalAccountName || null;
+      const explicitCanonicalKey = item?.final_canonical_account_key || item?.canonical_account_key || item?.canonicalAccountKey || null;
       const bankTxn = bankTxnMap[txnId] || null;
       const checkHit = isCheck(bankTxn || {});
       const mergedMeta = {
@@ -152,6 +155,7 @@ router.post("/approve", requireAuth, async (req, res) => {
         transaction_id: txnId,
         final_qbo_account_id: effectiveFinalId,
         final_qbo_account_name: effectiveFinalName,
+        final_canonical_account_key: explicitCanonicalKey || suggestedCanonicalMap[txnId] || mergedMeta?.canonical_account_key || null,
         confidence: item?.confidence || null,
         reason: item?.reason || null,
         post_after:
@@ -199,6 +203,7 @@ router.post("/approve", requireAuth, async (req, res) => {
         status: "approved",
         final_qbo_account_id: item.final_qbo_account_id || null,
         final_qbo_account_name: item.final_qbo_account_name || null,
+        final_canonical_account_key: item.final_canonical_account_key || null,
         confidence: item.confidence || null,
         reason: item.reason || null,
         decided_by: "user",

@@ -11,8 +11,8 @@ import {
 import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { getUniversalVendorHintForTransaction } from "../../../services/bookkeeping/universalVendorHintMatcher.js";
-import { mapIntentToCoa, resolveIntentKey } from "../../../services/bookkeeping/intentToCoaMapper.js";
-import { createQboCoaAccountIfNeeded } from "../../../services/bookkeeping/qboCoaCreationService.js";
+import { resolveIntentKey } from "../../../services/bookkeeping/intentToCoaMapper.js";
+import { resolveCanonicalQboAccount } from "../../../services/bookkeeping/canonicalQboAccountResolver.js";
 import { createOrUpdateClarificationRequest } from "../../../services/bookkeeping/clarificationService.js";
 import { computeMemoPrefixForLearning } from "../../../services/bookkeeping/vendorRuleLearner.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
@@ -513,33 +513,7 @@ function findCoaByNames(coaMap, names = []) {
   return null;
 }
 
-async function createQboAccount(qbo, payload) {
-  if (!qbo || !payload) return null;
-  const p = { Name: payload.Name, AccountType: payload.AccountType, AccountSubType: payload.AccountSubType || null };
-  const fn = qbo.account && typeof qbo.account.create === "function" ? qbo.account.create : qbo.createAccount;
-  if (!fn) return null;
-  return new Promise((resolve, reject) => {
-    fn.call(qbo, p, (err, data) => {
-      if (err) return reject(err);
-      const acct =
-        data?.Account ||
-        data?.account ||
-        data ||
-        null;
-      if (!acct?.Id && !acct?.id) return resolve(null);
-      resolve({
-        id: acct.Id || acct.id,
-        name: acct.Name || p.Name,
-        type: acct.AccountType || payload.AccountType || null,
-      });
-    });
-  });
-}
-
 async function ensureSuspenseAccounts(businessId) {
-  const qbo = await getQBOClient(businessId);
-  if (!qbo) return { expenseFallback: null, incomeFallback: null, ama: null };
-
   const coa = await fetchChartOfAccounts(businessId, { includeSubaccounts: true });
   const coaMap = (coa || []).reduce((acc, c) => {
     acc[normalizeName(c.name)] = c;
@@ -549,24 +523,6 @@ async function ensureSuspenseAccounts(businessId) {
   const ama = findCoaByNames(coaMap, ["Ask My Accountant"]);
   let expenseFallback = findCoaByNames(coaMap, ["Uncategorized Expense"]);
   let incomeFallback = findCoaByNames(coaMap, ["Uncategorized Income"]);
-
-  // Create if missing
-  if (!expenseFallback) {
-    try {
-      const created = await createQboAccount(qbo, { Name: "Uncategorized Expense", AccountType: "Expense" });
-      if (created) expenseFallback = created;
-    } catch (e) {
-      console.warn("[bookkeeping] create Uncategorized Expense failed", e?.message || e);
-    }
-  }
-  if (!incomeFallback) {
-    try {
-      const created = await createQboAccount(qbo, { Name: "Uncategorized Income", AccountType: "Income" });
-      if (created) incomeFallback = created;
-    } catch (e) {
-      console.warn("[bookkeeping] create Uncategorized Income failed", e?.message || e);
-    }
-  }
 
   return {
     expenseFallback: expenseFallback ? { id: expenseFallback.id || expenseFallback.Id || null, name: expenseFallback.name || expenseFallback.Name || "Uncategorized Expense" } : null,
@@ -592,37 +548,12 @@ function findOwnerEquityAccounts(coaMap) {
 }
 
 async function ensureOwnerEquityAccounts(businessId, existingCoa = null) {
-  const qbo = await getQBOClient(businessId);
   const coa = existingCoa || (await fetchChartOfAccounts(businessId, { includeSubaccounts: true }));
   const coaMap = (coa || []).reduce((acc, c) => {
     acc[normalizeName(c.name)] = c;
     return acc;
   }, {});
   let { drawAcct, contribAcct } = findOwnerEquityAccounts(coaMap);
-
-  if (!qbo) {
-    return {
-      drawAcct: drawAcct ? { id: drawAcct.id || drawAcct.Id || null, name: drawAcct.name || drawAcct.Name || null } : null,
-      contribAcct: contribAcct ? { id: contribAcct.id || contribAcct.Id || null, name: contribAcct.name || contribAcct.Name || null } : null,
-    };
-  }
-
-  if (!drawAcct) {
-    try {
-      const created = await createQboAccount(qbo, { Name: "Owner Draw", AccountType: "Equity" });
-      if (created) drawAcct = created;
-    } catch (e) {
-      console.warn("[bookkeeping] create Owner Draw failed", e?.message || e);
-    }
-  }
-  if (!contribAcct) {
-    try {
-      const created = await createQboAccount(qbo, { Name: "Owner Contribution", AccountType: "Equity" });
-      if (created) contribAcct = created;
-    } catch (e) {
-      console.warn("[bookkeeping] create Owner Contribution failed", e?.message || e);
-    }
-  }
 
   return {
     drawAcct: drawAcct ? { id: drawAcct.id || drawAcct.Id || null, name: drawAcct.name || drawAcct.Name || null } : null,
@@ -1149,7 +1080,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
     // Existing categs
     const { data: existing, error: catErr } = await supabase
       .from("transaction_categorizations")
-      .select("transaction_id,suggested_qbo_account_id,suggested_qbo_account_name,confidence,status,meta,final_qbo_account_id,final_qbo_account_name,decided_by,post_after,qbo_txn_id")
+      .select("transaction_id,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key,final_canonical_account_key,confidence,status,meta,final_qbo_account_id,final_qbo_account_name,decided_by,post_after,qbo_txn_id")
       .eq("business_id", businessId)
       .in("transaction_id", ids);
     if (catErr) throw catErr;
@@ -1686,6 +1617,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           transaction_id: row.id,
           suggested_qbo_account_id: suggestedId || null,
           suggested_qbo_account_name: suggestedName || null,
+          suggested_canonical_account_key: existingCat.suggested_canonical_account_key || existingCat.final_canonical_account_key || mergedMeta.canonical_account_key || null,
           confidence:
             canUpgrade && autoResult.status === "auto_approved" && (vendorRulePromote || universalPromote)
               ? "high"
@@ -1697,12 +1629,14 @@ router.post("/suggest", requireAuth, async (req, res) => {
         if (payload.status !== "auto_approved" && payload.status !== "approved" && payload.status !== "posted") {
           payload.final_qbo_account_id = null;
           payload.final_qbo_account_name = null;
+          payload.final_canonical_account_key = null;
           payload.post_after = null;
         }
         if (canUpgrade && autoResult.status === "auto_approved") {
           payload.status = "auto_approved";
           payload.final_qbo_account_id = suggestedId || null;
           payload.final_qbo_account_name = suggestedName || null;
+          payload.final_canonical_account_key = payload.suggested_canonical_account_key || null;
           payload.post_after = autoResult.postAfter === undefined ? computePostAfterForAutoPost(autoPostEnabled, GRACE_HOURS) : autoResult.postAfter;
           payload.decided_by = "bizzi";
           payload.decided_at = nowIso;
@@ -2142,38 +2076,20 @@ router.post("/suggest", requireAuth, async (req, res) => {
       if (universalHint) {
         const preferUniversalForTxn =
           !userApprovalContext.hasAnyUserApprovals || !vendorRuleApprovalBacked;
-        let mappedIntent = mapIntentToCoa({
+        const canonicalResolution = await resolveCanonicalQboAccount({
           businessId,
           intent: universalHint.primary_intent,
-          coaAccounts: coa,
+          transactionId: row.id,
+          source: "suggest",
         });
-        if (
-          mappedIntent?.qbo_account_id &&
-          shouldForceCanonicalIntentAccount(universalHint.primary_intent, mappedIntent.qbo_account_name)
-        ) {
-          devLog("universal_hint_force_canonical_account", {
-            txn: row.id,
-            plaid_transaction_id: row.plaid_transaction_id,
-            intent: universalHint.primary_intent,
-            mapped_qbo_account_name: mappedIntent.qbo_account_name || null,
-            canonical_account_name: intentToStandardAccountName(universalHint.primary_intent),
-          });
-          mappedIntent = null;
-        }
-        if (mappedIntent?.qbo_account_id) {
-          const hintSuggested = ensureAccountName({
-            acctId: mappedIntent.qbo_account_id,
-            acctName: mappedIntent.qbo_account_name,
-            coa,
-          });
-          const mappedConfidence =
-            mappedIntent.match_reason === "keyword_exact" || mappedIntent.match_reason === "keyword_startswith"
-              ? universalHint.confidence || "high"
-              : "medium";
+        if (canonicalResolution?.ok && canonicalResolution?.account?.id) {
+          const hintSuggested = {
+            id: canonicalResolution.account.id,
+            name: canonicalResolution.account.name,
+          };
+          const mappedConfidence = universalHint.confidence || "medium";
           const hintConfidenceHigh = (universalHint?.confidence || "").toLowerCase() === "high";
-          const strongPrimaryIntentMatch =
-            mappedIntent.match_source === "primary" &&
-            (mappedIntent.match_reason === "keyword_exact" || mappedIntent.match_reason === "keyword_startswith");
+          const strongPrimaryIntentMatch = canonicalResolution.review_required !== true;
           const learnedRecurringMatch =
             hasSimilarUserApproval &&
             String(similarUserApproval?.final_qbo_account_id || "") === String(hintSuggested.id || "") &&
@@ -2205,8 +2121,21 @@ router.post("/suggest", requireAuth, async (req, res) => {
               confidence: universalHint.confidence,
               match_type: universalHint.match_type || null,
               matched_value: universalHint.matched_value || null,
+              canonical_account_key: canonicalResolution.canonical?.canonical_account_key || null,
+              canonical_account_name: canonicalResolution.canonical?.preferred_account_name || null,
+              canonical_resolution_status: canonicalResolution.status || null,
+              created_coa: canonicalResolution.created === true
+                ? {
+                    created: true,
+                    qbo_account_id: hintSuggested.id,
+                    qbo_account_name: hintSuggested.name,
+                    account_type: canonicalResolution.account.type || null,
+                    account_subtype: canonicalResolution.account.subType || null,
+                  }
+                : null,
             },
-            intent_to_coa_match: { match_reason: mappedIntent.match_reason },
+            canonical_account_key: canonicalResolution.canonical?.canonical_account_key || null,
+            intent_to_coa_match: { match_reason: canonicalResolution.status || "canonical_resolved" },
           };
           hintMeta.safe_to_auto_handle = allowAuto;
           hintMeta.safe_to_auto_post = allowAuto;
@@ -2277,16 +2206,18 @@ router.post("/suggest", requireAuth, async (req, res) => {
             plaid_transaction_id: row.plaid_transaction_id,
             key: universalHint.matched_rule_key,
             intent: universalHint.primary_intent,
-            coa: mappedIntent.qbo_account_name,
-            match_reason: mappedIntent.match_reason,
+            canonical_account_key: canonicalResolution.canonical?.canonical_account_key || null,
+            coa: hintSuggested.name,
+            match_reason: canonicalResolution.status,
           });
           const payload = {
             business_id: businessId,
             transaction_id: row.id,
             suggested_qbo_account_id: hintSuggested.id,
             suggested_qbo_account_name: hintSuggested.name,
+            suggested_canonical_account_key: canonicalResolution.canonical?.canonical_account_key || null,
             confidence: allowAuto ? "high" : mappedConfidence,
-            reason: `Universal vendor hint: ${universalHint.canonical_vendor} → ${universalHint.primary_intent} → ${mappedIntent.qbo_account_name || "account"}`,
+            reason: `Universal vendor hint: ${universalHint.canonical_vendor} -> ${universalHint.primary_intent} -> ${canonicalResolution.canonical?.preferred_account_name || hintSuggested.name}`,
             status: autoResult.status,
             meta: autoResult.meta,
             decided_by: autoResult.decidedBy || "universal_hint",
@@ -2296,10 +2227,12 @@ router.post("/suggest", requireAuth, async (req, res) => {
           if (payload.status !== "auto_approved" && payload.status !== "approved" && payload.status !== "posted") {
             payload.final_qbo_account_id = null;
             payload.final_qbo_account_name = null;
+            payload.final_canonical_account_key = null;
             payload.post_after = null;
           }
           if (autoResult.finalAcctId !== undefined) payload.final_qbo_account_id = autoResult.finalAcctId;
           if (autoResult.finalAcctName !== undefined) payload.final_qbo_account_name = autoResult.finalAcctName;
+          if (autoResult.finalAcctId !== undefined) payload.final_canonical_account_key = canonicalResolution.canonical?.canonical_account_key || null;
           if (autoResult.postAfter !== undefined) payload.post_after = autoResult.postAfter;
           await pushRow({
             txn: row,
@@ -2312,200 +2245,12 @@ router.post("/suggest", requireAuth, async (req, res) => {
           });
           continue;
         } else {
-          const mt = String(universalHint?.match_type || "").toLowerCase();
-          const confident =
-            (universalHint?.confidence || "").toLowerCase() === "high" ||
-            mt === "exact" ||
-            mt === "startswith";
-          if (isUniversalIntentAllowlisted(universalHint.primary_intent) && confident && !checkHit.is_check) {
-            const candidateName = intentToStandardAccountName(universalHint.primary_intent);
-            if (candidateName) {
-              const created = await createQboCoaAccountIfNeeded({
-                businessId,
-                candidateName,
-                intent: universalHint.primary_intent,
-                source: "suggest",
-                createdBy: "bizzi",
-                meta: {
-                  universal_hint_key: universalHint.matched_rule_key,
-                  canonical_vendor: universalHint.canonical_vendor,
-                  plaid_transaction_id: row.plaid_transaction_id,
-                  transaction_id: row.id,
-                },
-              });
-              if (created?.ok && created?.account?.id) {
-                const createdSuggested = ensureAccountName({
-                  acctId: created.account.id,
-                  acctName: created.account.name,
-                  coa,
-                });
-                const createdCoaMeta = {
-                  created: Boolean(created.created),
-                  qbo_account_id: createdSuggested.id,
-                  qbo_account_name: createdSuggested.name,
-                  account_type: created.account.type,
-                  reason: created.reason || created.match_reason || null,
-                  match_reason: created.match_reason || null,
-                };
-                const hintMeta = {
-                  ...baseMetaWithCheck,
-                  suggestion_source: "universal_hint",
-                  user_approval_backed: hasSimilarUserApproval,
-                  user_approval_match_type: similarUserApproval?.match_type || null,
-                  user_approval_match_txn_id: similarUserApproval?.transaction_id || null,
-                  universal_bootstrap_mode: preferUniversalForTxn,
-                  universal_hint: {
-                    key: universalHint.matched_rule_key,
-                    canonical_vendor: universalHint.canonical_vendor,
-                    primary_intent: universalHint.primary_intent,
-                    intents: universalHint.intents,
-                    confidence: universalHint.confidence,
-                    match_type: universalHint.match_type || null,
-                    matched_value: universalHint.matched_value || null,
-                    created_coa: createdCoaMeta,
-                  },
-                  intent_to_coa_match: { match_reason: created.match_reason || "created_coa" },
-                };
-                const allowAuto =
-                  !checkHit.is_check &&
-                  (
-                    (
-                      (universalHint?.confidence || "").toLowerCase() === "high" &&
-                      isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
-                      isUniversalHintAutoApproveSafe(universalHint)
-                    ) ||
-                    (
-                      hasSimilarUserApproval &&
-                      String(similarUserApproval?.final_qbo_account_id || "") === String(createdSuggested.id || "") &&
-                      isUniversalIntentAutoApproveAllowed(universalHint.primary_intent) &&
-                      isUniversalHintAutoApproveSafe(universalHint)
-                    )
-                  );
-                const learnedRecurringMatch =
-                  allowAuto &&
-                  (universalHint?.confidence || "").toLowerCase() !== "high" &&
-                  hasSimilarUserApproval &&
-                  String(similarUserApproval?.final_qbo_account_id || "") === String(createdSuggested.id || "");
-                hintMeta.safe_to_auto_handle = allowAuto;
-                hintMeta.safe_to_auto_post = allowAuto;
-                hintMeta.auto_approve_reason = allowAuto ? (learnedRecurringMatch ? "learned_recurring" : "universal_hint") : null;
-                const autoResult = applyAutoApproval({
-                  status: "needs_review",
-                  confidence: allowAuto ? "high" : (universalHint.confidence || "medium"),
-                  meta: hintMeta,
-                  checkHit,
-                  suggestedAcct: { id: createdSuggested.id, name: createdSuggested.name },
-                  taxonomyType: null,
-                  nowIso,
-                  reason: hintMeta.auto_approve_reason || "universal_hint",
-                  autoApprove,
-                  autoPostEnabled,
-                  txnId: row.id,
-                  transaction: row,
-                  businessContext: { suspenseIds },
-                  evidence: {
-                    source: learnedRecurringMatch ? "learned_recurring" : "universal_hint",
-                    safeToAutoHandle: hintMeta.safe_to_auto_handle === true,
-                  },
-                });
-                const createdSuspense = isSuspenseAccount({
-                  acctId: createdSuggested.id,
-                  acctName: createdSuggested.name,
-                  suspenseIds,
-                });
-                if (autoResult.status === "auto_approved" && allowAuto && !checkHit.is_check && !createdSuspense) {
-                  const hasVendorSignal =
-                    Boolean(row.merchant_entity_id) ||
-                    Boolean(row.counterparty_name) ||
-                    Boolean(row.merchant_name) ||
-                    Boolean(row.qbo_entity_id);
-                  if (!hasVendorSignal) {
-                    devLog("auto_learn_vendor_rule_skipped", {
-                      txnId: row.id,
-                      learnedFrom: "universal_hint",
-                      reason: "no_vendor_signal",
-                    });
-                  } else {
-                    const learnResult = await autoLearnVendorRuleFromAutoApproval({
-                      businessId,
-                      bankTxn: row,
-                      finalAccountId: createdSuggested.id,
-                      finalAccountName: createdSuggested.name,
-                      taxonomyType: metaBase?.taxonomy_type || null,
-                      learnedFrom: "universal_hint",
-                    });
-                    if (learnResult?.ok && learnResult?.rule) {
-                      devLog("auto_learn_vendor_rule", {
-                        txnId: row.id,
-                        learnedFrom: "universal_hint",
-                        rule: learnResult.rule,
-                      });
-                    } else if (learnResult?.ok && learnResult?.skipped) {
-                      devLog("auto_learn_vendor_rule_skipped", {
-                        txnId: row.id,
-                        learnedFrom: "universal_hint",
-                        reason: learnResult.reason || "unknown",
-                      });
-                    }
-                  }
-                }
-                if (autoResult.status === "auto_approved" && !checkHit.is_check) autoApproved += 1;
-                const payload = {
-                  business_id: businessId,
-                  transaction_id: row.id,
-                  suggested_qbo_account_id: createdSuggested.id,
-                  suggested_qbo_account_name: createdSuggested.name,
-                  confidence: allowAuto ? "high" : (universalHint.confidence || "medium"),
-                  reason: created.created
-                    ? `Universal hint created COA account: ${candidateName}`
-                    : `Universal hint matched existing COA: ${created.account.name}`,
-                  status: autoResult.status,
-                  meta: autoResult.meta,
-                  decided_by: autoResult.decidedBy || "universal_hint",
-                  decided_at: autoResult.decidedAt || nowIso,
-                  updated_at: nowIso,
-                };
-                if (payload.status !== "auto_approved" && payload.status !== "approved" && payload.status !== "posted") {
-                  payload.final_qbo_account_id = null;
-                  payload.final_qbo_account_name = null;
-                  payload.post_after = null;
-                }
-                if (autoResult.finalAcctId !== undefined) payload.final_qbo_account_id = autoResult.finalAcctId;
-                if (autoResult.finalAcctName !== undefined) payload.final_qbo_account_name = autoResult.finalAcctName;
-                if (autoResult.postAfter !== undefined) payload.post_after = autoResult.postAfter;
-                await pushRow({
-                  txn: row,
-                  payload,
-                  meta: autoResult.meta,
-                  checkHit,
-                  universalHintKey: universalHint.matched_rule_key,
-                  confidenceOverride: universalHint.confidence || "medium",
-                  suggestionSource: "universal_hint",
-                });
-                devLog("universal_hint_created_coa", {
-                  txn: row.id,
-                  plaid_transaction_id: row.plaid_transaction_id,
-                  key: universalHint.matched_rule_key,
-                  intent: universalHint.primary_intent,
-                  account: created.account,
-                  created: created.created,
-                });
-                continue;
-              } else {
-                devLog("universal_hint_create_blocked", {
-                  txn: row.id,
-                  key: universalHint.matched_rule_key,
-                  intent: universalHint.primary_intent,
-                  reason: created?.reason || "create_failed",
-                });
-              }
-            }
-          }
           devLog("universal_hint_no_coa_match", {
             txn: row.id,
             plaid_transaction_id: row.plaid_transaction_id,
             key: universalHint.matched_rule_key,
             intent: universalHint.primary_intent,
+            canonical_reason: canonicalResolution?.reason || null,
           });
         }
       }

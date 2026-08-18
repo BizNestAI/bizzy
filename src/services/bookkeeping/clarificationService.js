@@ -1,9 +1,14 @@
 import { supabase } from "../supabaseAdmin.js";
-import { fetchChartOfAccounts } from "./qboAccounts.js";
-import { mapIntentToCoa } from "./intentToCoaMapper.js";
 import { computeMemoPrefixForLearning, canonicalTxnDirection, cleanMemoForPrefix } from "./vendorRuleLearner.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
 import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "./autoPostControl.js";
+import { resolveCanonicalQboAccount } from "./canonicalQboAccountResolver.js";
+import {
+  getCanonicalAccountByKey,
+  getCanonicalAccountForIntent,
+  getCanonicalAccounts,
+  getCanonicalIntentMappings,
+} from "./canonicalCoaRegistry.js";
 
 const GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
 
@@ -133,77 +138,124 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
   };
 }
 
-function scoreCoaNameMatch(answerNorm, acct) {
-  const name = normalize(acct.name || acct.Name || "");
-  if (!name) return { score: 0, reason: null };
-  if (name === answerNorm) return { score: 120, reason: "name_exact" };
-  if (answerNorm.startsWith(name) || name.startsWith(answerNorm)) return { score: 90, reason: "name_prefix" };
-  if (answerNorm.includes(name) || name.includes(answerNorm)) return { score: 70, reason: "name_contains" };
-  const answerTokens = answerNorm.split(" ").filter(Boolean);
-  const nameTokens = name.split(" ").filter(Boolean);
-  if (!answerTokens.length || !nameTokens.length) return { score: 0, reason: null };
-  const overlap = answerTokens.filter((t) => nameTokens.includes(t));
-  const score = (overlap.length / Math.max(answerTokens.length, nameTokens.length)) * 80;
-  if (score > 0) return { score, reason: "token_overlap" };
-  return { score: 0, reason: null };
+function answerIntentCandidates(answerNorm = "") {
+  const normalized = normalize(answerNorm);
+  if (!normalized) return [];
+  const candidates = new Set();
+  candidates.add(normalized);
+  candidates.add(normalized.replace(/\s+/g, "_"));
+
+  const explicitAliases = {
+    "owner draw": "owner_draw",
+    "owner distribution": "owner_distribution",
+    "owner distributions": "owner_distributions",
+    "owner contribution": "owner_contribution",
+    "owner contributions": "owner_contributions",
+    "loan payable": "loans_payable",
+    "loans payable": "loans_payable",
+    "loan principal": "loan_principal",
+    "software subscription": "software",
+    "software subscriptions": "software",
+    "office supplies": "office_supplies",
+    "supplies and materials": "materials",
+    "supplies materials": "materials",
+    "payment processing fees": "payment_processing",
+    "bank charges": "bank_fees",
+    "bank charges and fees": "bank_fees",
+    "parking and tolls": "parking_tolls",
+    "parking tolls": "parking_tolls",
+  };
+  if (explicitAliases[normalized]) candidates.add(explicitAliases[normalized]);
+
+  const intentEntries = Object.keys(getCanonicalIntentMappings())
+    .map((key) => ({ key, phrase: normalize(key.replace(/_/g, " ")) }))
+    .filter((entry) => entry.phrase)
+    .sort((a, b) => b.phrase.length - a.phrase.length);
+  for (const entry of intentEntries) {
+    const escaped = entry.phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`(^|\\s)${escaped}(\\s|$)`).test(normalized)) {
+      candidates.add(entry.key);
+    }
+  }
+
+  for (const acct of getCanonicalAccounts()) {
+    const preferred = normalize(acct.preferred_account_name);
+    if (preferred && normalized === preferred) candidates.add(acct.canonical_account_key);
+  }
+  return Array.from(candidates);
 }
 
-export async function mapAnswerToCoa({ businessId, txn = {}, answerText = "", coaAccounts = [] }) {
-  if (!answerText || !coaAccounts?.length) return null;
+function resolveClarificationCanonical(answerText = "") {
+  const candidates = answerIntentCandidates(answerText);
+  for (const candidate of candidates) {
+    const canonical = getCanonicalAccountForIntent(candidate) || getCanonicalAccountByKey(candidate);
+    if (canonical) return { intent: candidate, canonical };
+  }
+  return null;
+}
+
+export async function mapAnswerToCoa({ businessId, txn = {}, answerText = "", coaAccounts = [], dependencies = {} }) {
+  void coaAccounts;
+  if (!answerText) return null;
   const answerNorm = normalize(answerText);
   if (!answerNorm || answerNorm.length < 2) return null;
 
-  // 1) Direct-ish name match against COA
-  let best = null;
-  let bestScore = 0;
-  for (const acct of coaAccounts || []) {
-    const { score, reason } = scoreCoaNameMatch(answerNorm, acct);
-    if (score > bestScore) {
-      bestScore = score;
-      best = { acct, reason };
-    }
+  const resolvedCanonical = resolveClarificationCanonical(answerText);
+  if (!resolvedCanonical?.canonical) {
+    devLog("answer_unmapped", { txn_id: txn.id, answer: answerText, reason: "unknown_canonical_intent" });
+    return null;
   }
-  if (best && bestScore >= 80) {
-    devLog("answer_mapped", { txn_id: txn.id, match: best.acct?.name, reason: best.reason });
+
+  const resolved = await resolveCanonicalQboAccount({
+    businessId,
+    intent: resolvedCanonical.intent,
+    canonicalAccountKey: resolvedCanonical.canonical.canonical_account_key,
+    transactionId: txn?.id || null,
+    source: "clarification",
+    dependencies,
+  });
+
+  if (resolved?.ok && resolved?.account?.id) {
+    devLog("answer_mapped", {
+      txn_id: txn.id,
+      match: resolved.account?.name,
+      canonical_account_key: resolved.canonical?.canonical_account_key,
+      reason: resolved.status || "canonical_resolved",
+    });
     return {
-      account: { id: best.acct.id || best.acct.Id, name: best.acct.name || best.acct.Name },
-      match_reason: best.reason || "name_match",
-      confidence: bestScore >= 100 ? "high" : "medium",
+      account: {
+        id: resolved.account.id,
+        name: resolved.account.name,
+        type: resolved.account.type || null,
+        subType: resolved.account.subType || null,
+      },
+      canonical_account_key: resolved.canonical?.canonical_account_key || resolvedCanonical.canonical.canonical_account_key,
+      canonical_account_name: resolved.canonical?.preferred_account_name || resolvedCanonical.canonical.preferred_account_name,
+      canonical_resolution_status: resolved.status || "canonical_resolved",
+      match_reason: resolved.status || "canonical_resolved",
+      confidence: resolved.status === "existing_exact" ? "high" : "medium",
+      created: resolved.created === true,
+      review_required: false,
+      resolution: resolved,
     };
   }
 
-  // 2) Intent keyword mapping (includes synonyms)
-  const intentMatch = mapIntentToCoa({ businessId, intent: answerNorm, coaAccounts });
-  if (intentMatch?.qbo_account_id) {
-    devLog("answer_mapped", { txn_id: txn.id, match: intentMatch.qbo_account_name, reason: intentMatch.match_reason || "intent" });
-    return {
-      account: { id: intentMatch.qbo_account_id, name: intentMatch.qbo_account_name },
-      match_reason: intentMatch.match_reason || "intent",
-      confidence: "medium",
-    };
-  }
-
-  // 3) Soft fuzzy against COA names
-  let softBest = null;
-  let softScore = 0;
-  for (const acct of coaAccounts || []) {
-    const { score, reason } = scoreCoaNameMatch(answerNorm, acct);
-    if (score > softScore) {
-      softScore = score;
-      softBest = { acct, reason };
-    }
-  }
-  if (softBest && softScore >= 50) {
-    devLog("answer_mapped", { txn_id: txn.id, match: softBest.acct?.name, reason: softBest.reason || "soft_name" });
-    return {
-      account: { id: softBest.acct.id || softBest.acct.Id, name: softBest.acct.name || softBest.acct.Name },
-      match_reason: softBest.reason || "soft_name",
-      confidence: "low",
-    };
-  }
-
-  devLog("answer_unmapped", { txn_id: txn.id, answer: answerText });
-  return null;
+  devLog("answer_review_required", {
+    txn_id: txn.id,
+    answer: answerText,
+    canonical_account_key: resolvedCanonical.canonical.canonical_account_key,
+    reason: resolved?.reason || "canonical_resolution_failed",
+  });
+  return {
+    account: null,
+    canonical_account_key: resolved?.canonical?.canonical_account_key || resolvedCanonical.canonical.canonical_account_key,
+    canonical_account_name: resolved?.canonical?.preferred_account_name || resolvedCanonical.canonical.preferred_account_name,
+    canonical_resolution_status: resolved?.status || "needs_review",
+    match_reason: resolved?.reason || "canonical_resolution_failed",
+    confidence: "low",
+    review_required: true,
+    resolution: resolved || null,
+  };
 }
 
 export async function createOrUpdateClarificationRequest({ businessId, txn, reason_code = "other", meta = {}, prompt_text = "What was this for?" }) {
@@ -529,7 +581,6 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
 
   const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const autoPostEnabled = await getAutoPostToQuickBooks(supabase, businessId);
-  const coaAccounts = await fetchChartOfAccounts(businessId, { includeSubaccounts: true });
 
   const results = [];
   let mapped = 0;
@@ -614,11 +665,17 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
       continue;
     }
 
-    const mapping = await mapAnswerToCoa({ businessId, txn, answerText, coaAccounts });
+    const mapping = await mapAnswerToCoa({ businessId, txn, answerText });
     const baseMeta = { ...(catMeta[canonicalTxnId] || {}) };
     baseMeta.clarification_request_id = ans.request_id;
     baseMeta.clarification_answer_text = answerText;
     baseMeta.auto_approve_reason = "user_clarification";
+    baseMeta.clarification_canonical_account_key = mapping?.canonical_account_key || null;
+    baseMeta.canonical_account_key = mapping?.canonical_account_key || baseMeta.canonical_account_key || null;
+    baseMeta.canonical_account_name = mapping?.canonical_account_name || baseMeta.canonical_account_name || null;
+    baseMeta.canonical_resolution_status = mapping?.canonical_resolution_status || null;
+    baseMeta.clarification_resolution_reason = mapping?.match_reason || null;
+    baseMeta.clarification_created_coa = mapping?.created === true;
     if (baseMeta.safe_to_auto_post !== true) {
       baseMeta.safe_to_auto_post = false;
     }
@@ -637,15 +694,20 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
       mappedFlag = true;
     } else {
       baseMeta.clarification_unmapped = true;
-      baseMeta.clarification_unmapped_reason = "no_safe_mapping";
+      baseMeta.clarification_unmapped_reason = mapping?.match_reason || "no_safe_mapping";
+      baseMeta.safe_to_auto_post = false;
     }
 
     const catPayload = {
       business_id: businessId,
       transaction_id: canonicalTxnId,
       status,
+      suggested_qbo_account_id: finalId,
+      suggested_qbo_account_name: finalName,
+      suggested_canonical_account_key: mapping?.canonical_account_key || null,
       final_qbo_account_id: finalId,
       final_qbo_account_name: finalName,
+      final_canonical_account_key: mappedFlag ? mapping?.canonical_account_key || null : null,
       decided_by: "user_clarification",
       decided_at: nowIso,
       updated_at: nowIso,

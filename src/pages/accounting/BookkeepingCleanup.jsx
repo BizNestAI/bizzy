@@ -1705,6 +1705,29 @@ function BookkeepingCleanup() {
               </button>
               <button
                 type="button"
+                disabled={rulesButtonDisabled}
+                onClick={
+                  rulesButtonDisabled
+                    ? undefined
+                    : () => {
+                        try {
+                          navigate("/dashboard/accounting/rules");
+                        } catch {
+                          window.location.href = "/dashboard/accounting/rules";
+                        }
+                      }
+                }
+                className={`rounded-full px-4 py-1.5 min-w-[150px] text-center text-slate-200 border border-white/10 transition ${
+                  rulesButtonDisabled
+                    ? "cursor-not-allowed opacity-60"
+                    : "hover:border-[var(--accent-line)] hover:bg-[var(--panel)]"
+                }`}
+                title={rulesButtonDisabled ? "Chart of Accounts will be available soon" : undefined}
+              >
+                Chart of Accounts
+              </button>
+              <button
+                type="button"
                 disabled={savingAutoPost || loadingAutoPost}
                 onClick={handleToggleAutoPost}
                 role="switch"

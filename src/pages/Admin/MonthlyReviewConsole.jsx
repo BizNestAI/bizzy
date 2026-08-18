@@ -645,6 +645,8 @@ export default function MonthlyReviewConsole() {
                   </div>
                 ) : null}
 
+                <CanonicalCoaReviewPanel data={detail?.canonical_chart_of_accounts} />
+
                 <SourceLedgerPanel
                   ledger={sourceLedger}
                   loading={loadingLedger}
@@ -757,6 +759,56 @@ export default function MonthlyReviewConsole() {
           </main>
         </div>
       </div>
+    </div>
+  );
+}
+
+function CanonicalCoaReviewPanel({ data }) {
+  const summary = data?.summary || {};
+  const created = Array.isArray(data?.created_by_bizzi) ? data.created_by_bizzi : [];
+  const mapped = Array.isArray(data?.mapped_existing) ? data.mapped_existing : [];
+  const review = Array.isArray(data?.needs_review) ? data.needs_review : [];
+  const rows = [...created, ...mapped, ...review].slice(0, 12);
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
+      <div className="flex flex-col gap-3 border-b border-white/10 pb-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-[0.14em] text-emerald-200/75">Chart of Accounts</div>
+          <h3 className="mt-1 text-lg font-semibold text-white">Canonical Account Review</h3>
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+          <MiniStat label="Created" value={summary.created_by_bizzi_count || 0} />
+          <MiniStat label="Mapped" value={summary.mapped_existing_count || 0} />
+          <MiniStat label="Review" value={summary.needs_review_count || 0} />
+        </div>
+      </div>
+      {rows.length ? (
+        <div className="mt-3 overflow-hidden rounded-xl border border-white/10">
+          <div className="grid grid-cols-[1.1fr_1.1fr_120px_80px] gap-2 border-b border-white/8 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-white/40">
+            <span>Bizzi Account</span>
+            <span>QuickBooks Account</span>
+            <span>Status</span>
+            <span className="text-right">Usage</span>
+          </div>
+          <div className="divide-y divide-white/[0.06]">
+            {rows.map((row) => (
+              <div key={`${row.canonical_account_key}-${row.qbo_account_id || row.status}`} className="grid grid-cols-[1.1fr_1.1fr_120px_80px] gap-2 px-3 py-2 text-xs text-white/70">
+                <span className="truncate font-medium text-white/85">{row.bizzi_account_name || row.canonical_account_key}</span>
+                <span className="truncate">{row.qbo_account_name || "Needs review"}</span>
+                <span className={row.status === "needs_review" ? "text-amber-200" : row.status === "created_by_bizzi" ? "text-emerald-200" : "text-white/60"}>
+                  {formatCoaStatus(row.status)}
+                </span>
+                <span className="text-right">{row.usage_count || 0}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-4 text-sm text-white/45">
+          No canonical account mappings have been recorded for this business yet.
+        </div>
+      )}
     </div>
   );
 }
@@ -1941,6 +1993,17 @@ function normalizeAccountForBooksDropdown(account = {}) {
     name: account.name,
     type: normalizeBooksDropdownType(account.type || account.accountType || account.account_type),
   };
+}
+
+function formatCoaStatus(status = "") {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "existing_exact") return "Existing";
+  if (normalized === "existing_approved_equivalent") return "Mapped Equivalent";
+  if (normalized === "created_by_bizzi") return "Created by Bizzi";
+  if (normalized === "needs_review") return "Needs Review";
+  if (normalized === "rejected") return "Rejected";
+  if (normalized === "disabled") return "Disabled";
+  return "Needs Review";
 }
 
 function normalizeBooksDropdownType(type = "") {
