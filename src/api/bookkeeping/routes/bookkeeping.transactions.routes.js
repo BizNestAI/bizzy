@@ -94,6 +94,7 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null) {
     status: cat.status || "needs_review",
     payeeSource: row.counterparty_source || null,
     payeeConfidence: row.counterparty_confidence || null,
+    canonicalVendorId: row.canonical_vendor_id || null,
     qboEntityType: row.qbo_entity_type || null,
     qboEntityId: row.qbo_entity_id || null,
     is_check: cat.meta?.is_check === true,
@@ -159,7 +160,7 @@ export async function fetchBookkeepingTransactions({
   let txQuery = supabase
     .from("bank_transactions")
     .select(
-      "id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,counterparties,counterparty_name,counterparty_source,counterparty_confidence,qbo_entity_type,qbo_entity_id,amount,signed_amount,direction,pending,category_primary,category_detailed,personal_finance_category"
+      "id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparties,counterparty_name,counterparty_source,counterparty_confidence,canonical_vendor_id,qbo_entity_type,qbo_entity_id,amount,signed_amount,direction,pending,category_primary,category_detailed,personal_finance_category"
     )
     .eq("business_id", businessId)
     .eq("is_archived", false)
@@ -451,7 +452,7 @@ router.post("/enrich-counterparties", requireAuth, async (req, res) => {
     let txQuery = supabase
       .from("bank_transactions")
       .select(
-        "id,business_id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparties,direction,counterparty_name,counterparty_source,counterparty_confidence,qbo_entity_type,qbo_entity_id"
+        "id,business_id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparties,direction,counterparty_name,counterparty_source,counterparty_confidence,canonical_vendor_id,qbo_entity_type,qbo_entity_id"
       )
       .eq("business_id", businessId)
       .eq("is_archived", false);

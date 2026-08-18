@@ -439,6 +439,22 @@ export async function getCanonicalQboCoa(businessId, params = {}) {
   });
 }
 
+export async function approveExistingCanonicalQboAccount(businessId, canonicalKey, body = {}) {
+  return safeFetch(apiUrl(`/api/bookkeeping/qbo/canonical-coa/${encodeURIComponent(canonicalKey)}/use-existing`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body || {}),
+  });
+}
+
+export async function createPreferredCanonicalQboAccount(businessId, canonicalKey, body = {}) {
+  return safeFetch(apiUrl(`/api/bookkeeping/qbo/canonical-coa/${encodeURIComponent(canonicalKey)}/create-preferred`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body || {}),
+  });
+}
+
 export async function getQboPaymentAccounts(businessId) {
   return safeFetch(apiUrl("/api/bookkeeping/qbo/payment-accounts"), {
     method: "GET",
@@ -472,11 +488,39 @@ export async function getQboVendorCreations(businessId, params = {}) {
   });
 }
 
+export async function getCanonicalQboVendors(businessId, params = {}) {
+  const search = new URLSearchParams();
+  if (params.limit) search.set("limit", String(params.limit));
+  const qs = search.toString() ? `?${search.toString()}` : "";
+  return safeFetch(apiUrl(`/api/bookkeeping/qbo/canonical-vendors${qs}`), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+}
+
+export async function useExistingCanonicalQboVendor(businessId, canonicalVendorId, body = {}) {
+  return safeFetch(apiUrl(`/api/bookkeeping/qbo/canonical-vendors/${encodeURIComponent(canonicalVendorId)}/use-existing`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body || {}),
+  });
+}
+
+export async function createBizziCanonicalQboVendor(businessId, canonicalVendorId, body = {}) {
+  return safeFetch(apiUrl(`/api/bookkeeping/qbo/canonical-vendors/${encodeURIComponent(canonicalVendorId)}/create-bizzi-vendor`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(body || {}),
+  });
+}
+
 export default {
   getAccounts,
   getTransactions,
   getQboCoa,
   getCanonicalQboCoa,
+  approveExistingCanonicalQboAccount,
+  createPreferredCanonicalQboAccount,
   approveTransactions,
   undoTransaction,
   updateHandledTransaction,
@@ -502,4 +546,7 @@ export default {
   getQboPaymentAccounts,
   ensureQboPaymentAccount,
   getQboVendorCreations,
+  getCanonicalQboVendors,
+  useExistingCanonicalQboVendor,
+  createBizziCanonicalQboVendor,
 };

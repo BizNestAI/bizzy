@@ -2,21 +2,20 @@ import React, { useCallback, useEffect, useState } from "react";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
 import { useBusiness } from "../../context/BusinessContext.jsx";
 import {
+  approveExistingCanonicalQboAccount,
+  createBizziCanonicalQboVendor,
+  createPreferredCanonicalQboAccount,
   getCanonicalQboCoa,
   createQboCoaAccount,
-  getQboVendorCreations,
+  getCanonicalQboVendors,
+  useExistingCanonicalQboVendor,
 } from "../../services/bookkeeping/bookkeepingClient.js";
 
 function QboCoaChangesPanel({ businessId }) {
-  if (!businessId) {
-    return (
-      <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/60">
-        Connect QuickBooks to view COA changes.
-      </div>
-    );
-  }
   const [rows, setRows] = useState([]);
   const [history, setHistory] = useState([]);
+  const [decisions, setDecisions] = useState([]);
+  const [busyDecision, setBusyDecision] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -33,11 +32,13 @@ function QboCoaChangesPanel({ businessId }) {
         setError("");
         setRows(res?.rows || []);
         setHistory(res?.history || []);
+        setDecisions(res?.decisions || []);
       }
     } catch (e) {
       setError("Unable to load COA changes.");
       setRows([]);
       setHistory([]);
+      setDecisions([]);
     } finally {
       setLoading(false);
     }
@@ -48,6 +49,29 @@ function QboCoaChangesPanel({ businessId }) {
   }, [fetchRows]);
 
   const showDevCreate = process.env.NODE_ENV !== "production";
+  const mappedRows = rows.filter((row) => row.status !== "needs_review");
+
+  const resolveDecision = useCallback(async (decision, action) => {
+    if (!businessId || !decision?.canonical_account_key) return;
+    setBusyDecision(`${decision.canonical_account_key}:${action}`);
+    setError("");
+    try {
+      if (action === "use_existing") {
+        await approveExistingCanonicalQboAccount(businessId, decision.canonical_account_key, {
+          qbo_account_id: decision.candidate_qbo_account_id,
+        });
+      } else {
+        await createPreferredCanonicalQboAccount(businessId, decision.canonical_account_key, {
+          reviewed_candidate_qbo_account_id: decision.candidate_qbo_account_id || null,
+        });
+      }
+      await fetchRows();
+    } catch (e) {
+      setError(e?.body?.message || e?.message || "Unable to resolve COA decision.");
+    } finally {
+      setBusyDecision("");
+    }
+  }, [businessId, fetchRows]);
 
   const handleDevCreate = useCallback(async () => {
     if (!businessId) return;
@@ -61,6 +85,14 @@ function QboCoaChangesPanel({ businessId }) {
       setLoading(false);
     }
   }, [businessId, fetchRows]);
+
+  if (!businessId) {
+    return (
+      <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/60">
+        Connect QuickBooks to view COA changes.
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-3">
@@ -81,13 +113,52 @@ function QboCoaChangesPanel({ businessId }) {
         </div>
       </div>
       {error ? <p className="mt-1 text-[11px] text-amber-200/80">{error}</p> : null}
+      {decisions.length ? (
+        <div className="mt-3 space-y-2">
+          {decisions.map((decision) => {
+            const usage = decision.candidate_usage || {};
+            const busyUse = busyDecision === `${decision.canonical_account_key}:use_existing`;
+            const busyCreate = busyDecision === `${decision.canonical_account_key}:create_preferred`;
+            return (
+              <div key={`${decision.realm_id || "realm"}-${decision.canonical_account_key}`} className="rounded-lg border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-white/90">{decision.bizzi_account_name}</p>
+                    <p className="mt-0.5 text-[11px] text-white/60">
+                      Possible existing QuickBooks account: {decision.candidate_qbo_account_name || "None"} · {decision.candidate_qbo_account_type || "Account"}
+                    </p>
+                    <p className="mt-1 text-[11px] text-white/55">
+                      {Number(decision.affected_transaction_count || 0)} transaction{Number(decision.affected_transaction_count || 0) === 1 ? "" : "s"} affected
+                      {Number(usage.transaction_count || 0) ? ` · ${usage.transaction_count} prior use${Number(usage.transaction_count || 0) === 1 ? "" : "s"}` : " · no prior usage found"}
+                    </p>
+                    <p className="mt-1 text-[11px] text-amber-100/80">
+                      {decision.recommendation?.label || "Review Required"}: {decision.recommendation?.reason || decision.review_reason || "Human decision required."}
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-full border border-amber-200/25 px-2 py-0.5 text-[11px] text-amber-100">Needs Review</span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {decision.candidate_qbo_account_id ? (
+                    <GhostButton onClick={() => resolveDecision(decision, "use_existing")} disabled={loading || !!busyDecision} className="text-xs">
+                      {busyUse ? "Saving..." : "Use Existing Account"}
+                    </GhostButton>
+                  ) : null}
+                  <GhostButton onClick={() => resolveDecision(decision, "create_preferred")} disabled={loading || !!busyDecision} className="text-xs">
+                    {busyCreate ? "Creating..." : "Create Bizzi Preferred Account"}
+                  </GhostButton>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
       <div className="mt-2 space-y-2">
-        {loading && rows.length === 0 ? (
+        {loading && mappedRows.length === 0 ? (
           <p className="text-xs text-white/60">Loading…</p>
-        ) : rows.length === 0 ? (
+        ) : mappedRows.length === 0 ? (
           <p className="text-xs text-white/60">No canonical account mappings yet.</p>
         ) : (
-          rows.map((r) => (
+          mappedRows.map((r) => (
             <div key={r.canonical_account_key || r.qbo_account_id} className="rounded-lg border border-white/10 bg-black/30 px-3 py-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex flex-col">
@@ -128,14 +199,9 @@ function QboCoaChangesPanel({ businessId }) {
 }
 
 function QboVendorChangesPanel({ businessId }) {
-  if (!businessId) {
-    return (
-      <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/60">
-        Connect QuickBooks to view vendor changes.
-      </div>
-    );
-  }
   const [rows, setRows] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [busyDecision, setBusyDecision] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -143,17 +209,20 @@ function QboVendorChangesPanel({ businessId }) {
     if (!businessId) return;
     setLoading(true);
     try {
-      const res = await getQboVendorCreations(businessId, { limit: 50 });
+      const res = await getCanonicalQboVendors(businessId, { limit: 50 });
       if (res?.ok === false) {
         setError("Unable to load vendor changes.");
         setRows([]);
+        setSummary({});
       } else {
         setError("");
         setRows(res?.rows || []);
+        setSummary(res?.summary || {});
       }
     } catch (e) {
       setError("Unable to load vendor changes.");
       setRows([]);
+      setSummary({});
     } finally {
       setLoading(false);
     }
@@ -163,12 +232,42 @@ function QboVendorChangesPanel({ businessId }) {
     fetchRows();
   }, [fetchRows]);
 
+  const resolveVendorDecision = useCallback(async (row, action) => {
+    if (!businessId || !row?.canonical_vendor_id) return;
+    setBusyDecision(`${row.canonical_vendor_id}:${action}`);
+    setError("");
+    try {
+      if (action === "use_existing") {
+        await useExistingCanonicalQboVendor(businessId, row.canonical_vendor_id, {
+          qbo_vendor_id: row.candidate_qbo_vendor_id || row.qbo_vendor_id,
+        });
+      } else {
+        await createBizziCanonicalQboVendor(businessId, row.canonical_vendor_id, {
+          transaction_id: row.transaction_id || null,
+        });
+      }
+      await fetchRows();
+    } catch (e) {
+      setError(e?.body?.message || e?.message || "Unable to resolve vendor decision.");
+    } finally {
+      setBusyDecision("");
+    }
+  }, [businessId, fetchRows]);
+
+  if (!businessId) {
+    return (
+      <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-xs text-white/60">
+        Connect QuickBooks to view vendor changes.
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-3">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <p className="text-sm font-semibold text-white/90">Vendors added by Bizzi</p>
-          <p className="text-[11px] text-white/60">Bizzi creates vendors only when needed for clean posting.</p>
+          <p className="text-sm font-semibold text-white/90">Vendor Activity</p>
+          <p className="text-[11px] text-white/60">Canonical vendors, QBO mappings, and review items.</p>
         </div>
         <div className="flex items-center gap-2">
           <GhostButton onClick={fetchRows} disabled={loading} className="text-xs">
@@ -177,33 +276,60 @@ function QboVendorChangesPanel({ businessId }) {
         </div>
       </div>
       {error ? <p className="mt-1 text-[11px] text-amber-200/80">{error}</p> : null}
+      <div className="mt-3 grid grid-cols-2 gap-2 text-center text-[11px] text-white/65 md:grid-cols-4">
+        <MiniStat label="Created" value={summary.created_by_bizzi_count || 0} />
+        <MiniStat label="Mapped" value={summary.mapped_existing_count || 0} />
+        <MiniStat label="Aliases" value={summary.new_aliases_learned_count || 0} />
+        <MiniStat label="Review" value={summary.needs_review_count || 0} />
+      </div>
       <div className="mt-2 space-y-2">
         {loading && rows.length === 0 ? (
           <p className="text-xs text-white/60">Loading…</p>
         ) : rows.length === 0 ? (
-          <p className="text-xs text-white/60">No vendors created yet.</p>
+          <p className="text-xs text-white/60">No canonical vendor activity yet.</p>
         ) : (
           rows.map((r) => (
-            <div key={r.id || r.qbo_entity_id} className="rounded-lg border border-white/10 bg-black/30 px-3 py-2">
+            <div key={r.canonical_vendor_id || r.qbo_vendor_id} className={`rounded-lg border px-3 py-2 ${r.status === "needs_review" ? "border-amber-300/20 bg-amber-300/[0.06]" : "border-white/10 bg-black/30"}`}>
               <div className="flex items-center justify-between gap-2">
                 <div className="flex flex-col">
-                  <span className="text-sm text-white/90">{r.vendor_name}</span>
-                  <span className="text-[11px] text-white/60">{r.qbo_entity_type || "vendor"}</span>
+                  <span className="text-sm text-white/90">{r.display_name}</span>
+                  <span className="text-[11px] text-white/60">{r.qbo_display_name ? `QBO Vendor: ${r.qbo_display_name}` : r.candidate_qbo_vendor_name ? `Possible QBO Vendor: ${r.candidate_qbo_vendor_name}` : r.primary_evidence_type || "Canonical vendor"}</span>
                 </div>
                 <span className="text-[11px] text-white/50">
-                  {r.created_at ? new Date(r.created_at).toLocaleDateString() : ""}
+                  {r.updated_at ? new Date(r.updated_at).toLocaleDateString() : ""}
                 </span>
               </div>
               <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-white/60">
-                <span>{r.meta?.reason || r.meta?.intent || "—"}</span>
+                <span>{r.review_reason || `${Number(r.alias_count || 0)} alias${Number(r.alias_count || 0) === 1 ? "" : "es"} · ${Number(r.strong_alias_count || 0)} strong`}</span>
                 <span className="inline-flex items-center rounded-full border border-white/15 px-2 py-0.5 text-[11px] text-white/70">
-                  {r.created_by || "bizzi"}
+                  {r.status_label || r.status || "Mapped"}
                 </span>
               </div>
+              {r.status === "needs_review" ? (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {r.candidate_qbo_vendor_id ? (
+                    <GhostButton onClick={() => resolveVendorDecision(r, "use_existing")} disabled={loading || !!busyDecision} className="text-xs">
+                      {busyDecision === `${r.canonical_vendor_id}:use_existing` ? "Saving..." : "Use Existing"}
+                    </GhostButton>
+                  ) : null}
+                  <GhostButton onClick={() => resolveVendorDecision(r, "create_bizzi")} disabled={loading || !!busyDecision} className="text-xs">
+                    {busyDecision === `${r.canonical_vendor_id}:create_bizzi` ? "Creating..." : "Create Bizzi Vendor"}
+                  </GhostButton>
+                </div>
+              ) : null}
             </div>
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-2 py-2">
+      <div className="text-[10px] uppercase tracking-[0.12em] text-white/40">{label}</div>
+      <div className="mt-0.5 text-sm font-semibold text-white/85">{value}</div>
     </div>
   );
 }

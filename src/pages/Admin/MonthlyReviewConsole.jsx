@@ -262,6 +262,52 @@ export default function MonthlyReviewConsole() {
     }
   };
 
+  const resolveCanonicalCoaDecision = async (decision, action) => {
+    if (!selectedBusinessId || !decision?.canonical_account_key) return;
+    const actionKey = `canonical-coa:${decision.canonical_account_key}:${action}`;
+    setBusyAction(actionKey);
+    setError("");
+    try {
+      const path = action === "use_existing"
+        ? `/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/canonical-coa/${encodeURIComponent(decision.canonical_account_key)}/use-existing`
+        : `/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/canonical-coa/${encodeURIComponent(decision.canonical_account_key)}/create-preferred`;
+      const body = action === "use_existing"
+        ? { month, qbo_account_id: decision.candidate_qbo_account_id }
+        : { month, reviewed_candidate_qbo_account_id: decision.candidate_qbo_account_id || null };
+      await safeFetch(path, { method: "POST", body });
+      await loadDetail();
+      await loadSourceLedger();
+      await loadBusinesses();
+    } catch (e) {
+      setError(e?.body?.message || e?.message || "Could not resolve canonical account decision.");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const resolveCanonicalVendorDecision = async (row, action) => {
+    if (!selectedBusinessId || !row?.canonical_vendor_id) return;
+    const actionKey = `canonical-vendor:${row.canonical_vendor_id}:${action}`;
+    setBusyAction(actionKey);
+    setError("");
+    try {
+      const path = action === "use_existing"
+        ? `/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/canonical-vendors/${encodeURIComponent(row.canonical_vendor_id)}/use-existing`
+        : `/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/canonical-vendors/${encodeURIComponent(row.canonical_vendor_id)}/create-bizzi-vendor`;
+      const body = action === "use_existing"
+        ? { month, qbo_vendor_id: row.candidate_qbo_vendor_id || row.qbo_vendor_id }
+        : { month, transaction_id: row.transaction_id || null };
+      await safeFetch(path, { method: "POST", body });
+      await loadDetail();
+      await loadSourceLedger();
+      await loadBusinesses();
+    } catch (e) {
+      setError(e?.body?.message || e?.message || "Could not resolve canonical vendor decision.");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
   const openTransactionHistory = async (transaction) => {
     if (!detail?.run?.id || !transaction?.id) return;
     setHistoryDrawer({ open: true, transaction, rows: [], loading: true });
@@ -645,7 +691,16 @@ export default function MonthlyReviewConsole() {
                   </div>
                 ) : null}
 
-                <CanonicalCoaReviewPanel data={detail?.canonical_chart_of_accounts} />
+                <CanonicalCoaReviewPanel
+                  data={detail?.canonical_chart_of_accounts}
+                  busyAction={busyAction}
+                  onResolve={resolveCanonicalCoaDecision}
+                />
+                <CanonicalVendorReviewPanel
+                  data={detail?.canonical_vendors}
+                  busyAction={busyAction}
+                  onResolve={resolveCanonicalVendorDecision}
+                />
 
                 <SourceLedgerPanel
                   ledger={sourceLedger}
@@ -763,12 +818,13 @@ export default function MonthlyReviewConsole() {
   );
 }
 
-function CanonicalCoaReviewPanel({ data }) {
+function CanonicalCoaReviewPanel({ data, busyAction = "", onResolve }) {
   const summary = data?.summary || {};
   const created = Array.isArray(data?.created_by_bizzi) ? data.created_by_bizzi : [];
   const mapped = Array.isArray(data?.mapped_existing) ? data.mapped_existing : [];
   const review = Array.isArray(data?.needs_review) ? data.needs_review : [];
-  const rows = [...created, ...mapped, ...review].slice(0, 12);
+  const decisions = Array.isArray(data?.decisions) ? data.decisions : review;
+  const rows = [...created, ...mapped].slice(0, 12);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
@@ -783,6 +839,61 @@ function CanonicalCoaReviewPanel({ data }) {
           <MiniStat label="Review" value={summary.needs_review_count || 0} />
         </div>
       </div>
+      {decisions.length ? (
+        <div className="mt-3 space-y-2">
+          {decisions.map((decision) => {
+            const usage = decision.candidate_usage || {};
+            const useBusy = busyAction === `canonical-coa:${decision.canonical_account_key}:use_existing`;
+            const createBusy = busyAction === `canonical-coa:${decision.canonical_account_key}:create_preferred`;
+            return (
+              <div key={`${decision.realm_id || "realm"}-${decision.canonical_account_key}`} className="rounded-xl border border-amber-300/18 bg-amber-300/[0.06] px-3 py-2">
+                <div className="grid gap-2 lg:grid-cols-[1fr_1fr_100px_1.2fr]">
+                  <div>
+                    <div className="text-xs font-semibold text-white/90">{decision.bizzi_account_name || decision.canonical_account_key}</div>
+                    <div className="mt-0.5 text-[11px] text-white/45">{decision.canonical_account_key}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-white/75">{decision.candidate_qbo_account_name || "No candidate"}</div>
+                    <div className="mt-0.5 text-[11px] text-white/45">{decision.candidate_qbo_account_type || "Account"}{decision.candidate_qbo_account_subtype ? ` · ${decision.candidate_qbo_account_subtype}` : ""}</div>
+                  </div>
+                  <div className="text-xs text-white/65">
+                    <div>{Number(decision.affected_transaction_count || 0)} affected</div>
+                    <div className="mt-0.5 text-[11px] text-white/45">{Number(usage.transaction_count || 0)} prior</div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-amber-100/85">{decision.recommendation?.reason || decision.review_reason || "Human decision required."}</div>
+                    {usage.earliest_transaction_date || usage.latest_transaction_date ? (
+                      <div className="mt-0.5 text-[11px] text-white/40">
+                        {formatShortDate(usage.earliest_transaction_date)} - {formatShortDate(usage.latest_transaction_date)}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {decision.candidate_qbo_account_id ? (
+                    <button
+                      type="button"
+                      onClick={() => onResolve?.(decision, "use_existing")}
+                      disabled={!onResolve || Boolean(busyAction)}
+                      className="rounded-lg border border-white/12 bg-white/[0.06] px-2.5 py-1 text-xs text-white/80 hover:bg-white/[0.1] disabled:opacity-50"
+                    >
+                      {useBusy ? "Saving..." : "Use Existing"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => onResolve?.(decision, "create_preferred")}
+                    disabled={!onResolve || Boolean(busyAction)}
+                    className="rounded-lg border border-white/12 bg-white/[0.06] px-2.5 py-1 text-xs text-white/80 hover:bg-white/[0.1] disabled:opacity-50"
+                  >
+                    {createBusy ? "Creating..." : "Create Bizzi Preferred"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
       {rows.length ? (
         <div className="mt-3 overflow-hidden rounded-xl border border-white/10">
           <div className="grid grid-cols-[1.1fr_1.1fr_120px_80px] gap-2 border-b border-white/8 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-white/40">
@@ -807,6 +918,96 @@ function CanonicalCoaReviewPanel({ data }) {
       ) : (
         <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-4 text-sm text-white/45">
           No canonical account mappings have been recorded for this business yet.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CanonicalVendorReviewPanel({ data, busyAction = "", onResolve }) {
+  const summary = data?.summary || {};
+  const review = Array.isArray(data?.needs_review) ? data.needs_review : [];
+  const rows = Array.isArray(data?.rows) ? data.rows.filter((row) => row.status !== "needs_review").slice(0, 8) : [];
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
+      <div className="flex flex-col gap-3 border-b border-white/10 pb-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-[0.14em] text-emerald-200/75">Vendors</div>
+          <h3 className="mt-1 text-lg font-semibold text-white">Vendor Activity</h3>
+        </div>
+        <div className="grid grid-cols-4 gap-2 text-center text-xs">
+          <MiniStat label="Created" value={summary.created_by_bizzi_count || 0} />
+          <MiniStat label="Mapped" value={summary.mapped_existing_count || 0} />
+          <MiniStat label="Aliases" value={summary.new_aliases_learned_count || 0} />
+          <MiniStat label="Review" value={summary.needs_review_count || 0} />
+        </div>
+      </div>
+      {review.length ? (
+        <div className="mt-3 space-y-2">
+          {review.map((row) => {
+            const useBusy = busyAction === `canonical-vendor:${row.canonical_vendor_id}:use_existing`;
+            const createBusy = busyAction === `canonical-vendor:${row.canonical_vendor_id}:create_bizzi`;
+            return (
+              <div key={row.canonical_vendor_id} className="rounded-xl border border-amber-300/18 bg-amber-300/[0.06] px-3 py-2">
+                <div className="grid gap-2 lg:grid-cols-[1fr_1fr_1.2fr]">
+                  <div>
+                    <div className="text-xs font-semibold text-white/90">{row.display_name}</div>
+                    <div className="mt-0.5 text-[11px] text-white/45">{row.primary_evidence_type || "canonical vendor"}</div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-white/75">{row.candidate_qbo_vendor_name || row.qbo_display_name || "No candidate"}</div>
+                    <div className="mt-0.5 text-[11px] text-white/45">QuickBooks Vendor</div>
+                  </div>
+                  <div className="text-[11px] text-amber-100/85">{row.review_reason || "Human decision required."}</div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {row.candidate_qbo_vendor_id ? (
+                    <button
+                      type="button"
+                      onClick={() => onResolve?.(row, "use_existing")}
+                      disabled={!onResolve || Boolean(busyAction)}
+                      className="rounded-lg border border-white/12 bg-white/[0.06] px-2.5 py-1 text-xs text-white/80 hover:bg-white/[0.1] disabled:opacity-50"
+                    >
+                      {useBusy ? "Saving..." : "Use Existing"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => onResolve?.(row, "create_bizzi")}
+                    disabled={!onResolve || Boolean(busyAction)}
+                    className="rounded-lg border border-white/12 bg-white/[0.06] px-2.5 py-1 text-xs text-white/80 hover:bg-white/[0.1] disabled:opacity-50"
+                  >
+                    {createBusy ? "Creating..." : "Create Bizzi Vendor"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {rows.length ? (
+        <div className="mt-3 overflow-hidden rounded-xl border border-white/10">
+          <div className="grid grid-cols-[1.1fr_1.1fr_120px_80px] gap-2 border-b border-white/8 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-white/40">
+            <span>Vendor</span>
+            <span>QuickBooks Vendor</span>
+            <span>Status</span>
+            <span className="text-right">Aliases</span>
+          </div>
+          <div className="divide-y divide-white/[0.06]">
+            {rows.map((row) => (
+              <div key={row.canonical_vendor_id} className="grid grid-cols-[1.1fr_1.1fr_120px_80px] gap-2 px-3 py-2 text-xs text-white/70">
+                <span className="truncate font-medium text-white/85">{row.display_name}</span>
+                <span className="truncate">{row.qbo_display_name || "Unmapped"}</span>
+                <span className={row.status === "created_by_bizzi" ? "text-emerald-200" : "text-white/60"}>{row.status_label || row.status}</span>
+                <span className="text-right">{row.alias_count || 0}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-4 text-sm text-white/45">
+          No canonical vendor activity has been recorded for this business yet.
         </div>
       )}
     </div>

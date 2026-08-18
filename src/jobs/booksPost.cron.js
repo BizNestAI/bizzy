@@ -13,6 +13,7 @@ import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../services/tax/taxChangeE
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../services/bookkeeping/bookkeepingScope.js";
 import { getAutoPostToQuickBooks } from "../services/bookkeeping/autoPostControl.js";
 import { getLatestQuickBooksTokenRow } from "../services/quickbooksTokenService.js";
+import { getVendorPostingRequirement } from "../services/bookkeeping/canonicalVendorService.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
@@ -340,6 +341,126 @@ function resolveQboTxnType(item, bankTxn, mapping) {
   return null;
 }
 
+function classifyVendorEnsureOutcome(result, err = null) {
+  const rawReason = err?.message || result?.reason || "vendor_mapping_required";
+  const reason = String(rawReason || "vendor_mapping_required");
+  const reviewReasons = new Set([
+    "ambiguous",
+    "display_name_conflict",
+    "probable_requires_review",
+    "vendor_mapping_invalid",
+    "weak_memo_evidence",
+    "blocked_taxonomy",
+    "blocked_taxonomy_memo",
+    "check_without_confirmed_payee",
+    "payroll_ambiguous",
+    "unclear_or_non_vendor_name",
+  ]);
+  const retryReasons = new Set([
+    "vendor_creation_in_progress",
+    "qbo_vendor_create_unknown",
+    "qbo_client_unavailable",
+    "qbo_client_unavailable:no_active_token_row",
+  ]);
+  if (err) {
+    return {
+      reason: reason.includes("timeout") ? "vendor_provider_unknown" : "vendor_provider_unavailable",
+      review: false,
+      retryable: true,
+    };
+  }
+  if (result?.unknown) return { reason: "vendor_provider_unknown", review: false, retryable: true };
+  if (result?.deferred) return { reason: "vendor_create_pending", review: false, retryable: true };
+  if (result?.needsReview || reviewReasons.has(reason)) return { reason, review: true, retryable: false };
+  if (retryReasons.has(reason) || result?.ok === false) return { reason, review: false, retryable: true };
+  return { reason: "vendor_mapping_required", review: true, retryable: false };
+}
+
+async function markVendorPostingBlocked({ item, requestId, requirement, outcome, vendorResult = null }) {
+  const nowIso = getNowIso();
+  const currentRetries = Number(item?.meta?.post_retry_count || 0);
+  const nextRetries = outcome.retryable ? currentRetries + 1 : currentRetries;
+  const nextAttemptIso = outcome.retryable && nextRetries < MAX_RETRIES
+    ? new Date(Date.parse(nowIso) + computeBackoffMs(nextRetries)).toISOString()
+    : null;
+  const meta = {
+    ...(item.meta || {}),
+    posting_in_progress: false,
+    vendor_posting_required: requirement?.required === true,
+    vendor_post_block_reason: outcome.reason,
+    post_block_reason: outcome.reason,
+    post_retry_count: outcome.retryable ? nextRetries : item?.meta?.post_retry_count ?? null,
+    next_post_attempt_at: nextAttemptIso,
+    vendor_review_canonical_vendor_id: vendorResult?.canonical_vendor_id || vendorResult?.canonicalVendor?.id || null,
+    vendor_review_actions: outcome.review ? ["use_existing_vendor", "create_bizzi_vendor"] : [],
+  };
+  const update = {
+    status: outcome.review ? "needs_review" : item.status,
+    post_error: outcome.reason,
+    last_post_attempt_at: nowIso,
+    meta,
+  };
+  if (outcome.review) {
+    update.post_after = null;
+  }
+  await insertPostAttempt({
+    businessId: item.business_id,
+    transactionId: item.transaction_id,
+    status: outcome.review ? "skipped" : "failed",
+    errorMessage: outcome.reason,
+    retryCount: outcome.retryable ? nextRetries : (Number(item?.meta?.post_retry_count || 0) || null),
+    postAfter: item?.post_after || null,
+    payloadSummary: {
+      categorization_status: item?.status || null,
+      final_qbo_account_id: item?.final_qbo_account_id || null,
+      final_qbo_account_name: item?.final_qbo_account_name || null,
+      qbo_request_id: requestId || null,
+    },
+    responseSummary: {
+      vendor_required: requirement?.required === true,
+      retryable: outcome.retryable === true,
+      needs_review: outcome.review === true,
+      vendor_result_reason: vendorResult?.reason || null,
+    },
+    attemptedAt: nowIso,
+  });
+  await supabase
+    .from("transaction_categorizations")
+    .update(update)
+    .eq("business_id", item.business_id)
+    .eq("transaction_id", item.transaction_id);
+}
+
+async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, requestId }) {
+  const taxonomyMeta = { taxonomy_type: item?.meta?.taxonomy_type || null };
+  const requirement = getVendorPostingRequirement({ bankTxn: bank, taxonomyMeta, qboTxnType });
+  if (!requirement.required) return { ok: true, requirement };
+  let vendorEnsure = null;
+  try {
+    const payeeResolution = await resolvePayee({ businessId: item.business_id, txn: bank });
+    vendorEnsure = await ensureQboVendorForTransaction({
+      businessId: item.business_id,
+      bankTxn: bank,
+      payeeResolution,
+      taxonomyMeta,
+      source: "posting",
+      createdBy: "bizzi",
+    });
+  } catch (err) {
+    const outcome = classifyVendorEnsureOutcome(null, err);
+    await markVendorPostingBlocked({ item, requestId, requirement, outcome });
+    return { ok: false, requirement, outcome };
+  }
+  if (vendorEnsure?.qbo_entity_id && (vendorEnsure.qbo_entity_type || "").toLowerCase() === "vendor") {
+    bank.qbo_entity_type = "vendor";
+    bank.qbo_entity_id = vendorEnsure.qbo_entity_id;
+    return { ok: true, requirement, vendorEnsure };
+  }
+  const outcome = classifyVendorEnsureOutcome(vendorEnsure);
+  await markVendorPostingBlocked({ item, requestId, requirement, outcome, vendorResult: vendorEnsure });
+  return { ok: false, requirement, outcome, vendorEnsure };
+}
+
 async function claimQboPostingIntent({
   businessId,
   transactionId,
@@ -621,7 +742,7 @@ async function fetchBankTransactions(ids = [], businessId) {
   const { data, error } = await supabase
     .from("bank_transactions")
     .select(
-      "id,amount,direction,date,name,merchant_name,counterparty_name,plaid_account_id,plaid_transaction_id,transaction_type,check_number,qbo_entity_type,qbo_entity_id,signed_amount,pending,is_archived,accounting_review_required,accounting_review_reason"
+      "id,amount,direction,date,name,merchant_name,counterparty_name,merchant_entity_id,counterparties,canonical_vendor_id,plaid_account_id,plaid_transaction_id,transaction_type,check_number,qbo_entity_type,qbo_entity_id,signed_amount,pending,is_archived,accounting_review_required,accounting_review_reason,category_primary,personal_finance_category"
     )
     .eq("business_id", businessId)
     .in("id", ids);
@@ -1338,24 +1459,8 @@ export async function handleItem(item, options = {}) {
     }
   }
 
-  // Best-effort vendor resolution/creation after durable transaction claim and duplicate screening.
-  try {
-    const payeeResolution = await resolvePayee({ businessId, txn: bank });
-    const vendorEnsure = await ensureQboVendorForTransaction({
-      businessId,
-      bankTxn: bank,
-      payeeResolution,
-      taxonomyMeta: { taxonomy_type: item?.meta?.taxonomy_type || null },
-      source: "posting",
-      createdBy: "bizzi",
-    });
-    if (vendorEnsure?.qbo_entity_id) {
-      bank.qbo_entity_type = vendorEnsure.qbo_entity_type || bank.qbo_entity_type;
-      bank.qbo_entity_id = vendorEnsure.qbo_entity_id || bank.qbo_entity_id;
-    }
-  } catch (err) {
-    log.warn("[booksPost] vendor ensure failed", { businessId, txnId, msg: err?.message });
-  }
+  const vendorGate = await ensureRequiredVendorBeforePosting({ item, bank, qboTxnType: intentQboTxnType, requestId });
+  if (!vendorGate.ok) return;
 
   await insertPostAttempt({
     businessId,

@@ -1,7 +1,11 @@
 import { Router } from "express";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
-import { fetchCanonicalAccountMappingsForBusiness } from "../../../services/bookkeeping/canonicalQboAccountResolver.js";
+import {
+  approveExistingQboAccountForCanonical,
+  createPreferredQboAccountForCanonical,
+  fetchCanonicalAccountMappingsForBusiness,
+} from "../../../services/bookkeeping/canonicalQboAccountResolver.js";
 
 const router = Router();
 
@@ -21,7 +25,7 @@ router.get("/qbo/canonical-coa", requireAuth, async (req, res) => {
   if (!businessId) return;
   const month = req.query?.month || null;
   try {
-    const { rows, history } = await fetchCanonicalAccountMappingsForBusiness({ businessId, month });
+    const { rows, history, decisions } = await fetchCanonicalAccountMappingsForBusiness({ businessId, month });
     return res.json({
       ok: true,
       rows: (rows || []).map((row) => ({
@@ -48,10 +52,51 @@ router.get("/qbo/canonical-coa", requireAuth, async (req, res) => {
         reason: event.reason,
         created_at: event.created_at,
       })),
+      decisions: (decisions || []).map((decision) => ({
+        ...decision,
+        status_label: displayStatus(decision.status),
+      })),
     });
   } catch (err) {
     console.error("[bookkeeping][canonical-coa] failed", err?.message || err);
     return res.status(500).json({ ok: false, error: "canonical_coa_failed", message: err?.message || "failed" });
+  }
+});
+
+router.post("/qbo/canonical-coa/:canonicalKey/use-existing", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await approveExistingQboAccountForCanonical({
+      businessId,
+      canonicalAccountKey: req.params.canonicalKey,
+      qboAccountId: req.body?.qbo_account_id,
+      actor: req.user?.id || "user",
+      source: "manual",
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error("[bookkeeping][canonical-coa][use-existing] failed", err?.message || err);
+    return res.status(400).json({ ok: false, error: "canonical_coa_use_existing_failed", message: err?.message || "failed" });
+  }
+});
+
+router.post("/qbo/canonical-coa/:canonicalKey/create-preferred", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await createPreferredQboAccountForCanonical({
+      businessId,
+      canonicalAccountKey: req.params.canonicalKey,
+      reviewedCandidateQboAccountId: req.body?.reviewed_candidate_qbo_account_id || null,
+      actor: req.user?.id || "user",
+      source: "manual",
+    });
+    const statusCode = result?.ok ? 200 : 409;
+    return res.status(statusCode).json(result);
+  } catch (err) {
+    console.error("[bookkeeping][canonical-coa][create-preferred] failed", err?.message || err);
+    return res.status(400).json({ ok: false, error: "canonical_coa_create_preferred_failed", message: err?.message || "failed" });
   }
 });
 

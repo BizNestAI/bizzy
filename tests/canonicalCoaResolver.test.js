@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { resolveCanonicalQboAccount } from "../src/services/bookkeeping/canonicalQboAccountResolver.js";
+import {
+  approveExistingQboAccountForCanonical,
+  createPreferredQboAccountForCanonical,
+  fetchCanonicalAccountMappingsForBusiness,
+  resolveCanonicalQboAccount,
+} from "../src/services/bookkeeping/canonicalQboAccountResolver.js";
 import { getCanonicalAccountForIntent } from "../src/services/bookkeeping/canonicalCoaRegistry.js";
 import { mapAnswerToCoa } from "../src/services/bookkeeping/clarificationService.js";
 
@@ -72,6 +77,8 @@ function makeSupabase() {
     qbo_accounts_cache: [],
     qbo_coa_creations: [],
     transaction_categorizations: [],
+    bank_transactions: [],
+    business_profiles: [],
   };
   return {
     db,
@@ -152,6 +159,9 @@ class Query {
       }
       if (this.table === "qbo_coa_creations") {
         return `${row.business_id}|${row.qbo_account_id}`;
+      }
+      if (this.table === "transaction_categorizations") {
+        return `${row.business_id}|${row.transaction_id}`;
       }
       return JSON.stringify(row);
     };
@@ -472,4 +482,324 @@ test("clarification-created canonical mapping is auditable", async () => {
   assert.equal(mapping.mapping_source, "creation_intent");
   assert.equal(mapping.first_transaction_id, txnId);
   assert.equal(event.source, "creation_intent");
+});
+
+test("repeated materials_supplies review events aggregate into one current decision", async () => {
+  const supabase = makeSupabase();
+  const { qbo } = makeQbo([{ id: "supplies", name: "Supplies", type: "Expense" }]);
+  for (let i = 0; i < 6; i += 1) {
+    const txnId = `${String(i + 1).padStart(8, "0")}-2222-4222-8222-222222222222`;
+    await resolveCanonicalQboAccount({
+      businessId: BUSINESS_ID,
+      intent: "materials",
+      transactionId: txnId,
+      dependencies: deps({ supabase, qbo }),
+    });
+  }
+  assert.equal(supabase.db.qbo_account_mapping_events.length, 6);
+  const result = await fetchCanonicalAccountMappingsForBusiness({
+    businessId: BUSINESS_ID,
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.decisions.length, 1);
+  assert.equal(result.decisions[0].canonical_account_key, "materials_supplies");
+  assert.equal(result.decisions[0].bizzi_account_name, "Supplies & Materials");
+  assert.equal(result.decisions[0].candidate_qbo_account_name, "Supplies");
+  assert.equal(result.decisions[0].affected_transaction_count, 6);
+  assert.equal(result.history.length, 6);
+});
+
+test("existing candidate usage metrics are returned with decisions", async () => {
+  const supabase = makeSupabase();
+  supabase.db.transaction_categorizations.push(
+    { business_id: BUSINESS_ID, transaction_id: "aaaaaaaa-2222-4222-8222-222222222222", final_qbo_account_id: "supplies", final_qbo_account_name: "Supplies" },
+    { business_id: BUSINESS_ID, transaction_id: "bbbbbbbb-2222-4222-8222-222222222222", suggested_qbo_account_id: "supplies", suggested_qbo_account_name: "Supplies" }
+  );
+  supabase.db.bank_transactions.push(
+    { business_id: BUSINESS_ID, id: "aaaaaaaa-2222-4222-8222-222222222222", date: "2026-07-03" },
+    { business_id: BUSINESS_ID, id: "bbbbbbbb-2222-4222-8222-222222222222", date: "2026-08-09" }
+  );
+  const { qbo } = makeQbo([{ id: "supplies", name: "Supplies", type: "Expense" }]);
+  await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "materials",
+    transactionId: "cccccccc-2222-4222-8222-222222222222",
+    dependencies: deps({ supabase, qbo }),
+  });
+  const result = await fetchCanonicalAccountMappingsForBusiness({
+    businessId: BUSINESS_ID,
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.decisions[0].candidate_usage.transaction_count, 2);
+  assert.equal(result.decisions[0].candidate_usage.earliest_transaction_date, "2026-07-03");
+  assert.equal(result.decisions[0].candidate_usage.latest_transaction_date, "2026-08-09");
+  assert.equal(result.decisions[0].recommendation.action, "use_existing");
+});
+
+test("Use Existing maps materials_supplies to QBO Supplies only for that business and records audit", async () => {
+  const supabase = makeSupabase();
+  const { qbo } = makeQbo([{ id: "supplies", name: "Supplies", type: "Expense" }]);
+  await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "materials",
+    transactionId: "dddddddd-2222-4222-8222-222222222222",
+    dependencies: deps({ supabase, qbo }),
+  });
+  const result = await approveExistingQboAccountForCanonical({
+    businessId: BUSINESS_ID,
+    canonicalAccountKey: "materials_supplies",
+    qboAccountId: "supplies",
+    actor: "admin-1",
+    source: "monthly_review",
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.mapping.status, "existing_approved_equivalent");
+  assert.equal(result.mapping.qbo_account_id, "supplies");
+  assert.equal(result.mapping.business_id, BUSINESS_ID);
+  assert.equal(result.mapping.metadata.actor, "admin-1");
+  const event = supabase.db.qbo_account_mapping_events.find((row) => row.event_type === "existing_approved_equivalent");
+  assert.equal(event.metadata.action, "use_existing");
+});
+
+test("Create Bizzi Preferred uses resolver path and reconsiders affected transactions", async () => {
+  const supabase = makeSupabase();
+  supabase.db.transaction_categorizations.push({
+    business_id: BUSINESS_ID,
+    transaction_id: "eeeeeeee-2222-4222-8222-222222222222",
+    status: "needs_review",
+    suggested_canonical_account_key: "materials_supplies",
+    confidence: "high",
+    meta: { suggestion_source: "universal_hint", safe_to_auto_handle: true },
+  });
+  supabase.db.bank_transactions.push({
+    business_id: BUSINESS_ID,
+    id: "eeeeeeee-2222-4222-8222-222222222222",
+    date: "2026-08-18",
+    pending: false,
+    name: "Target",
+  });
+  const { qbo, state } = makeQbo([{ id: "supplies", name: "Supplies", type: "Expense" }]);
+  await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "materials",
+    transactionId: "eeeeeeee-2222-4222-8222-222222222222",
+    dependencies: deps({ supabase, qbo }),
+  });
+  const result = await createPreferredQboAccountForCanonical({
+    businessId: BUSINESS_ID,
+    canonicalAccountKey: "materials_supplies",
+    reviewedCandidateQboAccountId: "supplies",
+    actor: "admin-1",
+    source: "monthly_review",
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.account.name, "Supplies & Materials");
+  assert.equal(result.status, "created_by_bizzi");
+  assert.equal(state.createCount, 1);
+  assert.equal(result.reconsideration.count, 1);
+  assert.equal(supabase.db.transaction_categorizations[0].suggested_qbo_account_name, "Supplies & Materials");
+  assert.equal(supabase.db.transaction_categorizations[0].status, "auto_approved");
+  assert.equal(supabase.db.transaction_categorizations[0].final_qbo_account_name, "Supplies & Materials");
+  assert.equal(supabase.db.transaction_categorizations[0].post_after, null);
+  assert.equal(supabase.db.transaction_categorizations[0].meta.canonical_reconsideration_requested, false);
+  assert.equal(supabase.db.transaction_categorizations[0].meta.canonical_reconsideration_result.status, "auto_approved");
+});
+
+test("Use Existing reprocesses only affected unresolved transactions and is idempotent", async () => {
+  const supabase = makeSupabase();
+  supabase.db.transaction_categorizations.push(
+    {
+      business_id: BUSINESS_ID,
+      transaction_id: "11111111-2222-4222-8222-222222222222",
+      status: "needs_review",
+      confidence: "high",
+      suggested_canonical_account_key: "materials_supplies",
+      meta: { suggestion_source: "universal_hint", safe_to_auto_handle: true },
+    },
+    {
+      business_id: BUSINESS_ID,
+      transaction_id: "22222222-3333-4333-8333-333333333333",
+      status: "needs_review",
+      confidence: "high",
+      suggested_canonical_account_key: "software",
+      meta: { suggestion_source: "universal_hint", safe_to_auto_handle: true },
+    }
+  );
+  supabase.db.bank_transactions.push(
+    { business_id: BUSINESS_ID, id: "11111111-2222-4222-8222-222222222222", date: "2026-08-18", name: "Target" },
+    { business_id: BUSINESS_ID, id: "22222222-3333-4333-8333-333333333333", date: "2026-08-18", name: "Spotify" }
+  );
+  const { qbo } = makeQbo([{ id: "supplies", name: "Supplies", type: "Expense" }]);
+  await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "materials",
+    transactionId: "11111111-2222-4222-8222-222222222222",
+    dependencies: deps({ supabase, qbo }),
+  });
+  const first = await approveExistingQboAccountForCanonical({
+    businessId: BUSINESS_ID,
+    canonicalAccountKey: "materials_supplies",
+    qboAccountId: "supplies",
+    dependencies: deps({ supabase, qbo }),
+  });
+  const second = await approveExistingQboAccountForCanonical({
+    businessId: BUSINESS_ID,
+    canonicalAccountKey: "materials_supplies",
+    qboAccountId: "supplies",
+    dependencies: deps({ supabase, qbo }),
+  });
+  const affected = supabase.db.transaction_categorizations.find((row) => row.transaction_id === "11111111-2222-4222-8222-222222222222");
+  const unaffected = supabase.db.transaction_categorizations.find((row) => row.transaction_id === "22222222-3333-4333-8333-333333333333");
+  assert.equal(first.reconsideration.count, 1);
+  assert.equal(second.reconsideration.count, 0);
+  assert.equal(affected.status, "auto_approved");
+  assert.equal(affected.final_qbo_account_id, "supplies");
+  assert.equal(unaffected.status, "needs_review");
+  assert.equal(unaffected.final_qbo_account_id, undefined);
+});
+
+test("post-decision reconsideration keeps risky affected transactions in Needs Review", async () => {
+  const supabase = makeSupabase();
+  supabase.db.business_profiles.push({ id: BUSINESS_ID, bookkeeping_start_date: "2026-08-01", auto_post_to_quickbooks: true });
+  const blockedRows = [
+    ["pending", { pending: true }, {}],
+    ["duplicate", { accounting_review_required: true }, {}],
+    ["check", { name: "Check #1001" }, {}],
+    ["transfer", { name: "Online transfer" }, { taxonomy_type: "transfer_internal" }],
+    ["owner", { name: "Owner draw" }, { taxonomy_type: "owner_draw" }],
+    ["refund", { name: "Vendor refund" }, { taxonomy_type: "refund" }],
+    ["clarify", { name: "Target" }, { requires_clarification: true }],
+    ["old", { date: "2026-07-31", name: "Target" }, { safe_to_auto_handle: true }],
+  ];
+  for (const [id, txnPatch, metaPatch] of blockedRows) {
+    const txnId = `${id.padEnd(8, "0")}-2222-4222-8222-222222222222`;
+    supabase.db.transaction_categorizations.push({
+      business_id: BUSINESS_ID,
+      transaction_id: txnId,
+      status: "needs_review",
+      confidence: "high",
+      suggested_canonical_account_key: "materials_supplies",
+      meta: { suggestion_source: "universal_hint", safe_to_auto_handle: true, ...metaPatch },
+    });
+    supabase.db.bank_transactions.push({
+      business_id: BUSINESS_ID,
+      id: txnId,
+      date: txnPatch.date || "2026-08-18",
+      ...txnPatch,
+    });
+  }
+  const { qbo } = makeQbo([{ id: "supplies", name: "Supplies", type: "Expense" }]);
+  for (const row of supabase.db.transaction_categorizations) {
+    await resolveCanonicalQboAccount({
+      businessId: BUSINESS_ID,
+      intent: "materials",
+      transactionId: row.transaction_id,
+      dependencies: deps({ supabase, qbo }),
+    });
+  }
+  const result = await approveExistingQboAccountForCanonical({
+    businessId: BUSINESS_ID,
+    canonicalAccountKey: "materials_supplies",
+    qboAccountId: "supplies",
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.reconsideration.count, blockedRows.length);
+  for (const row of supabase.db.transaction_categorizations) {
+    assert.equal(row.status, "needs_review");
+    assert.equal(row.final_qbo_account_id, null);
+    assert.equal(row.meta.canonical_reconsideration_requested, false);
+    assert.match(row.meta.canonical_reconsideration_result.reason, /pending|plaid|check|transfer|owner|refund|clarification|bookkeeping/);
+  }
+});
+
+test("post-decision reconsideration keeps review-account mappings in Needs Review", async () => {
+  const supabase = makeSupabase();
+  supabase.db.transaction_categorizations.push({
+    business_id: BUSINESS_ID,
+    transaction_id: "44444444-2222-4222-8222-222222222222",
+    status: "needs_review",
+    confidence: "high",
+    suggested_canonical_account_key: "materials_supplies",
+    meta: { suggestion_source: "universal_hint", safe_to_auto_handle: true },
+  });
+  supabase.db.bank_transactions.push({
+    business_id: BUSINESS_ID,
+    id: "44444444-2222-4222-8222-222222222222",
+    date: "2026-08-18",
+    name: "Target",
+  });
+  const { qbo } = makeQbo([
+    { id: "supplies", name: "Supplies", type: "Expense" },
+    { id: "ama", name: "Ask My Accountant", type: "Expense" },
+  ]);
+  await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "materials",
+    transactionId: "44444444-2222-4222-8222-222222222222",
+    dependencies: deps({ supabase, qbo }),
+  });
+  await approveExistingQboAccountForCanonical({
+    businessId: BUSINESS_ID,
+    canonicalAccountKey: "materials_supplies",
+    qboAccountId: "ama",
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(supabase.db.transaction_categorizations[0].status, "needs_review");
+  assert.equal(supabase.db.transaction_categorizations[0].meta.canonical_reconsideration_result.reason, "review_or_suspense_account");
+});
+
+test("Auto-post on schedules post_after only after safe post-decision auto-handling", async () => {
+  const supabase = makeSupabase();
+  supabase.db.business_profiles.push({ id: BUSINESS_ID, auto_post_to_quickbooks: true });
+  supabase.db.transaction_categorizations.push({
+    business_id: BUSINESS_ID,
+    transaction_id: "33333333-2222-4222-8222-222222222222",
+    status: "needs_review",
+    confidence: "high",
+    suggested_canonical_account_key: "materials_supplies",
+    meta: { suggestion_source: "universal_hint", safe_to_auto_handle: true },
+  });
+  supabase.db.bank_transactions.push({
+    business_id: BUSINESS_ID,
+    id: "33333333-2222-4222-8222-222222222222",
+    date: "2026-08-18",
+    name: "Target",
+  });
+  const { qbo } = makeQbo([{ id: "supplies", name: "Supplies", type: "Expense" }]);
+  await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "materials",
+    transactionId: "33333333-2222-4222-8222-222222222222",
+    dependencies: deps({ supabase, qbo }),
+  });
+  await approveExistingQboAccountForCanonical({
+    businessId: BUSINESS_ID,
+    canonicalAccountKey: "materials_supplies",
+    qboAccountId: "supplies",
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(supabase.db.transaction_categorizations[0].status, "auto_approved");
+  assert.ok(supabase.db.transaction_categorizations[0].post_after);
+});
+
+test("Create Bizzi Preferred fails closed when a new ambiguous candidate appears", async () => {
+  const supabase = makeSupabase();
+  const { qbo, state } = makeQbo([
+    { id: "supplies", name: "Supplies", type: "Expense" },
+    { id: "materials-and-supplies", name: "Materials and Supplies", type: "Expense" },
+  ]);
+  const result = await createPreferredQboAccountForCanonical({
+    businessId: BUSINESS_ID,
+    canonicalAccountKey: "materials_supplies",
+    reviewedCandidateQboAccountId: "supplies",
+    actor: "admin-1",
+    source: "monthly_review",
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "needs_review");
+  assert.equal(result.account.id, "materials-and-supplies");
+  assert.equal(state.createCount, 0);
 });

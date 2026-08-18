@@ -8,7 +8,16 @@ import { runBooksPostOnce } from "../../jobs/booksPost.cron.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
-import { fetchCanonicalAccountMappingsForBusiness } from "../../services/bookkeeping/canonicalQboAccountResolver.js";
+import {
+  approveExistingQboAccountForCanonical,
+  createPreferredQboAccountForCanonical,
+  fetchCanonicalAccountMappingsForBusiness,
+} from "../../services/bookkeeping/canonicalQboAccountResolver.js";
+import {
+  createQboVendorForCanonicalReview,
+  fetchCanonicalVendorActivityForBusiness,
+  useExistingQboVendorForCanonical,
+} from "../../services/bookkeeping/canonicalVendorService.js";
 
 const router = Router();
 
@@ -102,6 +111,7 @@ router.get("/businesses/:businessId", async (req, res) => {
     const reminders = await fetchReminders(run.id);
     const sourceLedger = await buildMonthlySourceLedger(businessId, month);
     const canonicalCoa = await buildCanonicalCoaEvidence(businessId, month);
+    const canonicalVendors = await buildCanonicalVendorEvidence(businessId);
     const pnlReport = await fetchMonthlyPnlReport(businessId, month);
     const finalizationGuard = buildFinalizationGuard(sourceLedger);
     const currentEvidence = buildCurrentReviewEvidence(summaries, sourceLedger);
@@ -130,6 +140,7 @@ router.get("/businesses/:businessId", async (req, res) => {
       readiness,
       finalization_guard: finalizationGuard,
       canonical_chart_of_accounts: canonicalCoa,
+      canonical_vendors: canonicalVendors,
       active_lock: describeActiveLock(run),
       access: {
         internal_admin_only: true,
@@ -148,6 +159,130 @@ router.get("/businesses/:businessId", async (req, res) => {
   } catch (e) {
     console.error("[monthly-review] detail failed", e?.message || e);
     res.status(500).json({ ok: false, error: "monthly_review_detail_failed", message: e?.message || "Could not load review." });
+  }
+});
+
+router.post("/businesses/:businessId/canonical-vendors/:canonicalVendorId/use-existing", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    const run = await ensureRun(businessId, month, req.user.id);
+    const result = await useExistingQboVendorForCanonical({
+      businessId,
+      canonicalVendorId: req.params.canonicalVendorId,
+      qboVendorId: req.body?.qbo_vendor_id,
+      actor: req.user?.id || "admin",
+      source: "monthly_review",
+    });
+    await logAuditEvent({
+      run,
+      eventType: "canonical_vendor_use_existing",
+      actor: req.user,
+      nextValue: {
+        canonical_vendor_id: req.params.canonicalVendorId,
+        qbo_vendor_id: req.body?.qbo_vendor_id || null,
+        reconsideration: result.reconsideration || null,
+      },
+    }).catch(() => null);
+    return res.json(result);
+  } catch (e) {
+    console.error("[monthly-review] canonical vendor use-existing failed", e?.message || e);
+    return res.status(400).json({ ok: false, error: "monthly_review_canonical_vendor_use_existing_failed", message: e?.message || "Could not resolve vendor mapping." });
+  }
+});
+
+router.post("/businesses/:businessId/canonical-vendors/:canonicalVendorId/create-bizzi-vendor", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    const run = await ensureRun(businessId, month, req.user.id);
+    const result = await createQboVendorForCanonicalReview({
+      businessId,
+      canonicalVendorId: req.params.canonicalVendorId,
+      transactionId: req.body?.transaction_id || null,
+      actor: req.user?.id || "admin",
+      source: "monthly_review",
+    });
+    await logAuditEvent({
+      run,
+      eventType: "canonical_vendor_create_bizzi",
+      actor: req.user,
+      nextValue: {
+        canonical_vendor_id: req.params.canonicalVendorId,
+        transaction_id: req.body?.transaction_id || null,
+        result_status: result.status || result.reason || null,
+        reconsideration: result.reconsideration || null,
+      },
+    }).catch(() => null);
+    return res.status(result?.ok ? 200 : 409).json(result);
+  } catch (e) {
+    console.error("[monthly-review] canonical vendor create failed", e?.message || e);
+    return res.status(400).json({ ok: false, error: "monthly_review_canonical_vendor_create_failed", message: e?.message || "Could not create vendor." });
+  }
+});
+
+router.post("/businesses/:businessId/canonical-coa/:canonicalKey/use-existing", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    const run = await ensureRun(businessId, month, req.user.id);
+    const result = await approveExistingQboAccountForCanonical({
+      businessId,
+      canonicalAccountKey: req.params.canonicalKey,
+      qboAccountId: req.body?.qbo_account_id,
+      actor: req.user?.id || "admin",
+      source: "monthly_review",
+    });
+    await logAuditEvent({
+      run,
+      eventType: "canonical_coa_use_existing",
+      actor: req.user,
+      nextValue: {
+        canonical_account_key: req.params.canonicalKey,
+        qbo_account_id: req.body?.qbo_account_id || null,
+        evidence: result.evidence || null,
+        reconsideration: result.reconsideration || null,
+      },
+    }).catch(() => null);
+    return res.json(result);
+  } catch (e) {
+    console.error("[monthly-review] canonical coa use-existing failed", e?.message || e);
+    return res.status(400).json({ ok: false, error: "monthly_review_canonical_coa_use_existing_failed", message: e?.message || "Could not resolve account mapping." });
+  }
+});
+
+router.post("/businesses/:businessId/canonical-coa/:canonicalKey/create-preferred", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    const run = await ensureRun(businessId, month, req.user.id);
+    const result = await createPreferredQboAccountForCanonical({
+      businessId,
+      canonicalAccountKey: req.params.canonicalKey,
+      reviewedCandidateQboAccountId: req.body?.reviewed_candidate_qbo_account_id || null,
+      actor: req.user?.id || "admin",
+      source: "monthly_review",
+    });
+    await logAuditEvent({
+      run,
+      eventType: "canonical_coa_create_preferred",
+      actor: req.user,
+      nextValue: {
+        canonical_account_key: req.params.canonicalKey,
+        reviewed_candidate_qbo_account_id: req.body?.reviewed_candidate_qbo_account_id || null,
+        result_status: result.status || null,
+        reconsideration: result.reconsideration || null,
+      },
+    }).catch(() => null);
+    const statusCode = result?.ok ? 200 : 409;
+    return res.status(statusCode).json(result);
+  } catch (e) {
+    console.error("[monthly-review] canonical coa create-preferred failed", e?.message || e);
+    return res.status(400).json({ ok: false, error: "monthly_review_canonical_coa_create_preferred_failed", message: e?.message || "Could not create preferred account." });
   }
 });
 
@@ -1318,6 +1453,7 @@ async function buildCanonicalCoaEvidence(businessId, month) {
   const result = await fetchCanonicalAccountMappingsForBusiness({ businessId, month });
   const rows = result.rows || [];
   const history = result.history || [];
+  const decisions = result.decisions || [];
   const created = rows.filter((row) => row.status === "created_by_bizzi");
   const mapped = rows.filter((row) => row.status === "existing_exact" || row.status === "existing_approved_equivalent");
   const review = rows.filter((row) => row.status === "needs_review");
@@ -1330,7 +1466,18 @@ async function buildCanonicalCoaEvidence(businessId, month) {
     created_by_bizzi: created,
     mapped_existing: mapped,
     needs_review: review,
+    decisions,
     recent_history: history.slice(0, 25),
+  };
+}
+
+async function buildCanonicalVendorEvidence(businessId) {
+  const result = await fetchCanonicalVendorActivityForBusiness({ businessId, limit: 50 });
+  return {
+    summary: result.summary || {},
+    rows: (result.rows || []).slice(0, 25),
+    needs_review: (result.rows || []).filter((row) => row.status === "needs_review").slice(0, 25),
+    recent_history: (result.recent_history || []).slice(0, 25),
   };
 }
 

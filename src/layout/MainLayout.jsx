@@ -141,7 +141,7 @@ const MainLayoutCore = ({ children }) => {
     const path = location.pathname || "";
     if (path.startsWith("/dashboard/accounting")) {
       return [
-        { label: "Books", path: "/dashboard/accounting/bookkeeping" },
+        { label: "Books", path: "/dashboard/accounting/bookkeeping", activePaths: ["/dashboard/accounting/rules"] },
         { label: "Forecasts", path: "/dashboard/accounting/forecasts" },
         { label: "Health", path: "/dashboard/accounting" },
         { label: "Reports", path: "/dashboard/accounting/reports" },

@@ -1,5 +1,9 @@
 import crypto from "crypto";
 import { qboEnvName } from "../../utils/qboEnv.js";
+import { canAutoHandle } from "./autoHandlingPolicy.js";
+import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "./autoPostControl.js";
+import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
+import { isCheck } from "./checkDetector.js";
 import {
   ACCOUNTANT_REVIEW_REQUIRED,
   AUTO_CREATE_ALLOWED,
@@ -50,6 +54,14 @@ function qboTypeCompatible(canonical = {}, account = {}) {
   return false;
 }
 
+function qboAccountCompatibleForApproval(canonical = {}, account = {}) {
+  if (!qboTypeCompatible(canonical, account)) return false;
+  const expectedSubType = normalizeQboType(canonical.qbo_account_subtype);
+  const actualSubType = normalizeQboType(account.subType || account.AccountSubType || account.account_subtype);
+  if (!expectedSubType || !actualSubType) return true;
+  return expectedSubType === actualSubType;
+}
+
 function shapeQboAccount(account = {}) {
   return {
     id: account.id || account.Id || account.qbo_account_id || null,
@@ -82,14 +94,14 @@ function findApprovedEquivalentAccount(coa = [], canonical = {}) {
     .find((acct) => acct.active !== false && names.includes(normalizeCanonicalName(acct.name)) && qboTypeCompatible(canonical, acct)) || null;
 }
 
-function findAmbiguousCandidate(coa = [], canonical = {}) {
+function findAmbiguousCandidates(coa = [], canonical = {}) {
   const tokenSet = (value = "") =>
     normalizeCanonicalName(value)
       .split(" ")
       .filter((token) => token && !["and", "the", "of", "for"].includes(token));
   const canonicalTokens = tokenSet(canonical.preferred_account_name);
   if (!canonicalTokens.length) return null;
-  const candidates = (coa || [])
+  return (coa || [])
     .map(shapeQboAccount)
     .filter((acct) => acct.active !== false && qboTypeCompatible(canonical, acct))
     .map((acct) => {
@@ -99,11 +111,22 @@ function findAmbiguousCandidate(coa = [], canonical = {}) {
       return { acct, score };
     })
     .filter((entry) => entry.score > 0 && !isApprovedEquivalentName(canonical.canonical_account_key, entry.acct.name))
-    .sort((a, b) => b.score - a.score);
-  return candidates[0]?.score >= 0.5 ? candidates[0].acct : null;
+    .filter((entry) => entry.score >= 0.5)
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.acct);
 }
 
-async function getRealmContext({ businessId, supabase, getLatestQuickBooksTokenRow }) {
+function findAmbiguousCandidate(coa = [], canonical = {}) {
+  return findAmbiguousCandidates(coa, canonical)[0] || null;
+}
+
+function findUnreviewedAmbiguousCandidate(coa = [], canonical = {}, reviewedCandidateId = null) {
+  const candidates = findAmbiguousCandidates(coa, canonical);
+  if (!reviewedCandidateId) return candidates[0] || null;
+  return candidates.find((acct) => String(acct.id || "") !== String(reviewedCandidateId)) || null;
+}
+
+async function getRealmContext({ businessId, getLatestQuickBooksTokenRow }) {
   const tokenRow = await getLatestQuickBooksTokenRow(businessId);
   return {
     realmId: tokenRow?.realm_id || null,
@@ -359,6 +382,278 @@ async function createQboAccountFromCanonical({ qbo, canonical, requestId }) {
   return shapeQboAccount(acct);
 }
 
+function buildRecommendation({ mapping = {}, candidateUsage = {} } = {}) {
+  const reason = String(mapping.review_reason || mapping.metadata?.reason || "");
+  const usageCount = Number(candidateUsage.transaction_count || 0);
+  if (reason === "ambiguous_candidate_requires_review" && usageCount > 0) {
+    return {
+      action: "use_existing",
+      label: "Use Existing Account",
+      reason: "Candidate has prior usage; using it avoids fragmenting historical reporting.",
+    };
+  }
+  if (reason === "ambiguous_candidate_requires_review") {
+    return {
+      action: "create_bizzi_preferred",
+      label: "Create Bizzi Preferred Account",
+      reason: "Candidate has no visible prior usage; the Bizzi account gives cleaner reporting.",
+    };
+  }
+  return {
+    action: "review",
+    label: "Review Required",
+    reason: "Account policy requires a human decision before resolving this mapping.",
+  };
+}
+
+async function fetchAffectedCanonicalTransactions({ supabase, businessId, canonicalKey }) {
+  const ids = new Set();
+  try {
+    const { data, error } = await supabase
+      .from("qbo_account_mapping_events")
+      .select("transaction_id")
+      .eq("business_id", businessId)
+      .eq("canonical_account_key", canonicalKey)
+      .eq("event_type", CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW);
+    if (error) throw error;
+    (data || []).forEach((row) => {
+      if (row.transaction_id) ids.add(row.transaction_id);
+    });
+  } catch {
+    // Event evidence is best-effort for display; mappings remain authoritative.
+  }
+  return Array.from(ids);
+}
+
+async function fetchCandidateUsageEvidence({ supabase, businessId, account = null }) {
+  if (!account?.id && !account?.name) {
+    return {
+      qbo_account_id: null,
+      qbo_account_name: null,
+      qbo_account_type: null,
+      qbo_account_subtype: null,
+      transaction_count: 0,
+      earliest_transaction_date: null,
+      latest_transaction_date: null,
+    };
+  }
+  let rows = [];
+  try {
+    const { data, error } = await supabase
+      .from("transaction_categorizations")
+      .select("transaction_id,suggested_qbo_account_id,suggested_qbo_account_name,final_qbo_account_id,final_qbo_account_name")
+      .eq("business_id", businessId);
+    if (error) throw error;
+    rows = (data || []).filter((row) => {
+      const id = String(account.id || "");
+      const name = normalizeCanonicalName(account.name || "");
+      return (
+        (id && (String(row.final_qbo_account_id || "") === id || String(row.suggested_qbo_account_id || "") === id)) ||
+        (name && (normalizeCanonicalName(row.final_qbo_account_name || "") === name || normalizeCanonicalName(row.suggested_qbo_account_name || "") === name))
+      );
+    });
+  } catch {
+    rows = [];
+  }
+  const transactionIds = rows.map((row) => row.transaction_id).filter(Boolean);
+  let dates = [];
+  if (transactionIds.length) {
+    try {
+      const { data, error } = await supabase
+        .from("bank_transactions")
+        .select("id,date")
+        .eq("business_id", businessId)
+        .in("id", transactionIds);
+      if (error) throw error;
+      dates = (data || []).map((row) => row.date).filter(Boolean).sort();
+    } catch {
+      dates = [];
+    }
+  }
+  return {
+    qbo_account_id: account.id || null,
+    qbo_account_name: account.name || null,
+    qbo_account_type: account.type || null,
+    qbo_account_subtype: account.subType || null,
+    transaction_count: transactionIds.length,
+    earliest_transaction_date: dates[0] || null,
+    latest_transaction_date: dates[dates.length - 1] || null,
+  };
+}
+
+async function buildReviewDecision({ supabase, businessId, mapping }) {
+  const canonical = getCanonicalAccountByKey(mapping.canonical_account_key) || {};
+  const candidate = mapping.qbo_account_id || mapping.qbo_account_name
+    ? {
+        id: mapping.qbo_account_id || mapping.metadata?.candidate_id || null,
+        name: mapping.qbo_account_name || mapping.metadata?.candidate_name || null,
+        type: mapping.qbo_account_type || mapping.metadata?.candidate_type || null,
+        subType: mapping.qbo_account_subtype || mapping.metadata?.candidate_subtype || null,
+      }
+    : null;
+  const [affectedTransactionIds, candidateUsage] = await Promise.all([
+    fetchAffectedCanonicalTransactions({ supabase, businessId, canonicalKey: mapping.canonical_account_key }),
+    fetchCandidateUsageEvidence({ supabase, businessId, account: candidate }),
+  ]);
+  return {
+    mapping_id: mapping.id || null,
+    business_id: mapping.business_id,
+    realm_id: mapping.realm_id,
+    qbo_env: mapping.qbo_env,
+    canonical_account_key: mapping.canonical_account_key,
+    bizzi_account_name: canonical.preferred_account_name || mapping.canonical_account_key,
+    status: mapping.status,
+    review_reason: mapping.review_reason || mapping.metadata?.reason || null,
+    candidate_qbo_account_id: candidate?.id || null,
+    candidate_qbo_account_name: candidate?.name || null,
+    candidate_qbo_account_type: candidate?.type || canonical.qbo_account_type || null,
+    candidate_qbo_account_subtype: candidate?.subType || canonical.qbo_account_subtype || null,
+    affected_transaction_count: affectedTransactionIds.length || (mapping.first_transaction_id ? 1 : 0),
+    affected_transaction_ids: affectedTransactionIds,
+    candidate_usage: candidateUsage,
+    recommendation: buildRecommendation({ mapping, candidateUsage }),
+    updated_at: mapping.updated_at || mapping.created_at || null,
+  };
+}
+
+async function reconsiderAffectedTransactionsAfterMapping({ supabase, businessId, canonicalKey, account, actor = "bizzi", action }) {
+  const affectedTransactionIds = await fetchAffectedCanonicalTransactions({ supabase, businessId, canonicalKey });
+  if (!affectedTransactionIds.length || !account?.id) return { count: 0, transaction_ids: [] };
+  let rows = [];
+  try {
+    const { data, error } = await supabase
+      .from("transaction_categorizations")
+      .select("*")
+      .eq("business_id", businessId)
+      .in("transaction_id", affectedTransactionIds);
+    if (error) throw error;
+    rows = data || [];
+  } catch {
+    return { count: 0, transaction_ids: affectedTransactionIds };
+  }
+  let transactions = [];
+  try {
+    const { data, error } = await supabase
+      .from("bank_transactions")
+      .select("*")
+      .eq("business_id", businessId)
+      .in("id", affectedTransactionIds);
+    if (error) throw error;
+    transactions = data || [];
+  } catch {
+    transactions = [];
+  }
+  const txnById = new Map((transactions || []).map((txn) => [String(txn.id), txn]));
+  let bookkeepingStartDate = null;
+  let autoPostEnabled = false;
+  try {
+    const [startDate, autoPost] = await Promise.all([
+      getBookkeepingStartDate(supabase, businessId),
+      getAutoPostToQuickBooks(supabase, businessId),
+    ]);
+    bookkeepingStartDate = startDate;
+    autoPostEnabled = autoPost === true;
+  } catch {
+    bookkeepingStartDate = null;
+    autoPostEnabled = false;
+  }
+  const nowIso = new Date().toISOString();
+  const unresolvedStatuses = new Set(["", "needs_review", "uncategorized"]);
+  const patches = rows
+    .filter((row) => unresolvedStatuses.has(String(row.status || "").toLowerCase()))
+    .map((row) => {
+      const txn = txnById.get(String(row.transaction_id)) || { id: row.transaction_id };
+      const checkHit = isCheck(txn);
+      const baseMeta = {
+        ...(row.meta || {}),
+        canonical_mapping_resolved_at: nowIso,
+        canonical_mapping_resolution_action: action,
+        canonical_mapping_resolved_by: actor,
+        canonical_account_key: canonicalKey,
+        canonical_reconsideration_requested: false,
+      };
+      let decision = null;
+      if (!isTransactionInActiveBookkeepingScope(txn, bookkeepingStartDate)) {
+        decision = {
+          eligible: false,
+          confidence: row.confidence || "low",
+          source: baseMeta.suggestion_source || "canonical_mapping_reconsideration",
+          reason: "transaction_before_bookkeeping_start_date",
+        };
+      } else {
+        decision = canAutoHandle(
+          txn,
+          {
+            source: baseMeta.suggestion_source || "canonical_mapping_reconsideration",
+            confidence: row.confidence || baseMeta.universal_hint?.confidence || "low",
+            accountId: String(account.id),
+            accountName: account.name || row.suggested_qbo_account_name || null,
+            taxonomyType: baseMeta.taxonomy_type || null,
+            isCheck: checkHit.is_check === true,
+            meta: baseMeta,
+            reason: "canonical_mapping_resolved",
+            safeToAutoHandle: baseMeta.safe_to_auto_handle === true,
+            verifiedCcPayment:
+              baseMeta.taxonomy_type === "cc_payment" &&
+              baseMeta.cc_payment_mapping_confidence === "high" &&
+              baseMeta.cc_payment_bank_qbo_account_id &&
+              baseMeta.cc_payment_cc_qbo_account_id,
+            allowTaxonomyAutoHandle: baseMeta.allow_taxonomy_auto_handle === true,
+            weakRule: baseMeta.weak_rule === true,
+          },
+          {}
+        );
+      }
+      const autoApproved = decision?.eligible === true;
+      const nextMeta = {
+        ...baseMeta,
+        safe_to_auto_handle: autoApproved,
+        canonical_reconsideration_processed_at: nowIso,
+        canonical_reconsideration_result: {
+          status: autoApproved ? "auto_approved" : "needs_review",
+          reason: decision?.reason || "review_required",
+          action,
+          actor,
+          at: nowIso,
+        },
+        auto_handle_decision: {
+          eligible: autoApproved,
+          confidence: decision?.confidence || row.confidence || "low",
+          source: decision?.source || baseMeta.suggestion_source || "canonical_mapping_reconsideration",
+          reason: decision?.reason || "review_required",
+          at: nowIso,
+        },
+      };
+      return {
+        ...row,
+        suggested_qbo_account_id: String(account.id),
+        suggested_qbo_account_name: account.name || row.suggested_qbo_account_name || null,
+        suggested_canonical_account_key: canonicalKey,
+        final_qbo_account_id: autoApproved ? String(account.id) : null,
+        final_qbo_account_name: autoApproved ? account.name || null : null,
+        final_canonical_account_key: autoApproved ? canonicalKey : null,
+        confidence: row.confidence || decision?.confidence || null,
+        status: autoApproved ? "auto_approved" : "needs_review",
+        meta: nextMeta,
+        post_after: autoApproved ? computePostAfterForAutoPost(autoPostEnabled) : null,
+        decided_by: autoApproved ? "bizzi" : row.decided_by || null,
+        decided_at: autoApproved ? nowIso : row.decided_at || null,
+        updated_at: nowIso,
+      };
+    });
+  if (!patches.length) return { count: 0, transaction_ids: affectedTransactionIds };
+  try {
+    const { data, error } = await supabase
+      .from("transaction_categorizations")
+      .upsert(patches, { onConflict: "business_id,transaction_id" })
+      .select("transaction_id");
+    if (error) throw error;
+    return { count: patches.length, transaction_ids: affectedTransactionIds, rows: data || [] };
+  } catch {
+    return { count: 0, transaction_ids: affectedTransactionIds };
+  }
+}
+
 export async function resolveCanonicalQboAccount({
   businessId,
   intent = null,
@@ -366,6 +661,7 @@ export async function resolveCanonicalQboAccount({
   transactionId = null,
   source = "resolver",
   allowCreate = true,
+  approvedCreateDespiteCandidateId = null,
   dependencies = {},
 } = {}) {
   const supabase = dependencies.supabase || await getDefaultSupabase();
@@ -379,7 +675,7 @@ export async function resolveCanonicalQboAccount({
     return { ok: false, status: CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW, reason: "unknown_canonical_account", review_required: true };
   }
 
-  const { realmId, qboEnv } = await getRealmContext({ businessId, supabase, getLatestQuickBooksTokenRow });
+  const { realmId, qboEnv } = await getRealmContext({ businessId, getLatestQuickBooksTokenRow });
   if (!realmId) {
     return { ok: false, status: CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW, canonical, reason: "missing_qbo_realm_id", review_required: true };
   }
@@ -449,7 +745,7 @@ export async function resolveCanonicalQboAccount({
     return { ok: true, status: CANONICAL_MAPPING_STATUSES.EXISTING_APPROVED_EQUIVALENT, canonical, account: equivalent, created: false, review_required: false };
   }
 
-  const ambiguous = findAmbiguousCandidate(accounts, canonical);
+  const ambiguous = findUnreviewedAmbiguousCandidate(accounts, canonical, approvedCreateDespiteCandidateId);
   if (ambiguous) {
     return markNeedsReview({ supabase, businessId, realmId, qboEnv, canonical, transactionId, intent, reason: "ambiguous_candidate_requires_review", candidate: ambiguous, source });
   }
@@ -506,7 +802,7 @@ export async function resolveCanonicalQboAccount({
       await upsertMapping({ supabase, businessId, realmId, qboEnv, canonical, account: preCreateMatch, status, source: "creation_intent", transactionId, intent, metadata: { reason: "matched_before_create" } });
       return { ok: true, status, canonical, account: preCreateMatch, created: false, review_required: false };
     }
-    const preCreateAmbiguous = findAmbiguousCandidate(accounts, canonical);
+    const preCreateAmbiguous = findUnreviewedAmbiguousCandidate(accounts, canonical, approvedCreateDespiteCandidateId);
     if (preCreateAmbiguous) {
       await recordCreationIntentOutcome({ supabase, businessId, realmId, qboEnv, canonical, status: "needs_review", account: preCreateAmbiguous });
       return markNeedsReview({
@@ -635,7 +931,85 @@ export async function fetchCanonicalAccountMappingsForBusiness({ businessId, mon
       usage_count: usage.get(mapping.canonical_account_key) || 0,
     };
   });
-  return { rows, history: events };
+  const reviewMappings = mappings.filter((mapping) => mapping.status === CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW);
+  const decisions = await Promise.all(reviewMappings.map((mapping) => buildReviewDecision({ supabase, businessId, mapping })));
+  return { rows, history: events, decisions };
+}
+
+export async function approveExistingQboAccountForCanonical({ businessId, canonicalAccountKey, qboAccountId, actor = "bizzi", source = "manual", dependencies = {} } = {}) {
+  const supabase = dependencies.supabase || await getDefaultSupabase();
+  const getQBOClient = dependencies.getQBOClient || getDefaultQboClient;
+  const getLatestQuickBooksTokenRow = dependencies.getLatestQuickBooksTokenRow || getDefaultLatestQuickBooksTokenRow;
+  if (!businessId) throw new Error("missing_business_id");
+  const canonical = getCanonicalAccountByKey(canonicalAccountKey);
+  if (!canonical || canonical.is_active === false) throw new Error("unknown_canonical_account");
+  const { realmId, qboEnv } = await getRealmContext({ businessId, getLatestQuickBooksTokenRow });
+  if (!realmId) throw new Error("missing_qbo_realm_id");
+  const live = await fetchLiveQboAccounts({ businessId, getQBOClient });
+  await upsertQboCache({ supabase, businessId, realmId, qboEnv, accounts: live.accounts });
+  const account = (live.accounts || []).map(shapeQboAccount).find((acct) => String(acct.id || "") === String(qboAccountId || "") && acct.active !== false);
+  if (!account) throw new Error("qbo_candidate_not_found");
+  if (!qboAccountCompatibleForApproval(canonical, account)) throw new Error("qbo_candidate_type_incompatible");
+  const previous = await supabase
+    .from("business_canonical_qbo_account_mappings")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("realm_id", realmId)
+    .eq("qbo_env", qboEnv)
+    .eq("canonical_account_key", canonical.canonical_account_key)
+    .maybeSingle();
+  const previousRow = previous?.data || null;
+  const evidence = await fetchCandidateUsageEvidence({ supabase, businessId, account });
+  const mapping = await upsertMapping({
+    supabase,
+    businessId,
+    realmId,
+    qboEnv,
+    canonical,
+    account,
+    status: CANONICAL_MAPPING_STATUSES.EXISTING_APPROVED_EQUIVALENT,
+    source,
+    metadata: {
+      reason: "human_approved_equivalent",
+      action: "use_existing",
+      actor,
+      mapped_by: actor,
+      previous_status: previousRow?.status || null,
+      previous_qbo_account_id: previousRow?.qbo_account_id || null,
+      evidence,
+    },
+  });
+  const reconsideration = await reconsiderAffectedTransactionsAfterMapping({
+    supabase,
+    businessId,
+    canonicalKey: canonical.canonical_account_key,
+    account,
+    actor,
+    action: "use_existing",
+  });
+  return { ok: true, action: "use_existing", mapping, account, evidence, reconsideration };
+}
+
+export async function createPreferredQboAccountForCanonical({ businessId, canonicalAccountKey, reviewedCandidateQboAccountId = null, actor = "bizzi", source = "manual", dependencies = {} } = {}) {
+  const result = await resolveCanonicalQboAccount({
+    businessId,
+    canonicalAccountKey,
+    source,
+    allowCreate: true,
+    approvedCreateDespiteCandidateId: reviewedCandidateQboAccountId,
+    dependencies,
+  });
+  if (!result?.ok || !result?.account?.id) return { ok: false, ...result };
+  const supabase = dependencies.supabase || await getDefaultSupabase();
+  const reconsideration = await reconsiderAffectedTransactionsAfterMapping({
+    supabase,
+    businessId,
+    canonicalKey: result.canonical?.canonical_account_key || canonicalAccountKey,
+    account: result.account,
+    actor,
+    action: "create_bizzi_preferred",
+  });
+  return { ok: true, action: "create_bizzi_preferred", ...result, reconsideration };
 }
 
 async function fetchCanonicalUsage({ supabase, businessId }) {
@@ -660,4 +1034,6 @@ async function fetchCanonicalUsage({ supabase, businessId }) {
 export default {
   resolveCanonicalQboAccount,
   fetchCanonicalAccountMappingsForBusiness,
+  approveExistingQboAccountForCanonical,
+  createPreferredQboAccountForCanonical,
 };
