@@ -18,7 +18,6 @@ const SERVER_ONLY_VIEWS = [
 ];
 
 const BACKEND_ONLY_FUNCTION_SIGNATURES = [
-  "public.acquire_posting_lock(uuid, text, timestamp with time zone, integer, text)",
   "public.acquire_posting_lock(uuid, uuid, timestamp with time zone, integer, text)",
   "public.apply_tax_classification_override",
   "public.claim_contractor_cfo_insight_run(text, timestamp with time zone, text, integer)",
@@ -89,7 +88,6 @@ test("backend-only RPCs revoke browser execution and retain service role executi
 
 test("SECURITY DEFINER functions have hardened search_path", () => {
   const hardened = [
-    "public.acquire_posting_lock(uuid, text, timestamp with time zone, integer, text)",
     "public.acquire_posting_lock(uuid, uuid, timestamp with time zone, integer, text)",
     "public.claim_contractor_cfo_insight_run(text, timestamp with time zone, text, integer)",
     "public.claim_scheduled_job_lock(text, timestamp with time zone, text, integer, jsonb)",

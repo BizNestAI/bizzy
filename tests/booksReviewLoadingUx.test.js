@@ -22,6 +22,16 @@ test("Books Review caches the current transaction page across quick re-entry", (
   assert.match(source, /Updating this feed in the background without hiding your current rows/);
 });
 
+test("Books Review does not render a blank table for empty rows with a positive total", () => {
+  assert.match(source, /function isInconsistentEmptyTransactionPage/);
+  assert.match(source, /rows\.length === 0 && Number\(total \|\| 0\) > 0/);
+  assert.match(source, /window\.sessionStorage\.removeItem\(cacheKey\)/);
+  assert.match(source, /if \(isInconsistentEmptyTransactionPage\(payload\)\) return/);
+  assert.match(source, /lastNonEmptyTransactionsRef/);
+  assert.match(source, /hasInconsistentEmptyPage/);
+  assert.match(source, /loadingTxns \|\| isPreparingCategories \|\| hasInconsistentEmptyPage/);
+});
+
 test("Books Review bulk approval uses live COA accounts and selected vendors instead of mock placeholders", () => {
   assert.doesNotMatch(source, /Elm St\. Kitchen/);
   assert.doesNotMatch(source, /CATEGORY_OPTIONS/);

@@ -193,6 +193,10 @@ function readTransactionPageCache(cacheKey) {
   try {
     const parsed = JSON.parse(window.sessionStorage.getItem(cacheKey) || "null");
     if (!parsed || Date.now() - Number(parsed.cachedAt || 0) > BOOKS_TXN_CACHE_TTL_MS) return null;
+    if (isInconsistentEmptyTransactionPage(parsed)) {
+      window.sessionStorage.removeItem(cacheKey);
+      return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -201,11 +205,22 @@ function readTransactionPageCache(cacheKey) {
 
 function writeTransactionPageCache(cacheKey, payload) {
   if (!cacheKey || typeof window === "undefined" || !window.sessionStorage) return;
+  if (isInconsistentEmptyTransactionPage(payload)) return;
   try {
     window.sessionStorage.setItem(cacheKey, JSON.stringify({ ...payload, cachedAt: Date.now() }));
   } catch {
     // Cache failures should never block bookkeeping.
   }
+}
+
+function isInconsistentEmptyTransactionPage(payload = {}) {
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const total =
+    (typeof payload.totalCount === "number" ? payload.totalCount : null) ??
+    (typeof payload.total_count === "number" ? payload.total_count : null) ??
+    (typeof payload.meta?.total_count === "number" ? payload.meta.total_count : null) ??
+    null;
+  return rows.length === 0 && Number(total || 0) > 0;
 }
 
 function SummaryCard({ value, label, subtext }) {
@@ -229,6 +244,57 @@ function formatShortDate(dateStr) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${mm}-${dd}-${d.getFullYear()}`;
+}
+
+function formatPostingAmount(txn = {}) {
+  const amount = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0;
+  return `${amount < 0 ? "-" : "+"}$${Math.abs(amount).toFixed(2)}`;
+}
+
+function getManualPostSummary(txn = {}) {
+  return {
+    date: txn.date || "Unknown",
+    description: txn.description || txn.vendor || txn.payee || "Unknown",
+    amount: formatPostingAmount(txn),
+    account:
+      txn.glAccountName ||
+      txn.final_qbo_account_name ||
+      txn.suggestedAccountName ||
+      txn.currentAccount ||
+      "Unselected",
+  };
+}
+
+function buildManualPostError(err) {
+  const body = err?.body && typeof err.body === "object" ? err.body : {};
+  const rawMessage = String(
+    err?.message ||
+      err?.error ||
+      body?.message ||
+      body?.error ||
+      body?.reason ||
+      err ||
+      "QuickBooks rejected the transaction."
+  );
+  const normalized = rawMessage.toLowerCase();
+  if (normalized.includes("missing_qbo_account_mapping")) {
+    return {
+      type: "mapping",
+      title: "Map this account before posting",
+      message:
+        "Bizzi needs to know which QuickBooks bank or credit-card account matches this connected account before it can post.",
+      detail:
+        "Go to Settings > Integrations, open QuickBooks, and map the Plaid account to its matching QuickBooks account. This keeps the transaction in the correct QuickBooks register and prevents posting to the wrong account.",
+      primaryLabel: "Go to Integrations",
+    };
+  }
+  return {
+    type: "error",
+    title: "QuickBooks did not post this transaction",
+    message: rawMessage,
+    detail: "Nothing was marked Posted. You can try again after fixing the issue.",
+    primaryLabel: "Close",
+  };
 }
 
 function AccountCard({ account, selected, onClick }) {
@@ -339,6 +405,7 @@ function BookkeepingCleanup() {
   const suggestRanRef = useRef(null);
   const reconsiderRanRef = useRef(null);
   const enrichRanRef = useRef(null);
+  const lastNonEmptyTransactionsRef = useRef([]);
   const accountOverrides = useRef(new Map());
   const accountScrollRef = useRef(null);
   const [showAccountScrollLeft, setShowAccountScrollLeft] = useState(false);
@@ -449,6 +516,8 @@ function BookkeepingCleanup() {
   const [savingAutoPost, setSavingAutoPost] = useState(false);
   const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
+  const [manualPostTxn, setManualPostTxn] = useState(null);
+  const [manualPostResult, setManualPostResult] = useState(null);
   const [clarRequests, setClarRequests] = useState([]);
   const [clarCount, setClarCount] = useState(null);
   const [clarOpen, setClarOpen] = useState(false);
@@ -526,7 +595,8 @@ function BookkeepingCleanup() {
   }, [updateAutoPost]);
 
   useEffect(() => {
-    if (!autoPostConfirmOpen || typeof document === "undefined") return undefined;
+    const modalOpen = autoPostConfirmOpen || Boolean(manualPostTxn) || Boolean(manualPostResult);
+    if (!modalOpen || typeof document === "undefined") return undefined;
     const html = document.documentElement;
     const body = document.body;
     const appShell = document.querySelector(".bizzy-app-shell");
@@ -542,6 +612,8 @@ function BookkeepingCleanup() {
     const onKeyDown = (event) => {
       if (event.key === "Escape" && !savingAutoPost) {
         setAutoPostConfirmOpen(false);
+        setManualPostTxn(null);
+        setManualPostResult(null);
       }
     };
     document.addEventListener("keydown", onKeyDown);
@@ -551,7 +623,7 @@ function BookkeepingCleanup() {
       if (appShell) appShell.style.overflow = previous.appOverflow;
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [autoPostConfirmOpen, savingAutoPost]);
+  }, [autoPostConfirmOpen, manualPostTxn, manualPostResult, savingAutoPost]);
 
   const loadTabCounts = useCallback(async () => {
     if (usingDemo) return;
@@ -818,11 +890,16 @@ function BookkeepingCleanup() {
   const isHandledTab = activeTab === "handled";
   const hasVisibleRows = feedRows.length > 0;
   const isPreparingCategories = Boolean(categorizationStatus);
+  const hasInconsistentEmptyPage =
+    !usingDemo &&
+    !hasVisibleRows &&
+    typeof totalCount === "number" &&
+    totalCount > 0;
   const isEmpty = !loadingTxns && !isPreparingCategories && feedRows.length === 0;
   const showLoadingState =
     !plaidNeverConnected &&
     !hasVisibleRows &&
-    (loadingTxns || isPreparingCategories || (!accountFilter && !usingDemo));
+    (loadingTxns || isPreparingCategories || hasInconsistentEmptyPage || (!accountFilter && !usingDemo));
   const categorizationMessage = useMemo(() => {
     if (!categorizationStatus) return null;
     if (categorizationStatus.phase === "enriching") {
@@ -836,6 +913,7 @@ function BookkeepingCleanup() {
     }
     return null;
   }, [categorizationStatus]);
+  const manualPostSummary = manualPostTxn ? getManualPostSummary(manualPostTxn) : null;
   const pendingCount = useMemo(() => {
     return transactions.filter(
       (t) => t.status === "needs_review" || t.status === "uncategorized" || !t.status
@@ -1027,33 +1105,35 @@ function BookkeepingCleanup() {
     }
   };
 
-  const handleManualPostTransaction = async (txnId) => {
+  const handleManualPostTransaction = (txnId) => {
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
     const txn = transactions.find((t) => t.id === txnId);
     if (!txn) return;
-    const amount = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0;
-    const accountName = txn.glAccountName || txn.final_qbo_account_name || txn.suggestedAccountName || txn.currentAccount || "Unselected";
-    const context = [
-      `Date: ${txn.date || "Unknown"}`,
-      `Description/payee: ${txn.description || txn.vendor || txn.payee || "Unknown"}`,
-      `Amount: ${amount < 0 ? "-" : "+"}$${Math.abs(amount).toFixed(2)}`,
-      `Category/account: ${accountName}`,
-    ].join("\n");
-    const confirmed = window.confirm(
-      `Post this transaction to QuickBooks?\n\nThis will send this transaction to your connected QuickBooks company now.\n\n${context}`
-    );
-    if (!confirmed) return;
+    setManualPostResult(null);
+    setManualPostTxn(txn);
+  };
 
+  const confirmManualPostTransaction = async () => {
+    const txn = manualPostTxn;
+    const txnId = txn?.id;
+    if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
+    setManualPostTxn(null);
     setPostingTransactionIds((prev) => new Set(prev).add(txnId));
     try {
       await postTransactionToQuickBooks(businessId, txnId);
       await reloadTransactions();
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
-      window.alert("Transaction posted to QuickBooks.");
+      setManualPostResult({
+        type: "success",
+        title: "Transaction posted",
+        message: "Bizzi sent this handled transaction to your connected QuickBooks company.",
+        detail: "It will now appear in the Posted tab after the feed refreshes.",
+        primaryLabel: "Done",
+      });
     } catch (err) {
       console.warn("[bookkeeping] manual post failed", err?.message || err);
-      window.alert(err?.message || "QuickBooks rejected the transaction. It was not marked Posted.");
+      setManualPostResult(buildManualPostError(err));
       await reloadTransactions();
     } finally {
       setPostingTransactionIds((prev) => {
@@ -1061,6 +1141,14 @@ function BookkeepingCleanup() {
         next.delete(txnId);
         return next;
       });
+    }
+  };
+
+  const handleManualPostResultPrimary = () => {
+    const result = manualPostResult;
+    setManualPostResult(null);
+    if (result?.type === "mapping") {
+      navigate("/dashboard/settings?tab=integrations");
     }
   };
 
@@ -1182,6 +1270,7 @@ function BookkeepingCleanup() {
     const cachedPage = readTransactionPageCache(cacheKey);
     if (cachedPage && Array.isArray(cachedPage.rows)) {
       setTransactions(cachedPage.rows);
+      if (cachedPage.rows.length) lastNonEmptyTransactionsRef.current = cachedPage.rows;
       setTotalCount(typeof cachedPage.totalCount === "number" ? cachedPage.totalCount : cachedPage.rows.length);
       setLoadingTxns(false);
       setBackgroundRefreshingTxns(true);
@@ -1253,6 +1342,26 @@ function BookkeepingCleanup() {
       (typeof res?.total_count === "number" ? res.total_count : null) ??
       (typeof res?.meta?.total_count === "number" ? res.meta.total_count : null) ??
       normalizedList.length;
+    const commitTransactionPage = (normalizedList, nextTotalValue, { cache = true } = {}) => {
+      const incomplete = isInconsistentEmptyTransactionPage({ rows: normalizedList, totalCount: nextTotalValue });
+      setTotalCount(nextTotalValue);
+      if (incomplete) {
+        const fallbackRows = lastNonEmptyTransactionsRef.current || [];
+        if (fallbackRows.length) {
+          setTransactions(fallbackRows);
+        }
+        setBackgroundRefreshingTxns(true);
+        return false;
+      }
+      setTransactions(normalizedList);
+      if (normalizedList.length) {
+        lastNonEmptyTransactionsRef.current = normalizedList;
+      }
+      if (cache) {
+        writeTransactionPageCache(cacheKey, { rows: normalizedList, totalCount: nextTotalValue });
+      }
+      return true;
+    };
 
     try {
       if (process.env.NODE_ENV !== "production") {
@@ -1288,11 +1397,12 @@ function BookkeepingCleanup() {
           sample: normalized[0] || null,
         });
       }
-      setTransactions(normalized);
-      setTotalCount(nextTotal);
-      writeTransactionPageCache(cacheKey, { rows: normalized, totalCount: nextTotal });
+      const committedInitialPage = commitTransactionPage(normalized, nextTotal);
       setLoadingTxns(false);
       setBackgroundRefreshingTxns(false);
+      if (!committedInitialPage) {
+        return;
+      }
 
       const key = `${dateRange}|${accountFilter || "all"}`;
       if (canRunAI) {
@@ -1322,10 +1432,9 @@ function BookkeepingCleanup() {
             const txns3 = extractTxns(res3);
             const normalized3 = normalizeTxns(txns3);
             const nextTotal3 = computeTotal(res3, normalized3);
-            setTransactions(normalized3);
-            setTotalCount(nextTotal3);
-            writeTransactionPageCache(cacheKey, { rows: normalized3, totalCount: nextTotal3 });
-            latestNormalized = normalized3;
+            if (commitTransactionPage(normalized3, nextTotal3)) {
+              latestNormalized = normalized3;
+            }
             enrichRanRef.current = key;
           } catch (errEnrich) {
             console.warn("[bookkeeping] enrich-counterparties failed", errEnrich?.message || errEnrich);
@@ -1379,10 +1488,8 @@ function BookkeepingCleanup() {
             const txns2 = extractTxns(res2);
             const normalized2 = normalizeTxns(txns2);
             latestNormalized = normalized2;
-            setTransactions(normalized2);
             const nextTotal2 = computeTotal(res2, normalized2);
-            setTotalCount(nextTotal2);
-            writeTransactionPageCache(cacheKey, { rows: normalized2, totalCount: nextTotal2 });
+            commitTransactionPage(normalized2, nextTotal2);
             const stillMissingSuggestions = normalized2.some((t) => {
               const s = (t.status || "needs_review").toLowerCase();
               if (!(s === "needs_review" || s === "uncategorized")) return false;
@@ -1460,10 +1567,8 @@ function BookkeepingCleanup() {
               const txns4 = extractTxns(res4);
               const normalized4 = normalizeTxns(txns4);
               latestNormalized = normalized4;
-              setTransactions(normalized4);
               const nextTotal4 = computeTotal(res4, normalized4);
-              setTotalCount(nextTotal4);
-              writeTransactionPageCache(cacheKey, { rows: normalized4, totalCount: nextTotal4 });
+              commitTransactionPage(normalized4, nextTotal4);
             }
           } catch (errReconsider) {
             console.warn("[bookkeeping] reconsider suggestions failed", errReconsider?.message || errReconsider);
@@ -1978,6 +2083,185 @@ function BookkeepingCleanup() {
           </>
         )}
       </BillingGate>
+      {typeof document !== "undefined"
+        ? createPortal(
+            <AnimatePresence>
+              {manualPostTxn && manualPostSummary ? (
+                <motion.div
+                  className="fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="manual-post-confirm-title"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18, ease: [0.22, 0.1, 0.25, 1] }}
+                >
+                  <motion.button
+                    type="button"
+                    aria-label="Cancel QuickBooks posting"
+                    className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
+                    onClick={() => setManualPostTxn(null)}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.18 }}
+                  />
+                  <motion.div
+                    className="relative w-full max-w-[520px] rounded-2xl border p-5 text-slate-100 shadow-[0_28px_90px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.04)]"
+                    style={{ background: "rgba(17,19,18,0.97)", borderColor: "rgba(16,185,129,0.28)" }}
+                    initial={{ opacity: 0, y: 18, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: [0.16, 0.84, 0.44, 1] }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-400/[0.12] text-emerald-200">
+                        <UploadCloud className="h-4 w-4" strokeWidth={2} />
+                      </div>
+                      <div className="min-w-0">
+                        <h2 id="manual-post-confirm-title" className="text-base font-semibold text-white">
+                          Post this transaction to QuickBooks?
+                        </h2>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">
+                          Bizzi will send this handled transaction to your connected QuickBooks company now.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-sm">
+                      <div className="grid grid-cols-[92px_1fr] gap-x-3 gap-y-2">
+                        <span className="text-slate-500">Date</span>
+                        <span className="text-slate-200">{manualPostSummary.date}</span>
+                        <span className="text-slate-500">Payee</span>
+                        <span className="min-w-0 truncate text-slate-200">{manualPostSummary.description}</span>
+                        <span className="text-slate-500">Amount</span>
+                        <span className={manualPostSummary.amount.startsWith("-") ? "text-rose-300" : "text-emerald-300"}>
+                          {manualPostSummary.amount}
+                        </span>
+                        <span className="text-slate-500">Account</span>
+                        <span className="min-w-0 truncate text-slate-200">{manualPostSummary.account}</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setManualPostTxn(null)}
+                        className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08]"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmManualPostTransaction}
+                        className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200"
+                      >
+                        Post now
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>,
+            document.body
+          )
+        : null}
+      {typeof document !== "undefined"
+        ? createPortal(
+            <AnimatePresence>
+              {manualPostResult ? (
+                <motion.div
+                  className="fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="manual-post-result-title"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18, ease: [0.22, 0.1, 0.25, 1] }}
+                >
+                  <motion.button
+                    type="button"
+                    aria-label="Close posting message"
+                    className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
+                    onClick={() => setManualPostResult(null)}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.18 }}
+                  />
+                  <motion.div
+                    className="relative w-full max-w-[520px] rounded-2xl border p-5 text-slate-100 shadow-[0_28px_90px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.04)]"
+                    style={{
+                      background: "rgba(17,19,18,0.97)",
+                      borderColor:
+                        manualPostResult.type === "success" ? "rgba(16,185,129,0.28)" : "rgba(251,191,36,0.28)",
+                    }}
+                    initial={{ opacity: 0, y: 18, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: [0.16, 0.84, 0.44, 1] }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border ${
+                          manualPostResult.type === "success"
+                            ? "border-emerald-300/35 bg-emerald-400/[0.12] text-emerald-200"
+                            : "border-amber-300/35 bg-amber-400/[0.12] text-amber-200"
+                        }`}
+                      >
+                        {manualPostResult.type === "success" ? (
+                          <CheckCircle2 className="h-4 w-4" strokeWidth={2} />
+                        ) : (
+                          <CircleAlert className="h-4 w-4" strokeWidth={2} />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <h2 id="manual-post-result-title" className="text-base font-semibold text-white">
+                          {manualPostResult.title}
+                        </h2>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">{manualPostResult.message}</p>
+                      </div>
+                    </div>
+
+                    {manualPostResult.detail ? (
+                      <div
+                        className={`mt-4 rounded-xl border px-3 py-2.5 text-sm leading-6 ${
+                          manualPostResult.type === "success"
+                            ? "border-emerald-300/20 bg-emerald-300/[0.07] text-emerald-50/90"
+                            : "border-amber-300/24 bg-amber-300/[0.08] text-amber-50/90"
+                        }`}
+                      >
+                        {manualPostResult.detail}
+                      </div>
+                    ) : null}
+
+                    <div className="mt-5 flex items-center justify-end gap-2">
+                      {manualPostResult.type === "mapping" ? (
+                        <button
+                          type="button"
+                          onClick={() => setManualPostResult(null)}
+                          className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08]"
+                        >
+                          Close
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={handleManualPostResultPrimary}
+                        className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200"
+                      >
+                        {manualPostResult.primaryLabel || "Close"}
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>,
+            document.body
+          )
+        : null}
       {typeof document !== "undefined"
         ? createPortal(
             <AnimatePresence>

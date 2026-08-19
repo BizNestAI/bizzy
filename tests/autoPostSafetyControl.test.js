@@ -132,10 +132,24 @@ test("manual posting affects only the selected transaction row and prevents repe
   const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
   const feed = readFileSync(join(root, "src/components/Accounting/BookkeepingFeed.jsx"), "utf8");
 
-  assert.match(page, /handleManualPostTransaction = async \(txnId\)/);
+  assert.match(page, /handleManualPostTransaction = \(txnId\)/);
+  assert.match(page, /confirmManualPostTransaction = async \(\)/);
   assert.match(page, /postTransactionToQuickBooks\(businessId, txnId\)/);
   assert.match(page, /new Set\(prev\)\.add\(txnId\)/);
   assert.match(feed, /disabled=\{readOnly \|\| isPosting\}/);
+});
+
+test("manual posting uses in-app confirmation and mapping guidance modals", () => {
+  const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+
+  assert.doesNotMatch(page, /window\.confirm/);
+  assert.doesNotMatch(page, /window\.alert\("Transaction posted to QuickBooks\."\)/);
+  assert.match(page, /manualPostTxn/);
+  assert.match(page, /manual-post-confirm-title/);
+  assert.match(page, /Post this transaction to QuickBooks\?/);
+  assert.match(page, /Map this account before posting/);
+  assert.match(page, /Settings > Integrations/);
+  assert.match(page, /navigate\("\/dashboard\/settings\?tab=integrations"\)/);
 });
 
 test("Books Review exposes a compact Auto-post On Off control next to Rules", () => {

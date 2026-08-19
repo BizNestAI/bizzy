@@ -33,6 +33,24 @@ test("manual double click, manual plus cron race, and two cron workers share an 
   assert.match(migration, /jsonb_build_object\('claimed', false, 'already_posted', false/i);
 });
 
+test("acquire_posting_lock keeps only the UUID transaction RPC reachable through PostgREST", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const originalMigration = read("supabase/migrations/20260517_acquire_posting_lock_rpc.sql");
+  const dropTextOverloadMigration = read("supabase/migrations/20260829_drop_acquire_posting_lock_text_overload.sql");
+
+  assert.match(
+    dropTextOverloadMigration,
+    /drop function if exists public\.acquire_posting_lock\(\s*uuid,\s*text,\s*timestamp with time zone,\s*integer,\s*text\s*\);/i
+  );
+  assert.doesNotMatch(dropTextOverloadMigration, /acquire_posting_lock\(\s*uuid,\s*uuid,\s*timestamp with time zone/i);
+  assert.match(originalMigration, /p_transaction_id uuid/i);
+  assert.match(cron, /supabase\.rpc\("acquire_posting_lock",\s*\{[\s\S]*p_business_id:\s*businessId/);
+  assert.match(cron, /supabase\.rpc\("acquire_posting_lock",\s*\{[\s\S]*p_transaction_id:\s*txnId/);
+  assert.match(cron, /supabase\.rpc\("acquire_posting_lock",\s*\{[\s\S]*p_now_iso:\s*nowIso/);
+  assert.match(cron, /supabase\.rpc\("acquire_posting_lock",\s*\{[\s\S]*p_lock_stale_seconds:\s*600/);
+  assert.match(cron, /supabase\.rpc\("acquire_posting_lock",\s*\{[\s\S]*p_idempotency_key:\s*idempotencyKey/);
+});
+
 test("same request retries reuse the stable Intuit requestid for every QBO transaction create path", () => {
   const cron = read("src/jobs/booksPost.cron.js");
 
