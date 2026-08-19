@@ -105,7 +105,7 @@ export function classifyQboVendorProviderError(err = {}, stage = "unknown") {
     retryable = false;
   } else if (stage === "qbo_vendor_lookup" || stage === "qbo_vendor_mapping_revalidation" || stage === "qbo_vendor_create_recovery" || stage === "qbo_customer_lookup" || stage === "qbo_employee_lookup" || /findvendors|findcustomers|findemployees|qbo_find/i.test(lower)) {
     normalizedCode = "vendor_qbo_lookup_failed";
-  } else if (stage === "qbo_vendor_creation_intent" || /postgrest|supabase|rpc|duplicate key|violates/i.test(lower)) {
+  } else if (stage === "canonical_vendor_db" || stage === "qbo_vendor_creation_intent" || /postgrest|supabase|rpc|duplicate key|violates/i.test(lower)) {
     normalizedCode = "vendor_db_error";
   }
 
@@ -696,21 +696,20 @@ async function markMappingNeedsReview(db, { businessId, realmId, qboEnv, canonic
 
 async function upsertMapping(db, { businessId, realmId, qboEnv, canonicalVendorId, qboVendorId, qboDisplayName, source, transactionId }) {
   const payload = {
-    business_id: businessId,
-    realm_id: realmId,
-    qbo_env: qboEnv,
-    canonical_vendor_id: canonicalVendorId,
-    qbo_vendor_id: String(qboVendorId),
-    qbo_display_name: qboDisplayName,
-    status: "active",
-    mapping_source: source,
-    first_transaction_id: transactionId || null,
-    mapped_at: nowIso(),
+    p_business_id: businessId,
+    p_realm_id: realmId,
+    p_qbo_env: qboEnv,
+    p_canonical_vendor_id: canonicalVendorId,
+    p_qbo_vendor_id: String(qboVendorId),
+    p_qbo_display_name: qboDisplayName,
+    p_mapping_source: source,
+    p_created_by: "bizzi",
+    p_mapped_by: null,
+    p_first_transaction_id: transactionId || null,
+    p_metadata: {},
   };
-  const { data, error } = await db.from("business_qbo_vendor_mappings").upsert(payload, {
-    onConflict: "business_id,qbo_env,realm_id,canonical_vendor_id",
-  }).select("*").maybeSingle();
-  if (error) throw error;
+  const { data, error } = await db.rpc("upsert_active_qbo_vendor_mapping", payload);
+  if (error) throw new QboVendorProviderError("canonical_vendor_db", error);
   await upsertAlias(db, {
     businessId,
     vendorId: canonicalVendorId,
@@ -739,7 +738,17 @@ async function upsertMapping(db, { businessId, realmId, qboEnv, canonicalVendorI
     transactionId,
     source,
   });
-  return data || payload;
+  return data || {
+    business_id: businessId,
+    realm_id: realmId,
+    qbo_env: qboEnv,
+    canonical_vendor_id: canonicalVendorId,
+    qbo_vendor_id: String(qboVendorId),
+    qbo_display_name: qboDisplayName,
+    status: "active",
+    mapping_source: source,
+    first_transaction_id: transactionId || null,
+  };
 }
 
 async function hydrateCanonicalVendor(db, { businessId, canonicalVendor }) {

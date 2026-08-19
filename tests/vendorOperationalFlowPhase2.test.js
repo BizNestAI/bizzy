@@ -84,6 +84,24 @@ test("canonical vendor alias lookup disambiguates the tenant-scoped Vendor relat
   assert.match(migration, /vendor_aliases_business_vendor_fk[\s\S]*foreign key \(business_id, canonical_vendor_id\)[\s\S]*references public\.bizzi_vendors \(business_id, id\)/);
 });
 
+test("active QBO Vendor mapping persistence uses partial-index-aware RPC instead of PostgREST upsert", () => {
+  const service = read("src/services/bookkeeping/canonicalVendorService.js");
+  const upsertMappingBody = service.slice(service.indexOf("async function upsertMapping"), service.indexOf("async function hydrateCanonicalVendor"));
+  assert.match(upsertMappingBody, /db\.rpc\("upsert_active_qbo_vendor_mapping"/);
+  assert.doesNotMatch(upsertMappingBody, /\.from\("business_qbo_vendor_mappings"\)\.upsert/);
+  assert.doesNotMatch(upsertMappingBody, /onConflict: "business_id,qbo_env,realm_id,canonical_vendor_id"/);
+
+  const migration = read("supabase/migrations/20260901_upsert_active_qbo_vendor_mapping_rpc.sql");
+  assert.match(migration, /create or replace function public\.upsert_active_qbo_vendor_mapping/);
+  assert.match(migration, /perform 1[\s\S]*from public\.bizzi_vendors v[\s\S]*v\.business_id = p_business_id[\s\S]*v\.id = p_canonical_vendor_id/);
+  assert.match(migration, /on conflict \(business_id, qbo_env, realm_id, canonical_vendor_id\)\s+where status = 'active'\s+do update set/i);
+  assert.match(migration, /grant execute on function public\.upsert_active_qbo_vendor_mapping\(uuid, text, text, uuid, text, text, text, text, text, uuid, jsonb, timestamptz\) to service_role/);
+
+  const vendorMigration = read("supabase/migrations/20260828_canonical_vendor_identity.sql");
+  assert.match(vendorMigration, /business_qbo_vendor_mapping_vendor_active_uq[\s\S]*\(business_id, qbo_env, realm_id, canonical_vendor_id\)[\s\S]*where status = 'active'/);
+  assert.match(vendorMigration, /business_qbo_vendor_mappings_business_vendor_fk[\s\S]*foreign key \(business_id, canonical_vendor_id\)[\s\S]*references public\.bizzi_vendors \(business_id, id\)/);
+});
+
 test("weak evidence and non-vendor transaction classes do not enter required vendor posting", () => {
   const service = read("src/services/bookkeeping/canonicalVendorService.js");
   assert.match(service, /export function getVendorPostingRequirement/);

@@ -218,6 +218,9 @@ test("Instantly exact existing Vendor is mapped and no new Vendor is created", a
   assert.equal(result.reason, "existing_qbo_vendor_reused");
   assert.equal(result.qbo_entity_id, "v-instantly");
   assert.equal(qbo.created.length, 0);
+  assert.equal(db.calls.activeMappingUpserts, 1);
+  assert.equal(db.rows.business_qbo_vendor_mappings.length, 1);
+  assert.equal(db.rows.business_qbo_vendor_mappings[0].status, "active");
 });
 
 test("Instantly missing Vendor creates exactly once and maps the first transaction", async () => {
@@ -234,6 +237,7 @@ test("Instantly missing Vendor creates exactly once and maps the first transacti
   assert.equal(first.reason, "qbo_vendor_created");
   assert.equal(second.qbo_entity_id, first.qbo_entity_id);
   assert.equal(qbo.created.length, 1);
+  assert.equal(db.calls.activeMappingUpserts, 1);
 });
 
 test("Instantly Vendor create conflict is classified for review and does not map a Vendor", async () => {
@@ -250,6 +254,93 @@ test("Instantly Vendor create conflict is classified for review and does not map
   assert.equal(result.needsReview, true);
   assert.equal(result.reason, "vendor_qbo_name_conflict");
   assert.equal(result.vendorDiagnostics.stage, "qbo_vendor_create");
+  assert.equal(db.rows.business_qbo_vendor_mappings.length, 0);
+});
+
+test("active QBO Vendor mapping RPC inserts, updates, and preserves inactive history", async () => {
+  const db = makeDb();
+  const canonical = await resolveCanonicalVendorForTransaction({ db, businessId: BUSINESS_ID, bankTxn: txn({ id: "t-map-rpc", merchant_entity_id: "ent-map-rpc", merchant_name: "Map Rpc" }) });
+  db.rows.business_qbo_vendor_mappings.push({
+    id: "inactive-map",
+    business_id: BUSINESS_ID,
+    realm_id: REALM_ID,
+    qbo_env: "production",
+    canonical_vendor_id: canonical.canonicalVendor.id,
+    qbo_vendor_id: "v-old",
+    qbo_display_name: "Old Vendor",
+    status: "disabled",
+    mapping_source: "manual",
+  });
+
+  const first = await db.rpc("upsert_active_qbo_vendor_mapping", {
+    p_business_id: BUSINESS_ID,
+    p_realm_id: REALM_ID,
+    p_qbo_env: "production",
+    p_canonical_vendor_id: canonical.canonicalVendor.id,
+    p_qbo_vendor_id: "v-new",
+    p_qbo_display_name: "New Vendor",
+    p_mapping_source: "resolver",
+  });
+  assert.ifError(first.error);
+  assert.equal(first.data.qbo_vendor_id, "v-new");
+  assert.equal(db.rows.business_qbo_vendor_mappings.filter((row) => row.status === "disabled").length, 1);
+  assert.equal(db.rows.business_qbo_vendor_mappings.filter((row) => row.status === "active").length, 1);
+
+  const second = await db.rpc("upsert_active_qbo_vendor_mapping", {
+    p_business_id: BUSINESS_ID,
+    p_realm_id: REALM_ID,
+    p_qbo_env: "production",
+    p_canonical_vendor_id: canonical.canonicalVendor.id,
+    p_qbo_vendor_id: "v-updated",
+    p_qbo_display_name: "Updated Vendor",
+    p_mapping_source: "creation_intent",
+    p_first_transaction_id: "t-second",
+  });
+  assert.ifError(second.error);
+  assert.equal(second.data.id, first.data.id);
+  assert.equal(second.data.qbo_vendor_id, "v-updated");
+  assert.equal(db.rows.business_qbo_vendor_mappings.filter((row) => row.status === "active").length, 1);
+});
+
+test("active QBO Vendor mapping RPC rejects cross-business canonical vendor ownership", async () => {
+  const db = makeDb();
+  const other = await resolveCanonicalVendorForTransaction({
+    db,
+    businessId: OTHER_BUSINESS_ID,
+    bankTxn: txn({ id: "other-map-rpc", business_id: OTHER_BUSINESS_ID, merchant_entity_id: "other-map-rpc", merchant_name: "Other Vendor" }),
+  });
+  const result = await db.rpc("upsert_active_qbo_vendor_mapping", {
+    p_business_id: BUSINESS_ID,
+    p_realm_id: REALM_ID,
+    p_qbo_env: "production",
+    p_canonical_vendor_id: other.canonicalVendor.id,
+    p_qbo_vendor_id: "v-other",
+    p_qbo_display_name: "Other Vendor",
+    p_mapping_source: "resolver",
+  });
+  assert.equal(result.error?.message, "canonical_vendor_not_found");
+  assert.equal(db.rows.business_qbo_vendor_mappings.length, 0);
+});
+
+test("Vendor mapping DB failure is classified before QBO transaction create can run", async () => {
+  const db = makeDb({ failActiveMappingUpsert: Object.assign(new Error("there is no unique or exclusion constraint matching the ON CONFLICT specification"), { code: "42P10" }) });
+  const qbo = makeQbo({ vendors: [{ Id: "v-instantly", DisplayName: "Instantly", Active: true }] });
+  await assert.rejects(
+    async () => ensureCanonicalVendorMappedToQbo({
+      db,
+      getQBOClientFn: async () => qbo,
+      getLatestQuickBooksTokenRowFn: async () => ({ realm_id: REALM_ID, qbo_env: "production" }),
+      businessId: BUSINESS_ID,
+      bankTxn: txn({ id: "t-instantly-db-fail", merchant_entity_id: "ent-instantly-db-fail", merchant_name: "INSTANTLY" }),
+    }),
+    (err) => {
+      assert.equal(err.message, "vendor_db_error");
+      assert.equal(err.vendorDiagnostics.stage, "canonical_vendor_db");
+      assert.equal(err.vendorDiagnostics.provider_code, "42P10");
+      return true;
+    }
+  );
+  assert.equal(qbo.created.length, 0);
   assert.equal(db.rows.business_qbo_vendor_mappings.length, 0);
 });
 
@@ -284,6 +375,24 @@ test("manual vendor mapping action validates selected QBO entity is a usable Ven
     }),
     /qbo_vendor_not_usable/
   );
+});
+
+test("manual Use Existing Vendor mapping persists through active mapping RPC", async () => {
+  const db = makeDb();
+  const canonical = await resolveCanonicalVendorForTransaction({ db, businessId: BUSINESS_ID, bankTxn: txn({ id: "manual-vendor-success", merchant_entity_id: "ent-manual-success", merchant_name: "Manual Vendor" }) });
+  const qbo = makeQbo({ vendors: [{ Id: "v-manual", DisplayName: "Manual Vendor", Active: true }] });
+  const result = await useExistingQboVendorForCanonical({
+    db,
+    getQBOClientFn: async () => qbo,
+    getLatestQuickBooksTokenRowFn: async () => ({ realm_id: REALM_ID, qbo_env: "production" }),
+    businessId: BUSINESS_ID,
+    canonicalVendorId: canonical.canonicalVendor.id,
+    qboVendorId: "v-manual",
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.mapping.qbo_vendor_id, "v-manual");
+  assert.equal(db.calls.activeMappingUpserts, 1);
+  assert.equal(db.rows.business_qbo_vendor_mappings.length, 1);
 });
 
 test("Business A cannot use Business B canonical vendor in Use Existing review action", async () => {
@@ -583,7 +692,7 @@ function makeQbo({ vendors = [], customers = [], employees = [], failCreateOnceA
   };
 }
 
-function makeDb() {
+function makeDb({ failActiveMappingUpsert = null } = {}) {
   const rows = {
     bizzi_vendors: [],
     vendor_aliases: [],
@@ -597,6 +706,7 @@ function makeDb() {
   };
   const calls = {
     strongAliasClaims: 0,
+    activeMappingUpserts: 0,
   };
   let seq = 1;
   const nextId = () => `id-${seq++}`;
@@ -679,6 +789,63 @@ function makeDb() {
           reason: "strong_alias_claim_created_canonical_vendor",
         });
         return { data: { claimed: true, created: true, canonical_vendor: vendor, alias }, error: null };
+      }
+      if (name === "upsert_active_qbo_vendor_mapping") {
+        calls.activeMappingUpserts += 1;
+        if (failActiveMappingUpsert) return { data: null, error: failActiveMappingUpsert };
+        const vendor = rows.bizzi_vendors.find((row) =>
+          row.business_id === params.p_business_id &&
+          row.id === params.p_canonical_vendor_id &&
+          ["active", "needs_review"].includes(row.status)
+        );
+        if (!vendor) return { data: null, error: new Error("canonical_vendor_not_found") };
+        const qboEnv = params.p_qbo_env || "production";
+        const qboConflict = rows.business_qbo_vendor_mappings.find((row) =>
+          row.business_id === params.p_business_id &&
+          row.qbo_env === qboEnv &&
+          row.realm_id === params.p_realm_id &&
+          row.status === "active" &&
+          row.qbo_vendor_id === String(params.p_qbo_vendor_id) &&
+          row.canonical_vendor_id !== params.p_canonical_vendor_id
+        );
+        if (qboConflict) {
+          return { data: null, error: Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" }) };
+        }
+        let row = rows.business_qbo_vendor_mappings.find((candidate) =>
+          candidate.business_id === params.p_business_id &&
+          candidate.qbo_env === qboEnv &&
+          candidate.realm_id === params.p_realm_id &&
+          candidate.canonical_vendor_id === params.p_canonical_vendor_id &&
+          candidate.status === "active"
+        );
+        if (row) {
+          Object.assign(row, {
+            qbo_vendor_id: String(params.p_qbo_vendor_id),
+            qbo_display_name: params.p_qbo_display_name,
+            mapping_source: params.p_mapping_source || "resolver",
+            mapped_by: params.p_mapped_by || null,
+            first_transaction_id: row.first_transaction_id || params.p_first_transaction_id || null,
+            metadata: { ...(row.metadata || {}), ...(params.p_metadata || {}) },
+          });
+        } else {
+          row = {
+            id: nextId(),
+            business_id: params.p_business_id,
+            realm_id: params.p_realm_id,
+            qbo_env: qboEnv,
+            canonical_vendor_id: params.p_canonical_vendor_id,
+            qbo_vendor_id: String(params.p_qbo_vendor_id),
+            qbo_display_name: params.p_qbo_display_name,
+            status: "active",
+            mapping_source: params.p_mapping_source || "resolver",
+            created_by: params.p_created_by || "bizzi",
+            mapped_by: params.p_mapped_by || null,
+            first_transaction_id: params.p_first_transaction_id || null,
+            metadata: params.p_metadata || {},
+          };
+          rows.business_qbo_vendor_mappings.push(row);
+        }
+        return { data: row, error: null };
       }
       if (name !== "claim_qbo_vendor_creation_intent") return { data: null, error: new Error("unknown_rpc") };
       const existing = rows.qbo_vendor_creation_intents.find((row) =>
