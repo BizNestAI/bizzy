@@ -357,7 +357,7 @@ async function findVendorByAlias(db, businessId, aliases = []) {
     if (!alias?.normalized_alias_value) continue;
     const { data, error } = await db
       .from("vendor_aliases")
-      .select("canonical_vendor_id,bizzi_vendors(*)")
+      .select("canonical_vendor_id,bizzi_vendors!vendor_aliases_business_vendor_fk(*)")
       .eq("business_id", businessId)
       .eq("alias_type", alias.alias_type)
       .eq("normalized_alias_value", alias.normalized_alias_value)

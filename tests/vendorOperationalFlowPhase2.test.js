@@ -72,6 +72,18 @@ test("canonical vendor service validates active mappings before using stale loca
   assert.doesNotMatch(mappingBranch, /bankTxn\.qbo_entity_id/);
 });
 
+test("canonical vendor alias lookup disambiguates the tenant-scoped Vendor relationship", () => {
+  const service = read("src/services/bookkeeping/canonicalVendorService.js");
+  assert.match(
+    service,
+    /\.from\("vendor_aliases"\)[\s\S]*\.select\("canonical_vendor_id,bizzi_vendors!vendor_aliases_business_vendor_fk\(\*\)"\)/
+  );
+  assert.doesNotMatch(service, /bizzi_vendors\(\*\)/);
+  const migration = read("supabase/migrations/20260828_canonical_vendor_identity.sql");
+  assert.match(migration, /canonical_vendor_id uuid not null references public\.bizzi_vendors\(id\)/);
+  assert.match(migration, /vendor_aliases_business_vendor_fk[\s\S]*foreign key \(business_id, canonical_vendor_id\)[\s\S]*references public\.bizzi_vendors \(business_id, id\)/);
+});
+
 test("weak evidence and non-vendor transaction classes do not enter required vendor posting", () => {
   const service = read("src/services/bookkeeping/canonicalVendorService.js");
   assert.match(service, /export function getVendorPostingRequirement/);
