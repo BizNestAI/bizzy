@@ -333,3 +333,23 @@ test("account/date/business filters are enforced across cursor batches", async (
   assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-03").status, "needs_review");
   assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "other-01").status, "needs_review");
 });
+
+test("transactionIds option scopes reconsideration to explicit worker requests", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "software-current", name: "Software", type: "Expense", subType: "DuesSubscriptions" }]);
+  addMapping(db);
+  addRoutineRow(db, "txn-01");
+  addRoutineRow(db, "txn-02");
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, {
+    db,
+    range: "all",
+    transactionIds: ["txn-02"],
+    dependencies: deps(db, qbo),
+  });
+
+  assert.equal(result.promoted, 1);
+  assert.equal(result.next_cursor, null);
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-01").status, "needs_review");
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-02").status, "auto_approved");
+});

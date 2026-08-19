@@ -228,6 +228,28 @@ export async function reconsiderNeedsReviewTransactions(businessId, payload = {}
   return res;
 }
 
+export async function getBookkeepingProcessingStatus(businessId) {
+  const res = await safeFetch(apiUrl("/api/bookkeeping/processing/status"), {
+    headers: withBizHeaders(businessId),
+  });
+  if (res && res.ok === false) {
+    throw new Error(res.message || res.error || "bookkeeping_processing_status_failed");
+  }
+  return res;
+}
+
+export async function retryBookkeepingProcessing(businessId, payload = {}) {
+  const res = await safeFetch(apiUrl("/api/bookkeeping/processing/retry"), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId, ...payload }),
+  });
+  if (res && res.ok === false) {
+    throw new Error(res.message || res.error || "bookkeeping_processing_retry_failed");
+  }
+  return res;
+}
+
 export async function enrichCounterparties(businessId, payload = {}) {
   const body = {
     business_id: businessId,
@@ -547,6 +569,8 @@ export default {
   undoTransaction,
   updateHandledTransaction,
   suggestTransactions,
+  getBookkeepingProcessingStatus,
+  retryBookkeepingProcessing,
   enrichCounterparties,
   triggerPlaidSync,
   getAccountMappings,

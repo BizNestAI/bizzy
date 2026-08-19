@@ -29,6 +29,7 @@ import arRouter from "./api/ar/ar.routes.js";
 import bookkeepingPlaidRouter from "./api/bookkeeping/bookkeeping.routes.js";
 import { startBooksPostingCron } from "./jobs/booksPost.cron.js";
 import { startPlaidDailySyncCron } from "./cron/plaidSync.cron.js";
+import { startBookkeepingProcessingWorker } from "./cron/bookkeepingProcessing.cron.js";
 import { startReconciliationCron } from "./cron/reconciliation.cron.js";
 import { startQboJobCostingSyncCron } from "./cron/qboJobCostingSync.cron.js";
 import { startContractorCfoInsightsCron } from "./services/insights/contractorCfoTriggerService.js";
@@ -323,6 +324,7 @@ app.listen(PORT, () => {
 
 startForecastCron();
 startBooksPostingCron();
+startBookkeepingProcessingWorker();
 startPlaidDailySyncCron();
 startContractorCfoInsightsCron();
 startTaxRecalculationWorker();

@@ -207,6 +207,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
   const cursor = options.cursor ? String(options.cursor) : null;
   const nowIso = new Date().toISOString();
   const dependencies = options.dependencies || {};
+  const transactionIds = Array.isArray(options.transactionIds)
+    ? Array.from(new Set(options.transactionIds.map((id) => (id ? String(id) : null)).filter(Boolean)))
+    : [];
 
   let catQuery = db
     .from("transaction_categorizations")
@@ -216,7 +219,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     .is("qbo_txn_id", null)
     .order("transaction_id", { ascending: true })
     .limit(limit);
-  if (cursor) catQuery = catQuery.gt("transaction_id", cursor);
+  if (transactionIds.length) catQuery = catQuery.in("transaction_id", transactionIds);
+  if (cursor && !transactionIds.length) catQuery = catQuery.gt("transaction_id", cursor);
 
   const { data: cats, error: catErr } = await catQuery;
   if (catErr) throw catErr;
@@ -225,13 +229,13 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     return { ok: true, processed: 0, promoted: 0, skipped: 0, next_cursor: null, rows: [] };
   }
 
-  const transactionIds = catRows.map((row) => row.transaction_id).filter(Boolean);
+  const catTransactionIds = catRows.map((row) => row.transaction_id).filter(Boolean);
   let txQuery = db
     .from("bank_transactions")
     .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,signed_amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel,pending,accounting_review_required,accounting_review_reason,canonical_vendor_id,qbo_entity_type,qbo_entity_id,is_archived")
     .eq("business_id", businessId)
     .eq("is_archived", false)
-    .in("id", transactionIds);
+    .in("id", catTransactionIds);
   if (options.accountId) txQuery = txQuery.eq("plaid_account_id", options.accountId);
   if (rangeStart) txQuery = txQuery.gte("date", rangeStart);
   if (dateTo) txQuery = txQuery.lte("date", dateTo);
@@ -386,7 +390,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     processed,
     promoted,
     skipped,
-    next_cursor: catRows.length === limit ? last : null,
+    next_cursor: transactionIds.length ? null : catRows.length === limit ? last : null,
     rows,
   };
 }

@@ -66,6 +66,29 @@ function collectFrontendGraph(entry = FRONTEND_ENTRY) {
   return visited;
 }
 
+function trackedFilesForSensitiveViteNameScan() {
+  return execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" })
+    .split("\n")
+    .filter(Boolean)
+    .filter((file) => isFile(path.join(ROOT, file)))
+    .filter((file) =>
+      !file.startsWith("node_modules/") &&
+      !file.startsWith("dist/") &&
+      !file.startsWith("tests/")
+    );
+}
+
+function collectSensitiveViteNameFindings(files, readSource = (file) => read(path.join(ROOT, file))) {
+  const findings = [];
+  for (const file of files) {
+    const source = readSource(file);
+    for (const match of source.matchAll(SENSITIVE_VITE_RE)) {
+      findings.push(`${file}: ${match[0]}`);
+    }
+  }
+  return findings;
+}
+
 test("frontend import graph has no server-only credential modules or secret env references", () => {
   const files = collectFrontendGraph();
   const failures = [];
@@ -79,19 +102,22 @@ test("frontend import graph has no server-only credential modules or secret env 
 });
 
 test("known sensitive env names are not VITE-prefixed", () => {
-  const files = execFileSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" })
-    .split("\n")
-    .filter(Boolean)
-    .filter((file) => isFile(path.join(ROOT, file)))
-    .filter((file) => !file.startsWith("node_modules/") && !file.startsWith("dist/"));
-  const findings = [];
-  for (const file of files) {
-    const source = read(path.join(ROOT, file));
-    for (const match of source.matchAll(SENSITIVE_VITE_RE)) {
-      findings.push(`${file}: ${match[0]}`);
-    }
-  }
+  const findings = collectSensitiveViteNameFindings(trackedFilesForSensitiveViteNameScan());
   assert.deepEqual(findings, []);
+});
+
+test("repo-wide sensitive VITE scan excludes test fixtures but still catches production files", () => {
+  const files = trackedFilesForSensitiveViteNameScan();
+  assert.equal(files.some((file) => file.startsWith("tests/")), false);
+
+  const findings = collectSensitiveViteNameFindings(
+    ["src/client-fixture.js"],
+    () => "const leaked = import.meta.env.VITE_QBO_SECRET || import.meta.env.VITE_OPENAI_API_KEY;"
+  );
+  assert.deepEqual(findings, [
+    "src/client-fixture.js: VITE_QBO_SECRET",
+    "src/client-fixture.js: VITE_OPENAI_API_KEY",
+  ]);
 });
 
 test("gitignore has no merge markers and keeps real env files ignored", () => {

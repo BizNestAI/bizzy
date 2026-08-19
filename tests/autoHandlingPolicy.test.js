@@ -273,18 +273,20 @@ test("suggestion route uses central auto-handling policy and finalizes only hand
   assert.match(source, /suggested_qbo_account_id/);
 });
 
-test("backlog reconsideration endpoint and Books background flow use the shared policy", () => {
+test("backlog reconsideration endpoint and background worker use the shared policy", () => {
   const routeSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.suggest.routes.js"), "utf8");
   const serviceSource = readFileSync(join(root, "src/services/bookkeeping/routineExpenseReconsiderationService.js"), "utf8");
   const pageSource = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+  const workerSource = readFileSync(join(root, "src/services/bookkeeping/backgroundBookkeepingProcessingService.js"), "utf8");
 
   assert.match(routeSource, /router\.post\("\/suggest\/reconsider"/);
   assert.match(serviceSource, /canAutoHandle/);
   assert.match(serviceSource, /resolveCanonicalVendorForTransaction/);
   assert.match(serviceSource, /validateCanonicalQboAccountForPromotion/);
   assert.doesNotMatch(serviceSource, /ensureCanonicalVendorMappedToQbo/);
-  assert.match(pageSource, /reconsiderNeedsReviewTransactions/);
-  assert.match(pageSource, /books_review_background/);
-  assert.match(pageSource, /next_cursor/);
-  assert.match(pageSource, /localStorage/);
+  assert.match(workerSource, /reconsiderNeedsReviewTransactions/);
+  assert.match(workerSource, /background_bookkeeping/);
+  assert.match(workerSource, /const transactionIds = requests\.map\(\(request\) => request\.transaction_id\)/);
+  assert.doesNotMatch(pageSource, /books-review-reconsider/);
+  assert.doesNotMatch(pageSource, /maxBatchesPerPass/);
 });

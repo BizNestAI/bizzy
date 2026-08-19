@@ -16,9 +16,8 @@ import {
   approveTransactions,
   undoTransaction,
   updateHandledTransaction,
-  suggestTransactions,
-  reconsiderNeedsReviewTransactions,
   enrichCounterparties,
+  getBookkeepingProcessingStatus,
   getMappingStatus,
   getClarificationRequests,
   runPostingNow,
@@ -398,12 +397,11 @@ function BookkeepingCleanup() {
   const [loadingTxns, setLoadingTxns] = useState(false);
   const [backgroundRefreshingTxns, setBackgroundRefreshingTxns] = useState(false);
   const [categorizationStatus, setCategorizationStatus] = useState(null);
+  const [processingStatus, setProcessingStatus] = useState(null);
   const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null });
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
   const [postingNow, setPostingNow] = useState(false);
   const [postingRunSummary, setPostingRunSummary] = useState(null);
-  const suggestRanRef = useRef(null);
-  const reconsiderRanRef = useRef(null);
   const enrichRanRef = useRef(null);
   const lastNonEmptyTransactionsRef = useRef([]);
   const accountOverrides = useRef(new Map());
@@ -533,6 +531,16 @@ function BookkeepingCleanup() {
       console.warn("[bookkeeping] mapping status fetch failed", e?.message || e);
     } finally {
       setLoadingMappingStatus(false);
+    }
+  }, [businessId, usingDemo]);
+
+  const loadProcessingStatus = useCallback(async () => {
+    if (!businessId || usingDemo) return;
+    try {
+      const res = await getBookkeepingProcessingStatus(businessId);
+      setProcessingStatus(res || null);
+    } catch (e) {
+      console.warn("[bookkeeping] processing status fetch failed", e?.message || e);
     }
   }, [businessId, usingDemo]);
 
@@ -670,6 +678,15 @@ function BookkeepingCleanup() {
   useEffect(() => {
     loadClarifications();
   }, [loadClarifications]);
+
+  useEffect(() => {
+    if (usingDemo || !businessId) return undefined;
+    loadProcessingStatus();
+    const timer = window.setInterval(() => {
+      loadProcessingStatus();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [businessId, loadProcessingStatus, usingDemo]);
 
   const accountCards = useMemo(() => {
     if (!usingDemo) {
@@ -889,7 +906,8 @@ function BookkeepingCleanup() {
   );
   const isHandledTab = activeTab === "handled";
   const hasVisibleRows = feedRows.length > 0;
-  const isPreparingCategories = Boolean(categorizationStatus);
+  const serverProcessingCount = Number(processingStatus?.active_count || 0);
+  const isPreparingCategories = Boolean(categorizationStatus) || serverProcessingCount > 0;
   const hasInconsistentEmptyPage =
     !usingDemo &&
     !hasVisibleRows &&
@@ -901,6 +919,9 @@ function BookkeepingCleanup() {
     !hasVisibleRows &&
     (loadingTxns || isPreparingCategories || hasInconsistentEmptyPage || (!accountFilter && !usingDemo));
   const categorizationMessage = useMemo(() => {
+    if (serverProcessingCount > 0) {
+      return `Bizzi is reviewing ${serverProcessingCount} transaction${serverProcessingCount === 1 ? "" : "s"}.`;
+    }
     if (!categorizationStatus) return null;
     if (categorizationStatus.phase === "enriching") {
       return "Identifying payees before Bizzi prepares category suggestions.";
@@ -912,7 +933,7 @@ function BookkeepingCleanup() {
       return "Checking for new category suggestions in the background.";
     }
     return null;
-  }, [categorizationStatus]);
+  }, [categorizationStatus, serverProcessingCount]);
   const manualPostSummary = manualPostTxn ? getManualPostSummary(manualPostTxn) : null;
   const pendingCount = useMemo(() => {
     return transactions.filter(
@@ -1156,13 +1177,12 @@ function BookkeepingCleanup() {
     setSelectedIds(new Set());
     setPage(1);
     setTotalCount(null);
-    suggestRanRef.current = null;
-    reconsiderRanRef.current = null;
     setShowChecksOnly(false);
     if (!usingDemo && businessId) {
       loadMappingStatus();
+      loadProcessingStatus();
     }
-  }, [accountFilter, activeTab, dateRange, showCategorized, loadMappingStatus, usingDemo, businessId]);
+  }, [accountFilter, activeTab, dateRange, showCategorized, loadMappingStatus, loadProcessingStatus, usingDemo, businessId]);
 
   useEffect(() => {
     if (usingDemo) {
@@ -1442,141 +1462,9 @@ function BookkeepingCleanup() {
           }
         }
 
-        const shouldRunSuggest =
-          !suggestRanRef.current ||
-          suggestRanRef.current !== key ||
-          latestNormalized.some((t) => {
-            const s = (t.status || "needs_review").toLowerCase();
-            if (!(s === "needs_review" || s === "uncategorized")) return false;
-            return !(t.glAccountId || t.suggestedAccountId);
-          });
-        const needsReviewOrUncat = latestNormalized.some((t) => {
-          const s = (t.status || "needs_review").toLowerCase();
-          return s === "needs_review" || s === "uncategorized";
-        });
-        const handledGraceCandidates = latestNormalized.some((t) => {
-          const s = (t.status || "").toLowerCase();
-          return (s === "approved" || s === "auto_approved") && t.canEdit === true;
-        });
-        if (shouldRunSuggest && (needsReviewOrUncat || handledGraceCandidates)) {
-          if (process.env.NODE_ENV !== "production") {
-            console.info("[Books] running suggest for missing transactions");
-          }
-          try {
-            const suggestionCandidateCount = latestNormalized.filter((t) => {
-              const s = (t.status || "needs_review").toLowerCase();
-              return (s === "needs_review" || s === "uncategorized") && !(t.glAccountId || t.suggestedAccountId);
-            }).length;
-            setCategorizationStatus({
-              phase: "suggesting",
-              count: suggestionCandidateCount || latestNormalized.length,
-              initial: suggestionCandidateCount >= 10,
-            });
-            const suggestPayload = {
-              range: dateRange,
-              account_id: accountFilter,
-            };
-            const suggestRes = await suggestTransactions(businessId, suggestPayload);
-            // refresh to pick up suggestions after enrichment has populated stronger vendor identity
-            const res2 = await fetchTransactions(businessId, {
-              status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
-              account_id: accountFilter,
-              range: dateRange,
-              page,
-              page_size: rowsPerPage,
-            });
-            const txns2 = extractTxns(res2);
-            const normalized2 = normalizeTxns(txns2);
-            latestNormalized = normalized2;
-            const nextTotal2 = computeTotal(res2, normalized2);
-            commitTransactionPage(normalized2, nextTotal2);
-            const stillMissingSuggestions = normalized2.some((t) => {
-              const s = (t.status || "needs_review").toLowerCase();
-              if (!(s === "needs_review" || s === "uncategorized")) return false;
-              return !(t.glAccountId || t.suggestedAccountId);
-            });
-            if (suggestRes?.row_error_count > 0 || stillMissingSuggestions) {
-              suggestRanRef.current = null;
-            } else {
-              suggestRanRef.current = key;
-            }
-          } catch (errSuggest) {
-            console.warn("[bookkeeping] suggest failed", errSuggest?.message || errSuggest);
-            suggestRanRef.current = null;
-          }
         }
-
-        const reconsiderKey = `${dateRange}|${accountFilter || "all"}`;
-        const reconsiderCursorKey = `books-review-reconsider:${businessId}:${dateRange}:${accountFilter || "all"}`;
-        const storedReconsiderCursor =
-          typeof window !== "undefined" ? window.localStorage?.getItem(reconsiderCursorKey) || null : null;
-        const shouldRunReconsider =
-          ((!reconsiderRanRef.current || reconsiderRanRef.current !== reconsiderKey) || Boolean(storedReconsiderCursor)) &&
-          (Boolean(storedReconsiderCursor) || latestNormalized.some((t) => {
-            const s = (t.status || "needs_review").toLowerCase();
-            return s === "needs_review" || s === "uncategorized";
-          }));
-        if (shouldRunReconsider) {
-          try {
-            setCategorizationStatus({ phase: "suggesting", count: latestNormalized.length, initial: false });
-            const maxBatchesPerPass = 5;
-            let cursor = storedReconsiderCursor;
-            let promotedTotal = 0;
-            let processedTotal = 0;
-            let moreRemaining = false;
-            const seenCursors = new Set();
-            for (let batch = 0; batch < maxBatchesPerPass; batch += 1) {
-              const reconsiderRes = await reconsiderNeedsReviewTransactions(businessId, {
-                range: dateRange,
-                account_id: accountFilter || null,
-                cursor,
-                limit: 200,
-                source: "books_review_background",
-              });
-              promotedTotal += Number(reconsiderRes?.promoted || 0);
-              processedTotal += Number(reconsiderRes?.processed || 0);
-              const nextCursor = reconsiderRes?.next_cursor || null;
-              if (!nextCursor || seenCursors.has(nextCursor) || nextCursor === cursor) {
-                cursor = null;
-                moreRemaining = false;
-                break;
-              }
-              seenCursors.add(nextCursor);
-              cursor = nextCursor;
-              moreRemaining = true;
-            }
-            if (typeof window !== "undefined") {
-              if (cursor) window.localStorage?.setItem(reconsiderCursorKey, cursor);
-              else window.localStorage?.removeItem(reconsiderCursorKey);
-            }
-            reconsiderRanRef.current = moreRemaining ? null : reconsiderKey;
-            if (moreRemaining && typeof window !== "undefined") {
-              window.setTimeout(() => {
-                reconsiderRanRef.current = null;
-                reloadTransactions();
-              }, 1500);
-            }
-            if (promotedTotal > 0 || processedTotal > 0) {
-              const res4 = await fetchTransactions(businessId, {
-                status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
-                account_id: accountFilter,
-                range: dateRange,
-                page,
-                page_size: rowsPerPage,
-              });
-              const txns4 = extractTxns(res4);
-              const normalized4 = normalizeTxns(txns4);
-              latestNormalized = normalized4;
-              const nextTotal4 = computeTotal(res4, normalized4);
-              commitTransactionPage(normalized4, nextTotal4);
-            }
-          } catch (errReconsider) {
-            console.warn("[bookkeeping] reconsider suggestions failed", errReconsider?.message || errReconsider);
-            reconsiderRanRef.current = null;
-          }
-        }
-      }
-      await loadMappingStatus();
+        await loadMappingStatus();
+        await loadProcessingStatus();
     } catch (e) {
       console.warn("[bookkeeping] transactions load failed", e?.message || e);
     } finally {
@@ -1585,7 +1473,7 @@ function BookkeepingCleanup() {
       setCategorizationStatus(null);
       setCountsRefreshKey((value) => value + 1);
     }
-  }, [activeTab, accountFilter, businessId, canRunAI, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus]);
+  }, [activeTab, accountFilter, businessId, canRunAI, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus, loadProcessingStatus]);
 
   useEffect(() => {
     if (usingDemo) return;
@@ -1798,8 +1686,8 @@ function BookkeepingCleanup() {
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 mt-4 mb-2 text-xs sm:text-sm">
-        <div className="flex items-center gap-2">
+      <div className="mt-4 mb-2 flex min-w-0 flex-wrap items-center gap-2 text-xs sm:text-sm">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
           {/** Ensure uniform sizing across all tab buttons */}
           {TABS.map((tab) => {
             const active = tab.key === activeTab;
@@ -1813,7 +1701,7 @@ function BookkeepingCleanup() {
                   setActiveTab(tab.key);
                   setSelectedIds(new Set());
                 }}
-                className={`rounded-full px-4 py-1.5 min-w-[120px] text-center transition border ${
+                className={`min-w-0 rounded-full border px-3 py-1.5 text-center transition sm:px-3.5 ${
                   active
                     ? "bg-[var(--panel)] text-emerald-300 border-[var(--accent-line)] shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
                     : "text-slate-200 border-white/10 hover:bg-[var(--panel)] hover:border-[var(--accent-line)]"
@@ -1836,7 +1724,7 @@ function BookkeepingCleanup() {
               <button
                 type="button"
                 onClick={() => navigate("/dashboard/accounting/reconciliations")}
-                className="rounded-full px-4 py-1.5 min-w-[120px] text-center text-slate-200 border border-white/10 hover:border-[var(--accent-line)] hover:bg-[var(--panel)] transition"
+                className="min-w-0 rounded-full border border-white/10 px-3 py-1.5 text-center text-slate-200 transition hover:border-[var(--accent-line)] hover:bg-[var(--panel)] sm:px-3.5"
               >
                 Reconciled
               </button>
@@ -1854,7 +1742,7 @@ function BookkeepingCleanup() {
                         }
                       }
                 }
-                className={`rounded-full px-4 py-1.5 min-w-[120px] text-center text-slate-200 border border-white/10 transition ${
+                className={`min-w-0 rounded-full border border-white/10 px-3 py-1.5 text-center text-slate-200 transition sm:px-3.5 ${
                   rulesButtonDisabled
                     ? "cursor-not-allowed opacity-60"
                     : "hover:border-[var(--accent-line)] hover:bg-[var(--panel)]"
@@ -1870,7 +1758,7 @@ function BookkeepingCleanup() {
                 role="switch"
                 aria-checked={autoPostStatus?.auto_post_to_quickbooks === true}
                 aria-label={`Auto-post · ${autoPostStatus?.auto_post_to_quickbooks === true ? "On" : "Off"}`}
-                className={`group inline-flex min-w-[174px] items-center justify-between gap-3 rounded-full border px-3 py-1.5 text-left text-xs font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_24px_rgba(0,0,0,0.24)] transition ${
+                className={`group inline-flex min-w-[142px] items-center justify-between gap-2 rounded-full border px-2.5 py-1.5 text-left text-xs font-semibold shadow-[inset_0_1px_0_rgba(255,255,255,0.04),0_10px_24px_rgba(0,0,0,0.24)] transition sm:min-w-[154px] sm:px-3 ${
                   autoPostStatus?.auto_post_to_quickbooks === true
                     ? "border-emerald-300/45 bg-emerald-400/[0.12] text-emerald-50 hover:border-emerald-200/65 hover:bg-emerald-400/[0.16]"
                     : "border-white/12 bg-white/[0.035] text-slate-200 hover:border-white/22 hover:bg-white/[0.06]"

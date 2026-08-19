@@ -1,6 +1,7 @@
 import { supabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
 import { triggerContractorCfoInsightsBestEffort } from "../insights/contractorCfoTriggerService.js";
+import { enqueueBookkeepingProcessingForTransactions } from "../bookkeeping/backgroundBookkeepingProcessingService.js";
 import { resolveStoredPlaidAccessToken } from "./plaidTokenCrypto.js";
 import {
   buildCanonicalTransactionIdentity,
@@ -770,12 +771,33 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       console.warn("[plaid][sync] amount/direction backfill failed", backfillErr?.message || backfillErr);
     }
 
+    let bookkeepingEnqueued = 0;
+    if (resolvedTxnIds.length) {
+      try {
+        const queued = await enqueueBookkeepingProcessingForTransactions({
+          businessId,
+          transactionIds: resolvedTxnIds,
+          source: "plaid_sync",
+          priority: 10,
+          supabase,
+        });
+        bookkeepingEnqueued = Number(queued?.enqueued || 0);
+      } catch (bookkeepingErr) {
+        console.warn("[plaid][sync] bookkeeping enqueue failed", {
+          business_id: businessId,
+          count: resolvedTxnIds.length,
+          error: bookkeepingErr?.message || String(bookkeepingErr),
+        });
+      }
+    }
+
     return {
       ok: true,
       last_sync_at: lastSyncAt,
       added: added.length,
       modified: modified.length,
       removed: removed.length,
+      bookkeeping_enqueued: bookkeepingEnqueued,
     };
   } finally {
     memoryLocks.delete(itemLockKey);
@@ -797,6 +819,7 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
 
   let synced = 0;
   let skipped = 0;
+  let bookkeepingEnqueued = 0;
   for (const item of items) {
     try {
       const res = await runSyncForItem(plaid, businessId, item, { force });
@@ -804,6 +827,7 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
         skipped += 1;
       } else {
         synced += 1;
+        bookkeepingEnqueued += Number(res?.bookkeeping_enqueued || 0);
       }
       await new Promise((r) => setTimeout(r, 250)); // small delay to avoid hammering Plaid
     } catch (err) {
@@ -824,5 +848,5 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
     });
   }
 
-  return { ok: true, synced, skipped };
+  return { ok: true, synced, skipped, bookkeeping_enqueued: bookkeepingEnqueued };
 }

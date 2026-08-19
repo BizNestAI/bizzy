@@ -951,18 +951,24 @@ async function findRefundOriginalTxn({ businessId, refundTxn, bookkeepingStartDa
   };
 }
 
-router.post("/suggest", requireAuth, async (req, res) => {
-  const body = req.body || {};
-  const businessId = ensureBusinessId(req, res);
-  if (!businessId) return;
+export async function runBookkeepingSuggestionPass({
+  businessId,
+  body = {},
+  query = {},
+  user = null,
+} = {}) {
+  if (!businessId) throw new Error("missing_business_id");
 
   const txnIds = Array.isArray(body.transaction_ids) ? body.transaction_ids : null;
-  const rangeParam = (body.range || req.query?.range || "this_month").toLowerCase();
-  const accountId = body.account_id || req.query?.account_id || null;
+  const rangeParam = (body.range || query?.range || "this_month").toLowerCase();
+  const accountId = body.account_id || query?.account_id || null;
   const autoApprove =
     process.env.DISABLE_AUTO_APPROVE === "true"
       ? false
       : body.auto_approve !== false;
+  const allowQboAccountCreate =
+    body.allow_qbo_account_create !== false &&
+    body.allowQboAccountCreate !== false;
 
   const rangeStart = txnIds ? null : computeRangeStart(rangeParam);
 
@@ -1067,7 +1073,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
     }, {});
     const fallbacks = await ensureSuspenseAccounts(businessId);
     const ownerEquityAccounts = await ensureOwnerEquityAccounts(businessId, coa);
-    const userId = req.user?.id || req.user?.user_id || null;
+    const userId = user?.id || user?.user_id || null;
     let ownerTokens = [];
     if (userId) {
       try {
@@ -1122,7 +1128,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
     const eligibleTxns = (txns || []).filter((t) => t.pending !== true && t.accounting_review_required !== true);
 
     const ids = eligibleTxns.map((t) => t.id);
-    if (!ids.length) return res.json({ ok: true, updated: 0, auto_approved: 0, skipped: 0, sample: [] });
+    if (!ids.length) return { ok: true, updated: 0, auto_approved: 0, skipped: 0, sample: [] };
 
     const plaidAccountIds = [...new Set(eligibleTxns.map((t) => t.plaid_account_id).filter(Boolean))];
     let plaidAccountMap = new Map();
@@ -2214,6 +2220,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           intent: universalHint.primary_intent,
           transactionId: row.id,
           source: "suggest",
+          allowCreate: allowQboAccountCreate,
         });
         if (canonicalResolution?.ok && canonicalResolution?.account?.id) {
           const hintSuggested = {
@@ -2604,7 +2611,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
           });
         }
       }
-      return res.json({
+      return {
         ok: true,
         updated: 0,
         auto_approved: autoApproved,
@@ -2613,7 +2620,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
         row_error_count: rowErrors.length,
         row_errors: rowErrors,
         sample: [],
-      });
+      };
     }
 
     if (metaBackfills.length) {
@@ -2642,7 +2649,7 @@ router.post("/suggest", requireAuth, async (req, res) => {
       .select("transaction_id,suggested_qbo_account_id,suggested_qbo_account_name,confidence,status,reason,meta");
     if (upErr) throw upErr;
 
-    return res.json({
+    return {
       ok: true,
       updated: upserted?.length || 0,
       auto_approved: autoApproved,
@@ -2651,12 +2658,29 @@ router.post("/suggest", requireAuth, async (req, res) => {
       row_error_count: rowErrors.length,
       row_errors: rowErrors,
       sample: (upserted || []).slice(0, 3),
-    });
+    };
   } catch (err) {
     console.error("[bookkeeping][suggest] failed", {
       message: err?.message || String(err),
       stack: err?.stack || null,
     });
+    throw err;
+  }
+}
+
+router.post("/suggest", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    const result = await runBookkeepingSuggestionPass({
+      businessId,
+      body: req.body || {},
+      query: req.query || {},
+      user: req.user || null,
+    });
+    return res.json(result);
+  } catch (err) {
     return res.status(500).json({ ok: false, error: "suggest_failed", message: err?.message || "failed" });
   }
 });
