@@ -8,6 +8,7 @@ import {
   enqueueBookkeepingProcessingForTransactions,
   enqueueUnresolvedBookkeepingBacklog,
   processPendingBookkeepingRequests,
+  processPendingBookkeepingRequestsUntilIdle,
 } from "../src/services/bookkeeping/backgroundBookkeepingProcessingService.js";
 
 const root = process.cwd();
@@ -324,6 +325,7 @@ test("background worker passes provider-read-only COA mode and records unresolve
   __setBackgroundBookkeepingProcessingTestDeps({
     runBookkeepingSuggestionPass: async ({ body }) => {
       assert.equal(body.allow_qbo_account_create, false);
+      assert.equal(body.allow_ai_categorization, false);
       qboAccountCreates += 0;
       const row = supabase.store.transaction_categorizations[0];
       row.status = "needs_review";
@@ -461,8 +463,11 @@ test("source wiring preserves server-side authority and removes Books Review bac
   assert.match(service, /const transactionIds = requests\.map\(\(request\) => request\.transaction_id\)/);
   assert.match(service, /ignoreDuplicates: true/);
   assert.match(service, /\.neq\("status", BOOKKEEPING_PROCESSING_STATUSES\.PROCESSING\)/);
-  assert.match(service, /allow_qbo_account_create: false/);
+  assert.match(service, /BACKGROUND_BOOKKEEPING_EXECUTION_POLICY/);
+  assert.match(service, /allow_ai_categorization:\s*false/);
+  assert.match(service, /allow_qbo_account_create:\s*false/);
   assert.match(suggestRoute, /const allowQboAccountCreate/);
+  assert.match(suggestRoute, /const allowAiCategorization/);
   assert.match(suggestRoute, /allowCreate: allowQboAccountCreate/);
   assert.match(migration, /create table if not exists public\.bookkeeping_processing_requests/);
   assert.match(migration, /for update skip locked/i);
@@ -490,4 +495,128 @@ test("tenant isolation is preserved by queue identity", async () => {
 
   assert.equal(supabase.store.bookkeeping_processing_requests.length, 2);
   assert.equal(new Set(supabase.store.bookkeeping_processing_requests.map((row) => row.business_id)).size, 2);
+});
+
+test("multi-batch worker invocation can advance more than one claim batch without draining unbounded work", async () => {
+  const supabase = makeSupabase();
+  const ids = Array.from({ length: 209 }, (_value, index) => `txn-${index + 1}`);
+  seedBankTransactions(supabase, BUSINESS_ID, ids);
+  for (const transaction_id of ids) {
+    supabase.store.transaction_categorizations.push({
+      business_id: BUSINESS_ID,
+      transaction_id,
+      status: "needs_review",
+      qbo_txn_id: null,
+      meta: {},
+    });
+  }
+  let batches = 0;
+  __setBackgroundBookkeepingProcessingTestDeps({
+    runBookkeepingSuggestionPass: async ({ businessId, body }) => {
+      assert.equal(businessId, BUSINESS_ID);
+      assert.equal(body.allow_qbo_account_create, false);
+      assert.equal(body.allow_ai_categorization, false);
+      assert.ok(body.transaction_ids.length <= 25);
+      batches += 1;
+      return { ok: true, updated: body.transaction_ids.length, auto_approved: 0, skipped: 0 };
+    },
+    reconsiderNeedsReviewTransactions: async (_businessId, options) => {
+      for (const transactionId of options.transactionIds) {
+        const row = supabase.store.transaction_categorizations.find((cat) => cat.transaction_id === transactionId);
+        row.status = "auto_approved";
+        row.post_after = null;
+      }
+      return { ok: true, processed: options.transactionIds.length, promoted: options.transactionIds.length, skipped: 0 };
+    },
+  });
+  await enqueueBookkeepingProcessingForTransactions({ businessId: BUSINESS_ID, transactionIds: ids, supabase });
+
+  const result = await processPendingBookkeepingRequestsUntilIdle({
+    supabase,
+    businessId: BUSINESS_ID,
+    batchSize: 25,
+    maxBatches: 4,
+    workerId: "worker-multi",
+  });
+
+  assert.equal(result.batches, 4);
+  assert.equal(result.claimed, 100);
+  assert.equal(result.completed, 100);
+  assert.equal(batches, 4);
+  assert.equal(supabase.store.bookkeeping_processing_requests.filter((row) => row.status === "pending").length, 109);
+});
+
+test("business-scoped processing does not claim another business during Plaid wake style runs", async () => {
+  const supabase = makeSupabase();
+  seedBankTransactions(supabase, BUSINESS_ID, ["txn-a"]);
+  seedBankTransactions(supabase, OTHER_BUSINESS_ID, ["txn-b"]);
+  for (const [business_id, transaction_id] of [[BUSINESS_ID, "txn-a"], [OTHER_BUSINESS_ID, "txn-b"]]) {
+    supabase.store.transaction_categorizations.push({
+      business_id,
+      transaction_id,
+      status: "needs_review",
+      qbo_txn_id: null,
+      meta: {},
+    });
+  }
+  await enqueueBookkeepingProcessingForTransactions({ businessId: BUSINESS_ID, transactionIds: ["txn-a"], supabase });
+  await enqueueBookkeepingProcessingForTransactions({ businessId: OTHER_BUSINESS_ID, transactionIds: ["txn-b"], supabase });
+
+  const result = await processPendingBookkeepingRequestsUntilIdle({
+    supabase,
+    businessId: BUSINESS_ID,
+    batchSize: 25,
+    maxBatches: 4,
+    workerId: "plaid-wake",
+  });
+
+  assert.equal(result.claimed, 1);
+  assert.equal(supabase.store.bookkeeping_processing_requests.find((row) => row.transaction_id === "txn-a").status, "completed");
+  assert.equal(supabase.store.bookkeeping_processing_requests.find((row) => row.transaction_id === "txn-b").status, "pending");
+});
+
+test("Plaid sync wires enqueue to a bounded best-effort business wake without making sync fragile", () => {
+  const plaidSync = readFileSync(join(root, "src/services/plaid/plaidSyncService.js"), "utf8");
+
+  assert.match(plaidSync, /processPendingBookkeepingRequestsUntilIdle/);
+  assert.match(plaidSync, /function triggerBookkeepingProcessingWake/);
+  assert.match(plaidSync, /BOOKKEEPING_PROCESSING_PLAID_WAKE_BATCH_SIZE \|\| 10/);
+  assert.match(plaidSync, /BOOKKEEPING_PROCESSING_PLAID_WAKE_MAX_BATCHES \|\| 1/);
+  assert.match(plaidSync, /businessId,\s*batchSize,\s*maxBatches/s);
+  assert.match(plaidSync, /\.catch\(\(err\) => \{/);
+  assert.match(plaidSync, /immediate bookkeeping processing failed/);
+});
+
+test("recurring worker uses sequential multi-batch drain with a bounded cap", () => {
+  const cron = readFileSync(join(root, "src/cron/bookkeepingProcessing.cron.js"), "utf8");
+
+  assert.match(cron, /BOOKKEEPING_PROCESSING_MAX_BATCHES_PER_TICK \|\| 4/);
+  assert.match(cron, /processPendingBookkeepingRequestsUntilIdle/);
+  assert.match(cron, /maxBatches: MAX_BATCHES_PER_TICK/);
+  assert.doesNotMatch(cron, /Promise\.all\(\s*businesses/);
+});
+
+test("background bookkeeping has an explicit zero-AI policy and no provider-write imports", () => {
+  const service = readFileSync(join(root, "src/services/bookkeeping/backgroundBookkeepingProcessingService.js"), "utf8");
+  const suggestRoute = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.suggest.routes.js"), "utf8");
+
+  assert.match(service, /BACKGROUND_BOOKKEEPING_EXECUTION_POLICY/);
+  assert.match(service, /allow_ai_categorization:\s*false/);
+  assert.match(service, /allow_qbo_provider_writes:\s*false/);
+  assert.match(suggestRoute, /Any future paid model fallback[\s\S]*must require this flag/);
+  assert.doesNotMatch(service, /from ["']openai["']|chat\.completions|responses\.create|embeddings\.create/);
+  assert.doesNotMatch(suggestRoute, /from ["']openai["']|chat\.completions|responses\.create|embeddings\.create/);
+  assert.doesNotMatch(service, /postToQbo|claim_qbo_posting_intent|ensureCanonicalVendorMappedToQbo|createQboAccountFromCanonical|createQboVendorWithRequestId/);
+});
+
+test("business-scoped claim RPC preserves leases and service-role-only access", () => {
+  const migration = readFileSync(join(root, "supabase/migrations/20260831_bookkeeping_processing_business_scoped_claim.sql"), "utf8");
+
+  assert.match(migration, /claim_bookkeeping_processing_requests_for_business/);
+  assert.match(migration, /where business_id = p_business_id/);
+  assert.match(migration, /for update skip locked/i);
+  assert.match(migration, /status = 'processing'/);
+  assert.match(migration, /locked_at < p_now - interval '10 minutes'/);
+  assert.match(migration, /grant execute[\s\S]*to service_role/i);
+  assert.match(migration, /revoke all[\s\S]*from authenticated/i);
 });

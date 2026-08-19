@@ -31,6 +31,115 @@ const STRONG_CANONICAL_CLAIM_ALIAS_TYPES = new Set([
   "qbo_vendor_id",
 ]);
 
+const AUTH_ERROR_CODES = new Set([
+  "quickbooks_needs_reconnect",
+  "qbo_client_unavailable:no_active_token_row",
+  "invalid_grant",
+  "authentication_failed",
+  "unauthorized",
+]);
+
+function firstProviderFault(err = {}) {
+  const fault = err?.Fault || err?.fault || err?.response?.Fault || err?.response?.fault;
+  const errors = fault?.Error || fault?.error || fault?.errors;
+  if (Array.isArray(errors)) return errors[0] || null;
+  return errors || null;
+}
+
+function safeProviderMessage(err = {}) {
+  const fault = firstProviderFault(err);
+  return String(
+    fault?.Message ||
+      fault?.message ||
+      fault?.Detail ||
+      fault?.detail ||
+      err?.message ||
+      err?.code ||
+      "provider_error"
+  ).slice(0, 240);
+}
+
+function providerStatus(err = {}) {
+  const raw = err?.statusCode || err?.status || err?.response?.status || err?.response?.statusCode || null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function providerCode(err = {}) {
+  const fault = firstProviderFault(err);
+  const raw = fault?.code || fault?.Code || err?.code || err?.errorCode || err?.intuit_tid || null;
+  return raw == null ? null : String(raw).slice(0, 80);
+}
+
+export function classifyQboVendorProviderError(err = {}, stage = "unknown") {
+  if (err?.vendorDiagnostics) return err.vendorDiagnostics;
+  const message = safeProviderMessage(err);
+  const lower = message.toLowerCase();
+  const status = providerStatus(err);
+  const code = providerCode(err);
+  const codeLower = String(code || "").toLowerCase();
+
+  let normalizedCode = stage === "qbo_vendor_create" ? "vendor_qbo_create_unknown" : "vendor_provider_unavailable";
+  let retryable = true;
+  let reconnectRequired = false;
+
+  if (AUTH_ERROR_CODES.has(lower) || AUTH_ERROR_CODES.has(codeLower) || status === 401 || status === 403 || /invalid_grant|unauthori[sz]ed|reconnect|authentication/.test(lower)) {
+    normalizedCode = "vendor_qbo_auth_required";
+    retryable = false;
+    reconnectRequired = true;
+  } else if (status === 429 || /rate limit|too many requests|throttle/.test(lower)) {
+    normalizedCode = "vendor_qbo_rate_limited";
+  } else if (/timeout|timed out|etimedout|econnreset|socket hang up|network/i.test(message)) {
+    normalizedCode = "vendor_qbo_timeout";
+  } else if (/duplicate name|name already exists|6240|displayname.*exists|display name.*exists/i.test(message) || code === "6240") {
+    normalizedCode = "vendor_qbo_name_conflict";
+    retryable = false;
+  } else if (status === 400 || /validation|business validation|invalid.*vendor|malformed/i.test(message)) {
+    normalizedCode = "vendor_qbo_validation_failed";
+    retryable = false;
+  } else if (/not_supported|not supported/i.test(message)) {
+    normalizedCode = stage === "qbo_vendor_create" ? "vendor_qbo_create_unsupported" : "vendor_provider_unavailable";
+    retryable = false;
+  } else if (/missing_id|create_missing_id/i.test(message)) {
+    normalizedCode = stage === "qbo_vendor_create" ? "vendor_qbo_create_unknown" : "vendor_provider_unavailable";
+    retryable = false;
+  } else if (stage === "qbo_vendor_lookup" || stage === "qbo_vendor_mapping_revalidation" || stage === "qbo_vendor_create_recovery" || stage === "qbo_customer_lookup" || stage === "qbo_employee_lookup" || /findvendors|findcustomers|findemployees|qbo_find/i.test(lower)) {
+    normalizedCode = "vendor_qbo_lookup_failed";
+  } else if (stage === "qbo_vendor_creation_intent" || /postgrest|supabase|rpc|duplicate key|violates/i.test(lower)) {
+    normalizedCode = "vendor_db_error";
+  }
+
+  return {
+    stage,
+    code: normalizedCode,
+    provider_code: code,
+    http_status: status,
+    retryable,
+    reconnect_required: reconnectRequired,
+    message,
+  };
+}
+
+export class QboVendorProviderError extends Error {
+  constructor(stage, err) {
+    const diagnostics = classifyQboVendorProviderError(err, stage);
+    super(diagnostics.code);
+    this.name = "QboVendorProviderError";
+    this.cause = err;
+    this.vendorDiagnostics = diagnostics;
+    this.retryable = diagnostics.retryable;
+    this.reconnectRequired = diagnostics.reconnect_required;
+  }
+}
+
+async function withVendorProviderStage(stage, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    throw err?.vendorDiagnostics ? err : new QboVendorProviderError(stage, err);
+  }
+}
+
 function looksLikeTaxonomyLandmineMemo(txn = {}) {
   const memo = normalizeVendorText([txn.name, txn.merchant_name, txn.counterparty_name].filter(Boolean).join(" "));
   const pfcPrimary = String(txn.personal_finance_category?.primary || "").toUpperCase();
@@ -461,22 +570,33 @@ function mapQboEntities(list = [], type) {
     .filter((entity) => entity.id && entity.displayName);
 }
 
-async function qboFind(qbo, method, query) {
-  if (!qbo || typeof qbo[method] !== "function") return [];
-  const data = await new Promise((resolve, reject) => {
+async function qboFind(qbo, method, query, stage) {
+  if (!qbo || typeof qbo[method] !== "function") {
+    throw new QboVendorProviderError(stage, new Error(`${method}_not_supported`));
+  }
+  const data = await withVendorProviderStage(stage, () => new Promise((resolve, reject) => {
     qbo[method](query, (err, res) => (err ? reject(err) : resolve(res)));
-  });
+  }));
   const key = method === "findVendors" ? "Vendor" : method === "findCustomers" ? "Customer" : "Employee";
   return Array.isArray(data?.QueryResponse?.[key]) ? data.QueryResponse[key] : [];
 }
 
-export async function refreshQboVendorNameList({ db = null, businessId, realmId, qboEnv = qboEnvName || "production", qbo }) {
+export async function refreshQboVendorNameList({
+  db = null,
+  businessId,
+  realmId,
+  qboEnv = qboEnvName || "production",
+  qbo,
+  vendorStage = "qbo_vendor_lookup",
+  customerStage = "qbo_customer_lookup",
+  employeeStage = "qbo_employee_lookup",
+} = {}) {
   db = db || await getDefaultDb();
   const [vendorsActive, vendorsInactive, customers, employees] = await Promise.all([
-    qboFind(qbo, "findVendors", { Active: true }),
-    qboFind(qbo, "findVendors", { Active: false }),
-    qboFind(qbo, "findCustomers", { Active: true }),
-    qboFind(qbo, "findEmployees", { Active: true }),
+    qboFind(qbo, "findVendors", { Active: true }, vendorStage),
+    qboFind(qbo, "findVendors", { Active: false }, vendorStage),
+    qboFind(qbo, "findCustomers", { Active: true }, customerStage),
+    qboFind(qbo, "findEmployees", { Active: true }, employeeStage),
   ]);
   const entities = [
     ...mapQboEntities(vendorsActive, "vendor"),
@@ -920,12 +1040,12 @@ async function createQboVendorWithRequestId(qbo, { displayName, requestId }) {
     Active: true,
   };
   const fn = qbo?.vendor && typeof qbo.vendor.create === "function" ? qbo.vendor.create : qbo?.createVendor;
-  if (!fn) throw new Error("qbo_vendor_create_not_supported");
-  const data = await new Promise((resolve, reject) => {
+  if (!fn) throw new QboVendorProviderError("qbo_vendor_create", new Error("qbo_vendor_create_not_supported"));
+  const data = await withVendorProviderStage("qbo_vendor_create", () => new Promise((resolve, reject) => {
     fn.call(qbo, payload, (err, res) => (err ? reject(err) : resolve(res)));
-  });
+  }));
   const vendor = data?.Vendor || data?.vendor || data || null;
-  if (!vendor?.Id && !vendor?.id) throw new Error("qbo_vendor_create_missing_id");
+  if (!vendor?.Id && !vendor?.id) throw new QboVendorProviderError("qbo_vendor_create", new Error("qbo_vendor_create_missing_id"));
   return {
     id: vendor.Id || vendor.id,
     displayName: vendor.DisplayName || vendor.CompanyName || displayName,
@@ -960,10 +1080,10 @@ export async function ensureCanonicalVendorMappedToQbo({
     qboEnv,
     canonicalVendorId: resolved.canonicalVendor.id,
   });
-  const qbo = await getQBOClientFn(businessId);
+  const qbo = await withVendorProviderStage("qbo_client_acquisition", () => getQBOClientFn(businessId));
   if (!qbo) return { ok: false, skipped: true, reason: "qbo_client_unavailable", canonicalVendor: resolved.canonicalVendor };
   if (existingMapping?.qbo_vendor_id) {
-    const entities = await refreshQboVendorNameList({ db, businessId, realmId, qboEnv, qbo });
+    const entities = await refreshQboVendorNameList({ db, businessId, realmId, qboEnv, qbo, vendorStage: "qbo_vendor_mapping_revalidation" });
     const usable = findUsableCachedVendor(entities, existingMapping.qbo_vendor_id);
     if (!usable) {
       await markMappingNeedsReview(db, {
@@ -1044,7 +1164,7 @@ export async function ensureCanonicalVendorMappedToQbo({
 
   const requestId = stableRequestId({ businessId, realmId, canonicalVendorId: resolved.canonicalVendor.id });
   const payloadSummary = { desired_display_name: desiredDisplayName, source, created_by: createdBy };
-  const claim = await db.rpc("claim_qbo_vendor_creation_intent", {
+  const claim = await withVendorProviderStage("qbo_vendor_creation_intent", () => db.rpc("claim_qbo_vendor_creation_intent", {
     p_business_id: businessId,
     p_realm_id: realmId,
     p_qbo_env: qboEnv,
@@ -1053,8 +1173,8 @@ export async function ensureCanonicalVendorMappedToQbo({
     p_request_id: requestId,
     p_first_transaction_id: bankTxn.id || null,
     p_payload_summary: payloadSummary,
-  });
-  if (claim.error) throw claim.error;
+  }));
+  if (claim.error) throw new QboVendorProviderError("qbo_vendor_creation_intent", claim.error);
   const claimData = claim.data || {};
   if (claimData.already_mapped && claimData.intent?.qbo_vendor_id) {
     await persistTransactionVendor(db, { businessId, transactionId: bankTxn.id, canonicalVendorId: resolved.canonicalVendor.id, qboVendorId: claimData.intent.qbo_vendor_id });
@@ -1064,7 +1184,7 @@ export async function ensureCanonicalVendorMappedToQbo({
     return { ok: true, skipped: true, deferred: true, reason: "vendor_creation_in_progress", canonical_vendor_id: resolved.canonicalVendor.id };
   }
 
-  entities = await refreshQboVendorNameList({ db, businessId, realmId, qboEnv, qbo });
+  entities = await refreshQboVendorNameList({ db, businessId, realmId, qboEnv, qbo, vendorStage: "qbo_vendor_create_recovery" });
   match = classifyQboNameMatch({ entities, desiredDisplayName });
   if (match.decision === "reuse_exact_vendor") {
     const mapping = await upsertMapping(db, { businessId, realmId, qboEnv, canonicalVendorId: resolved.canonicalVendor.id, qboVendorId: match.vendor.id, qboDisplayName: match.vendor.displayName, source: "creation_intent", transactionId: bankTxn.id });
@@ -1099,8 +1219,23 @@ export async function ensureCanonicalVendorMappedToQbo({
     await persistTransactionVendor(db, { businessId, transactionId: bankTxn.id, canonicalVendorId: resolved.canonicalVendor.id, qboVendorId: mapping.qbo_vendor_id });
     return { ok: true, created: true, reason: "qbo_vendor_created", canonical_vendor_id: resolved.canonicalVendor.id, qbo_entity_type: "vendor", qbo_entity_id: mapping.qbo_vendor_id, vendor_name: mapping.qbo_display_name };
   } catch (err) {
-    await markIntent(db, { businessId, realmId, qboEnv, canonicalVendorId: resolved.canonicalVendor.id, status: "unknown", lastError: { message: err?.message || String(err) } });
-    await insertEvent(db, { business_id: businessId, realm_id: realmId, qbo_env: qboEnv, canonical_vendor_id: resolved.canonicalVendor.id, transaction_id: bankTxn.id, event_type: "creation_unknown", reason: err?.message || "qbo_vendor_create_unknown" });
-    return { ok: false, unknown: true, reason: "qbo_vendor_create_unknown", error: err?.message || String(err), canonical_vendor_id: resolved.canonicalVendor.id };
+    const diagnostics = classifyQboVendorProviderError(err, "qbo_vendor_create");
+    await markIntent(db, { businessId, realmId, qboEnv, canonicalVendorId: resolved.canonicalVendor.id, status: diagnostics.retryable ? "unknown" : "needs_review", lastError: diagnostics });
+    await insertEvent(db, {
+      business_id: businessId,
+      realm_id: realmId,
+      qbo_env: qboEnv,
+      canonical_vendor_id: resolved.canonicalVendor.id,
+      transaction_id: bankTxn.id,
+      event_type: diagnostics.retryable ? "creation_unknown" : "creation_failed",
+      reason: diagnostics.code || "vendor_qbo_create_unknown",
+      metadata: {
+        stage: diagnostics.stage,
+        provider_code: diagnostics.provider_code,
+        http_status: diagnostics.http_status,
+        reconnect_required: diagnostics.reconnect_required,
+      },
+    });
+    return { ok: false, unknown: diagnostics.retryable, needsReview: !diagnostics.retryable, reason: diagnostics.code || "vendor_qbo_create_unknown", error: diagnostics.code, vendorDiagnostics: diagnostics, canonical_vendor_id: resolved.canonicalVendor.id };
   }
 }

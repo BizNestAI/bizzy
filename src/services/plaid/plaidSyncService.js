@@ -1,7 +1,10 @@
 import { supabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
 import { triggerContractorCfoInsightsBestEffort } from "../insights/contractorCfoTriggerService.js";
-import { enqueueBookkeepingProcessingForTransactions } from "../bookkeeping/backgroundBookkeepingProcessingService.js";
+import {
+  enqueueBookkeepingProcessingForTransactions,
+  processPendingBookkeepingRequestsUntilIdle,
+} from "../bookkeeping/backgroundBookkeepingProcessingService.js";
 import { resolveStoredPlaidAccessToken } from "./plaidTokenCrypto.js";
 import {
   buildCanonicalTransactionIdentity,
@@ -62,6 +65,22 @@ function isoDateAddDays(isoDate, deltaDays) {
   if (Number.isNaN(d.getTime())) return isoDate;
   d.setUTCDate(d.getUTCDate() + deltaDays);
   return d.toISOString().slice(0, 10);
+}
+
+function triggerBookkeepingProcessingWake({ businessId }) {
+  const batchSize = Math.max(1, Math.min(Number(process.env.BOOKKEEPING_PROCESSING_PLAID_WAKE_BATCH_SIZE || 10), 50));
+  const maxBatches = Math.max(1, Math.min(Number(process.env.BOOKKEEPING_PROCESSING_PLAID_WAKE_MAX_BATCHES || 1), 4));
+  processPendingBookkeepingRequestsUntilIdle({
+    businessId,
+    batchSize,
+    maxBatches,
+    workerId: `bookkeeping-plaid-wake:${process.env.HOSTNAME || "local"}:${process.pid}`,
+  }).catch((err) => {
+    console.warn("[plaid][sync] immediate bookkeeping processing failed", {
+      business_id: businessId,
+      error: err?.message || String(err),
+    });
+  });
 }
 
 async function upsertRowsInChunks(table, rows, onConflict, chunkSize = 200) {
@@ -782,6 +801,9 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
           supabase,
         });
         bookkeepingEnqueued = Number(queued?.enqueued || 0);
+        if (bookkeepingEnqueued > 0) {
+          triggerBookkeepingProcessingWake({ businessId });
+        }
       } catch (bookkeepingErr) {
         console.warn("[plaid][sync] bookkeeping enqueue failed", {
           business_id: businessId,

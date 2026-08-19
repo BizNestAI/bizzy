@@ -35,12 +35,31 @@ test("Purchase and CreditCardCharge payloads attach vendor refs from canonical a
 test("vendor-required failures are classified into retryable or review states without transaction create", () => {
   const cron = read("src/jobs/booksPost.cron.js");
   assert.match(cron, /function classifyVendorEnsureOutcome/);
-  assert.match(cron, /vendor_provider_unknown/);
+  assert.match(cron, /vendor_qbo_auth_required/);
+  assert.match(cron, /vendor_qbo_lookup_failed/);
+  assert.match(cron, /vendor_qbo_timeout/);
+  assert.match(cron, /vendor_qbo_create_unknown/);
   assert.match(cron, /vendor_create_pending/);
   assert.match(cron, /vendor_mapping_invalid/);
   assert.match(cron, /function markVendorPostingBlocked/);
   assert.match(cron, /status: outcome\.review \? "needs_review" : item\.status/);
   assert.match(cron, /vendor_review_canonical_vendor_id/);
+  assert.match(cron, /vendor_failure_stage/);
+  assert.match(cron, /vendor_failure_provider_code/);
+  assert.match(cron, /reconnect_required/);
+  const service = read("src/services/bookkeeping/canonicalVendorService.js");
+  assert.match(service, /qbo_vendor_mapping_revalidation/);
+  assert.match(service, /qbo_vendor_create_recovery/);
+  assert.match(service, /qbo_customer_lookup/);
+  assert.match(service, /qbo_employee_lookup/);
+});
+
+test("manual posting UI maps safe Vendor diagnostics to human-readable messages", () => {
+  const ui = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  assert.match(ui, /vendor_qbo_auth_required[\s\S]*Reconnect QuickBooks/);
+  assert.match(ui, /vendor_qbo_lookup_failed[\s\S]*QuickBooks Vendor check failed/);
+  assert.match(ui, /vendor_qbo_name_conflict[\s\S]*Review Vendor mapping/);
+  assert.match(ui, /vendor_qbo_create_unknown[\s\S]*QuickBooks Vendor status unknown/);
 });
 
 test("canonical vendor service validates active mappings before using stale local qbo entity fields", () => {

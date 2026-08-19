@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   canonicalizeVendorDisplayName,
+  classifyQboVendorProviderError,
   createQboVendorForCanonicalReview,
   ensureCanonicalVendorMappedToQbo,
   getVendorAutoCreateBlockReason,
@@ -142,16 +143,114 @@ test("temporary QBO vendor lookup failure returns safely without creating a dupl
   const db = makeDb();
   const qbo = makeQbo({ failFindVendors: true });
   await assert.rejects(
-    ensureCanonicalVendorMappedToQbo({
+    async () => ensureCanonicalVendorMappedToQbo({
       db,
       getQBOClientFn: async () => qbo,
       getLatestQuickBooksTokenRowFn: async () => ({ realm_id: REALM_ID, qbo_env: "production" }),
       businessId: BUSINESS_ID,
       bankTxn: txn({ merchant_entity_id: "ent-lookup", merchant_name: "Lookup Vendor" }),
     }),
-    /qbo_find_failed/
+    (err) => {
+      assert.equal(err.message, "vendor_qbo_lookup_failed");
+      assert.equal(err.vendorDiagnostics.stage, "qbo_vendor_lookup");
+      assert.equal(err.vendorDiagnostics.retryable, true);
+      return true;
+    }
   );
   assert.equal(qbo.created.length, 0);
+});
+
+test("Instantly vendor gate classifies QBO auth failures without provider create", async () => {
+  const db = makeDb();
+  await assert.rejects(
+    async () => ensureCanonicalVendorMappedToQbo({
+      db,
+      getQBOClientFn: async () => {
+        const err = new Error("quickbooks_needs_reconnect");
+        err.status = 401;
+        throw err;
+      },
+      getLatestQuickBooksTokenRowFn: async () => ({ realm_id: REALM_ID, qbo_env: "production" }),
+      businessId: BUSINESS_ID,
+      bankTxn: txn({ id: "t-instantly-auth", merchant_entity_id: "ent-instantly", merchant_name: "INSTANTLY" }),
+    }),
+    (err) => {
+      assert.equal(err.message, "vendor_qbo_auth_required");
+      assert.equal(err.vendorDiagnostics.stage, "qbo_client_acquisition");
+      assert.equal(err.vendorDiagnostics.reconnect_required, true);
+      return true;
+    }
+  );
+});
+
+test("Vendor provider diagnostics keep safe metadata only", () => {
+  const err = Object.assign(new Error("Duplicate Name Exists Error"), {
+    status: 400,
+    Fault: { Error: [{ code: "6240", Message: "Duplicate Name Exists Error" }] },
+    access_token: "should-not-be-copied",
+    refresh_token: "should-not-be-copied",
+  });
+  const diagnostics = classifyQboVendorProviderError(err, "qbo_vendor_create");
+  assert.deepEqual(Object.keys(diagnostics).sort(), [
+    "code",
+    "http_status",
+    "message",
+    "provider_code",
+    "reconnect_required",
+    "retryable",
+    "stage",
+  ]);
+  assert.equal(diagnostics.code, "vendor_qbo_name_conflict");
+  assert.equal(diagnostics.provider_code, "6240");
+  assert.equal(JSON.stringify(diagnostics).includes("should-not-be-copied"), false);
+});
+
+test("Instantly exact existing Vendor is mapped and no new Vendor is created", async () => {
+  const db = makeDb();
+  const qbo = makeQbo({ vendors: [{ Id: "v-instantly", DisplayName: "Instantly", Active: true }] });
+  const result = await ensureCanonicalVendorMappedToQbo({
+    db,
+    getQBOClientFn: async () => qbo,
+    getLatestQuickBooksTokenRowFn: async () => ({ realm_id: REALM_ID, qbo_env: "production" }),
+    businessId: BUSINESS_ID,
+    bankTxn: txn({ id: "t-instantly-existing", merchant_entity_id: "ent-instantly", merchant_name: "INSTANTLY" }),
+  });
+  assert.equal(result.reason, "existing_qbo_vendor_reused");
+  assert.equal(result.qbo_entity_id, "v-instantly");
+  assert.equal(qbo.created.length, 0);
+});
+
+test("Instantly missing Vendor creates exactly once and maps the first transaction", async () => {
+  const db = makeDb();
+  const qbo = makeQbo();
+  const common = {
+    db,
+    getQBOClientFn: async () => qbo,
+    getLatestQuickBooksTokenRowFn: async () => ({ realm_id: REALM_ID, qbo_env: "production" }),
+    businessId: BUSINESS_ID,
+  };
+  const first = await ensureCanonicalVendorMappedToQbo({ ...common, bankTxn: txn({ id: "t-instantly-create", merchant_entity_id: "ent-instantly-create", merchant_name: "INSTANTLY" }) });
+  const second = await ensureCanonicalVendorMappedToQbo({ ...common, bankTxn: txn({ id: "t-instantly-create-2", merchant_entity_id: "ent-instantly-create", merchant_name: "INSTANTLY" }) });
+  assert.equal(first.reason, "qbo_vendor_created");
+  assert.equal(second.qbo_entity_id, first.qbo_entity_id);
+  assert.equal(qbo.created.length, 1);
+});
+
+test("Instantly Vendor create conflict is classified for review and does not map a Vendor", async () => {
+  const db = makeDb();
+  const qbo = makeQbo({ failCreateWith: Object.assign(new Error("Duplicate Name Exists Error"), { status: 400, Fault: { Error: [{ code: "6240", Message: "Duplicate Name Exists Error" }] } }) });
+  const result = await ensureCanonicalVendorMappedToQbo({
+    db,
+    getQBOClientFn: async () => qbo,
+    getLatestQuickBooksTokenRowFn: async () => ({ realm_id: REALM_ID, qbo_env: "production" }),
+    businessId: BUSINESS_ID,
+    bankTxn: txn({ id: "t-instantly-conflict", merchant_entity_id: "ent-instantly-conflict", merchant_name: "INSTANTLY" }),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.needsReview, true);
+  assert.equal(result.reason, "vendor_qbo_name_conflict");
+  assert.equal(result.vendorDiagnostics.stage, "qbo_vendor_create");
+  assert.equal(db.rows.business_qbo_vendor_mappings.length, 0);
 });
 
 test("vendor posting requirement applies only to normal identifiable merchant outflows", () => {
@@ -431,7 +530,7 @@ function txn(overrides = {}) {
   };
 }
 
-function makeQbo({ vendors = [], customers = [], employees = [], failCreateOnceAfterPersisting = false, failFindVendors = false } = {}) {
+function makeQbo({ vendors = [], customers = [], employees = [], failCreateOnceAfterPersisting = false, failFindVendors = false, failCreateWith = null } = {}) {
   const state = {
     vendors: [...vendors],
     customers: [...customers],
@@ -439,6 +538,7 @@ function makeQbo({ vendors = [], customers = [], employees = [], failCreateOnceA
     created: [],
     failCreateOnceAfterPersisting,
     failFindVendors,
+    failCreateWith,
   };
   return {
     get created() {
@@ -465,6 +565,10 @@ function makeQbo({ vendors = [], customers = [], employees = [], failCreateOnceA
     },
     vendor: {
       create(payload, cb) {
+        if (state.failCreateWith) {
+          cb(state.failCreateWith);
+          return;
+        }
         const row = { Id: `v-${state.vendors.length + 1}`, DisplayName: payload.DisplayName, Active: true };
         state.vendors.push(row);
         state.created.push({ payload, row });

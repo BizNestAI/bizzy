@@ -13,7 +13,7 @@ import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../services/tax/taxChangeE
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../services/bookkeeping/bookkeepingScope.js";
 import { getAutoPostToQuickBooks } from "../services/bookkeeping/autoPostControl.js";
 import { getLatestQuickBooksTokenRow } from "../services/quickbooksTokenService.js";
-import { getVendorPostingRequirement } from "../services/bookkeeping/canonicalVendorService.js";
+import { classifyQboVendorProviderError, getVendorPostingRequirement } from "../services/bookkeeping/canonicalVendorService.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
@@ -341,14 +341,18 @@ function resolveQboTxnType(item, bankTxn, mapping) {
   return null;
 }
 
-function classifyVendorEnsureOutcome(result, err = null) {
+function classifyVendorEnsureOutcome(result, err = null, fallbackStage = "qbo_vendor_lookup") {
   const rawReason = err?.message || result?.reason || "vendor_mapping_required";
   const reason = String(rawReason || "vendor_mapping_required");
+  const diagnostics = err?.vendorDiagnostics || result?.vendorDiagnostics || null;
   const reviewReasons = new Set([
     "ambiguous",
     "display_name_conflict",
     "probable_requires_review",
     "vendor_mapping_invalid",
+    "vendor_qbo_name_conflict",
+    "vendor_qbo_validation_failed",
+    "vendor_qbo_create_unsupported",
     "weak_memo_evidence",
     "blocked_taxonomy",
     "blocked_taxonomy_memo",
@@ -359,17 +363,47 @@ function classifyVendorEnsureOutcome(result, err = null) {
   const retryReasons = new Set([
     "vendor_creation_in_progress",
     "qbo_vendor_create_unknown",
+    "vendor_qbo_create_unknown",
+    "vendor_qbo_lookup_failed",
+    "vendor_qbo_rate_limited",
+    "vendor_qbo_timeout",
     "qbo_client_unavailable",
     "qbo_client_unavailable:no_active_token_row",
   ]);
   if (err) {
+    const classified = classifyQboVendorProviderError(err, diagnostics?.stage || fallbackStage);
     return {
-      reason: reason.includes("timeout") ? "vendor_provider_unknown" : "vendor_provider_unavailable",
+      reason: classified.code || (reason.includes("timeout") ? "vendor_qbo_timeout" : "vendor_provider_unavailable"),
+      diagnostics: classified,
       review: false,
-      retryable: true,
+      retryable: classified.retryable !== false,
+      reconnectRequired: classified.reconnect_required === true,
     };
   }
-  if (result?.unknown) return { reason: "vendor_provider_unknown", review: false, retryable: true };
+  if (diagnostics) {
+    return {
+      reason: diagnostics.code || reason,
+      diagnostics,
+      review: result?.needsReview === true || diagnostics.retryable === false,
+      retryable: diagnostics.retryable !== false,
+      reconnectRequired: diagnostics.reconnect_required === true,
+    };
+  }
+  if (reason === "qbo_client_unavailable" || reason === "qbo_client_unavailable:no_active_token_row") {
+    return {
+      reason: "vendor_qbo_auth_required",
+      diagnostics: {
+        stage: "qbo_client_acquisition",
+        code: "vendor_qbo_auth_required",
+        retryable: false,
+        reconnect_required: true,
+      },
+      review: false,
+      retryable: false,
+      reconnectRequired: true,
+    };
+  }
+  if (result?.unknown) return { reason: "vendor_qbo_create_unknown", review: false, retryable: true };
   if (result?.deferred) return { reason: "vendor_create_pending", review: false, retryable: true };
   if (result?.needsReview || reviewReasons.has(reason)) return { reason, review: true, retryable: false };
   if (retryReasons.has(reason) || result?.ok === false) return { reason, review: false, retryable: true };
@@ -393,6 +427,12 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
     next_post_attempt_at: nextAttemptIso,
     vendor_review_canonical_vendor_id: vendorResult?.canonical_vendor_id || vendorResult?.canonicalVendor?.id || null,
     vendor_review_actions: outcome.review ? ["use_existing_vendor", "create_bizzi_vendor"] : [],
+    vendor_failure_stage: outcome.diagnostics?.stage || null,
+    vendor_failure_code: outcome.diagnostics?.code || outcome.reason,
+    vendor_failure_provider_code: outcome.diagnostics?.provider_code || null,
+    vendor_failure_http_status: outcome.diagnostics?.http_status || null,
+    vendor_failure_retryable: outcome.retryable === true,
+    vendor_failure_reconnect_required: outcome.reconnectRequired === true,
   };
   const update = {
     status: outcome.review ? "needs_review" : item.status,
@@ -403,6 +443,16 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
   if (outcome.review) {
     update.post_after = null;
   }
+  console.warn("[books-post] vendor gate blocked", {
+    businessId: item.business_id,
+    transactionId: item.transaction_id,
+    reason: outcome.reason,
+    stage: outcome.diagnostics?.stage || null,
+    provider_code: outcome.diagnostics?.provider_code || null,
+    http_status: outcome.diagnostics?.http_status || null,
+    retryable: outcome.retryable === true,
+    reconnect_required: outcome.reconnectRequired === true,
+  });
   await insertPostAttempt({
     businessId: item.business_id,
     transactionId: item.transaction_id,
@@ -420,6 +470,11 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
       vendor_required: requirement?.required === true,
       retryable: outcome.retryable === true,
       needs_review: outcome.review === true,
+      reconnect_required: outcome.reconnectRequired === true,
+      failure_stage: outcome.diagnostics?.stage || null,
+      failure_code: outcome.diagnostics?.code || outcome.reason,
+      provider_code: outcome.diagnostics?.provider_code || null,
+      http_status: outcome.diagnostics?.http_status || null,
       vendor_result_reason: vendorResult?.reason || null,
     },
     attemptedAt: nowIso,
@@ -447,7 +502,11 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
       createdBy: "bizzi",
     });
   } catch (err) {
-    const outcome = classifyVendorEnsureOutcome(null, err);
+    const message = String(err?.message || err || "").toLowerCase();
+    const fallbackStage = /quickbooks|qbo_client|token|reconnect|auth/.test(message)
+      ? "qbo_client_acquisition"
+      : "canonical_vendor_db";
+    const outcome = classifyVendorEnsureOutcome(null, err, fallbackStage);
     await markVendorPostingBlocked({ item, requestId, requirement, outcome });
     return { ok: false, requirement, outcome };
   }

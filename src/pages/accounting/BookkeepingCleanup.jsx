@@ -287,6 +287,51 @@ function buildManualPostError(err) {
       primaryLabel: "Go to Integrations",
     };
   }
+  if (normalized.includes("vendor_qbo_auth_required")) {
+    return {
+      type: "error",
+      title: "Reconnect QuickBooks",
+      message: "QuickBooks needs to be reconnected before Bizzi can post this transaction.",
+      detail: "Nothing was marked Posted. Reconnect QuickBooks, then try posting again.",
+      primaryLabel: "Close",
+    };
+  }
+  if (normalized.includes("vendor_qbo_lookup_failed") || normalized.includes("vendor_qbo_rate_limited") || normalized.includes("vendor_qbo_timeout")) {
+    return {
+      type: "error",
+      title: "QuickBooks Vendor check failed",
+      message: "Bizzi couldn't verify the Vendor in QuickBooks. Please try again shortly.",
+      detail: "Nothing was marked Posted. Bizzi will not post merchant expenses without a verified Vendor.",
+      primaryLabel: "Close",
+    };
+  }
+  if (normalized.includes("vendor_qbo_name_conflict")) {
+    return {
+      type: "error",
+      title: "Review Vendor mapping",
+      message: "QuickBooks reported a Vendor name conflict. Review the Vendor mapping before posting.",
+      detail: "Nothing was marked Posted. This prevents Bizzi from creating or using the wrong Vendor.",
+      primaryLabel: "Close",
+    };
+  }
+  if (normalized.includes("vendor_qbo_validation_failed")) {
+    return {
+      type: "error",
+      title: "Vendor needs review",
+      message: "QuickBooks rejected the Vendor information for this transaction.",
+      detail: "Nothing was marked Posted. Review the Vendor mapping, then try again.",
+      primaryLabel: "Close",
+    };
+  }
+  if (normalized.includes("vendor_qbo_create_unknown")) {
+    return {
+      type: "error",
+      title: "QuickBooks Vendor status unknown",
+      message: "Bizzi couldn't confirm whether QuickBooks created the Vendor. Please try again shortly.",
+      detail: "Nothing was marked Posted. Bizzi will re-check QuickBooks before any retry creates a Vendor.",
+      primaryLabel: "Close",
+    };
+  }
   return {
     type: "error",
     title: "QuickBooks did not post this transaction",

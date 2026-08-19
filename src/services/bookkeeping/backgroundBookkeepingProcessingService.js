@@ -12,8 +12,15 @@ export const BOOKKEEPING_PROCESSING_STATUSES = {
 
 const DEFAULT_BATCH_SIZE = 25;
 const DEFAULT_DISCOVERY_LIMIT = 250;
+const DEFAULT_MAX_BATCHES_PER_RUN = 4;
 const STALE_PROCESSING_MINUTES = 10;
 const UNRESOLVED_RETRY_COOLDOWN_HOURS = 24;
+
+export const BACKGROUND_BOOKKEEPING_EXECUTION_POLICY = Object.freeze({
+  allow_ai_categorization: false,
+  allow_qbo_account_create: false,
+  allow_qbo_provider_writes: false,
+});
 
 let deps = {
   runBookkeepingSuggestionPass: async (args) => {
@@ -240,8 +247,18 @@ export async function enqueueBookkeepingProcessingForTransactions({
   return insertOrResetRequests({ db, businessId, transactionIds, source, priority, now });
 }
 
-async function claimDueRequests({ db, workerId, batchSize, now }) {
+async function claimDueRequests({ db, workerId, batchSize, now, businessId = null }) {
   const nowText = nowIso(now);
+  if (typeof db.rpc === "function" && !db.store && businessId) {
+    const { data, error } = await db.rpc("claim_bookkeeping_processing_requests_for_business", {
+      p_business_id: businessId,
+      p_worker_id: workerId,
+      p_batch_size: batchSize,
+      p_now: nowText,
+    });
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  }
   if (typeof db.rpc === "function" && !db.store) {
     const { data, error } = await db.rpc("claim_bookkeeping_processing_requests", {
       p_worker_id: workerId,
@@ -258,6 +275,7 @@ async function claimDueRequests({ db, workerId, batchSize, now }) {
     const claimable = db.store.bookkeeping_processing_requests
       .filter((row) => {
         const status = row.status;
+        if (businessId && row.business_id !== businessId) return false;
         const due = new Date(row.process_after || nowText).getTime() <= nowMs;
         const attemptsRemain = Number(row.attempt_count || 0) < Number(row.max_attempts || 5);
         const stale =
@@ -377,6 +395,7 @@ export async function processPendingBookkeepingRequests({
   supabase = null,
   workerId = `bookkeeping:${process.env.HOSTNAME || "local"}:${process.pid}`,
   batchSize = DEFAULT_BATCH_SIZE,
+  businessId = null,
   now = new Date(),
 } = {}) {
   const db = supabase || await getDefaultSupabase();
@@ -384,6 +403,7 @@ export async function processPendingBookkeepingRequests({
     db,
     workerId,
     batchSize: Math.max(1, Math.min(Number(batchSize || DEFAULT_BATCH_SIZE), 250)),
+    businessId,
     now,
   });
   const results = [];
@@ -439,7 +459,7 @@ export async function processPendingBookkeepingRequests({
           range: "all",
           auto_approve: true,
           source,
-          allow_qbo_account_create: false,
+          ...BACKGROUND_BOOKKEEPING_EXECUTION_POLICY,
         },
       });
       const reconsideration = await deps.reconsiderNeedsReviewTransactions(businessId, {
@@ -482,6 +502,48 @@ export async function processPendingBookkeepingRequests({
     skipped: results.filter((row) => row?.status === BOOKKEEPING_PROCESSING_STATUSES.SKIPPED).length,
     results,
   };
+}
+
+export async function processPendingBookkeepingRequestsUntilIdle({
+  supabase = null,
+  workerId = `bookkeeping:${process.env.HOSTNAME || "local"}:${process.pid}`,
+  batchSize = DEFAULT_BATCH_SIZE,
+  maxBatches = DEFAULT_MAX_BATCHES_PER_RUN,
+  businessId = null,
+  now = new Date(),
+} = {}) {
+  const db = supabase || await getDefaultSupabase();
+  const batches = Math.max(1, Math.min(Number(maxBatches || DEFAULT_MAX_BATCHES_PER_RUN), 20));
+  const aggregate = {
+    ok: true,
+    batches: 0,
+    claimed: 0,
+    completed: 0,
+    failed: 0,
+    dead_letter: 0,
+    skipped: 0,
+    results: [],
+  };
+
+  for (let i = 0; i < batches; i += 1) {
+    const result = await processPendingBookkeepingRequests({
+      supabase: db,
+      workerId,
+      batchSize,
+      businessId,
+      now,
+    });
+    aggregate.batches += 1;
+    aggregate.claimed += Number(result?.claimed || 0);
+    aggregate.completed += Number(result?.completed || 0);
+    aggregate.failed += Number(result?.failed || 0);
+    aggregate.dead_letter += Number(result?.dead_letter || 0);
+    aggregate.skipped += Number(result?.skipped || 0);
+    aggregate.results.push(...(result?.results || []));
+    if (!result?.claimed) break;
+  }
+
+  return aggregate;
 }
 
 export async function enqueueUnresolvedBookkeepingBacklog({
@@ -606,13 +668,14 @@ export async function runBookkeepingProcessingForBusiness({
   } else {
     await enqueueUnresolvedBookkeepingBacklog({ businessId, supabase: db, limit: batchSize, now });
   }
-  return processPendingBookkeepingRequests({ supabase: db, workerId, batchSize, now });
+  return processPendingBookkeepingRequests({ supabase: db, workerId, batchSize, businessId, now });
 }
 
 export default {
   enqueueBookkeepingProcessingForTransactions,
   enqueueUnresolvedBookkeepingBacklog,
   processPendingBookkeepingRequests,
+  processPendingBookkeepingRequestsUntilIdle,
   runBookkeepingProcessingForBusiness,
   getBookkeepingProcessingStatus,
 };

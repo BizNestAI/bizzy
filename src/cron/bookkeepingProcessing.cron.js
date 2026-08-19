@@ -1,12 +1,13 @@
 import { supabase } from "../services/supabaseAdmin.js";
 import {
   enqueueUnresolvedBookkeepingBacklog,
-  processPendingBookkeepingRequests,
+  processPendingBookkeepingRequestsUntilIdle,
 } from "../services/bookkeeping/backgroundBookkeepingProcessingService.js";
 
 const DISABLED = String(process.env.DISABLE_BOOKKEEPING_PROCESSING_WORKER || "").toLowerCase() === "true";
 const INTERVAL_MINUTES = Number(process.env.BOOKKEEPING_PROCESSING_WORKER_INTERVAL_MINUTES || 5);
 const BATCH_SIZE = Number(process.env.BOOKKEEPING_PROCESSING_WORKER_BATCH_SIZE || 25);
+const MAX_BATCHES_PER_TICK = Number(process.env.BOOKKEEPING_PROCESSING_MAX_BATCHES_PER_TICK || 4);
 const DISCOVERY_BUSINESS_LIMIT = Number(process.env.BOOKKEEPING_PROCESSING_DISCOVERY_BUSINESS_LIMIT || 25);
 const DISCOVERY_TXN_LIMIT = Number(process.env.BOOKKEEPING_PROCESSING_DISCOVERY_TXN_LIMIT || 100);
 
@@ -65,16 +66,18 @@ export async function runBookkeepingProcessingWorkerOnce({
     }
   }
 
-  const processed = await processPendingBookkeepingRequests({
+  const processed = await processPendingBookkeepingRequestsUntilIdle({
     supabase,
     workerId,
     batchSize,
+    maxBatches: MAX_BATCHES_PER_TICK,
   });
 
   if (enqueued > 0 || processed.claimed > 0) {
     console.info("[bookkeeping-processing] worker tick", {
       businesses: businesses.length,
       enqueued,
+      batches: processed.batches,
       claimed: processed.claimed,
       completed: processed.completed,
       failed: processed.failed,
@@ -103,6 +106,7 @@ export function startBookkeepingProcessingWorker() {
   console.info("[bookkeeping-processing] worker started", {
     interval_minutes: INTERVAL_MINUTES,
     batch_size: BATCH_SIZE,
+    max_batches_per_tick: MAX_BATCHES_PER_TICK,
     discovery_txn_limit: DISCOVERY_TXN_LIMIT,
   });
   return timer;

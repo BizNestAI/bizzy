@@ -969,6 +969,13 @@ export async function runBookkeepingSuggestionPass({
   const allowQboAccountCreate =
     body.allow_qbo_account_create !== false &&
     body.allowQboAccountCreate !== false;
+  const allowAiCategorization =
+    body.allow_ai_categorization === true ||
+    body.allowAiCategorization === true;
+  // Any future paid model fallback in this pass must require this flag.
+  const executionPolicy = {
+    allow_ai_categorization: allowAiCategorization,
+  };
 
   const rangeStart = txnIds ? null : computeRangeStart(rangeParam);
 
@@ -2438,7 +2445,7 @@ export async function runBookkeepingSuggestionPass({
         const meta = enforceCheckNeverAutoApprove({
           ...baseMetaWithCheck,
           suggestion_source: "check_block",
-          suggestion_debug: { reason: "check_detected" },
+          suggestion_debug: { reason: "check_detected", ...executionPolicy },
         });
         await pushRow({
           txn: row,
@@ -2486,6 +2493,7 @@ export async function runBookkeepingSuggestionPass({
         suggestion_source: suggestionSource,
         suggestion_debug: {
           mapping_reason: mapped.reason || null,
+          ...executionPolicy,
         },
       };
       if (metaBase?.auto_approve_reason === "manual_user") {
