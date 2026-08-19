@@ -186,6 +186,47 @@ function getQboTxnAmount(entity = {}) {
   return null;
 }
 
+function qboCreateCandidates(qbo, directMethod, nestedKeys = []) {
+  const candidates = [];
+  if (typeof qbo?.[directMethod] === "function") {
+    candidates.push({ fn: qbo[directMethod], context: qbo });
+  }
+  for (const key of nestedKeys) {
+    if (typeof qbo?.[key]?.create === "function") {
+      candidates.push({ fn: qbo[key].create, context: qbo[key] });
+    }
+  }
+  return candidates;
+}
+
+async function createQboPurchase(qbo, payload) {
+  const candidates = qboCreateCandidates(qbo, "createPurchase", ["purchase"]);
+  if (!candidates.length) {
+    throw new Error("purchase_post_not_supported");
+  }
+  const { fn, context } = candidates[0];
+  return new Promise((resolve, reject) => {
+    fn.call(context, payload, (err, resp) => {
+      if (err) return reject(err);
+      return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Purchase", syncToken: resp?.SyncToken || null, raw: resp || null });
+    });
+  });
+}
+
+async function createQboDeposit(qbo, payload) {
+  const candidates = qboCreateCandidates(qbo, "createDeposit", ["deposit"]);
+  if (!candidates.length) {
+    throw new Error("deposit_post_not_supported");
+  }
+  const { fn, context } = candidates[0];
+  return new Promise((resolve, reject) => {
+    fn.call(context, payload, (err, resp) => {
+      if (err) return reject(err);
+      return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Deposit", syncToken: resp?.SyncToken || null, raw: resp || null });
+    });
+  });
+}
+
 function getQboPostingAccountId(entity = {}, qboTxnType) {
   if (qboTxnType === "Purchase" || qboTxnType === "CreditCardCharge") return entity.AccountRef?.value || null;
   if (qboTxnType === "Deposit") return entity.DepositToAccountRef?.value || null;
@@ -894,31 +935,23 @@ async function postBankOutflowPurchase(item, bankTxn, qbo, mappedAccountId, cate
       attached_to: vendorRef ? "purchase" : "none",
     });
   }
-  return new Promise((resolve, reject) => {
-    qbo.purchase.create(
+  return createQboPurchase(qbo, {
+    requestId,
+    PaymentType: "Cash",
+    AccountRef: { value: String(mappedAccountId) },
+    TxnDate: txnDate,
+    PrivateNote: note,
+    ...(vendorRef ? { EntityRef: { value: vendorRef.value, type: "Vendor" } } : {}),
+    Line: [
       {
-        requestId,
-        PaymentType: "Cash",
-        AccountRef: { value: String(mappedAccountId) },
-        TxnDate: txnDate,
-        PrivateNote: note,
-        ...(vendorRef ? { EntityRef: { value: vendorRef.value, type: "Vendor" } } : {}),
-        Line: [
-          {
-            DetailType: "AccountBasedExpenseLineDetail",
-            Amount: amount,
-            Description: lineDescription,
-            AccountBasedExpenseLineDetail: {
-              AccountRef: { value: String(categoryAccountId) },
-            },
-          },
-        ],
+        DetailType: "AccountBasedExpenseLineDetail",
+        Amount: amount,
+        Description: lineDescription,
+        AccountBasedExpenseLineDetail: {
+          AccountRef: { value: String(categoryAccountId) },
+        },
       },
-      (err, resp) => {
-        if (err) return reject(err);
-        return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Purchase", syncToken: resp?.SyncToken || null, raw: resp || null });
-      }
-    );
+    ],
   });
 }
 
@@ -957,12 +990,7 @@ async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, catego
   });
 
   const attempt = (payload) =>
-    new Promise((resolve, reject) => {
-      qbo.deposit.create(payload, (err, resp) => {
-        if (err) return reject(err);
-        return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Deposit", syncToken: resp?.SyncToken || null, raw: resp || null });
-      });
-    });
+    createQboDeposit(qbo, payload);
 
   try {
     return await attempt(buildPayload("A"));
@@ -993,13 +1021,14 @@ async function postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, 
   }
   const payload = {
     requestId,
+    PaymentType: "CreditCard",
     AccountRef: { value: String(mappedAccountId) },
     TxnDate: txnDate,
+    TotalAmt: amount,
     PrivateNote: note,
     ...(vendorRef
       ? {
           EntityRef: { value: vendorRef.value, type: "Vendor" },
-          PayeeEntityRef: { value: vendorRef.value, type: "Vendor" },
         }
       : {}),
     Line: [
@@ -1013,21 +1042,7 @@ async function postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, 
       },
     ],
   };
-  const candidates = [
-    qbo?.creditcardcharge?.create,
-    qbo?.creditCardCharge?.create,
-    qbo?.createCreditCardCharge,
-  ].filter(Boolean);
-  if (!candidates.length) {
-    throw new Error("cc_charge_post_not_supported");
-  }
-  const fn = candidates[0];
-  return new Promise((resolve, reject) => {
-    fn.call(qbo, payload, (err, resp) => {
-      if (err) return reject(err);
-      return resolve({ id: resp?.Id || null, type: resp?.TxnType || "CreditCardCharge", syncToken: resp?.SyncToken || null, raw: resp || null });
-    });
-  });
+  return createQboPurchase(qbo, payload);
 }
 
 async function postToQbo(item, bankTxn, qbo, mapping, requestId) {

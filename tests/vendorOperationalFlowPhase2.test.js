@@ -29,7 +29,7 @@ test("Purchase and CreditCardCharge payloads attach vendor refs from canonical a
   assert.match(cron, /postBankOutflowPurchase[\s\S]*EntityRef: \{ value: vendorRef\.value, type: "Vendor" \}/);
   assert.match(cron, /postCreditCardOutflowCharge[\s\S]*const vendorRef = getQboEntityRef\(bankTxn, "vendor"\)/);
   assert.match(cron, /postCreditCardOutflowCharge[\s\S]*EntityRef: \{ value: vendorRef\.value, type: "Vendor" \}/);
-  assert.match(cron, /postCreditCardOutflowCharge[\s\S]*PayeeEntityRef: \{ value: vendorRef\.value, type: "Vendor" \}/);
+  assert.doesNotMatch(cron, /postCreditCardOutflowCharge[\s\S]*PayeeEntityRef/);
 });
 
 test("vendor-required failures are classified into retryable or review states without transaction create", () => {

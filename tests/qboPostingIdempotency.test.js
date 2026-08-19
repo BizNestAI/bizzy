@@ -70,6 +70,30 @@ test("same request retries reuse the stable Intuit requestid for every QBO trans
   assert.match(cron, /requestId,[\s\S]*AccountRef: \{ value: String\(mappedAccountId\) \}/);
 });
 
+test("credit-card funded expenses create QBO Purchases with CreditCard payment type", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const ccBody = cron.slice(cron.indexOf("async function postCreditCardOutflowCharge"), cron.indexOf("async function postToQbo"));
+
+  assert.match(ccBody, /const payload = \{/);
+  assert.match(ccBody, /return createQboPurchase\(qbo, payload\)/);
+  assert.match(ccBody, /PaymentType: "CreditCard"/);
+  assert.match(ccBody, /AccountRef: \{ value: String\(mappedAccountId\) \}/);
+  assert.match(ccBody, /TotalAmt: amount/);
+  assert.match(ccBody, /Amount: amount/);
+  assert.match(ccBody, /AccountBasedExpenseLineDetail:[\s\S]*AccountRef: \{ value: String\(categoryAccountId\) \}/);
+  assert.match(ccBody, /EntityRef: \{ value: vendorRef\.value, type: "Vendor" \}/);
+  assert.doesNotMatch(ccBody, /createCreditCardCharge|creditcardcharge\?\.create|creditCardCharge\?\.create/);
+});
+
+test("QBO Purchase and Deposit provider helpers support raw node-quickbooks methods and wrapped clients", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+
+  assert.match(cron, /function qboCreateCandidates\(qbo, directMethod, nestedKeys = \[\]\)/);
+  assert.match(cron, /qboCreateCandidates\(qbo, "createPurchase", \["purchase"\]\)/);
+  assert.match(cron, /qboCreateCandidates\(qbo, "createDeposit", \["deposit"\]\)/);
+  assert.match(cron, /fn\.call\(context, payload/);
+});
+
 test("QBO success plus local crash and network timeouts recover as unknown without a new requestid", () => {
   const cron = read("src/jobs/booksPost.cron.js");
   const migration = read("supabase/migrations/20260826_qbo_posting_idempotency_phase2.sql");
