@@ -12,12 +12,36 @@ test("Operator Requests live population is derived from Books Review Needs Revie
   const client = read("src/services/bookkeeping/bookkeepingClient.js");
 
   assert.match(service, /fetchOperatorRequests/);
-  assert.match(service, /fetchBookkeepingTransactions\(\{[\s\S]*statusFilter:\s*"needs_review"[\s\S]*rangeParam:\s*"all"/);
+  assert.match(service, /get_operator_request_counts_bounded/);
+  assert.match(service, /get_operator_requests_bounded/);
   assert.match(service, /outstanding_count/);
   assert.match(service, /answered_awaiting_review_count/);
-  assert.match(service, /while \(allRows\.length < totalCount\)/);
+  assert.doesNotMatch(service, /while \(allRows\.length < totalCount\)/);
+  assert.doesNotMatch(service, /fetchBookkeepingTransactions\(\{[\s\S]*statusFilter:\s*"needs_review"[\s\S]*rangeParam:\s*"all"/);
   assert.match(route, /router\.get\("\/operator-requests"/);
   assert.match(client, /getOperatorRequests/);
+});
+
+test("Operator Requests retrieval is database bounded and supports large Needs Review populations", () => {
+  const service = read("src/services/bookkeeping/clarificationService.js");
+  const migration = read("supabase/migrations/20260905_bounded_bookkeeping_needs_review_retrieval.sql");
+  const fetchBody = service.slice(
+    service.indexOf("export async function fetchOperatorRequests"),
+    service.indexOf("async function upsertVendorRuleFromClarification")
+  );
+
+  assert.match(migration, /create or replace function public\.get_operator_request_counts_bounded/);
+  assert.match(migration, /outstanding_count bigint/);
+  assert.match(migration, /answered_awaiting_review_count bigint/);
+  assert.match(migration, /accounting_needs_review_count bigint/);
+  assert.match(migration, /create or replace function public\.get_operator_requests_bounded/);
+  assert.match(migration, /count\(\*\) over \(\) as total_count/);
+  assert.match(migration, /limit greatest\(least\(coalesce\(p_limit, 25\), 100\), 1\)/);
+  assert.match(migration, /offset greatest\(coalesce\(p_offset, 0\), 0\)/);
+  assert.match(migration, /not exists \([\s\S]*from public\.clarification_requests cr[\s\S]*cr\.status = 'answered'[\s\S]*cr\.resolved_at is null/);
+  assert.match(fetchBody, /p_limit:\s*safePageSize/);
+  assert.match(fetchBody, /p_offset:\s*\(safePage - 1\) \* safePageSize/);
+  assert.doesNotMatch(fetchBody, /\.in\("transaction_id",\s*ids\)/);
 });
 
 test("customer answer stores context only and leaves accounting Needs Review unchanged", () => {
@@ -110,9 +134,11 @@ test("Books Review and Monthly Review share authoritative human approval service
 test("stale requests close and answered awaiting review rows block background auto-handling", () => {
   const service = read("src/services/bookkeeping/clarificationService.js");
   const worker = read("src/services/bookkeeping/backgroundBookkeepingProcessingService.js");
+  const migration = read("supabase/migrations/20260905_bounded_bookkeeping_needs_review_retrieval.sql");
 
-  assert.match(service, /transaction_no_longer_needs_review/);
-  assert.match(service, /status:\s*"expired"/);
+  assert.match(service, /expire_stale_operator_requests/);
+  assert.match(migration, /transaction_no_longer_needs_review/);
+  assert.match(migration, /status = 'expired'/);
   assert.match(worker, /hasAnsweredOperatorRequestAwaitingReview/);
   assert.match(worker, /operator_response_awaiting_accountant_review/);
 });
@@ -125,4 +151,17 @@ test("schema preserves reviewer attribution and resolution audit fields", () => 
   assert.match(migration, /resolved_at timestamp with time zone/);
   assert.match(migration, /resolved_by_user_id uuid/);
   assert.match(migration, /resolved_final_qbo_account_id text/);
+});
+
+test("bounded retrieval migration keeps Books Review and Operator Requests on the same Needs Review semantics", () => {
+  const migration = read("supabase/migrations/20260905_bounded_bookkeeping_needs_review_retrieval.sql");
+
+  assert.match(migration, /create or replace function public\.bookkeeping_transaction_matches_status/);
+  assert.match(migration, /coalesce\(p_status, 'needs_review'\) in \('needs_review', 'uncategorized'\)/);
+  assert.match(migration, /coalesce\(p_status, ''\) = 'auto_approved'[\s\S]*p_meta ->> 'is_check'/);
+  assert.match(migration, /bt\.business_id = p_business_id/);
+  assert.match(migration, /bt\.is_archived is false/);
+  assert.match(migration, /bp\.bookkeeping_start_date is null or bt\.date >= bp\.bookkeeping_start_date/);
+  assert.match(migration, /revoke all on function public\.get_operator_requests_bounded/);
+  assert.match(migration, /grant execute on function public\.get_operator_requests_bounded\(uuid, integer, integer\) to service_role/);
 });

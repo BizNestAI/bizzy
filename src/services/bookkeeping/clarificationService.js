@@ -2,7 +2,7 @@ import { supabase } from "../supabaseAdmin.js";
 import { computeMemoPrefixForLearning, canonicalTxnDirection, cleanMemoForPrefix } from "./vendorRuleLearner.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
 import { resolveCanonicalQboAccount } from "./canonicalQboAccountResolver.js";
-import { fetchBookkeepingTransactions, matchesTransactionStatusFilter } from "../../api/bookkeeping/routes/bookkeeping.transactions.routes.js";
+import { matchesTransactionStatusFilter } from "../../api/bookkeeping/routes/bookkeeping.transactions.routes.js";
 import {
   getCanonicalAccountByKey,
   getCanonicalAccountForIntent,
@@ -423,20 +423,6 @@ export async function fetchPendingClarifications({ businessId, limit = 25 }) {
   return { ok: true, count: typeof count === "number" ? count : rows.length, rows };
 }
 
-async function fetchAnsweredAwaitingReviewMap({ businessId, transactionIds = [] }) {
-  const ids = Array.from(new Set((transactionIds || []).filter(Boolean)));
-  if (!businessId || !ids.length) return new Map();
-  const { data, error } = await supabase
-    .from("clarification_requests")
-    .select("id,transaction_id,status,prompt_text,answer_text,selected_intent,answered_at,answered_by_user_id,resolved_at,meta")
-    .eq("business_id", businessId)
-    .eq("status", "answered")
-    .is("resolved_at", null)
-    .in("transaction_id", ids);
-  if (error) throw new Error(error?.message || "operator_answer_fetch_failed");
-  return new Map((data || []).map((row) => [String(row.transaction_id), row]));
-}
-
 async function ensurePendingRequestForTransaction({ businessId, transaction }) {
   if (!businessId || !transaction?.id) return null;
   const existing = transaction.operator_request?.id
@@ -456,10 +442,10 @@ async function ensurePendingRequestForTransaction({ businessId, transaction }) {
       transaction_snapshot: {
         date: transaction.date || null,
         amount: transaction.amount ?? null,
-        merchant_name: transaction.vendor || transaction.payee || null,
-        description: transaction.description || null,
+        merchant_name: transaction.vendor || transaction.payee || transaction.counterparty_name || transaction.merchant_name || null,
+        description: transaction.description || transaction.name || null,
         plaid_account_id: transaction.plaid_account_id || null,
-        source_account: transaction.currentAccount || null,
+        source_account: transaction.currentAccount || transaction.account_name || transaction.account_official_name || null,
       },
     },
   });
@@ -470,56 +456,37 @@ export async function fetchOperatorRequests({ businessId, page = 1, pageSize = 2
   if (!businessId) return { ok: false, error: "missing_business_id" };
   const safePage = Math.max(parseInt(page, 10) || 1, 1);
   const safePageSize = Math.min(Math.max(parseInt(pageSize, 10) || 25, 1), 100);
-  const allRows = [];
-  let nextPage = 1;
-  let totalCount = 0;
-  do {
-    const result = await fetchBookkeepingTransactions({
-      businessId,
-      statusFilter: "needs_review",
-      rangeParam: "all",
-      page: nextPage,
-      pageSize: 200,
-    });
-    totalCount = Number(result.totalCount || 0);
-    allRows.push(...(result.rows || []));
-    nextPage += 1;
-  } while (allRows.length < totalCount);
 
-  const answeredMap = await fetchAnsweredAwaitingReviewMap({
-    businessId,
-    transactionIds: allRows.map((row) => row.id),
+  const { error: staleErr } = await supabase.rpc("expire_stale_operator_requests", {
+    p_business_id: businessId,
   });
-  const needsReviewIds = new Set(allRows.map((row) => String(row.id)));
-  const { data: pendingRows, error: pendingErr } = await supabase
-    .from("clarification_requests")
-    .select("id,transaction_id")
-    .eq("business_id", businessId)
-    .eq("status", "pending")
-    .limit(1000);
-  if (pendingErr) throw new Error(pendingErr?.message || "operator_pending_fetch_failed");
-  const staleIds = (pendingRows || [])
-    .filter((row) => row?.transaction_id && !needsReviewIds.has(String(row.transaction_id)))
-    .map((row) => row.id);
-  if (staleIds.length) {
-    await supabase
-      .from("clarification_requests")
-      .update({
-        status: "expired",
-        resolved_at: new Date().toISOString(),
-        resolved_reason: "transaction_no_longer_needs_review",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("business_id", businessId)
-      .in("id", staleIds);
+  if (staleErr) throw new Error(staleErr?.message || "operator_stale_expire_failed");
+
+  const { data: countRows, error: countErr } = await supabase.rpc("get_operator_request_counts_bounded", {
+    p_business_id: businessId,
+  });
+  if (countErr) throw new Error(countErr?.message || "operator_counts_fetch_failed");
+  const counts = Array.isArray(countRows) ? countRows[0] || {} : countRows || {};
+  const outstandingCount = Number(counts.outstanding_count || 0);
+  const answeredAwaitingReviewCount = Number(counts.answered_awaiting_review_count || 0);
+  const accountingNeedsReviewCount = Number(counts.accounting_needs_review_count || 0);
+
+  let paged = [];
+  if (includeRows && outstandingCount > 0) {
+    const { data: pageRows, error: pageErr } = await supabase.rpc("get_operator_requests_bounded", {
+      p_business_id: businessId,
+      p_limit: safePageSize,
+      p_offset: (safePage - 1) * safePageSize,
+    });
+    if (pageErr) throw new Error(pageErr?.message || "operator_rows_fetch_failed");
+    paged = pageRows || [];
   }
-  const outstanding = allRows.filter((row) => !answeredMap.has(String(row.id)));
-  const start = (safePage - 1) * safePageSize;
-  const paged = includeRows ? outstanding.slice(start, start + safePageSize) : [];
   const rows = [];
 
   for (const txn of paged) {
     const request = await ensurePendingRequestForTransaction({ businessId, transaction: txn });
+    const merchant = txn.counterparty_name || txn.merchant_name || txn.name || "Unknown merchant";
+    const sourceAccount = txn.account_name || txn.account_official_name || txn.currentAccount || null;
     rows.push({
       id: request?.id || txn.id,
       request_id: request?.id || null,
@@ -529,36 +496,36 @@ export async function fetchOperatorRequests({ businessId, page = 1, pageSize = 2
       prompt_text: Number(txn.amount || 0) > 0 ? "What was this deposit for?" : "What was this charge for?",
       created_at: null,
       meta: {
-        suggested_qbo_account_id: txn.suggestedAccountId || null,
-        suggested_qbo_account_name: txn.suggestedAccountName || null,
+        suggested_qbo_account_id: txn.suggested_qbo_account_id || txn.suggestedAccountId || null,
+        suggested_qbo_account_name: txn.suggested_qbo_account_name || txn.suggestedAccountName || null,
       },
       txn: {
         date: txn.date || null,
         amount: txn.signed_amount ?? txn.amount ?? null,
-        name: txn.description || null,
-        description: txn.description || null,
-        merchant_name: txn.vendor || txn.payee || null,
-        counterparty_name: txn.payee || txn.vendor || null,
+        name: txn.name || null,
+        description: txn.name || null,
+        merchant_name: merchant,
+        counterparty_name: txn.counterparty_name || merchant,
         plaid_account_id: txn.plaid_account_id || null,
-        source_account: txn.currentAccount || null,
-        suggested_qbo_account_id: txn.suggestedAccountId || null,
-        suggested_qbo_account_name: txn.suggestedAccountName || null,
+        source_account: sourceAccount,
+        suggested_qbo_account_id: txn.suggested_qbo_account_id || txn.suggestedAccountId || null,
+        suggested_qbo_account_name: txn.suggested_qbo_account_name || txn.suggestedAccountName || null,
       },
     });
   }
 
   return {
     ok: true,
-    outstanding_count: outstanding.length,
-    answered_awaiting_review_count: answeredMap.size,
-    accounting_needs_review_count: totalCount,
-    count: outstanding.length,
+    outstanding_count: outstandingCount,
+    answered_awaiting_review_count: answeredAwaitingReviewCount,
+    accounting_needs_review_count: accountingNeedsReviewCount,
+    count: outstandingCount,
     rows,
     meta: {
       page: safePage,
       page_size: safePageSize,
-      total_count: outstanding.length,
-      page_count: Math.max(1, Math.ceil(outstanding.length / safePageSize)),
+      total_count: outstandingCount,
+      page_count: Math.max(1, Math.ceil(outstandingCount / safePageSize)),
     },
   };
 }

@@ -43,6 +43,11 @@ function normalizeDate(d) {
   return parsed.toISOString().slice(0, 10);
 }
 
+export function rangeStartDateForBookkeeping(rangeParam = "this_month") {
+  const rangeStart = computeRangeStart(String(rangeParam || "this_month").toLowerCase());
+  return rangeStart ? normalizeDate(rangeStart) : null;
+}
+
 export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   const status = cat?.status || "needs_review";
   const isCheckTxn = cat?.meta?.is_check === true;
@@ -145,6 +150,59 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
   };
 }
 
+function normalizeBookkeepingRpcRow(row = {}) {
+  const operatorRequest = row.operator_request_id
+    ? {
+        id: row.operator_request_id,
+        status: row.operator_request_status,
+        prompt_text: row.operator_prompt_text,
+        answer_text: row.operator_answer_text,
+        selected_intent: row.operator_selected_intent,
+        answered_at: row.operator_answered_at,
+        resolved_at: row.operator_resolved_at,
+        meta: row.operator_meta,
+      }
+    : null;
+  return normalizeBookkeepingTransactionRow(
+    row,
+    {
+      status: row.cat_status,
+      suggested_qbo_account_id: row.suggested_qbo_account_id,
+      suggested_qbo_account_name: row.suggested_qbo_account_name,
+      confidence: row.confidence,
+      reason: row.reason,
+      final_qbo_account_id: row.final_qbo_account_id,
+      final_qbo_account_name: row.final_qbo_account_name,
+      post_after: row.post_after,
+      qbo_txn_id: row.qbo_txn_id,
+      qbo_txn_type: row.qbo_txn_type,
+      posted_at: row.posted_at,
+      reconciled_at: row.reconciled_at,
+      post_error: row.post_error,
+      last_post_attempt_at: row.last_post_attempt_at,
+      meta: row.cat_meta,
+    },
+    row.account_name || row.account_official_name || null,
+    operatorRequest
+  );
+}
+
+export async function countBookkeepingTransactions({
+  businessId,
+  statusFilter = "needs_review",
+  accountId = null,
+  rangeParam = "this_month",
+} = {}) {
+  const { data, error } = await supabase.rpc("count_bookkeeping_transactions_bounded", {
+    p_business_id: businessId,
+    p_status_filter: statusFilter,
+    p_account_id: accountId || null,
+    p_range_start: rangeStartDateForBookkeeping(rangeParam),
+  });
+  if (error) throw error;
+  return Number(data || 0);
+}
+
 // Job Costing uses posted Books transactions as the source of truth.
 export function normalizePostedBookTransaction(row = {}) {
   const bankMemo =
@@ -190,87 +248,23 @@ export async function fetchBookkeepingTransactions({
   page = 1,
   pageSize = 25,
 } = {}) {
-  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
-  // Step A: fetch bank transactions
-  let txQuery = supabase
-    .from("bank_transactions")
-    .select(
-      "id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparties,counterparty_name,counterparty_source,counterparty_confidence,canonical_vendor_id,qbo_entity_type,qbo_entity_id,amount,signed_amount,direction,pending,category_primary,category_detailed,personal_finance_category"
-    )
-    .eq("business_id", businessId)
-    .eq("is_archived", false)
-    .order("date", { ascending: false });
-
-  const rangeStart = computeRangeStart(rangeParam);
-  if (rangeStart) txQuery.gte("date", normalizeDate(rangeStart));
-  txQuery = applyActiveBookkeepingScope(txQuery, bookkeepingStartDate);
-  if (accountId) txQuery.eq("plaid_account_id", accountId);
-
-  const { data: baseRows, error: txErr } = await txQuery;
-  if (txErr) throw txErr;
-
-  // Step B: fetch categorizations separately
-  const ids = (baseRows || []).map((r) => r.id);
-  let catMap = {};
-  if (ids.length) {
-    const { data: catRows, error: catErr } = await supabase
-      .from("transaction_categorizations")
-      .select(
-        "transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,confidence,reason,final_qbo_account_id,final_qbo_account_name,post_after,qbo_txn_id,qbo_txn_type,posted_at,reconciled_at,post_error,last_post_attempt_at,meta"
-      )
-      .eq("business_id", businessId)
-      .in("transaction_id", ids);
-    if (catErr) throw catErr;
-    catMap = (catRows || []).reduce((acc, row) => {
-      acc[row.transaction_id] = row;
-      return acc;
-    }, {});
+  const safePage = Math.max(parseInt(page, 10) || 1, 1);
+  const safePageSize = Math.min(Math.max(parseInt(pageSize, 10) || 25, 1), 200);
+  const { data, error } = await supabase.rpc("get_bookkeeping_transactions_bounded", {
+    p_business_id: businessId,
+    p_status_filter: statusFilter,
+    p_account_id: accountId || null,
+    p_range_start: rangeStartDateForBookkeeping(rangeParam),
+    p_limit: safePageSize,
+    p_offset: (safePage - 1) * safePageSize,
+  });
+  if (error) throw error;
+  const pageRows = data || [];
+  let totalCount = pageRows.length ? Number(pageRows[0].total_count || 0) : 0;
+  if (!pageRows.length && safePage > 1) {
+    totalCount = await countBookkeepingTransactions({ businessId, statusFilter, accountId, rangeParam });
   }
-
-  // Step C: fetch plaid accounts for display name
-  const uniqueAccountIds = Array.from(new Set((baseRows || []).map((row) => row.plaid_account_id).filter(Boolean)));
-  let accountMap = {};
-  if (uniqueAccountIds.length) {
-    const { data: acctRows, error: acctErr } = await supabase
-      .from("plaid_accounts")
-      .select("plaid_account_id,name,official_name")
-      .eq("business_id", businessId)
-      .in("plaid_account_id", uniqueAccountIds);
-    if (acctErr) throw acctErr;
-    accountMap = (acctRows || []).reduce((acc, row) => {
-      acc[row.plaid_account_id] = row.name || row.official_name || null;
-      return acc;
-    }, {});
-  }
-
-  let operatorRequestMap = {};
-  if (ids.length) {
-    const { data: requestRows, error: requestErr } = await supabase
-      .from("clarification_requests")
-      .select("id,transaction_id,status,prompt_text,answer_text,selected_intent,answered_at,resolved_at,meta")
-      .eq("business_id", businessId)
-      .eq("status", "answered")
-      .is("resolved_at", null)
-      .in("transaction_id", ids);
-    if (requestErr) throw requestErr;
-    operatorRequestMap = (requestRows || []).reduce((acc, row) => {
-      acc[row.transaction_id] = row;
-      return acc;
-    }, {});
-  }
-
-  const filtered = (baseRows || []).filter((row) => matchesTransactionStatusFilter(statusFilter, catMap[row.id] || {}));
-  const totalCount = filtered.length;
-  const start = (page - 1) * pageSize;
-  const end = start + pageSize;
-  const pageRows = filtered.slice(start, end);
-
-  const rows = pageRows.map((row) => normalizeBookkeepingTransactionRow(
-    row,
-    catMap[row.id] || {},
-    accountMap[row.plaid_account_id] || null,
-    operatorRequestMap[row.id] || null
-  ));
+  const rows = pageRows.map((row) => normalizeBookkeepingRpcRow(row));
   return { rows, totalCount };
 }
 
@@ -397,43 +391,12 @@ router.get("/transactions/counts", requireAuth, async (req, res) => {
   const rangeParam = (req.query?.range || "this_month").toLowerCase();
 
   try {
-    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
-    let txQuery = supabase
-      .from("bank_transactions")
-      .select("id")
-      .eq("business_id", businessId)
-      .eq("is_archived", false);
-
-    const rangeStart = computeRangeStart(rangeParam);
-    if (rangeStart) txQuery.gte("date", normalizeDate(rangeStart));
-    txQuery = applyActiveBookkeepingScope(txQuery, bookkeepingStartDate);
-    if (accountId) txQuery.eq("plaid_account_id", accountId);
-
-    const { data: baseRows, error: txErr } = await txQuery;
-    if (txErr) throw txErr;
-
-    const ids = (baseRows || []).map((row) => row.id);
-    let catMap = {};
-    if (ids.length) {
-      const { data: catRows, error: catErr } = await supabase
-        .from("transaction_categorizations")
-        .select("transaction_id,status,qbo_txn_id,meta")
-        .eq("business_id", businessId)
-        .in("transaction_id", ids);
-      if (catErr) throw catErr;
-      catMap = (catRows || []).reduce((acc, row) => {
-        acc[row.transaction_id] = row;
-        return acc;
-      }, {});
-    }
-
-    const counts = { needs_review: 0, handled: 0, posted: 0 };
-    (baseRows || []).forEach((row) => {
-      const cat = catMap[row.id] || {};
-      if (matchesTransactionStatusFilter("needs_review", cat)) counts.needs_review += 1;
-      if (matchesTransactionStatusFilter("handled", cat)) counts.handled += 1;
-      if (matchesTransactionStatusFilter("posted", cat)) counts.posted += 1;
-    });
+    const [needsReview, handled, posted] = await Promise.all([
+      countBookkeepingTransactions({ businessId, statusFilter: "needs_review", accountId, rangeParam }),
+      countBookkeepingTransactions({ businessId, statusFilter: "handled", accountId, rangeParam }),
+      countBookkeepingTransactions({ businessId, statusFilter: "posted", accountId, rangeParam }),
+    ]);
+    const counts = { needs_review: needsReview, handled, posted };
 
     return res.json({ ok: true, counts });
   } catch (err) {
