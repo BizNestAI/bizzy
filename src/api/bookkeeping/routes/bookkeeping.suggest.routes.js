@@ -1387,6 +1387,9 @@ export async function runBookkeepingSuggestionPass({
       const similarUserApproval = findSimilarUserApproval(userApprovalContext, row);
       const hasSimilarUserApproval = Boolean(similarUserApproval);
       const metaBase = existingCat?.meta || {};
+      const ccPaymentRejected =
+        metaBase?.cc_payment_rejected === true ||
+        metaBase?.taxonomy_override === "not_cc_payment";
       const checkMeta = checkHit.is_check
         ? {
             is_check: true,
@@ -1398,9 +1401,15 @@ export async function runBookkeepingSuggestionPass({
         : {};
       const baseMetaWithCheck = { ...metaBase, ...checkMeta };
       const plaidAcctForTxn = plaidAccountMap.get(String(row.plaid_account_id)) || null;
-      const ccPaymentPairResult = await createSafeCreditCardPaymentPairForRow({ businessId, row });
+      const ccPaymentPairResult = ccPaymentRejected
+        ? { status: "no_match", reason: "cc_payment_rejected_by_user" }
+        : await createSafeCreditCardPaymentPairForRow({ businessId, row });
       const ccPaymentPair = ccPaymentPairResult?.pair
         ? {
+            role:
+              String(ccPaymentPairResult.pair.checking_transaction_id) === String(row.id)
+                ? "checking"
+                : "credit_card",
             txnId:
               String(ccPaymentPairResult.pair.checking_transaction_id) === String(row.id)
                 ? ccPaymentPairResult.pair.credit_card_transaction_id
@@ -1413,6 +1422,30 @@ export async function runBookkeepingSuggestionPass({
             pairId: ccPaymentPairResult.pair.id,
             pairStatus: ccPaymentPairResult.pair.status,
             pairConfidence: ccPaymentPairResult.pair.match_confidence,
+            checkingQboAccountId: ccPaymentPairResult.pair.checking_qbo_account_id,
+            checkingQboAccountName: ccPaymentPairResult.pair.checking_qbo_account_name,
+            creditCardQboAccountId: ccPaymentPairResult.pair.credit_card_qbo_account_id,
+            creditCardQboAccountName: ccPaymentPairResult.pair.credit_card_qbo_account_name,
+            targetQboAccountId:
+              String(ccPaymentPairResult.pair.checking_transaction_id) === String(row.id)
+                ? ccPaymentPairResult.pair.credit_card_qbo_account_id
+                : ccPaymentPairResult.pair.checking_qbo_account_id,
+            targetQboAccountName:
+              String(ccPaymentPairResult.pair.checking_transaction_id) === String(row.id)
+                ? ccPaymentPairResult.pair.credit_card_qbo_account_name
+                : ccPaymentPairResult.pair.checking_qbo_account_name,
+            counterpartAmount:
+              String(ccPaymentPairResult.pair.checking_transaction_id) === String(row.id)
+                ? Math.abs(Number(ccPaymentPairResult.pair.amount || 0))
+                : -Math.abs(Number(ccPaymentPairResult.pair.amount || 0)),
+            counterpartDate:
+              String(ccPaymentPairResult.pair.checking_transaction_id) === String(row.id)
+                ? ccPaymentPairResult.pair.matched_date || ccPaymentPairResult.pair.payment_date
+                : ccPaymentPairResult.pair.payment_date || ccPaymentPairResult.pair.matched_date,
+            counterpartAccountName:
+              String(ccPaymentPairResult.pair.checking_transaction_id) === String(row.id)
+                ? ccPaymentPairResult.pair.credit_card_qbo_account_name
+                : ccPaymentPairResult.pair.checking_qbo_account_name,
           }
         : null;
       const rowTaxonomyContext = {
@@ -1420,6 +1453,8 @@ export async function runBookkeepingSuggestionPass({
         currentAccountType: plaidAcctForTxn?.type || null,
         currentAccountSubtype: plaidAcctForTxn?.subtype || null,
         hasCreditCardPaymentPair: Boolean(ccPaymentPair?.txnId),
+        suppressCcPayment: ccPaymentRejected,
+        taxonomyOverride: ccPaymentRejected ? "not_cc_payment" : null,
         targetAccountTypes: ccPaymentPair?.txnId || plaidAccountLooksCredit(plaidAcctForTxn) ? ["credit"] : [],
       };
       rowBranch = "existing_categorization";
@@ -1470,6 +1505,16 @@ export async function runBookkeepingSuggestionPass({
               mergedMeta.cc_payment_pair_historical_context_only = !!ccPaymentPair.historicalContextOnly;
               mergedMeta.cc_payment_pair_status = ccPaymentPair.pairStatus || "needs_review";
               mergedMeta.cc_payment_pair_confidence = ccPaymentPair.pairConfidence || "high";
+              mergedMeta.cc_payment_pair_role = ccPaymentPair.role || null;
+              mergedMeta.cc_payment_transfer_target_qbo_account_id = ccPaymentPair.targetQboAccountId || null;
+              mergedMeta.cc_payment_transfer_target_qbo_account_name = ccPaymentPair.targetQboAccountName || null;
+              mergedMeta.cc_payment_pair_counterpart_amount = ccPaymentPair.counterpartAmount;
+              mergedMeta.cc_payment_pair_counterpart_date = ccPaymentPair.counterpartDate || null;
+              mergedMeta.cc_payment_pair_counterpart_account_name = ccPaymentPair.counterpartAccountName || null;
+              mergedMeta.cc_payment_bank_qbo_account_id = ccPaymentPair.checkingQboAccountId || null;
+              mergedMeta.cc_payment_bank_qbo_account_name = ccPaymentPair.checkingQboAccountName || null;
+              mergedMeta.cc_payment_cc_qbo_account_id = ccPaymentPair.creditCardQboAccountId || null;
+              mergedMeta.cc_payment_cc_qbo_account_name = ccPaymentPair.creditCardQboAccountName || null;
             } else if (taxHit.type === "cc_payment" && ccPaymentPairResult?.status === "ambiguous") {
               mergedMeta.post_block_reason = "cc_payment_pair_ambiguous";
               mergedMeta.cc_payment_pair_ambiguous = true;
@@ -1882,40 +1927,51 @@ export async function runBookkeepingSuggestionPass({
         if (taxHit.type === "cc_payment") {
           if (ccPaymentPair?.txnId) {
             mergedMeta.cc_payment_pair_id = ccPaymentPair.pairId || null;
+            mergedMeta.cc_payment_pair_role = ccPaymentPair.role || null;
             mergedMeta.cc_payment_pair_txn_id = ccPaymentPair.txnId;
             mergedMeta.cc_payment_pair_plaid_account_id = ccPaymentPair.pairedPlaidAccountId || null;
             mergedMeta.cc_payment_pair_historical_context_only = !!ccPaymentPair.historicalContextOnly;
             mergedMeta.cc_payment_pair_status = ccPaymentPair.pairStatus || "needs_review";
             mergedMeta.cc_payment_pair_confidence = ccPaymentPair.pairConfidence || "high";
+            mergedMeta.cc_payment_transfer_target_qbo_account_id = ccPaymentPair.targetQboAccountId || null;
+            mergedMeta.cc_payment_transfer_target_qbo_account_name = ccPaymentPair.targetQboAccountName || null;
+            mergedMeta.cc_payment_pair_counterpart_amount = ccPaymentPair.counterpartAmount;
+            mergedMeta.cc_payment_pair_counterpart_date = ccPaymentPair.counterpartDate || null;
+            mergedMeta.cc_payment_pair_counterpart_account_name = ccPaymentPair.counterpartAccountName || null;
+            mergedMeta.cc_payment_bank_qbo_account_id = ccPaymentPair.checkingQboAccountId || null;
+            mergedMeta.cc_payment_bank_qbo_account_name = ccPaymentPair.checkingQboAccountName || null;
+            mergedMeta.cc_payment_cc_qbo_account_id = ccPaymentPair.creditCardQboAccountId || null;
+            mergedMeta.cc_payment_cc_qbo_account_name = ccPaymentPair.creditCardQboAccountName || null;
           } else if (ccPaymentPairResult?.status === "ambiguous") {
             mergedMeta.post_block_reason = "cc_payment_pair_ambiguous";
             mergedMeta.cc_payment_pair_ambiguous = true;
             mergedMeta.cc_payment_pair_candidates = ccPaymentPairResult.candidates || [];
           }
-          ccMapping = await resolveCcPaymentMapping({ businessId, txnRow: row, coa, coaMap });
-          if (ccMapping?.creditCardAccountRef) {
-            suggestedAcct = ccMapping.creditCardAccountRef;
+          ccMapping = ccPaymentPair?.targetQboAccountId
+            ? {
+                bankAccountRef: ccPaymentPair.role === "credit_card" ? { id: ccPaymentPair.targetQboAccountId, name: ccPaymentPair.targetQboAccountName } : null,
+                creditCardAccountRef: ccPaymentPair.role !== "credit_card" ? { id: ccPaymentPair.targetQboAccountId, name: ccPaymentPair.targetQboAccountName } : null,
+                confidence: "high",
+                notes: "durable_pair_target",
+              }
+            : null;
+          if (ccPaymentPair?.targetQboAccountId) {
+            suggestedAcct = {
+              id: ccPaymentPair.targetQboAccountId,
+              name: ccPaymentPair.targetQboAccountName || ccPaymentPair.targetQboAccountId,
+            };
           } else {
-            suggestedAcct = fallbacks.ama || null;
+            suggestedAcct = safeFallback;
           }
           mergedMeta.cc_payment_mapping_confidence = ccMapping?.confidence || "low";
-          mergedMeta.cc_payment_bank_qbo_account_id = ccMapping?.bankAccountRef?.id || null;
-          mergedMeta.cc_payment_bank_qbo_account_name = ccMapping?.bankAccountRef?.name || null;
-          mergedMeta.cc_payment_cc_qbo_account_id = ccMapping?.creditCardAccountRef?.id || null;
-          mergedMeta.cc_payment_cc_qbo_account_name = ccMapping?.creditCardAccountRef?.name || null;
+          mergedMeta.cc_payment_bank_qbo_account_id = ccPaymentPair?.checkingQboAccountId || ccMapping?.bankAccountRef?.id || null;
+          mergedMeta.cc_payment_bank_qbo_account_name = ccPaymentPair?.checkingQboAccountName || ccMapping?.bankAccountRef?.name || null;
+          mergedMeta.cc_payment_cc_qbo_account_id = ccPaymentPair?.creditCardQboAccountId || ccMapping?.creditCardAccountRef?.id || null;
+          mergedMeta.cc_payment_cc_qbo_account_name = ccPaymentPair?.creditCardQboAccountName || ccMapping?.creditCardAccountRef?.name || null;
           mergedMeta.cc_payment_mapping_notes = ccMapping?.notes || null;
-          const mappingHigh = ccMapping?.confidence === "high" && mergedMeta.cc_payment_bank_qbo_account_id && mergedMeta.cc_payment_cc_qbo_account_id;
-          if (mappingHigh) {
-            mergedMeta.safe_to_auto_handle = true;
-            mergedMeta.safe_to_auto_post = true;
-            if (!metaBase?.auto_approve_reason) mergedMeta.auto_approve_reason = mergedMeta.auto_approve_reason || "taxonomy";
-          } else {
-            if (metaBase?.auto_approve_reason !== "manual_user") {
-              mergedMeta.safe_to_auto_handle = false;
-              mergedMeta.safe_to_auto_post = false;
-              mergedMeta.auto_approve_reason = metaBase?.auto_approve_reason || null;
-            }
-          }
+          mergedMeta.safe_to_auto_handle = false;
+          mergedMeta.safe_to_auto_post = metaBase?.auto_approve_reason === "manual_user";
+          mergedMeta.auto_approve_reason = metaBase?.auto_approve_reason === "manual_user" ? "manual_user" : null;
           status = "needs_review";
           reasonPrefix = `Taxonomy: cc_payment (${taxHit.confidence}) — Not an expense. Suggested: ${suggestedAcct?.name || "none"}. Mapping: ${ccMapping?.confidence || "low"}.`;
           mergedMeta.suggestion_debug = {

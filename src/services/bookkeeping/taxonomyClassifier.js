@@ -259,12 +259,13 @@ export function looksLikeOwnerMove(tx = {}, context = {}) {
 }
 
 export function classifyTaxonomy(tx = {}, context = {}) {
+  const suppressCcPayment = context?.suppressCcPayment === true || context?.taxonomyOverride === "not_cc_payment";
   const classifiers = [
-    { fn: looksLikeCcPayment, type: TAXONOMY_TYPES.CC_PAYMENT },
+    suppressCcPayment ? null : { fn: looksLikeCcPayment, type: TAXONOMY_TYPES.CC_PAYMENT },
     { fn: looksLikeRefund, type: TAXONOMY_TYPES.REFUND },
     { fn: looksLikeOwnerMove, type: null },
     { fn: looksLikeTransfer, type: TAXONOMY_TYPES.TRANSFER_INTERNAL },
-  ];
+  ].filter(Boolean);
 
   for (const entry of classifiers) {
     const hit = entry.fn(tx, context);

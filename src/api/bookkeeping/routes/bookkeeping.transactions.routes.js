@@ -121,6 +121,10 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null) {
     cc_payment_cc_qbo_account_name: cat.meta?.cc_payment_cc_qbo_account_name || null,
     cc_payment_transfer_target_qbo_account_id: cat.meta?.cc_payment_transfer_target_qbo_account_id || null,
     cc_payment_transfer_target_qbo_account_name: cat.meta?.cc_payment_transfer_target_qbo_account_name || null,
+    cc_payment_pair_counterpart_amount: cat.meta?.cc_payment_pair_counterpart_amount ?? null,
+    cc_payment_pair_counterpart_date: cat.meta?.cc_payment_pair_counterpart_date || null,
+    cc_payment_pair_counterpart_account_name: cat.meta?.cc_payment_pair_counterpart_account_name || null,
+    cc_payment_rejected: cat.meta?.cc_payment_rejected === true || cat.meta?.taxonomy_override === "not_cc_payment",
   };
 }
 

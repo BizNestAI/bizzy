@@ -62,7 +62,7 @@ test("one confirmation resolves the pair and manual target must be a CreditCard 
   assert.match(approvals, /confirmCreditCardPaymentPairForTransaction/);
   assert.doesNotMatch(approvals, /isCreditCardQboType/);
   assert.doesNotMatch(approvals, /explicitFinalType/);
-  assert.doesNotMatch(service, /targetQboAccountName/);
+  assert.match(service, /targetAccountName: pair\.credit_card_qbo_account_name/);
   assert.match(service, /validateBusinessQboCreditCardAccount\(businessId, targetQboAccountId\)/);
   assert.match(service, /throw new Error\(validatedTarget\?\.reason \|\| "cc_payment_target_credit_card_required"\)/);
   assert.match(qboAccounts, /getLatestQuickBooksTokenRow\(businessId\)/);
@@ -155,4 +155,64 @@ test("credit-card-payment UI exposes transfer target state instead of only a gen
   assert.match(feed, /ccSelectableAccounts/);
   assert.match(feed, /type === "creditcard"/);
   assert.match(page, /newAccountType/);
+});
+
+test("taxonomy-only cc-payment stays suspected and does not lock the account picker", () => {
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  const approvals = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const classifier = read("src/services/bookkeeping/taxonomyClassifier.js");
+
+  assert.match(feed, /const hasCcPair = Boolean/);
+  assert.match(feed, /const isCcPaymentSuspected = !ccRejected && !hasCcPair/);
+  assert.match(feed, /const isCcPayment = !ccRejected && hasCcPair/);
+  assert.match(feed, /Possible credit card payment/);
+  assert.match(approvals, /taxonomy_override: "not_cc_payment"/);
+  assert.match(approvals, /validateBusinessQboCreditCardAccount\(businessId, explicitFinalId\)/);
+  assert.match(classifier, /suppressCcPayment/);
+});
+
+test("durable pair target preselects and weaker mapping cannot overwrite it", () => {
+  const suggest = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  const txRoute = read("src/api/bookkeeping/routes/bookkeeping.transactions.routes.js");
+
+  assert.match(suggest, /targetQboAccountId/);
+  assert.match(suggest, /durable_pair_target/);
+  assert.match(suggest, /suggestedAcct = \{\s*id: ccPaymentPair\.targetQboAccountId/s);
+  assert.match(txRoute, /cc_payment_transfer_target_qbo_account_id/);
+  assert.match(feed, /ccTargetId/);
+  assert.match(feed, /selectedAccountValue = accountSelections\.get\(txn\.id\).*ccTargetId/s);
+});
+
+test("customer-facing matched label is human-readable and never displays counterpart UUID text", () => {
+  const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
+  const txRoute = read("src/api/bookkeeping/routes/bookkeeping.transactions.routes.js");
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+
+  assert.match(service, /cc_payment_pair_counterpart_amount/);
+  assert.match(txRoute, /cc_payment_pair_counterpart_account_name/);
+  assert.match(feed, /Matched to \$\{ccMatchedParts\.join/);
+  assert.doesNotMatch(feed, /Matched counterpart/);
+});
+
+test("not-a-credit-card-payment override is durable and voids unconfirmed pairs without provider effects", () => {
+  const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
+  const approvals = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  const suggest = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
+
+  assert.match(service, /export async function rejectCreditCardPaymentSuggestion/);
+  assert.match(service, /status: "voided"/);
+  assert.match(service, /cc_payment_rejected\s*=\s*true/);
+  assert.match(service, /taxonomy_override\s*=\s*"not_cc_payment"|taxonomy_override: "not_cc_payment"/);
+  const rejectBody = service.slice(
+    service.indexOf("export async function rejectCreditCardPaymentSuggestion"),
+    service.indexOf("export async function findExistingCreditCardPaymentPairForTransaction")
+  );
+  assert.doesNotMatch(rejectBody, /createQboTransfer|postCreditCardPaymentPairToQbo|claimCreditCardPaymentPairPosting/);
+  assert.match(approvals, /credit-card-payments\/reject/);
+  assert.match(client, /rejectCreditCardPayment/);
+  assert.match(page, /handleRejectCreditCardPayment/);
+  assert.match(suggest, /cc_payment_rejected_by_user/);
 });

@@ -149,6 +149,19 @@ export async function undoTransaction(businessId, txnId) {
   return res;
 }
 
+export async function rejectCreditCardPayment(businessId, txnId) {
+  const payload = { business_id: businessId, txnId };
+  const res = await safeFetch(apiUrl("/api/bookkeeping/credit-card-payments/reject"), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  if (res && res.ok === false) {
+    throw new Error(res.message || res.error || "cc_payment_reject_failed");
+  }
+  return res;
+}
+
 export async function updateHandledTransaction(businessId, transactionId, payload = {}) {
   const body = {
     ...payload,
@@ -567,6 +580,7 @@ export default {
   createPreferredCanonicalQboAccount,
   approveTransactions,
   undoTransaction,
+  rejectCreditCardPayment,
   updateHandledTransaction,
   suggestTransactions,
   getBookkeepingProcessingStatus,

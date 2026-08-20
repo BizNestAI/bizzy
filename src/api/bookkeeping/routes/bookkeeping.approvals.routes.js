@@ -9,7 +9,9 @@ import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "../../../s
 import {
   confirmCreditCardPaymentPairForTransaction,
   createManualCreditCardPaymentPair,
+  rejectCreditCardPaymentSuggestion,
 } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
+import { validateBusinessQboCreditCardAccount } from "../../../services/bookkeeping/qboAccounts.js";
 
 const router = Router();
 
@@ -112,6 +114,21 @@ router.post("/approve", requireAuth, async (req, res) => {
     if (meta?.taxonomy_type !== "cc_payment") continue;
     const explicitFinalId = item?.newAccountId || item?.final_qbo_account_id || item?.finalAccountId || null;
     if (!meta.cc_payment_pair_id && explicitFinalId) {
+      const targetValidation = await validateBusinessQboCreditCardAccount(businessId, explicitFinalId);
+      if (!targetValidation?.ok) {
+        existingMetaMap[txnId] = {
+          ...meta,
+          cc_payment_rejected: true,
+          cc_payment_rejected_at: nowIso,
+          taxonomy_override: "not_cc_payment",
+          safe_to_auto_handle: false,
+          safe_to_auto_post: true,
+          auto_approve_reason: "manual_user",
+        };
+        delete existingMetaMap[txnId].taxonomy_type;
+        delete existingMetaMap[txnId].taxonomy_subtype;
+        continue;
+      }
       let pair = null;
       try {
         pair = await createManualCreditCardPaymentPair({
@@ -164,6 +181,12 @@ router.post("/approve", requireAuth, async (req, res) => {
       cc_payment_transfer_target_qbo_account_id:
         currentMeta.cc_payment_pair_role === "credit_card" ? pair.checking_qbo_account_id : pair.credit_card_qbo_account_id,
       cc_payment_transfer_target_qbo_account_name:
+        currentMeta.cc_payment_pair_role === "credit_card" ? pair.checking_qbo_account_name : pair.credit_card_qbo_account_name,
+      cc_payment_pair_counterpart_amount:
+        currentMeta.cc_payment_pair_role === "credit_card" ? -Math.abs(Number(pair.amount || 0)) : Math.abs(Number(pair.amount || 0)),
+      cc_payment_pair_counterpart_date:
+        currentMeta.cc_payment_pair_role === "credit_card" ? pair.payment_date || pair.matched_date : pair.matched_date || pair.payment_date,
+      cc_payment_pair_counterpart_account_name:
         currentMeta.cc_payment_pair_role === "credit_card" ? pair.checking_qbo_account_name : pair.credit_card_qbo_account_name,
       safe_to_auto_post: true,
       auto_approve_reason: "manual_user",
@@ -350,6 +373,11 @@ router.post("/approve", requireAuth, async (req, res) => {
               cc_payment_cc_qbo_account_name: pair.credit_card_qbo_account_name,
               cc_payment_transfer_target_qbo_account_id: pairRow.targetAccountId,
               cc_payment_transfer_target_qbo_account_name: pairRow.targetAccountName,
+              cc_payment_pair_counterpart_amount:
+                pairRow.role === "credit_card" ? -Math.abs(Number(pair.amount || 0)) : Math.abs(Number(pair.amount || 0)),
+              cc_payment_pair_counterpart_date:
+                pairRow.role === "credit_card" ? pair.payment_date || pair.matched_date : pair.matched_date || pair.payment_date,
+              cc_payment_pair_counterpart_account_name: pairRow.targetAccountName,
               safe_to_auto_handle: false,
               safe_to_auto_post: true,
               auto_approve_reason: "manual_user",
@@ -467,6 +495,33 @@ router.post("/undo", requireAuth, async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "undo_failed",
+      message: err?.message || "failed",
+    });
+  }
+});
+
+router.post("/credit-card-payments/reject", requireAuth, async (req, res) => {
+  const raw = req.body || {};
+  const businessId = ensureBusinessId(req, res);
+  const txnId = raw.txnId || raw.transaction_id || raw.transactionId || raw.id || null;
+  if (!businessId) return;
+  if (!txnId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+
+  try {
+    const result = await rejectCreditCardPaymentSuggestion({
+      businessId,
+      transactionId: txnId,
+    });
+    return res.json(result);
+  } catch (err) {
+    const code = String(err?.message || "cc_payment_reject_failed");
+    if (code.startsWith("cc_payment_") || code === "missing_cc_payment_rejection_identity") {
+      return res.status(400).json({ ok: false, error: code });
+    }
+    console.error("[bookkeeping][cc-payment-reject] failed", err?.message || err);
+    return res.status(500).json({
+      ok: false,
+      error: "cc_payment_reject_failed",
       message: err?.message || "failed",
     });
   }

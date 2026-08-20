@@ -226,6 +226,20 @@ function getTransactionMemo(txn = {}) {
   );
 }
 
+function formatCcPairDate(value) {
+  if (!value) return "";
+  const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function formatSignedAmount(value) {
+  const amount = Number(value || 0);
+  if (!Number.isFinite(amount) || amount === 0) return null;
+  const sign = amount < 0 ? "-" : "+";
+  return `${sign}$${Math.abs(amount).toFixed(2)}`;
+}
+
 function ConfidenceBadge({ level }) {
   const styles = {
     high: "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40",
@@ -245,6 +259,7 @@ export default function BookkeepingFeed({
   onApprove,
   onUndo,
   onManualPost,
+  onRejectCcPayment,
   postingTransactionIds,
   accounts = [],
   onAccountChange,
@@ -354,14 +369,24 @@ export default function BookkeepingFeed({
   const [sort, setSort] = React.useState({ column: null, direction: null }); // direction: 'asc' | 'desc' | null
   const [expandedRowId, setExpandedRowId] = React.useState(null);
 
-  React.useEffect(() => {
-    let changed = false;
-    const next = new Map(accountSelections);
-    transactions.forEach((txn) => {
-      const suggested = txn.glAccountId || txn.suggestedAccountId || "";
-      if (!next.has(txn.id) || next.get(txn.id) !== suggested) {
-        next.set(txn.id, suggested);
-        changed = true;
+	  React.useEffect(() => {
+	    let changed = false;
+	    const next = new Map(accountSelections);
+	    transactions.forEach((txn) => {
+	      const meta = txn.meta || {};
+	      const hasPair = Boolean(txn.cc_payment_pair_id || meta.cc_payment_pair_id);
+	      const ccTarget =
+	        hasPair
+	          ? txn.cc_payment_transfer_target_qbo_account_id ||
+	            meta.cc_payment_transfer_target_qbo_account_id ||
+	            txn.cc_payment_cc_qbo_account_id ||
+	            meta.cc_payment_cc_qbo_account_id ||
+	            ""
+	          : "";
+	      const suggested = txn.glAccountId || txn.suggestedAccountId || ccTarget || "";
+	      if (!next.has(txn.id) || next.get(txn.id) !== suggested) {
+	        next.set(txn.id, suggested);
+	        changed = true;
       }
     });
     if (changed) setAccountSelections(next);
@@ -528,8 +553,18 @@ export default function BookkeepingFeed({
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
             const fullMemo = getTransactionMemo(txn) || "No bank memo available.";
-            const isCcPayment = txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment" || txn.cc_payment_pair_id;
+            const ccRejected = txn.cc_payment_rejected === true || txn.meta?.cc_payment_rejected === true || txn.meta?.taxonomy_override === "not_cc_payment";
+            const hasCcPair = Boolean(txn.cc_payment_pair_id || txn.meta?.cc_payment_pair_id);
+            const isCcPaymentSuspected = !ccRejected && !hasCcPair && (txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment");
+            const isCcPayment = !ccRejected && hasCcPair;
             const ccPairRole = txn.cc_payment_pair_role || txn.meta?.cc_payment_pair_role || null;
+            const ccTargetId =
+              txn.cc_payment_transfer_target_qbo_account_id ||
+              txn.meta?.cc_payment_transfer_target_qbo_account_id ||
+              (ccPairRole === "credit_card"
+                ? txn.cc_payment_bank_qbo_account_id || txn.meta?.cc_payment_bank_qbo_account_id
+                : txn.cc_payment_cc_qbo_account_id || txn.meta?.cc_payment_cc_qbo_account_id) ||
+              null;
             const ccTargetName =
               txn.cc_payment_transfer_target_qbo_account_name ||
               txn.meta?.cc_payment_transfer_target_qbo_account_name ||
@@ -542,8 +577,20 @@ export default function BookkeepingFeed({
             const ccTransferLabel = isCcPayment
               ? `Credit Card Payment ${ccPairRole === "credit_card" ? "←" : "→"} ${ccTargetName || "select card"}`
               : null;
-            const ccMatchedLabel = isCcPayment && (txn.cc_payment_pair_txn_id || txn.meta?.cc_payment_pair_txn_id)
-              ? `Matched counterpart ${txn.cc_payment_pair_txn_id || txn.meta?.cc_payment_pair_txn_id}`
+            const ccCounterpartAmount = txn.cc_payment_pair_counterpart_amount ?? txn.meta?.cc_payment_pair_counterpart_amount ?? null;
+            const ccCounterpartAccount =
+              txn.cc_payment_pair_counterpart_account_name ||
+              txn.meta?.cc_payment_pair_counterpart_account_name ||
+              ccTargetName ||
+              null;
+            const ccCounterpartDate = txn.cc_payment_pair_counterpart_date || txn.meta?.cc_payment_pair_counterpart_date || null;
+            const ccMatchedParts = [
+              formatSignedAmount(ccCounterpartAmount),
+              ccCounterpartAccount ? `on ${ccCounterpartAccount}` : null,
+              formatCcPairDate(ccCounterpartDate),
+            ].filter(Boolean);
+            const ccMatchedLabel = isCcPayment && ccMatchedParts.length
+              ? `Matched to ${ccMatchedParts.join(" · ")}`
               : null;
             const ccSelectableAccounts = isCcPayment
               ? accounts.filter((acct) => {
@@ -551,6 +598,12 @@ export default function BookkeepingFeed({
                   return ccPairRole === "credit_card" ? type === "bank" : type === "creditcard";
                 })
               : accounts;
+            const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (hasCcPair ? ccTargetId : null) ?? txn.accountId ?? "";
+            const canRejectCcPayment =
+              !readOnly &&
+              !isPosted &&
+              txn.status !== "posted" &&
+              (isCcPaymentSuspected || (isCcPayment && !["confirmed", "posted"].includes(String(txn.cc_payment_pair_status || txn.meta?.cc_payment_pair_status || "").toLowerCase())));
 
             return (
               <React.Fragment key={txn.id}>
@@ -638,9 +691,14 @@ export default function BookkeepingFeed({
                     {ccMatchedLabel ? <span className="truncate text-[9px] font-medium text-emerald-100/65">{ccMatchedLabel}</span> : null}
                   </span>
                 ) : null}
+                {isCcPaymentSuspected ? (
+                  <span className="inline-flex w-fit max-w-full rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
+                    Possible credit card payment
+                  </span>
+                ) : null}
                 {accounts.length > 0 ? (
                   <CoaDropdown
-                    value={accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? txn.accountId ?? ""}
+                    value={selectedAccountValue}
                     suggestedId={txn.suggestedAccountId}
                     suggestedName={txn.suggestedAccountName || txn.glAccountName}
                     accounts={ccSelectableAccounts}
@@ -677,6 +735,33 @@ export default function BookkeepingFeed({
               <div className="flex justify-center pl-4" onClick={(e) => e.stopPropagation()}>
                 {isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
+                ) : canRejectCcPayment ? (
+                  <div className="flex items-center justify-center gap-1.5">
+                    <button
+                      className="inline-flex h-7 items-center justify-center rounded-full border border-slate-500/60 bg-white/5 px-2.5 text-[10px] font-semibold text-slate-100 transition hover:border-emerald-300/50 hover:text-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
+                      disabled={readOnly || isPosting}
+                      onClick={() => {
+                        if (readOnly || isPosting) return;
+                        onRejectCcPayment && onRejectCcPayment(txn.id);
+                      }}
+                      title="Categorize this transaction normally"
+                      aria-label="Not a credit card payment"
+                    >
+                      Not CC payment
+                    </button>
+                    <button
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/14 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/24 hover:border-emerald-300/90 active:scale-[0.99] disabled:opacity-45 disabled:cursor-not-allowed shadow-[0_2px_6px_rgba(0,0,0,0.2)] transition-transform"
+                      disabled={readOnly || (txn.is_check && !selectedAccountValue)}
+                      title={txn.is_check && !selectedAccountValue ? "Select a category to approve this check." : "Approve"}
+                      onClick={() => {
+                        if (readOnly) return;
+                        onApprove && onApprove(txn.id, selectedAccountValue || null);
+                      }}
+                      aria-label="Approve transaction"
+                    >
+                      ✓
+                    </button>
+                  </div>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
                   <div className="flex items-center justify-center gap-1.5">
                     <button
@@ -721,10 +806,10 @@ export default function BookkeepingFeed({
                        ? "Billing required to approve transactions."
                        : "Approve"
                    }
-                  onClick={() => {
-                    if (readOnly) return;
-                    onApprove && onApprove(txn.id, accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null);
-                  }}
+	                  onClick={() => {
+	                    if (readOnly) return;
+	                    onApprove && onApprove(txn.id, selectedAccountValue || null);
+	                  }}
                   aria-label="Approve transaction"
                 >
                   ✓

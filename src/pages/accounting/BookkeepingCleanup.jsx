@@ -15,6 +15,7 @@ import {
   getQboCoa as fetchQboCoa,
   approveTransactions,
   undoTransaction,
+  rejectCreditCardPayment,
   updateHandledTransaction,
   enrichCounterparties,
   getBookkeepingProcessingStatus,
@@ -1147,6 +1148,46 @@ function BookkeepingCleanup() {
     }
   };
 
+  const handleRejectCreditCardPayment = async (id) => {
+    if (!canRunAI) return;
+    if (usingDemo) {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                taxonomy_type: null,
+                cc_payment_pair_id: null,
+                cc_payment_pair_status: null,
+                cc_payment_rejected: true,
+                glAccountId: null,
+                glAccountName: null,
+                suggestedAccountId: null,
+                suggestedAccountName: null,
+                meta: {
+                  ...(t.meta || {}),
+                  cc_payment_rejected: true,
+                  taxonomy_override: "not_cc_payment",
+                },
+              }
+            : t
+        )
+      );
+      return;
+    }
+    if (!businessId) return;
+    try {
+      await rejectCreditCardPayment(businessId, id);
+      accountOverrides.current?.delete?.(id);
+      await reloadAccounts();
+      await reloadTransactions();
+      await loadMappingStatus();
+    } catch (e) {
+      console.warn("[bookkeeping] cc payment reject failed", e?.message || e);
+      window.alert(e?.message || "Could not mark this as not a credit card payment.");
+    }
+  };
+
   const handleBulkApprove = async () => {
     if (!canRunAI || !selectedTransactions.length || !bulkAccountId) return;
     const account = chartAccounts.find((a) => String(a.id) === String(bulkAccountId));
@@ -2053,6 +2094,7 @@ function BookkeepingCleanup() {
               onApprove={handleApprove}
               onUndo={handleUndo}
               onManualPost={handleManualPostTransaction}
+              onRejectCcPayment={handleRejectCreditCardPayment}
               postingTransactionIds={postingTransactionIds}
               accounts={groupedChartAccounts}
               onAccountChange={handleAccountChange}
