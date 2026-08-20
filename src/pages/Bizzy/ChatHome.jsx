@@ -342,10 +342,13 @@ function ChatHomeInner() {
 
             {!showStatusCard && hasPendingQuestions && isChatHome && !isCanvasOpen && typeof document !== "undefined"
               ? createPortal(
-                  <button
+                  <motion.button
                     type="button"
                     onClick={() => setShowStatusCard(true)}
                     aria-label="Show questions"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.28, ease: "easeOut" }}
                     className="group fixed bottom-12 inline-flex items-center justify-center text-[13px] text-white/70 hover:text-white transition z-[12050] relative px-2 py-1"
                     style={{
                       left: bounds?.width ? bounds.left + bounds.width / 2 : "50%",
@@ -356,7 +359,7 @@ function ChatHomeInner() {
                       ↑
                     </span>
                     {clarCount} remaining transaction{clarCount === 1 ? "" : "s"}
-                  </button>,
+                  </motion.button>,
                   document.body
                 )
               : null}
