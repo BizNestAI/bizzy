@@ -20,7 +20,7 @@ test("new business auto-post defaults safely off in schema and helper", async ()
 test("off permits handled state but does not create a posting grace timestamp", () => {
   assert.equal(computePostAfterForAutoPost(false, 24, Date.parse("2026-08-01T00:00:00Z")), null);
 
-  const approvals = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.approvals.routes.js"), "utf8");
+  const approvals = readFileSync(join(root, "src/services/bookkeeping/bookkeepingApprovalService.js"), "utf8");
   const suggest = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.suggest.routes.js"), "utf8");
   const clarification = readFileSync(join(root, "src/services/bookkeeping/clarificationService.js"), "utf8");
 
@@ -28,7 +28,10 @@ test("off permits handled state but does not create a posting grace timestamp", 
   assert.match(approvals, /computePostAfterForAutoPost\(autoPostEnabled, 24\)/);
   assert.match(suggest, /autoPostEnabled/);
   assert.match(suggest, /computePostAfterForAutoPost\(autoPostEnabled, GRACE_HOURS\)/);
-  assert.match(clarification, /computePostAfterForAutoPost\(autoPostEnabled, GRACE_HOURS\)/);
+  assert.doesNotMatch(clarification, /computePostAfterForAutoPost\(autoPostEnabled, GRACE_HOURS\)/);
+  assert.match(clarification, /customer_context_only/);
+  assert.match(clarification, /accounting_status:\s*"needs_review"/);
+  assert.doesNotMatch(clarification, /status = baseMeta\.safe_to_auto_post === true \? "auto_approved" : "approved"/);
   assert.match(approvals, /status:\s*"approved"/);
   assert.match(suggest, /status:\s*"auto_approved"/);
 });

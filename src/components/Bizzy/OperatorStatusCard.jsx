@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { getClarificationRequests, submitClarificationAnswers } from "../../services/bookkeeping/bookkeepingClient";
+import { getOperatorRequests, submitClarificationAnswers } from "../../services/bookkeeping/bookkeepingClient";
 import { ArrowDownLeft, ArrowUpRight, Check } from "lucide-react";
 
 export default function OperatorStatusCard({
@@ -11,11 +11,12 @@ export default function OperatorStatusCard({
   mockRequests = [],
   requests: externalRequests = null,
   showExpand = true,
+  error = "",
 }) {
-  const effectiveCount = Array.isArray(externalRequests)
-    ? externalRequests.length
-    : Number(count) > 0
+  const effectiveCount = Number(count) > 0
     ? Number(count)
+    : Array.isArray(externalRequests)
+    ? externalRequests.length
     : mockMode
     ? mockRequests.length
     : 0;
@@ -133,7 +134,7 @@ export default function OperatorStatusCard({
     const load = async () => {
       setLoadingList(true);
       try {
-        const res = await getClarificationRequests(businessId, { limit: 200 });
+        const res = await getOperatorRequests(businessId, { page: 1, page_size: 25 });
         if (!alive) return;
         const rows = res?.rows || res || [];
         setRequests(sortRequestsByDate(rows));
@@ -190,7 +191,7 @@ export default function OperatorStatusCard({
       if (onRefresh) await onRefresh();
       if (!externalRequests) {
         // refetch to show remaining only when we manage our own list
-        const res = await getClarificationRequests(businessId, { limit: 200 });
+        const res = await getOperatorRequests(businessId, { page: 1, page_size: 25 });
         const rows = res?.rows || res || [];
         setRequests(sortRequestsByDate(rows));
         if (!rows.length && onRefresh) {
@@ -291,6 +292,7 @@ export default function OperatorStatusCard({
       {expanded && (
         <div className="mt-5 pt-4 border-t border-white/10">
           {loadingList && <div className="text-xs text-white/60">Loading…</div>}
+          {error ? <div className="mb-2 text-xs text-amber-100/85">{error}</div> : null}
           {showList && (
             <div
               className="space-y-2 max-h-[300px] overflow-y-auto pr-1 pb-12 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-900/60"
@@ -406,7 +408,7 @@ export default function OperatorStatusCard({
           )}
           {requests.length > 0 && (
             <div className="mt-4 flex items-center justify-between">
-              <div className="text-xs text-white/60">Answered {answeredCount} of {requests.length}</div>
+              <div className="text-xs text-white/60">Answered {answeredCount} of {effectiveCount}</div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"

@@ -43,7 +43,7 @@ function normalizeDate(d) {
   return parsed.toISOString().slice(0, 10);
 }
 
-function matchesTransactionStatusFilter(statusFilter, cat = {}) {
+export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   const status = cat?.status || "needs_review";
   const isCheckTxn = cat?.meta?.is_check === true;
   const handledView = statusFilter === "approved" || statusFilter === "handled";
@@ -63,7 +63,20 @@ function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   return false;
 }
 
-function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null) {
+function normalizeOperatorRequest(row = null) {
+  if (!row) return null;
+  return {
+    id: row.id || null,
+    status: row.status || null,
+    prompt_text: row.prompt_text || null,
+    answer_text: row.answer_text || null,
+    selected_intent: row.selected_intent || row.meta?.selected_intent || null,
+    answered_at: row.answered_at || null,
+    resolved_at: row.resolved_at || null,
+  };
+}
+
+function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, operatorRequest = null) {
   const suggestedId = cat.suggested_qbo_account_id || null;
   const suggestedName = cat.suggested_qbo_account_name || null;
   const finalId = cat.final_qbo_account_id || null;
@@ -125,6 +138,10 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null) {
     cc_payment_pair_counterpart_date: cat.meta?.cc_payment_pair_counterpart_date || null,
     cc_payment_pair_counterpart_account_name: cat.meta?.cc_payment_pair_counterpart_account_name || null,
     cc_payment_rejected: cat.meta?.cc_payment_rejected === true || cat.meta?.taxonomy_override === "not_cc_payment",
+    operator_request: normalizeOperatorRequest(operatorRequest),
+    customer_answered: Boolean(operatorRequest?.answer_text && operatorRequest?.status === "answered" && !operatorRequest?.resolved_at),
+    customer_response: operatorRequest?.answer_text || null,
+    customer_responded_at: operatorRequest?.answered_at || null,
   };
 }
 
@@ -226,13 +243,34 @@ export async function fetchBookkeepingTransactions({
     }, {});
   }
 
+  let operatorRequestMap = {};
+  if (ids.length) {
+    const { data: requestRows, error: requestErr } = await supabase
+      .from("clarification_requests")
+      .select("id,transaction_id,status,prompt_text,answer_text,selected_intent,answered_at,resolved_at,meta")
+      .eq("business_id", businessId)
+      .eq("status", "answered")
+      .is("resolved_at", null)
+      .in("transaction_id", ids);
+    if (requestErr) throw requestErr;
+    operatorRequestMap = (requestRows || []).reduce((acc, row) => {
+      acc[row.transaction_id] = row;
+      return acc;
+    }, {});
+  }
+
   const filtered = (baseRows || []).filter((row) => matchesTransactionStatusFilter(statusFilter, catMap[row.id] || {}));
   const totalCount = filtered.length;
   const start = (page - 1) * pageSize;
   const end = start + pageSize;
   const pageRows = filtered.slice(start, end);
 
-  const rows = pageRows.map((row) => normalizeBookkeepingTransactionRow(row, catMap[row.id] || {}, accountMap[row.plaid_account_id] || null));
+  const rows = pageRows.map((row) => normalizeBookkeepingTransactionRow(
+    row,
+    catMap[row.id] || {},
+    accountMap[row.plaid_account_id] || null,
+    operatorRequestMap[row.id] || null
+  ));
   return { rows, totalCount };
 }
 

@@ -1403,7 +1403,7 @@ function PlaidIntegrationCard({ businessId }) {
                                       : ""
                                   }`,
                               })),
-                              { value: "__create__", label: "Create matching account in QuickBooks..." },
+                              { value: "__create__", label: "Find or create matching QuickBooks account..." },
                             ]}
                           />
                         ) : null}

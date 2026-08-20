@@ -8,6 +8,7 @@ import { runBooksPostOnce } from "../../jobs/booksPost.cron.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
+import { matchesTransactionStatusFilter } from "../bookkeeping/routes/bookkeeping.transactions.routes.js";
 import {
   approveExistingQboAccountForCanonical,
   createPreferredQboAccountForCanonical,
@@ -18,6 +19,10 @@ import {
   fetchCanonicalVendorActivityForBusiness,
   useExistingQboVendorForCanonical,
 } from "../../services/bookkeeping/canonicalVendorService.js";
+import {
+  approveBookkeepingTransactions,
+  BookkeepingApprovalError,
+} from "../../services/bookkeeping/bookkeepingApprovalService.js";
 
 const router = Router();
 
@@ -110,6 +115,7 @@ router.get("/businesses/:businessId", async (req, res) => {
     const auditEvents = await fetchAuditEvents(run.id);
     const reminders = await fetchReminders(run.id);
     const sourceLedger = await buildMonthlySourceLedger(businessId, month);
+    const operatorResponses = await fetchOperatorResponsesAwaitingReview(businessId, month);
     const canonicalCoa = await buildCanonicalCoaEvidence(businessId, month);
     const canonicalVendors = await buildCanonicalVendorEvidence(businessId);
     const pnlReport = await fetchMonthlyPnlReport(businessId, month);
@@ -141,6 +147,7 @@ router.get("/businesses/:businessId", async (req, res) => {
       finalization_guard: finalizationGuard,
       canonical_chart_of_accounts: canonicalCoa,
       canonical_vendors: canonicalVendors,
+      operator_responses: operatorResponses,
       active_lock: describeActiveLock(run),
       access: {
         internal_admin_only: true,
@@ -296,6 +303,98 @@ router.get("/businesses/:businessId/source-ledger", async (req, res) => {
   } catch (e) {
     console.error("[monthly-review] source ledger failed", e?.message || e);
     res.status(500).json({ ok: false, error: "monthly_review_source_ledger_failed", message: e?.message || "Could not load source ledger." });
+  }
+});
+
+router.post("/businesses/:businessId/operator-responses/:requestId/approve", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    const requestId = req.params.requestId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    if (!UUID_RE.test(String(requestId))) return res.status(400).json({ ok: false, error: "invalid_request_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    const accountId = String(req.body?.final_qbo_account_id || req.body?.account_id || "").trim();
+    const accountName = String(req.body?.final_qbo_account_name || req.body?.account_name || "").trim();
+    if (!accountId || !accountName) return res.status(400).json({ ok: false, error: "missing_account" });
+
+    const { data: requestRow, error: requestErr } = await supabase
+      .from("clarification_requests")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("id", requestId)
+      .eq("status", "answered")
+      .is("resolved_at", null)
+      .maybeSingle();
+    if (requestErr) throw requestErr;
+    if (!requestRow) return res.status(404).json({ ok: false, error: "operator_response_not_found" });
+
+    const run = await ensureRun(businessId, month, req.user.id);
+    const now = new Date().toISOString();
+    const approval = await approveBookkeepingTransactions({
+      businessId,
+      items: [{
+        transaction_id: requestRow.transaction_id,
+        final_qbo_account_id: accountId,
+        final_qbo_account_name: accountName,
+        reason: req.body?.reason || "Approved from monthly Operator Response review.",
+      }],
+      actor: "monthly_review_operator_response",
+      reason: req.body?.reason || "Approved from monthly Operator Response review.",
+      requireNeedsReview: true,
+      allowCcPaymentRejection: false,
+      extraMetaByTransactionId: {
+        [requestRow.transaction_id]: {
+          operator_response_request_id: requestId,
+          operator_response_answered_at: requestRow.answered_at || null,
+          operator_response_approved_at: now,
+          operator_response_approved_by: req.user?.id || null,
+        },
+      },
+      db: supabase,
+    });
+    const updated = approval.rows?.find((row) => String(row.transaction_id) === String(requestRow.transaction_id)) || approval.rows?.[0] || null;
+
+    const { error: resolveErr } = await supabase
+      .from("clarification_requests")
+      .update({
+        resolved_at: now,
+        resolved_by_user_id: req.user?.id || null,
+        resolved_reason: "monthly_review_approved",
+        resolved_transaction_status: "approved",
+        resolved_final_qbo_account_id: accountId,
+        resolved_final_qbo_account_name: accountName,
+        updated_at: now,
+      })
+      .eq("business_id", businessId)
+      .eq("id", requestId);
+    if (resolveErr) throw resolveErr;
+
+    await logAuditEvent({
+      run,
+      actor: req.user,
+      eventType: "operator_response_approved",
+      sectionKey: "operator_responses",
+      previousValue: {
+        request_id: requestId,
+        transaction_id: requestRow.transaction_id,
+        answer_text: requestRow.answer_text || null,
+      },
+      nextValue: {
+        transaction_id: requestRow.transaction_id,
+        final_qbo_account_id: accountId,
+        final_qbo_account_name: accountName,
+        status: "approved",
+      },
+      notes: "Approved customer Operator Response during monthly review.",
+    }).catch(() => null);
+
+    return res.json({ ok: true, request_id: requestId, transaction_id: requestRow.transaction_id, categorization: updated });
+  } catch (e) {
+    if (e instanceof BookkeepingApprovalError) {
+      return res.status(e.status || 400).json({ ok: false, error: e.error, ...e.details });
+    }
+    console.error("[monthly-review] operator response approval failed", e?.message || e);
+    return res.status(500).json({ ok: false, error: "operator_response_approval_failed", message: e?.message || "Could not approve Operator Response." });
   }
 });
 
@@ -1697,6 +1796,95 @@ async function buildMonthlySourceLedger(businessId, month) {
     account_groups: accountGroups,
     reconciliation_trace: reconciliationTrace,
     reconciliation_totals: reconciliationTotals,
+  };
+}
+
+async function fetchOperatorResponsesAwaitingReview(businessId, month) {
+  const [start, end] = monthBounds(month);
+  const requests = await safeRows(() =>
+    supabase
+      .from("clarification_requests")
+      .select("id,business_id,transaction_id,status,prompt_text,answer_text,selected_intent,answered_at,answered_by_user_id,meta")
+      .eq("business_id", businessId)
+      .eq("status", "answered")
+      .is("resolved_at", null)
+      .order("answered_at", { ascending: true }),
+    "Operator responses"
+  );
+  const transactionIds = requests.map((row) => row.transaction_id).filter(Boolean);
+  if (!transactionIds.length) {
+    return { count: 0, rows: [], source_contract: { source_tables: ["clarification_requests", "bank_transactions", "transaction_categorizations"] } };
+  }
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  const bankRows = await safeRows(() =>
+    applyActiveBookkeepingScope(
+      supabase
+        .from("bank_transactions")
+        .select("id,plaid_account_id,date,name,merchant_name,counterparty_name,amount,signed_amount,direction,is_archived,pending")
+        .eq("business_id", businessId)
+        .eq("is_archived", false)
+        .gte("date", start)
+        .lt("date", end)
+        .in("id", transactionIds),
+      bookkeepingStartDate
+    ),
+    "Operator response transactions"
+  );
+  const catRows = bankRows.length
+    ? await safeRows(() =>
+        supabase
+          .from("transaction_categorizations")
+          .select("transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,final_qbo_account_id,final_qbo_account_name,post_after,qbo_txn_id,posted_at,meta")
+          .eq("business_id", businessId)
+          .in("transaction_id", bankRows.map((row) => row.id)),
+        "Operator response categorizations"
+      )
+    : [];
+  const acctRows = bankRows.length
+    ? await safeRows(() =>
+        supabase
+          .from("plaid_accounts")
+          .select("plaid_account_id,name,official_name")
+          .eq("business_id", businessId)
+          .in("plaid_account_id", Array.from(new Set(bankRows.map((row) => row.plaid_account_id).filter(Boolean)))),
+        "Operator response accounts"
+      )
+    : [];
+  const bankById = new Map(bankRows.map((row) => [String(row.id), row]));
+  const catByTxn = new Map(catRows.map((row) => [String(row.transaction_id), row]));
+  const acctByPlaidId = new Map(acctRows.map((row) => [String(row.plaid_account_id), row.name || row.official_name || null]));
+  const rows = requests
+    .map((request) => {
+      const bank = bankById.get(String(request.transaction_id));
+      const cat = catByTxn.get(String(request.transaction_id)) || {};
+      if (!bank || !matchesTransactionStatusFilter("needs_review", cat)) return null;
+      const amount = Number(bank.signed_amount ?? bank.amount ?? 0);
+      return {
+        request_id: request.id,
+        transaction_id: request.transaction_id,
+        prompt_text: request.prompt_text || "What was this for?",
+        answer_text: request.answer_text || "",
+        selected_intent: request.selected_intent || request.meta?.selected_intent || null,
+        answered_at: request.answered_at || null,
+        answered_by_user_id: request.answered_by_user_id || null,
+        date: bank.date,
+        amount,
+        source_account: acctByPlaidId.get(String(bank.plaid_account_id)) || bank.plaid_account_id || null,
+        merchant: bank.counterparty_name || bank.merchant_name || bank.name || "Transaction",
+        description: bank.name || "",
+        suggested_qbo_account_id: cat.suggested_qbo_account_id || request.meta?.non_authoritative_account_evidence?.qbo_account_id || null,
+        suggested_qbo_account_name: cat.suggested_qbo_account_name || request.meta?.non_authoritative_account_evidence?.qbo_account_name || null,
+        taxonomy_type: cat.meta?.taxonomy_type || null,
+      };
+    })
+    .filter(Boolean);
+  return {
+    count: rows.length,
+    rows,
+    source_contract: {
+      source_tables: ["clarification_requests", "bank_transactions", "transaction_categorizations"],
+      state_basis: "clarification_requests.status=answered and resolved_at is null, transaction still Books Review Needs Review",
+    },
   };
 }
 

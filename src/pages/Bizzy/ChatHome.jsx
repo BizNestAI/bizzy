@@ -13,7 +13,7 @@ import { useBusiness } from "../../context/BusinessContext";
 import OperatorStatusCard from "../../components/Bizzy/OperatorStatusCard";
 import { CHAT_BAR_MAX_W, CHAT_BAR_VW } from "../../config/chatLayout";
 import { getDemoMode, shouldUseDemoData, getDemoData } from "../../services/demo/demoClient";
-import { getClarificationRequests, getTransactions } from "../../services/bookkeeping/bookkeepingClient.js";
+import { getOperatorRequests } from "../../services/bookkeeping/bookkeepingClient.js";
 
 export default function ChatHome() {
   return <ChatHomeInner />;
@@ -27,7 +27,9 @@ function ChatHomeInner() {
   const dashboardTarget = "/dashboard/accounting";
   const { businessId, currentBusiness } = useBusiness();
   const [needsReviewRequests, setNeedsReviewRequests] = useState([]);
+  const [operatorOutstandingCount, setOperatorOutstandingCount] = useState(0);
   const [clarLoading, setClarLoading] = useState(false);
+  const [clarError, setClarError] = useState("");
   const [clarOpen, setClarOpen] = useState(false);
   const [showStatusCard, setShowStatusCard] = useState(false);
   const dataMode = getDemoMode?.() || "";
@@ -147,71 +149,43 @@ function ChatHomeInner() {
 
     if (isMockMode) {
       setNeedsReviewRequests(mockNeedsReviewRequests);
+      setOperatorOutstandingCount(mockNeedsReviewRequests.length);
       setClarLoading(false);
+      setClarError("");
       return;
     }
     if (!businessId) {
       setNeedsReviewRequests([]);
+      setOperatorOutstandingCount(0);
+      setClarError("");
       return;
     }
     setClarLoading(true);
+    setClarError("");
     try {
-      const [clarRes, txnRes] = await Promise.all([
-        getClarificationRequests(businessId, { limit: 200 }),
-        getTransactions(businessId, { status: "needs_review", range: "all", page_size: 200 }),
-      ]);
-      const clarRows = normalizeList(clarRes);
-      const needsReviewTxns = normalizeList(txnRes).filter((txn) => {
-        const status = (txn?.status || "").toLowerCase();
-        return !["approved", "auto_approved", "posted", "handled"].includes(status);
+      const operatorRes = await getOperatorRequests(businessId, { page: 1, page_size: 15 });
+      const operatorRows = normalizeList(operatorRes);
+      const merged = operatorRows.map((req) => {
+        const txn = req.txn || {};
+        const merchant = normalizeMerchant(txn);
+        return {
+          ...req,
+          txn: {
+            ...txn,
+            merchant_name: merchant,
+            counterparty_name: txn.counterparty_name || merchant,
+            amount: txn.signed_amount ?? txn.amount,
+            date: txn.date || txn.txn_date,
+            name: txn.description || txn.name || "",
+            description: txn.description || txn.name || "",
+          },
+        };
       });
-      const clarByTxn = new Map();
-      clarRows.forEach((req) => {
-        const tid = req?.transaction_id || req?.txn?.id;
-        if (!tid) return;
-        clarByTxn.set(String(tid), req);
-      });
-      const merged = [];
-      needsReviewTxns.forEach((txn) => {
-        const tid = txn.transaction_id || txn.id;
-        if (!tid) return;
-        const key = String(tid);
-        const existing = clarByTxn.get(key);
-        const merchant = normalizeMerchant(txn, existing);
-        if (existing) {
-          merged.push({
-            ...existing,
-            txn: {
-              ...existing?.txn,
-              ...txn,
-              merchant_name: merchant,
-              counterparty_name: txn.counterparty_name || merchant,
-              amount: txn.signed_amount ?? txn.amount ?? existing?.txn?.amount,
-              name: txn.description || txn.name || existing?.txn?.name,
-              description: txn.description || existing?.txn?.description || txn.name || existing?.txn?.name,
-              date: txn.date || txn.txn_date || existing?.txn?.date,
-            },
-          });
-        } else {
-          const fallbackName = txn.description || txn.name || merchant;
-          merged.push({
-            id: tid,
-            transaction_id: tid,
-            txn: {
-              ...txn,
-              merchant_name: merchant,
-              counterparty_name: txn.counterparty_name || merchant,
-              amount: txn.signed_amount ?? txn.amount,
-              date: txn.date || txn.txn_date,
-              name: fallbackName,
-              description: txn.description || txn.name || "",
-            },
-          });
-        }
-      });
+      const outstanding = Number(operatorRes?.outstanding_count ?? merged.length);
       setNeedsReviewRequests(merged);
-    } catch {
-      setNeedsReviewRequests([]);
+      setOperatorOutstandingCount(outstanding);
+    } catch (err) {
+      setClarError(err?.message || "Could not load Operator Requests.");
     } finally {
       setClarLoading(false);
     }
@@ -274,7 +248,7 @@ function ChatHomeInner() {
     setClarOpen(true);
   }, []);
 
-  const clarCount = needsReviewRequests.length;
+  const clarCount = isMockMode ? needsReviewRequests.length : operatorOutstandingCount;
   const hasPendingQuestions = clarCount > 0;
   const isChatHome = (location?.pathname || "").includes("/chat");
   const heroOpacity = 0.92;
@@ -406,6 +380,7 @@ function ChatHomeInner() {
                         mockMode={isMockMode}
                         mockRequests={mockNeedsReviewRequests}
                         requests={needsReviewRequests}
+                        error={clarError}
                         onHide={() => setShowStatusCard(false)}
                         showExpand
                       />

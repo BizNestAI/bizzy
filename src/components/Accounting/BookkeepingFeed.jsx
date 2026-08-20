@@ -553,6 +553,10 @@ export default function BookkeepingFeed({
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
             const fullMemo = getTransactionMemo(txn) || "No bank memo available.";
+            const operatorRequest = txn.operator_request || null;
+            const customerAnswered = Boolean(txn.customer_answered || (operatorRequest?.answer_text && operatorRequest?.status === "answered" && !operatorRequest?.resolved_at));
+            const customerResponseText = txn.customer_response || operatorRequest?.answer_text || "";
+            const customerRespondedAt = txn.customer_responded_at || operatorRequest?.answered_at || null;
             const ccRejected = txn.cc_payment_rejected === true || txn.meta?.cc_payment_rejected === true || txn.meta?.taxonomy_override === "not_cc_payment";
             const hasCcPair = Boolean(txn.cc_payment_pair_id || txn.meta?.cc_payment_pair_id);
             const isCcPaymentSuspected = !ccRejected && !hasCcPair && (txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment");
@@ -660,6 +664,14 @@ export default function BookkeepingFeed({
                       title="Checks often don’t include vendor details. Bizzi needs one quick clarification."
                     >
                       Check
+                    </span>
+                  ) : null}
+                  {customerAnswered ? (
+                    <span
+                      className="inline-flex items-center rounded-full border border-cyan-300/45 bg-cyan-400/10 px-2 py-[1px] text-[9px] font-semibold text-cyan-100"
+                      title="Customer response received; accountant review still required."
+                    >
+                      Customer answered
                     </span>
                   ) : null}
                 </div>
@@ -819,7 +831,7 @@ export default function BookkeepingFeed({
            </div>
            <div
              className={`overflow-hidden border-b transition-[max-height,opacity] duration-200 ease-out ${
-               isExpanded ? "max-h-40 opacity-100" : "max-h-0 opacity-0"
+               isExpanded ? "max-h-80 opacity-100" : "max-h-0 opacity-0"
              }`}
              style={{ background: "rgba(15,17,20,0.92)", borderColor: panelBorder }}
              aria-hidden={!isExpanded}
@@ -838,6 +850,21 @@ export default function BookkeepingFeed({
                  <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
                    {fullMemo}
                  </div>
+                 {customerAnswered ? (
+                   <div className="mt-3 rounded-lg border border-cyan-300/18 bg-cyan-400/[0.06] px-3 py-2">
+                     <div className="text-[10px] font-semibold uppercase tracking-wide text-cyan-100/80">
+                       Customer response
+                     </div>
+                     <div className="mt-1 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
+                       {customerResponseText}
+                     </div>
+                     {customerRespondedAt ? (
+                       <div className="mt-1 text-[10px] text-slate-400">
+                         Answered {new Date(customerRespondedAt).toLocaleString()}
+                       </div>
+                     ) : null}
+                   </div>
+                 ) : null}
                </div>
              </div>
            </div>

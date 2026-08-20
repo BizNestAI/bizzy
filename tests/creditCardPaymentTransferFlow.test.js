@@ -54,10 +54,12 @@ test("suggestion creates canonical pairs and writes symmetric metadata to both l
 });
 
 test("one confirmation resolves the pair and manual target must be a CreditCard account", () => {
-  const approvals = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const approvals = read("src/services/bookkeeping/bookkeepingApprovalService.js");
+  const approvalsRoute = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
   const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
   const qboAccounts = read("src/services/bookkeeping/qboAccounts.js");
 
+  assert.match(approvalsRoute, /approveBookkeepingTransactions/);
   assert.match(approvals, /createManualCreditCardPaymentPair/);
   assert.match(approvals, /confirmCreditCardPaymentPairForTransaction/);
   assert.doesNotMatch(approvals, /isCreditCardQboType/);
@@ -159,7 +161,7 @@ test("credit-card-payment UI exposes transfer target state instead of only a gen
 
 test("taxonomy-only cc-payment stays suspected and does not lock the account picker", () => {
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
-  const approvals = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const approvals = read("src/services/bookkeeping/bookkeepingApprovalService.js");
   const classifier = read("src/services/bookkeeping/taxonomyClassifier.js");
 
   assert.match(feed, /const hasCcPair = Boolean/);
@@ -198,6 +200,7 @@ test("customer-facing matched label is human-readable and never displays counter
 test("not-a-credit-card-payment override is durable and voids unconfirmed pairs without provider effects", () => {
   const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
   const approvals = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const approvalService = read("src/services/bookkeeping/bookkeepingApprovalService.js");
   const client = read("src/services/bookkeeping/bookkeepingClient.js");
   const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
   const suggest = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
@@ -212,6 +215,7 @@ test("not-a-credit-card-payment override is durable and voids unconfirmed pairs 
   );
   assert.doesNotMatch(rejectBody, /createQboTransfer|postCreditCardPaymentPairToQbo|claimCreditCardPaymentPairPosting/);
   assert.match(approvals, /credit-card-payments\/reject/);
+  assert.match(approvalService, /cc_payment_rejected:\s*true/);
   assert.match(client, /rejectCreditCardPayment/);
   assert.match(page, /handleRejectCreditCardPayment/);
   assert.match(suggest, /cc_payment_rejected_by_user/);

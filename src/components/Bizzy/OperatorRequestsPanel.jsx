@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  getClarificationRequests,
+  getOperatorRequests,
   submitClarificationAnswers,
   snoozeClarifications,
 } from "../../services/bookkeeping/bookkeepingClient";
@@ -24,7 +24,7 @@ function formatDate(d) {
   return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function ClarificationModal({ open, onClose, requests = [], businessId, onSubmitted }) {
+export function ClarificationModal({ open, onClose, requests = [], businessId, onSubmitted, page = 1, pageCount = 1, onPageChange, error = "" }) {
   const [answers, setAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
@@ -62,7 +62,7 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
     setSuccessMsg("");
     try {
       await submitClarificationAnswers(businessId, { answers: readyAnswers });
-      setSuccessMsg("Saved. Bizzi will categorize and learn this vendor.");
+      setSuccessMsg("Saved. Your response is ready for accountant review.");
       await onSubmitted?.();
       setAnswers({});
     } catch (e) {
@@ -164,6 +164,8 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
             const txn = req.txn || {};
             const memo = txn.name || "";
             const merchant = txn.merchant_name || txn.counterparty_name || "";
+            const sourceAccount = txn.source_account || txn.currentAccount || txn.plaid_account_name || "";
+            const suggestion = txn.suggested_qbo_account_name || req.meta?.suggested_qbo_account_name || "";
             const answered = (answers[req.id] || "").trim().length >= 3;
             return (
               <div
@@ -181,8 +183,12 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
                     <div className="text-xs text-white/70 flex items-center gap-3">
                       {txn.date && <span>{formatDate(txn.date)}</span>}
                       <span>{formatAmount(txn.amount)}</span>
+                      {sourceAccount ? <span>{sourceAccount}</span> : null}
                     </div>
                     <div className="text-sm text-white/60 leading-snug">{memo || "No memo available"}</div>
+                    {suggestion ? (
+                      <div className="text-xs text-emerald-100/70">Bizzi suggestion: {suggestion}</div>
+                    ) : null}
                   </div>
                   <div className="w-[220px] space-y-2">
                     <label className="block text-[11px] uppercase tracking-[0.12em] text-white/60">
@@ -235,9 +241,16 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
 
         <div className="flex items-center justify-between px-6 py-4 border-t border-white/10">
           <div className="text-xs text-white/60">
-            {successMsg ? <span className="text-emerald-300">{successMsg}</span> : "Tip: Submit everything in one pass — Bizzi learns your vendor patterns."}
+            {error ? <span className="text-amber-200">{error}</span> : successMsg ? <span className="text-emerald-300">{successMsg}</span> : "Tip: Submit everything in one pass."}
           </div>
           <div className="flex items-center gap-3">
+            {pageCount > 1 ? (
+              <div className="flex items-center gap-2 text-xs text-white/60">
+                <button type="button" onClick={() => onPageChange?.(Math.max(1, page - 1))} disabled={page <= 1 || submitting} className="px-2 py-1 rounded-md border border-white/10 bg-white/5 disabled:opacity-40">Prev</button>
+                <span>{page} / {pageCount}</span>
+                <button type="button" onClick={() => onPageChange?.(Math.min(pageCount, page + 1))} disabled={page >= pageCount || submitting} className="px-2 py-1 rounded-md border border-white/10 bg-white/5 disabled:opacity-40">Next</button>
+              </div>
+            ) : null}
             <button
               type="button"
               onClick={() => onSnooze(24)}
@@ -274,27 +287,36 @@ export default function OperatorRequestsPanel({ businessId, onCountChange, openE
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageCount, setPageCount] = useState(1);
+  const [outstandingCount, setOutstandingCount] = useState(0);
+  const [error, setError] = useState("");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (nextPage = 1) => {
     if (!businessId) return;
     setLoading(true);
+    setError("");
     try {
-      const res = await getClarificationRequests(businessId, { limit: 50 });
-      setRequests(res?.rows || res || []);
-      if (onCountChange) onCountChange((res?.rows || res || []).length || 0);
+      const res = await getOperatorRequests(businessId, { page: nextPage, page_size: 25 });
+      const rows = res?.rows || res || [];
+      setRequests(rows);
+      setPage(Number(res?.meta?.page || nextPage));
+      setPageCount(Number(res?.meta?.page_count || 1));
+      setOutstandingCount(Number(res?.outstanding_count ?? rows.length));
+      if (onCountChange) onCountChange(Number(res?.outstanding_count ?? rows.length));
     } catch (e) {
       console.warn("[OperatorRequests] fetch failed", e);
-      if (onCountChange) onCountChange(0);
+      setError(e?.message || "Could not load Operator Requests.");
     } finally {
       setLoading(false);
     }
   }, [businessId]);
 
   useEffect(() => {
-    load();
+    load(1);
   }, [load]);
 
-  const pendingCount = requests.length;
+  const pendingCount = outstandingCount || requests.length;
 
   const title = pendingCount
     ? `Bizzi needs ${pendingCount} quick clarification${pendingCount === 1 ? "" : "s"}`
@@ -342,8 +364,12 @@ export default function OperatorRequestsPanel({ businessId, onCountChange, openE
         requests={requests}
         businessId={businessId}
         onSubmitted={async () => {
-          await load();
+          await load(page);
         }}
+        page={page}
+        pageCount={pageCount}
+        onPageChange={(nextPage) => load(nextPage)}
+        error={error}
       />
     </>
   );

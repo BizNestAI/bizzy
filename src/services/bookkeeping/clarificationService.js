@@ -1,16 +1,14 @@
 import { supabase } from "../supabaseAdmin.js";
 import { computeMemoPrefixForLearning, canonicalTxnDirection, cleanMemoForPrefix } from "./vendorRuleLearner.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
-import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "./autoPostControl.js";
 import { resolveCanonicalQboAccount } from "./canonicalQboAccountResolver.js";
+import { fetchBookkeepingTransactions, matchesTransactionStatusFilter } from "../../api/bookkeeping/routes/bookkeeping.transactions.routes.js";
 import {
   getCanonicalAccountByKey,
   getCanonicalAccountForIntent,
   getCanonicalAccounts,
   getCanonicalIntentMappings,
 } from "./canonicalCoaRegistry.js";
-
-const GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
 
 const devLog = (tag, payload) => {
   if (process.env.NODE_ENV !== "production") {
@@ -194,7 +192,15 @@ function resolveClarificationCanonical(answerText = "") {
   return null;
 }
 
-export async function mapAnswerToCoa({ businessId, txn = {}, answerText = "", coaAccounts = [], dependencies = {} }) {
+export async function mapAnswerToCoa({
+  businessId,
+  txn = {},
+  answerText = "",
+  coaAccounts = [],
+  dependencies = {},
+  allowQboAccountCreate = false,
+  allowProviderWrites = false,
+} = {}) {
   void coaAccounts;
   if (!answerText) return null;
   const answerNorm = normalize(answerText);
@@ -212,6 +218,7 @@ export async function mapAnswerToCoa({ businessId, txn = {}, answerText = "", co
     canonicalAccountKey: resolvedCanonical.canonical.canonical_account_key,
     transactionId: txn?.id || null,
     source: "clarification",
+    allowCreate: allowQboAccountCreate === true && allowProviderWrites === true,
     dependencies,
   });
 
@@ -416,6 +423,146 @@ export async function fetchPendingClarifications({ businessId, limit = 25 }) {
   return { ok: true, count: typeof count === "number" ? count : rows.length, rows };
 }
 
+async function fetchAnsweredAwaitingReviewMap({ businessId, transactionIds = [] }) {
+  const ids = Array.from(new Set((transactionIds || []).filter(Boolean)));
+  if (!businessId || !ids.length) return new Map();
+  const { data, error } = await supabase
+    .from("clarification_requests")
+    .select("id,transaction_id,status,prompt_text,answer_text,selected_intent,answered_at,answered_by_user_id,resolved_at,meta")
+    .eq("business_id", businessId)
+    .eq("status", "answered")
+    .is("resolved_at", null)
+    .in("transaction_id", ids);
+  if (error) throw new Error(error?.message || "operator_answer_fetch_failed");
+  return new Map((data || []).map((row) => [String(row.transaction_id), row]));
+}
+
+async function ensurePendingRequestForTransaction({ businessId, transaction }) {
+  if (!businessId || !transaction?.id) return null;
+  const existing = transaction.operator_request?.id
+    ? { id: transaction.operator_request.id, status: transaction.operator_request.status }
+    : null;
+  if (existing?.id) return existing;
+  const result = await createOrUpdateClarificationRequest({
+    businessId,
+    txn: { id: transaction.id },
+    reason_code: "other",
+    prompt_text: Number(transaction.amount || 0) > 0 ? "What was this deposit for?" : "What was this charge for?",
+    meta: {
+      source: "operator_requests",
+      suggested_qbo_account_id: transaction.suggestedAccountId || transaction.suggested_qbo_account_id || null,
+      suggested_qbo_account_name: transaction.suggestedAccountName || transaction.suggested_qbo_account_name || null,
+      suggested_canonical_account_key: transaction.suggested_canonical_account_key || null,
+      transaction_snapshot: {
+        date: transaction.date || null,
+        amount: transaction.amount ?? null,
+        merchant_name: transaction.vendor || transaction.payee || null,
+        description: transaction.description || null,
+        plaid_account_id: transaction.plaid_account_id || null,
+        source_account: transaction.currentAccount || null,
+      },
+    },
+  });
+  return result?.ok ? { id: result.id, status: "pending" } : null;
+}
+
+export async function fetchOperatorRequests({ businessId, page = 1, pageSize = 25, includeRows = true }) {
+  if (!businessId) return { ok: false, error: "missing_business_id" };
+  const safePage = Math.max(parseInt(page, 10) || 1, 1);
+  const safePageSize = Math.min(Math.max(parseInt(pageSize, 10) || 25, 1), 100);
+  const allRows = [];
+  let nextPage = 1;
+  let totalCount = 0;
+  do {
+    const result = await fetchBookkeepingTransactions({
+      businessId,
+      statusFilter: "needs_review",
+      rangeParam: "all",
+      page: nextPage,
+      pageSize: 200,
+    });
+    totalCount = Number(result.totalCount || 0);
+    allRows.push(...(result.rows || []));
+    nextPage += 1;
+  } while (allRows.length < totalCount);
+
+  const answeredMap = await fetchAnsweredAwaitingReviewMap({
+    businessId,
+    transactionIds: allRows.map((row) => row.id),
+  });
+  const needsReviewIds = new Set(allRows.map((row) => String(row.id)));
+  const { data: pendingRows, error: pendingErr } = await supabase
+    .from("clarification_requests")
+    .select("id,transaction_id")
+    .eq("business_id", businessId)
+    .eq("status", "pending")
+    .limit(1000);
+  if (pendingErr) throw new Error(pendingErr?.message || "operator_pending_fetch_failed");
+  const staleIds = (pendingRows || [])
+    .filter((row) => row?.transaction_id && !needsReviewIds.has(String(row.transaction_id)))
+    .map((row) => row.id);
+  if (staleIds.length) {
+    await supabase
+      .from("clarification_requests")
+      .update({
+        status: "expired",
+        resolved_at: new Date().toISOString(),
+        resolved_reason: "transaction_no_longer_needs_review",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("business_id", businessId)
+      .in("id", staleIds);
+  }
+  const outstanding = allRows.filter((row) => !answeredMap.has(String(row.id)));
+  const start = (safePage - 1) * safePageSize;
+  const paged = includeRows ? outstanding.slice(start, start + safePageSize) : [];
+  const rows = [];
+
+  for (const txn of paged) {
+    const request = await ensurePendingRequestForTransaction({ businessId, transaction: txn });
+    rows.push({
+      id: request?.id || txn.id,
+      request_id: request?.id || null,
+      transaction_id: txn.id,
+      status: request?.status || "pending",
+      reason_code: "other",
+      prompt_text: Number(txn.amount || 0) > 0 ? "What was this deposit for?" : "What was this charge for?",
+      created_at: null,
+      meta: {
+        suggested_qbo_account_id: txn.suggestedAccountId || null,
+        suggested_qbo_account_name: txn.suggestedAccountName || null,
+      },
+      txn: {
+        date: txn.date || null,
+        amount: txn.signed_amount ?? txn.amount ?? null,
+        name: txn.description || null,
+        description: txn.description || null,
+        merchant_name: txn.vendor || txn.payee || null,
+        counterparty_name: txn.payee || txn.vendor || null,
+        plaid_account_id: txn.plaid_account_id || null,
+        source_account: txn.currentAccount || null,
+        suggested_qbo_account_id: txn.suggestedAccountId || null,
+        suggested_qbo_account_name: txn.suggestedAccountName || null,
+      },
+    });
+  }
+
+  return {
+    ok: true,
+    outstanding_count: outstanding.length,
+    answered_awaiting_review_count: answeredMap.size,
+    accounting_needs_review_count: totalCount,
+    count: outstanding.length,
+    rows,
+    meta: {
+      page: safePage,
+      page_size: safePageSize,
+      total_count: outstanding.length,
+      page_count: Math.max(1, Math.ceil(outstanding.length / safePageSize)),
+    },
+  };
+}
+
 async function upsertVendorRuleFromClarification({ businessId, txn, accountId, accountName }) {
   if (!businessId || !txn || !accountId) return { ok: true, skipped: true, reason: "missing_inputs" };
   const direction = canonicalTxnDirection(txn);
@@ -519,7 +666,7 @@ async function upsertVendorRuleFromClarification({ businessId, txn, accountId, a
   return { ok: true, rule: insData };
 }
 
-export async function processClarificationAnswers({ businessId, answers = [] }) {
+export async function processClarificationAnswers({ businessId, answers = [], answeredByUserId = null }) {
   if (!businessId) return { ok: false, error: "missing_business_id" };
   if (!Array.isArray(answers) || !answers.length) return { ok: false, error: "missing_answers" };
 
@@ -528,12 +675,12 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
       request_id: a?.request_id || a?.id || a?.requestId,
       transaction_id: a?.transaction_id || a?.transactionId || null,
       answer_text: typeof a?.answer_text === "string" ? a.answer_text : a?.answerText,
+      selected_intent: typeof a?.selected_intent === "string" ? a.selected_intent : typeof a?.intent === "string" ? a.intent : null,
     }))
     .filter((a) => a.request_id && a.transaction_id && typeof a.answer_text === "string");
   if (!sanitized.length) return { ok: false, error: "invalid_answers" };
 
   const requestIds = sanitized.map((a) => a.request_id);
-  const txnIds = sanitized.map((a) => a.transaction_id);
   const nowIso = new Date().toISOString();
 
   const { data: reqRows, error: reqErr } = await supabase
@@ -570,7 +717,7 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
   const { data: catRows } = canonicalTxnIds.length
     ? await supabase
         .from("transaction_categorizations")
-        .select("transaction_id,meta")
+        .select("transaction_id,status,meta")
         .eq("business_id", businessId)
         .in("transaction_id", canonicalTxnIds)
     : { data: [] };
@@ -580,8 +727,6 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
   });
 
   const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
-  const autoPostEnabled = await getAutoPostToQuickBooks(supabase, businessId);
-
   const results = [];
   let mapped = 0;
   let unmapped = 0;
@@ -591,12 +736,32 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
     const resolved = resolutionMap[ans.request_id] || null;
     const txn = resolved?.txn || null;
     const canonicalTxnId = resolved?.canonicalTxnId || null;
-    if (!req || req.transaction_id !== ans.transaction_id) {
+    let effectiveReq = req;
+    if (!effectiveReq && ans.request_id === ans.transaction_id) {
+      const created = await createOrUpdateClarificationRequest({
+        businessId,
+        txn: { id: ans.transaction_id },
+        reason_code: "other",
+        prompt_text: "What was this for?",
+        meta: { source: "operator_requests_answer_submit" },
+      });
+      if (created?.ok && created.id) {
+        const { data: createdReq, error: createdReqErr } = await supabase
+          .from("clarification_requests")
+          .select("*")
+          .eq("business_id", businessId)
+          .eq("id", created.id)
+          .maybeSingle();
+        if (createdReqErr) return { ok: false, error: createdReqErr?.message || "clarification_create_fetch_failed" };
+        effectiveReq = createdReq;
+      }
+    }
+    if (!effectiveReq || effectiveReq.transaction_id !== ans.transaction_id) {
       results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "not_found_or_mismatch" });
       unmapped += 1;
       continue;
     }
-    if (req.status !== "pending") {
+    if (effectiveReq.status !== "pending") {
       results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "not_pending" });
       unmapped += 1;
       continue;
@@ -658,6 +823,17 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
       unmapped += 1;
       continue;
     }
+    const currentCat = catRows?.find((row) => row.transaction_id === canonicalTxnId) || {};
+    if (!matchesTransactionStatusFilter("needs_review", currentCat)) {
+      results.push({
+        request_id: ans.request_id,
+        transaction_id: ans.transaction_id,
+        canonical_transaction_id: canonicalTxnId,
+        error: "transaction_not_needs_review",
+      });
+      unmapped += 1;
+      continue;
+    }
     const answerText = (ans.answer_text || "").trim();
     if (answerText.length < 2 || answerText.length > 200) {
       results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "invalid_answer_length" });
@@ -665,59 +841,55 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
       continue;
     }
 
-    const mapping = await mapAnswerToCoa({ businessId, txn, answerText });
+    let mapping = null;
+    try {
+      mapping = await mapAnswerToCoa({
+        businessId,
+        txn,
+        answerText,
+        allowQboAccountCreate: false,
+        allowProviderWrites: false,
+      });
+    } catch (err) {
+      mapping = {
+        account: null,
+        canonical_account_key: null,
+        canonical_account_name: null,
+        canonical_resolution_status: "lookup_failed",
+        match_reason: err?.message || "customer_answer_account_suggestion_failed",
+        confidence: "low",
+        review_required: true,
+        resolution: null,
+      };
+    }
     const baseMeta = { ...(catMeta[canonicalTxnId] || {}) };
-    baseMeta.clarification_request_id = ans.request_id;
-    baseMeta.clarification_answer_text = answerText;
-    baseMeta.auto_approve_reason = "user_clarification";
-    baseMeta.clarification_canonical_account_key = mapping?.canonical_account_key || null;
-    baseMeta.canonical_account_key = mapping?.canonical_account_key || baseMeta.canonical_account_key || null;
-    baseMeta.canonical_account_name = mapping?.canonical_account_name || baseMeta.canonical_account_name || null;
-    baseMeta.canonical_resolution_status = mapping?.canonical_resolution_status || null;
-    baseMeta.clarification_resolution_reason = mapping?.match_reason || null;
-    baseMeta.clarification_created_coa = mapping?.created === true;
-    if (baseMeta.safe_to_auto_post !== true) {
-      baseMeta.safe_to_auto_post = false;
-    }
-
-    let finalId = null;
-    let finalName = null;
-    let status = "needs_review";
-    let post_after = null;
-    let mappedFlag = false;
-
-    if (mapping?.account?.id && mapping?.account?.name) {
-      finalId = mapping.account.id;
-      finalName = mapping.account.name;
-      status = baseMeta.safe_to_auto_post === true ? "auto_approved" : "approved";
-      post_after = computePostAfterForAutoPost(autoPostEnabled, GRACE_HOURS);
-      mappedFlag = true;
-    } else {
-      baseMeta.clarification_unmapped = true;
-      baseMeta.clarification_unmapped_reason = mapping?.match_reason || "no_safe_mapping";
-      baseMeta.safe_to_auto_post = false;
-    }
-
-    const catPayload = {
-      business_id: businessId,
-      transaction_id: canonicalTxnId,
-      status,
-      suggested_qbo_account_id: finalId,
-      suggested_qbo_account_name: finalName,
-      suggested_canonical_account_key: mapping?.canonical_account_key || null,
-      final_qbo_account_id: finalId,
-      final_qbo_account_name: finalName,
-      final_canonical_account_key: mappedFlag ? mapping?.canonical_account_key || null : null,
-      decided_by: "user_clarification",
-      decided_at: nowIso,
-      updated_at: nowIso,
-      post_after,
-      post_error: null,
-      meta: baseMeta,
-      reason: "user_clarification",
+    const requestMeta = {
+      ...(effectiveReq.meta || {}),
+      selected_intent: ans.selected_intent || null,
+      customer_context_only: true,
+      non_authoritative_account_evidence: mapping
+        ? {
+            qbo_account_id: mapping.account?.id || null,
+            qbo_account_name: mapping.account?.name || null,
+            canonical_account_key: mapping.canonical_account_key || null,
+            canonical_account_name: mapping.canonical_account_name || null,
+            resolution_status: mapping.canonical_resolution_status || null,
+            match_reason: mapping.match_reason || null,
+            review_required: mapping.review_required === true,
+          }
+        : null,
+      transaction_context_snapshot: {
+        date: txn.date || null,
+        amount: txn.amount ?? null,
+        name: txn.name || null,
+        merchant_name: txn.merchant_name || null,
+        counterparty_name: txn.counterparty_name || null,
+        plaid_account_id: txn.plaid_account_id || null,
+        direction: txn.direction || null,
+      },
     };
 
-    if (resolved?.wasRemapped && canonicalTxnId && canonicalTxnId !== req.transaction_id && txn.is_archived !== true) {
+    if (resolved?.wasRemapped && canonicalTxnId && canonicalTxnId !== effectiveReq.transaction_id && txn.is_archived !== true) {
       const { error: remapReqErr } = await supabase
         .from("clarification_requests")
         .update({
@@ -725,7 +897,7 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
           updated_at: nowIso,
         })
         .eq("business_id", businessId)
-        .eq("id", ans.request_id);
+        .eq("id", effectiveReq.id);
       if (remapReqErr) {
         results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "clarification_repoint_failed" });
         unmapped += 1;
@@ -744,50 +916,21 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
         status: "answered",
         answered_at: nowIso,
         answered_by: "user",
+        answered_by_user_id: answeredByUserId || null,
         answer_text: answerText,
-        meta: req.meta || null,
+        selected_intent: ans.selected_intent || null,
+        meta: requestMeta,
         updated_at: nowIso,
       })
       .eq("business_id", businessId)
-      .eq("id", ans.request_id);
+      .eq("id", effectiveReq.id);
     if (clarErr) {
       results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "clarification_update_failed" });
       unmapped += 1;
       continue;
     }
 
-    const { error: catErr } = await supabase
-      .from("transaction_categorizations")
-      .upsert(catPayload, { onConflict: "business_id,transaction_id" });
-    if (catErr) {
-      results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "categorization_update_failed" });
-      unmapped += 1;
-      continue;
-    }
-
-    if (mappedFlag) {
-      const { error: learnErr } = await supabase.from("clarification_learning_events").insert({
-        business_id: businessId,
-        transaction_id: canonicalTxnId,
-        vendor_key: txn.merchant_entity_id || (txn.counterparty_name || txn.merchant_name || txn.name || "").toLowerCase(),
-        memo_key: computeMemoPrefixForLearning(txn, 20)?.prefix || null,
-        user_answer_text: answerText,
-        resulting_qbo_account_id: finalId,
-        resulting_qbo_account_name: finalName,
-        meta: { clarification_request_id: ans.request_id },
-      });
-      if (learnErr) {
-        devLog("learning_insert_failed", { error: learnErr?.message || learnErr, transaction_id: ans.transaction_id });
-      }
-      const vr = await upsertVendorRuleFromClarification({
-        businessId,
-        txn,
-        accountId: finalId,
-        accountName: finalName,
-      });
-      if (vr?.error) {
-        devLog("vendor_rule_error", { error: vr.error, transaction_id: ans.transaction_id });
-      }
+    if (mapping?.account?.id && mapping?.account?.name) {
       mapped += 1;
     } else {
       unmapped += 1;
@@ -798,10 +941,11 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
       transaction_id: ans.transaction_id,
       canonical_transaction_id: canonicalTxnId,
       remapped: !!resolved?.wasRemapped,
-      mapped: mappedFlag,
-      status: catPayload.status,
-      final_qbo_account_id: finalId,
-      final_qbo_account_name: finalName,
+      mapped: Boolean(mapping?.account?.id),
+      status: "answered",
+      accounting_status: "needs_review",
+      final_qbo_account_id: null,
+      final_qbo_account_name: null,
     });
   }
 
@@ -810,6 +954,7 @@ export async function processClarificationAnswers({ businessId, answers = [] }) 
 
 export default {
   fetchPendingClarifications,
+  fetchOperatorRequests,
   mapAnswerToCoa,
   createOrUpdateClarificationRequest,
   processClarificationAnswers,

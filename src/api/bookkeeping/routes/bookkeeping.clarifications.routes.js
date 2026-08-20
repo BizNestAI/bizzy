@@ -3,6 +3,7 @@ import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import {
   fetchPendingClarifications,
+  fetchOperatorRequests,
   processClarificationAnswers,
 } from "../../../services/bookkeeping/clarificationService.js";
 import { supabase } from "../../../services/supabaseAdmin.js";
@@ -33,6 +34,27 @@ router.get("/clarifications", requireAuth, async (req, res) => {
   }
 });
 
+router.get("/operator-requests", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    const result = await fetchOperatorRequests({
+      businessId,
+      page: req.query?.page || 1,
+      pageSize: req.query?.page_size || req.query?.limit || 25,
+      includeRows: req.query?.include_rows !== "false",
+    });
+    if (!result.ok) {
+      return res.status(500).json({ ok: false, error: result.error || "operator_requests_fetch_failed" });
+    }
+    return res.json(result);
+  } catch (err) {
+    console.error("[operator-requests][fetch] failed", err?.message || err);
+    return res.status(500).json({ ok: false, error: "operator_requests_fetch_failed", message: err?.message || "failed" });
+  }
+});
+
 router.post("/clarifications/submit", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
@@ -40,7 +62,7 @@ router.post("/clarifications/submit", requireAuth, async (req, res) => {
   const answers = body.answers || body.items || [];
 
   try {
-    const result = await processClarificationAnswers({ businessId, answers });
+    const result = await processClarificationAnswers({ businessId, answers, answeredByUserId: req.user?.id || null });
     if (!result.ok) {
       return res.status(400).json({ ok: false, error: result.error || "clarifications_submit_failed" });
     }

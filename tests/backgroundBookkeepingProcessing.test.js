@@ -20,6 +20,7 @@ function makeStore() {
     bookkeeping_processing_requests: [],
     transaction_categorizations: [],
     bank_transactions: [],
+    clarification_requests: [],
   };
 }
 
@@ -249,6 +250,50 @@ test("already handled or posted rows are skipped before categorization work", as
 
   assert.equal(result.skipped, 1);
   assert.equal(suggestionCalls, 0);
+});
+
+test("answered Operator Requests awaiting accountant review are skipped before auto-handling", async () => {
+  const supabase = makeSupabase();
+  seedBankTransactions(supabase, BUSINESS_ID, ["txn-answered"]);
+  supabase.store.transaction_categorizations.push({
+    business_id: BUSINESS_ID,
+    transaction_id: "txn-answered",
+    status: "needs_review",
+    qbo_txn_id: null,
+    post_after: null,
+    meta: {},
+  });
+  supabase.store.clarification_requests.push({
+    id: "clar-answered",
+    business_id: BUSINESS_ID,
+    transaction_id: "txn-answered",
+    status: "answered",
+    answer_text: "Materials for Johnson remodel",
+    answered_at: "2026-08-31T12:00:00.000Z",
+    resolved_at: null,
+  });
+  let suggestionCalls = 0;
+  let reconsiderCalls = 0;
+  __setBackgroundBookkeepingProcessingTestDeps({
+    runBookkeepingSuggestionPass: async () => {
+      suggestionCalls += 1;
+      return { ok: true };
+    },
+    reconsiderNeedsReviewTransactions: async () => {
+      reconsiderCalls += 1;
+      return { ok: true };
+    },
+  });
+
+  await enqueueBookkeepingProcessingForTransactions({ businessId: BUSINESS_ID, transactionIds: ["txn-answered"], supabase });
+  const result = await processPendingBookkeepingRequests({ supabase, batchSize: 1 });
+
+  assert.equal(result.skipped, 1);
+  assert.equal(suggestionCalls, 0);
+  assert.equal(reconsiderCalls, 0);
+  assert.equal(supabase.store.transaction_categorizations[0].status, "needs_review");
+  assert.equal(supabase.store.transaction_categorizations[0].post_after, null);
+  assert.equal(supabase.store.clarification_requests[0].answer_text, "Materials for Johnson remodel");
 });
 
 test("application enqueue rejects a transaction owned by another business", async () => {

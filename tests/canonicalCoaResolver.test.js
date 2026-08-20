@@ -433,7 +433,7 @@ test("clarification for Software resolves through canonical policy and reuses ex
   assert.equal(supabase.db.qbo_account_mapping_events[0].source, "clarification");
 });
 
-test("clarification cannot fuzzy-map Software to Subscriptions and safely creates Software", async () => {
+test("clarification cannot fuzzy-map Software to Subscriptions and does not create from customer answer", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "subs", name: "Subscriptions", type: "Expense" }]);
   const result = await mapAnswerToCoa({
@@ -442,10 +442,11 @@ test("clarification cannot fuzzy-map Software to Subscriptions and safely create
     answerText: "software",
     dependencies: deps({ supabase, qbo }),
   });
-  assert.equal(result.account.name, "Software");
+  assert.equal(result.account, null);
   assert.equal(result.canonical_account_key, "software");
-  assert.equal(result.created, true);
-  assert.equal(state.createCount, 1);
+  assert.equal(result.review_required, true);
+  assert.equal(result.match_reason, "canonical_account_requires_review");
+  assert.equal(state.createCount, 0);
 });
 
 test("clarification with ambiguous Supplies candidate remains review-required", async () => {
@@ -464,7 +465,7 @@ test("clarification with ambiguous Supplies candidate remains review-required", 
   assert.equal(state.createCount, 0);
 });
 
-test("clarification-created canonical mapping is auditable", async () => {
+test("clarification answer cannot create canonical mapping or QBO account", async () => {
   const supabase = makeSupabase();
   const { qbo } = makeQbo([]);
   const txnId = "22222222-2222-4222-8222-222222222222";
@@ -474,14 +475,12 @@ test("clarification-created canonical mapping is auditable", async () => {
     answerText: "software",
     dependencies: deps({ supabase, qbo }),
   });
-  assert.equal(result.account.name, "Software");
-  const mapping = supabase.db.business_canonical_qbo_account_mappings[0];
-  const event = supabase.db.qbo_account_mapping_events.find((row) => row.event_type === "created_by_bizzi");
-  assert.equal(mapping.canonical_account_key, "software");
-  assert.equal(mapping.qbo_account_name, "Software");
-  assert.equal(mapping.mapping_source, "creation_intent");
-  assert.equal(mapping.first_transaction_id, txnId);
-  assert.equal(event.source, "creation_intent");
+  assert.equal(result.account, null);
+  assert.equal(result.review_required, true);
+  assert.equal(result.match_reason, "canonical_account_requires_review");
+  assert.equal(supabase.db.qbo_account_creation_intents.length, 0);
+  assert.equal(supabase.db.qbo_coa_creations.length, 0);
+  assert.equal(supabase.db.business_canonical_qbo_account_mappings[0].status, "needs_review");
 });
 
 test("repeated materials_supplies review events aggregate into one current decision", async () => {

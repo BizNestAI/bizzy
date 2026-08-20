@@ -308,6 +308,33 @@ export default function MonthlyReviewConsole() {
     }
   };
 
+  const approveOperatorResponse = async (response, accountId) => {
+    if (!selectedBusinessId || !response?.request_id || !accountId) return;
+    const account = (sourceLedger?.chart_accounts || []).find((item) => String(item.id) === String(accountId));
+    if (!account) return;
+    const actionKey = `operator-response:${response.request_id}`;
+    setBusyAction(actionKey);
+    setError("");
+    try {
+      await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/operator-responses/${encodeURIComponent(response.request_id)}/approve`, {
+        method: "POST",
+        body: {
+          month,
+          final_qbo_account_id: account.id,
+          final_qbo_account_name: account.name,
+          reason: "Approved from monthly Operator Response review.",
+        },
+      });
+      await loadDetail();
+      await loadSourceLedger();
+      await loadBusinesses();
+    } catch (e) {
+      setError(e?.body?.message || e?.message || "Could not approve Operator Response.");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
   const openTransactionHistory = async (transaction) => {
     if (!detail?.run?.id || !transaction?.id) return;
     setHistoryDrawer({ open: true, transaction, rows: [], loading: true });
@@ -700,6 +727,13 @@ export default function MonthlyReviewConsole() {
                   data={detail?.canonical_vendors}
                   busyAction={busyAction}
                   onResolve={resolveCanonicalVendorDecision}
+                />
+
+                <OperatorResponsesPanel
+                  data={detail?.operator_responses}
+                  accounts={sourceLedger?.chart_accounts || []}
+                  busyAction={busyAction}
+                  onApprove={approveOperatorResponse}
                 />
 
                 <SourceLedgerPanel
@@ -1152,6 +1186,65 @@ function SourceLedgerPanel({
       </div>
 
       <ReconciliationTracePanel ledger={ledger} loading={loading} />
+    </div>
+  );
+}
+
+function OperatorResponsesPanel({ data, accounts = [], busyAction, onApprove }) {
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const dropdownAccounts = useMemo(() => accounts.map(normalizeAccountForBooksDropdown), [accounts]);
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
+      <div className="flex flex-col gap-2 border-b border-white/10 pb-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-[0.14em] text-emerald-200/75">Operator Responses</div>
+          <h3 className="mt-1 text-lg font-semibold text-white">{Number(data?.count || rows.length)} awaiting review</h3>
+        </div>
+      </div>
+      <div className="mt-4 space-y-3">
+        {rows.length ? rows.map((row) => {
+          const busy = busyAction === `operator-response:${row.request_id}`;
+          return (
+            <div key={row.request_id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+              <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(260px,1.2fr)_minmax(240px,320px)] lg:items-start">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-white">{row.merchant || "Transaction"}</div>
+                  <div className="mt-1 text-xs text-white/50">
+                    {formatShortDate(row.date)} · {formatCurrency(row.amount)} · {row.source_account || "Bank account"}
+                  </div>
+                  <div className="mt-1 truncate text-xs text-white/38">{row.description || "No memo available"}</div>
+                  {row.suggested_qbo_account_name ? (
+                    <div className="mt-2 text-xs text-emerald-100/70">Bizzi suggestion: {row.suggested_qbo_account_name}</div>
+                  ) : null}
+                </div>
+                <div className="rounded-lg border border-cyan-300/14 bg-cyan-300/[0.05] p-3">
+                  <div className="text-[10px] uppercase tracking-[0.12em] text-cyan-100/70">{row.prompt_text || "Question"}</div>
+                  <div className="mt-1 whitespace-pre-wrap text-sm text-white">{row.answer_text || "No response text"}</div>
+                  <div className="mt-2 text-xs text-white/45">
+                    {row.selected_intent ? `${row.selected_intent} · ` : ""}Answered {formatDateTime(row.answered_at)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <CoaDropdown
+                    value={row.suggested_qbo_account_id || ""}
+                    suggestedId={row.suggested_qbo_account_id || ""}
+                    suggestedName={row.suggested_qbo_account_name || ""}
+                    accounts={dropdownAccounts}
+                    status="needs_review"
+                    disabled={busy || !dropdownAccounts.length}
+                    onChange={(accountId) => onApprove?.(row, accountId)}
+                  />
+                  {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/45" /> : null}
+                </div>
+              </div>
+            </div>
+          );
+        }) : (
+          <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-8 text-center text-sm text-white/45">
+            No answered Operator Requests are awaiting accountant review.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2152,6 +2245,13 @@ function formatShortTime(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function formatDateTime(value) {
+  if (!value) return "not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "not recorded";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function formatCurrency(value) {

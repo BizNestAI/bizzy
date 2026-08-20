@@ -27,6 +27,19 @@ export async function getTransactions(businessId, params = {}) {
   return res || { rows: [] };
 }
 
+export async function getOperatorRequests(businessId, params = {}) {
+  const search = new URLSearchParams();
+  Object.entries(params || {}).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== "") search.set(k, v);
+  });
+  const qs = search.toString() ? `?${search.toString()}` : "";
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/operator-requests${qs}`), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+  return res || { rows: [], outstanding_count: 0 };
+}
+
 export async function getTransactionCounts(businessId, params = {}) {
   const search = new URLSearchParams();
   Object.entries(params || {}).forEach(([k, v]) => {

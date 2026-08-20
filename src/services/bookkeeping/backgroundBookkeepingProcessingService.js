@@ -391,6 +391,28 @@ function isAlreadyHandledOrPosted(existingCat) {
   );
 }
 
+async function hasAnsweredOperatorRequestAwaitingReview({ db, businessId, transactionId }) {
+  if (!businessId || !transactionId) return false;
+  if (db.store?.clarification_requests) {
+    return db.store.clarification_requests.some((row) =>
+      row.business_id === businessId &&
+      row.transaction_id === transactionId &&
+      row.status === "answered" &&
+      !row.resolved_at
+    );
+  }
+  const { data, error } = await db
+    .from("clarification_requests")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .eq("status", "answered")
+    .is("resolved_at", null)
+    .limit(1);
+  if (error) throw error;
+  return Boolean(data?.length);
+}
+
 export async function processPendingBookkeepingRequests({
   supabase = null,
   workerId = `bookkeeping:${process.env.HOSTNAME || "local"}:${process.pid}`,
@@ -424,6 +446,14 @@ export async function processPendingBookkeepingRequests({
       if (existingCatErr) throw existingCatErr;
       if (isAlreadyHandledOrPosted(existingCat)) {
         results.push(await skipRequest({ db, request, workerId, now, reason: "already_handled_or_posted" }));
+        continue;
+      }
+      if (await hasAnsweredOperatorRequestAwaitingReview({
+        db,
+        businessId: request.business_id,
+        transactionId: request.transaction_id,
+      })) {
+        results.push(await skipRequest({ db, request, workerId, now, reason: "operator_response_awaiting_accountant_review" }));
         continue;
       }
       const owned = await fetchOwnedTransactionIds({

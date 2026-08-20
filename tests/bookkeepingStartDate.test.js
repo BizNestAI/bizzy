@@ -40,7 +40,7 @@ test("active query helper applies date cutoff only when configured", () => {
 });
 
 test("approval and posting paths have hard pre-cutoff gates for direct transaction IDs", () => {
-  const approvalsSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.approvals.routes.js"), "utf8");
+  const approvalsSource = readFileSync(join(root, "src/services/bookkeeping/bookkeepingApprovalService.js"), "utf8");
   const postingSource = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
 
   assert.match(approvalsSource, /getTransactionsOutsideActiveBookkeepingScope/);

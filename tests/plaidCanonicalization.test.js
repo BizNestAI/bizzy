@@ -194,7 +194,7 @@ test("probable relink history is classified for review instead of canonical merg
 });
 
 test("probable relink review blocks approval, auto-approval, clarification, manual posting, and cron posting", () => {
-  const approvals = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const approvals = read("src/services/bookkeeping/bookkeepingApprovalService.js");
   const suggest = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
   const clarification = read("src/services/bookkeeping/clarificationService.js");
   const posting = read("src/jobs/booksPost.cron.js");
@@ -221,7 +221,7 @@ test("check/reference metadata can produce deterministic canonical identity", ()
 });
 
 test("pending transactions cannot approve, auto-approve, clarify, or post", () => {
-  const approvals = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const approvals = read("src/services/bookkeeping/bookkeepingApprovalService.js");
   const suggest = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
   const clarification = read("src/services/bookkeeping/clarificationService.js");
   const posting = read("src/jobs/booksPost.cron.js");
