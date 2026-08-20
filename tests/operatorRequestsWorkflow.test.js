@@ -46,6 +46,7 @@ test("Operator Requests retrieval is database bounded and supports large Needs R
 
 test("Operator Request summary is durable and recomputed from authoritative SQL semantics", () => {
   const migration = read("supabase/migrations/20260906_operator_request_summary.sql");
+  const fixMigration = read("supabase/migrations/20260907_fix_operator_request_summary_business_id_conflict.sql");
   const boundedMigration = read("supabase/migrations/20260905_bounded_bookkeeping_needs_review_retrieval.sql");
   const service = read("src/services/bookkeeping/operatorRequestSummaryService.js");
 
@@ -56,13 +57,39 @@ test("Operator Request summary is durable and recomputed from authoritative SQL 
   assert.match(migration, /answered_awaiting_review_count integer not null default 0/);
   assert.match(migration, /create or replace function public\.refresh_operator_request_summary/);
   assert.match(migration, /from public\.get_operator_request_counts_bounded\(p_business_id\)/);
-  assert.match(migration, /on conflict \(business_id\) do update/);
+  assert.match(fixMigration, /create or replace function public\.refresh_operator_request_summary\(p_business_id uuid\)/);
+  assert.match(fixMigration, /from public\.get_operator_request_counts_bounded\(p_business_id\)/);
+  assert.equal((fixMigration.match(/on conflict on constraint operator_request_summaries_pkey do update/g) || []).length, 2);
+  assert.doesNotMatch(fixMigration, /on conflict \(business_id\)/i);
+  assert.match(fixMigration, /returns table \([\s\S]*business_id uuid/);
+  assert.match(fixMigration, /revoke all on function public\.refresh_operator_request_summary\(uuid\) from public, anon, authenticated/);
+  assert.match(fixMigration, /grant execute on function public\.refresh_operator_request_summary\(uuid\) to service_role/);
   assert.match(migration, /alter table public\.operator_request_summaries enable row level security/);
   assert.match(migration, /revoke all on table public\.operator_request_summaries from public, anon, authenticated/);
   assert.match(migration, /grant all on table public\.operator_request_summaries to service_role/);
   assert.match(boundedMigration, /create or replace function public\.get_operator_request_counts_bounded/);
   assert.match(service, /refresh_operator_request_summary/);
   assert.doesNotMatch(service, /outstanding_count\s*[+-]=/);
+});
+
+test("Operator Request summary business_id conflict target is unambiguous in success and error paths", () => {
+  const fixMigration = read("supabase/migrations/20260907_fix_operator_request_summary_business_id_conflict.sql");
+  const successUpsert = fixMigration.slice(
+    fixMigration.indexOf("insert into public.operator_request_summaries as ors ("),
+    fixMigration.indexOf("return query")
+  );
+  const errorUpsert = fixMigration.slice(
+    fixMigration.indexOf("exception"),
+    fixMigration.indexOf("end;", fixMigration.indexOf("exception"))
+  );
+
+  assert.match(successUpsert, /on conflict on constraint operator_request_summaries_pkey do update/);
+  assert.match(errorUpsert, /on conflict on constraint operator_request_summaries_pkey do update/);
+  assert.doesNotMatch(successUpsert, /on conflict\s*\(\s*business_id\s*\)/i);
+  assert.doesNotMatch(errorUpsert, /on conflict\s*\(\s*business_id\s*\)/i);
+  assert.match(successUpsert, /last_reconciled_at = excluded\.last_reconciled_at/);
+  assert.match(errorUpsert, /reconciliation_status = 'error'/);
+  assert.match(errorUpsert, /last_error = left\(sqlerrm, 1000\)/);
 });
 
 test("Home count uses summary endpoint and does not fetch Operator Request rows before expansion", () => {
