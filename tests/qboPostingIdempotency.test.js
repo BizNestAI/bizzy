@@ -94,10 +94,30 @@ test("QBO Purchase and Deposit provider helpers support raw node-quickbooks meth
   assert.match(cron, /fn\.call\(context, payload/);
 });
 
+test("posting path records safe stage timings and reuses QBO context for vendor gate", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const handleBody = cron.slice(cron.indexOf("export async function handleItem"), cron.indexOf("function taxYearFromDate"));
+
+  assert.match(cron, /function createPostingTiming/);
+  assert.match(cron, /source_mapping_ms/);
+  assert.match(cron, /lock_ms/);
+  assert.match(cron, /posting_intent_ms/);
+  assert.match(cron, /qbo_auth_ms/);
+  assert.match(cron, /duplicate_preflight_ms/);
+  assert.match(cron, /vendor_gate_ms/);
+  assert.match(cron, /qbo_create_ms/);
+  assert.match(cron, /receipt_ms/);
+  assert.match(cron, /total_ms/);
+  assert.match(handleBody, /ensureRequiredVendorBeforePosting\(\{ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow \}\)/);
+  assert.match(handleBody, /duplicate_preflight_ran = true/);
+  assert.match(handleBody, /posting_timing/);
+  assert.doesNotMatch(cron, /access_token|refresh_token|client_secret/i);
+});
+
 test("QBO success plus local crash and network timeouts recover as unknown without a new requestid", () => {
   const cron = read("src/jobs/booksPost.cron.js");
   const migration = read("supabase/migrations/20260826_qbo_posting_idempotency_phase2.sql");
-  const requestIdBuilder = cron.slice(cron.indexOf("function buildQboRequestId"), cron.indexOf("function appendMarker"));
+  const requestIdBuilder = cron.slice(cron.indexOf("function buildQboRequestId"), cron.indexOf("function buildQboRecoveryRef"));
 
   assert.match(cron, /catch \(err\) \{[\s\S]*recordQboPostingUnknown\(\{ businessId, transactionId: txnId, requestId, err \}\)/);
   assert.match(cron, /qbo_post_missing_transaction_id/);
@@ -106,6 +126,53 @@ test("QBO success plus local crash and network timeouts recover as unknown witho
   assert.match(migration, /v_row\.status = 'posted' and v_row\.qbo_txn_id is not null/i);
   assert.match(migration, /request_id = coalesce\(request_id, p_request_id\)/i);
   assert.doesNotMatch(requestIdBuilder, /Date\.now\(\)|Math\.random\(/);
+});
+
+test("QBO posted transaction metadata is human readable and uses a short deterministic recovery ref", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const textBuilder = cron.slice(cron.indexOf("function buildQboRecoveryRef"), cron.indexOf("function computeBackoffMs"));
+
+  assert.match(cron, /const BIZZI_POSTED_LABEL = "Posted by Bizzi"/);
+  assert.match(cron, /const QBO_RECOVERY_REF_LENGTH = 10/);
+  assert.match(textBuilder, /function buildQboRecoveryRef\(requestId = ""\)/);
+  assert.match(textBuilder, /createHash\("sha256"\)/);
+  assert.match(textBuilder, /update\(`qbo-visible-ref-v1\|\$\{requestId \|\| ""\}`\)/);
+  assert.match(textBuilder, /slice\(0, QBO_RECOVERY_REF_LENGTH\)/);
+  assert.match(textBuilder, /\.toUpperCase\(\)/);
+  assert.match(textBuilder, /`\$\{BIZZI_POSTED_LABEL\} · Ref \$\{ref\}`/);
+  assert.match(textBuilder, /lineDescription: `\$\{desc\} · \$\{BIZZI_POSTED_LABEL\}`/);
+  assert.doesNotMatch(textBuilder, /plaid_transaction_id|bankTxn\?\.id|Bizzi:\$\{|idempotencyKey|Math\.random|Date\.now/);
+});
+
+test("clean QBO metadata is applied to all posting payload types without new provider calls", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const postingBody = cron.slice(cron.indexOf("async function postCcPaymentToQbo"), cron.indexOf("async function postToQbo"));
+
+  assert.match(postingBody, /buildQboPostText\(bankTxn, "CC payment", requestId\)/);
+  assert.match(postingBody, /buildQboPostText\(bankTxn, "Bank transaction", requestId\)/);
+  assert.match(postingBody, /buildQboPostText\(bankTxn, "CC charge", requestId\)/);
+  assert.match(postingBody, /PrivateNote: note/);
+  assert.match(postingBody, /Description: lineDescription/);
+  assert.match(postingBody, /createQboPurchase\(qbo,/);
+  assert.match(postingBody, /createQboDeposit\(qbo,/);
+  assert.doesNotMatch(postingBody, /resolvePayee|getQBOClient|getLatestQuickBooksTokenRow|supabase\.from|supabase\.rpc|openai|plaid/i);
+});
+
+test("posting display name prefers QBO/canonical vendor evidence over raw bank memo", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const displayBuilder = cron.slice(cron.indexOf("function buildQboDisplayName"), cron.indexOf("function buildQboPostText"));
+  const vendorGate = cron.slice(cron.indexOf("async function ensureRequiredVendorBeforePosting"), cron.indexOf("async function claimQboPostingIntent"));
+
+  assert.match(displayBuilder, /bankTxn\.qbo_vendor_display_name/);
+  assert.match(displayBuilder, /bankTxn\.qbo_display_name/);
+  assert.match(displayBuilder, /bankTxn\.posting_display_name/);
+  assert.match(displayBuilder, /bankTxn\.canonical_vendor_display_name/);
+  assert.match(displayBuilder, /bankTxn\.resolved_payee_name/);
+  assert.match(displayBuilder, /bankTxn\.counterparty_name/);
+  assert.match(displayBuilder, /bankTxn\.merchant_name/);
+  assert.match(displayBuilder, /cleanBankMemoName\(bankTxn\.name\)/);
+  assert.match(cron, /function cleanDisplayName[\s\S]*canonicalizeVendorDisplayName/);
+  assert.match(vendorGate, /bank\.posting_display_name =[\s\S]*vendorEnsure\.vendor_name/);
 });
 
 test("posted truth is recorded in durable receipt before local categorization becomes Posted", () => {

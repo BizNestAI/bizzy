@@ -139,6 +139,70 @@ test("stale or deleted canonical QBO mapping requires review instead of trusting
   assert.equal(db.rows.business_qbo_vendor_mappings[0].status, "needs_review");
 });
 
+test("recent active QBO Vendor mapping uses fast path without full entity refresh", async () => {
+  const db = makeDb();
+  const canonical = await resolveCanonicalVendorForTransaction({ db, businessId: BUSINESS_ID, bankTxn: txn({ id: "t-fast-1", merchant_entity_id: "ent-fast", merchant_name: "Fast Vendor" }) });
+  db.rows.business_qbo_vendor_mappings.push({
+    id: "map-fast",
+    business_id: BUSINESS_ID,
+    realm_id: REALM_ID,
+    qbo_env: "production",
+    canonical_vendor_id: canonical.canonicalVendor.id,
+    qbo_vendor_id: "v-fast",
+    qbo_display_name: "Fast Vendor",
+    status: "active",
+    mapping_source: "resolver",
+    last_validated_at: new Date().toISOString(),
+  });
+  const qbo = makeQbo({ vendors: [] });
+  const result = await ensureCanonicalVendorMappedToQbo({
+    db,
+    getQBOClientFn: async () => qbo,
+    getLatestQuickBooksTokenRowFn: async () => ({ realm_id: REALM_ID, qbo_env: "production" }),
+    businessId: BUSINESS_ID,
+    bankTxn: txn({ id: "t-fast-2", merchant_entity_id: "ent-fast", merchant_name: "Fast Vendor" }),
+  });
+
+  assert.equal(result.reason, "canonical_mapping_recent");
+  assert.equal(result.vendor_validation_mode, "cache_hit");
+  assert.equal(result.qbo_entity_id, "v-fast");
+  assert.equal(qbo.calls.findVendors, 0);
+  assert.equal(qbo.calls.findCustomers, 0);
+  assert.equal(qbo.calls.findEmployees, 0);
+});
+
+test("stale active QBO Vendor mapping still performs full validation", async () => {
+  const db = makeDb();
+  const canonical = await resolveCanonicalVendorForTransaction({ db, businessId: BUSINESS_ID, bankTxn: txn({ id: "t-stale-fast-1", merchant_entity_id: "ent-stale-fast", merchant_name: "Stale Fast Vendor" }) });
+  db.rows.business_qbo_vendor_mappings.push({
+    id: "map-stale-fast",
+    business_id: BUSINESS_ID,
+    realm_id: REALM_ID,
+    qbo_env: "production",
+    canonical_vendor_id: canonical.canonicalVendor.id,
+    qbo_vendor_id: "v-stale-fast",
+    qbo_display_name: "Stale Fast Vendor",
+    status: "active",
+    mapping_source: "resolver",
+    last_validated_at: new Date(Date.now() - 11 * 60 * 1000).toISOString(),
+  });
+  const qbo = makeQbo({ vendors: [{ Id: "v-stale-fast", DisplayName: "Stale Fast Vendor", Active: true }] });
+  const result = await ensureCanonicalVendorMappedToQbo({
+    db,
+    getQBOClientFn: async () => qbo,
+    getLatestQuickBooksTokenRowFn: async () => ({ realm_id: REALM_ID, qbo_env: "production" }),
+    businessId: BUSINESS_ID,
+    bankTxn: txn({ id: "t-stale-fast-2", merchant_entity_id: "ent-stale-fast", merchant_name: "Stale Fast Vendor" }),
+  });
+
+  assert.equal(result.reason, "canonical_mapping");
+  assert.equal(result.vendor_validation_mode, "fresh_validation");
+  assert.equal(qbo.calls.findVendors, 2);
+  assert.equal(qbo.calls.findCustomers, 1);
+  assert.equal(qbo.calls.findEmployees, 1);
+  assert.ok(Date.now() - Date.parse(db.rows.business_qbo_vendor_mappings[0].last_validated_at) < 60_000);
+});
+
 test("temporary QBO vendor lookup failure returns safely without creating a duplicate vendor", async () => {
   const db = makeDb();
   const qbo = makeQbo({ failFindVendors: true });
@@ -645,6 +709,7 @@ function makeQbo({ vendors = [], customers = [], employees = [], failCreateOnceA
     customers: [...customers],
     employees: [...employees],
     created: [],
+    calls: { findVendors: 0, findCustomers: 0, findEmployees: 0 },
     failCreateOnceAfterPersisting,
     failFindVendors,
     failCreateWith,
@@ -653,7 +718,11 @@ function makeQbo({ vendors = [], customers = [], employees = [], failCreateOnceA
     get created() {
       return state.created;
     },
+    get calls() {
+      return state.calls;
+    },
     findVendors(query, cb) {
+      state.calls.findVendors += 1;
       if (state.failFindVendors) {
         cb(new Error("qbo_find_failed"));
         return;
@@ -663,11 +732,13 @@ function makeQbo({ vendors = [], customers = [], employees = [], failCreateOnceA
       cb(null, { QueryResponse: { Vendor: list } });
     },
     findCustomers(query, cb) {
+      state.calls.findCustomers += 1;
       const active = query?.Active;
       const list = state.customers.filter((v) => active === undefined || v.Active !== !active);
       cb(null, { QueryResponse: { Customer: list } });
     },
     findEmployees(query, cb) {
+      state.calls.findEmployees += 1;
       const active = query?.Active;
       const list = state.employees.filter((v) => active === undefined || v.Active !== !active);
       cb(null, { QueryResponse: { Employee: list } });
@@ -824,6 +895,8 @@ function makeDb({ failActiveMappingUpsert = null } = {}) {
             qbo_display_name: params.p_qbo_display_name,
             mapping_source: params.p_mapping_source || "resolver",
             mapped_by: params.p_mapped_by || null,
+            mapped_at: params.p_now || new Date().toISOString(),
+            last_validated_at: params.p_now || new Date().toISOString(),
             first_transaction_id: row.first_transaction_id || params.p_first_transaction_id || null,
             metadata: { ...(row.metadata || {}), ...(params.p_metadata || {}) },
           });
@@ -840,6 +913,8 @@ function makeDb({ failActiveMappingUpsert = null } = {}) {
             mapping_source: params.p_mapping_source || "resolver",
             created_by: params.p_created_by || "bizzi",
             mapped_by: params.p_mapped_by || null,
+            mapped_at: params.p_now || new Date().toISOString(),
+            last_validated_at: params.p_now || new Date().toISOString(),
             first_transaction_id: params.p_first_transaction_id || null,
             metadata: params.p_metadata || {},
           };

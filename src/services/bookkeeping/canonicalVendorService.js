@@ -31,6 +31,8 @@ const STRONG_CANONICAL_CLAIM_ALIAS_TYPES = new Set([
   "qbo_vendor_id",
 ]);
 
+export const QBO_VENDOR_MAPPING_VALIDATION_TTL_MS = 10 * 60 * 1000;
+
 const AUTH_ERROR_CODES = new Set([
   "quickbooks_needs_reconnect",
   "qbo_client_unavailable:no_active_token_row",
@@ -183,6 +185,13 @@ async function defaultGetLatestQuickBooksTokenRow(businessId) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function isRecentTimestamp(value, ttlMs = QBO_VENDOR_MAPPING_VALIDATION_TTL_MS) {
+  if (!value) return false;
+  const ts = Date.parse(value);
+  if (!Number.isFinite(ts)) return false;
+  return Date.now() - ts >= 0 && Date.now() - ts <= ttlMs;
 }
 
 export function normalizeVendorText(value = "") {
@@ -659,6 +668,21 @@ async function findActiveMapping(db, { businessId, realmId, qboEnv, canonicalVen
   return data || null;
 }
 
+function getRecentActiveMappingVendor(mapping) {
+  if (!mapping?.qbo_vendor_id || mapping.status !== "active") return null;
+  if (!isRecentTimestamp(mapping.last_validated_at)) return null;
+  if (mapping.disabled_at) return null;
+  const metadata = mapping.metadata || {};
+  if (metadata.validation_failed === true || metadata.provider_error === true || metadata.requires_revalidation === true) return null;
+  return {
+    id: String(mapping.qbo_vendor_id),
+    displayName: mapping.qbo_display_name,
+    active: true,
+    type: "vendor",
+    source: "recent_mapping",
+  };
+}
+
 function findUsableCachedVendor(entities = [], qboVendorId) {
   if (!qboVendorId) return null;
   return entities.find((entity) =>
@@ -692,6 +716,22 @@ async function markMappingNeedsReview(db, { businessId, realmId, qboEnv, canonic
     event_type: "conflict_detected",
     reason,
   });
+}
+
+async function markMappingValidated(db, { businessId, realmId, qboEnv, canonicalVendorId }) {
+  const validatedAt = nowIso();
+  await db
+    .from("business_qbo_vendor_mappings")
+    .update({
+      last_validated_at: validatedAt,
+      updated_at: validatedAt,
+    })
+    .eq("business_id", businessId)
+    .eq("realm_id", realmId)
+    .eq("qbo_env", qboEnv)
+    .eq("canonical_vendor_id", canonicalVendorId)
+    .eq("status", "active");
+  return validatedAt;
 }
 
 async function upsertMapping(db, { businessId, realmId, qboEnv, canonicalVendorId, qboVendorId, qboDisplayName, source, transactionId }) {
@@ -1066,6 +1106,8 @@ export async function ensureCanonicalVendorMappedToQbo({
   db = null,
   getQBOClientFn = defaultGetQBOClient,
   getLatestQuickBooksTokenRowFn = defaultGetLatestQuickBooksTokenRow,
+  qboClient = null,
+  tokenRow: providedTokenRow = null,
   businessId,
   bankTxn = {},
   payeeResolution = {},
@@ -1078,7 +1120,7 @@ export async function ensureCanonicalVendorMappedToQbo({
   if (!resolved?.canonicalVendor?.id) return resolved;
   resolved.canonicalVendor = await hydrateCanonicalVendor(db, { businessId, canonicalVendor: resolved.canonicalVendor });
 
-  const tokenRow = await getLatestQuickBooksTokenRowFn(businessId);
+  const tokenRow = providedTokenRow || await getLatestQuickBooksTokenRowFn(businessId);
   const realmId = tokenRow?.realm_id || null;
   const qboEnv = tokenRow?.qbo_env || qboEnvName || "production";
   if (!realmId) return { ok: false, skipped: true, reason: "qbo_client_unavailable:no_active_token_row", canonicalVendor: resolved.canonicalVendor };
@@ -1089,7 +1131,28 @@ export async function ensureCanonicalVendorMappedToQbo({
     qboEnv,
     canonicalVendorId: resolved.canonicalVendor.id,
   });
-  const qbo = await withVendorProviderStage("qbo_client_acquisition", () => getQBOClientFn(businessId));
+  if (existingMapping?.qbo_vendor_id) {
+    const recentVendor = getRecentActiveMappingVendor(existingMapping);
+    if (recentVendor) {
+      await persistTransactionVendor(db, {
+        businessId,
+        transactionId: bankTxn.id,
+        canonicalVendorId: resolved.canonicalVendor.id,
+        qboVendorId: recentVendor.id,
+      });
+      return {
+        ok: true,
+        created: false,
+        reason: "canonical_mapping_recent",
+        vendor_validation_mode: "cache_hit",
+        canonical_vendor_id: resolved.canonicalVendor.id,
+        qbo_entity_type: "vendor",
+        qbo_entity_id: recentVendor.id,
+        vendor_name: recentVendor.displayName || existingMapping.qbo_display_name,
+      };
+    }
+  }
+  const qbo = qboClient || await withVendorProviderStage("qbo_client_acquisition", () => getQBOClientFn(businessId));
   if (!qbo) return { ok: false, skipped: true, reason: "qbo_client_unavailable", canonicalVendor: resolved.canonicalVendor };
   if (existingMapping?.qbo_vendor_id) {
     const entities = await refreshQboVendorNameList({ db, businessId, realmId, qboEnv, qbo, vendorStage: "qbo_vendor_mapping_revalidation" });
@@ -1112,6 +1175,12 @@ export async function ensureCanonicalVendorMappedToQbo({
         canonical_vendor_id: resolved.canonicalVendor.id,
       };
     }
+    await markMappingValidated(db, {
+      businessId,
+      realmId,
+      qboEnv,
+      canonicalVendorId: resolved.canonicalVendor.id,
+    });
     await persistTransactionVendor(db, {
       businessId,
       transactionId: bankTxn.id,
@@ -1122,6 +1191,7 @@ export async function ensureCanonicalVendorMappedToQbo({
       ok: true,
       created: false,
       reason: "canonical_mapping",
+      vendor_validation_mode: "fresh_validation",
       canonical_vendor_id: resolved.canonicalVendor.id,
       qbo_entity_type: "vendor",
       qbo_entity_id: usable.id,
@@ -1155,7 +1225,7 @@ export async function ensureCanonicalVendorMappedToQbo({
       reason: "exact_display_name",
     });
     await persistTransactionVendor(db, { businessId, transactionId: bankTxn.id, canonicalVendorId: resolved.canonicalVendor.id, qboVendorId: mapping.qbo_vendor_id });
-    return { ok: true, created: false, reason: "existing_qbo_vendor_reused", canonical_vendor_id: resolved.canonicalVendor.id, qbo_entity_type: "vendor", qbo_entity_id: mapping.qbo_vendor_id, vendor_name: mapping.qbo_display_name };
+    return { ok: true, created: false, reason: "existing_qbo_vendor_reused", vendor_validation_mode: "fresh_validation", canonical_vendor_id: resolved.canonicalVendor.id, qbo_entity_type: "vendor", qbo_entity_id: mapping.qbo_vendor_id, vendor_name: mapping.qbo_display_name };
   }
   if (match.decision !== "create") {
     await insertEvent(db, {
@@ -1199,7 +1269,7 @@ export async function ensureCanonicalVendorMappedToQbo({
     const mapping = await upsertMapping(db, { businessId, realmId, qboEnv, canonicalVendorId: resolved.canonicalVendor.id, qboVendorId: match.vendor.id, qboDisplayName: match.vendor.displayName, source: "creation_intent", transactionId: bankTxn.id });
     await markIntent(db, { businessId, realmId, qboEnv, canonicalVendorId: resolved.canonicalVendor.id, status: "mapped_existing", qboVendorId: mapping.qbo_vendor_id, qboDisplayName: mapping.qbo_display_name, responseSummary: { reason: "found_on_recheck" } });
     await persistTransactionVendor(db, { businessId, transactionId: bankTxn.id, canonicalVendorId: resolved.canonicalVendor.id, qboVendorId: mapping.qbo_vendor_id });
-    return { ok: true, created: false, reason: "existing_qbo_vendor_reused_after_claim", canonical_vendor_id: resolved.canonicalVendor.id, qbo_entity_type: "vendor", qbo_entity_id: mapping.qbo_vendor_id, vendor_name: mapping.qbo_display_name };
+    return { ok: true, created: false, reason: "existing_qbo_vendor_reused_after_claim", vendor_validation_mode: "fresh_validation", canonical_vendor_id: resolved.canonicalVendor.id, qbo_entity_type: "vendor", qbo_entity_id: mapping.qbo_vendor_id, vendor_name: mapping.qbo_display_name };
   }
   if (match.decision !== "create") {
     await markIntent(db, { businessId, realmId, qboEnv, canonicalVendorId: resolved.canonicalVendor.id, status: "needs_review", lastError: { reason: match.decision, candidates: match.candidates || [] } });

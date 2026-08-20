@@ -27,6 +27,8 @@ export async function ensureQboVendorForTransaction({
   taxonomyMeta = {},
   source = "suggest",
   createdBy = "bizzi",
+  qboClient = null,
+  tokenRow = null,
 }) {
   const result = await ensureCanonicalVendorMappedToQbo({
     businessId,
@@ -35,6 +37,8 @@ export async function ensureQboVendorForTransaction({
     taxonomyMeta,
     source,
     createdBy,
+    qboClient,
+    tokenRow,
   });
 
   if (result?.vendor_name) return result;

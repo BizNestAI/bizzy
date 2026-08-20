@@ -30,11 +30,15 @@ test("detector queries supported QBO APIs for purchase, deposit, credit-card cha
   assert.match(cron, /CreditCardPayment: \["creditcardpayment", "creditCardPayment"\]/);
 });
 
-test("Bizzi marker or request ID is deterministic and links without creating", () => {
+test("short Bizzi recovery marker or request ID is deterministic and links without creating", () => {
   const cron = read("src/jobs/booksPost.cron.js");
 
   assert.match(cron, /requestText && text\.includes\(requestText\)/);
   assert.match(cron, /marker && text\.includes\(marker\)/);
+  assert.match(cron, /const marker = normalizeMatchText\(buildQboPostMarker\(requestId\)\)/);
+  assert.match(cron, /Posted by Bizzi/);
+  assert.match(cron, /Ref \$\{ref\}/);
+  assert.doesNotMatch(cron, /Bizzi:\$\{txnRef\}|plaid_transaction_id \|\| bankTxn\?\.id/);
   assert.match(cron, /recordQboExistingLink/);
   assert.match(cron, /linked_existing_qbo_transaction: true/);
   assert.match(cron, /if \(duplicateCheck\.confidence === "DETERMINISTIC_EXISTING"\)/);

@@ -67,7 +67,7 @@ test("turning off clears unposted grace timestamps and off to on cannot reuse ol
 test("successful QBO write remains required before Posted state", () => {
   const source = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
 
-  assert.match(source, /const result = await postToQbo/);
+  assert.match(source, /const result = await timePostingStage\(timing, "qbo_create_ms", \(\) =>\s*postToQbo/);
   assert.match(source, /if \(!result\)/);
   assert.match(source, /status:\s*"posted"[\s\S]*?qbo_txn_id:\s*qboId/);
 });

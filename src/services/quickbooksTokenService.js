@@ -11,6 +11,18 @@ const ACCESS_WINDOW_MS = 60 * ONE_MINUTE_MS;          // nominal 60 minutes
 const ACCESS_REFRESH_BUFFER_MS = 5 * ONE_MINUTE_MS;   // refresh if <5m remaining
 const ACCESS_AGE_REFRESH_MS = 50 * ONE_MINUTE_MS;     // refresh if older than 50m
 const refreshLocks = new Map();
+const refreshMarkers = new Map();
+
+function refreshMarkerKey(businessId) {
+  return `${businessId}:${qboEnvName}`;
+}
+
+export function consumeQuickBooksRefreshMarker(businessId) {
+  const key = refreshMarkerKey(businessId);
+  const value = refreshMarkers.get(key) === true;
+  refreshMarkers.delete(key);
+  return value;
+}
 
 async function getLatestTokenRow(business_id) {
   const { data, error } = await supabase
@@ -112,7 +124,7 @@ function is401(err) {
  * Persists the rotated refresh token to Supabase.
  */
 export async function refreshQuickBooksTokens(business_id, currentRefreshToken = null) {
-  const lockKey = `${business_id}:${qboEnvName}`;
+  const lockKey = refreshMarkerKey(business_id);
   if (refreshLocks.has(lockKey)) {
     return refreshLocks.get(lockKey);
   }
@@ -204,6 +216,7 @@ export async function refreshQuickBooksTokens(business_id, currentRefreshToken =
 
   await supabase.from("quickbooks_tokens").upsert(payload, { onConflict: "business_id" });
 
+  refreshMarkers.set(lockKey, true);
   console.info("[qboTokens] refresh succeeded", { business_id, status: res.status });
   return { ...payload, access_token, refresh_token: nextRefresh };
   })();

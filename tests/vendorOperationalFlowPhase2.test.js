@@ -17,8 +17,9 @@ test("posting gates vendor-required Purchases and CreditCardCharges before QBO t
 
   assert.ok(gateIndex > 0);
   assert.ok(createIndex > gateIndex);
-  assert.match(handleBody, /const vendorGate = await ensureRequiredVendorBeforePosting/);
-  assert.match(handleBody, /if \(!vendorGate\.ok\) return/);
+  assert.match(handleBody, /const vendorGate = await timePostingStage\(timing, "vendor_gate_ms"/);
+  assert.match(handleBody, /ensureRequiredVendorBeforePosting\(\{ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow \}\)/);
+  assert.match(handleBody, /if \(!vendorGate\.ok\) \{[\s\S]*logPostingTiming[\s\S]*return;/);
   assert.doesNotMatch(handleBody, /vendor ensure failed[\s\S]*postToQbo/);
 });
 
@@ -65,9 +66,13 @@ test("manual posting UI maps safe Vendor diagnostics to human-readable messages"
 test("canonical vendor service validates active mappings before using stale local qbo entity fields", () => {
   const service = read("src/services/bookkeeping/canonicalVendorService.js");
   const mappingBranch = service.slice(service.indexOf("if (existingMapping?.qbo_vendor_id)"), service.indexOf("const desiredDisplayName"));
+  assert.match(mappingBranch, /getRecentActiveMappingVendor\(existingMapping\)/);
+  assert.match(mappingBranch, /reason: "canonical_mapping_recent"/);
+  assert.match(mappingBranch, /vendor_validation_mode: "cache_hit"/);
   assert.match(mappingBranch, /refreshQboVendorNameList/);
   assert.match(mappingBranch, /findUsableCachedVendor/);
   assert.match(mappingBranch, /markMappingNeedsReview/);
+  assert.match(mappingBranch, /markMappingValidated/);
   assert.match(mappingBranch, /reason: "vendor_mapping_invalid"/);
   assert.doesNotMatch(mappingBranch, /bankTxn\.qbo_entity_id/);
 });
@@ -92,10 +97,13 @@ test("active QBO Vendor mapping persistence uses partial-index-aware RPC instead
   assert.doesNotMatch(upsertMappingBody, /onConflict: "business_id,qbo_env,realm_id,canonical_vendor_id"/);
 
   const migration = read("supabase/migrations/20260901_upsert_active_qbo_vendor_mapping_rpc.sql");
+  const validationMigration = read("supabase/migrations/20260902_qbo_vendor_mapping_validation_timing.sql");
   assert.match(migration, /create or replace function public\.upsert_active_qbo_vendor_mapping/);
   assert.match(migration, /perform 1[\s\S]*from public\.bizzi_vendors v[\s\S]*v\.business_id = p_business_id[\s\S]*v\.id = p_canonical_vendor_id/);
   assert.match(migration, /on conflict \(business_id, qbo_env, realm_id, canonical_vendor_id\)\s+where status = 'active'\s+do update set/i);
   assert.match(migration, /grant execute on function public\.upsert_active_qbo_vendor_mapping\(uuid, text, text, uuid, text, text, text, text, text, uuid, jsonb, timestamptz\) to service_role/);
+  assert.match(validationMigration, /add column if not exists last_validated_at timestamptz/);
+  assert.match(validationMigration, /last_validated_at = excluded\.last_validated_at/);
 
   const vendorMigration = read("supabase/migrations/20260828_canonical_vendor_identity.sql");
   assert.match(vendorMigration, /business_qbo_vendor_mapping_vendor_active_uq[\s\S]*\(business_id, qbo_env, realm_id, canonical_vendor_id\)[\s\S]*where status = 'active'/);

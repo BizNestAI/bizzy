@@ -12,12 +12,14 @@ import { triggerContractorCfoInsightsBestEffort } from "../services/insights/con
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../services/tax/taxChangeEvents.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../services/bookkeeping/bookkeepingScope.js";
 import { getAutoPostToQuickBooks } from "../services/bookkeeping/autoPostControl.js";
-import { getLatestQuickBooksTokenRow } from "../services/quickbooksTokenService.js";
-import { classifyQboVendorProviderError, getVendorPostingRequirement } from "../services/bookkeeping/canonicalVendorService.js";
+import { consumeQuickBooksRefreshMarker, getLatestQuickBooksTokenRow } from "../services/quickbooksTokenService.js";
+import { canonicalizeVendorDisplayName, classifyQboVendorProviderError, getVendorPostingRequirement } from "../services/bookkeeping/canonicalVendorService.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
 const BACKOFF_SCHEDULE_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000, 6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000];
+const BIZZI_POSTED_LABEL = "Posted by Bizzi";
+const QBO_RECOVERY_REF_LENGTH = 10;
 
 let postAttemptsTableAvailable = true;
 
@@ -43,36 +45,61 @@ function buildQboRequestId({ businessId, transactionId, idempotencyKey }) {
   return `bizzi_${hash}`;
 }
 
-function appendMarker(desc, marker) {
-  if (!marker) return desc;
-  const base = desc || "";
-  if (base.includes(marker)) return base;
-  if (!base) return marker;
-  return `${base} | ${marker}`;
+function buildQboRecoveryRef(requestId = "") {
+  return crypto
+    .createHash("sha256")
+    .update(`qbo-visible-ref-v1|${requestId || ""}`)
+    .digest("hex")
+    .slice(0, QBO_RECOVERY_REF_LENGTH)
+    .toUpperCase();
 }
 
-function isPlaidSandboxSource(bankTxn = {}) {
-  return String(bankTxn?.plaid_env || plaidEnvName || "").toLowerCase() === "sandbox";
-}
-
-function buildQboPostMarker(bankTxn = {}) {
-  const txnRef = bankTxn?.plaid_transaction_id || bankTxn?.id || null;
+function buildQboPostMarker(requestId = "") {
+  const ref = buildQboRecoveryRef(requestId);
   const markers = [];
-  if (txnRef) markers.push(`Bizzi:${txnRef}`);
-  if (isPlaidSandboxSource(bankTxn)) {
-    markers.push(`BIZZI TEST - PLAID SANDBOX${txnRef ? ` - txn ${txnRef}` : ""}`);
-  }
+  if (ref) markers.push(`${BIZZI_POSTED_LABEL} · Ref ${ref}`);
   return markers.join(" | ") || null;
 }
 
-function buildQboPostText(bankTxn = {}, fallback = "Bank transaction") {
-  const desc = bankTxn.name || bankTxn.counterparty_name || bankTxn.merchant_name || fallback;
-  const marker = buildQboPostMarker(bankTxn);
-  const marked = appendMarker(desc, marker);
+function cleanBankMemoName(value = "") {
+  return String(value || "")
+    .replace(/^(POS|DEBIT|CREDIT|ACH|ACH DEBIT|ACH CREDIT|SQ \*|VENMO PAYMENT|PP\*|PURCHASE)\s+/i, "")
+    .replace(/\d{4,}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanDisplayName(value = "") {
+  const trimmed = String(value || "").replace(/\s+/g, " ").trim();
+  if (!trimmed) return "";
+  return canonicalizeVendorDisplayName(trimmed) || trimmed;
+}
+
+function buildQboDisplayName(bankTxn = {}, fallback = "Bank transaction") {
+  const candidates = [
+    bankTxn.qbo_vendor_display_name,
+    bankTxn.qbo_display_name,
+    bankTxn.posting_display_name,
+    bankTxn.canonical_vendor_display_name,
+    bankTxn.resolved_payee_name,
+    bankTxn.counterparty_name,
+    bankTxn.merchant_name,
+    cleanBankMemoName(bankTxn.name),
+  ];
+  for (const candidate of candidates) {
+    const cleaned = cleanDisplayName(candidate);
+    if (cleaned) return cleaned;
+  }
+  return fallback;
+}
+
+function buildQboPostText(bankTxn = {}, fallback = "Bank transaction", requestId = "") {
+  const desc = buildQboDisplayName(bankTxn, fallback);
+  const marker = buildQboPostMarker(requestId);
   return {
     desc,
-    note: marked,
-    lineDescription: marked,
+    note: marker || BIZZI_POSTED_LABEL,
+    lineDescription: `${desc} · ${BIZZI_POSTED_LABEL}`,
   };
 }
 
@@ -84,6 +111,53 @@ function computeBackoffMs(nextRetries) {
 
 function getNowIso() {
   return new Date().toISOString();
+}
+
+function createPostingTiming() {
+  return {
+    started_at: Date.now(),
+    timings: {},
+    context: {
+      duplicate_preflight_ran: false,
+      vendor_validation_mode: null,
+      oauth_refresh_observed: false,
+      failure_code: null,
+    },
+  };
+}
+
+async function timePostingStage(timing, key, fn) {
+  const start = Date.now();
+  try {
+    return await fn();
+  } finally {
+    if (timing?.timings && key) {
+      timing.timings[key] = (timing.timings[key] || 0) + (Date.now() - start);
+    }
+  }
+}
+
+function summarizePostingTiming(timing, extra = {}) {
+  if (!timing) return null;
+  return {
+    ...timing.timings,
+    total_ms: Date.now() - timing.started_at,
+    ...timing.context,
+    ...extra,
+  };
+}
+
+function logPostingTiming({ businessId, transactionId, qboTxnType, manual, timing, status = "completed", failureCode = null }) {
+  const summary = summarizePostingTiming(timing, { failure_code: failureCode || timing?.context?.failure_code || null });
+  if (!summary) return;
+  console.info("[books-post] posting timing", {
+    businessId,
+    transactionId,
+    qboTxnType: qboTxnType || null,
+    manual: manual === true,
+    status,
+    ...summary,
+  });
 }
 
 function isMissingRelationError(err) {
@@ -303,7 +377,7 @@ async function findQboTransactions(qbo, qboTxnType, bankTxn) {
 function scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }) {
   const qboId = getQboTxnId(entity);
   const text = collectQboText(entity);
-  const marker = normalizeMatchText(buildQboPostMarker(bankTxn));
+  const marker = normalizeMatchText(buildQboPostMarker(requestId));
   const requestText = normalizeMatchText(requestId);
   const accountMatches = String(getQboPostingAccountId(entity, qboTxnType) || "") === String(mapping?.qbo_account_id || "");
   const dateMatches = isNearQboTxnDate(getQboTxnDate(entity), bankTxn?.date);
@@ -527,7 +601,7 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
     .eq("transaction_id", item.transaction_id);
 }
 
-async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, requestId }) {
+async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, requestId, qboClient = null, tokenRow = null }) {
   const taxonomyMeta = { taxonomy_type: item?.meta?.taxonomy_type || null };
   const requirement = getVendorPostingRequirement({ bankTxn: bank, taxonomyMeta, qboTxnType });
   if (!requirement.required) return { ok: true, requirement };
@@ -541,6 +615,8 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
       taxonomyMeta,
       source: "posting",
       createdBy: "bizzi",
+      qboClient,
+      tokenRow,
     });
   } catch (err) {
     const message = String(err?.message || err || "").toLowerCase();
@@ -554,6 +630,14 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
   if (vendorEnsure?.qbo_entity_id && (vendorEnsure.qbo_entity_type || "").toLowerCase() === "vendor") {
     bank.qbo_entity_type = "vendor";
     bank.qbo_entity_id = vendorEnsure.qbo_entity_id;
+    bank.posting_display_name =
+      vendorEnsure.vendor_name ||
+      vendorEnsure.qbo_display_name ||
+      vendorEnsure.qboDisplayName ||
+      vendorEnsure.canonicalVendor?.display_name ||
+      bank.counterparty_name ||
+      bank.merchant_name ||
+      null;
     return { ok: true, requirement, vendorEnsure };
   }
   const outcome = classifyVendorEnsureOutcome(vendorEnsure);
@@ -894,7 +978,7 @@ async function postCcPaymentToQbo(item, bankTxn, qbo, mapping, requestId) {
   const amount = Math.abs(Number(bankTxn.amount || 0));
   if (!Number.isFinite(amount) || amount === 0) throw new Error("invalid_amount");
   const txnDate = bankTxn.date || new Date().toISOString().slice(0, 10);
-  const { note } = buildQboPostText(bankTxn, "CC payment");
+  const { note } = buildQboPostText(bankTxn, "CC payment", requestId);
 
   const payload = {
     requestId,
@@ -925,7 +1009,7 @@ async function postCcPaymentToQbo(item, bankTxn, qbo, mapping, requestId) {
 async function postBankOutflowPurchase(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
   const amount = Math.abs(Number(bankTxn.amount || 0));
   const txnDate = bankTxn.date || new Date().toISOString().slice(0, 10);
-  const { note, lineDescription } = buildQboPostText(bankTxn, "Bank transaction");
+  const { note, lineDescription } = buildQboPostText(bankTxn, "Bank transaction", requestId);
   const vendorRef = getQboEntityRef(bankTxn, "vendor");
   if (process.env.NODE_ENV !== "production") {
     console.info("[books-post] entity_ref", {
@@ -958,7 +1042,7 @@ async function postBankOutflowPurchase(item, bankTxn, qbo, mappedAccountId, cate
 async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
   const amount = Math.abs(Number(bankTxn.amount || 0));
   const txnDate = bankTxn.date || new Date().toISOString().slice(0, 10);
-  const { note, lineDescription } = buildQboPostText(bankTxn, "Bank transaction");
+  const { note, lineDescription } = buildQboPostText(bankTxn, "Bank transaction", requestId);
   const customerRef = getQboEntityRef(bankTxn, "customer");
   if (process.env.NODE_ENV !== "production") {
     console.info("[books-post] entity_ref", {
@@ -1009,7 +1093,7 @@ async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, catego
 async function postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
   const amount = Math.abs(Number(bankTxn.amount || 0));
   const txnDate = bankTxn.date || new Date().toISOString().slice(0, 10);
-  const { note, lineDescription } = buildQboPostText(bankTxn, "CC charge");
+  const { note, lineDescription } = buildQboPostText(bankTxn, "CC charge", requestId);
   const vendorRef = getQboEntityRef(bankTxn, "vendor");
   if (process.env.NODE_ENV !== "production") {
     console.info("[books-post] entity_ref", {
@@ -1159,6 +1243,8 @@ export async function handleItem(item, options = {}) {
   const manual = options?.manual === true;
   const confirmPostAnyway = options?.confirmPostAnyway === true;
   const duplicatePostAnyway = confirmPostAnyway && item?.meta?.possible_qbo_duplicate === true;
+  const timing = createPostingTiming();
+  let intentQboTxnTypeForLog = null;
 
   if (item.status === "posted" || item.qbo_txn_id) {
     return;
@@ -1226,7 +1312,7 @@ export async function handleItem(item, options = {}) {
     return;
   }
 
-  const mapping = await getQboAccountForPlaidAccount(businessId, bank?.plaid_account_id);
+  const mapping = await timePostingStage(timing, "source_mapping_ms", () => getQboAccountForPlaidAccount(businessId, bank?.plaid_account_id));
   if (!mapping) {
     await insertPostAttempt({
       businessId,
@@ -1320,13 +1406,13 @@ export async function handleItem(item, options = {}) {
 
   const nowIso = new Date().toISOString();
   // NOTE: acquire_posting_lock is a Postgres FUNCTION (Supabase RPC), not a table.
-  const { data: locked, error: lockErr } = await supabase.rpc("acquire_posting_lock", {
+  const { data: locked, error: lockErr } = await timePostingStage(timing, "lock_ms", () => supabase.rpc("acquire_posting_lock", {
     p_business_id: businessId,
     p_transaction_id: txnId,
     p_now_iso: nowIso,
     p_lock_stale_seconds: 600,
     p_idempotency_key: idempotencyKey,
-  });
+  }));
   if (lockErr) {
     console.error("[books-post] acquire_posting_lock rpc failed", lockErr?.message || lockErr);
     throw new Error(`acquire_posting_lock_rpc_failed:${lockErr?.message || lockErr?.code || "unknown"}`);
@@ -1368,13 +1454,13 @@ export async function handleItem(item, options = {}) {
     return;
   }
 
-  const tokenRow = await getLatestQuickBooksTokenRow(businessId);
+  const tokenRow = await timePostingStage(timing, "qbo_auth_ms", () => getLatestQuickBooksTokenRow(businessId));
   const realmId = tokenRow?.realm_id || null;
   if (!realmId) {
     throw new Error("qbo_client_unavailable:no_active_token_row");
   }
 
-  const existingIntent = await fetchExistingQboPostingIntent(businessId, txnId);
+  const existingIntent = await timePostingStage(timing, "posting_intent_ms", () => fetchExistingQboPostingIntent(businessId, txnId));
   if (existingIntent?.status === "posted" && existingIntent?.qbo_txn_id) {
     const postedIso = existingIntent.posted_at || getNowIso();
     await supabase
@@ -1406,8 +1492,9 @@ export async function handleItem(item, options = {}) {
   const requestId = existingIntent?.request_id || buildQboRequestId({ businessId, transactionId: txnId, idempotencyKey });
   const intentIdempotencyKey = existingIntent?.idempotency_key || idempotencyKey;
   const intentQboTxnType = existingIntent?.qbo_txn_type || qboTxnType;
+  intentQboTxnTypeForLog = intentQboTxnType;
   const payloadSummary = summarizePayload(item, bank, mapping);
-  const claim = await claimQboPostingIntent({
+  const claim = await timePostingStage(timing, "posting_intent_ms", () => claimQboPostingIntent({
     businessId,
     transactionId: txnId,
     realmId,
@@ -1415,7 +1502,7 @@ export async function handleItem(item, options = {}) {
     requestId,
     idempotencyKey: intentIdempotencyKey,
     payloadSummary,
-  });
+  }));
   if (claim.alreadyPosted && claim.intent?.qbo_txn_id) {
     const postedIso = claim.intent.posted_at || getNowIso();
     await supabase
@@ -1454,7 +1541,8 @@ export async function handleItem(item, options = {}) {
 
   let qbo = null;
   try {
-    qbo = await getQBOClient(businessId);
+    qbo = await timePostingStage(timing, "qbo_auth_ms", () => getQBOClient(businessId));
+    timing.context.oauth_refresh_observed = consumeQuickBooksRefreshMarker(businessId);
   } catch (err) {
     const underlyingMessage = err?.message || "qbo_client_unavailable";
     const e = new Error(underlyingMessage === "qbo_client_unavailable" ? underlyingMessage : `qbo_client_unavailable:${underlyingMessage}`);
@@ -1466,7 +1554,8 @@ export async function handleItem(item, options = {}) {
   }
 
   if (!duplicatePostAnyway) {
-    const qboCandidates = await findQboTransactions(qbo, intentQboTxnType, bank);
+    timing.context.duplicate_preflight_ran = true;
+    const qboCandidates = await timePostingStage(timing, "duplicate_preflight_ms", () => findQboTransactions(qbo, intentQboTxnType, bank));
     const duplicateCheck = classifyPreExistingQboMatch({
       qboCandidates,
       bankTxn: bank,
@@ -1533,8 +1622,19 @@ export async function handleItem(item, options = {}) {
     }
   }
 
-  const vendorGate = await ensureRequiredVendorBeforePosting({ item, bank, qboTxnType: intentQboTxnType, requestId });
-  if (!vendorGate.ok) return;
+  const vendorGate = await timePostingStage(timing, "vendor_gate_ms", () =>
+    ensureRequiredVendorBeforePosting({ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow })
+  );
+  timing.context.vendor_validation_mode =
+    vendorGate?.vendorEnsure?.vendor_validation_mode ||
+    vendorGate?.vendorEnsure?.reason ||
+    vendorGate?.outcome?.stage ||
+    null;
+  if (!vendorGate.ok) {
+    timing.context.failure_code = vendorGate?.outcome?.code || vendorGate?.outcome?.reason || "vendor_gate_blocked";
+    logPostingTiming({ businessId, transactionId: txnId, qboTxnType: intentQboTxnTypeForLog, manual, timing, status: "blocked", failureCode: timing.context.failure_code });
+    return;
+  }
 
   await insertPostAttempt({
     businessId,
@@ -1546,8 +1646,10 @@ export async function handleItem(item, options = {}) {
     attemptedAt: nowIso,
   });
 
-  const result = await postToQbo(item, bank, qbo, mapping, requestId).catch(async (err) => {
+  const result = await timePostingStage(timing, "qbo_create_ms", () => postToQbo(item, bank, qbo, mapping, requestId)).catch(async (err) => {
+    timing.context.failure_code = err?.message || "qbo_create_failed";
     await recordQboPostingUnknown({ businessId, transactionId: txnId, requestId, err });
+    logPostingTiming({ businessId, transactionId: txnId, qboTxnType: intentQboTxnTypeForLog, manual, timing, status: "failed", failureCode: timing.context.failure_code });
     throw err;
   });
   if (!result) {
@@ -1586,7 +1688,11 @@ export async function handleItem(item, options = {}) {
   }
   const { id: qboId, type: qboType } = result;
 
-  const responseSummary = summarizeResponse(result);
+  const responseSummary = {
+    ...summarizeResponse(result),
+    posting_timing: summarizePostingTiming(timing),
+  };
+  const receiptStart = Date.now();
   const postedIso = await recordQboPostingSuccess({
     businessId,
     transactionId: txnId,
@@ -1595,6 +1701,8 @@ export async function handleItem(item, options = {}) {
     payloadSummary,
     responseSummary,
   });
+  timing.timings.receipt_ms = (timing.timings.receipt_ms || 0) + (Date.now() - receiptStart);
+  const finalTiming = summarizePostingTiming(timing);
   await insertPostAttempt({
     businessId,
     transactionId: txnId,
@@ -1604,7 +1712,10 @@ export async function handleItem(item, options = {}) {
     retryCount: Number(item?.meta?.post_retry_count || 0) || null,
     postAfter: item?.post_after || null,
     payloadSummary,
-    responseSummary,
+    responseSummary: {
+      ...responseSummary,
+      posting_timing: finalTiming,
+    },
     attemptedAt: postedIso,
   });
   const { error } = await supabase
@@ -1629,6 +1740,7 @@ export async function handleItem(item, options = {}) {
     .eq("business_id", businessId)
     .eq("transaction_id", txnId);
   if (error) throw error;
+  logPostingTiming({ businessId, transactionId: txnId, qboTxnType: qboType || intentQboTxnTypeForLog, manual, timing, status: "posted" });
   emitTaxDataChanged({
     businessId,
     taxYear: taxYearFromDate(bank?.date || postedIso),
