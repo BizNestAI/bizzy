@@ -1,4 +1,13 @@
 import { getQBOClient } from "../../utils/qboClient.js";
+import { qboEnvName } from "../../utils/qboEnv.js";
+import { getLatestQuickBooksTokenRow } from "../quickbooksTokenService.js";
+
+export function normalizeQboPaymentAccountType(val = "") {
+  const normalized = String(val || "").replace(/[\s\-_]+/g, "").toLowerCase();
+  if (normalized === "bank") return "Bank";
+  if (normalized === "creditcard") return "CreditCard";
+  return null;
+}
 
 export async function fetchChartOfAccounts(businessId, opts = {}) {
   const includeSubaccounts = opts?.includeSubaccounts === true;
@@ -45,19 +54,109 @@ function normalizeName(name = "") {
     .trim();
 }
 
-function normalizeType(val = "") {
-  const normalized = String(val || "").replace(/[\s\-_]+/g, "").toLowerCase();
-  if (normalized === "bank") return "Bank";
-  if (normalized === "creditcard") return "CreditCard";
-  return null;
-}
-
 export async function fetchPaymentAccounts(businessId) {
   const accounts = await fetchChartOfAccounts(businessId);
   return (accounts || []).filter((acct) => {
-    const t = normalizeType(acct?.type);
+    const t = normalizeQboPaymentAccountType(acct?.type);
     return t === "Bank" || t === "CreditCard";
   });
+}
+
+function shapeQboAccount(account = {}) {
+  const id = account.Id || account.id || null;
+  if (!id) return null;
+  return {
+    id: String(id),
+    name: account.Name || account.name || account.FullyQualifiedName || account.fullyQualifiedName || null,
+    type: account.AccountType || account.type || account.account_type || null,
+    subType: account.AccountSubType || account.subType || account.account_sub_type || null,
+    active: account.Active !== false && account.active !== false,
+    raw: account,
+  };
+}
+
+function unwrapQboAccountResponse(data) {
+  const direct = data?.Account || data?.account || null;
+  if (direct) return shapeQboAccount(direct);
+  const queryAccount = data?.QueryResponse?.Account || data?.QueryResponse?.account || null;
+  if (Array.isArray(queryAccount)) return shapeQboAccount(queryAccount[0] || {});
+  if (queryAccount) return shapeQboAccount(queryAccount);
+  return shapeQboAccount(data || {});
+}
+
+export async function fetchQboAccountByIdForBusiness(businessId, qboAccountId) {
+  if (!businessId || !qboAccountId) {
+    return { ok: false, reason: "cc_payment_target_account_not_found", account: null, realmId: null, qboEnv: qboEnvName };
+  }
+  const tokenRow = await getLatestQuickBooksTokenRow(businessId);
+  const realmId = tokenRow?.realm_id || null;
+  if (!realmId) {
+    return { ok: false, reason: "cc_payment_target_wrong_realm", account: null, realmId: null, qboEnv: qboEnvName };
+  }
+  let qbo = null;
+  try {
+    qbo = await getQBOClient(businessId);
+  } catch (err) {
+    const expectedDisconnected = new Set([
+      "quickbooks_not_connected",
+      "quickbooks_needs_reconnect",
+      "quickbooks_missing_realm_id",
+      "qbo_client_unavailable",
+      "qbo_client_unavailable:no_active_token_row",
+    ]);
+    if (expectedDisconnected.has(err?.message)) {
+      return { ok: false, reason: "cc_payment_target_wrong_realm", account: null, realmId, qboEnv: qboEnvName };
+    }
+    throw err;
+  }
+  if (!qbo) {
+    return { ok: false, reason: "cc_payment_target_wrong_realm", account: null, realmId, qboEnv: qboEnvName };
+  }
+
+  const done = (fn) =>
+    new Promise((resolve, reject) => {
+      fn((err, data) => (err ? reject(err) : resolve(data)));
+    });
+
+  let account = null;
+  try {
+    if (typeof qbo.getAccount === "function") {
+      account = unwrapQboAccountResponse(await done((cb) => qbo.getAccount(qboAccountId, cb)));
+    } else if (qbo.account && typeof qbo.account.get === "function") {
+      account = unwrapQboAccountResponse(await done((cb) => qbo.account.get(qboAccountId, cb)));
+    } else if (typeof qbo.findAccounts === "function") {
+      account = unwrapQboAccountResponse(await done((cb) => qbo.findAccounts({ Id: qboAccountId }, cb)));
+    }
+  } catch (err) {
+    const message = String(err?.message || err?.Fault?.Error?.[0]?.Message || "");
+    if (/not\s*found|object not found|invalid id|does not exist/i.test(message)) {
+      return { ok: false, reason: "cc_payment_target_account_not_found", account: null, realmId, qboEnv: qboEnvName };
+    }
+    throw err;
+  }
+
+  if (!account || String(account.id) !== String(qboAccountId)) {
+    return { ok: false, reason: "cc_payment_target_account_not_found", account: null, realmId, qboEnv: qboEnvName };
+  }
+  return { ok: true, account, realmId, qboEnv: qboEnvName };
+}
+
+export async function validateBusinessQboCreditCardAccount(businessId, qboAccountId) {
+  const resolved = await fetchQboAccountByIdForBusiness(businessId, qboAccountId);
+  if (!resolved.ok) return resolved;
+  if (resolved.account.active === false) {
+    return { ...resolved, ok: false, reason: "cc_payment_target_account_inactive" };
+  }
+  if (normalizeQboPaymentAccountType(resolved.account.type) !== "CreditCard") {
+    return { ...resolved, ok: false, reason: "cc_payment_target_not_credit_card" };
+  }
+  return {
+    ...resolved,
+    account: {
+      ...resolved.account,
+      type: "CreditCard",
+    },
+  };
 }
 
 export function findStrongPaymentAccountMatch(accounts = [], plaidName, mask) {
@@ -212,7 +311,10 @@ export async function fetchQboAccountBalance(businessId, qboAccountId) {
 export default {
   fetchChartOfAccounts,
   fetchPaymentAccounts,
+  fetchQboAccountByIdForBusiness,
   findStrongPaymentAccountMatch,
   ensurePaymentAccount,
   fetchQboAccountBalance,
+  normalizeQboPaymentAccountType,
+  validateBusinessQboCreditCardAccount,
 };

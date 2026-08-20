@@ -64,7 +64,8 @@ test("same request retries reuse the stable Intuit requestid for every QBO trans
   assert.match(cron, /postBankOutflowPurchase\(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId\)/);
   assert.match(cron, /postBankInflowDeposit\(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId\)/);
   assert.match(cron, /postCreditCardOutflowCharge\(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId\)/);
-  assert.match(cron, /requestId,[\s\S]*BankAccountRef/);
+  assert.match(cron, /requestId,[\s\S]*FromAccountRef/);
+  assert.match(cron, /requestId,[\s\S]*ToAccountRef/);
   assert.match(cron, /requestId,[\s\S]*PaymentType: "Cash"/);
   assert.match(cron, /requestId,[\s\S]*DepositToAccountRef/);
   assert.match(cron, /requestId,[\s\S]*AccountRef: \{ value: String\(mappedAccountId\) \}/);
@@ -146,15 +147,16 @@ test("QBO posted transaction metadata is human readable and uses a short determi
 
 test("clean QBO metadata is applied to all posting payload types without new provider calls", () => {
   const cron = read("src/jobs/booksPost.cron.js");
-  const postingBody = cron.slice(cron.indexOf("async function postCcPaymentToQbo"), cron.indexOf("async function postToQbo"));
+  const postingBody = cron.slice(cron.indexOf("async function postCcPaymentToQbo"), cron.indexOf("async function handleCreditCardPaymentPairItem"));
 
   assert.match(postingBody, /buildQboPostText\(bankTxn, "CC payment", requestId\)/);
-  assert.match(postingBody, /buildQboPostText\(bankTxn, "Bank transaction", requestId\)/);
-  assert.match(postingBody, /buildQboPostText\(bankTxn, "CC charge", requestId\)/);
+  assert.match(cron, /buildQboPostText\(bankTxn, "Bank transaction", requestId\)/);
+  assert.match(cron, /buildQboPostText\(bankTxn, "CC charge", requestId\)/);
   assert.match(postingBody, /PrivateNote: note/);
-  assert.match(postingBody, /Description: lineDescription/);
-  assert.match(postingBody, /createQboPurchase\(qbo,/);
-  assert.match(postingBody, /createQboDeposit\(qbo,/);
+  assert.match(postingBody, /createQboTransfer\(qbo, payload\)/);
+  assert.match(cron, /Description: lineDescription/);
+  assert.match(cron, /createQboPurchase\(qbo,/);
+  assert.match(cron, /createQboDeposit\(qbo,/);
   assert.doesNotMatch(postingBody, /resolvePayee|getQBOClient|getLatestQuickBooksTokenRow|supabase\.from|supabase\.rpc|openai|plaid/i);
 });
 

@@ -387,7 +387,7 @@ function getTxnAccountKey(txn = {}) {
 
 function matchesBooksTab(txn = {}, tabKey = "needs_review") {
   const status = txn.status || "needs_review";
-  const handledStatuses = ["approved", "auto_approved"];
+  const handledStatuses = ["approved", "auto_approved", "failed"];
   if (tabKey === "all") return true;
   if (tabKey === "needs_review") {
     if (status === "needs_review" || status === "uncategorized" || !status) return true;
@@ -413,6 +413,11 @@ function isWithinBookkeepingDateRange(dateStr, dateRange, { ignoreRange = false,
   if (dateRange === "last_30") return diffDays <= 30;
   if (dateRange === "last_90") return diffDays <= 90;
   return true;
+}
+
+function adjustCount(value, delta) {
+  if (value === null || value === undefined || !Number.isFinite(delta) || delta === 0) return value;
+  return Math.max(0, Number(value || 0) + delta);
 }
 
 function BookkeepingCleanup() {
@@ -923,6 +928,32 @@ function BookkeepingCleanup() {
     );
   }, [accountFilter, dateRange, tabCounts, transactions, usingDemo]);
 
+  const applyOptimisticCountTransition = useCallback(
+    (beforeTxn, afterTxn) => {
+      if (usingDemo || !beforeTxn || !afterTxn) return;
+      const now = new Date();
+      const accountFilterNormalized = accountFilter === "all" ? null : accountFilter;
+      const isInCurrentCountScope = (txn) => {
+        const txnAcct = getTxnAccountKey(txn);
+        const matchesAccount = !accountFilterNormalized || txnAcct === accountFilterNormalized;
+        const matchesRange = isWithinBookkeepingDateRange(txn.date, dateRange, { now });
+        return matchesAccount && matchesRange;
+      };
+
+      setTabCounts((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev };
+        TABS.forEach(({ key }) => {
+          const beforeMatches = isInCurrentCountScope(beforeTxn) && matchesBooksTab(beforeTxn, key);
+          const afterMatches = isInCurrentCountScope(afterTxn) && matchesBooksTab(afterTxn, key);
+          next[key] = adjustCount(next[key], Number(afterMatches) - Number(beforeMatches));
+        });
+        return next;
+      });
+    },
+    [accountFilter, dateRange, usingDemo]
+  );
+
   const start = (page - 1) * rowsPerPage;
   const tableTransactions = usingDemo ? filteredTransactions.slice(start, start + rowsPerPage) : filteredTransactions;
   const categorizedTransactions = useMemo(
@@ -1039,27 +1070,30 @@ function BookkeepingCleanup() {
       return;
     }
     const glAccountId = newAccountId || txn.glAccountId || txn.suggestedAccountId || null;
+    const glAccount = chartAccounts.find((a) => a.id === glAccountId) || null;
     const glAccountName =
-      chartAccounts.find((a) => a.id === glAccountId)?.name || glAccountId || null;
-    const prevStatus = txn.status;
+      glAccount?.name || glAccountId || null;
+    const approvedTxn = { ...txn, status: "approved", glAccountId, glAccountName };
+    applyOptimisticCountTransition(txn, approvedTxn);
     setTransactions((prev) =>
       prev.map((t) =>
         t.id === id
-          ? { ...t, status: "approved", glAccountId, glAccountName }
+          ? approvedTxn
           : t
       )
     );
     try {
       await approveTransactions(businessId, [
-        { txnId: id, newAccountId: glAccountId, newAccountName: glAccountName },
+        { txnId: id, newAccountId: glAccountId, newAccountName: glAccountName, newAccountType: glAccount?.type || null },
       ]);
       await reloadAccounts();
       await reloadTransactions();
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] approve failed", e?.message || e);
+      applyOptimisticCountTransition(approvedTxn, txn);
       setTransactions((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, status: prevStatus } : t))
+        prev.map((t) => (t.id === id ? txn : t))
       );
     }
   };
@@ -1084,15 +1118,18 @@ function BookkeepingCleanup() {
       return;
     }
     if (!businessId) return;
-    const prevStatus = transactions.find((t) => t.id === id)?.status || "approved";
-    if (prevStatus === "posted") {
+    const txn = transactions.find((t) => t.id === id);
+    if (!txn) return;
+    if (txn.status === "posted") {
       showPostedToast();
       return;
     }
+    const needsReviewTxn = { ...txn, status: "needs_review" };
+    applyOptimisticCountTransition(txn, needsReviewTxn);
     setTransactions((prev) =>
       prev.map((t) =>
         t.id === id
-          ? { ...t, status: "needs_review" }
+          ? needsReviewTxn
           : t
       )
     );
@@ -1103,8 +1140,9 @@ function BookkeepingCleanup() {
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] undo failed", e?.message || e);
+      applyOptimisticCountTransition(needsReviewTxn, txn);
       setTransactions((prev) =>
-        prev.map((t) => (t.id === id ? { ...t, status: prevStatus } : t))
+        prev.map((t) => (t.id === id ? txn : t))
       );
     }
   };
@@ -1133,6 +1171,18 @@ function BookkeepingCleanup() {
     }
 
     if (!businessId) return;
+    const selectedTxnById = new Map(selectedTransactions.map((txn) => [txn.id, txn]));
+    const approvedTxnsById = new Map(
+      selectedTransactions.map((txn) => [
+        txn.id,
+        { ...txn, status: "approved", glAccountId: bulkAccountId, glAccountName: accountName },
+      ])
+    );
+    approvedTxnsById.forEach((approvedTxn, txnId) => {
+      applyOptimisticCountTransition(selectedTxnById.get(txnId), approvedTxn);
+    });
+    setTransactions((prev) => prev.map((txn) => approvedTxnsById.get(txn.id) || txn));
+    setSelectedIds(new Set());
     try {
       await approveTransactions(
         businessId,
@@ -1140,15 +1190,20 @@ function BookkeepingCleanup() {
           txnId,
           newAccountId: bulkAccountId,
           newAccountName: accountName,
+          newAccountType: account?.type || null,
         }))
       );
-      setSelectedIds(new Set());
       setCountsRefreshKey((value) => value + 1);
       await reloadAccounts();
       await reloadTransactions();
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] bulk approve failed", e?.message || e);
+      approvedTxnsById.forEach((approvedTxn, txnId) => {
+        applyOptimisticCountTransition(approvedTxn, selectedTxnById.get(txnId));
+      });
+      setTransactions((prev) => prev.map((txn) => selectedTxnById.get(txn.id) || txn));
+      setSelectedIds(new Set(selectedTxnIds));
       window.alert(e?.message || "Could not approve selected transactions.");
     }
   };

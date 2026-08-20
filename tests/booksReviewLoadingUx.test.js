@@ -43,3 +43,23 @@ test("Books Review bulk approval uses live COA accounts and selected vendors ins
   assert.match(source, /newAccountId: bulkAccountId/);
   assert.match(source, /newAccountName: accountName/);
 });
+
+test("Books Review updates tab counts optimistically when transaction status changes", () => {
+  assert.match(source, /function adjustCount\(value, delta\)/);
+  assert.match(source, /const applyOptimisticCountTransition = useCallback/);
+  assert.match(source, /const isInCurrentCountScope = \(txn\) =>/);
+  assert.match(source, /matchesBooksTab\(beforeTxn, key\)/);
+  assert.match(source, /matchesBooksTab\(afterTxn, key\)/);
+  assert.match(source, /adjustCount\(next\[key\], Number\(afterMatches\) - Number\(beforeMatches\)\)/);
+});
+
+test("Books Review immediately flips Needs Review and Handled counts for approve, undo, and bulk approve", () => {
+  assert.match(source, /const approvedTxn = \{ \.\.\.txn, status: "approved", glAccountId, glAccountName \}/);
+  assert.match(source, /applyOptimisticCountTransition\(txn, approvedTxn\)/);
+  assert.match(source, /applyOptimisticCountTransition\(approvedTxn, txn\)/);
+  assert.match(source, /const needsReviewTxn = \{ \.\.\.txn, status: "needs_review" \}/);
+  assert.match(source, /applyOptimisticCountTransition\(txn, needsReviewTxn\)/);
+  assert.match(source, /applyOptimisticCountTransition\(needsReviewTxn, txn\)/);
+  assert.match(source, /approvedTxnsById\.forEach\(\(approvedTxn, txnId\) => \{[\s\S]*?applyOptimisticCountTransition\(selectedTxnById\.get\(txnId\), approvedTxn\)/);
+  assert.match(source, /approvedTxnsById\.forEach\(\(approvedTxn, txnId\) => \{[\s\S]*?applyOptimisticCountTransition\(approvedTxn, selectedTxnById\.get\(txnId\)\)/);
+});

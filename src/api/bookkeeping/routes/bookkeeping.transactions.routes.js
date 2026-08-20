@@ -107,6 +107,20 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null) {
     qbo_txn_type: cat.qbo_txn_type || null,
     qbo_txn_id: cat.qbo_txn_id || null,
     post_after: cat.post_after || null,
+    post_error: cat.post_error || null,
+    meta: cat.meta || null,
+    taxonomy_type: cat.meta?.taxonomy_type || null,
+    cc_payment_pair_id: cat.meta?.cc_payment_pair_id || null,
+    cc_payment_pair_role: cat.meta?.cc_payment_pair_role || null,
+    cc_payment_pair_txn_id: cat.meta?.cc_payment_pair_txn_id || null,
+    cc_payment_pair_status: cat.meta?.cc_payment_pair_status || null,
+    cc_payment_pair_confidence: cat.meta?.cc_payment_pair_confidence || null,
+    cc_payment_bank_qbo_account_id: cat.meta?.cc_payment_bank_qbo_account_id || null,
+    cc_payment_bank_qbo_account_name: cat.meta?.cc_payment_bank_qbo_account_name || null,
+    cc_payment_cc_qbo_account_id: cat.meta?.cc_payment_cc_qbo_account_id || null,
+    cc_payment_cc_qbo_account_name: cat.meta?.cc_payment_cc_qbo_account_name || null,
+    cc_payment_transfer_target_qbo_account_id: cat.meta?.cc_payment_transfer_target_qbo_account_id || null,
+    cc_payment_transfer_target_qbo_account_name: cat.meta?.cc_payment_transfer_target_qbo_account_name || null,
   };
 }
 

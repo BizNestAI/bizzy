@@ -528,6 +528,29 @@ export default function BookkeepingFeed({
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
             const fullMemo = getTransactionMemo(txn) || "No bank memo available.";
+            const isCcPayment = txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment" || txn.cc_payment_pair_id;
+            const ccPairRole = txn.cc_payment_pair_role || txn.meta?.cc_payment_pair_role || null;
+            const ccTargetName =
+              txn.cc_payment_transfer_target_qbo_account_name ||
+              txn.meta?.cc_payment_transfer_target_qbo_account_name ||
+              (ccPairRole === "credit_card"
+                ? txn.cc_payment_bank_qbo_account_name || txn.meta?.cc_payment_bank_qbo_account_name
+                : txn.cc_payment_cc_qbo_account_name || txn.meta?.cc_payment_cc_qbo_account_name) ||
+              txn.suggestedAccountName ||
+              txn.glAccountName ||
+              null;
+            const ccTransferLabel = isCcPayment
+              ? `Credit Card Payment ${ccPairRole === "credit_card" ? "←" : "→"} ${ccTargetName || "select card"}`
+              : null;
+            const ccMatchedLabel = isCcPayment && (txn.cc_payment_pair_txn_id || txn.meta?.cc_payment_pair_txn_id)
+              ? `Matched counterpart ${txn.cc_payment_pair_txn_id || txn.meta?.cc_payment_pair_txn_id}`
+              : null;
+            const ccSelectableAccounts = isCcPayment
+              ? accounts.filter((acct) => {
+                  const type = String(acct?.type || "").replace(/[\s_-]+/g, "").toLowerCase();
+                  return ccPairRole === "credit_card" ? type === "bank" : type === "creditcard";
+                })
+              : accounts;
 
             return (
               <React.Fragment key={txn.id}>
@@ -609,12 +632,18 @@ export default function BookkeepingFeed({
                     Posted to QuickBooks
                   </span>
                 ) : null}
+                {ccTransferLabel ? (
+                  <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100">
+                    <span className="truncate">{ccTransferLabel}</span>
+                    {ccMatchedLabel ? <span className="truncate text-[9px] font-medium text-emerald-100/65">{ccMatchedLabel}</span> : null}
+                  </span>
+                ) : null}
                 {accounts.length > 0 ? (
                   <CoaDropdown
                     value={accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? txn.accountId ?? ""}
                     suggestedId={txn.suggestedAccountId}
                     suggestedName={txn.suggestedAccountName || txn.glAccountName}
-                    accounts={accounts}
+                    accounts={ccSelectableAccounts}
                     status={txn.status}
                     disabled={
                       isPosted ||

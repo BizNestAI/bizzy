@@ -23,6 +23,7 @@ import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "../../../s
 import { canAutoHandle } from "../../../services/bookkeeping/autoHandlingPolicy.js";
 import { resolveCanonicalVendorForTransaction } from "../../../services/bookkeeping/canonicalVendorService.js";
 import { reconsiderNeedsReviewTransactions } from "../../../services/bookkeeping/routineExpenseReconsiderationService.js";
+import { createSafeCreditCardPaymentPairForRow } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
 
 const router = Router();
 
@@ -1308,7 +1309,7 @@ export async function runBookkeepingSuggestionPass({
       const conf = String(confidenceOverride || payload?.confidence || meta?.confidence || "").toLowerCase();
       const safeToAutoPost = meta?.safe_to_auto_post ?? payload?.meta?.safe_to_auto_post ?? null;
       const safeToAutoHandle = meta?.safe_to_auto_handle ?? payload?.meta?.safe_to_auto_handle ?? null;
-      const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution"];
+      const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution", "cc_payment"];
       const taxType = String(taxonomyType || meta?.taxonomy_type || payload?.meta?.taxonomy_type || "").toLowerCase();
       if ((safeToAutoHandle === true || safeToAutoPost === true) && conf === "high" && !checkHit?.is_check && !blockedTaxonomy.includes(taxType)) {
         return;
@@ -1397,10 +1398,23 @@ export async function runBookkeepingSuggestionPass({
         : {};
       const baseMetaWithCheck = { ...metaBase, ...checkMeta };
       const plaidAcctForTxn = plaidAccountMap.get(String(row.plaid_account_id)) || null;
-      const ccPaymentPair = await findCreditCardPaymentPairTxnId(businessId, row, {
-        bookkeepingStartDate,
-        allowHistoricalContext: true,
-      });
+      const ccPaymentPairResult = await createSafeCreditCardPaymentPairForRow({ businessId, row });
+      const ccPaymentPair = ccPaymentPairResult?.pair
+        ? {
+            txnId:
+              String(ccPaymentPairResult.pair.checking_transaction_id) === String(row.id)
+                ? ccPaymentPairResult.pair.credit_card_transaction_id
+                : ccPaymentPairResult.pair.checking_transaction_id,
+            pairedPlaidAccountId:
+              String(ccPaymentPairResult.pair.checking_transaction_id) === String(row.id)
+                ? ccPaymentPairResult.pair.credit_card_plaid_account_id
+                : ccPaymentPairResult.pair.checking_plaid_account_id,
+            historicalContextOnly: false,
+            pairId: ccPaymentPairResult.pair.id,
+            pairStatus: ccPaymentPairResult.pair.status,
+            pairConfidence: ccPaymentPairResult.pair.match_confidence,
+          }
+        : null;
       const rowTaxonomyContext = {
         ...taxonomyContext,
         currentAccountType: plaidAcctForTxn?.type || null,
@@ -1450,9 +1464,16 @@ export async function runBookkeepingSuggestionPass({
               mergedMeta.owner_move_equity_account_name = suggested?.name || null;
             }
             if (taxHit.type === "cc_payment" && ccPaymentPair?.txnId) {
+              mergedMeta.cc_payment_pair_id = ccPaymentPair.pairId || null;
               mergedMeta.cc_payment_pair_txn_id = ccPaymentPair.txnId;
               mergedMeta.cc_payment_pair_plaid_account_id = ccPaymentPair.pairedPlaidAccountId || null;
               mergedMeta.cc_payment_pair_historical_context_only = !!ccPaymentPair.historicalContextOnly;
+              mergedMeta.cc_payment_pair_status = ccPaymentPair.pairStatus || "needs_review";
+              mergedMeta.cc_payment_pair_confidence = ccPaymentPair.pairConfidence || "high";
+            } else if (taxHit.type === "cc_payment" && ccPaymentPairResult?.status === "ambiguous") {
+              mergedMeta.post_block_reason = "cc_payment_pair_ambiguous";
+              mergedMeta.cc_payment_pair_ambiguous = true;
+              mergedMeta.cc_payment_pair_candidates = ccPaymentPairResult.candidates || [];
             }
             if (taxHit.type === "refund") {
               const orig = await findRefundOriginalTxn({
@@ -1494,7 +1515,7 @@ export async function runBookkeepingSuggestionPass({
           metaBackfilled += 1;
         }
         if (mergedMeta.safe_to_auto_handle !== true && mergedMeta.safe_to_auto_handle !== false) {
-          const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution"];
+          const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution", "cc_payment"];
           const taxType = String(mergedMeta.taxonomy_type || "").toLowerCase();
           const suggested = ensureAccountName({
             acctId: existingCat.suggested_qbo_account_id,
@@ -1594,7 +1615,7 @@ export async function runBookkeepingSuggestionPass({
         let suggestedAcct = suggestedId ? { id: suggestedId, name: suggestedNameResolved || "" } : null;
         const protectedStatuses = ["approved", "auto_approved", "posted"];
         const canUpgrade = !protectedStatuses.includes(statusLower) || protectedBizziGraceEligible;
-        const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution"];
+        const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution", "cc_payment"];
         const taxType = String(mergedMeta.taxonomy_type || "").toLowerCase();
         let promotionSource = null;
         let promotionReason = null;
@@ -1860,9 +1881,16 @@ export async function runBookkeepingSuggestionPass({
 
         if (taxHit.type === "cc_payment") {
           if (ccPaymentPair?.txnId) {
+            mergedMeta.cc_payment_pair_id = ccPaymentPair.pairId || null;
             mergedMeta.cc_payment_pair_txn_id = ccPaymentPair.txnId;
             mergedMeta.cc_payment_pair_plaid_account_id = ccPaymentPair.pairedPlaidAccountId || null;
             mergedMeta.cc_payment_pair_historical_context_only = !!ccPaymentPair.historicalContextOnly;
+            mergedMeta.cc_payment_pair_status = ccPaymentPair.pairStatus || "needs_review";
+            mergedMeta.cc_payment_pair_confidence = ccPaymentPair.pairConfidence || "high";
+          } else if (ccPaymentPairResult?.status === "ambiguous") {
+            mergedMeta.post_block_reason = "cc_payment_pair_ambiguous";
+            mergedMeta.cc_payment_pair_ambiguous = true;
+            mergedMeta.cc_payment_pair_candidates = ccPaymentPairResult.candidates || [];
           }
           ccMapping = await resolveCcPaymentMapping({ businessId, txnRow: row, coa, coaMap });
           if (ccMapping?.creditCardAccountRef) {

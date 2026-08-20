@@ -14,6 +14,12 @@ import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "
 import { getAutoPostToQuickBooks } from "../services/bookkeeping/autoPostControl.js";
 import { consumeQuickBooksRefreshMarker, getLatestQuickBooksTokenRow } from "../services/quickbooksTokenService.js";
 import { canonicalizeVendorDisplayName, classifyQboVendorProviderError, getVendorPostingRequirement } from "../services/bookkeeping/canonicalVendorService.js";
+import {
+  claimCreditCardPaymentPairPosting,
+  findExistingCreditCardPaymentPairForTransaction,
+  markCreditCardPaymentPairFailed,
+  markCreditCardPaymentPairPosted,
+} from "../services/bookkeeping/creditCardPaymentPairService.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
@@ -301,6 +307,20 @@ async function createQboDeposit(qbo, payload) {
   });
 }
 
+async function createQboTransfer(qbo, payload) {
+  const candidates = qboCreateCandidates(qbo, "createTransfer", ["transfer"]);
+  if (!candidates.length) {
+    throw new Error("transfer_post_not_supported");
+  }
+  const { fn, context } = candidates[0];
+  return new Promise((resolve, reject) => {
+    fn.call(context, payload, (err, resp) => {
+      if (err) return reject(err);
+      return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Transfer", syncToken: resp?.SyncToken || null, raw: resp || null });
+    });
+  });
+}
+
 function getQboPostingAccountId(entity = {}, qboTxnType) {
   if (qboTxnType === "Purchase" || qboTxnType === "CreditCardCharge") return entity.AccountRef?.value || null;
   if (qboTxnType === "Deposit") return entity.DepositToAccountRef?.value || null;
@@ -313,6 +333,7 @@ function getQboPostingAccountId(entity = {}, qboTxnType) {
       null
     );
   }
+  if (qboTxnType === "Transfer") return entity.FromAccountRef?.value || entity.ToAccountRef?.value || null;
   return null;
 }
 
@@ -331,6 +352,7 @@ function qboFindMethodName(qboTxnType) {
     Deposit: "findDeposits",
     CreditCardCharge: "findPurchases",
     CreditCardPayment: "findTransfers",
+    Transfer: "findTransfers",
   }[qboTxnType] || null;
 }
 
@@ -338,6 +360,7 @@ function qboNestedFindKeys(qboTxnType) {
   return {
     CreditCardCharge: ["creditcardcharge", "creditCardCharge"],
     CreditCardPayment: ["creditcardpayment", "creditCardPayment"],
+    Transfer: ["transfer"],
   }[qboTxnType] || [];
 }
 
@@ -444,7 +467,7 @@ function resolveQboTxnType(item, bankTxn, mapping) {
     item?.meta?.cc_payment_bank_qbo_account_id ||
     item?.meta?.cc_payment_cc_qbo_account_id ||
     item?.meta?.cc_payment_mapping_confidence;
-  if (looksCcMeta) return "CreditCardPayment";
+  if (looksCcMeta) return "Transfer";
   if (item?.meta?.taxonomy_type && item.meta.taxonomy_type !== "cc_payment") return null;
   if (!item?.final_qbo_account_id) return null;
   if (!isBank && !isCreditCard) return null;
@@ -982,28 +1005,175 @@ async function postCcPaymentToQbo(item, bankTxn, qbo, mapping, requestId) {
 
   const payload = {
     requestId,
-    BankAccountRef: { value: String(bankId) },
-    CreditCardAccountRef: { value: String(ccId) },
+    FromAccountRef: { value: String(bankId) },
+    ToAccountRef: { value: String(ccId) },
     Amount: amount,
     TxnDate: txnDate,
     PrivateNote: note,
   };
+  return createQboTransfer(qbo, payload);
+}
 
-  const candidates = [
-    qbo?.creditcardpayment?.create,
-    qbo?.creditCardPayment?.create,
-    qbo?.createCreditCardPayment,
-  ].filter(Boolean);
-  if (!candidates.length) {
-    throw new Error("cc_payment_post_not_supported");
-  }
-  const fn = candidates[0];
-  return new Promise((resolve, reject) => {
-    fn.call(qbo, payload, (err, resp) => {
-      if (err) return reject(err);
-      return resolve({ id: resp?.Id || null, type: resp?.TxnType || "CreditCardPayment", syncToken: resp?.SyncToken || null, raw: resp || null });
-    });
+function scoreQboTransferCandidate({ entity, pair, requestId }) {
+  const text = collectQboText(entity);
+  const marker = normalizeMatchText(buildQboPostMarker(requestId));
+  const requestText = normalizeMatchText(requestId);
+  const fromMatches = String(entity?.FromAccountRef?.value || "") === String(pair.checking_qbo_account_id || "");
+  const toMatches = String(entity?.ToAccountRef?.value || "") === String(pair.credit_card_qbo_account_id || "");
+  const dateMatches = isNearQboTxnDate(getQboTxnDate(entity), pair.payment_date || pair.matched_date);
+  const amountMatches = cents(getQboTxnAmount(entity)) === cents(pair.amount);
+  const deterministic = Boolean((requestText && text.includes(requestText)) || (marker && text.includes(marker)));
+  return {
+    qbo_txn_id: getQboTxnId(entity),
+    qbo_txn_type: "Transfer",
+    txn_date: getQboTxnDate(entity),
+    amount: getQboTxnAmount(entity),
+    from_matches: fromMatches,
+    to_matches: toMatches,
+    date_matches: dateMatches,
+    amount_matches: amountMatches,
+    deterministic,
+    raw: entity,
+  };
+}
+
+function classifyPreExistingQboTransferMatch({ qboCandidates = [], pair, requestId }) {
+  const scored = (qboCandidates || [])
+    .map((entity) => scoreQboTransferCandidate({ entity, pair, requestId }))
+    .filter((c) => c.qbo_txn_id && c.from_matches && c.to_matches && c.date_matches && c.amount_matches);
+  const deterministic = scored.filter((c) => c.deterministic);
+  if (deterministic.length === 1) return { confidence: "DETERMINISTIC_EXISTING", candidates: deterministic };
+  if (deterministic.length > 1) return { confidence: "AMBIGUOUS", candidates: deterministic };
+  if (scored.length === 1) return { confidence: "HIGH_CONFIDENCE_PROBABLE_DUPLICATE", candidates: scored };
+  if (scored.length > 1) return { confidence: "AMBIGUOUS", candidates: scored };
+  return { confidence: "NO_MATCH", candidates: [] };
+}
+
+async function postCreditCardPaymentPairToQbo({ item, bankTxn, pair, qbo, requestId }) {
+  const amount = Math.abs(Number(pair.amount || bankTxn?.amount || 0));
+  if (!Number.isFinite(amount) || amount === 0) throw new Error("invalid_amount");
+  if (!pair?.checking_qbo_account_id || !pair?.credit_card_qbo_account_id) throw new Error("cc_payment_mapping_not_safe");
+  const txnDate = pair.payment_date || bankTxn?.date || new Date().toISOString().slice(0, 10);
+  const { note } = buildQboPostText(bankTxn, "CC payment", requestId);
+  return createQboTransfer(qbo, {
+    requestId,
+    FromAccountRef: { value: String(pair.checking_qbo_account_id) },
+    ToAccountRef: { value: String(pair.credit_card_qbo_account_id) },
+    Amount: amount,
+    TxnDate: txnDate,
+    PrivateNote: note,
   });
+}
+
+async function handleCreditCardPaymentPairItem({ item, bank, mapping, timing, manual, confirmPostAnyway }) {
+  const businessId = item.business_id;
+  const txnId = item.transaction_id;
+  const pair = await findExistingCreditCardPaymentPairForTransaction({ businessId, transactionId: txnId });
+  if (!pair) throw new Error("cc_payment_pair_not_found");
+  if (pair.status === "posted" && pair.qbo_txn_id) {
+    await markCreditCardPaymentPairPosted({
+      businessId,
+      pair,
+      qboTxnId: pair.qbo_txn_id,
+      qboSyncToken: pair.qbo_sync_token || null,
+      postedAt: pair.posted_at || getNowIso(),
+    });
+    return;
+  }
+  if (pair.status !== "confirmed" && pair.status !== "failed") {
+    await markTransactionNonPostable(item, pair.match_confidence === "ambiguous" ? "cc_payment_pair_ambiguous" : "cc_payment_pair_requires_confirmation");
+    return;
+  }
+  const requestId = pair.request_id || buildQboRequestId({ businessId, transactionId: pair.id, idempotencyKey: pair.idempotency_key || "" });
+  const claim = await timePostingStage(timing, "posting_intent_ms", () =>
+    claimCreditCardPaymentPairPosting({
+      businessId,
+      pair: { ...pair, request_id: requestId, idempotency_key: pair.idempotency_key || requestId },
+    })
+  );
+  if (claim.alreadyPosted && claim.pair?.qbo_txn_id) {
+    await markCreditCardPaymentPairPosted({
+      businessId,
+      pair: claim.pair,
+      qboTxnId: claim.pair.qbo_txn_id,
+      qboSyncToken: claim.pair.qbo_sync_token || null,
+      postedAt: claim.pair.posted_at || getNowIso(),
+    });
+    return;
+  }
+  if (!claim.claimed) return;
+  const claimedPair = claim.pair || { ...pair, request_id: requestId };
+  let qbo = null;
+  try {
+    qbo = await timePostingStage(timing, "qbo_auth_ms", () => getQBOClient(businessId));
+    timing.context.oauth_refresh_observed = consumeQuickBooksRefreshMarker(businessId);
+    if (!qbo) throw new Error("qbo_client_unavailable:no_active_token_row");
+
+    if (confirmPostAnyway !== true) {
+      timing.context.duplicate_preflight_ran = true;
+      const transferCandidates = await timePostingStage(timing, "duplicate_preflight_ms", () => findQboTransactions(qbo, "Transfer", { date: claimedPair.payment_date || bank.date }));
+      const duplicateCheck = classifyPreExistingQboTransferMatch({
+        qboCandidates: transferCandidates,
+        pair: claimedPair,
+        requestId,
+      });
+      if (duplicateCheck.confidence === "DETERMINISTIC_EXISTING") {
+        const match = duplicateCheck.candidates[0];
+        await markCreditCardPaymentPairPosted({
+          businessId,
+          pair: claimedPair,
+          qboTxnId: match.qbo_txn_id,
+          postedAt: getNowIso(),
+        });
+        return;
+      }
+      if (duplicateCheck.confidence === "HIGH_CONFIDENCE_PROBABLE_DUPLICATE" || duplicateCheck.confidence === "AMBIGUOUS") {
+        await markCreditCardPaymentPairFailed({ businessId, pair: claimedPair, message: "possible_qbo_duplicate" });
+        await markTransactionNonPostable(item, "possible_qbo_duplicate");
+        return;
+      }
+    }
+
+    const result = await timePostingStage(timing, "qbo_create_ms", () =>
+      postCreditCardPaymentPairToQbo({ item, bankTxn: bank, pair: claimedPair, qbo, requestId })
+    ).catch(async (err) => {
+      timing.context.failure_code = err?.message || "qbo_create_failed";
+      await markCreditCardPaymentPairFailed({ businessId, pair: claimedPair, message: err?.message || "qbo_create_failed" });
+      throw err;
+    });
+    if (!result?.id) throw new Error("qbo_post_missing_transaction_id");
+    const postedIso = getNowIso();
+    await insertPostAttempt({
+      businessId,
+      transactionId: txnId,
+      status: "posted",
+      qboTxnId: result.id,
+      qboTxnType: "Transfer",
+      postAfter: item?.post_after || null,
+      payloadSummary: {
+        ...summarizePayload(item, bank, mapping),
+        cc_payment_pair_id: claimedPair.id,
+        from_account_id: claimedPair.checking_qbo_account_id,
+        to_account_id: claimedPair.credit_card_qbo_account_id,
+      },
+      responseSummary: {
+        ...summarizeResponse({ ...result, type: "Transfer" }),
+        posting_timing: summarizePostingTiming(timing),
+      },
+      attemptedAt: postedIso,
+    });
+    await markCreditCardPaymentPairPosted({
+      businessId,
+      pair: claimedPair,
+      qboTxnId: result.id,
+      qboSyncToken: result.syncToken || null,
+      postedAt: postedIso,
+    });
+    logPostingTiming({ businessId, transactionId: txnId, qboTxnType: "Transfer", manual, timing, status: "posted" });
+  } catch (err) {
+    await markCreditCardPaymentPairFailed({ businessId, pair: claimedPair, message: err?.message || "cc_payment_pair_post_failed" });
+    throw err;
+  }
 }
 
 async function postBankOutflowPurchase(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
@@ -1339,6 +1509,11 @@ export async function handleItem(item, options = {}) {
       })
       .eq("business_id", businessId)
       .eq("transaction_id", txnId);
+    return;
+  }
+
+  if (item?.meta?.taxonomy_type === "cc_payment" && item?.meta?.cc_payment_pair_id) {
+    await handleCreditCardPaymentPairItem({ item, bank, mapping, timing, manual, confirmPostAnyway });
     return;
   }
 

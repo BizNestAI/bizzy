@@ -6,6 +6,10 @@ import { learnVendorRuleFromTransaction } from "../../../services/bookkeeping/ve
 import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
 import { getBookkeepingStartDate, getTransactionsOutsideActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
 import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "../../../services/bookkeeping/autoPostControl.js";
+import {
+  confirmCreditCardPaymentPairForTransaction,
+  createManualCreditCardPaymentPair,
+} from "../../../services/bookkeeping/creditCardPaymentPairService.js";
 
 const router = Router();
 
@@ -98,6 +102,73 @@ router.post("/approve", requireAuth, async (req, res) => {
   }
 
   const missingCheckFinals = [];
+  const ccPairConfirmTxnIds = new Set();
+  const confirmedCcPairs = new Map();
+
+  for (const item of items || []) {
+    const txnId = item?.txnId || item?.transaction_id || item?.transactionId || item?.id;
+    if (!txnId) continue;
+    const meta = existingMetaMap[txnId] || {};
+    if (meta?.taxonomy_type !== "cc_payment") continue;
+    const explicitFinalId = item?.newAccountId || item?.final_qbo_account_id || item?.finalAccountId || null;
+    if (!meta.cc_payment_pair_id && explicitFinalId) {
+      let pair = null;
+      try {
+        pair = await createManualCreditCardPaymentPair({
+          businessId,
+          transactionId: txnId,
+          targetQboAccountId: explicitFinalId,
+        });
+      } catch (err) {
+        const code = String(err?.message || "cc_payment_target_credit_card_required");
+        if (code.startsWith("cc_payment_")) {
+          return res.status(400).json({
+            ok: false,
+            error: code,
+            transactions: [txnId],
+          });
+        }
+        throw err;
+      }
+      existingMetaMap[txnId] = {
+        ...(existingMetaMap[txnId] || {}),
+        taxonomy_type: "cc_payment",
+        cc_payment_pair_id: pair.id,
+        cc_payment_pair_role: "checking",
+        cc_payment_pair_status: pair.status,
+        cc_payment_pair_confidence: pair.match_confidence,
+        cc_payment_bank_qbo_account_id: pair.checking_qbo_account_id,
+        cc_payment_bank_qbo_account_name: pair.checking_qbo_account_name,
+        cc_payment_cc_qbo_account_id: pair.credit_card_qbo_account_id,
+        cc_payment_cc_qbo_account_name: pair.credit_card_qbo_account_name,
+        cc_payment_transfer_target_qbo_account_id: pair.credit_card_qbo_account_id,
+        cc_payment_transfer_target_qbo_account_name: pair.credit_card_qbo_account_name,
+      };
+    }
+    ccPairConfirmTxnIds.add(txnId);
+  }
+
+  for (const txnId of ccPairConfirmTxnIds) {
+    const pair = await confirmCreditCardPaymentPairForTransaction({ businessId, transactionId: txnId });
+    confirmedCcPairs.set(String(pair.id), pair);
+    const currentMeta = existingMetaMap[txnId] || {};
+    existingMetaMap[txnId] = {
+      ...currentMeta,
+      cc_payment_pair_id: pair.id,
+      cc_payment_pair_status: "confirmed",
+      cc_payment_pair_confidence: pair.match_confidence,
+      cc_payment_bank_qbo_account_id: pair.checking_qbo_account_id,
+      cc_payment_bank_qbo_account_name: pair.checking_qbo_account_name,
+      cc_payment_cc_qbo_account_id: pair.credit_card_qbo_account_id,
+      cc_payment_cc_qbo_account_name: pair.credit_card_qbo_account_name,
+      cc_payment_transfer_target_qbo_account_id:
+        currentMeta.cc_payment_pair_role === "credit_card" ? pair.checking_qbo_account_id : pair.credit_card_qbo_account_id,
+      cc_payment_transfer_target_qbo_account_name:
+        currentMeta.cc_payment_pair_role === "credit_card" ? pair.checking_qbo_account_name : pair.credit_card_qbo_account_name,
+      safe_to_auto_post: true,
+      auto_approve_reason: "manual_user",
+    };
+  }
 
   const approvals = (items || [])
     .map((item) => {
@@ -223,6 +294,68 @@ router.post("/approve", requireAuth, async (req, res) => {
     if (error) {
       console.error("[bookkeeping][approve] supabase error", error);
       return res.status(500).json({ ok: false, error: "approve_failed", message: error.message });
+    }
+
+    for (const pair of confirmedCcPairs.values()) {
+      const pairRows = [
+        {
+          transaction_id: pair.checking_transaction_id,
+          final_qbo_account_id: pair.credit_card_qbo_account_id,
+          final_qbo_account_name: pair.credit_card_qbo_account_name,
+          role: "checking",
+          counterpart: pair.credit_card_transaction_id || null,
+          targetAccountId: pair.credit_card_qbo_account_id,
+          targetAccountName: pair.credit_card_qbo_account_name,
+        },
+        pair.credit_card_transaction_id
+          ? {
+              transaction_id: pair.credit_card_transaction_id,
+              final_qbo_account_id: pair.checking_qbo_account_id,
+              final_qbo_account_name: pair.checking_qbo_account_name,
+              role: "credit_card",
+              counterpart: pair.checking_transaction_id,
+              targetAccountId: pair.checking_qbo_account_id,
+              targetAccountName: pair.checking_qbo_account_name,
+            }
+          : null,
+      ].filter(Boolean);
+      for (const pairRow of pairRows) {
+        const existingMeta = existingMetaMap[pairRow.transaction_id] || {};
+        await supabase
+          .from("transaction_categorizations")
+          .upsert({
+            business_id: businessId,
+            transaction_id: pairRow.transaction_id,
+            status: "approved",
+            final_qbo_account_id: pairRow.final_qbo_account_id,
+            final_qbo_account_name: pairRow.final_qbo_account_name,
+            confidence: "high",
+            reason: "Confirmed credit-card payment transfer",
+            decided_by: "user",
+            decided_at: nowIso,
+            updated_at: nowIso,
+            post_after: postAfter,
+            post_error: null,
+            meta: {
+              ...existingMeta,
+              taxonomy_type: "cc_payment",
+              cc_payment_pair_id: pair.id,
+              cc_payment_pair_role: pairRow.role,
+              cc_payment_pair_txn_id: pairRow.counterpart,
+              cc_payment_pair_status: "confirmed",
+              cc_payment_pair_confidence: pair.match_confidence,
+              cc_payment_bank_qbo_account_id: pair.checking_qbo_account_id,
+              cc_payment_bank_qbo_account_name: pair.checking_qbo_account_name,
+              cc_payment_cc_qbo_account_id: pair.credit_card_qbo_account_id,
+              cc_payment_cc_qbo_account_name: pair.credit_card_qbo_account_name,
+              cc_payment_transfer_target_qbo_account_id: pairRow.targetAccountId,
+              cc_payment_transfer_target_qbo_account_name: pairRow.targetAccountName,
+              safe_to_auto_handle: false,
+              safe_to_auto_post: true,
+              auto_approve_reason: "manual_user",
+            },
+          }, { onConflict: "business_id,transaction_id" });
+      }
     }
 
     // Learning loop (best-effort per item)
