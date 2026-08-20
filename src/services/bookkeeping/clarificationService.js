@@ -3,6 +3,7 @@ import { computeMemoPrefixForLearning, canonicalTxnDirection, cleanMemoForPrefix
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
 import { resolveCanonicalQboAccount } from "./canonicalQboAccountResolver.js";
 import { matchesTransactionStatusFilter } from "../../api/bookkeeping/routes/bookkeeping.transactions.routes.js";
+import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 import {
   getCanonicalAccountByKey,
   getCanonicalAccountForIntent,
@@ -514,6 +515,13 @@ export async function fetchOperatorRequests({ businessId, page = 1, pageSize = 2
     });
   }
 
+  if (includeRows) {
+    refreshOperatorRequestSummaryBestEffort({
+      businessId,
+      reason: "operator_requests_rows_loaded",
+    }).catch(() => null);
+  }
+
   return {
     ok: true,
     outstanding_count: outstandingCount,
@@ -913,6 +921,13 @@ export async function processClarificationAnswers({ businessId, answers = [], an
       accounting_status: "needs_review",
       final_qbo_account_id: null,
       final_qbo_account_name: null,
+    });
+  }
+
+  if (results.some((row) => row?.status === "answered")) {
+    await refreshOperatorRequestSummaryBestEffort({
+      businessId,
+      reason: "customer_answer",
     });
   }
 

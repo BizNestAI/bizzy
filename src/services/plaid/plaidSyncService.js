@@ -5,6 +5,7 @@ import {
   enqueueBookkeepingProcessingForTransactions,
   processPendingBookkeepingRequestsUntilIdle,
 } from "../bookkeeping/backgroundBookkeepingProcessingService.js";
+import { refreshOperatorRequestSummaryBestEffort } from "../bookkeeping/operatorRequestSummaryService.js";
 import { resolveStoredPlaidAccessToken } from "./plaidTokenCrypto.js";
 import {
   buildCanonicalTransactionIdentity,
@@ -863,6 +864,10 @@ export async function runPlaidSyncForBusiness(businessId, { force = false } = {}
   }
 
   if (synced > 0) {
+    await refreshOperatorRequestSummaryBestEffort({
+      businessId,
+      reason: "plaid_sync",
+    });
     triggerContractorCfoInsightsBestEffort({
       businessId,
       trigger: "plaid_sync",

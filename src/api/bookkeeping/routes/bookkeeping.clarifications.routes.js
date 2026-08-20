@@ -6,6 +6,7 @@ import {
   fetchOperatorRequests,
   processClarificationAnswers,
 } from "../../../services/bookkeeping/clarificationService.js";
+import { getOperatorRequestSummary } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
 import { supabase } from "../../../services/supabaseAdmin.js";
 
 const router = Router();
@@ -52,6 +53,22 @@ router.get("/operator-requests", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("[operator-requests][fetch] failed", err?.message || err);
     return res.status(500).json({ ok: false, error: "operator_requests_fetch_failed", message: err?.message || "failed" });
+  }
+});
+
+router.get("/operator-requests/summary", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    const result = await getOperatorRequestSummary({ businessId });
+    if (!result.ok) {
+      return res.status(500).json({ ok: false, error: result.error || "operator_summary_fetch_failed" });
+    }
+    return res.json({ ok: true, summary: result.summary });
+  } catch (err) {
+    console.error("[operator-requests][summary] failed", err?.message || err);
+    return res.status(500).json({ ok: false, error: "operator_summary_fetch_failed", message: err?.message || "failed" });
   }
 });
 

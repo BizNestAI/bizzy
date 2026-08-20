@@ -44,6 +44,88 @@ test("Operator Requests retrieval is database bounded and supports large Needs R
   assert.doesNotMatch(fetchBody, /\.in\("transaction_id",\s*ids\)/);
 });
 
+test("Operator Request summary is durable and recomputed from authoritative SQL semantics", () => {
+  const migration = read("supabase/migrations/20260906_operator_request_summary.sql");
+  const boundedMigration = read("supabase/migrations/20260905_bounded_bookkeeping_needs_review_retrieval.sql");
+  const service = read("src/services/bookkeeping/operatorRequestSummaryService.js");
+
+  assert.match(migration, /create table if not exists public\.operator_request_summaries/);
+  assert.match(migration, /business_id uuid primary key references public\.business_profiles\(id\) on delete cascade/);
+  assert.match(migration, /accounting_needs_review_count integer not null default 0/);
+  assert.match(migration, /outstanding_count integer not null default 0/);
+  assert.match(migration, /answered_awaiting_review_count integer not null default 0/);
+  assert.match(migration, /create or replace function public\.refresh_operator_request_summary/);
+  assert.match(migration, /from public\.get_operator_request_counts_bounded\(p_business_id\)/);
+  assert.match(migration, /on conflict \(business_id\) do update/);
+  assert.match(migration, /alter table public\.operator_request_summaries enable row level security/);
+  assert.match(migration, /revoke all on table public\.operator_request_summaries from public, anon, authenticated/);
+  assert.match(migration, /grant all on table public\.operator_request_summaries to service_role/);
+  assert.match(boundedMigration, /create or replace function public\.get_operator_request_counts_bounded/);
+  assert.match(service, /refresh_operator_request_summary/);
+  assert.doesNotMatch(service, /outstanding_count\s*[+-]=/);
+});
+
+test("Home count uses summary endpoint and does not fetch Operator Request rows before expansion", () => {
+  const home = read("src/pages/Bizzy/ChatHome.jsx");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const panel = read("src/components/Bizzy/OperatorRequestsPanel.jsx");
+  const card = read("src/components/Bizzy/OperatorStatusCard.jsx");
+
+  assert.match(client, /export async function getOperatorRequestSummary/);
+  assert.match(client, /\/api\/bookkeeping\/operator-requests\/summary/);
+  assert.match(home, /import \{ getOperatorRequestSummary \}/);
+  assert.match(home, /const summary = await getOperatorRequestSummary\(businessId\)/);
+  assert.match(home, /summary\?\.outstanding_count/);
+  assert.doesNotMatch(home, /getOperatorRequests\(businessId, \{ page: 1, page_size: 15 \}/);
+  assert.match(home, /requests=\{isMockMode \? needsReviewRequests : null\}/);
+  assert.match(home, /clarOpen \? \(/);
+  assert.match(panel, /if \(!openExternally && !open\) return/);
+  assert.match(card, /if \(!expanded \|\| !businessId\) return/);
+  assert.match(card, /getOperatorRequests\(businessId, \{ page: 1, page_size: 25 \}\)/);
+});
+
+test("summary endpoint is lightweight and does not materialize rows or provider calls", () => {
+  const route = read("src/api/bookkeeping/routes/bookkeeping.clarifications.routes.js");
+  const service = read("src/services/bookkeeping/operatorRequestSummaryService.js");
+  const summaryRoute = route.slice(
+    route.indexOf("router.get(\"/operator-requests/summary\""),
+    route.indexOf("router.post(\"/clarifications/submit\"")
+  );
+
+  assert.match(summaryRoute, /getOperatorRequestSummary/);
+  assert.doesNotMatch(summaryRoute, /fetchOperatorRequests/);
+  assert.doesNotMatch(summaryRoute, /expire_stale_operator_requests/);
+  assert.doesNotMatch(summaryRoute, /ensurePendingRequestForTransaction/);
+  assert.doesNotMatch(summaryRoute, /getOperatorRequests/);
+  assert.match(service, /\.from\("operator_request_summaries"\)/);
+  assert.doesNotMatch(service, /getQBOClient|plaid|openai|createQbo|postToQbo/i);
+});
+
+test("state-change boundaries reconcile Operator Request summary without blind counters", () => {
+  const clarification = read("src/services/bookkeeping/clarificationService.js");
+  const approval = read("src/services/bookkeeping/bookkeepingApprovalService.js");
+  const approvalsRoute = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const monthly = read("src/api/admin/monthlyReview.routes.js");
+  const worker = read("src/services/bookkeeping/backgroundBookkeepingProcessingService.js");
+  const plaid = read("src/services/plaid/plaidSyncService.js");
+  const suggest = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
+  const cron = read("src/cron/operatorRequestSummary.cron.js");
+  const server = read("src/server.js");
+
+  assert.match(clarification, /reason:\s*"customer_answer"/);
+  assert.match(clarification, /reason:\s*"operator_requests_rows_loaded"/);
+  assert.match(approval, /reason:\s*"human_approval"/);
+  assert.match(approvalsRoute, /reason:\s*"approval_undo"/);
+  assert.match(approvalsRoute, /reason:\s*"cc_payment_rejection"/);
+  assert.match(monthly, /reason:\s*"operator_response_resolved"/);
+  assert.match(worker, /reason:\s*"background_bookkeeping_batch"/);
+  assert.match(plaid, /reason:\s*"plaid_sync"/);
+  assert.match(suggest, /reason:\s*"bookkeeping_suggestion_pass"/);
+  assert.match(cron, /runOperatorRequestSummaryReconciliationOnce/);
+  assert.match(cron, /periodic_reconciliation/);
+  assert.match(server, /startOperatorRequestSummaryCron\(\)/);
+});
+
 test("customer answer stores context only and leaves accounting Needs Review unchanged", () => {
   const service = read("src/services/bookkeeping/clarificationService.js");
 

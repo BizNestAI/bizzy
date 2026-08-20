@@ -1,5 +1,6 @@
 import { reconsiderNeedsReviewTransactions } from "./routineExpenseReconsiderationService.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
+import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 
 export const BOOKKEEPING_PROCESSING_STATUSES = {
   PENDING: "pending",
@@ -571,6 +572,18 @@ export async function processPendingBookkeepingRequestsUntilIdle({
     aggregate.skipped += Number(result?.skipped || 0);
     aggregate.results.push(...(result?.results || []));
     if (!result?.claimed) break;
+  }
+
+  if (aggregate.claimed > 0) {
+    const businessIds = new Set((aggregate.results || []).map((row) => row?.business_id).filter(Boolean));
+    if (businessId) businessIds.add(businessId);
+    for (const changedBusinessId of businessIds) {
+      await refreshOperatorRequestSummaryBestEffort({
+        businessId: changedBusinessId,
+        db,
+        reason: "background_bookkeeping_batch",
+      });
+    }
   }
 
   return aggregate;

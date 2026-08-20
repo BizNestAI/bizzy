@@ -24,6 +24,7 @@ import { canAutoHandle } from "../../../services/bookkeeping/autoHandlingPolicy.
 import { resolveCanonicalVendorForTransaction } from "../../../services/bookkeeping/canonicalVendorService.js";
 import { reconsiderNeedsReviewTransactions } from "../../../services/bookkeeping/routineExpenseReconsiderationService.js";
 import { createSafeCreditCardPaymentPairForRow } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
+import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
 
 const router = Router();
 
@@ -1136,7 +1137,13 @@ export async function runBookkeepingSuggestionPass({
     const eligibleTxns = (txns || []).filter((t) => t.pending !== true && t.accounting_review_required !== true);
 
     const ids = eligibleTxns.map((t) => t.id);
-    if (!ids.length) return { ok: true, updated: 0, auto_approved: 0, skipped: 0, sample: [] };
+    if (!ids.length) {
+      await refreshOperatorRequestSummaryBestEffort({
+        businessId,
+        reason: "bookkeeping_suggestion_pass",
+      });
+      return { ok: true, updated: 0, auto_approved: 0, skipped: 0, sample: [] };
+    }
 
     const plaidAccountIds = [...new Set(eligibleTxns.map((t) => t.plaid_account_id).filter(Boolean))];
     let plaidAccountMap = new Map();
@@ -2703,6 +2710,10 @@ export async function runBookkeepingSuggestionPass({
           });
         }
       }
+      await refreshOperatorRequestSummaryBestEffort({
+        businessId,
+        reason: "bookkeeping_suggestion_pass",
+      });
       return {
         ok: true,
         updated: 0,
@@ -2740,6 +2751,11 @@ export async function runBookkeepingSuggestionPass({
       .upsert(normalizedRows, { onConflict: "business_id,transaction_id" })
       .select("transaction_id,suggested_qbo_account_id,suggested_qbo_account_name,confidence,status,reason,meta");
     if (upErr) throw upErr;
+
+    await refreshOperatorRequestSummaryBestEffort({
+      businessId,
+      reason: "bookkeeping_suggestion_pass",
+    });
 
     return {
       ok: true,

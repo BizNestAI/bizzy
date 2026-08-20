@@ -13,7 +13,7 @@ import { useBusiness } from "../../context/BusinessContext";
 import OperatorStatusCard from "../../components/Bizzy/OperatorStatusCard";
 import { CHAT_BAR_MAX_W, CHAT_BAR_VW } from "../../config/chatLayout";
 import { getDemoMode, shouldUseDemoData, getDemoData } from "../../services/demo/demoClient";
-import { getOperatorRequests } from "../../services/bookkeeping/bookkeepingClient.js";
+import { getOperatorRequestSummary } from "../../services/bookkeeping/bookkeepingClient.js";
 
 export default function ChatHome() {
   return <ChatHomeInner />;
@@ -92,61 +92,7 @@ function ChatHomeInner() {
     });
   }, [isMockMode]);
 
-  const normalizeList = useCallback((res) => {
-    if (Array.isArray(res?.rows)) return res.rows;
-    if (Array.isArray(res?.items)) return res.items;
-    if (Array.isArray(res?.transactions)) return res.transactions;
-    if (Array.isArray(res)) return res;
-    return [];
-  }, []);
-
   const loadNeedsReviewRequests = useCallback(async () => {
-    const normalizeMerchant = (txn, existing = null) => {
-      const raw =
-        txn.vendor ||
-        txn.merchant_name ||
-        txn.counterparty_name ||
-        txn.description ||
-        txn.name ||
-        existing?.txn?.merchant_name ||
-        existing?.txn?.counterparty_name ||
-        existing?.txn?.name ||
-        existing?.txn?.description ||
-        "Unknown merchant";
-      const upper = String(raw || "").toUpperCase();
-      const patterns = [
-        { test: /UBER/, name: "Uber" },
-        { test: /LYFT/, name: "Lyft" },
-        { test: /DOORDASH|DOOR DASH/, name: "DoorDash" },
-        { test: /GRUBHUB/, name: "Grubhub" },
-        { test: /POSTMATES/, name: "Postmates" },
-        { test: /AIRBNB/, name: "Airbnb" },
-        { test: /VENMO/, name: "Venmo" },
-        { test: /CASH APP|CASHAPP/, name: "Cash App" },
-        { test: /PAYPAL/, name: "PayPal" },
-        { test: /ZELLE/, name: "Zelle" },
-        { test: /STRIPE/, name: "Stripe" },
-        { test: /SQUARE/, name: "Square" },
-        { test: /INTUIT PAYMENT|QUICKBOOKS PAYMENTS/, name: "QuickBooks Payments" },
-        { test: /AMZN|AMAZON/, name: "Amazon" },
-        { test: /WALMART/, name: "Walmart" },
-        { test: /TARGET/, name: "Target" },
-        { test: /HOME DEPOT|HOMEDPOT/, name: "Home Depot" },
-        { test: /LOWE'S|LOWES/, name: "Lowe's" },
-        { test: /COSTCO/, name: "Costco" },
-        { test: /SAM'S CLUB|SAMS CLUB/, name: "Sam's Club" },
-        { test: /TRANSFER/, name: "Transfer" },
-        { test: /ACH/, name: "ACH Electronic" },
-        { test: /CREDIT CARD PAYMENT|CC PAYMENT|CARD PMT/, name: "Credit Card Payment" },
-        { test: /INTEREST/, name: "Interest Payment" },
-        { test: /CD DEPOSIT|CERTIFICATE OF DEPOSIT/, name: "CD Deposit" },
-        { test: /WIRE/, name: "Wire Transfer" },
-        { test: /PAYMENT/, name: "Payment" },
-      ];
-      const matched = patterns.find((p) => p.test.test(upper));
-      return matched ? matched.name : raw;
-    };
-
     if (isMockMode) {
       setNeedsReviewRequests(mockNeedsReviewRequests);
       setOperatorOutstandingCount(mockNeedsReviewRequests.length);
@@ -163,33 +109,16 @@ function ChatHomeInner() {
     setClarLoading(true);
     setClarError("");
     try {
-      const operatorRes = await getOperatorRequests(businessId, { page: 1, page_size: 15 });
-      const operatorRows = normalizeList(operatorRes);
-      const merged = operatorRows.map((req) => {
-        const txn = req.txn || {};
-        const merchant = normalizeMerchant(txn);
-        return {
-          ...req,
-          txn: {
-            ...txn,
-            merchant_name: merchant,
-            counterparty_name: txn.counterparty_name || merchant,
-            amount: txn.signed_amount ?? txn.amount,
-            date: txn.date || txn.txn_date,
-            name: txn.description || txn.name || "",
-            description: txn.description || txn.name || "",
-          },
-        };
-      });
-      const outstanding = Number(operatorRes?.outstanding_count ?? merged.length);
-      setNeedsReviewRequests(merged);
+      const summary = await getOperatorRequestSummary(businessId);
+      const outstanding = Number(summary?.outstanding_count || 0);
+      setNeedsReviewRequests([]);
       setOperatorOutstandingCount(outstanding);
     } catch (err) {
       setClarError(err?.message || "Could not load Operator Requests.");
     } finally {
       setClarLoading(false);
     }
-  }, [businessId, isMockMode, mockNeedsReviewRequests, normalizeList]);
+  }, [businessId, isMockMode, mockNeedsReviewRequests]);
   // Ensure IBM Plex Sans is available (once)
   useEffect(() => {
     const id = "ibm-plex-sans-font";
@@ -313,16 +242,18 @@ function ChatHomeInner() {
                       zIndex: 0,
                     }}
                   />
-                  <div className="w-full mt-1">
-                    <OperatorRequestsPanel
-                      businessId={businessId}
-                      openExternally={clarOpen}
-                      onCloseExternal={() => {
-                        setClarOpen(false);
-                        loadNeedsReviewRequests();
-                      }}
-                    />
-                  </div>
+                  {clarOpen ? (
+                    <div className="w-full mt-1">
+                      <OperatorRequestsPanel
+                        businessId={businessId}
+                        openExternally={clarOpen}
+                        onCloseExternal={() => {
+                          setClarOpen(false);
+                          loadNeedsReviewRequests();
+                        }}
+                      />
+                    </div>
+                  ) : null}
                   <div className="bizzy-chathome-brand w-full mb-2 px-2 mt-1">
                     <div className="bizzy-chathome-status" aria-label="Financial Operator online">
                       <span className="bizzy-chathome-status-dot" aria-hidden="true" />
@@ -379,7 +310,7 @@ function ChatHomeInner() {
                         onRefresh={loadNeedsReviewRequests}
                         mockMode={isMockMode}
                         mockRequests={mockNeedsReviewRequests}
-                        requests={needsReviewRequests}
+                        requests={isMockMode ? needsReviewRequests : null}
                         error={clarError}
                         onHide={() => setShowStatusCard(false)}
                         showExpand

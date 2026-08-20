@@ -7,6 +7,7 @@ import {
   approveBookkeepingTransactions,
   BookkeepingApprovalError,
 } from "../../../services/bookkeeping/bookkeepingApprovalService.js";
+import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
 
 const router = Router();
 
@@ -96,6 +97,11 @@ router.post("/undo", requireAuth, async (req, res) => {
       updated_count = rows.length;
     }
 
+    await refreshOperatorRequestSummaryBestEffort({
+      businessId,
+      reason: "approval_undo",
+    });
+
     console.info("[bookkeeping][undo]", { businessId, txnId, updated_count });
     return res.json({ ok: true, reverted: true, txn_id: txnId, updated_count, rows });
   } catch (err) {
@@ -119,6 +125,10 @@ router.post("/credit-card-payments/reject", requireAuth, async (req, res) => {
     const result = await rejectCreditCardPaymentSuggestion({
       businessId,
       transactionId: txnId,
+    });
+    await refreshOperatorRequestSummaryBestEffort({
+      businessId,
+      reason: "cc_payment_rejection",
     });
     return res.json(result);
   } catch (err) {

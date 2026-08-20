@@ -313,8 +313,9 @@ export default function OperatorRequestsPanel({ businessId, onCountChange, openE
   }, [businessId]);
 
   useEffect(() => {
+    if (!openExternally && !open) return;
     load(1);
-  }, [load]);
+  }, [load, openExternally, open]);
 
   const pendingCount = outstandingCount || requests.length;
 
@@ -359,7 +360,6 @@ export default function OperatorRequestsPanel({ businessId, onCountChange, openE
         onClose={() => {
           setOpen(false);
           if (onCloseExternal) onCloseExternal();
-          load();
         }}
         requests={requests}
         businessId={businessId}

@@ -8,6 +8,7 @@ import {
   createManualCreditCardPaymentPair,
 } from "./creditCardPaymentPairService.js";
 import { fetchChartOfAccounts, validateBusinessQboCreditCardAccount } from "./qboAccounts.js";
+import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 
 export class BookkeepingApprovalError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -466,6 +467,12 @@ export async function approveBookkeepingTransactions({
       }
     }
   }
+
+  await refreshOperatorRequestSummaryBestEffort({
+    businessId,
+    db,
+    reason: "human_approval",
+  });
 
   return { ok: true, updated: data?.length || 0, rows: data || [], warnings, auto_post_enabled: autoPostEnabled === true };
 }

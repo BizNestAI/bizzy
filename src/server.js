@@ -30,6 +30,7 @@ import bookkeepingPlaidRouter from "./api/bookkeeping/bookkeeping.routes.js";
 import { startBooksPostingCron } from "./jobs/booksPost.cron.js";
 import { startPlaidDailySyncCron } from "./cron/plaidSync.cron.js";
 import { startBookkeepingProcessingWorker } from "./cron/bookkeepingProcessing.cron.js";
+import { startOperatorRequestSummaryCron } from "./cron/operatorRequestSummary.cron.js";
 import { startReconciliationCron } from "./cron/reconciliation.cron.js";
 import { startQboJobCostingSyncCron } from "./cron/qboJobCostingSync.cron.js";
 import { startContractorCfoInsightsCron } from "./services/insights/contractorCfoTriggerService.js";
@@ -325,6 +326,7 @@ app.listen(PORT, () => {
 startForecastCron();
 startBooksPostingCron();
 startBookkeepingProcessingWorker();
+startOperatorRequestSummaryCron();
 startPlaidDailySyncCron();
 startContractorCfoInsightsCron();
 startTaxRecalculationWorker();

@@ -23,6 +23,7 @@ import {
   approveBookkeepingTransactions,
   BookkeepingApprovalError,
 } from "../../services/bookkeeping/bookkeepingApprovalService.js";
+import { refreshOperatorRequestSummaryBestEffort } from "../../services/bookkeeping/operatorRequestSummaryService.js";
 
 const router = Router();
 
@@ -368,6 +369,11 @@ router.post("/businesses/:businessId/operator-responses/:requestId/approve", asy
       .eq("business_id", businessId)
       .eq("id", requestId);
     if (resolveErr) throw resolveErr;
+
+    await refreshOperatorRequestSummaryBestEffort({
+      businessId,
+      reason: "operator_response_resolved",
+    });
 
     await logAuditEvent({
       run,

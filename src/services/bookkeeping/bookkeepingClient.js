@@ -40,6 +40,14 @@ export async function getOperatorRequests(businessId, params = {}) {
   return res || { rows: [], outstanding_count: 0 };
 }
 
+export async function getOperatorRequestSummary(businessId) {
+  const res = await safeFetch(apiUrl("/api/bookkeeping/operator-requests/summary"), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+  return res?.summary || null;
+}
+
 export async function getTransactionCounts(businessId, params = {}) {
   const search = new URLSearchParams();
   Object.entries(params || {}).forEach(([k, v]) => {
