@@ -411,6 +411,8 @@ html, body {
 }
 
 .admin-monthly-review-scroll {
+  position: fixed !important;
+  inset: 0;
   overflow-x: hidden;
   overflow-y: auto !important;
   overscroll-behavior: contain;
