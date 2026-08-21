@@ -410,6 +410,13 @@ html, body {
   overflow: hidden;
 }
 
+.admin-monthly-review-scroll {
+  overflow-x: hidden;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
 [data-bizzy-header],
 [data-bizzy-header] * {
   backdrop-filter: none !important;

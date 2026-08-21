@@ -218,7 +218,8 @@ test("MonthlyReviewConsole remains the single reused admin monthly review implem
 
   assert.equal((main.match(/<MonthlyReviewConsole \/>/g) || []).length, 2);
   assert.match(monthlyUi, /safeFetch\(`\/api\/admin\/monthly-review\/businesses/);
-  assert.match(monthlyUi, /fixed inset-0 overflow-y-scroll overscroll-contain bg-app/);
+  assert.match(monthlyUi, /admin-monthly-review-scroll fixed inset-0 bg-app/);
+  assert.match(read("src/index.css"), /\.admin-monthly-review-scroll\s*\{[\s\S]*overflow-y: auto !important;/);
   assert.doesNotMatch(read("src/pages/Admin/AdminLogin.jsx"), /transaction_categorizations|bank_transactions|clarification_requests/);
 });
 
