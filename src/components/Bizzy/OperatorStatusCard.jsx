@@ -12,6 +12,7 @@ export default function OperatorStatusCard({
   mockMode = false,
   mockRequests = [],
   requests: externalRequests = null,
+  rowsLoading = false,
   showExpand = true,
   error = "",
 }) {
@@ -43,13 +44,7 @@ export default function OperatorStatusCard({
     "Training",
   ];
 
-  const sortRequestsByDate = (list = []) => {
-    return [...list].sort((a, b) => {
-      const da = new Date(a?.txn?.date || a?.date || 0).getTime();
-      const db = new Date(b?.txn?.date || b?.date || 0).getTime();
-      return da - db;
-    });
-  };
+  const preserveRequestOrder = (list = []) => (Array.isArray(list) ? [...list] : []);
 
   const formatAmount = (amt) => {
     if (amt === null || amt === undefined || Number.isNaN(Number(amt))) return "";
@@ -98,8 +93,8 @@ export default function OperatorStatusCard({
   });
 
   const initialRequests = useMemo(() => {
-    if (Array.isArray(externalRequests)) return sortRequestsByDate(externalRequests);
-    if (mockMode && !externalRequests) return sortRequestsByDate(mockRequests || []);
+    if (Array.isArray(externalRequests)) return preserveRequestOrder(externalRequests);
+    if (mockMode && !externalRequests) return preserveRequestOrder(mockRequests || []);
     return [];
   }, [externalRequests, mockMode, mockRequests]);
 
@@ -112,12 +107,17 @@ export default function OperatorStatusCard({
   const [submittingId, setSubmittingId] = useState(null);
 
   const mergeRequests = useCallback((current = [], incoming = []) => {
-    const byId = new Map();
-    [...current, ...(incoming || [])].forEach((row) => {
+    const merged = [];
+    const seen = new Set();
+    [...(current || []), ...(incoming || [])].forEach((row) => {
       const id = row?.id || row?.transaction_id;
-      if (id) byId.set(String(id), row);
+      if (!id) return;
+      const key = String(id);
+      if (seen.has(key)) return;
+      seen.add(key);
+      merged.push(row);
     });
-    return sortRequestsByDate(Array.from(byId.values()));
+    return merged;
   }, []);
 
   useEffect(() => {
@@ -128,7 +128,7 @@ export default function OperatorStatusCard({
     setRequests((prev) => {
       const prevSig = prev.map((r) => `${r?.transaction_id || r?.id || ""}-${r?.txn?.date || ""}`).join("|");
       if (signature === prevSig) return prev;
-      return sortRequestsByDate(externalRequests || []);
+      return preserveRequestOrder(externalRequests || []);
     });
     setLoadedPage(externalRequests.length ? 1 : 0);
     if (externalRequests.length) {
@@ -138,7 +138,7 @@ export default function OperatorStatusCard({
 
   useEffect(() => {
     if (mockMode && !externalRequests) {
-      setRequests(sortRequestsByDate(mockRequests || []));
+      setRequests(preserveRequestOrder(mockRequests || []));
       setExpanded(true);
       return;
     }
@@ -151,7 +151,7 @@ export default function OperatorStatusCard({
         const res = await getOperatorRequests(businessId, { page: 1, page_size: OPERATOR_REQUEST_PAGE_SIZE });
         if (!alive) return;
         const rows = res?.rows || res || [];
-        setRequests(sortRequestsByDate(rows));
+        setRequests(preserveRequestOrder(rows));
         setLoadedPage(rows.length ? 1 : 0);
       } catch (e) {
         console.warn("[OperatorStatusCard] fetch clarifications failed", e);
@@ -232,7 +232,7 @@ export default function OperatorStatusCard({
         // refetch to show remaining only when we manage our own list
         const res = await getOperatorRequests(businessId, { page: 1, page_size: 25 });
         const rows = res?.rows || res || [];
-        setRequests(sortRequestsByDate(rows));
+        setRequests(preserveRequestOrder(rows));
         if (!rows.length && onRefresh) {
           setExpanded(false);
         }
@@ -285,7 +285,7 @@ export default function OperatorStatusCard({
   if (!effectiveCount || effectiveCount <= 0) return null;
 
   const showList = expanded && requests.length > 0;
-  const showEmpty = expanded && requests.length === 0 && !loadingList;
+  const showEmpty = expanded && requests.length === 0 && !loadingList && !rowsLoading;
   const monthLabel = formatMonthLabel(requests);
 
   return (
@@ -330,7 +330,15 @@ export default function OperatorStatusCard({
 
       {expanded && (
         <div className="mt-5 pt-4 border-t border-white/10">
-          {loadingList && <div className="text-xs text-white/60">Loading…</div>}
+          {(loadingList || rowsLoading) && (
+            <div className="flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-3 text-xs text-white/65">
+              <span
+                className="h-3.5 w-3.5 rounded-full border-2 border-emerald-300/25 border-t-emerald-300 animate-spin"
+                aria-hidden="true"
+              />
+              <span>Loading remaining transactions for your review...</span>
+            </div>
+          )}
           {error ? <div className="mb-2 text-xs text-amber-100/85">{error}</div> : null}
           {showList && (
             <div

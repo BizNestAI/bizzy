@@ -30,6 +30,8 @@ function ChatHomeInner() {
   const { businessId, currentBusiness } = useBusiness();
   const [needsReviewRequests, setNeedsReviewRequests] = useState([]);
   const [operatorOutstandingCount, setOperatorOutstandingCount] = useState(0);
+  const [operatorRequestsPrefetching, setOperatorRequestsPrefetching] = useState(false);
+  const [operatorRequestsPrefetchFailed, setOperatorRequestsPrefetchFailed] = useState(false);
   const [clarLoading, setClarLoading] = useState(false);
   const [clarError, setClarError] = useState("");
   const [clarOpen, setClarOpen] = useState(false);
@@ -99,6 +101,8 @@ function ChatHomeInner() {
     if (isMockMode) {
       setNeedsReviewRequests(mockNeedsReviewRequests);
       setOperatorOutstandingCount(mockNeedsReviewRequests.length);
+      setOperatorRequestsPrefetching(false);
+      setOperatorRequestsPrefetchFailed(false);
       setClarLoading(false);
       setClarError("");
       return;
@@ -107,35 +111,48 @@ function ChatHomeInner() {
       operatorRequestPrefetchSeq.current += 1;
       setNeedsReviewRequests([]);
       setOperatorOutstandingCount(0);
+      setOperatorRequestsPrefetching(false);
+      setOperatorRequestsPrefetchFailed(false);
       setClarError("");
       return;
     }
     setClarLoading(true);
     setClarError("");
+    setNeedsReviewRequests([]);
+    setOperatorRequestsPrefetching(false);
+    setOperatorRequestsPrefetchFailed(false);
     const loadSeq = operatorRequestPrefetchSeq.current + 1;
     operatorRequestPrefetchSeq.current = loadSeq;
     try {
       const summaryPromise = getOperatorRequestSummary(businessId);
-      const firstPagePromise = getOperatorRequests(businessId, {
-        page: 1,
-        page_size: OPERATOR_REQUEST_PREFETCH_PAGE_SIZE,
-      });
-
-      firstPagePromise
-        .then((res) => {
-          if (operatorRequestPrefetchSeq.current !== loadSeq) return;
-          setNeedsReviewRequests(res?.rows || res || []);
-        })
-        .catch((err) => {
-          if (operatorRequestPrefetchSeq.current !== loadSeq) return;
-          console.warn("[OperatorRequests] prefetch failed", err);
-        });
-
       const summary = await summaryPromise;
       if (operatorRequestPrefetchSeq.current !== loadSeq) return;
       const outstanding = Number(summary?.outstanding_count || 0);
       setOperatorOutstandingCount(outstanding);
-      if (outstanding <= 0) setNeedsReviewRequests([]);
+      if (outstanding <= 0) {
+        setNeedsReviewRequests([]);
+        return;
+      }
+
+      setOperatorRequestsPrefetching(true);
+      getOperatorRequests(businessId, {
+        page: 1,
+        page_size: OPERATOR_REQUEST_PREFETCH_PAGE_SIZE,
+      })
+        .then((res) => {
+          if (operatorRequestPrefetchSeq.current !== loadSeq) return;
+          setNeedsReviewRequests(res?.rows || res || []);
+          setOperatorRequestsPrefetchFailed(false);
+        })
+        .catch((err) => {
+          if (operatorRequestPrefetchSeq.current !== loadSeq) return;
+          setOperatorRequestsPrefetchFailed(true);
+          console.warn("[OperatorRequests] prefetch failed", err);
+        })
+        .finally(() => {
+          if (operatorRequestPrefetchSeq.current !== loadSeq) return;
+          setOperatorRequestsPrefetching(false);
+        });
     } catch (err) {
       setClarError(err?.message || "Could not load Operator Requests.");
     } finally {
@@ -333,7 +350,8 @@ function ChatHomeInner() {
                         onRefresh={loadNeedsReviewRequests}
                         mockMode={isMockMode}
                         mockRequests={mockNeedsReviewRequests}
-                        requests={isMockMode || needsReviewRequests.length ? needsReviewRequests : null}
+                        requests={isMockMode || !operatorRequestsPrefetchFailed ? needsReviewRequests : null}
+                        rowsLoading={operatorRequestsPrefetching}
                         error={clarError}
                         onHide={() => setShowStatusCard(false)}
                         showExpand

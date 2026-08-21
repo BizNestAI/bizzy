@@ -485,14 +485,13 @@ export async function fetchOperatorRequests({ businessId, page = 1, pageSize = 2
   const rows = [];
 
   for (const txn of paged) {
-    const request = await ensurePendingRequestForTransaction({ businessId, transaction: txn });
     const merchant = txn.counterparty_name || txn.merchant_name || txn.name || "Unknown merchant";
     const sourceAccount = txn.account_name || txn.account_official_name || txn.currentAccount || null;
     rows.push({
-      id: request?.id || txn.id,
-      request_id: request?.id || null,
+      id: txn.id,
+      request_id: null,
       transaction_id: txn.id,
-      status: request?.status || "pending",
+      status: "pending",
       reason_code: "other",
       prompt_text: Number(txn.amount || 0) > 0 ? "What was this deposit for?" : "What was this charge for?",
       created_at: null,

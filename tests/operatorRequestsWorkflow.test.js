@@ -42,6 +42,9 @@ test("Operator Requests retrieval is database bounded and supports large Needs R
   assert.match(fetchBody, /p_limit:\s*safePageSize/);
   assert.match(fetchBody, /p_offset:\s*\(safePage - 1\) \* safePageSize/);
   assert.doesNotMatch(fetchBody, /\.in\("transaction_id",\s*ids\)/);
+  assert.doesNotMatch(fetchBody, /await ensurePendingRequestForTransaction/);
+  assert.match(fetchBody, /id:\s*txn\.id/);
+  assert.match(fetchBody, /request_id:\s*null/);
 });
 
 test("Operator Request summary is durable and recomputed from authoritative SQL semantics", () => {
@@ -102,21 +105,59 @@ test("Home count uses summary endpoint first and prefetches first Operator Reque
   assert.match(client, /\/api\/bookkeeping\/operator-requests\/summary/);
   assert.match(home, /import \{ getOperatorRequestSummary, getOperatorRequests \}/);
   assert.match(home, /const summaryPromise = getOperatorRequestSummary\(businessId\)/);
-  assert.match(home, /const firstPagePromise = getOperatorRequests\(businessId, \{[\s\S]*page:\s*1,[\s\S]*page_size:\s*OPERATOR_REQUEST_PREFETCH_PAGE_SIZE/);
   assert.match(home, /const summary = await summaryPromise/);
   assert.match(home, /summary\?\.outstanding_count/);
+  assert.match(home, /if \(outstanding <= 0\) \{[\s\S]*return;/);
+  assert.match(home, /setOperatorRequestsPrefetching\(true\)/);
+  assert.match(home, /getOperatorRequests\(businessId, \{[\s\S]*page:\s*1,[\s\S]*page_size:\s*OPERATOR_REQUEST_PREFETCH_PAGE_SIZE/);
   assert.match(home, /operatorRequestPrefetchSeq/);
+  assert.match(home, /setOperatorRequestsPrefetchFailed\(true\)/);
   assert.doesNotMatch(home, /getOperatorRequests\(businessId, \{ page: 1, page_size: 15 \}/);
-  assert.match(home, /requests=\{isMockMode \|\| needsReviewRequests\.length \? needsReviewRequests : null\}/);
+  assert.match(home, /requests=\{isMockMode \|\| !operatorRequestsPrefetchFailed \? needsReviewRequests : null\}/);
+  assert.match(home, /rowsLoading=\{operatorRequestsPrefetching\}/);
   assert.match(home, /clarOpen \? \(/);
   assert.match(panel, /if \(!openExternally && !open\) return/);
   assert.match(card, /if \(!expanded \|\| !businessId\) return/);
+  assert.match(card, /if \(externalRequests\) return/);
+  assert.match(card, /rowsLoading = false/);
+  assert.match(card, /loadingList \|\| rowsLoading/);
+  assert.match(card, /animate-spin/);
+  assert.match(card, /Loading remaining transactions for your review\.\.\./);
   assert.match(card, /OPERATOR_REQUEST_PAGE_SIZE = 25/);
   assert.match(card, /const canLoadMore = !mockMode[\s\S]*requests\.length < effectiveCount[\s\S]*loadedPage < knownPageCount/);
   assert.match(card, /const loadMore = useCallback/);
   assert.match(card, /getOperatorRequests\(businessId, \{ page: nextPage, page_size: OPERATOR_REQUEST_PAGE_SIZE \}\)/);
   assert.doesNotMatch(card, /onScroll=\{handleListScroll\}/);
   assert.match(card, /`Load more \(\$\{requests\.length\} of \$\{effectiveCount\}\)`/);
+});
+
+test("Operator Request row loading preserves server order and appends Load More pages", () => {
+  const card = read("src/components/Bizzy/OperatorStatusCard.jsx");
+
+  assert.match(card, /const preserveRequestOrder = \(list = \[\]\) => \(Array\.isArray\(list\) \? \[\.{3}list\] : \[\]\)/);
+  assert.match(card, /\[\.\.\.\(current \|\| \[\]\), \.\.\.\(incoming \|\| \[\]\)\]\.forEach/);
+  assert.match(card, /if \(seen\.has\(key\)\) return;/);
+  assert.match(card, /merged\.push\(row\)/);
+  assert.match(card, /return merged/);
+  assert.doesNotMatch(card, /return da - db/);
+  assert.doesNotMatch(card, /sortRequestsByDate/);
+});
+
+test("unmaterialized Operator Request rows can create durable clarification requests lazily on answer", () => {
+  const service = read("src/services/bookkeeping/clarificationService.js");
+  const answerBody = service.slice(
+    service.indexOf("export async function processClarificationAnswers"),
+    service.indexOf("export default")
+  );
+
+  assert.match(answerBody, /if \(!effectiveReq && ans\.request_id === ans\.transaction_id\)/);
+  assert.match(answerBody, /createOrUpdateClarificationRequest\(\{[\s\S]*txn:\s*\{ id:\s*ans\.transaction_id \}/);
+  assert.match(answerBody, /meta:\s*\{ source:\s*"operator_requests_answer_submit" \}/);
+  assert.match(answerBody, /answered_by_user_id:\s*answeredByUserId/);
+  assert.match(answerBody, /status:\s*"answered"/);
+  assert.match(answerBody, /accounting_status:\s*"needs_review"/);
+  assert.doesNotMatch(answerBody, /final_qbo_account_id:\s*resolved/);
+  assert.doesNotMatch(answerBody, /post_after:\s*nowIso/);
 });
 
 test("summary endpoint is lightweight and does not materialize rows or provider calls", () => {
