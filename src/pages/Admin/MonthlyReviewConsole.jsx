@@ -513,7 +513,7 @@ export default function MonthlyReviewConsole() {
   }
 
   return (
-    <div className="min-h-screen bg-app px-4 py-5 pb-10 text-white md:px-8">
+    <div className="h-screen min-h-0 overflow-y-auto bg-app px-4 py-5 pb-10 text-white md:px-8">
       <div className="mx-auto max-w-[1680px] space-y-5">
         <header className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>

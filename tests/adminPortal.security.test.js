@@ -218,6 +218,7 @@ test("MonthlyReviewConsole remains the single reused admin monthly review implem
 
   assert.equal((main.match(/<MonthlyReviewConsole \/>/g) || []).length, 2);
   assert.match(monthlyUi, /safeFetch\(`\/api\/admin\/monthly-review\/businesses/);
+  assert.match(monthlyUi, /h-screen min-h-0 overflow-y-auto bg-app/);
   assert.doesNotMatch(read("src/pages/Admin/AdminLogin.jsx"), /transaction_categorizations|bank_transactions|clarification_requests/);
 });
 
