@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getOperatorRequests, submitClarificationAnswers } from "../../services/bookkeeping/bookkeepingClient";
 import { ArrowDownLeft, ArrowUpRight, Check } from "lucide-react";
+
+const OPERATOR_REQUEST_PAGE_SIZE = 25;
 
 export default function OperatorStatusCard({
   count = 0,
@@ -103,9 +105,21 @@ export default function OperatorStatusCard({
 
   const [requests, setRequests] = useState(initialRequests);
   const [loadingList, setLoadingList] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadedPage, setLoadedPage] = useState(initialRequests.length ? 1 : 0);
   const [answers, setAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [submittingId, setSubmittingId] = useState(null);
+  const scrollElRef = useRef(null);
+
+  const mergeRequests = useCallback((current = [], incoming = []) => {
+    const byId = new Map();
+    [...current, ...(incoming || [])].forEach((row) => {
+      const id = row?.id || row?.transaction_id;
+      if (id) byId.set(String(id), row);
+    });
+    return sortRequestsByDate(Array.from(byId.values()));
+  }, []);
 
   useEffect(() => {
     if (!Array.isArray(externalRequests)) return;
@@ -117,6 +131,7 @@ export default function OperatorStatusCard({
       if (signature === prevSig) return prev;
       return sortRequestsByDate(externalRequests || []);
     });
+    setLoadedPage(externalRequests.length ? 1 : 0);
     if (externalRequests.length) {
       setExpanded((prev) => prev || true);
     }
@@ -134,10 +149,11 @@ export default function OperatorStatusCard({
     const load = async () => {
       setLoadingList(true);
       try {
-        const res = await getOperatorRequests(businessId, { page: 1, page_size: 25 });
+        const res = await getOperatorRequests(businessId, { page: 1, page_size: OPERATOR_REQUEST_PAGE_SIZE });
         if (!alive) return;
         const rows = res?.rows || res || [];
         setRequests(sortRequestsByDate(rows));
+        setLoadedPage(rows.length ? 1 : 0);
       } catch (e) {
         console.warn("[OperatorStatusCard] fetch clarifications failed", e);
       } finally {
@@ -149,6 +165,39 @@ export default function OperatorStatusCard({
       alive = false;
     };
   }, [expanded, businessId, mockMode, mockRequests, externalRequests]);
+
+  const knownPageCount = Math.max(1, Math.ceil(effectiveCount / OPERATOR_REQUEST_PAGE_SIZE));
+  const canLoadMore = !mockMode
+    && expanded
+    && businessId
+    && requests.length > 0
+    && requests.length < effectiveCount
+    && loadedPage < knownPageCount;
+
+  const loadMore = useCallback(async () => {
+    if (!canLoadMore || loadingList || loadingMore) return;
+    const nextPage = Math.max(loadedPage + 1, 2);
+    setLoadingMore(true);
+    try {
+      const res = await getOperatorRequests(businessId, { page: nextPage, page_size: OPERATOR_REQUEST_PAGE_SIZE });
+      const rows = res?.rows || res || [];
+      setRequests((prev) => mergeRequests(prev, rows));
+      setLoadedPage(Number(res?.meta?.page || nextPage));
+    } catch (e) {
+      console.warn("[OperatorStatusCard] fetch more clarifications failed", e);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [businessId, canLoadMore, loadedPage, loadingList, loadingMore, mergeRequests]);
+
+  const handleListScroll = useCallback((event) => {
+    const el = event.currentTarget;
+    if (!el || !canLoadMore || loadingMore) return;
+    const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (remaining < 72) {
+      loadMore();
+    }
+  }, [canLoadMore, loadMore, loadingMore]);
 
   const handleChip = (id, chip) => {
     setAnswers((prev) => {
@@ -295,6 +344,8 @@ export default function OperatorStatusCard({
           {error ? <div className="mb-2 text-xs text-amber-100/85">{error}</div> : null}
           {showList && (
             <div
+              ref={scrollElRef}
+              onScroll={handleListScroll}
               className="space-y-2 max-h-[300px] overflow-y-auto pr-1 pb-12 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-900/60"
               style={{ scrollbarColor: "rgba(107,114,128,0.85) rgba(26,28,30,0.7)" }}
             >
@@ -400,6 +451,20 @@ export default function OperatorStatusCard({
                   </div>
                 );
               })}
+              {canLoadMore ? (
+                <button
+                  type="button"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/65 hover:text-white hover:border-white/20 transition disabled:opacity-50"
+                >
+                  {loadingMore ? "Loading more…" : `Load more (${requests.length} of ${effectiveCount})`}
+                </button>
+              ) : requests.length < effectiveCount ? (
+                <div className="text-center text-xs text-white/45 py-2">
+                  Showing {requests.length} of {effectiveCount}
+                </div>
+              ) : null}
               <div className="h-10" aria-hidden />
             </div>
           )}

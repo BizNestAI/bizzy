@@ -92,7 +92,7 @@ test("Operator Request summary business_id conflict target is unambiguous in suc
   assert.match(errorUpsert, /last_error = left\(sqlerrm, 1000\)/);
 });
 
-test("Home count uses summary endpoint and does not fetch Operator Request rows before expansion", () => {
+test("Home count uses summary endpoint first and prefetches first Operator Request page in the background", () => {
   const home = read("src/pages/Bizzy/ChatHome.jsx");
   const client = read("src/services/bookkeeping/bookkeepingClient.js");
   const panel = read("src/components/Bizzy/OperatorRequestsPanel.jsx");
@@ -100,15 +100,22 @@ test("Home count uses summary endpoint and does not fetch Operator Request rows 
 
   assert.match(client, /export async function getOperatorRequestSummary/);
   assert.match(client, /\/api\/bookkeeping\/operator-requests\/summary/);
-  assert.match(home, /import \{ getOperatorRequestSummary \}/);
+  assert.match(home, /import \{ getOperatorRequestSummary, getOperatorRequests \}/);
   assert.match(home, /const summary = await getOperatorRequestSummary\(businessId\)/);
   assert.match(home, /summary\?\.outstanding_count/);
+  assert.match(home, /setOperatorOutstandingCount\(outstanding\);[\s\S]*if \(outstanding > 0\) \{[\s\S]*getOperatorRequests\(businessId, \{ page: 1, page_size: 25 \}\)/);
+  assert.match(home, /operatorRequestPrefetchSeq/);
   assert.doesNotMatch(home, /getOperatorRequests\(businessId, \{ page: 1, page_size: 15 \}/);
-  assert.match(home, /requests=\{isMockMode \? needsReviewRequests : null\}/);
+  assert.match(home, /requests=\{isMockMode \|\| needsReviewRequests\.length \? needsReviewRequests : null\}/);
   assert.match(home, /clarOpen \? \(/);
   assert.match(panel, /if \(!openExternally && !open\) return/);
   assert.match(card, /if \(!expanded \|\| !businessId\) return/);
-  assert.match(card, /getOperatorRequests\(businessId, \{ page: 1, page_size: 25 \}\)/);
+  assert.match(card, /OPERATOR_REQUEST_PAGE_SIZE = 25/);
+  assert.match(card, /const canLoadMore = !mockMode[\s\S]*requests\.length < effectiveCount[\s\S]*loadedPage < knownPageCount/);
+  assert.match(card, /const loadMore = useCallback/);
+  assert.match(card, /getOperatorRequests\(businessId, \{ page: nextPage, page_size: OPERATOR_REQUEST_PAGE_SIZE \}\)/);
+  assert.match(card, /onScroll=\{handleListScroll\}/);
+  assert.match(card, /`Load more \(\$\{requests\.length\} of \$\{effectiveCount\}\)`/);
 });
 
 test("summary endpoint is lightweight and does not materialize rows or provider calls", () => {
