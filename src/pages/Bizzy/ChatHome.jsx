@@ -15,6 +15,8 @@ import { CHAT_BAR_MAX_W, CHAT_BAR_VW } from "../../config/chatLayout";
 import { getDemoMode, shouldUseDemoData, getDemoData } from "../../services/demo/demoClient";
 import { getOperatorRequestSummary, getOperatorRequests } from "../../services/bookkeeping/bookkeepingClient.js";
 
+const OPERATOR_REQUEST_PREFETCH_PAGE_SIZE = 25;
+
 export default function ChatHome() {
   return <ChatHomeInner />;
 }
@@ -113,22 +115,27 @@ function ChatHomeInner() {
     const loadSeq = operatorRequestPrefetchSeq.current + 1;
     operatorRequestPrefetchSeq.current = loadSeq;
     try {
-      const summary = await getOperatorRequestSummary(businessId);
+      const summaryPromise = getOperatorRequestSummary(businessId);
+      const firstPagePromise = getOperatorRequests(businessId, {
+        page: 1,
+        page_size: OPERATOR_REQUEST_PREFETCH_PAGE_SIZE,
+      });
+
+      firstPagePromise
+        .then((res) => {
+          if (operatorRequestPrefetchSeq.current !== loadSeq) return;
+          setNeedsReviewRequests(res?.rows || res || []);
+        })
+        .catch((err) => {
+          if (operatorRequestPrefetchSeq.current !== loadSeq) return;
+          console.warn("[OperatorRequests] prefetch failed", err);
+        });
+
+      const summary = await summaryPromise;
       if (operatorRequestPrefetchSeq.current !== loadSeq) return;
       const outstanding = Number(summary?.outstanding_count || 0);
-      setNeedsReviewRequests([]);
       setOperatorOutstandingCount(outstanding);
-      if (outstanding > 0) {
-        getOperatorRequests(businessId, { page: 1, page_size: 25 })
-          .then((res) => {
-            if (operatorRequestPrefetchSeq.current !== loadSeq) return;
-            setNeedsReviewRequests(res?.rows || res || []);
-          })
-          .catch((err) => {
-            if (operatorRequestPrefetchSeq.current !== loadSeq) return;
-            console.warn("[OperatorRequests] prefetch failed", err);
-          });
-      }
+      if (outstanding <= 0) setNeedsReviewRequests([]);
     } catch (err) {
       setClarError(err?.message || "Could not load Operator Requests.");
     } finally {

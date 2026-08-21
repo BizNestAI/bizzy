@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { getOperatorRequests, submitClarificationAnswers } from "../../services/bookkeeping/bookkeepingClient";
 import { ArrowDownLeft, ArrowUpRight, Check } from "lucide-react";
 
@@ -110,7 +110,6 @@ export default function OperatorStatusCard({
   const [answers, setAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [submittingId, setSubmittingId] = useState(null);
-  const scrollElRef = useRef(null);
 
   const mergeRequests = useCallback((current = [], incoming = []) => {
     const byId = new Map();
@@ -189,15 +188,6 @@ export default function OperatorStatusCard({
       setLoadingMore(false);
     }
   }, [businessId, canLoadMore, loadedPage, loadingList, loadingMore, mergeRequests]);
-
-  const handleListScroll = useCallback((event) => {
-    const el = event.currentTarget;
-    if (!el || !canLoadMore || loadingMore) return;
-    const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (remaining < 72) {
-      loadMore();
-    }
-  }, [canLoadMore, loadMore, loadingMore]);
 
   const handleChip = (id, chip) => {
     setAnswers((prev) => {
@@ -344,8 +334,6 @@ export default function OperatorStatusCard({
           {error ? <div className="mb-2 text-xs text-amber-100/85">{error}</div> : null}
           {showList && (
             <div
-              ref={scrollElRef}
-              onScroll={handleListScroll}
               className="space-y-2 max-h-[300px] overflow-y-auto pr-1 pb-12 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-900/60"
               style={{ scrollbarColor: "rgba(107,114,128,0.85) rgba(26,28,30,0.7)" }}
             >
