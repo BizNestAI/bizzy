@@ -5,6 +5,7 @@ import { supabase } from "../../services/supabaseClient.js";
 import { resendSignupConfirmation } from "../../services/authService.js";
 import { clearStoredBusinessState } from "../../services/authSessionCleanup.js";
 import { useAuth } from "../../context/AuthContext.jsx";
+import { getAdminRoutePath, getCurrentApplicationSurface, isProductionAdminSurface } from "../../utils/applicationSurface.js";
 import bizzyLogo from "../../assets/bizzy-logo.png";
 
 const BG =
@@ -48,6 +49,7 @@ function classifyError(params, error) {
 export default function EmailConfirmation() {
   const navigate = useNavigate();
   const { user } = useAuth() || {};
+  const applicationSurface = getCurrentApplicationSurface();
   const [state, setState] = useState({ status: "loading", message: "" });
   const [resendEmail, setResendEmail] = useState("");
   const [resendStatus, setResendStatus] = useState("");
@@ -128,6 +130,13 @@ export default function EmailConfirmation() {
 
   const goContinue = async () => {
     const { data } = await supabase.auth.getSession();
+    if (isProductionAdminSurface(applicationSurface)) {
+      navigate(data?.session || user ? getAdminRoutePath("monthlyReview", applicationSurface) : getAdminRoutePath("login", applicationSurface), {
+        replace: true,
+        state: { emailConfirmed: isSuccess },
+      });
+      return;
+    }
     if (data?.session || user) {
       navigate("/setup", { replace: true });
       return;
@@ -306,7 +315,7 @@ export default function EmailConfirmation() {
                     Return to Signup
                   </Link>
                   <Link
-                    to="/login"
+                    to={isProductionAdminSurface(applicationSurface) ? getAdminRoutePath("login", applicationSurface) : "/login"}
                     className="inline-flex w-full items-center justify-center rounded-full border border-white/[0.13] bg-white/[0.035] py-3 text-sm font-semibold text-white/[0.88] transition hover:border-white/24 hover:bg-white/[0.065]"
                   >
                     Return to Login
@@ -316,7 +325,7 @@ export default function EmailConfirmation() {
 
               {isSuccess ? (
                 <Link
-                  to="/login"
+                  to={isProductionAdminSurface(applicationSurface) ? getAdminRoutePath("login", applicationSurface) : "/login"}
                   state={{ emailConfirmed: true }}
                   className="block text-center text-sm font-semibold text-white transition hover:text-emerald-100"
                 >

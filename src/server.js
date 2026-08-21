@@ -74,6 +74,7 @@ import { buildSafeErrorResponse, redactErrorForLog } from "./api/_shared/safeErr
 
 /* 🔹 NEW: Hero insights router */
 import heroInsightsRouter from "./api/hero-insights/router.js";
+import adminRouter from "./api/admin/admin.routes.js";
 import monthlyReviewAdminRouter from "./api/admin/monthlyReview.routes.js";
 
 const app = express();
@@ -104,6 +105,7 @@ if (process.env.NODE_ENV !== "production") {
 const allowlist = (() => {
   const list = [
     "https://app.bizzios.com",
+    "https://admin.bizzios.com",
     "https://bizzios.com",
     "https://www.bizzios.com",
     "https://bizzi-ten.vercel.app",
@@ -284,6 +286,7 @@ app.use("/api/tax", requireAuth, taxRouter);
 app.use("/api/hero-insights", heroInsightsRouter);
 
 /* -------------------------------- Internal Admin -------------------------------- */
+app.use("/api/admin", adminRouter);
 app.use("/api/admin/monthly-review", monthlyReviewAdminRouter);
 
 /* ------------------------------- Billing REST (non-webhook) ------------------------------ */

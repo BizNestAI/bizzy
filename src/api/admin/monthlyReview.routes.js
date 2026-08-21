@@ -24,6 +24,7 @@ import {
   BookkeepingApprovalError,
 } from "../../services/bookkeeping/bookkeepingApprovalService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../services/bookkeeping/operatorRequestSummaryService.js";
+import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../_shared/internalStaffAuth.js";
 
 const router = Router();
 
@@ -37,16 +38,17 @@ const SECTION_DEFS = [
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 router.use(requireAuth);
-router.use(requireInternalAdmin);
+router.use(requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES));
 
 router.get("/me", async (req, res) => {
   res.json({
     ok: true,
     user: { id: req.user.id, email: req.user.email, internal: true },
+    staff: { user_id: req.internalStaff.userId, role: req.internalStaff.role, active: true },
     safeguards: {
       route: "/api/admin/monthly-review",
       auth: "Supabase auth required",
-      authorization: "Bizzi internal admin only",
+      authorization: "Active Bizzi internal staff only",
       customer_access: false,
     },
   });
@@ -1190,37 +1192,6 @@ router.get("/runs/:runId/export", async (req, res) => {
   }
 });
 
-async function requireInternalAdmin(req, res, next) {
-  try {
-    const email = String(req.user?.email || "").toLowerCase();
-    const allowedEmails = new Set(
-      String(process.env.BIZZY_INTERNAL_ADMIN_EMAILS || process.env.BIZZY_ADMIN_EMAILS || "")
-        .split(",")
-        .map((item) => item.trim().toLowerCase())
-        .filter(Boolean)
-    );
-
-    if (allowedEmails.has(email)) return next();
-
-    const { data, error } = await supabase
-      .from("user_profiles")
-      .select("email")
-      .eq("id", req.user.id)
-      .maybeSingle();
-    if (error) throw error;
-
-    const profileEmail = String(data?.email || email).toLowerCase();
-    if (allowedEmails.has(profileEmail)) {
-      return next();
-    }
-
-    return res.status(403).json({ ok: false, error: "forbidden_internal_admin_only" });
-  } catch (e) {
-    console.error("[monthly-review] admin check failed", e?.message || e);
-    return res.status(403).json({ ok: false, error: "forbidden_internal_admin_only" });
-  }
-}
-
 function normalizeMonth(value) {
   const raw = String(value || "").trim();
   const match = raw.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
@@ -1394,13 +1365,6 @@ async function resolveInternalReviewer(email) {
   const normalizedEmail = String(email || "").trim().toLowerCase();
   if (!normalizedEmail) return null;
 
-  const allowedEmails = new Set(
-    String(process.env.BIZZY_INTERNAL_ADMIN_EMAILS || process.env.BIZZY_ADMIN_EMAILS || "")
-      .split(",")
-      .map((item) => item.trim().toLowerCase())
-      .filter(Boolean)
-  );
-
   const { data, error } = await supabase
     .from("user_profiles")
     .select("id,email")
@@ -1409,8 +1373,17 @@ async function resolveInternalReviewer(email) {
   if (error) throw error;
 
   const profileEmail = String(data?.email || normalizedEmail).toLowerCase();
-  if (allowedEmails.has(profileEmail)) {
-    return { id: data?.id || null, email: profileEmail, role: "internal_admin" };
+  if (!data?.id) return null;
+
+  const { data: staff, error: staffErr } = await supabase
+    .from("internal_staff_users")
+    .select("user_id,role,active")
+    .eq("user_id", data.id)
+    .maybeSingle();
+  if (staffErr) throw staffErr;
+
+  if (staff?.active && MONTHLY_REVIEW_STAFF_ROLES.includes(staff.role)) {
+    return { id: data.id, email: profileEmail, role: staff.role };
   }
   return null;
 }

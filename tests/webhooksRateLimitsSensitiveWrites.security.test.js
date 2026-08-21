@@ -275,10 +275,12 @@ test("Gmail OAuth state has no production default secret and enforces signed exp
 
 test("internal monthly review admin does not trust self-editable user profile role", () => {
   assert.match(adminSource, /router\.use\(requireAuth\)/);
-  assert.match(adminSource, /router\.use\(requireInternalAdmin\)/);
+  assert.match(adminSource, /router\.use\(requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)\)/);
+  assert.match(adminSource, /from\("internal_staff_users"\)/);
+  assert.doesNotMatch(adminSource, /router\.use\(requireInternalAdmin\)/);
   assert.doesNotMatch(adminSource, /admin", "internal_admin", "bizzy_admin", "super_admin"/);
   assert.doesNotMatch(adminSource, /const role = String\(data\?\.role/);
   assert.doesNotMatch(adminSource, /\.select\("id,email,role"\)/);
   assert.doesNotMatch(adminSource, /\.select\("role,email"\)/);
-  assert.match(adminSource, /allowedEmails\.has\(profileEmail\)/);
+  assert.doesNotMatch(adminSource, /allowedEmails\.has\(profileEmail\)/);
 });

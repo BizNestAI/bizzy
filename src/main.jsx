@@ -49,6 +49,9 @@ import SocialCaptionPage from "./pages/Marketing/SocialCaptionPage.jsx";
 import CompanionPage from "./pages/Companion/CompanionPage.jsx";
 import JobsDashboard from "./pages/LeadsJobs/JobsDashboard.jsx";
 import MonthlyReviewConsole from "./pages/Admin/MonthlyReviewConsole.jsx";
+import AdminLogin from "./pages/Admin/AdminLogin.jsx";
+import AdminProtectedRoute from "./components/Admin/AdminProtectedRoute.jsx";
+import { getAdminRoutePath, getCurrentApplicationSurface } from "./utils/applicationSurface.js";
 
 const AffordabilityPage = React.lazy(() => import("./pages/accounting/Affordability.jsx"));
 const ScenariosPage = React.lazy(() => import("./pages/accounting/Scenarios.jsx"));
@@ -122,6 +125,14 @@ function RootRedirect() {
   return <Navigate to="/dashboard/bizzi/chat" replace />;
 }
 
+function AdminRootRedirect() {
+  return (
+    <AdminProtectedRoute>
+      <Navigate to={getAdminRoutePath("monthlyReview", applicationSurface)} replace />
+    </AdminProtectedRoute>
+  );
+}
+
 function LegacyDocRedirect() {
   const { id } = useParams();
   const location = useLocation();
@@ -151,6 +162,11 @@ function ScenariosPageWrapper() {
   );
 }
 
+const applicationSurface = getCurrentApplicationSurface();
+const renderCustomerRoutes = applicationSurface !== "admin";
+const renderAdminRoutes = applicationSurface === "admin" || applicationSurface === "development";
+const renderDevelopmentAdminRoutes = applicationSurface === "development";
+
 /* -------------------------- Render -------------------------- */
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
@@ -158,6 +174,25 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <AuthProvider>
         <PeriodProvider syncUrl writeUrl autoSnapToCurrentMonth>
           <Routes>
+            {renderAdminRoutes && (
+              <>
+                <Route path={getAdminRoutePath("root", applicationSurface)} element={<AdminRootRedirect />} />
+                <Route path={getAdminRoutePath("login", applicationSurface)} element={<AdminLogin />} />
+                <Route path="/auth/confirm" element={<EmailConfirmation />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
+                <Route
+                  path={getAdminRoutePath("monthlyReview", applicationSurface)}
+                  element={
+                    <AdminProtectedRoute>
+                      <MonthlyReviewConsole />
+                    </AdminProtectedRoute>
+                  }
+                />
+              </>
+            )}
+
+            {renderCustomerRoutes && (
+              <>
             {/* Public / auth */}
             <Route path="/" element={<RootRedirect />} />
             <Route path="/login" element={<Login />} />
@@ -278,8 +313,21 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               <Route path="settings" element={<SettingsHome />} />
 
               {/* Internal Admin */}
-              <Route path="admin/monthly-review" element={<MonthlyReviewConsole />} />
+              {renderDevelopmentAdminRoutes && (
+                <Route
+                  path="admin/monthly-review"
+                  element={
+                    <AdminProtectedRoute>
+                      <MonthlyReviewConsole />
+                    </AdminProtectedRoute>
+                  }
+                />
+              )}
             </Route>
+              </>
+            )}
+
+            <Route path="*" element={<Navigate to={applicationSurface === "admin" ? "/" : "/dashboard/bizzi/chat"} replace />} />
           </Routes>
         </PeriodProvider>
       </AuthProvider>

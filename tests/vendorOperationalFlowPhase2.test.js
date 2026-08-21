@@ -153,7 +153,8 @@ test("Rules and Monthly Review show canonical Vendor Activity rather than only l
   assert.match(rules, /useExistingCanonicalQboVendor/);
   assert.doesNotMatch(rules, /getQboVendorCreations\(businessId/);
 
-  assert.match(monthlyRoute, /router\.use\(requireInternalAdmin\)/);
+  assert.match(monthlyRoute, /router\.use\(requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)\)/);
+  assert.doesNotMatch(monthlyRoute, /router\.use\(requireInternalAdmin\)/);
   assert.match(monthlyRoute, /canonical_vendors: canonicalVendors/);
   assert.match(monthlyRoute, /canonical-vendors\/:canonicalVendorId\/use-existing/);
   assert.match(monthlyUi, /CanonicalVendorReviewPanel/);

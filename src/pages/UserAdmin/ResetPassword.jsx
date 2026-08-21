@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { AlertTriangle, ArrowRight, CheckCircle2, Eye, EyeOff, Lock, Mail, RefreshCw } from "lucide-react";
 import { supabase } from "../../services/supabaseClient.js";
 import bizzyLogo from "../../assets/bizzy-logo.png";
+import { getAdminRoutePath, getCurrentApplicationSurface, isProductionAdminSurface } from "../../utils/applicationSurface.js";
 
 const BG =
   "radial-gradient(820px 520px at 50% 34%, rgba(255,255,255,0.045), transparent 66%)," +
@@ -68,6 +69,8 @@ export default function ResetPassword() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
+  const applicationSurface = getCurrentApplicationSurface();
+  const loginPath = isProductionAdminSurface(applicationSurface) ? getAdminRoutePath("login", applicationSurface) : "/login";
 
   useEffect(() => {
     const focusTimer = window.setTimeout(() => {
@@ -396,7 +399,7 @@ export default function ResetPassword() {
 
             {mode === "complete" ? (
               <Link
-                to="/login"
+                to={loginPath}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-full border border-emerald-300/32 bg-[linear-gradient(180deg,rgba(32,216,155,0.18),rgba(19,185,129,0.10))] py-3 text-sm font-semibold text-emerald-50 shadow-[0_18px_45px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-emerald-300/48 hover:bg-emerald-300/[0.16]"
               >
                 Return to Login <ArrowRight className="h-4 w-4" />
@@ -412,7 +415,7 @@ export default function ResetPassword() {
                       ? "Use at least 8 characters for your new password."
                       : "Did not receive the email? Check your spam folder or try again after a minute."}
                   </p>
-                  <Link to="/login" className="font-semibold text-white transition hover:text-emerald-100">
+                  <Link to={loginPath} className="font-semibold text-white transition hover:text-emerald-100">
                     Back to login
                   </Link>
                 </div>
