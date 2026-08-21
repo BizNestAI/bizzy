@@ -10,6 +10,7 @@ import {
   processPendingBookkeepingRequests,
   processPendingBookkeepingRequestsUntilIdle,
 } from "../src/services/bookkeeping/backgroundBookkeepingProcessingService.js";
+import { CATEGORIZATION_POLICY_VERSION } from "../src/services/bookkeeping/categorizationEvidencePolicy.js";
 
 const root = process.cwd();
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
@@ -394,6 +395,7 @@ test("background worker passes provider-read-only COA mode and records unresolve
   assert.equal(supabase.store.transaction_categorizations[0].status, "needs_review");
   assert.equal(req.blocked_reason, "canonical_account_requires_review");
   assert.ok(req.evidence_fingerprint);
+  assert.match(req.evidence_fingerprint, new RegExp(CATEGORIZATION_POLICY_VERSION));
   assert.ok(req.blocked_until);
 });
 

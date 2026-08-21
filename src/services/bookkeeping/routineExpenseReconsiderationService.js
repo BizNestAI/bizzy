@@ -3,7 +3,13 @@ import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "./autoPost
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
 import { canAutoHandle, isReviewAccount } from "./autoHandlingPolicy.js";
 import { resolveCanonicalVendorForTransaction } from "./canonicalVendorService.js";
-import { validateCanonicalQboAccountForPromotion } from "./canonicalQboAccountResolver.js";
+import { resolveCanonicalQboAccount, validateCanonicalQboAccountForPromotion } from "./canonicalQboAccountResolver.js";
+import { resolveIntentToCanonicalKey } from "./canonicalCoaRegistry.js";
+import { getUniversalVendorHintForTransaction } from "./universalVendorHintMatcher.js";
+import {
+  isStrongUniversalVendorEvidence,
+  withCategorizationPolicyVersion,
+} from "./categorizationEvidencePolicy.js";
 
 const MAX_RECONSIDERATION_LIMIT = 500;
 
@@ -230,6 +236,16 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
   }
 
   const catTransactionIds = catRows.map((row) => row.transaction_id).filter(Boolean);
+  const { data: clarRows } = await db
+    .from("clarification_requests")
+    .select("transaction_id,status")
+    .eq("business_id", businessId)
+    .in("transaction_id", catTransactionIds);
+  const answeredAwaitingReview = new Set(
+    (clarRows || [])
+      .filter((row) => String(row?.status || "").toLowerCase() === "answered")
+      .map((row) => String(row.transaction_id))
+  );
   let txQuery = db
     .from("bank_transactions")
     .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,signed_amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel,pending,accounting_review_required,accounting_review_reason,canonical_vendor_id,qbo_entity_type,qbo_entity_id,is_archived")
@@ -263,8 +279,153 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       skipped += 1;
       continue;
     }
+    if (answeredAwaitingReview.has(String(cat.transaction_id))) {
+      skipped += 1;
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: "answered_awaiting_accountant_review" });
+      continue;
+    }
     const meta = cat.meta || {};
     const checkHit = isCheck(bankTxn);
+    const universalHint = await getUniversalVendorHintForTransaction({ bankTxn });
+    if (!checkHit.is_check && isStrongUniversalVendorEvidence(universalHint)) {
+      const canonicalKey = resolveIntentToCanonicalKey(universalHint.primary_intent);
+      const canonicalResolution = await resolveCanonicalQboAccount({
+        businessId,
+        intent: universalHint.primary_intent,
+        transactionId: cat.transaction_id,
+        source: options.source || "backlog_reconsideration",
+        allowCreate: false,
+        dependencies: {
+          ...(dependencies || {}),
+          supabase: db,
+        },
+      });
+      const account =
+        canonicalResolution?.ok && canonicalResolution?.account?.id && canonicalResolution?.review_required !== true
+          ? {
+              id: String(canonicalResolution.account.id),
+              name: canonicalResolution.account.name || canonicalResolution.account.fullyQualifiedName || null,
+            }
+          : { id: null, name: null };
+      const vendorEvidence = await resolveVendorEvidence({
+        db,
+        businessId,
+        bankTxn,
+        meta: {
+          ...meta,
+          suggestion_source: "universal_hint",
+          canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+        },
+      });
+      const canonicalAccountResolved = Boolean(account.id && account.name);
+      const decision = canAutoHandle(
+        bankTxn,
+        {
+          source: "universal_hint",
+          confidence: universalHint.confidence || "high",
+          accountId: account.id,
+          accountName: account.name,
+          taxonomyType: meta.taxonomy_type || null,
+          isCheck: false,
+          meta,
+          canonicalAccountResolved,
+          canonicalAccountKey: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+          canonicalAccountReviewRequired: canonicalAccountResolved !== true,
+          canonicalVendorId: vendorEvidence.canonicalVendorId || null,
+          canonicalVendorReliable: vendorEvidence.canonicalVendorReliable === true,
+          weakVendorEvidence: vendorEvidence.weakVendorEvidence === true,
+          merchantEvidenceStrong:
+            vendorEvidence.merchantEvidenceStrong === true ||
+            Boolean(bankTxn.merchant_entity_id || bankTxn.merchant_name || bankTxn.counterparty_name),
+          inBookkeepingScope: true,
+          reconsiderationSource: options.source || "backlog_reconsideration",
+        },
+        {}
+      );
+      const decisionMeta = withCategorizationPolicyVersion({
+        ...meta,
+        suggestion_source: "universal_hint",
+        universal_bootstrap_mode: true,
+        universal_hint: {
+          key: universalHint.matched_rule_key,
+          canonical_vendor: universalHint.canonical_vendor,
+          primary_intent: universalHint.primary_intent,
+          intents: universalHint.intents,
+          confidence: universalHint.confidence,
+          match_type: universalHint.match_type || null,
+          matched_value: universalHint.matched_value || null,
+          canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+          canonical_account_name: canonicalResolution?.canonical?.preferred_account_name || null,
+          canonical_resolution_status: canonicalResolution?.status || null,
+        },
+        canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+        canonical_coa_resolved: canonicalAccountResolved,
+        canonical_account_review_required: canonicalAccountResolved !== true,
+        canonical_setup_required: canonicalAccountResolved !== true,
+        canonical_setup_required_reason: canonicalResolution?.reason || null,
+        canonical_vendor_id: vendorEvidence.canonicalVendorId || null,
+        canonical_vendor_reliable: vendorEvidence.canonicalVendorReliable === true,
+        merchant_evidence_strong: decision.evidence?.merchantEvidenceStrong === true,
+        safe_to_auto_handle: decision.eligible === true,
+        safe_to_auto_post: decision.eligible === true,
+        auto_handle_decision: {
+          eligible: decision.eligible === true,
+          confidence: decision.confidence,
+          source: decision.source,
+          reason: decision.reason,
+          reconsideration_source: options.source || "backlog_reconsideration",
+          at: nowIso,
+        },
+      });
+      if (decision.eligible === true && account.id && account.name) {
+        const postAfter = computePostAfterForAutoPost(autoPostEnabled, Number(process.env.BOOKS_POST_GRACE_HOURS || 24));
+        updates.push({
+          business_id: businessId,
+          transaction_id: cat.transaction_id,
+          suggested_qbo_account_id: account.id,
+          suggested_qbo_account_name: account.name,
+          suggested_canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+          final_qbo_account_id: account.id,
+          final_qbo_account_name: account.name,
+          final_canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+          confidence: universalHint.confidence || "high",
+          status: "auto_approved",
+          post_after: postAfter,
+          decided_by: "bizzi",
+          decided_at: nowIso,
+          meta: {
+            ...decisionMeta,
+            auto_approve_reason: "routine_expense_fully_resolved",
+            auto_handled_reason: decision.reason,
+          },
+          updated_at: nowIso,
+        });
+        promoted += 1;
+        rows.push({ transaction_id: cat.transaction_id, promoted: true, reason: decision.reason });
+        continue;
+      }
+      updates.push({
+        business_id: businessId,
+        transaction_id: cat.transaction_id,
+        suggested_qbo_account_id: account.id || null,
+        suggested_qbo_account_name: account.name || null,
+        suggested_canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+        final_qbo_account_id: null,
+        final_qbo_account_name: null,
+        final_canonical_account_key: null,
+        confidence: universalHint.confidence || "high",
+        status: "needs_review",
+        post_after: null,
+        meta: {
+          ...decisionMeta,
+          auto_handled_reason: decision.reason || canonicalResolution?.reason || "canonical_setup_required",
+        },
+        updated_at: nowIso,
+      });
+      skipped += 1;
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: decision.reason || canonicalResolution?.reason || "canonical_setup_required" });
+      continue;
+    }
     const canonicalAccount = await resolveCanonicalAccountEvidence({
       businessId,
       db,
@@ -342,10 +503,10 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         confidence: cat.confidence || meta.confidence || "medium",
         status: cat.status || "needs_review",
         post_after: null,
-        meta: {
+        meta: withCategorizationPolicyVersion({
           ...decisionMeta,
           auto_handled_reason: decision.reason || canonicalAccount.reason || "review_required",
-        },
+        }),
         updated_at: nowIso,
       });
       continue;
@@ -366,11 +527,11 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       post_after: postAfter,
       decided_by: "bizzi",
       decided_at: nowIso,
-      meta: {
+      meta: withCategorizationPolicyVersion({
         ...decisionMeta,
         auto_approve_reason: decisionMeta.auto_approve_reason || "routine_expense_fully_resolved",
         auto_handled_reason: decision.reason,
-      },
+      }),
       updated_at: nowIso,
     });
     promoted += 1;

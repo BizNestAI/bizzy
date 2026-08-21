@@ -3,6 +3,8 @@
 // Keep this pure JS: no network, no DB. Intent-only hints to be mapped later.
 
 const TRUE_NOISE_PREFIXES = [
+  /^apl\s*pay\s+/i,
+  /^apple\s*pay\s+/i,
   /^sq\s*\*/i,
   /^square\s*\*/i,
   /^clover\s*\*/i,
@@ -17,6 +19,7 @@ const PHRASE_NORMALIZERS = [
   { pattern: /\b(uber)\s*trip\b/i, replace: "$1" },
   { pattern: /\b(lyft)\s*ride\b/i, replace: "$1" },
   { pattern: /\bapple\.?com\/?bill\b/i, replace: "apple" },
+  { pattern: /\bmicro\s*mart\b/i, replace: "micro mart" },
 ];
 
 export function normalizeVendorString(input = "") {
@@ -28,6 +31,7 @@ export function normalizeVendorString(input = "") {
     s = s.replace(pattern, replace);
   });
   s = s.replace(/[^a-z0-9\s]/g, " ");
+  s = s.replace(/\b\d{5,}[a-z]*\b/g, " ");
   s = s.replace(/\s+/g, " ").trim();
   return s;
 }
@@ -358,6 +362,9 @@ addVendors(
     "Uber Eats",
     "Crumbl",
     "Micro Mart",
+    "Micromart",
+    "Rancho Tacos",
+    "Two Scoops Creamery",
     "Short Stop",
     "PoppyCox",
   ],

@@ -145,6 +145,23 @@ test("parking vendors map to Parking/Tolls instead of broad transportation accou
 
   const mapped = mapIntentToCoa({ intent: parkMobile.primary_intent, coaAccounts: coa });
   assert.equal(mapped.qbo_account_name, "Parking/Tolls");
+  assert.notEqual(mapped.qbo_account_name, "Transportation");
+});
+
+test("rideshare canonical intent prefers Transportation over vendor-specific Lyft/Uber account", () => {
+  for (const name of ["Uber Trip", "Lyft Ride", "Lime"]) {
+    const hint = hintFor(name);
+    assert.equal(hint.primary_intent, "transportation", name);
+    const mapped = mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa });
+    assert.equal(mapped.qbo_account_name, "Transportation", name);
+    assert.notEqual(mapped.qbo_account_name, "Lyft/Uber", name);
+  }
+
+  const vendorSpecificOnly = mapIntentToCoa({
+    intent: "transportation",
+    coaAccounts: [{ id: "rideshare", name: "Lyft/Uber", type: "Expense" }],
+  });
+  assert.equal(vendorSpecificOnly, null);
 });
 
 test("known restaurant vendors map to Meals instead of Lyft/Uber", () => {
@@ -154,6 +171,8 @@ test("known restaurant vendors map to Meals instead of Lyft/Uber", () => {
     "Chipotle Mexican Grill",
     "Chick-fil-A",
     "Bonefish Grill",
+    "Rancho Tacos",
+    "Two Scoops Creamery",
   ];
 
   for (const name of names) {
@@ -161,6 +180,26 @@ test("known restaurant vendors map to Meals instead of Lyft/Uber", () => {
     assert.equal(hint.primary_intent, "meals", name);
     assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Meals", name);
   }
+});
+
+test("Micro Mart descriptor variants normalize to the same deterministic meals merchant", () => {
+  for (const name of ["MICRO MART", "MICRO MART 650000013ATLANTA", "MICROMART", "AplPay MICRO MART 650000013ATLANTA"]) {
+    const hint = hintFor(name);
+    assert.equal(hint.canonical_vendor, "Micro Mart", name);
+    assert.equal(hint.primary_intent, "meals", name);
+    assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Meals", name);
+  }
+});
+
+test("suggestion pass bypasses unresolved stale suggestions for authoritative current evidence", () => {
+  const suggest = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.suggest.routes.js"), "utf8");
+
+  assert.match(suggest, /confirmedCcPaymentPair/);
+  assert.match(suggest, /durableCcPaymentPair/);
+  assert.match(suggest, /authoritativeSpecialWorkflow/);
+  assert.match(suggest, /strongFreshUniversalEvidence/);
+  assert.match(suggest, /bypassExistingForFreshEvidence/);
+  assert.match(suggest, /existingCat && existingCat\.suggested_qbo_account_id && !bypassExistingForFreshEvidence/);
 });
 
 test("software and subscription vendors map to Software", () => {

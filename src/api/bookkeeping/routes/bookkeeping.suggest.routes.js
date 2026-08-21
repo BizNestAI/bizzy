@@ -25,6 +25,11 @@ import { resolveCanonicalVendorForTransaction } from "../../../services/bookkeep
 import { reconsiderNeedsReviewTransactions } from "../../../services/bookkeeping/routineExpenseReconsiderationService.js";
 import { createSafeCreditCardPaymentPairForRow } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
+import { resolveIntentToCanonicalKey } from "../../../services/bookkeeping/canonicalCoaRegistry.js";
+import {
+  isStrongUniversalVendorEvidence,
+  withCategorizationPolicyVersion,
+} from "../../../services/bookkeeping/categorizationEvidencePolicy.js";
 
 const router = Router();
 
@@ -1382,8 +1387,12 @@ export async function runBookkeepingSuggestionPass({
     const pushRow = async (options) => {
       const { payload, txn, ...ctx } = options || {};
       if (!payload || !txn) return;
-      rows.push(payload);
-      await maybeQueueClarification({ payload, txn, ...ctx });
+      const stampedPayload = {
+        ...payload,
+        meta: withCategorizationPolicyVersion(payload.meta || {}),
+      };
+      rows.push(stampedPayload);
+      await maybeQueueClarification({ payload: stampedPayload, txn, ...ctx });
     };
 
     for (const row of eligibleTxns || []) {
@@ -1464,9 +1473,46 @@ export async function runBookkeepingSuggestionPass({
         taxonomyOverride: ccPaymentRejected ? "not_cc_payment" : null,
         targetAccountTypes: ccPaymentPair?.txnId || plaidAccountLooksCredit(plaidAcctForTxn) ? ["credit"] : [],
       };
+      const freshTaxHit = classifyTaxonomy(row, rowTaxonomyContext);
+      const freshUniversalHint = await getUniversalVendorHintForTransaction({ bankTxn: row });
+      const existingStatusLower = String(existingCat?.status || "").toLowerCase();
+      const existingProtected = ["approved", "auto_approved", "posted"].includes(existingStatusLower);
+      const confirmedCcPaymentPair =
+        freshTaxHit?.type === "cc_payment" &&
+        ccPaymentPair?.txnId &&
+        String(ccPaymentPair.pairStatus || "").toLowerCase() === "confirmed";
+      const durableCcPaymentPair =
+        freshTaxHit?.type === "cc_payment" &&
+        ccPaymentPair?.txnId &&
+        String(ccPaymentPair.pairConfidence || "").toLowerCase() === "high";
+      const authoritativeSpecialWorkflow =
+        confirmedCcPaymentPair ||
+        durableCcPaymentPair ||
+        ["transfer_internal", "owner_draw", "owner_contribution", "refund"].includes(String(freshTaxHit?.type || ""));
+      const strongFreshUniversalEvidence =
+        !existingProtected &&
+        freshUniversalHint &&
+        isUniversalIntentAllowlisted(freshUniversalHint.primary_intent) &&
+        isStrongUniversalVendorEvidence(freshUniversalHint);
+      const existingCanonicalKey = existingCat?.suggested_canonical_account_key || metaBase?.canonical_account_key || null;
+      const freshIntentKey = freshUniversalHint?.primary_intent ? resolveIntentKey(freshUniversalHint.primary_intent) : null;
+      const bypassExistingForFreshEvidence =
+        !existingProtected &&
+        (
+          authoritativeSpecialWorkflow ||
+          checkHit.is_check ||
+          (
+            strongFreshUniversalEvidence &&
+            (
+              !existingCanonicalKey ||
+              String(existingCanonicalKey).toLowerCase() !== String(freshIntentKey || "").toLowerCase() ||
+              String(metaBase?.suggestion_source || "") !== "universal_hint"
+            )
+          )
+        );
       rowBranch = "existing_categorization";
-        if (existingCat && existingCat.suggested_qbo_account_id) {
-        const taxHit = classifyTaxonomy(row, rowTaxonomyContext);
+        if (existingCat && existingCat.suggested_qbo_account_id && !bypassExistingForFreshEvidence) {
+        const taxHit = freshTaxHit;
         let mergedMeta = { ...baseMetaWithCheck };
         mergedMeta.user_approval_backed = hasSimilarUserApproval;
         mergedMeta.user_approval_match_type = similarUserApproval?.match_type || null;
@@ -1887,7 +1933,7 @@ export async function runBookkeepingSuggestionPass({
       }
 
       rowBranch = "taxonomy";
-      const taxHit = classifyTaxonomy(row, rowTaxonomyContext);
+      const taxHit = freshTaxHit;
       if (taxHit) {
         const taxonomyMeta = buildTaxonomyMeta(taxHit);
         let mergedMeta = {
@@ -2078,9 +2124,11 @@ export async function runBookkeepingSuggestionPass({
           decided_by: autoResult.decidedBy || "taxonomy",
           decided_at: autoResult.decidedAt || nowIso,
         };
+        if (taxHit.type === "cc_payment") payload.suggested_canonical_account_key = null;
         if (payload.status !== "auto_approved" && payload.status !== "approved" && payload.status !== "posted") {
           payload.final_qbo_account_id = null;
           payload.final_qbo_account_name = null;
+          payload.final_canonical_account_key = null;
           payload.post_after = null;
         }
         if (autoResult.finalAcctId !== undefined) payload.final_qbo_account_id = autoResult.finalAcctId;
@@ -2309,7 +2357,7 @@ export async function runBookkeepingSuggestionPass({
       }
 
       rowBranch = "universal_hint";
-      const universalHint = await getUniversalVendorHintForTransaction({ bankTxn: row });
+      const universalHint = freshUniversalHint;
       if (universalHint) {
         const preferUniversalForTxn =
           !userApprovalContext.hasAnyUserApprovals || !vendorRuleApprovalBacked;
@@ -2521,6 +2569,70 @@ export async function runBookkeepingSuggestionPass({
             intent: universalHint.primary_intent,
             canonical_reason: canonicalResolution?.reason || null,
           });
+          if (isStrongUniversalVendorEvidence(universalHint)) {
+            const canonicalKey =
+              canonicalResolution?.canonical?.canonical_account_key ||
+              resolveIntentToCanonicalKey(universalHint.primary_intent) ||
+              null;
+            const meta = {
+              ...baseMetaWithCheck,
+              suggestion_source: "universal_hint",
+              universal_bootstrap_mode: true,
+              universal_hint: {
+                key: universalHint.matched_rule_key,
+                canonical_vendor: universalHint.canonical_vendor,
+                primary_intent: universalHint.primary_intent,
+                intents: universalHint.intents,
+                confidence: universalHint.confidence,
+                match_type: universalHint.match_type || null,
+                matched_value: universalHint.matched_value || null,
+                canonical_account_key: canonicalKey,
+                canonical_account_name: canonicalResolution?.canonical?.preferred_account_name || null,
+                canonical_resolution_status: canonicalResolution?.status || null,
+              },
+              canonical_account_key: canonicalKey,
+              canonical_coa_resolved: false,
+              canonical_account_review_required: true,
+              canonical_setup_required: true,
+              canonical_setup_required_reason: canonicalResolution?.reason || "canonical_account_requires_review",
+              safe_to_auto_handle: false,
+              safe_to_auto_post: false,
+              auto_handle_decision: {
+                eligible: false,
+                confidence: universalHint.confidence || "high",
+                source: "universal_hint",
+                reason: canonicalResolution?.reason || "canonical_setup_required",
+                at: nowIso,
+              },
+            };
+            await pushRow({
+              txn: row,
+              payload: {
+                business_id: businessId,
+                transaction_id: row.id,
+                suggested_qbo_account_id: null,
+                suggested_qbo_account_name: null,
+                suggested_canonical_account_key: canonicalKey,
+                final_qbo_account_id: null,
+                final_qbo_account_name: null,
+                final_canonical_account_key: null,
+                confidence: universalHint.confidence || "high",
+                reason: `Universal vendor hint: ${universalHint.canonical_vendor} -> ${universalHint.primary_intent}; canonical QBO setup required`,
+                status: "needs_review",
+                post_after: null,
+                meta,
+                decided_by: "universal_hint",
+                decided_at: nowIso,
+                updated_at: nowIso,
+              },
+              meta,
+              checkHit,
+              universalHintKey: universalHint.matched_rule_key,
+              confidenceOverride: universalHint.confidence || "high",
+              suggestionSource: "universal_hint",
+            });
+            continue;
+          }
         }
       }
 

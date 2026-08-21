@@ -51,6 +51,9 @@ test("suggestion creates canonical pairs and writes symmetric metadata to both l
   assert.match(service, /cc_payment_pair_id: pair\.id/);
   assert.match(service, /cc_payment_pair_txn_id: item\.counterpart/);
   assert.match(service, /safe_to_auto_handle: false/);
+  assert.match(service, /suggested_canonical_account_key: null/);
+  assert.match(service, /final_qbo_account_id: null/);
+  assert.match(service, /final_canonical_account_key: null/);
 });
 
 test("one confirmation resolves the pair and manual target must be a CreditCard account", () => {

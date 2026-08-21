@@ -137,6 +137,11 @@ const STRICT_PRIMARY_ONLY_INTENTS = new Set([
   "electric",
 ]);
 
+const CANONICAL_ONLY_INTENTS = new Set([
+  "transportation",
+  "parking_tolls",
+]);
+
 function normalizeCoaName(name = "") {
   return (name || "")
     .toLowerCase()
@@ -144,6 +149,18 @@ function normalizeCoaName(name = "") {
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function exactCanonicalAccountForIntent(intentKey, accounts = []) {
+  if (intentKey === "transportation") {
+    return accounts.find((acct) => acct._normName === "transportation") || null;
+  }
+  if (intentKey === "parking_tolls") {
+    return accounts.find((acct) =>
+      ["parking and tolls", "parking tolls", "parking"].includes(acct._normName)
+    ) || null;
+  }
+  return null;
 }
 
 function escapeRegExp(s = "") {
@@ -280,6 +297,20 @@ export function mapIntentToCoa({ businessId, intent, coaAccounts }) {
     ...a,
     _normName: normalizeCoaName(a.name || a.Name || ""),
   }));
+
+  const exactCanonical = exactCanonicalAccountForIntent(intentKey, normalized);
+  if (exactCanonical) {
+    return {
+      qbo_account_id: exactCanonical.id || exactCanonical.Id || null,
+      qbo_account_name: exactCanonical.name || exactCanonical.Name || null,
+      matched_intent: intentKey,
+      match_source: "primary",
+      score: 250,
+      match_reason: "canonical_exact_account",
+    };
+  }
+
+  if (CANONICAL_ONLY_INTENTS.has(intentKey)) return null;
 
   for (const acct of normalized) {
     for (const candidate of buildIntentCandidates(intentKey)) {

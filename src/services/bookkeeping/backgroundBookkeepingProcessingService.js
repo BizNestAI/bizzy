@@ -1,6 +1,7 @@
 import { reconsiderNeedsReviewTransactions } from "./routineExpenseReconsiderationService.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
+import { CATEGORIZATION_POLICY_VERSION } from "./categorizationEvidencePolicy.js";
 
 export const BOOKKEEPING_PROCESSING_STATUSES = {
   PENDING: "pending",
@@ -70,6 +71,7 @@ async function getDefaultSupabase() {
 function processingEvidenceFingerprint(cat = {}) {
   const meta = cat?.meta || {};
   const parts = [
+    CATEGORIZATION_POLICY_VERSION,
     cat?.status || "",
     cat?.suggested_qbo_account_id || "",
     cat?.suggested_canonical_account_key || "",
