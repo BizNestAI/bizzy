@@ -21,8 +21,14 @@ test("Rules page renders aggregated COA decisions and preserves history", () => 
   const source = read("src/pages/accounting/Rules.jsx");
   assert.match(source, /decisions\.map/);
   assert.match(source, /affected_transaction_count/);
-  assert.match(source, /Use Existing Account/);
-  assert.match(source, /Create Bizzi Preferred Account/);
+  assert.match(source, /Account setup needed/);
+  assert.match(source, /Bizzi will review this during your monthly close/);
+  assert.doesNotMatch(source, /Use Existing Account/);
+  assert.doesNotMatch(source, /Create Bizzi Preferred Account/);
+  assert.doesNotMatch(source, /approveExistingCanonicalQboAccount/);
+  assert.doesNotMatch(source, /createPreferredCanonicalQboAccount/);
+  assert.doesNotMatch(source, /createQboCoaAccount/);
+  assert.doesNotMatch(source, /Create test account/);
   assert.match(source, /history\.slice\(0,\s*8\)\.map/);
 });
 
@@ -31,6 +37,8 @@ test("Monthly Review exposes the same canonical COA decision actions", () => {
   assert.match(source, /resolveCanonicalCoaDecision/);
   assert.match(source, /canonical-coa\/\$\{encodeURIComponent\(decision\.canonical_account_key\)\}\/use-existing/);
   assert.match(source, /canonical-coa\/\$\{encodeURIComponent\(decision\.canonical_account_key\)\}\/create-preferred/);
-  assert.match(source, /Use Existing/);
-  assert.match(source, /Create Bizzi Preferred/);
+  assert.match(source, /Needs Approval/);
+  assert.match(source, /This Month(?:'|&apos;)s Account Activity/);
+  assert.match(source, /Map Existing/);
+  assert.match(source, /Create Recommended Account/);
 });

@@ -123,10 +123,10 @@ test("manual posting cannot bypass bookkeeping start date, mapping, idempotency,
 });
 
 test("failed manual QBO writes stay visible in handled feed for retry", () => {
-  const transactionsRoute = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.transactions.routes.js"), "utf8");
+  const transactionsService = readFileSync(join(root, "src/services/bookkeeping/bookkeepingTransactionFeedService.js"), "utf8");
   const feed = readFileSync(join(root, "src/components/Accounting/BookkeepingFeed.jsx"), "utf8");
 
-  assert.match(transactionsRoute, /\["approved", "auto_approved", "failed"\]\.includes\(status\)/);
+  assert.match(transactionsService, /\["approved", "auto_approved", "failed"\]\.includes\(status\)/);
   assert.match(feed, /\["approved", "auto_approved", "failed"\]\.includes\(txn\.status\)/);
   assert.match(feed, /Posting\.\.\./);
 });

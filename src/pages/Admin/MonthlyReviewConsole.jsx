@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Circle, ClipboardCheck, Download, ExternalLink, Loader2, Lock, RefreshCcw, RotateCcw, Search, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardCheck, ExternalLink, Loader2, Lock, RefreshCcw, RotateCcw, Search, ShieldCheck } from "lucide-react";
 import { safeFetch } from "../../utils/safeFetch.js";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { CoaDropdown } from "../../components/Accounting/BookkeepingFeed.jsx";
+import BookkeepingTransactionMirrorTable from "../../components/Accounting/BookkeepingTransactionMirrorTable.jsx";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -38,20 +39,55 @@ const QUEUE_STATUS_OPTIONS = [
   { value: "reopened", label: "Reopened" },
 ];
 
+const BOOKKEEPING_FEED_PAGE_SIZE = 25;
+const BOOKKEEPING_FEED_CONFIG = {
+  needs_review: {
+    label: "Needs Review",
+    description: "Exact selected-month Books Review Needs Review population.",
+  },
+  handled: {
+    label: "Handled",
+    description: "Exact selected-month Books Review Handled population.",
+  },
+};
+
+function buildInitialBookkeepingFeeds() {
+  return Object.fromEntries(Object.keys(BOOKKEEPING_FEED_CONFIG).map((key) => [
+    key,
+    {
+      expanded: false,
+      rows: [],
+      totalCount: null,
+      page: 0,
+      pageSize: BOOKKEEPING_FEED_PAGE_SIZE,
+      loading: false,
+      error: "",
+      loaded: false,
+    },
+  ]));
+}
+
 export default function MonthlyReviewConsole() {
   const [month, setMonth] = useState(() => initialMonthValue());
   const [businesses, setBusinesses] = useState([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState(() => initialBusinessIdValue());
   const [detail, setDetail] = useState(null);
   const [sourceLedger, setSourceLedger] = useState(null);
+  const [connectedAccounts, setConnectedAccounts] = useState(null);
+  const [bookkeepingFeeds, setBookkeepingFeeds] = useState(() => buildInitialBookkeepingFeeds());
+  const [loadingBookkeepingCounts, setLoadingBookkeepingCounts] = useState(false);
+  const [bookkeepingCountsError, setBookkeepingCountsError] = useState("");
   const [loadingBusinesses, setLoadingBusinesses] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingLedger, setLoadingLedger] = useState(false);
+  const [loadingConnectedAccounts, setLoadingConnectedAccounts] = useState(false);
+  const [connectedAccountsError, setConnectedAccountsError] = useState("");
   const [error, setError] = useState("");
   const [blocked, setBlocked] = useState(false);
   const [busySection, setBusySection] = useState("");
   const [busyTransaction, setBusyTransaction] = useState("");
   const [retryingTransaction, setRetryingTransaction] = useState("");
+  const [busyFeedAction, setBusyFeedAction] = useState("");
   const [finalizing, setFinalizing] = useState(false);
   const [finalizeNotes, setFinalizeNotes] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -78,9 +114,15 @@ export default function MonthlyReviewConsole() {
     return sections.filter((section) => ["reviewed", "not_applicable"].includes(section.status)).length;
   }, [detail?.sections]);
   const totalCount = detail?.sections?.length || 0;
-  const finalizationGuard = sourceLedger?.finalization_guard || detail?.finalization_guard || {};
+  const finalizationGuard = detail?.finalization_guard || sourceLedger?.finalization_guard || {};
   const pnlPublished = Boolean(detail?.pnl_report?.monthly_review_published_at && detail?.pnl_report?.storage_path);
-  const canFinalize = totalCount > 0 && reviewedCount === totalCount && !detail?.stamp && finalizationGuard?.can_finalize !== false && pnlPublished;
+  const canRequestApproval = Boolean(detail?.run?.id && !detail?.stamp && !finalizing);
+  const selectedReviewStatus = getMonthlyCloseStatus(detail, selectedBusiness);
+  const closeSummary = buildAccountingCloseSummary({ detail, sourceLedger, finalizationGuard });
+  const mirrorFeedAccounts = useMemo(
+    () => (sourceLedger?.chart_accounts || []).map(normalizeAccountForBooksDropdown),
+    [sourceLedger?.chart_accounts]
+  );
 
   const loadBusinesses = useCallback(async () => {
     setLoadingBusinesses(true);
@@ -143,6 +185,94 @@ export default function MonthlyReviewConsole() {
     }
   }, [demoMode, month, selectedBusinessId]);
 
+  const loadConnectedAccounts = useCallback(async () => {
+    if (!selectedBusinessId) {
+      setConnectedAccounts(null);
+      setConnectedAccountsError("");
+      return;
+    }
+    setLoadingConnectedAccounts(true);
+    setConnectedAccountsError("");
+    try {
+      const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/connected-accounts`);
+      setConnectedAccounts(data);
+    } catch (e) {
+      setConnectedAccounts(null);
+      setConnectedAccountsError(e?.body?.message || e?.message || "Could not load connected accounts.");
+    } finally {
+      setLoadingConnectedAccounts(false);
+    }
+  }, [selectedBusinessId]);
+
+  const loadBookkeepingFeedCounts = useCallback(async () => {
+    if (!selectedBusinessId) {
+      setBookkeepingFeeds(buildInitialBookkeepingFeeds());
+      setBookkeepingCountsError("");
+      return;
+    }
+    setLoadingBookkeepingCounts(true);
+    setBookkeepingCountsError("");
+    try {
+      const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/counts?month=${encodeURIComponent(month)}`);
+      const counts = data?.counts || {};
+      setBookkeepingFeeds((current) => {
+        const next = { ...current };
+        Object.keys(BOOKKEEPING_FEED_CONFIG).forEach((key) => {
+          next[key] = {
+            ...current[key],
+            totalCount: Number(counts[key] || 0),
+          };
+        });
+        return next;
+      });
+    } catch (e) {
+      setBookkeepingCountsError(e?.body?.message || e?.message || "Could not load bookkeeping feed counts.");
+    } finally {
+      setLoadingBookkeepingCounts(false);
+    }
+  }, [month, selectedBusinessId]);
+
+  const loadBookkeepingFeed = useCallback(async (status, { reset = false } = {}) => {
+    if (!selectedBusinessId || !BOOKKEEPING_FEED_CONFIG[status]) return;
+    const currentFeed = bookkeepingFeeds[status] || {};
+    const nextPage = reset ? 1 : Math.max(Number(currentFeed.page || 0) + 1, 1);
+    setBookkeepingFeeds((current) => ({
+      ...current,
+      [status]: {
+        ...current[status],
+        loading: true,
+        error: "",
+      },
+    }));
+    try {
+      const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions?month=${encodeURIComponent(month)}&status=${encodeURIComponent(status)}&page=${encodeURIComponent(nextPage)}&page_size=${BOOKKEEPING_FEED_PAGE_SIZE}`);
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      const totalCount = Number(data?.totalCount ?? data?.total_count ?? rows.length);
+      setBookkeepingFeeds((current) => ({
+        ...current,
+        [status]: {
+          ...current[status],
+          rows: reset ? rows : [...(current[status]?.rows || []), ...rows],
+          totalCount,
+          page: Number(data?.meta?.page || nextPage),
+          pageSize: Number(data?.meta?.page_size || BOOKKEEPING_FEED_PAGE_SIZE),
+          loading: false,
+          error: "",
+          loaded: true,
+        },
+      }));
+    } catch (e) {
+      setBookkeepingFeeds((current) => ({
+        ...current,
+        [status]: {
+          ...current[status],
+          loading: false,
+          error: e?.body?.message || e?.message || "Could not load bookkeeping transactions.",
+        },
+      }));
+    }
+  }, [bookkeepingFeeds, month, selectedBusinessId]);
+
   useEffect(() => {
     loadBusinesses();
   }, [loadBusinesses]);
@@ -155,11 +285,24 @@ export default function MonthlyReviewConsole() {
     loadSourceLedger();
   }, [loadSourceLedger]);
 
+  useEffect(() => {
+    loadConnectedAccounts();
+  }, [loadConnectedAccounts]);
+
+  useEffect(() => {
+    setBookkeepingFeeds(buildInitialBookkeepingFeeds());
+    loadBookkeepingFeedCounts();
+  }, [loadBookkeepingFeedCounts]);
+
   const selectBusiness = useCallback((businessId) => {
     if (!businessId || String(businessId) === String(selectedBusinessId)) return;
     setSelectedBusinessId(businessId);
     setDetail(null);
     setSourceLedger(null);
+    setConnectedAccounts(null);
+    setConnectedAccountsError("");
+    setBookkeepingFeeds(buildInitialBookkeepingFeeds());
+    setBookkeepingCountsError("");
     setError("");
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
@@ -171,11 +314,89 @@ export default function MonthlyReviewConsole() {
     setMonth(nextMonth);
     setDetail(null);
     setSourceLedger(null);
+    setBookkeepingFeeds(buildInitialBookkeepingFeeds());
+    setBookkeepingCountsError("");
     setError("");
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
     updateReviewUrl({ businessId: selectedBusinessId, month: nextMonth });
   }, [month, selectedBusinessId]);
+
+  const toggleBookkeepingFeed = useCallback((status) => {
+    const current = bookkeepingFeeds[status];
+    if (!current) return;
+    const nextExpanded = !current.expanded;
+    setBookkeepingFeeds((feeds) => ({
+      ...feeds,
+      [status]: {
+        ...feeds[status],
+        expanded: nextExpanded,
+      },
+    }));
+    if (nextExpanded && !current.loaded && !current.loading) {
+      loadBookkeepingFeed(status, { reset: true });
+    }
+  }, [bookkeepingFeeds, loadBookkeepingFeed]);
+
+  const refreshBookkeepingFeeds = useCallback(() => {
+    loadBookkeepingFeedCounts();
+    Object.keys(BOOKKEEPING_FEED_CONFIG).forEach((status) => {
+      if (bookkeepingFeeds[status]?.expanded) {
+        loadBookkeepingFeed(status, { reset: true });
+      }
+    });
+  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts]);
+
+  const refreshAfterFeedAction = useCallback(async () => {
+    await Promise.all([
+      loadDetail(),
+      loadSourceLedger(),
+      loadBusinesses(),
+      loadBookkeepingFeedCounts(),
+    ]);
+    await Promise.all(Object.keys(BOOKKEEPING_FEED_CONFIG).map((status) => (
+      bookkeepingFeeds[status]?.expanded ? loadBookkeepingFeed(status, { reset: true }) : Promise.resolve()
+    )));
+  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadBusinesses, loadDetail, loadSourceLedger]);
+
+  const runBookkeepingFeedAction = useCallback(async (actionKey, row, accountId = null) => {
+    if (!detail?.run?.id || !row?.id) return;
+    const transactionId = row.id;
+    const routeBase = `/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(transactionId)}`;
+    const actionId = `${actionKey}:${transactionId}`;
+    setBusyFeedAction(actionId);
+    setError("");
+    try {
+      if (actionKey === "approve") {
+        if (!accountId) throw new Error("Choose a GL account before approving.");
+        await safeFetch(`${routeBase}/approve`, {
+          method: "POST",
+          body: {
+            final_qbo_account_id: accountId,
+            reason: "Approved from Monthly Review Needs Review feed.",
+          },
+        });
+      } else if (actionKey === "reclassify") {
+        if (!accountId) throw new Error("Choose a GL account before reclassifying.");
+        await safeFetch(`${routeBase}/account`, {
+          method: "PATCH",
+          body: {
+            final_qbo_account_id: accountId,
+            reason: "Reclassified from Monthly Review Handled feed.",
+          },
+        });
+      } else if (actionKey === "post") {
+        await safeFetch(`${routeBase}/post-qbo`, { method: "POST" });
+      } else if (actionKey === "retry") {
+        await safeFetch(`${routeBase}/retry-qbo-sync`, { method: "POST" });
+      }
+      await refreshAfterFeedAction();
+    } catch (e) {
+      setError(e?.body?.message || e?.message || "Could not complete bookkeeping action.");
+    } finally {
+      setBusyFeedAction("");
+    }
+  }, [detail?.run?.id, refreshAfterFeedAction]);
 
   useEffect(() => {
     if (!detail?.run?.id) return undefined;
@@ -321,7 +542,6 @@ export default function MonthlyReviewConsole() {
         body: {
           month,
           final_qbo_account_id: account.id,
-          final_qbo_account_name: account.name,
           reason: "Approved from monthly Operator Response review.",
         },
       });
@@ -349,12 +569,12 @@ export default function MonthlyReviewConsole() {
   };
 
   const requestFinalizeReview = () => {
-    if (!detail?.run?.id || !canFinalize) return;
+    if (!detail?.run?.id || detail?.stamp) return;
     setConfirmFinalizeOpen(true);
   };
 
   const finalizeReview = async () => {
-    if (!detail?.run?.id || !canFinalize) return;
+    if (!detail?.run?.id || detail?.stamp) return;
     setFinalizing(true);
     setError("");
     try {
@@ -562,12 +782,14 @@ export default function MonthlyReviewConsole() {
               {busyAction === "bulk" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardCheck className="h-4 w-4" />}
               Prepare Queue
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                loadBusinesses();
-                loadDetail();
-              }}
+	            <button
+	              type="button"
+	              onClick={() => {
+	                loadBusinesses();
+	                loadDetail();
+	                loadConnectedAccounts();
+                  refreshBookkeepingFeeds();
+	              }}
               className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.06] px-3 py-2 text-sm text-white/80 hover:bg-white/[0.1]"
             >
               <RefreshCcw className={`h-4 w-4 ${loadingBusinesses || loadingDetail ? "animate-spin" : ""}`} />
@@ -615,7 +837,7 @@ export default function MonthlyReviewConsole() {
                     <StatusPill status={business.review_status} />
                   </div>
                   <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-white/45">
-                    <span>Readiness {Math.round(Number(business.readiness_score || 0))}%</span>
+                    <span>{getBusinessQueueSubtext(business)}</span>
                     {Number(business.blocked_sections || 0) > 0 ? (
                       <span className="text-amber-200">{business.blocked_sections} blocked</span>
                     ) : business.last_reminder_at ? (
@@ -625,7 +847,7 @@ export default function MonthlyReviewConsole() {
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
                     <div
                       className="h-full rounded-full bg-emerald-300"
-                      style={{ width: `${Math.min(100, (Number(business.reviewed_sections || 0) / Math.max(1, Number(business.total_sections || 1))) * 100)}%` }}
+                      style={{ width: `${getBusinessQueueProgress(business)}%` }}
                     />
                   </div>
                 </button>
@@ -645,13 +867,15 @@ export default function MonthlyReviewConsole() {
               </div>
             ) : (
               <div className="space-y-4">
-                <div className="flex flex-col gap-3 border-b border-white/10 pb-4 xl:flex-row xl:items-start xl:justify-between">
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.14em] text-white/45">{formatMonth(month)}</div>
-                    <h2 className="mt-1 text-xl font-semibold text-white">{selectedBusiness.business_name}</h2>
-                    <p className="mt-1 text-sm text-white/55">
-                      {reviewedCount} of {totalCount} review sections complete.
-                    </p>
+                <div className="flex flex-col gap-4 border-b border-white/10 pb-4 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="min-w-0">
+                    <h2 className="text-xl font-semibold text-white">{selectedBusiness.business_name}</h2>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-white/60">
+                      <span>{formatMonth(month)}</span>
+                      <span className="h-1 w-1 rounded-full bg-white/35" />
+                      <StatusPill status={selectedReviewStatus.key} label={selectedReviewStatus.label} />
+                    </div>
+                    {detail?.stamp ? <ReviewedStamp stamp={detail.stamp} month={month} /> : null}
                     {detail?.run?.assigned_reviewer_email ? (
                       <p className="mt-1 text-xs text-white/45">Assigned to {detail.run.assigned_reviewer_email}</p>
                     ) : null}
@@ -661,51 +885,99 @@ export default function MonthlyReviewConsole() {
                       </p>
                     ) : null}
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <StatusPill status={detail?.stamp ? "finalized" : detail?.run?.status} />
+                  <div className="flex flex-col gap-2 sm:flex-row xl:flex-col xl:items-stretch">
+                    <button
+                      type="button"
+                      disabled
+                      title="Admin customer view coming in the next implementation phase."
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/40 disabled:cursor-not-allowed"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                      View Customer App
+                    </button>
                     {detail?.stamp ? (
-                      <div className="inline-flex items-center gap-2 rounded-full border border-emerald-300/25 bg-emerald-300/[0.1] px-3 py-1.5 text-xs text-emerald-100">
-                        <CheckCircle2 className="h-4 w-4" />
-                        Customer stamp active
-                      </div>
-                    ) : null}
+                      <button
+                        type="button"
+                        onClick={reopenReview}
+                        disabled={busyAction === "reopen"}
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[0.1] px-4 py-2 text-sm font-semibold text-amber-100 transition hover:bg-amber-300/[0.16] disabled:opacity-45"
+                      >
+                        {busyAction === "reopen" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                        Reopen Month
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={requestFinalizeReview}
+                        disabled={!canRequestApproval}
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/[0.12] px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-300/[0.18] disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {finalizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                        Approve {formatMonthShort(month)} Books
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div className="grid gap-3 xl:grid-cols-[360px_1fr]">
-                  <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-sm font-semibold text-white">Review Readiness</div>
-                        <p className="mt-1 text-xs text-white/50">{detail?.readiness?.label || "Not scored yet"}</p>
-                      </div>
-                      <div className="text-2xl font-semibold text-emerald-100">{Math.round(Number(detail?.readiness?.score || 0))}%</div>
+	                <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <div className="text-sm font-semibold text-white">Month Close Summary</div>
+                      <p className="mt-1 text-xs text-white/50">Can this company's books be closed for {formatMonth(month)}?</p>
                     </div>
-                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
-                      <div className="h-full rounded-full bg-emerald-300" style={{ width: `${Math.max(0, Math.min(100, Number(detail?.readiness?.score || 0)))}%` }} />
-                    </div>
-                    <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                      <MiniStat label="Warnings" value={detail?.readiness?.warning_count ?? 0} />
-                      <MiniStat label="Blocked" value={detail?.readiness?.blocked_count ?? 0} />
-                      <MiniStat label="Required" value={`${detail?.readiness?.reviewed_required ?? 0}/${detail?.readiness?.total_required ?? 0}`} />
-                    </div>
+                    <button
+                      type="button"
+                      onClick={pullPnlReport}
+                      disabled={busyAction === "pull-pnl" || !detail?.run?.id}
+                      className="inline-flex min-h-9 items-center justify-center gap-2 rounded-xl border border-sky-300/20 bg-sky-300/[0.09] px-3 py-2 text-xs font-semibold text-sky-100 transition hover:bg-sky-300/[0.14] disabled:opacity-45"
+                    >
+                      {busyAction === "pull-pnl" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                      Pull P&amp;L
+                    </button>
                   </div>
-                  <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
-                    <div className="text-sm font-semibold text-white">Finalize Requirements</div>
-                    <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                      <MiniStat label="Sections Reviewed" value={`${reviewedCount}/${totalCount}`} />
-                      <MiniStat label="P&L Published" value={pnlPublished ? "Yes" : "No"} />
-                      <MiniStat label="Ledger Blockers" value={finalizationGuard?.blocker_count ?? 0} />
-                      <MiniStat label="QBO Failed" value={finalizationGuard?.counts?.qbo_failed ?? 0} />
-                      <MiniStat label="QBO Queued" value={finalizationGuard?.counts?.qbo_queued ?? 0} />
-                    </div>
-                    <p className="mt-3 text-xs text-white/45">
-                      Finalize unlocks when required sections are reviewed, the P&amp;L has been pulled, and the source ledger has no QBO or GL blockers.
-                    </p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                    {closeSummary.map((item) => (
+                      <MiniStat key={item.label} label={item.label} value={item.value} />
+                    ))}
                   </div>
-                </div>
+                  {finalizationGuard?.can_finalize === false ? (
+                    <div className="mt-3 rounded-xl border border-amber-300/16 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-100/90">
+                      {buildCloseBlockerText(finalizationGuard, pnlPublished)}
+                    </div>
+                  ) : !pnlPublished ? (
+                    <div className="mt-3 rounded-xl border border-amber-300/16 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-100/90">
+                      Pull and publish the monthly P&amp;L before approving this month.
+                    </div>
+                  ) : (
+                    <div className="mt-3 rounded-xl border border-emerald-300/14 bg-emerald-300/[0.055] px-3 py-2 text-xs text-emerald-100/85">
+                      Accounting close summary is clear based on currently loaded live records.
+                    </div>
+	                  )}
+	                </div>
 
-                {Array.isArray(detail?.changed_since_finalized) && detail.changed_since_finalized.length ? (
+	                <ConnectedAccountsPanel
+	                  data={connectedAccounts}
+	                  loading={loadingConnectedAccounts}
+	                  error={connectedAccountsError}
+	                  onRefresh={loadConnectedAccounts}
+	                />
+
+                <BookkeepingFeedMirrorPanels
+                  feeds={bookkeepingFeeds}
+                  loadingCounts={loadingBookkeepingCounts}
+                  countsError={bookkeepingCountsError}
+                  onToggle={toggleBookkeepingFeed}
+                  onLoadMore={(status) => loadBookkeepingFeed(status)}
+                  onRefresh={refreshBookkeepingFeeds}
+                  accounts={mirrorFeedAccounts}
+                  busyAction={busyFeedAction}
+                  onApprove={(row, accountId) => runBookkeepingFeedAction("approve", row, accountId)}
+                  onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
+                  onPost={(row) => runBookkeepingFeedAction("post", row)}
+                  onRetry={(row) => runBookkeepingFeedAction("retry", row)}
+                />
+	
+	                {Array.isArray(detail?.changed_since_finalized) && detail.changed_since_finalized.length ? (
                   <div className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.07] p-4">
                     <div className="text-sm font-semibold text-amber-100">Changed since finalized</div>
                     <div className="mt-2 grid gap-2 md:grid-cols-2">
@@ -718,15 +990,19 @@ export default function MonthlyReviewConsole() {
                   </div>
                 ) : null}
 
-                <CanonicalCoaReviewPanel
-                  data={detail?.canonical_chart_of_accounts}
-                  busyAction={busyAction}
-                  onResolve={resolveCanonicalCoaDecision}
-                />
-                <CanonicalVendorReviewPanel
-                  data={detail?.canonical_vendors}
-                  busyAction={busyAction}
-                  onResolve={resolveCanonicalVendorDecision}
+                <SourceLedgerPanel
+                  ledger={sourceLedger}
+                  loading={loadingLedger}
+                  busyTransaction={busyTransaction}
+                  retryingTransaction={retryingTransaction}
+                  businessId={selectedBusinessId}
+                  month={month}
+                  accountSearch={accountSearch}
+                  onAccountSearch={setAccountSearch}
+                  onRefresh={loadSourceLedger}
+                  onAccountChange={updateTransactionAccount}
+                  onRetry={retryQboSync}
+                  onHistory={openTransactionHistory}
                 />
 
                 <OperatorResponsesPanel
@@ -736,101 +1012,17 @@ export default function MonthlyReviewConsole() {
                   onApprove={approveOperatorResponse}
                 />
 
-                <SourceLedgerPanel
-                  ledger={sourceLedger}
-                  loading={loadingLedger}
-                  busyTransaction={busyTransaction}
-                  retryingTransaction={retryingTransaction}
-                  accountSearch={accountSearch}
-                  onAccountSearch={setAccountSearch}
-                  onRefresh={loadSourceLedger}
-                  onAccountChange={updateTransactionAccount}
-                  onRetry={retryQboSync}
-                  onHistory={openTransactionHistory}
+                <CanonicalCoaReviewPanel
+                  data={detail?.canonical_chart_of_accounts}
+                  accounts={sourceLedger?.chart_accounts || []}
+                  busyAction={busyAction}
+                  onResolve={resolveCanonicalCoaDecision}
                 />
-
-                <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-                  {(detail?.sections || []).map((section) => (
-                    <SectionCard
-                      key={section.section_key}
-                      section={section}
-                      busy={busySection === section.section_key}
-                      onUpdate={updateSection}
-                    />
-                  ))}
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                        <ClipboardCheck className="h-4 w-4 text-emerald-200" />
-                        Finalize Monthly Review
-                      </div>
-                      <p className="mt-1 text-sm text-white/55">
-                        Finalizing writes the customer-facing Financials stamp for {formatMonth(month)}.
-                      </p>
-                      {finalizationGuard?.can_finalize === false ? (
-                        <FinalizationGuardPanel guard={finalizationGuard} />
-                      ) : (
-                        <div className="mt-3 rounded-xl border border-emerald-300/14 bg-emerald-300/[0.055] px-3 py-2 text-xs text-emerald-100/85">
-                          Source ledger guard is clear: GL accounts and QBO sync are ready for finalization.
-                        </div>
-                      )}
-                      <textarea
-                        value={finalizeNotes}
-                        onChange={(event) => setFinalizeNotes(event.target.value)}
-                        placeholder="Internal finalization notes"
-                        rows={2}
-                        className={`mt-3 w-full ${INPUT_CLASS}`}
-                      />
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {detail?.stamp ? (
-                        <button
-                          type="button"
-                          onClick={reopenReview}
-                          disabled={busyAction === "reopen"}
-                          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[0.1] px-4 py-2 text-sm font-semibold text-amber-100 transition hover:bg-amber-300/[0.16] disabled:opacity-45"
-                        >
-                          {busyAction === "reopen" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-                          Reopen
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={pullPnlReport}
-                        disabled={busyAction === "pull-pnl" || !detail?.run?.id}
-                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300/20 bg-sky-300/[0.09] px-4 py-2 text-sm font-semibold text-sky-100 transition hover:bg-sky-300/[0.14] disabled:opacity-45"
-                      >
-                        {busyAction === "pull-pnl" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                        Pull P&amp;L
-                      </button>
-                      <button
-                        type="button"
-                        onClick={exportPacket}
-                        disabled={busyAction === "export"}
-                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white/80 transition hover:bg-white/[0.1] disabled:opacity-45"
-                      >
-                        {busyAction === "export" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                        Export Packet
-                      </button>
-                      <button
-                        type="button"
-                        onClick={requestFinalizeReview}
-                        disabled={!canFinalize || finalizing}
-                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/[0.12] px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-300/[0.18] disabled:cursor-not-allowed disabled:opacity-45"
-                      >
-                        {finalizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                        Finalize {formatMonth(month)}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-3">
-                  <TimelinePanel title="Audit Log" rows={detail?.audit_events || []} />
-                </div>
+                <CanonicalVendorReviewPanel
+                  data={detail?.canonical_vendors}
+                  busyAction={busyAction}
+                  onResolve={resolveCanonicalVendorDecision}
+                />
                 <TransactionHistoryDrawer
                   state={historyDrawer}
                   onClose={() => setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false })}
@@ -852,13 +1044,230 @@ export default function MonthlyReviewConsole() {
   );
 }
 
-function CanonicalCoaReviewPanel({ data, busyAction = "", onResolve }) {
+function BookkeepingFeedMirrorPanels({
+  feeds,
+  loadingCounts,
+  countsError,
+  onToggle,
+  onLoadMore,
+  onRefresh,
+  accounts,
+  busyAction,
+  onApprove,
+  onReclassify,
+  onPost,
+  onRetry,
+}) {
+  return (
+    <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.18em] text-emerald-100/70">Books Review Mirror</div>
+          <h2 className="mt-1 text-lg font-semibold text-white">Needs Review / Handled</h2>
+          <p className="mt-1 text-xs text-white/45">Selected-month transactions from the same bounded Books Review source.</p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.06] px-3 py-2 text-sm text-white/70 hover:bg-white/[0.1]"
+        >
+          <RefreshCcw className={`h-4 w-4 ${loadingCounts ? "animate-spin" : ""}`} />
+          Refresh Feeds
+        </button>
+      </div>
+      {countsError ? (
+        <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-xs text-amber-100">
+          {countsError}
+        </div>
+      ) : null}
+      <div className="mt-3 space-y-3">
+        {Object.entries(BOOKKEEPING_FEED_CONFIG).map(([status, config]) => (
+          <BookkeepingFeedMirrorSection
+            key={status}
+            status={status}
+            config={config}
+            feed={feeds?.[status]}
+            loadingCounts={loadingCounts}
+            onToggle={() => onToggle(status)}
+            onLoadMore={() => onLoadMore(status)}
+            accounts={accounts}
+            busyAction={busyAction}
+            onApprove={onApprove}
+            onReclassify={onReclassify}
+            onPost={onPost}
+            onRetry={onRetry}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function BookkeepingFeedMirrorSection({
+  status,
+  config,
+  feed,
+  loadingCounts,
+  onToggle,
+  onLoadMore,
+  accounts,
+  busyAction,
+  onApprove,
+  onReclassify,
+  onPost,
+  onRetry,
+}) {
+  const rows = Array.isArray(feed?.rows) ? feed.rows : [];
+  const totalCount = feed?.totalCount ?? 0;
+  const hasMore = rows.length < Number(totalCount || 0);
+  const expanded = Boolean(feed?.expanded);
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/15">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="flex w-full items-center justify-between gap-4 px-4 py-3 text-left hover:bg-white/[0.04] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          {expanded ? <ChevronDown className="h-4 w-4 text-white/45" /> : <ChevronRight className="h-4 w-4 text-white/45" />}
+          <div className="min-w-0">
+            <div className="font-semibold text-white">{config.label}</div>
+            <div className="truncate text-xs text-white/45">{config.description}</div>
+          </div>
+        </div>
+        <div className="shrink-0 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-1 text-sm font-semibold text-white">
+          {loadingCounts && totalCount === null ? "..." : Number(totalCount || 0).toLocaleString()} transactions
+        </div>
+      </button>
+      {expanded ? (
+        <div className="space-y-3 border-t border-white/10 p-3">
+          {feed?.error ? (
+            <div className="rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-xs text-amber-100">
+              {feed.error}
+            </div>
+          ) : null}
+          {feed?.loading && !feed?.loaded ? (
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.035] px-4 py-5 text-sm text-white/55">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading {config.label.toLowerCase()}...
+            </div>
+          ) : (
+            <BookkeepingTransactionMirrorTable
+              rows={rows}
+              status={status}
+              accounts={accounts}
+              busyAction={busyAction}
+              onApprove={onApprove}
+              onReclassify={onReclassify}
+              onPost={onPost}
+              onRetry={onRetry}
+              emptyMessage={`No selected-month ${config.label.toLowerCase()} transactions.`}
+            />
+          )}
+          {hasMore ? (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={feed?.loading}
+              className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.06] px-3 py-2 text-sm text-white/75 hover:bg-white/[0.1] disabled:opacity-50"
+            >
+              {feed?.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Load more
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ConnectedAccountsPanel({ data, loading, error, onRefresh }) {
+  const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
+  const count = Number(data?.accounts_count ?? accounts.length ?? 0);
+  const lastSync = latestConnectedAccountSync(accounts);
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
+      <div className="flex flex-col gap-3 border-b border-white/10 pb-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="text-xs uppercase tracking-[0.14em] text-emerald-200/75">Connected Accounts</div>
+          <h3 className="mt-1 text-lg font-semibold text-white">{loading ? "Loading accounts..." : `${count} connected`}</h3>
+          <p className="mt-1 text-xs text-white/45">
+            Current Plaid connectivity for this business. Historical month selection does not change this list.
+          </p>
+          {lastSync ? <p className="mt-1 text-[11px] text-white/35">Last sync {formatDateTime(lastSync)}</p> : null}
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className="inline-flex min-h-9 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-xs font-semibold text-white/70 hover:bg-white/[0.1] disabled:opacity-45"
+        >
+          <RefreshCcw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          Refresh
+        </button>
+      </div>
+
+      {error ? (
+        <div className="mt-3 rounded-xl border border-amber-300/18 bg-amber-300/[0.07] px-3 py-3 text-sm text-amber-100/90">
+          {error}
+        </div>
+      ) : loading ? (
+        <div className="mt-3 flex min-h-24 items-center justify-center rounded-xl border border-white/8 bg-white/[0.03] text-sm text-white/55">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Loading connected accounts...
+        </div>
+      ) : accounts.length ? (
+        <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {accounts.map((account) => (
+            <div key={`${account.plaid_item_id || "item"}-${account.plaid_account_id}`} className="rounded-xl border border-white/10 bg-white/[0.035] px-3 py-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-white">
+                    {account.display_name || account.name || "Financial account"}
+                    {account.mask ? <span className="font-normal text-white/45"> ••••{account.mask}</span> : null}
+                  </div>
+                  {account.official_name && account.official_name !== account.display_name ? (
+                    <div className="mt-0.5 truncate text-[11px] text-white/38">{account.official_name}</div>
+                  ) : null}
+                </div>
+                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${account.connection_status === "error" ? "border-amber-300/30 bg-amber-300/[0.08] text-amber-100" : "border-emerald-300/24 bg-emerald-300/[0.09] text-emerald-100"}`}>
+                  {account.connection_status === "error" ? "Attention" : "Active"}
+                </span>
+              </div>
+              <div className="mt-2 text-xs text-white/55">{account.institution_name || "Institution unavailable"}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-white/40">
+                <span>{formatFinancialAccountType(account)}</span>
+                {account.mapped_to_qbo ? (
+                  <>
+                    <span className="h-1 w-1 rounded-full bg-white/25" />
+                    <span>Mapped to QBO</span>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.03] px-4 py-6 text-center text-sm text-white/45">
+          No currently connected bank or credit-card accounts were found for this business.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CanonicalCoaReviewPanel({ data, accounts = [], busyAction = "", onResolve }) {
   const summary = data?.summary || {};
-  const created = Array.isArray(data?.created_by_bizzi) ? data.created_by_bizzi : [];
-  const mapped = Array.isArray(data?.mapped_existing) ? data.mapped_existing : [];
   const review = Array.isArray(data?.needs_review) ? data.needs_review : [];
+  const activity = Array.isArray(data?.this_month_activity) ? data.this_month_activity : [];
   const decisions = Array.isArray(data?.decisions) ? data.decisions : review;
-  const rows = [...created, ...mapped].slice(0, 12);
+  const [selectedExistingAccounts, setSelectedExistingAccounts] = useState({});
+  const dropdownAccounts = useMemo(() => accounts.map(normalizeAccountForBooksDropdown), [accounts]);
+  useEffect(() => {
+    setSelectedExistingAccounts({});
+  }, [decisions.map((decision) => decision.canonical_account_key).join("|")]);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
@@ -867,32 +1276,51 @@ function CanonicalCoaReviewPanel({ data, busyAction = "", onResolve }) {
           <div className="text-xs uppercase tracking-[0.14em] text-emerald-200/75">Chart of Accounts</div>
           <h3 className="mt-1 text-lg font-semibold text-white">Canonical Account Review</h3>
         </div>
-        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+        <div className="grid grid-cols-4 gap-2 text-center text-xs">
+          <MiniStat label="Needs Approval" value={summary.needs_review_count || 0} />
           <MiniStat label="Created" value={summary.created_by_bizzi_count || 0} />
           <MiniStat label="Mapped" value={summary.mapped_existing_count || 0} />
-          <MiniStat label="Review" value={summary.needs_review_count || 0} />
         </div>
       </div>
+      <div className="mt-3 text-xs uppercase tracking-[0.14em] text-amber-100/70">Needs Approval</div>
       {decisions.length ? (
-        <div className="mt-3 space-y-2">
+        <div className="mt-2 space-y-2">
           {decisions.map((decision) => {
             const usage = decision.candidate_usage || {};
             const useBusy = busyAction === `canonical-coa:${decision.canonical_account_key}:use_existing`;
             const createBusy = busyAction === `canonical-coa:${decision.canonical_account_key}:create_preferred`;
+            const selectedExistingId = selectedExistingAccounts[decision.canonical_account_key] || decision.candidate_qbo_account_id || "";
+            const examples = Array.isArray(decision.selected_month_examples) ? decision.selected_month_examples : [];
             return (
-              <div key={`${decision.realm_id || "realm"}-${decision.canonical_account_key}`} className="rounded-xl border border-amber-300/18 bg-amber-300/[0.06] px-3 py-2">
-                <div className="grid gap-2 lg:grid-cols-[1fr_1fr_100px_1.2fr]">
+              <div key={`${decision.realm_id || "realm"}-${decision.canonical_account_key}`} className="rounded-xl border border-amber-300/18 bg-amber-300/[0.06] px-3 py-3">
+                <div className="grid gap-3 xl:grid-cols-[minmax(220px,0.95fr)_minmax(220px,0.9fr)_minmax(220px,1fr)_minmax(260px,1.1fr)]">
                   <div>
-                    <div className="text-xs font-semibold text-white/90">{decision.bizzi_account_name || decision.canonical_account_key}</div>
+                    <div className="text-sm font-semibold text-white">{decision.bizzi_account_name || decision.canonical_account_key}</div>
                     <div className="mt-0.5 text-[11px] text-white/45">{decision.canonical_account_key}</div>
+                    <div className="mt-2 text-xs text-white/65">
+                      {decision.candidate_qbo_account_type || "Account"}
+                      {decision.candidate_qbo_account_subtype ? ` · ${decision.candidate_qbo_account_subtype}` : ""}
+                    </div>
                   </div>
                   <div>
-                    <div className="text-xs text-white/75">{decision.candidate_qbo_account_name || "No candidate"}</div>
-                    <div className="mt-0.5 text-[11px] text-white/45">{decision.candidate_qbo_account_type || "Account"}{decision.candidate_qbo_account_subtype ? ` · ${decision.candidate_qbo_account_subtype}` : ""}</div>
+                    <div className="text-[10px] uppercase tracking-[0.12em] text-white/38">Existing status</div>
+                    <div className="mt-1 text-xs text-white/75">{decision.candidate_qbo_account_name || "No existing candidate"}</div>
+                    <div className="mt-1 text-[11px] text-white/45">{formatCoaStatus(decision.status)}</div>
                   </div>
                   <div className="text-xs text-white/65">
-                    <div>{Number(decision.affected_transaction_count || 0)} affected</div>
-                    <div className="mt-0.5 text-[11px] text-white/45">{Number(usage.transaction_count || 0)} prior</div>
+                    <div className="font-medium text-white/82">{Number(decision.selected_month_transaction_count || decision.affected_transaction_count || 0)} current-month transaction{Number(decision.selected_month_transaction_count || decision.affected_transaction_count || 0) === 1 ? "" : "s"}</div>
+                    {examples.length ? (
+                      <div className="mt-1 space-y-0.5">
+                        {examples.map((example) => (
+                          <div key={example.transaction_id} className="truncate text-[11px] text-white/50">
+                            {formatShortDate(example.date)} · {example.merchant || "Transaction"}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-[11px] text-white/42">No examples available.</div>
+                    )}
+                    <div className="mt-1 text-[11px] text-white/38">{Number(usage.transaction_count || 0)} prior account uses</div>
                   </div>
                   <div>
                     <div className="text-[11px] text-amber-100/85">{decision.recommendation?.reason || decision.review_reason || "Human decision required."}</div>
@@ -903,55 +1331,71 @@ function CanonicalCoaReviewPanel({ data, busyAction = "", onResolve }) {
                     ) : null}
                   </div>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {decision.candidate_qbo_account_id ? (
+                <div className="mt-3 grid gap-2 md:grid-cols-[minmax(240px,1fr)_auto] md:items-center">
+                  <CoaDropdown
+                    value={selectedExistingId}
+                    suggestedId={decision.candidate_qbo_account_id || ""}
+                    suggestedName={decision.candidate_qbo_account_name || ""}
+                    accounts={dropdownAccounts}
+                    status="needs_review"
+                    disabled={useBusy || createBusy || !dropdownAccounts.length}
+                    onChange={(accountId) => setSelectedExistingAccounts((current) => ({ ...current, [decision.canonical_account_key]: accountId }))}
+                  />
+                  <div className="flex flex-wrap gap-2 md:justify-end">
                     <button
                       type="button"
-                      onClick={() => onResolve?.(decision, "use_existing")}
-                      disabled={!onResolve || Boolean(busyAction)}
+                      onClick={() => onResolve?.({ ...decision, candidate_qbo_account_id: selectedExistingId }, "use_existing")}
+                      disabled={!onResolve || Boolean(busyAction) || !selectedExistingId}
                       className="rounded-lg border border-white/12 bg-white/[0.06] px-2.5 py-1 text-xs text-white/80 hover:bg-white/[0.1] disabled:opacity-50"
                     >
-                      {useBusy ? "Saving..." : "Use Existing"}
+                      {useBusy ? "Mapping..." : "Map Existing"}
                     </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    onClick={() => onResolve?.(decision, "create_preferred")}
-                    disabled={!onResolve || Boolean(busyAction)}
-                    className="rounded-lg border border-white/12 bg-white/[0.06] px-2.5 py-1 text-xs text-white/80 hover:bg-white/[0.1] disabled:opacity-50"
-                  >
-                    {createBusy ? "Creating..." : "Create Bizzi Preferred"}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => onResolve?.(decision, "create_preferred")}
+                      disabled={!onResolve || Boolean(busyAction)}
+                      className="rounded-lg border border-emerald-300/18 bg-emerald-300/[0.09] px-2.5 py-1 text-xs font-semibold text-emerald-100 hover:bg-emerald-300/[0.14] disabled:opacity-50"
+                    >
+                      {createBusy ? "Creating..." : "Create Recommended Account"}
+                    </button>
+                  </div>
                 </div>
               </div>
             );
           })}
         </div>
-      ) : null}
-      {rows.length ? (
+      ) : (
+        <div className="mt-2 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-4 text-sm text-white/45">
+          No current-month canonical account approvals are waiting.
+        </div>
+      )}
+      <div className="mt-5 border-t border-white/8 pt-4">
+        <div className="text-xs uppercase tracking-[0.14em] text-white/45">This Month&apos;s Account Activity</div>
+      </div>
+      {activity.length ? (
         <div className="mt-3 overflow-hidden rounded-xl border border-white/10">
           <div className="grid grid-cols-[1.1fr_1.1fr_120px_80px] gap-2 border-b border-white/8 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-white/40">
             <span>Bizzi Account</span>
             <span>QuickBooks Account</span>
             <span>Status</span>
-            <span className="text-right">Usage</span>
+            <span className="text-right">Month Uses</span>
           </div>
           <div className="divide-y divide-white/[0.06]">
-            {rows.map((row) => (
+            {activity.map((row) => (
               <div key={`${row.canonical_account_key}-${row.qbo_account_id || row.status}`} className="grid grid-cols-[1.1fr_1.1fr_120px_80px] gap-2 px-3 py-2 text-xs text-white/70">
                 <span className="truncate font-medium text-white/85">{row.bizzi_account_name || row.canonical_account_key}</span>
                 <span className="truncate">{row.qbo_account_name || "Needs review"}</span>
                 <span className={row.status === "needs_review" ? "text-amber-200" : row.status === "created_by_bizzi" ? "text-emerald-200" : "text-white/60"}>
                   {formatCoaStatus(row.status)}
                 </span>
-                <span className="text-right">{row.usage_count || 0}</span>
+                <span className="text-right">{row.selected_month_transaction_count || 0}</span>
               </div>
             ))}
           </div>
         </div>
       ) : (
         <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-4 text-sm text-white/45">
-          No canonical account mappings have been recorded for this business yet.
+          No canonical account creation or mapping activity has been recorded for this month.
         </div>
       )}
     </div>
@@ -960,8 +1404,9 @@ function CanonicalCoaReviewPanel({ data, busyAction = "", onResolve }) {
 
 function CanonicalVendorReviewPanel({ data, busyAction = "", onResolve }) {
   const summary = data?.summary || {};
-  const review = Array.isArray(data?.needs_review) ? data.needs_review : [];
-  const rows = Array.isArray(data?.rows) ? data.rows.filter((row) => row.status !== "needs_review").slice(0, 8) : [];
+  const attention = Array.isArray(data?.needs_attention) ? data.needs_attention : Array.isArray(data?.needs_review) ? data.needs_review : [];
+  const created = Array.isArray(data?.created_this_month) ? data.created_this_month : [];
+  const mapped = Array.isArray(data?.mapped_existing) ? data.mapped_existing : [];
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
@@ -970,16 +1415,17 @@ function CanonicalVendorReviewPanel({ data, busyAction = "", onResolve }) {
           <div className="text-xs uppercase tracking-[0.14em] text-emerald-200/75">Vendors</div>
           <h3 className="mt-1 text-lg font-semibold text-white">Vendor Activity</h3>
         </div>
-        <div className="grid grid-cols-4 gap-2 text-center text-xs">
-          <MiniStat label="Created" value={summary.created_by_bizzi_count || 0} />
-          <MiniStat label="Mapped" value={summary.mapped_existing_count || 0} />
+        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+          <MiniStat label="Attention" value={summary.needs_attention_count ?? summary.needs_review_count ?? 0} />
+          <MiniStat label="Created" value={summary.created_this_month_count ?? summary.created_by_bizzi_count ?? 0} />
+          <MiniStat label="Mapped" value={summary.mapped_existing_this_month_count ?? summary.mapped_existing_count ?? 0} />
           <MiniStat label="Aliases" value={summary.new_aliases_learned_count || 0} />
-          <MiniStat label="Review" value={summary.needs_review_count || 0} />
         </div>
       </div>
-      {review.length ? (
+      <div className="mt-3 text-xs uppercase tracking-[0.14em] text-amber-100/70">Needs Attention</div>
+      {attention.length ? (
         <div className="mt-3 space-y-2">
-          {review.map((row) => {
+          {attention.map((row) => {
             const useBusy = busyAction === `canonical-vendor:${row.canonical_vendor_id}:use_existing`;
             const createBusy = busyAction === `canonical-vendor:${row.canonical_vendor_id}:create_bizzi`;
             return (
@@ -993,8 +1439,11 @@ function CanonicalVendorReviewPanel({ data, busyAction = "", onResolve }) {
                     <div className="text-xs text-white/75">{row.candidate_qbo_vendor_name || row.qbo_display_name || "No candidate"}</div>
                     <div className="mt-0.5 text-[11px] text-white/45">QuickBooks Vendor</div>
                   </div>
-                  <div className="text-[11px] text-amber-100/85">{row.review_reason || "Human decision required."}</div>
+                  <div className="text-[11px] text-amber-100/85">{row.review_reason || row.exception_type || "Human decision required."}</div>
                 </div>
+                {row.aliases?.length ? (
+                  <div className="mt-2 truncate text-[11px] text-white/45">Aliases: {row.aliases.join(", ")}</div>
+                ) : null}
                 <div className="mt-2 flex flex-wrap gap-2">
                   {row.candidate_qbo_vendor_id ? (
                     <button
@@ -1019,29 +1468,58 @@ function CanonicalVendorReviewPanel({ data, busyAction = "", onResolve }) {
             );
           })}
         </div>
-      ) : null}
+      ) : (
+        <div className="mt-2 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-4 text-sm text-white/45">
+          No vendor exceptions need accountant attention.
+        </div>
+      )}
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <VendorAuditTable
+          title="Created This Month"
+          rows={created}
+          empty="No QBO vendors were created by Bizzi this month."
+          dateKey="created_at"
+        />
+        <VendorAuditTable
+          title="Mapped to Existing"
+          rows={mapped}
+          empty="No existing QBO vendor mappings were recorded this month."
+          dateKey="mapped_at"
+        />
+      </div>
+    </div>
+  );
+}
+
+function VendorAuditTable({ title, rows = [], empty, dateKey }) {
+  return (
+    <div>
+      <div className="text-xs uppercase tracking-[0.14em] text-white/45">{title}</div>
       {rows.length ? (
-        <div className="mt-3 overflow-hidden rounded-xl border border-white/10">
+        <div className="mt-2 overflow-hidden rounded-xl border border-white/10">
           <div className="grid grid-cols-[1.1fr_1.1fr_120px_80px] gap-2 border-b border-white/8 bg-white/[0.04] px-3 py-2 text-[11px] uppercase tracking-[0.12em] text-white/40">
             <span>Vendor</span>
             <span>QuickBooks Vendor</span>
-            <span>Status</span>
+            <span>Date</span>
             <span className="text-right">Aliases</span>
           </div>
           <div className="divide-y divide-white/[0.06]">
             {rows.map((row) => (
               <div key={row.canonical_vendor_id} className="grid grid-cols-[1.1fr_1.1fr_120px_80px] gap-2 px-3 py-2 text-xs text-white/70">
-                <span className="truncate font-medium text-white/85">{row.display_name}</span>
+                <span className="truncate font-medium text-white/85" title={row.aliases?.length ? `Aliases: ${row.aliases.join(", ")}` : undefined}>
+                  {row.display_name}
+                </span>
                 <span className="truncate">{row.qbo_display_name || "Unmapped"}</span>
-                <span className={row.status === "created_by_bizzi" ? "text-emerald-200" : "text-white/60"}>{row.status_label || row.status}</span>
-                <span className="text-right">{row.alias_count || 0}</span>
+                <span className="text-white/55">{formatShortDate(row[dateKey] || row.activity_at || row.updated_at)}</span>
+                <span className="text-right" title={row.aliases?.length ? row.aliases.join(", ") : undefined}>{row.alias_count || 0}</span>
               </div>
             ))}
           </div>
         </div>
       ) : (
         <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-4 text-sm text-white/45">
-          No canonical vendor activity has been recorded for this business yet.
+          {empty}
         </div>
       )}
     </div>
@@ -1053,6 +1531,8 @@ function SourceLedgerPanel({
   loading,
   busyTransaction,
   retryingTransaction,
+  businessId,
+  month,
   accountSearch,
   onAccountSearch,
   onRefresh,
@@ -1063,6 +1543,7 @@ function SourceLedgerPanel({
   const groups = Array.isArray(ledger?.account_groups) ? ledger.account_groups : [];
   const accounts = Array.isArray(ledger?.chart_accounts) ? ledger.chart_accounts : [];
   const warnings = Array.isArray(ledger?.warnings) ? ledger.warnings : [];
+  const [expandedAccountKeys, setExpandedAccountKeys] = useState(() => new Set());
   const filteredAccounts = useMemo(() => {
     const query = String(accountSearch || "").trim().toLowerCase();
     return accounts
@@ -1070,6 +1551,18 @@ function SourceLedgerPanel({
       .sort((a, b) => accountSortRank(a.type, a.name) - accountSortRank(b.type, b.name) || String(a.name || "").localeCompare(String(b.name || "")));
   }, [accounts, accountSearch]);
   const dropdownAccounts = useMemo(() => filteredAccounts.map(normalizeAccountForBooksDropdown), [filteredAccounts]);
+  const toggleAccountGroup = useCallback((groupKey) => {
+    setExpandedAccountKeys((current) => {
+      const next = new Set(current);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    setExpandedAccountKeys(new Set());
+  }, [businessId, month]);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
@@ -1121,63 +1614,80 @@ function SourceLedgerPanel({
             Loading monthly source ledger...
           </div>
         ) : groups.length ? (
-          groups.map((group) => (
-            <div key={`${group.account_id || group.account_name}`} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
-              <div className="flex flex-col gap-1 border-b border-white/8 px-3 py-2 md:flex-row md:items-center md:justify-between">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold leading-tight text-white">{group.account_name || "Uncategorized"}</div>
-                  <div className="text-[10px] uppercase tracking-[0.12em] text-white/35">{group.account_type || "Account"}</div>
-                </div>
-                <div className="flex items-center gap-3 text-xs">
-                  <span className={`font-semibold ${Number(group.total_amount || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
-                    {formatCurrency(group.total_amount)}
-                  </span>
-                </div>
-              </div>
-
-              <div className="divide-y divide-white/[0.06]">
-                {(group.transactions || []).map((txn) => (
-                  <div key={txn.id} className="grid gap-2 px-3 py-2 text-xs xl:grid-cols-[76px_minmax(200px,1fr)_105px_118px_minmax(210px,280px)_36px] xl:items-center">
-                    <div className="whitespace-nowrap text-white/45">{formatShortDate(txn.date)}</div>
+          groups.map((group) => {
+            const groupKey = getAccountGroupKey(group);
+            const expanded = expandedAccountKeys.has(groupKey);
+            const transactionCount = Number(group.transaction_count ?? group.transactions?.length ?? 0);
+            return (
+              <div key={groupKey} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
+                <button
+                  type="button"
+                  onClick={() => toggleAccountGroup(groupKey)}
+                  aria-expanded={expanded}
+                  aria-controls={`monthly-review-gl-${groupKey}`}
+                  className="flex w-full flex-col gap-2 px-3 py-3 text-left transition hover:bg-white/[0.045] focus:outline-none focus:ring-2 focus:ring-emerald-300/45 md:grid md:grid-cols-[minmax(220px,1fr)_150px_150px] md:items-center"
+                >
+                  <div className="flex min-w-0 items-center gap-2">
+                    {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-white/45" /> : <ChevronRight className="h-4 w-4 shrink-0 text-white/45" />}
                     <div className="min-w-0">
-                      <div className="truncate font-medium leading-tight text-white">{txn.payee || txn.description || "Transaction"}</div>
-                      <div className="truncate text-[11px] leading-tight text-white/38">{txn.description || txn.reason || txn.status}</div>
-                      {txn.post_error ? <div className="truncate text-[11px] leading-tight text-rose-200">{txn.post_error}</div> : null}
-                    </div>
-                    <div className={`font-semibold xl:text-right ${Number(txn.amount || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
-                      {formatCurrency(txn.amount)}
-                    </div>
-                    <QboSyncStatusBadge status={txn.qbo_sync_status} compact />
-                    <div className="flex items-center gap-2">
-                      <CoaDropdown
-                        value={txn.effective_account_id || ""}
-                        suggestedId={txn.effective_account_id || txn.suggested_qbo_account_id || ""}
-                        suggestedName={txn.effective_account_name || txn.suggested_qbo_account_name || ""}
-                        accounts={dropdownAccounts}
-                        status={txn.status}
-                        onChange={(accountId) => onAccountChange(txn, accountId)}
-                        disabled={busyTransaction === txn.id || !accounts.length}
-                      />
-                      {busyTransaction === txn.id ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/45" /> : null}
-                    </div>
-                    <div className="flex items-center gap-1.5 xl:justify-end">
-                      {txn.qbo_sync_status?.key === "failed" || txn.qbo_sync_status?.key === "queued" || txn.qbo_sync_status?.key === "not_posted" ? (
-                        <button
-                          type="button"
-                          onClick={() => onRetry(txn)}
-                          disabled={retryingTransaction === txn.id || busyTransaction === txn.id}
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-amber-300/18 bg-amber-300/[0.08] text-amber-100 hover:bg-amber-300/[0.14] disabled:opacity-45"
-                          title="Retry QBO sync"
-                        >
-                          {retryingTransaction === txn.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                        </button>
-                      ) : null}
+                      <div className="truncate text-sm font-semibold leading-tight text-white">{group.account_name || "Uncategorized"}</div>
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-white/35">{group.account_type || "Account"}</div>
                     </div>
                   </div>
-                ))}
+                  <div className="text-xs text-white/50 md:text-right">
+                    {transactionCount} transaction{transactionCount === 1 ? "" : "s"}
+                  </div>
+                  <div className={`text-sm font-semibold md:text-right ${Number(group.total_amount || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
+                    {formatCurrency(group.total_amount)}
+                  </div>
+                </button>
+
+                {expanded ? (
+                  <div id={`monthly-review-gl-${groupKey}`} className="divide-y divide-white/[0.06] border-t border-white/8">
+                    {(group.transactions || []).map((txn) => (
+                      <div key={txn.id} className="grid gap-2 px-3 py-2 text-xs xl:grid-cols-[76px_minmax(200px,1fr)_105px_118px_minmax(210px,280px)_36px] xl:items-center">
+                        <div className="whitespace-nowrap text-white/45">{formatShortDate(txn.date)}</div>
+                        <div className="min-w-0">
+                          <div className="truncate font-medium leading-tight text-white">{txn.payee || txn.description || "Transaction"}</div>
+                          <div className="truncate text-[11px] leading-tight text-white/38">{txn.description || txn.reason || txn.status}</div>
+                          {txn.post_error ? <div className="truncate text-[11px] leading-tight text-rose-200">{txn.post_error}</div> : null}
+                        </div>
+                        <div className={`font-semibold xl:text-right ${Number(txn.amount || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
+                          {formatCurrency(txn.amount)}
+                        </div>
+                        <QboSyncStatusBadge status={txn.qbo_sync_status} compact />
+                        <div className="flex items-center gap-2">
+                          <CoaDropdown
+                            value={txn.effective_account_id || ""}
+                            suggestedId={txn.effective_account_id || txn.suggested_qbo_account_id || ""}
+                            suggestedName={txn.effective_account_name || txn.suggested_qbo_account_name || ""}
+                            accounts={dropdownAccounts}
+                            status={txn.status}
+                            onChange={(accountId) => onAccountChange(txn, accountId)}
+                            disabled={busyTransaction === txn.id || !accounts.length}
+                          />
+                          {busyTransaction === txn.id ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/45" /> : null}
+                        </div>
+                        <div className="flex items-center gap-1.5 xl:justify-end">
+                          {txn.qbo_sync_status?.key === "failed" || txn.qbo_sync_status?.key === "queued" || txn.qbo_sync_status?.key === "not_posted" ? (
+                            <button
+                              type="button"
+                              onClick={() => onRetry(txn)}
+                              disabled={retryingTransaction === txn.id || busyTransaction === txn.id}
+                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-amber-300/18 bg-amber-300/[0.08] text-amber-100 hover:bg-amber-300/[0.14] disabled:opacity-45"
+                              title="Retry QBO sync"
+                            >
+                              {retryingTransaction === txn.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-            </div>
-          ))
+            );
+          })
         ) : (
           <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-8 text-center text-sm text-white/45">
             No source transactions found for this month.
@@ -1193,6 +1703,10 @@ function SourceLedgerPanel({
 function OperatorResponsesPanel({ data, accounts = [], busyAction, onApprove }) {
   const rows = Array.isArray(data?.rows) ? data.rows : [];
   const dropdownAccounts = useMemo(() => accounts.map(normalizeAccountForBooksDropdown), [accounts]);
+  const [selectedAccounts, setSelectedAccounts] = useState({});
+  useEffect(() => {
+    setSelectedAccounts({});
+  }, [rows.map((row) => row.request_id).join("|")]);
   return (
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
       <div className="flex flex-col gap-2 border-b border-white/10 pb-4 md:flex-row md:items-start md:justify-between">
@@ -1204,37 +1718,67 @@ function OperatorResponsesPanel({ data, accounts = [], busyAction, onApprove }) 
       <div className="mt-4 space-y-3">
         {rows.length ? rows.map((row) => {
           const busy = busyAction === `operator-response:${row.request_id}`;
+          const selectedAccountId = selectedAccounts[row.request_id] || row.suggested_qbo_account_id || row.current_qbo_account_id || "";
           return (
             <div key={row.request_id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
-              <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(260px,1.2fr)_minmax(240px,320px)] lg:items-start">
+              <div className="grid gap-3 lg:grid-cols-[minmax(220px,0.95fr)_minmax(280px,1.25fr)_minmax(260px,340px)] lg:items-start">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-white">{row.merchant || "Transaction"}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="truncate text-sm font-semibold text-white">{row.merchant || row.description || "Transaction"}</div>
+                    {row.taxonomy_type ? (
+                      <span className="rounded-full border border-amber-300/18 bg-amber-300/[0.08] px-2 py-0.5 text-[10px] uppercase tracking-[0.1em] text-amber-100/85">
+                        {formatTaxonomyLabel(row.taxonomy_type)}
+                      </span>
+                    ) : null}
+                  </div>
                   <div className="mt-1 text-xs text-white/50">
                     {formatShortDate(row.date)} · {formatCurrency(row.amount)} · {row.source_account || "Bank account"}
                   </div>
-                  <div className="mt-1 truncate text-xs text-white/38">{row.description || "No memo available"}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-white/45">
+                    <span>{row.status || "needs_review"}</span>
+                    <QboSyncStatusBadge status={row.qbo_sync_status} compact />
+                  </div>
                   {row.suggested_qbo_account_name ? (
                     <div className="mt-2 text-xs text-emerald-100/70">Bizzi suggestion: {row.suggested_qbo_account_name}</div>
                   ) : null}
+                  {row.current_qbo_account_name ? (
+                    <div className="mt-1 text-xs text-white/45">Current GL: {row.current_qbo_account_name}</div>
+                  ) : null}
+                  {row.bank_memo ? (
+                    <details className="mt-2 text-xs text-white/45">
+                      <summary className="cursor-pointer text-white/50">Bank memo</summary>
+                      <div className="mt-1 whitespace-pre-wrap text-white/60">{row.bank_memo}</div>
+                    </details>
+                  ) : null}
                 </div>
                 <div className="rounded-lg border border-cyan-300/14 bg-cyan-300/[0.05] p-3">
-                  <div className="text-[10px] uppercase tracking-[0.12em] text-cyan-100/70">{row.prompt_text || "Question"}</div>
-                  <div className="mt-1 whitespace-pre-wrap text-sm text-white">{row.answer_text || "No response text"}</div>
+                  <div className="text-[10px] uppercase tracking-[0.12em] text-cyan-100/70">Customer answer</div>
+                  <div className="mt-1 whitespace-pre-wrap text-sm font-medium leading-snug text-white">{row.answer_text || "No response text"}</div>
+                  <div className="mt-3 border-t border-white/10 pt-2 text-xs text-white/55">{row.prompt_text || "Question not recorded"}</div>
                   <div className="mt-2 text-xs text-white/45">
                     {row.selected_intent ? `${row.selected_intent} · ` : ""}Answered {formatDateTime(row.answered_at)}
+                    {row.answered_by_display ? ` by ${row.answered_by_display}` : ""}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="space-y-2">
                   <CoaDropdown
-                    value={row.suggested_qbo_account_id || ""}
+                    value={selectedAccountId}
                     suggestedId={row.suggested_qbo_account_id || ""}
                     suggestedName={row.suggested_qbo_account_name || ""}
                     accounts={dropdownAccounts}
                     status="needs_review"
                     disabled={busy || !dropdownAccounts.length}
-                    onChange={(accountId) => onApprove?.(row, accountId)}
+                    onChange={(accountId) => setSelectedAccounts((current) => ({ ...current, [row.request_id]: accountId }))}
                   />
-                  {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/45" /> : null}
+                  <button
+                    type="button"
+                    onClick={() => onApprove?.(row, selectedAccountId)}
+                    disabled={busy || !selectedAccountId}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-300/18 bg-emerald-300/[0.09] px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-300/[0.14] disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                    Approve
+                  </button>
                 </div>
               </div>
             </div>
@@ -1321,14 +1865,14 @@ function FinalizeConfirmModal({ open, month, businessName, finalizing, onCancel,
             <ClipboardCheck className="h-4 w-4" />
           </div>
           <div>
-            <h3 className="text-lg font-semibold text-white">Finalize monthly review?</h3>
+            <h3 className="text-lg font-semibold text-white">Approve monthly books?</h3>
             <p className="mt-2 text-sm text-white/58">
-              This will mark {businessName || "this customer"} as finalized for {formatMonth(month)} and show the customer-facing Financials stamp.
+              This will mark {businessName || "this customer"} as reviewed for {formatMonth(month)} and show the customer-facing Financials stamp.
             </p>
           </div>
         </div>
         <div className="mt-5 rounded-xl border border-amber-300/16 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-100/90">
-          Only confirm after the source ledger, QBO sync, evidence sections, and P&L source data have been reviewed.
+          Existing backend close blockers, QBO safeguards, and stamp audit history still apply.
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button
@@ -1346,7 +1890,7 @@ function FinalizeConfirmModal({ open, month, businessName, finalizing, onCancel,
             className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/[0.12] px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-300/[0.18] disabled:opacity-50"
           >
             {finalizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-            Confirm Finalization
+            Approve Books
           </button>
         </div>
       </div>
@@ -1716,7 +2260,7 @@ function metricToneClass(tone) {
   return "border-white/8 bg-black/20";
 }
 
-function StatusPill({ status }) {
+function StatusPill({ status, label = null }) {
   const normalized = status || "not_started";
   const cls = normalized === "finalized" || normalized === "reviewed" || normalized === "ready_to_finalize"
     ? "border-emerald-300/25 bg-emerald-300/[0.1] text-emerald-100"
@@ -1726,9 +2270,106 @@ function StatusPill({ status }) {
 
   return (
     <span className={`shrink-0 rounded-full border px-2 py-1 text-[11px] font-medium ${cls}`}>
-      {STATUS_LABELS[normalized] || normalized}
+      {label || STATUS_LABELS[normalized] || normalized}
     </span>
   );
+}
+
+function ReviewedStamp({ stamp = {}, month }) {
+  return (
+    <div className="mt-3 inline-flex flex-col rounded-xl border border-emerald-300/24 bg-emerald-300/[0.08] px-3 py-2 text-emerald-50">
+      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.12em]">
+        <CheckCircle2 className="h-4 w-4" />
+        {formatMonth(month)} Reviewed
+      </div>
+      <div className="mt-1 text-xs text-emerald-100/78">Reviewed by {formatReviewerName(stamp.reviewed_by || stamp.reviewer_user_id)}</div>
+      <div className="mt-0.5 text-xs text-emerald-100/62">{formatStampDateTime(stamp.completed_at)}</div>
+    </div>
+  );
+}
+
+function getMonthlyCloseStatus(detail, business) {
+  if (detail?.stamp || business?.review_status === "finalized" || detail?.run?.status === "finalized") {
+    return { key: "reviewed", label: "Reviewed" };
+  }
+  const raw = detail?.run?.status || business?.review_status || "not_started";
+  if (!raw || raw === "not_started") return { key: "not_started", label: "Not Started" };
+  return { key: "in_progress", label: "In Progress" };
+}
+
+function getBusinessQueueSubtext(business = {}) {
+  if (business.review_status === "finalized" || business.finalized_at) return `Reviewed ${formatShortDate(business.finalized_at)}`;
+  if (business.review_status === "not_started") return "Not started";
+  return "Month close in progress";
+}
+
+function getBusinessQueueProgress(business = {}) {
+  if (business.review_status === "finalized" || business.finalized_at) return 100;
+  if (business.review_status === "not_started") return 0;
+  return 50;
+}
+
+function buildAccountingCloseSummary({ detail, sourceLedger, finalizationGuard }) {
+  const reconciliationExceptions = Math.max(
+    Number(sourceLedger?.reconciliation_totals?.exception_count || 0),
+    Number(findSectionRawMetric(detail, "reconciliations", "exceptionCount") || 0)
+  );
+  return [
+    { label: "Needs Review", value: sourceLedger?.totals?.needs_review_count ?? 0 },
+    { label: "Operator Responses", value: detail?.operator_responses?.count ?? detail?.operator_responses?.rows?.length ?? 0 },
+    { label: "COA Approvals", value: detail?.canonical_chart_of_accounts?.summary?.needs_review_count ?? 0 },
+    { label: "Failed QBO", value: finalizationGuard?.counts?.qbo_failed ?? 0 },
+    { label: "Reconciliation Exceptions", value: reconciliationExceptions },
+  ];
+}
+
+function findSectionRawMetric(detail, sectionKey, metricKey) {
+  const section = (detail?.sections || []).find((item) => item.section_key === sectionKey);
+  return section?.summary?.raw?.[metricKey] ?? null;
+}
+
+function buildCloseBlockerText(guard = {}, pnlPublished = false) {
+  if (!pnlPublished) return "Pull and publish the monthly P&L before approving this month.";
+  const count = Number(guard.unique_blocking_item_count || guard.blocker_count || 0);
+  const reasonCount = Number(guard.reason_count || guard.blockers?.length || 0);
+  if (!count) return "Accounting close blockers are clear.";
+  const counts = guard.counts || {};
+  const parts = [
+    counts.needs_review_transactions ? `${counts.needs_review_transactions} Needs Review transaction${counts.needs_review_transactions === 1 ? "" : "s"}` : null,
+    counts.operator_responses_unresolved ? `${counts.operator_responses_unresolved} Operator Response${counts.operator_responses_unresolved === 1 ? "" : "s"}` : null,
+    counts.canonical_coa_needs_review ? `${counts.canonical_coa_needs_review} COA approval${counts.canonical_coa_needs_review === 1 ? "" : "s"}` : null,
+    counts.qbo_failed ? `${counts.qbo_failed} failed QBO posting${counts.qbo_failed === 1 ? "" : "s"}` : null,
+    counts.qbo_queued ? `${counts.qbo_queued} queued QBO posting${counts.qbo_queued === 1 ? "" : "s"}` : null,
+    counts.qbo_not_posted ? `${counts.qbo_not_posted} not posted` : null,
+    counts.missing_gl_account ? `${counts.missing_gl_account} missing GL account${counts.missing_gl_account === 1 ? "" : "s"}` : null,
+    counts.reconciliation_exception ? `${counts.reconciliation_exception} reconciliation exception${counts.reconciliation_exception === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+  const reasonText = parts.length ? ` Reasons: ${parts.join(", ")}.` : "";
+  const expanded = reasonCount > count ? ` across ${reasonCount} reason${reasonCount === 1 ? "" : "s"}` : "";
+  return `${count} transaction/item${count === 1 ? "" : "s"} blocking close${expanded}.${reasonText}`;
+}
+
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return 0;
+}
+
+function formatReviewerName(value) {
+  const raw = String(value || "Internal staff").trim();
+  if (!raw.includes("@")) return raw;
+  const local = raw.split("@")[0].replace(/[._-]+/g, " ").trim();
+  if (!local) return raw;
+  return local.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatStampDateTime(value) {
+  if (!value) return "not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "not recorded";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function buildMonthOptions(currentValue) {
@@ -2273,6 +2914,14 @@ function formatMonth(value) {
   });
 }
 
+function formatMonthShort(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})/);
+  if (!match) return "Month";
+  return new Date(Number(match[1]), Number(match[2]) - 1, 1).toLocaleDateString(undefined, {
+    month: "long",
+  });
+}
+
 function accountSortRank(type = "", name = "") {
   const normalizedType = String(type || "").toLowerCase();
   const normalizedName = String(name || "").toLowerCase();
@@ -2287,6 +2936,13 @@ function accountSortRank(type = "", name = "") {
   return 100;
 }
 
+function getAccountGroupKey(group = {}) {
+  if (group.account_id) return `account:${group.account_id}`;
+  const name = String(group.account_name || "Uncategorized").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const type = String(group.account_type || "account").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  return `account-name:${name || "uncategorized"}:${type || "account"}`;
+}
+
 function normalizeAccountForBooksDropdown(account = {}) {
   return {
     ...account,
@@ -2294,6 +2950,30 @@ function normalizeAccountForBooksDropdown(account = {}) {
     name: account.name,
     type: normalizeBooksDropdownType(account.type || account.accountType || account.account_type),
   };
+}
+
+function formatFinancialAccountType(account = {}) {
+  const type = String(account.type || "").replace(/[_-]+/g, " ").trim();
+  const subtype = String(account.subtype || "").replace(/[_-]+/g, " ").trim();
+  const normalized = `${type} ${subtype}`.toLowerCase();
+  if (normalized.includes("credit card")) return "Credit card";
+  if (normalized.includes("checking")) return "Checking";
+  if (normalized.includes("savings")) return "Savings";
+  if (subtype) return titleCase(subtype);
+  if (type) return titleCase(type);
+  return "Financial account";
+}
+
+function latestConnectedAccountSync(accounts = []) {
+  let latest = null;
+  for (const account of accounts) {
+    const value = account?.last_sync_at || null;
+    if (!value) continue;
+    const ts = Date.parse(value);
+    if (Number.isNaN(ts)) continue;
+    if (!latest || ts > latest.ts) latest = { value, ts };
+  }
+  return latest?.value || null;
 }
 
 function formatCoaStatus(status = "") {
@@ -2305,6 +2985,13 @@ function formatCoaStatus(status = "") {
   if (normalized === "rejected") return "Rejected";
   if (normalized === "disabled") return "Disabled";
   return "Needs Review";
+}
+
+function formatTaxonomyLabel(value = "") {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeBooksDropdownType(type = "") {

@@ -2,13 +2,16 @@ import { Router } from "express";
 import crypto from "crypto";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
-import { fetchChartOfAccounts } from "../../services/bookkeeping/qboAccounts.js";
-import { getQBOClient } from "../../utils/qboClient.js";
-import { runBooksPostOnce } from "../../jobs/booksPost.cron.js";
+import { fetchChartOfAccounts, fetchQboAccountByIdForBusiness } from "../../services/bookkeeping/qboAccounts.js";
+import { postSingleBookkeepingTransactionNow } from "../../jobs/booksPost.cron.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
-import { matchesTransactionStatusFilter } from "../bookkeeping/routes/bookkeeping.transactions.routes.js";
+import {
+  countBookkeepingTransactions,
+  fetchBookkeepingTransactions,
+  matchesTransactionStatusFilter,
+} from "../../services/bookkeeping/bookkeepingTransactionFeedService.js";
 import {
   approveExistingQboAccountForCanonical,
   createPreferredQboAccountForCanonical,
@@ -23,8 +26,22 @@ import {
   approveBookkeepingTransactions,
   BookkeepingApprovalError,
 } from "../../services/bookkeeping/bookkeepingApprovalService.js";
+import {
+  BookkeepingReclassificationError,
+  reclassifyBookkeepingTransaction,
+  updatePostedQboTransactionAccount,
+} from "../../services/bookkeeping/bookkeepingReclassificationService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../services/bookkeeping/operatorRequestSummaryService.js";
+import { getConnectedFinancialAccountsForBusiness } from "../../services/plaid/plaidIntegrationService.js";
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../_shared/internalStaffAuth.js";
+import {
+  buildAccountingCloseFinalizationGuard,
+  buildFinalizationGuard,
+  buildReconciliationKpis,
+  canonicalKeyFromCategorization,
+  findTrueReconciliationExceptionItems,
+  selectedMonthTransactionStillRequiresCanonicalMapping,
+} from "./monthlyReviewCloseGuard.js";
 
 const router = Router();
 
@@ -36,9 +53,34 @@ const SECTION_DEFS = [
 ];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES = new Set(["needs_review", "handled"]);
+const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_DEFAULT = 25;
+const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX = 100;
 
 router.use(requireAuth);
 router.use(requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES));
+
+async function assertRunTransactionInSelectedMonth(run, transactionId) {
+  const [start, end] = monthBounds(run.review_month);
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, run.business_id);
+  const { data: bankTxn, error: bankErr } = await supabase
+    .from("bank_transactions")
+    .select("id,business_id,date,pending,is_archived,accounting_review_required")
+    .eq("business_id", run.business_id)
+    .eq("id", transactionId)
+    .eq("is_archived", false)
+    .gte("date", start)
+    .lt("date", end)
+    .maybeSingle();
+  if (bankErr) throw bankErr;
+  if (!bankTxn || !isTransactionInActiveBookkeepingScope(bankTxn, bookkeepingStartDate)) {
+    const err = new Error("transaction_not_in_selected_month");
+    err.status = 409;
+    err.code = "transaction_not_in_selected_month";
+    throw err;
+  }
+  return bankTxn;
+}
 
 router.get("/me", async (req, res) => {
   res.json({
@@ -120,9 +162,14 @@ router.get("/businesses/:businessId", async (req, res) => {
     const sourceLedger = await buildMonthlySourceLedger(businessId, month);
     const operatorResponses = await fetchOperatorResponsesAwaitingReview(businessId, month);
     const canonicalCoa = await buildCanonicalCoaEvidence(businessId, month);
-    const canonicalVendors = await buildCanonicalVendorEvidence(businessId);
+    const canonicalVendors = await buildCanonicalVendorEvidence(businessId, month);
     const pnlReport = await fetchMonthlyPnlReport(businessId, month);
-    const finalizationGuard = buildFinalizationGuard(sourceLedger);
+    const finalizationGuard = buildAccountingCloseFinalizationGuard({
+      sourceLedger,
+      operatorResponses,
+      canonicalCoa,
+      reconciliationEvidence: summaries.reconciliations,
+    });
     const currentEvidence = buildCurrentReviewEvidence(summaries, sourceLedger);
     const currentEvidenceHash = hashEvidence(currentEvidence);
     const changedSinceFinalized = run.evidence_hash && run.status === "finalized" && run.evidence_hash !== currentEvidenceHash
@@ -169,6 +216,162 @@ router.get("/businesses/:businessId", async (req, res) => {
   } catch (e) {
     console.error("[monthly-review] detail failed", e?.message || e);
     res.status(500).json({ ok: false, error: "monthly_review_detail_failed", message: e?.message || "Could not load review." });
+  }
+});
+
+router.get("/businesses/:businessId/connected-accounts", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+
+    const { data: business, error: bizErr } = await supabase
+      .from("business_profiles")
+      .select("id")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
+
+    const connected = await getConnectedFinancialAccountsForBusiness({ businessId });
+    return res.json({
+      ok: true,
+      business_id: businessId,
+      ...connected,
+    });
+  } catch (e) {
+    console.error("[monthly-review] connected accounts failed", e?.message || e);
+    res.status(500).json({
+      ok: false,
+      error: "monthly_review_connected_accounts_failed",
+      message: e?.message || "Could not load connected financial accounts.",
+    });
+  }
+});
+
+router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const month = normalizeMonth(req.query.month);
+    const accountId = req.query?.account_id || req.query?.plaid_account_id || null;
+
+    const { data: business, error: bizErr } = await supabase
+      .from("business_profiles")
+      .select("id")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
+
+    const [rangeStart, rangeEnd] = monthBounds(month);
+    const [needsReview, handled] = await Promise.all([
+      countBookkeepingTransactions({
+        businessId,
+        statusFilter: "needs_review",
+        accountId,
+        rangeStart,
+        rangeEnd,
+      }),
+      countBookkeepingTransactions({
+        businessId,
+        statusFilter: "handled",
+        accountId,
+        rangeStart,
+        rangeEnd,
+      }),
+    ]);
+
+    return res.json({
+      ok: true,
+      business_id: businessId,
+      month,
+      range_start: rangeStart,
+      range_end: rangeEnd,
+      counts: {
+        needs_review: needsReview,
+        handled,
+      },
+      source_contract: {
+        service: "bookkeepingTransactionFeedService",
+        selected_month_bounds: "server-side [range_start, range_end)",
+        customer_books_review_semantics: true,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] bookkeeping feed counts failed", e?.message || e);
+    res.status(500).json({
+      ok: false,
+      error: "monthly_review_bookkeeping_feed_counts_failed",
+      message: e?.message || "Could not load bookkeeping feed counts.",
+    });
+  }
+});
+
+router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const statusFilter = String(req.query?.status || "needs_review").toLowerCase();
+    if (!MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES.has(statusFilter)) {
+      return res.status(400).json({ ok: false, error: "invalid_bookkeeping_feed_status" });
+    }
+    const month = normalizeMonth(req.query.month);
+    const accountId = req.query?.account_id || req.query?.plaid_account_id || null;
+    const page = Math.max(parseInt(req.query?.page, 10) || 1, 1);
+    const pageSize = Math.min(
+      Math.max(parseInt(req.query?.page_size, 10) || MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_DEFAULT, 1),
+      MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX
+    );
+
+    const { data: business, error: bizErr } = await supabase
+      .from("business_profiles")
+      .select("id")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
+
+    const [rangeStart, rangeEnd] = monthBounds(month);
+    const { rows, totalCount } = await fetchBookkeepingTransactions({
+      businessId,
+      statusFilter,
+      accountId,
+      rangeStart,
+      rangeEnd,
+      page,
+      pageSize,
+    });
+
+    return res.json({
+      ok: true,
+      business_id: businessId,
+      month,
+      status: statusFilter,
+      rows,
+      totalCount,
+      total_count: totalCount,
+      meta: {
+        page,
+        page_size: pageSize,
+        total_count: totalCount,
+        page_count: Math.max(1, Math.ceil(totalCount / pageSize)),
+        range_start: rangeStart,
+        range_end: rangeEnd,
+      },
+      source_contract: {
+        service: "bookkeepingTransactionFeedService",
+        selected_month_bounds: "server-side [range_start, range_end)",
+        customer_books_review_semantics: true,
+        provider_calls: false,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] bookkeeping feed failed", e?.message || e);
+    res.status(500).json({
+      ok: false,
+      error: "monthly_review_bookkeeping_feed_failed",
+      message: e?.message || "Could not load bookkeeping transactions.",
+    });
   }
 });
 
@@ -317,8 +520,8 @@ router.post("/businesses/:businessId/operator-responses/:requestId/approve", asy
     if (!UUID_RE.test(String(requestId))) return res.status(400).json({ ok: false, error: "invalid_request_id" });
     const month = normalizeMonth(req.body?.month || req.query?.month);
     const accountId = String(req.body?.final_qbo_account_id || req.body?.account_id || "").trim();
-    const accountName = String(req.body?.final_qbo_account_name || req.body?.account_name || "").trim();
-    if (!accountId || !accountName) return res.status(400).json({ ok: false, error: "missing_account" });
+    if (!accountId) return res.status(400).json({ ok: false, error: "missing_account" });
+    const targetAccount = await resolveOperatorResponseTargetAccount(businessId, accountId);
 
     const { data: requestRow, error: requestErr } = await supabase
       .from("clarification_requests")
@@ -331,14 +534,48 @@ router.post("/businesses/:businessId/operator-responses/:requestId/approve", asy
     if (requestErr) throw requestErr;
     if (!requestRow) return res.status(404).json({ ok: false, error: "operator_response_not_found" });
 
+    const [start, end] = monthBounds(month);
+    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+    const { data: bankTxn, error: bankErr } = await supabase
+      .from("bank_transactions")
+      .select("id,business_id,date,pending,is_archived,accounting_review_required")
+      .eq("business_id", businessId)
+      .eq("id", requestRow.transaction_id)
+      .eq("is_archived", false)
+      .gte("date", start)
+      .lt("date", end)
+      .maybeSingle();
+    if (bankErr) throw bankErr;
+    if (!bankTxn || !isTransactionInActiveBookkeepingScope(bankTxn, bookkeepingStartDate)) {
+      return res.status(409).json({
+        ok: false,
+        error: "operator_response_transaction_not_in_selected_month",
+        message: "This Operator Response is no longer tied to an active Needs Review transaction in the selected month.",
+      });
+    }
+    const { data: currentCat, error: catErr } = await supabase
+      .from("transaction_categorizations")
+      .select("transaction_id,status,meta")
+      .eq("business_id", businessId)
+      .eq("transaction_id", requestRow.transaction_id)
+      .maybeSingle();
+    if (catErr) throw catErr;
+    if (!matchesTransactionStatusFilter("needs_review", currentCat || {})) {
+      return res.status(409).json({
+        ok: false,
+        error: "operator_response_transaction_not_needs_review",
+        message: "This Operator Response has already been handled or is no longer awaiting accounting review.",
+      });
+    }
+
     const run = await ensureRun(businessId, month, req.user.id);
     const now = new Date().toISOString();
     const approval = await approveBookkeepingTransactions({
       businessId,
       items: [{
         transaction_id: requestRow.transaction_id,
-        final_qbo_account_id: accountId,
-        final_qbo_account_name: accountName,
+        final_qbo_account_id: targetAccount.id,
+        final_qbo_account_name: targetAccount.name,
         reason: req.body?.reason || "Approved from monthly Operator Response review.",
       }],
       actor: "monthly_review_operator_response",
@@ -364,8 +601,8 @@ router.post("/businesses/:businessId/operator-responses/:requestId/approve", asy
         resolved_by_user_id: req.user?.id || null,
         resolved_reason: "monthly_review_approved",
         resolved_transaction_status: "approved",
-        resolved_final_qbo_account_id: accountId,
-        resolved_final_qbo_account_name: accountName,
+        resolved_final_qbo_account_id: targetAccount.id,
+        resolved_final_qbo_account_name: targetAccount.name,
         updated_at: now,
       })
       .eq("business_id", businessId)
@@ -389,8 +626,8 @@ router.post("/businesses/:businessId/operator-responses/:requestId/approve", asy
       },
       nextValue: {
         transaction_id: requestRow.transaction_id,
-        final_qbo_account_id: accountId,
-        final_qbo_account_name: accountName,
+        final_qbo_account_id: targetAccount.id,
+        final_qbo_account_name: targetAccount.name,
         status: "approved",
       },
       notes: "Approved customer Operator Response during monthly review.",
@@ -591,32 +828,23 @@ router.post("/runs/:runId/finalize", async (req, res) => {
       .single();
     if (runErr) throw runErr;
 
-    const sections = await fetchSections(runId);
-    const missing = SECTION_DEFS
-      .filter((def) => def.required)
-      .filter((def) => {
-        const section = sections.find((item) => item.section_key === def.key);
-        return !section || !["reviewed", "not_applicable"].includes(section.status);
-      });
-
-    if (missing.length) {
-      return res.status(409).json({
-        ok: false,
-        error: "required_sections_not_reviewed",
-        missing_sections: missing,
-        message: "All required sections must be reviewed before finalizing.",
-      });
-    }
-
     const now = new Date().toISOString();
+    const sections = await fetchSections(runId);
     const summaries = await buildSummaries(run.business_id, run.review_month);
     const sourceLedger = await buildMonthlySourceLedger(run.business_id, run.review_month);
-    const finalizationGuard = buildFinalizationGuard(sourceLedger);
+    const operatorResponses = await fetchOperatorResponsesAwaitingReview(run.business_id, run.review_month);
+    const canonicalCoa = await buildCanonicalCoaEvidence(run.business_id, run.review_month);
+    const finalizationGuard = buildAccountingCloseFinalizationGuard({
+      sourceLedger,
+      operatorResponses,
+      canonicalCoa,
+      reconciliationEvidence: summaries.reconciliations,
+    });
     if (!finalizationGuard.can_finalize) {
       return res.status(409).json({
         ok: false,
-        error: "source_ledger_not_ready_for_finalization",
-        message: "Resolve QBO sync failures, queued transactions, missing GL accounts, and unsynced transactions before finalizing.",
+        error: "accounting_close_not_ready_for_finalization",
+        message: summarizeAccountingCloseBlockers(finalizationGuard),
         finalization_guard: finalizationGuard,
       });
     }
@@ -786,9 +1014,9 @@ router.patch("/runs/:runId/transactions/:transactionId/account", async (req, res
     if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
 
     const run = await fetchRun(runId);
+    await assertRunTransactionInSelectedMonth(run, transactionId);
     const accountId = String(req.body?.final_qbo_account_id || req.body?.account_id || "").trim() || null;
-    const accountName = String(req.body?.final_qbo_account_name || req.body?.account_name || "").trim() || null;
-    if (!accountId || !accountName) {
+    if (!accountId) {
       return res.status(400).json({
         ok: false,
         error: "missing_account",
@@ -796,94 +1024,14 @@ router.patch("/runs/:runId/transactions/:transactionId/account", async (req, res
       });
     }
 
-    const { data: bankTxn, error: bankErr } = await supabase
-      .from("bank_transactions")
-      .select("id,date,name,merchant_name,counterparty_name,amount,plaid_transaction_id")
-      .eq("business_id", run.business_id)
-      .eq("id", transactionId)
-      .maybeSingle();
-    if (bankErr) throw bankErr;
-    if (!bankTxn) return res.status(404).json({ ok: false, error: "transaction_not_found" });
-    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, run.business_id);
-    if (!isTransactionInActiveBookkeepingScope(bankTxn, bookkeepingStartDate)) {
-      return res.status(400).json({
-        ok: false,
-        error: "transaction_before_bookkeeping_start_date",
-        bookkeeping_start_date: bookkeepingStartDate,
-      });
-    }
-
-    const { data: previous } = await supabase
-      .from("transaction_categorizations")
-      .select("transaction_id,status,final_qbo_account_id,final_qbo_account_name,suggested_qbo_account_id,suggested_qbo_account_name,qbo_txn_id,qbo_txn_type,post_after,meta")
-      .eq("business_id", run.business_id)
-      .eq("transaction_id", transactionId)
-      .maybeSingle();
-
-    if (String(previous?.status || "").toLowerCase() === "posted" && !previous?.qbo_txn_id) {
-      return res.status(409).json({
-        ok: false,
-        error: "posted_transaction_missing_qbo_reference",
-        message: "This transaction is marked posted but is missing its QBO transaction reference. Bizzi will not create a second QBO transaction from monthly review.",
-      });
-    }
-
-    const wasPosted = Boolean(previous?.qbo_txn_id);
-    let qboUpdate = null;
-    if (previous?.qbo_txn_id) {
-      qboUpdate = await updatePostedQboTransactionAccount({
-        businessId: run.business_id,
-        qboTxnId: previous.qbo_txn_id,
-        qboTxnType: previous.qbo_txn_type,
-        accountId,
-        accountName,
-      });
-    }
-
-    const now = new Date().toISOString();
-    const updatePayload = {
-      status: wasPosted ? "posted" : "auto_approved",
-      final_qbo_account_id: accountId,
-      final_qbo_account_name: accountName,
-      reason: req.body?.reason || "Adjusted during monthly human review.",
-      updated_at: now,
-      post_after: wasPosted ? previous?.post_after || null : now,
-      post_error: null,
-      meta: {
-        ...(previous?.meta || {}),
-        monthly_review_adjusted: true,
-        monthly_review_run_id: runId,
-        monthly_review_adjusted_at: now,
-        monthly_review_approved_for_posting: !wasPosted,
-        monthly_review_qbo_update: qboUpdate,
-      },
-    };
-
-    let updated = null;
-    if (previous) {
-      const { data, error } = await supabase
-        .from("transaction_categorizations")
-        .update(updatePayload)
-        .eq("business_id", run.business_id)
-        .eq("transaction_id", transactionId)
-        .select("*")
-        .single();
-      if (error) throw error;
-      updated = data;
-    } else {
-      const { data, error } = await supabase
-        .from("transaction_categorizations")
-        .insert({
-          business_id: run.business_id,
-          transaction_id: transactionId,
-          ...updatePayload,
-          created_at: now,
-        })
-        .select("*")
-        .single();
-      if (error) throw error;
-      updated = data;
-    }
+    const result = await reclassifyBookkeepingTransaction({
+      businessId: run.business_id,
+      transactionId,
+      targetQboAccountId: accountId,
+      actor: req.user?.id || req.user?.email || "internal_admin",
+      source: "monthly_review",
+      reason: req.body?.reason || "Adjusted GL account during monthly human review.",
+    });
 
     await logAuditEvent({
       run,
@@ -892,45 +1040,193 @@ router.patch("/runs/:runId/transactions/:transactionId/account", async (req, res
       sectionKey: "books",
       previousValue: {
         transaction_id: transactionId,
-        final_qbo_account_id: previous?.final_qbo_account_id || null,
-        final_qbo_account_name: previous?.final_qbo_account_name || null,
+        final_qbo_account_id: result.previous?.final_qbo_account_id || null,
+        final_qbo_account_name: result.previous?.final_qbo_account_name || null,
+        status: result.previous?.status || null,
+        qbo_txn_id: result.previous?.qbo_txn_id || null,
+        qbo_txn_type: result.previous?.qbo_txn_type || null,
       },
       nextValue: {
         transaction_id: transactionId,
-        final_qbo_account_id: accountId,
-        final_qbo_account_name: accountName,
-        amount: bankTxn.amount,
-        date: bankTxn.date,
-        qbo_update: qboUpdate,
+        mode: result.mode,
+        final_qbo_account_id: result.target_account?.id || null,
+        final_qbo_account_name: result.target_account?.name || null,
+        qbo_update: result.qbo_update || null,
       },
-      notes: req.body?.reason || `Moved transaction to ${accountName}.`,
+      notes: req.body?.reason || `Moved transaction to ${result.target_account?.name || "selected account"}.`,
     });
-
-    let postingSummary = null;
-    if (!wasPosted) {
-      postingSummary = await runBooksPostOnce({ businessId: run.business_id, force: true });
-      if (postingSummary?.ok === false) {
-        throw new Error(postingSummary?.error || "qbo_posting_failed_after_monthly_review_adjustment");
-      }
-      await logAuditEvent({
-        run,
-        actor: req.user,
-        eventType: "source_transaction_queued_for_qbo_posting",
-        sectionKey: "books",
-        nextValue: {
-          transaction_id: transactionId,
-          posting_summary: postingSummary,
-        },
-        notes: "Monthly review adjustment approved and sent through QBO posting.",
-      });
-    }
 
     const summaries = await buildSummaries(run.business_id, run.review_month);
     await syncRunStatus(runId, summaries);
-    res.json({ ok: true, transaction_id: transactionId, categorization: updated, qbo_update: qboUpdate, posting_summary: postingSummary });
+    res.json({
+      ok: true,
+      transaction_id: transactionId,
+      mode: result.mode,
+      categorization: result.categorization,
+      target_account: result.target_account,
+      qbo_update: result.qbo_update,
+      posting_summary: result.posting_summary || null,
+    });
   } catch (e) {
     console.error("[monthly-review] account adjustment failed", e?.message || e);
-    res.status(500).json({ ok: false, error: "monthly_review_account_adjustment_failed", message: e?.message || "Could not update transaction account." });
+    const status = e instanceof BookkeepingReclassificationError ? e.status || 400 : e?.status || 500;
+    res.status(status).json({
+      ok: false,
+      error: e instanceof BookkeepingReclassificationError ? e.error : e?.code || "monthly_review_account_adjustment_failed",
+      message: e?.message || "Could not update transaction account.",
+      details: e instanceof BookkeepingReclassificationError ? e.details || {} : undefined,
+    });
+  }
+});
+
+router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res) => {
+  try {
+    const { runId, transactionId } = req.params;
+    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
+    if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+
+    const run = await fetchRun(runId);
+    await assertRunTransactionInSelectedMonth(run, transactionId);
+
+    const accountId = String(req.body?.final_qbo_account_id || req.body?.account_id || "").trim();
+    if (!accountId) {
+      return res.status(400).json({
+        ok: false,
+        error: "missing_account",
+        message: "Choose a GL account before approving this transaction.",
+      });
+    }
+
+    const result = await reclassifyBookkeepingTransaction({
+      businessId: run.business_id,
+      transactionId,
+      targetQboAccountId: accountId,
+      actor: req.user?.id || req.user?.email || "internal_admin",
+      source: "monthly_review",
+      reason: req.body?.reason || "Approved from Monthly Review Needs Review feed.",
+    });
+    if (result.mode !== "needs_review_approval") {
+      return res.status(409).json({
+        ok: false,
+        error: "transaction_not_needs_review",
+        message: "This transaction is no longer in Needs Review.",
+        mode: result.mode,
+      });
+    }
+
+    await logAuditEvent({
+      run,
+      actor: req.user,
+      eventType: "bookkeeping_feed_transaction_approved",
+      sectionKey: "books_review_mirror",
+      previousValue: {
+        transaction_id: transactionId,
+        final_qbo_account_id: result.previous?.final_qbo_account_id || null,
+        final_qbo_account_name: result.previous?.final_qbo_account_name || null,
+        status: result.previous?.status || null,
+      },
+      nextValue: {
+        transaction_id: transactionId,
+        final_qbo_account_id: result.target_account?.id || null,
+        final_qbo_account_name: result.target_account?.name || null,
+        status: result.categorization?.status || "approved",
+        operator_response_resolution: result.operator_response_resolution || null,
+      },
+      notes: req.body?.reason || "Approved selected-month Needs Review transaction from Monthly Review.",
+    }).catch(() => null);
+
+    const summaries = await buildSummaries(run.business_id, run.review_month);
+    await syncRunStatus(runId, summaries);
+    res.json({
+      ok: true,
+      transaction_id: transactionId,
+      mode: result.mode,
+      categorization: result.categorization,
+      target_account: result.target_account,
+      operator_response_resolution: result.operator_response_resolution || null,
+    });
+  } catch (e) {
+    console.error("[monthly-review] feed approval failed", e?.message || e);
+    const status = e instanceof BookkeepingReclassificationError ? e.status || 400 : e?.status || 500;
+    res.status(status).json({
+      ok: false,
+      error: e instanceof BookkeepingReclassificationError ? e.error : e?.code || "monthly_review_feed_approval_failed",
+      message: e?.message || "Could not approve transaction.",
+      details: e instanceof BookkeepingReclassificationError ? e.details || {} : undefined,
+    });
+  }
+});
+
+router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res) => {
+  try {
+    const { runId, transactionId } = req.params;
+    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
+    if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+
+    const run = await fetchRun(runId);
+    await assertRunTransactionInSelectedMonth(run, transactionId);
+
+    const { data: current, error: catErr } = await supabase
+      .from("transaction_categorizations")
+      .select("transaction_id,status,qbo_txn_id,post_after,post_error")
+      .eq("business_id", run.business_id)
+      .eq("transaction_id", transactionId)
+      .maybeSingle();
+    if (catErr) throw catErr;
+    if (!current) return res.status(409).json({ ok: false, error: "transaction_not_categorized" });
+    if (current.qbo_txn_id || String(current.status || "").toLowerCase() === "posted") {
+      return res.status(409).json({ ok: false, error: "transaction_already_posted", message: "This transaction is already posted in QuickBooks." });
+    }
+    if (!matchesTransactionStatusFilter("handled", current)) {
+      return res.status(409).json({ ok: false, error: "transaction_not_handled", message: "Only handled transactions can be manually posted to QuickBooks." });
+    }
+
+    const confirmPostAnyway =
+      req.body?.confirm_post_anyway === true ||
+      req.body?.post_anyway === true ||
+      req.body?.confirmPostAnyway === true;
+    const result = await postSingleBookkeepingTransactionNow({
+      businessId: run.business_id,
+      transactionId,
+      confirmPostAnyway,
+    });
+    if (result?.ok === false) {
+      return res.status(result?.status || 409).json({
+        ok: false,
+        error: result?.error || "monthly_review_manual_post_failed",
+        message: result?.message || result?.error || "QuickBooks posting did not complete.",
+        result,
+      });
+    }
+
+    await logAuditEvent({
+      run,
+      actor: req.user,
+      eventType: "bookkeeping_feed_transaction_posted",
+      sectionKey: "books_review_mirror",
+      previousValue: {
+        transaction_id: transactionId,
+        status: current.status || null,
+        post_after: current.post_after || null,
+        post_error: current.post_error || null,
+      },
+      nextValue: {
+        transaction_id: transactionId,
+        posting_result: result,
+      },
+      notes: "Manually pushed selected-month handled transaction to QuickBooks from Monthly Review.",
+    }).catch(() => null);
+
+    const summaries = await buildSummaries(run.business_id, run.review_month);
+    await syncRunStatus(runId, summaries);
+    res.json({ ok: true, transaction_id: transactionId, posting_result: result });
+  } catch (e) {
+    console.error("[monthly-review] manual post failed", e?.message || e);
+    res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.code || e?.message || "monthly_review_manual_post_failed",
+      message: e?.message || "Could not post transaction to QuickBooks.",
+    });
   }
 });
 
@@ -941,6 +1237,7 @@ router.post("/runs/:runId/transactions/:transactionId/retry-qbo-sync", async (re
     if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
 
     const run = await fetchRun(runId);
+    await assertRunTransactionInSelectedMonth(run, transactionId);
     const { data: bankTxn, error: bankErr } = await supabase
       .from("bank_transactions")
       .select("id,date,name,merchant_name,counterparty_name,amount,plaid_transaction_id")
@@ -1011,26 +1308,15 @@ router.post("/runs/:runId/transactions/:transactionId/retry-qbo-sync", async (re
         .eq("transaction_id", transactionId);
       if (error) throw error;
     } else {
-      const { error } = await supabase
-        .from("transaction_categorizations")
-        .update({
-          status: "auto_approved",
-          final_qbo_account_id: accountId,
-          final_qbo_account_name: accountName,
-          post_after: now,
-          post_error: null,
-          meta: {
-            ...(current.meta || {}),
-            monthly_review_retry_at: now,
-            monthly_review_approved_for_posting: true,
-          },
-          updated_at: now,
-        })
-        .eq("business_id", run.business_id)
-        .eq("transaction_id", transactionId);
-      if (error) throw error;
-      postingSummary = await runBooksPostOnce({ businessId: run.business_id, force: true });
-      if (postingSummary?.ok === false) throw new Error(postingSummary?.error || "qbo_retry_posting_failed");
+      postingSummary = await postSingleBookkeepingTransactionNow({
+        businessId: run.business_id,
+        transactionId,
+      });
+      if (postingSummary?.ok === false) {
+        const err = new Error(postingSummary?.error || "qbo_retry_posting_failed");
+        err.status = postingSummary?.status || 400;
+        throw err;
+      }
     }
 
     await logAuditEvent({
@@ -1057,7 +1343,7 @@ router.post("/runs/:runId/transactions/:transactionId/retry-qbo-sync", async (re
     res.json({ ok: true, transaction_id: transactionId, qbo_update: qboUpdate, posting_summary: postingSummary });
   } catch (e) {
     console.error("[monthly-review] retry qbo sync failed", e?.message || e);
-    res.status(500).json({ ok: false, error: "monthly_review_retry_qbo_sync_failed", message: e?.message || "Could not retry QBO sync." });
+    res.status(e?.status || 500).json({ ok: false, error: e?.code || "monthly_review_retry_qbo_sync_failed", message: e?.message || "Could not retry QBO sync." });
   }
 });
 
@@ -1529,33 +1815,165 @@ async function buildSummaries(businessId, month) {
 
 async function buildCanonicalCoaEvidence(businessId, month) {
   const result = await fetchCanonicalAccountMappingsForBusiness({ businessId, month });
+  const monthRequirements = await fetchSelectedMonthCanonicalRequirements(businessId, month);
+  const monthActivityKeys = buildCanonicalMonthActivityKeys(result.history || []);
   const rows = result.rows || [];
   const history = result.history || [];
   const decisions = result.decisions || [];
-  const created = rows.filter((row) => row.status === "created_by_bizzi");
-  const mapped = rows.filter((row) => row.status === "existing_exact" || row.status === "existing_approved_equivalent");
-  const review = rows.filter((row) => row.status === "needs_review");
+  const rowsWithRequirement = rows.map((row) => {
+    const requirement = monthRequirements.get(row.canonical_account_key) || null;
+    return {
+      ...row,
+      selected_month_required: Boolean(requirement),
+      selected_month_transaction_count: requirement?.transaction_ids?.length || 0,
+      selected_month_transaction_ids: requirement?.transaction_ids || [],
+      selected_month_examples: requirement?.examples || [],
+      selected_month_requirement_reasons: requirement?.reasons || [],
+    };
+  });
+  const requiredKeys = new Set(Array.from(monthRequirements.keys()));
+  const created = rowsWithRequirement.filter((row) => row.status === "created_by_bizzi");
+  const mapped = rowsWithRequirement.filter((row) => row.status === "existing_exact" || row.status === "existing_approved_equivalent");
+  const review = rowsWithRequirement.filter((row) => row.status === "needs_review" && row.selected_month_required);
+  const allReview = rowsWithRequirement.filter((row) => row.status === "needs_review");
+  const relevantDecisions = decisions
+    .filter((decision) => requiredKeys.has(decision.canonical_account_key))
+    .map((decision) => {
+      const requirement = monthRequirements.get(decision.canonical_account_key) || null;
+      return {
+        ...decision,
+        selected_month_required: Boolean(requirement),
+        selected_month_transaction_count: requirement?.transaction_ids?.length || 0,
+        selected_month_transaction_ids: requirement?.transaction_ids || [],
+        selected_month_examples: requirement?.examples || [],
+      };
+    });
+  const thisMonthActivity = [...created, ...mapped]
+    .filter((row) => monthActivityKeys.has(row.canonical_account_key) || isMonthTimestamp(row.mapped_at || row.created_at, month))
+    .sort((a, b) => String(b.mapped_at || b.created_at || "").localeCompare(String(a.mapped_at || a.created_at || "")))
+    .slice(0, 12);
   return {
     summary: {
       created_by_bizzi_count: created.length,
       mapped_existing_count: mapped.length,
       needs_review_count: review.length,
+      all_needs_review_count: allReview.length,
+      selected_month_required_count: review.length,
     },
     created_by_bizzi: created,
     mapped_existing: mapped,
     needs_review: review,
-    decisions,
+    all_needs_review: allReview,
+    decisions: relevantDecisions,
+    this_month_activity: thisMonthActivity,
     recent_history: history.slice(0, 25),
+    source_contract: {
+      source_tables: ["business_canonical_qbo_account_mappings", "bank_transactions", "transaction_categorizations"],
+      state_basis: "needs_review canonical mappings only block close when unresolved selected-month active transactions still depend on that canonical key",
+    },
   };
 }
 
-async function buildCanonicalVendorEvidence(businessId) {
+function buildCanonicalMonthActivityKeys(history = []) {
+  const activityEvents = new Set(["existing_exact", "existing_approved_equivalent", "created_by_bizzi", "creation_intent", "mapped_existing"]);
+  return new Set((history || [])
+    .filter((event) => activityEvents.has(String(event.event_type || "")))
+    .map((event) => event.canonical_account_key)
+    .filter(Boolean));
+}
+
+function isMonthTimestamp(value, month) {
+  if (!value || !month) return false;
+  return String(value).slice(0, 7) === String(month).slice(0, 7);
+}
+
+async function fetchSelectedMonthCanonicalRequirements(businessId, month) {
+  const [start, end] = monthBounds(month);
+  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  const bankRows = await safeRows(() =>
+    applyActiveBookkeepingScope(
+      supabase
+        .from("bank_transactions")
+        .select("id,date,name,merchant_name,counterparty_name,is_archived")
+        .eq("business_id", businessId)
+        .eq("is_archived", false)
+        .gte("date", start)
+        .lt("date", end),
+      bookkeepingStartDate
+    ),
+    "Selected month canonical requirement transactions"
+  );
+  const txnIds = bankRows.map((row) => row.id).filter(Boolean);
+  if (!txnIds.length) return new Map();
+  const bankById = new Map(bankRows.map((row) => [String(row.id), row]));
+  const catRows = await safeRows(() =>
+    supabase
+      .from("transaction_categorizations")
+      .select("transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key,final_qbo_account_id,final_qbo_account_name,final_canonical_account_key,qbo_txn_id,meta")
+      .eq("business_id", businessId)
+      .in("transaction_id", txnIds),
+    "Selected month canonical requirement categorizations"
+  );
+  const requirements = new Map();
+  for (const cat of catRows) {
+    const bank = bankById.get(String(cat.transaction_id));
+    if (!bank) continue;
+    if (!selectedMonthTransactionStillRequiresCanonicalMapping(cat)) continue;
+    const key = canonicalKeyFromCategorization(cat);
+    if (!key) continue;
+    if (!requirements.has(key)) {
+      requirements.set(key, { canonical_account_key: key, transaction_ids: [], reasons: [], examples: [] });
+    }
+    const requirement = requirements.get(key);
+    requirement.transaction_ids.push(cat.transaction_id);
+    if (requirement.examples.length < 3) {
+      requirement.examples.push({
+        transaction_id: cat.transaction_id,
+        date: bank.date || null,
+        merchant: bank.counterparty_name || bank.merchant_name || bank.name || "Transaction",
+      });
+    }
+    const reason = cat.meta?.canonical_mapping_review_required === true
+      ? "canonical_mapping_review_required"
+      : "unresolved_selected_month_canonical_account";
+    if (!requirement.reasons.includes(reason)) requirement.reasons.push(reason);
+  }
+  return requirements;
+}
+
+async function buildCanonicalVendorEvidence(businessId, month) {
   const result = await fetchCanonicalVendorActivityForBusiness({ businessId, limit: 50 });
+  const rows = result.rows || [];
+  const needsAttention = rows
+    .filter((row) => row.status === "needs_review")
+    .slice(0, 25);
+  const createdThisMonth = rows
+    .filter((row) => row.status === "created_by_bizzi")
+    .filter((row) => isMonthTimestamp(row.activity_at || row.created_at || row.mapped_at || row.updated_at, month))
+    .sort((a, b) => String(b.activity_at || b.created_at || "").localeCompare(String(a.activity_at || a.created_at || "")))
+    .slice(0, 12);
+  const mappedExisting = rows
+    .filter((row) => row.status === "mapped_existing")
+    .filter((row) => isMonthTimestamp(row.activity_at || row.mapped_at || row.updated_at, month))
+    .sort((a, b) => String(b.activity_at || b.mapped_at || "").localeCompare(String(a.activity_at || a.mapped_at || "")))
+    .slice(0, 12);
   return {
-    summary: result.summary || {},
-    rows: (result.rows || []).slice(0, 25),
-    needs_review: (result.rows || []).filter((row) => row.status === "needs_review").slice(0, 25),
+    summary: {
+      ...(result.summary || {}),
+      needs_attention_count: needsAttention.length,
+      created_this_month_count: createdThisMonth.length,
+      mapped_existing_this_month_count: mappedExisting.length,
+    },
+    rows: rows.slice(0, 25),
+    needs_review: needsAttention,
+    needs_attention: needsAttention,
+    created_this_month: createdThisMonth,
+    mapped_existing: mappedExisting,
     recent_history: (result.recent_history || []).slice(0, 25),
+    source_contract: {
+      source_tables: ["bizzi_vendors", "business_qbo_vendor_mappings", "qbo_vendor_creation_intents", "vendor_aliases", "vendor_mapping_events"],
+      state_basis: "routine created/mapped vendors are audit-only; only needs_review vendor rows represent accountant attention",
+    },
   };
 }
 
@@ -1693,8 +2111,10 @@ async function buildMonthlySourceLedger(businessId, month) {
       books_review_tab: deriveBooksReviewTab(cat),
       final_qbo_account_id: cat.final_qbo_account_id || null,
       final_qbo_account_name: cat.final_qbo_account_name || null,
+      final_canonical_account_key: cat.final_canonical_account_key || null,
       suggested_qbo_account_id: cat.suggested_qbo_account_id || null,
       suggested_qbo_account_name: cat.suggested_qbo_account_name || null,
+      suggested_canonical_account_key: cat.suggested_canonical_account_key || null,
       effective_account_id: accountId,
       effective_account_name: accountName,
       materiality_flags: materialityFlags,
@@ -1794,6 +2214,16 @@ async function fetchOperatorResponsesAwaitingReview(businessId, month) {
   if (!transactionIds.length) {
     return { count: 0, rows: [], source_contract: { source_tables: ["clarification_requests", "bank_transactions", "transaction_categorizations"] } };
   }
+  const responderIds = Array.from(new Set(requests.map((row) => row.answered_by_user_id).filter(Boolean)));
+  const responderRows = responderIds.length
+    ? await safeRows(() =>
+        supabase
+          .from("user_profiles")
+          .select("id,email,first_name,last_name,full_name")
+          .in("id", responderIds),
+        "Operator response answerers"
+      )
+    : [];
   const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   const bankRows = await safeRows(() =>
     applyActiveBookkeepingScope(
@@ -1832,12 +2262,23 @@ async function fetchOperatorResponsesAwaitingReview(businessId, month) {
   const bankById = new Map(bankRows.map((row) => [String(row.id), row]));
   const catByTxn = new Map(catRows.map((row) => [String(row.transaction_id), row]));
   const acctByPlaidId = new Map(acctRows.map((row) => [String(row.plaid_account_id), row.name || row.official_name || null]));
+  const responderById = new Map((responderRows || []).map((row) => [
+    String(row.id),
+    {
+      id: row.id,
+      display_name: row.full_name || [row.first_name, row.last_name].filter(Boolean).join(" ") || row.email || "Customer",
+      email: row.email || null,
+    },
+  ]));
   const rows = requests
     .map((request) => {
       const bank = bankById.get(String(request.transaction_id));
       const cat = catByTxn.get(String(request.transaction_id)) || {};
       if (!bank || !matchesTransactionStatusFilter("needs_review", cat)) return null;
       const amount = Number(bank.signed_amount ?? bank.amount ?? 0);
+      const currentAccountId = cat.final_qbo_account_id || cat.suggested_qbo_account_id || null;
+      const currentAccountName = cat.final_qbo_account_name || cat.suggested_qbo_account_name || null;
+      const responder = request.answered_by_user_id ? responderById.get(String(request.answered_by_user_id)) || null : null;
       return {
         request_id: request.id,
         transaction_id: request.transaction_id,
@@ -1846,14 +2287,24 @@ async function fetchOperatorResponsesAwaitingReview(businessId, month) {
         selected_intent: request.selected_intent || request.meta?.selected_intent || null,
         answered_at: request.answered_at || null,
         answered_by_user_id: request.answered_by_user_id || null,
+        answered_by_display: responder?.display_name || (request.answered_by_user_id ? "Customer" : null),
+        answered_by_email: responder?.email || null,
         date: bank.date,
         amount,
         source_account: acctByPlaidId.get(String(bank.plaid_account_id)) || bank.plaid_account_id || null,
         merchant: bank.counterparty_name || bank.merchant_name || bank.name || "Transaction",
         description: bank.name || "",
+        bank_memo: bank.name || "",
+        status: cat.status || "needs_review",
+        qbo_sync_status: deriveQboSyncStatus(cat),
+        final_qbo_account_id: cat.final_qbo_account_id || null,
+        final_qbo_account_name: cat.final_qbo_account_name || null,
+        current_qbo_account_id: currentAccountId,
+        current_qbo_account_name: currentAccountName,
         suggested_qbo_account_id: cat.suggested_qbo_account_id || request.meta?.non_authoritative_account_evidence?.qbo_account_id || null,
         suggested_qbo_account_name: cat.suggested_qbo_account_name || request.meta?.non_authoritative_account_evidence?.qbo_account_name || null,
         taxonomy_type: cat.meta?.taxonomy_type || null,
+        special_workflow: cat.meta?.taxonomy_type || null,
       };
     })
     .filter(Boolean);
@@ -1867,153 +2318,21 @@ async function fetchOperatorResponsesAwaitingReview(businessId, month) {
   };
 }
 
-async function updatePostedQboTransactionAccount({
-  businessId,
-  qboTxnId,
-  qboTxnType,
-  accountId,
-  accountName,
-}) {
-  const txnType = normalizeQboTxnType(qboTxnType);
-  if (!txnType) throw new Error("missing_qbo_txn_type");
-  if (txnType === "CreditCardPayment") {
-    throw new Error("qbo_credit_card_payment_account_change_not_supported");
+async function resolveOperatorResponseTargetAccount(businessId, accountId) {
+  const resolved = await fetchQboAccountByIdForBusiness(businessId, accountId);
+  if (!resolved?.ok || !resolved.account) {
+    const err = new BookkeepingApprovalError(resolved?.reason || "invalid_qbo_account", 400, { account_id: accountId });
+    throw err;
   }
-  if (!["Purchase", "Deposit", "CreditCardCharge"].includes(txnType)) {
-    throw new Error(`unsupported_qbo_txn_type_${txnType}`);
-  }
-
-  const qbo = await getQBOClient(businessId);
-  if (!qbo) throw new Error("qbo_client_unavailable");
-
-  const baseTxn = await fetchQboTransaction(qbo, txnType, qboTxnId);
-  if (!baseTxn?.Id && !baseTxn?.id) throw new Error("qbo_transaction_not_found");
-
-  const updatedTxn = rewriteQboTransactionAccount(baseTxn, txnType, accountId, accountName);
-  await updateQboTransaction(qbo, txnType, updatedTxn);
-
-  return {
-    ok: true,
-    qbo_txn_id: qboTxnId,
-    qbo_txn_type: txnType,
-    final_qbo_account_id: accountId,
-    final_qbo_account_name: accountName,
-    updated_at: new Date().toISOString(),
+  const account = {
+    id: String(resolved.account.id),
+    name: resolved.account.name || resolved.account.fullyQualifiedName || resolved.account.FullyQualifiedName || null,
+    type: resolved.account.type || resolved.account.AccountType || null,
+    active: resolved.account.active !== false && resolved.account.Active !== false,
   };
-}
-
-function normalizeQboTxnType(value = "") {
-  const normalized = String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
-  if (normalized === "purchase") return "Purchase";
-  if (normalized === "deposit") return "Deposit";
-  if (normalized === "creditcardcharge" || normalized === "creditcardexpense") return "CreditCardCharge";
-  if (normalized === "creditcardpayment") return "CreditCardPayment";
-  return value ? String(value) : "";
-}
-
-async function fetchQboTransaction(qbo, txnType, txnId) {
-  const directMethod = `get${txnType}`;
-  const candidates = [
-    typeof qbo?.[directMethod] === "function" ? qbo[directMethod].bind(qbo) : null,
-    nestedQboMethod(qbo, txnType, "get"),
-    nestedQboMethod(qbo, txnType, "findById"),
-  ].filter(Boolean);
-  if (!candidates.length) throw new Error(`qbo_get_not_supported_${txnType}`);
-  let lastError = null;
-  for (const fn of candidates) {
-    try {
-      return await new Promise((resolve, reject) => {
-        fn(txnId, (err, resp) => {
-          if (err) return reject(err);
-          resolve(unwrapQboTransactionResponse(resp, txnType));
-        });
-      });
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  throw lastError || new Error(`qbo_get_failed_${txnType}`);
-}
-
-async function updateQboTransaction(qbo, txnType, payload) {
-  const directMethod = `update${txnType}`;
-  const candidates = [
-    typeof qbo?.[directMethod] === "function" ? qbo[directMethod].bind(qbo) : null,
-    nestedQboMethod(qbo, txnType, "update"),
-  ].filter(Boolean);
-  if (!candidates.length) throw new Error(`qbo_update_not_supported_${txnType}`);
-  let lastError = null;
-  for (const fn of candidates) {
-    try {
-      return await new Promise((resolve, reject) => {
-        fn(payload, (err, resp) => {
-          if (err) return reject(err);
-          resolve(resp);
-        });
-      });
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  throw lastError || new Error(`qbo_update_failed_${txnType}`);
-}
-
-function nestedQboMethod(qbo, txnType, method) {
-  const keys = {
-    Purchase: ["purchase"],
-    Deposit: ["deposit"],
-    CreditCardCharge: ["creditcardcharge", "creditCardCharge"],
-    CreditCardPayment: ["creditcardpayment", "creditCardPayment"],
-  }[txnType] || [];
-  for (const key of keys) {
-    if (typeof qbo?.[key]?.[method] === "function") return qbo[key][method].bind(qbo[key]);
-  }
-  return null;
-}
-
-function unwrapQboTransactionResponse(resp, txnType) {
-  if (!resp || typeof resp !== "object") return resp;
-  return resp[txnType] || resp[txnType.charAt(0).toLowerCase() + txnType.slice(1)] || resp;
-}
-
-function rewriteQboTransactionAccount(baseTxn, txnType, accountId, accountName) {
-  const accountRef = { value: String(accountId), ...(accountName ? { name: accountName } : {}) };
-  let changed = false;
-  const payload = {
-    ...baseTxn,
-    Sparse: true,
-    Id: baseTxn.Id || baseTxn.id,
-    SyncToken: baseTxn.SyncToken,
-  };
-
-  if (Array.isArray(payload.Line)) {
-    payload.Line = payload.Line.map((line) => {
-      if (txnType === "Deposit" && line.DepositLineDetail) {
-        changed = true;
-        return {
-          ...line,
-          DepositLineDetail: {
-            ...line.DepositLineDetail,
-            AccountRef: accountRef,
-          },
-        };
-      }
-      if (line.AccountBasedExpenseLineDetail) {
-        changed = true;
-        return {
-          ...line,
-          AccountBasedExpenseLineDetail: {
-            ...line.AccountBasedExpenseLineDetail,
-            AccountRef: accountRef,
-          },
-        };
-      }
-      return line;
-    });
-  }
-
-  if (!changed) throw new Error(`qbo_transaction_has_no_editable_account_line_${txnType}`);
-  return payload;
+  if (!account.active) throw new BookkeepingApprovalError("inactive_qbo_account", 400, { account_id: accountId });
+  if (!account.name) throw new BookkeepingApprovalError("qbo_account_missing_name", 400, { account_id: accountId });
+  return account;
 }
 
 async function buildReconciliationEvidence(businessId, month) {
@@ -2037,14 +2356,15 @@ async function buildReconciliationEvidence(businessId, month) {
     ? await safeRows(() =>
         supabase
           .from("reconciliation_items")
-          .select("id,status,issue_type,reason,plaid_account_id")
+          .select("*")
           .eq("business_id", businessId)
           .eq("run_id", run.id),
         "Reconciliation items"
       )
     : [];
 
-  const kpis = buildReconciliationKpis(run, items);
+  const exceptionItems = findTrueReconciliationExceptionItems(items);
+  const kpis = buildReconciliationKpis(run, items, exceptionItems);
   const exceptionCount = kpis.exceptionCount;
   const missingInQbo = kpis.missingInQbo;
   const failedPost = kpis.failedPosting;
@@ -2074,7 +2394,7 @@ async function buildReconciliationEvidence(businessId, month) {
       metric("Failed Posting", kpis.failedPosting, kpis.failedPosting ? "danger" : "good"),
     ],
     warnings,
-    raw: { run, runStatus, exceptionCount, missingInQbo, failedPost, ...kpis },
+    raw: { run, runStatus, exceptionCount, missingInQbo, failedPost, exceptionItems, ...kpis },
   });
 }
 
@@ -2249,38 +2569,6 @@ async function buildJobCostingEvidence(businessId, month) {
     warnings,
     raw: { assignments: assignments.length, uniqueJobs, postedJobLike: postedJobLike.length, unassigned },
   });
-}
-
-function buildReconciliationKpis(run, items = []) {
-  const count = (value) => Number(value || 0);
-  const countItemsByStatus = (statuses) => {
-    const statusSet = new Set(Array.isArray(statuses) ? statuses : [statuses]);
-    return items.filter((item) => statusSet.has(String(item.status || item.issue_type || "").toLowerCase())).length;
-  };
-
-  const plaidTotal = run ? count(run.total_seen) || items.length : 0;
-  const fullyReconciled = run ? count(run.matched_count) : countItemsByStatus("matched");
-  const needsGlCategory = run ? count(run.needs_review_count) : countItemsByStatus("needs_review");
-  const duplicateInQbo = run ? count(run.duplicate_in_qbo_count) : countItemsByStatus("duplicate_in_qbo");
-  const failedPosting = run ? count(run.failed_post_count) : countItemsByStatus("failed_post");
-  const missingInQbo = run ? count(run.missing_in_qbo_count) : countItemsByStatus("missing_in_qbo");
-  const postedToQbo = fullyReconciled + duplicateInQbo;
-  const issueStatuses = ["missing_in_qbo", "failed_post", "needs_review", "mismatch", "duplicate", "duplicate_in_qbo", "unmatched", "warning"];
-  const exceptionCount = run
-    ? needsGlCategory + missingInQbo + failedPosting + duplicateInQbo
-    : countItemsByStatus(issueStatuses);
-
-  return {
-    plaidTotal,
-    categorized: Math.max(0, plaidTotal - needsGlCategory),
-    needsGlCategory,
-    postedToQbo,
-    fullyReconciled,
-    failedPosting,
-    missingInQbo,
-    duplicateInQbo,
-    exceptionCount,
-  };
 }
 
 function evidence({ label, value, detail, tone = "neutral", metrics = [], warnings = [], deepLink = "", raw = {} }) {
@@ -2533,37 +2821,20 @@ function summarizeLedgerForEvidence(sourceLedger = {}) {
   };
 }
 
-function buildFinalizationGuard(sourceLedger = {}) {
-  const groups = Array.isArray(sourceLedger.account_groups) ? sourceLedger.account_groups : [];
-  const blockers = [];
-  for (const group of groups) {
-    for (const txn of group.transactions || []) {
-      const syncKey = txn.qbo_sync_status?.key || "not_posted";
-      const label = `${txn.payee || txn.description || txn.id} ${txn.date ? `(${txn.date})` : ""}`.trim();
-      if (!txn.effective_account_id && !txn.effective_account_name) {
-        blockers.push({ type: "missing_gl_account", transaction_id: txn.id, label, message: "Missing GL account." });
-      }
-      if (syncKey === "failed") {
-        blockers.push({ type: "qbo_failed", transaction_id: txn.id, label, message: txn.post_error || "QBO sync failed." });
-      }
-      if (syncKey === "queued") {
-        blockers.push({ type: "qbo_queued", transaction_id: txn.id, label, message: "QBO sync is still queued." });
-      }
-      if (syncKey === "not_posted") {
-        blockers.push({ type: "qbo_not_posted", transaction_id: txn.id, label, message: "Transaction has not been posted or updated in QBO." });
-      }
-    }
-  }
-
-  return {
-    can_finalize: blockers.length === 0,
-    blocker_count: blockers.length,
-    blockers: blockers.slice(0, 80),
-    counts: blockers.reduce((acc, blocker) => {
-      acc[blocker.type] = (acc[blocker.type] || 0) + 1;
-      return acc;
-    }, {}),
-  };
+function summarizeAccountingCloseBlockers(guard = {}) {
+  const counts = guard.counts || {};
+  const parts = [
+    counts.needs_review_transactions ? `${counts.needs_review_transactions} Needs Review transaction${counts.needs_review_transactions === 1 ? "" : "s"}` : null,
+    counts.operator_responses_unresolved ? `${counts.operator_responses_unresolved} Operator Response${counts.operator_responses_unresolved === 1 ? "" : "s"}` : null,
+    counts.canonical_coa_needs_review ? `${counts.canonical_coa_needs_review} canonical account approval${counts.canonical_coa_needs_review === 1 ? "" : "s"}` : null,
+    counts.qbo_failed ? `${counts.qbo_failed} failed QBO posting${counts.qbo_failed === 1 ? "" : "s"}` : null,
+    counts.qbo_queued ? `${counts.qbo_queued} queued QBO posting${counts.qbo_queued === 1 ? "" : "s"}` : null,
+    counts.qbo_not_posted ? `${counts.qbo_not_posted} unposted transaction${counts.qbo_not_posted === 1 ? "" : "s"}` : null,
+    counts.missing_gl_account ? `${counts.missing_gl_account} missing GL account${counts.missing_gl_account === 1 ? "" : "s"}` : null,
+    counts.reconciliation_exception ? `${counts.reconciliation_exception} reconciliation/posting exception${counts.reconciliation_exception === 1 ? "" : "s"}` : null,
+  ].filter(Boolean);
+  if (!parts.length) return "Accounting close blockers must be resolved before finalizing.";
+  return `Resolve ${parts.join(", ")} before approving this month.`;
 }
 
 function buildSectionSourceReview(sectionKey, summary = {}, sourceLedger = {}) {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 const root = process.cwd();
 const source = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
 const routeSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.transactions.routes.js"), "utf8");
+const feedServiceSource = readFileSync(join(root, "src/services/bookkeeping/bookkeepingTransactionFeedService.js"), "utf8");
 
 test("Books Review keeps loaded rows visible while categorization continues", () => {
   assert.match(source, /const hasVisibleRows = feedRows\.length > 0/);
@@ -66,21 +67,18 @@ test("Books Review immediately flips Needs Review and Handled counts for approve
 });
 
 test("Books Review transaction loading is database-bounded before pagination", () => {
-  const fetchBody = routeSource.slice(
-    routeSource.indexOf("export async function fetchBookkeepingTransactions"),
-    routeSource.indexOf("/* ----------------------------- Grace edits")
-  );
   const countsBody = routeSource.slice(
     routeSource.indexOf("router.get(\"/transactions/counts\""),
     routeSource.indexOf("router.get(\"/transactions\"")
   );
 
-  assert.match(fetchBody, /get_bookkeeping_transactions_bounded/);
-  assert.match(fetchBody, /p_limit:\s*safePageSize/);
-  assert.match(fetchBody, /p_offset:\s*\(safePage - 1\) \* safePageSize/);
-  assert.match(fetchBody, /rangeStartDateForBookkeeping\(rangeParam\)/);
-  assert.doesNotMatch(fetchBody, /\.in\("transaction_id",\s*ids\)/);
-  assert.doesNotMatch(fetchBody, /const ids = \(baseRows \|\| \[\]\)\.map/);
+  assert.match(routeSource, /bookkeepingTransactionFeedService\.js/);
+  assert.match(feedServiceSource, /get_bookkeeping_transactions_bounded/);
+  assert.match(feedServiceSource, /p_limit:\s*safePageSize/);
+  assert.match(feedServiceSource, /p_offset:\s*\(safePage - 1\) \* safePageSize/);
+  assert.match(feedServiceSource, /rangeStartDateForBookkeeping\(rangeParam\)/);
+  assert.doesNotMatch(feedServiceSource, /\.in\("transaction_id",\s*ids\)/);
+  assert.doesNotMatch(feedServiceSource, /const ids = \(baseRows \|\| \[\]\)\.map/);
   assert.match(countsBody, /countBookkeepingTransactions/);
   assert.match(countsBody, /Promise\.all/);
 });

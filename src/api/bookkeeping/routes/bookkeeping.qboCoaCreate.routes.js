@@ -2,7 +2,6 @@ import { Router } from "express";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { supabase } from "../../../services/supabaseAdmin.js";
-import { createQboCoaAccountIfNeeded } from "../../../services/bookkeeping/qboCoaCreationService.js";
 
 const router = Router();
 
@@ -28,32 +27,11 @@ router.get("/qbo/coa-creations", requireAuth, async (req, res) => {
 router.post("/qbo/coa-create", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
-  const name = req.body?.name || "";
-  const intent = req.body?.intent || "";
-  const source = "manual";
-  const createdBy = "user";
-
-  if (!name || !intent) {
-    return res.status(400).json({ ok: false, error: "missing_params", message: "name and intent are required" });
-  }
-
-  try {
-    const result = await createQboCoaAccountIfNeeded({
-      businessId,
-      candidateName: name,
-      intent,
-      source,
-      createdBy,
-      meta: { created_from_route: true },
-    });
-    if (result.ok === false) {
-      return res.status(400).json(result);
-    }
-    return res.json(result);
-  } catch (err) {
-    console.error("[qbo][coa-create] failed", err?.message || err);
-    return res.status(500).json({ ok: false, error: "qbo_coa_create_failed", message: err?.message || "failed" });
-  }
+  return res.status(403).json({
+    ok: false,
+    error: "canonical_coa_internal_approval_required",
+    message: "Canonical chart of accounts creation is reviewed during monthly close.",
+  });
 });
 
 export default router;

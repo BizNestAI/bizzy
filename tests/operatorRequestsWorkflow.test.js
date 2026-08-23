@@ -236,16 +236,17 @@ test("customer answer path has zero QBO provider-write capability", () => {
   assert.match(answerBody, /allowProviderWrites:\s*false/);
   assert.match(answerBody, /catch \(err\)[\s\S]*customer_answer_account_suggestion_failed/);
   assert.doesNotMatch(answerBody, /createQboAccountFromCanonical|claimCreationIntent|createQboVendor|postToQbo|createQboTransfer|createQboPurchase|createQboDeposit/);
-  assert.match(resolver, /allowCreate = true/);
+  assert.match(resolver, /allowCreate = false/);
+  assert.match(resolver, /creationAuthorizedByInternalAccountant/);
 });
 
 test("Books Review exposes answered customer context without moving the transaction tab", () => {
-  const txRoute = read("src/api/bookkeeping/routes/bookkeeping.transactions.routes.js");
+  const txFeedService = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
 
-  assert.match(txRoute, /operator_request/);
-  assert.match(txRoute, /customer_answered/);
-  assert.match(txRoute, /customer_response/);
+  assert.match(txFeedService, /operator_request/);
+  assert.match(txFeedService, /customer_answered/);
+  assert.match(txFeedService, /customer_response/);
   assert.match(feed, /Customer answered/);
   assert.match(feed, /Customer response/);
   assert.match(feed, /customerResponseText/);

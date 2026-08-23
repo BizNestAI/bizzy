@@ -660,7 +660,7 @@ export async function resolveCanonicalQboAccount({
   canonicalAccountKey = null,
   transactionId = null,
   source = "resolver",
-  allowCreate = true,
+  allowCreate = false,
   approvedCreateDespiteCandidateId = null,
   dependencies = {},
 } = {}) {
@@ -674,6 +674,7 @@ export async function resolveCanonicalQboAccount({
   if (!canonical || canonical.is_active === false) {
     return { ok: false, status: CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW, reason: "unknown_canonical_account", review_required: true };
   }
+  const internalMappingAuthority = ["monthly_review", "internal_monthly_review", "internal_admin"].includes(String(source || "").toLowerCase());
 
   const { realmId, qboEnv } = await getRealmContext({ businessId, getLatestQuickBooksTokenRow });
   if (!realmId) {
@@ -711,6 +712,20 @@ export async function resolveCanonicalQboAccount({
 
   const exact = findExactCanonicalAccount(accounts, canonical);
   if (exact) {
+    if (internalMappingAuthority !== true) {
+      return markNeedsReview({
+        supabase,
+        businessId,
+        realmId,
+        qboEnv,
+        canonical,
+        transactionId,
+        intent,
+        reason: "canonical_mapping_requires_internal_approval",
+        candidate: exact,
+        source,
+      });
+    }
     await upsertMapping({
       supabase,
       businessId,
@@ -729,6 +744,20 @@ export async function resolveCanonicalQboAccount({
 
   const equivalent = findApprovedEquivalentAccount(accounts, canonical);
   if (equivalent) {
+    if (internalMappingAuthority !== true) {
+      return markNeedsReview({
+        supabase,
+        businessId,
+        realmId,
+        qboEnv,
+        canonical,
+        transactionId,
+        intent,
+        reason: "canonical_mapping_requires_internal_approval",
+        candidate: equivalent,
+        source,
+      });
+    }
     await upsertMapping({
       supabase,
       businessId,
@@ -750,7 +779,11 @@ export async function resolveCanonicalQboAccount({
     return markNeedsReview({ supabase, businessId, realmId, qboEnv, canonical, transactionId, intent, reason: "ambiguous_candidate_requires_review", candidate: ambiguous, source });
   }
 
-  if (canonical.auto_create_policy !== AUTO_CREATE_ALLOWED || canonical.review_required === true || allowCreate !== true) {
+  const creationAuthorizedByInternalAccountant =
+    allowCreate === true &&
+    internalMappingAuthority === true;
+
+  if (canonical.auto_create_policy !== AUTO_CREATE_ALLOWED || canonical.review_required === true || creationAuthorizedByInternalAccountant !== true) {
     return markNeedsReview({ supabase, businessId, realmId, qboEnv, canonical, transactionId, intent, reason: "canonical_account_requires_review", candidate: ambiguous, source });
   }
 

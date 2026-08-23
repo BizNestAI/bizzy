@@ -854,7 +854,7 @@ export async function fetchCanonicalVendorActivityForBusiness({ db = null, busin
     db.from("business_qbo_vendor_mappings").select("canonical_vendor_id,realm_id,qbo_env,qbo_vendor_id,qbo_display_name,status,mapping_source,metadata,mapped_at,created_at").eq("business_id", businessId),
     db.from("qbo_vendor_creation_intents").select("canonical_vendor_id,realm_id,qbo_env,status,qbo_vendor_id,qbo_display_name,last_error,updated_at,created_at").eq("business_id", businessId),
     db.from("vendor_mapping_events").select("id,canonical_vendor_id,qbo_vendor_id,qbo_display_name,event_type,reason,metadata,transaction_id,created_at").eq("business_id", businessId).order("created_at", { ascending: false }).limit(max),
-    db.from("vendor_aliases").select("canonical_vendor_id,alias_type,is_strong_evidence,is_approved,confidence,created_at").eq("business_id", businessId).order("created_at", { ascending: false }).limit(max * 4),
+    db.from("vendor_aliases").select("canonical_vendor_id,alias_type,alias_value,normalized_alias_value,is_strong_evidence,is_approved,confidence,created_at").eq("business_id", businessId).order("created_at", { ascending: false }).limit(max * 4),
   ]);
   if (vendorErr) throw vendorErr;
   if (mappingErr) throw mappingErr;
@@ -886,6 +886,9 @@ export async function fetchCanonicalVendorActivityForBusiness({ db = null, busin
     const vendorAliases = aliasesByVendor.get(vendor.id) || [];
     const needsReview = Boolean(reviewEvent || reviewMapping || intent?.status === "needs_review");
     const createdByBizzi = mapping?.mapping_source === "creation_intent" || intent?.status === "created";
+    const latestEvent = (events || []).find((event) => event.canonical_vendor_id === vendor.id) || null;
+    const creationEvent = (events || []).find((event) => event.canonical_vendor_id === vendor.id && event.event_type === "qbo_vendor_created") || null;
+    const mappingEvent = (events || []).find((event) => event.canonical_vendor_id === vendor.id && ["existing_qbo_vendor_reused", "manual_link", "override"].includes(event.event_type)) || null;
     return {
       canonical_vendor_id: vendor.id,
       display_name: vendor.display_name,
@@ -899,10 +902,19 @@ export async function fetchCanonicalVendorActivityForBusiness({ db = null, busin
       confidence: vendor.confidence,
       alias_count: vendorAliases.length,
       strong_alias_count: vendorAliases.filter((alias) => alias.is_strong_evidence).length,
+      aliases: vendorAliases
+        .map((alias) => alias.alias_value || alias.normalized_alias_value)
+        .filter(Boolean)
+        .slice(0, 5),
       review_reason: reviewEvent?.reason || intent?.last_error?.reason || reviewMapping?.metadata?.reason || null,
+      exception_type: reviewEvent?.event_type || intent?.last_error?.code || reviewMapping?.metadata?.reason || null,
       candidate_qbo_vendor_id: reviewEvent?.metadata?.candidates?.[0]?.id || null,
       candidate_qbo_vendor_name: reviewEvent?.metadata?.candidates?.[0]?.displayName || null,
       transaction_id: reviewEvent?.transaction_id || null,
+      activity_at: creationEvent?.created_at || mappingEvent?.created_at || mapping?.mapped_at || intent?.updated_at || latestEvent?.created_at || vendor.updated_at || vendor.created_at || null,
+      mapped_at: mapping?.mapped_at || mappingEvent?.created_at || null,
+      created_at: creationEvent?.created_at || intent?.created_at || vendor.created_at || null,
+      activity_event_type: creationEvent?.event_type || mappingEvent?.event_type || latestEvent?.event_type || null,
       updated_at: vendor.updated_at || vendor.created_at || null,
     };
   });

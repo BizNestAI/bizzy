@@ -2,11 +2,8 @@ import React, { useCallback, useEffect, useState } from "react";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
 import { useBusiness } from "../../context/BusinessContext.jsx";
 import {
-  approveExistingCanonicalQboAccount,
   createBizziCanonicalQboVendor,
-  createPreferredCanonicalQboAccount,
   getCanonicalQboCoa,
-  createQboCoaAccount,
   getCanonicalQboVendors,
   useExistingCanonicalQboVendor,
 } from "../../services/bookkeeping/bookkeepingClient.js";
@@ -15,7 +12,6 @@ function QboCoaChangesPanel({ businessId }) {
   const [rows, setRows] = useState([]);
   const [history, setHistory] = useState([]);
   const [decisions, setDecisions] = useState([]);
-  const [busyDecision, setBusyDecision] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -48,43 +44,7 @@ function QboCoaChangesPanel({ businessId }) {
     fetchRows();
   }, [fetchRows]);
 
-  const showDevCreate = process.env.NODE_ENV !== "production";
   const mappedRows = rows.filter((row) => row.status !== "needs_review");
-
-  const resolveDecision = useCallback(async (decision, action) => {
-    if (!businessId || !decision?.canonical_account_key) return;
-    setBusyDecision(`${decision.canonical_account_key}:${action}`);
-    setError("");
-    try {
-      if (action === "use_existing") {
-        await approveExistingCanonicalQboAccount(businessId, decision.canonical_account_key, {
-          qbo_account_id: decision.candidate_qbo_account_id,
-        });
-      } else {
-        await createPreferredCanonicalQboAccount(businessId, decision.canonical_account_key, {
-          reviewed_candidate_qbo_account_id: decision.candidate_qbo_account_id || null,
-        });
-      }
-      await fetchRows();
-    } catch (e) {
-      setError(e?.body?.message || e?.message || "Unable to resolve COA decision.");
-    } finally {
-      setBusyDecision("");
-    }
-  }, [businessId, fetchRows]);
-
-  const handleDevCreate = useCallback(async () => {
-    if (!businessId) return;
-    setLoading(true);
-    try {
-      await createQboCoaAccount(businessId, { name: "Transportation", intent: "transportation" });
-      await fetchRows();
-    } catch (e) {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [businessId, fetchRows]);
 
   if (!businessId) {
     return (
@@ -101,24 +61,15 @@ function QboCoaChangesPanel({ businessId }) {
           <p className="text-sm font-semibold text-white/90">Chart of Accounts</p>
           <p className="text-[11px] text-white/60">Canonical Bizzi accounts mapped to QuickBooks accounts.</p>
         </div>
-        <div className="flex items-center gap-2">
-          {showDevCreate ? (
-            <GhostButton onClick={handleDevCreate} disabled={loading} className="text-xs">
-              Create test account
-            </GhostButton>
-          ) : null}
-          <GhostButton onClick={fetchRows} disabled={loading} className="text-xs">
-            {loading ? "Refreshing…" : "Refresh"}
-          </GhostButton>
-        </div>
+        <GhostButton onClick={fetchRows} disabled={loading} className="text-xs">
+          {loading ? "Refreshing…" : "Refresh"}
+        </GhostButton>
       </div>
       {error ? <p className="mt-1 text-[11px] text-amber-200/80">{error}</p> : null}
       {decisions.length ? (
         <div className="mt-3 space-y-2">
           {decisions.map((decision) => {
             const usage = decision.candidate_usage || {};
-            const busyUse = busyDecision === `${decision.canonical_account_key}:use_existing`;
-            const busyCreate = busyDecision === `${decision.canonical_account_key}:create_preferred`;
             return (
               <div key={`${decision.realm_id || "realm"}-${decision.canonical_account_key}`} className="rounded-lg border border-amber-300/20 bg-amber-300/[0.06] px-3 py-2">
                 <div className="flex items-start justify-between gap-3">
@@ -137,15 +88,8 @@ function QboCoaChangesPanel({ businessId }) {
                   </div>
                   <span className="shrink-0 rounded-full border border-amber-200/25 px-2 py-0.5 text-[11px] text-amber-100">Needs Review</span>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {decision.candidate_qbo_account_id ? (
-                    <GhostButton onClick={() => resolveDecision(decision, "use_existing")} disabled={loading || !!busyDecision} className="text-xs">
-                      {busyUse ? "Saving..." : "Use Existing Account"}
-                    </GhostButton>
-                  ) : null}
-                  <GhostButton onClick={() => resolveDecision(decision, "create_preferred")} disabled={loading || !!busyDecision} className="text-xs">
-                    {busyCreate ? "Creating..." : "Create Bizzi Preferred Account"}
-                  </GhostButton>
+                <div className="mt-2 rounded-md border border-amber-200/15 bg-black/20 px-3 py-2 text-[11px] text-amber-100/80">
+                  Account setup needed. Bizzi will review this during your monthly close.
                 </div>
               </div>
             );

@@ -401,9 +401,78 @@ export async function getPlaidStatus({ businessId }) {
   };
 }
 
+export function normalizeConnectedFinancialAccountsStatus(status = {}) {
+  const sourceInstitutions = Array.isArray(status?.institutions) ? status.institutions : [];
+  const institutions = [];
+  const accounts = [];
+
+  for (const institution of sourceInstitutions) {
+    const plaidItemId = institution?.plaid_item_id || null;
+    if (!plaidItemId || plaidItemId === "unknown") continue;
+
+    const institutionAccounts = (Array.isArray(institution?.accounts) ? institution.accounts : [])
+      .filter((account) => {
+        if (!account?.plaid_account_id) return false;
+        if (account.is_active === false) return false;
+        if (account.plaid_item_id && account.plaid_item_id !== plaidItemId) return false;
+        return true;
+      })
+      .map((account) => ({
+        plaid_account_id: account.plaid_account_id,
+        plaid_item_id: plaidItemId,
+        display_name: account.name || account.official_name || "Financial account",
+        name: account.name || account.official_name || "Financial account",
+        official_name: account.official_name || null,
+        mask: account.mask || null,
+        type: account.type || null,
+        subtype: account.subtype || null,
+        institution_name: institution.institution_name || null,
+        institution_id: institution.institution_id || null,
+        connection_status: institution.status || "connected",
+        mapped_to_qbo: account.mapped_to_qbo === true,
+        last_sync_at: account.last_sync_at || institution.last_sync_at || null,
+        connected_at: account.connected_at || null,
+      }));
+
+    if (!institutionAccounts.length) continue;
+
+    institutions.push({
+      plaid_item_id: plaidItemId,
+      institution_name: institution.institution_name || null,
+      institution_id: institution.institution_id || null,
+      status: institution.status || "connected",
+      last_sync_at: institution.last_sync_at || null,
+      accounts_count: institutionAccounts.length,
+      accounts: institutionAccounts,
+    });
+    accounts.push(...institutionAccounts);
+  }
+
+  return {
+    ok: true,
+    accounts_count: accounts.length,
+    institutions_count: institutions.length,
+    accounts,
+    institutions,
+    current_state_based: true,
+    source_contract: {
+      source_tables: ["plaid_items", "plaid_accounts", "plaid_qbo_account_mappings"],
+      active_state: "Only active Plaid items and active Plaid accounts are returned. Historical month selection does not change this list.",
+      provider_calls: false,
+    },
+  };
+}
+
+export async function getConnectedFinancialAccountsForBusiness({ businessId }) {
+  const status = await getPlaidStatus({ businessId });
+  return normalizeConnectedFinancialAccountsStatus(status);
+}
+
 export default {
   createLinkToken,
   exchangePublicToken,
   fetchAndUpsertAccounts,
   getPlaidStatus,
+  getConnectedFinancialAccountsForBusiness,
+  normalizeConnectedFinancialAccountsStatus,
 };

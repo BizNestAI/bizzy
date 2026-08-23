@@ -206,7 +206,7 @@ function deps({ supabase, qbo }) {
   };
 }
 
-test("Spotify resolves to canonical Software and reuses exact QBO Software", async () => {
+test("background Software recommendation records exact QBO candidate for internal review", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "software", name: "Software", type: "Expense" }]);
   const result = await resolveCanonicalQboAccount({
@@ -215,17 +215,22 @@ test("Spotify resolves to canonical Software and reuses exact QBO Software", asy
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(getCanonicalAccountForIntent("software").preferred_account_name, "Software");
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "needs_review");
+  assert.equal(result.reason, "canonical_mapping_requires_internal_approval");
   assert.equal(result.account.name, "Software");
-  assert.equal(result.status, "existing_exact");
   assert.equal(state.createCount, 0);
+  assert.equal(supabase.db.business_canonical_qbo_account_mappings[0].status, "needs_review");
 });
 
-test("Software absent safely creates Software instead of using unrelated Subscriptions", async () => {
+test("Software absent creates Software only from explicit internal Monthly Review approval", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "subs", name: "Subscriptions", type: "Expense" }]);
   const result = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
     intent: "software",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(result.account.name, "Software");
@@ -234,7 +239,7 @@ test("Software absent safely creates Software instead of using unrelated Subscri
   assert.equal(state.accounts.some((account) => account.name === "Subscriptions"), true);
 });
 
-test("approved equivalent maps without duplicate creation", async () => {
+test("approved equivalent remains an internal review candidate without duplicate creation", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "soft-exp", name: "Software Expense", type: "Expense" }]);
   const result = await resolveCanonicalQboAccount({
@@ -242,17 +247,22 @@ test("approved equivalent maps without duplicate creation", async () => {
     intent: "software",
     dependencies: deps({ supabase, qbo }),
   });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, "needs_review");
+  assert.equal(result.reason, "canonical_mapping_requires_internal_approval");
   assert.equal(result.account.id, "soft-exp");
-  assert.equal(result.status, "existing_approved_equivalent");
   assert.equal(state.createCount, 0);
+  assert.equal(supabase.db.business_canonical_qbo_account_mappings[0].status, "needs_review");
 });
 
-test("Duke Energy intent resolves Electric and does not silently substitute Utilities", async () => {
+test("Duke Energy intent creates Electric only from explicit internal Monthly Review approval", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "utilities", name: "Utilities", type: "Expense" }]);
   const result = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
     intent: "electric",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(result.account.name, "Electric");
@@ -266,6 +276,8 @@ test("Target business supplies resolves Supplies & Materials", async () => {
   const result = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
     intent: "materials",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(result.canonical.canonical_account_key, "materials_supplies");
@@ -278,6 +290,8 @@ test("ambiguous Supplies account blocks auto-create of Supplies & Materials", as
   const result = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
     intent: "materials",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(result.ok, false);
@@ -291,29 +305,31 @@ test("ambiguous Supplies account blocks auto-create of Supplies & Materials", as
   );
 });
 
-test("ambiguous Supplies appearing during final pre-create refresh blocks QBO create", async () => {
+test("ambiguous Software candidate appearing during final pre-create refresh blocks QBO create", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([], {
     beforeFind(s) {
-      if (s.findCount === 2 && !s.accounts.some((account) => account.name === "Supplies")) {
-        s.accounts.push({ id: "supplies", name: "Supplies", type: "Expense" });
+      if (s.findCount === 2 && !s.accounts.some((account) => account.name === "Software Services")) {
+        s.accounts.push({ id: "software-services", name: "Software Services", type: "Expense" });
       }
     },
   });
   const result = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
-    intent: "materials",
+    intent: "software",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(result.ok, false);
   assert.equal(result.status, "needs_review");
   assert.equal(result.reason, "ambiguous_candidate_requires_review");
-  assert.equal(result.account.name, "Supplies");
+  assert.equal(result.account.name, "Software Services");
   assert.equal(state.createCount, 0);
   assert.equal(supabase.db.qbo_account_creation_intents[0].status, "needs_review");
   assert.equal(
     supabase.db.business_canonical_qbo_account_mappings[0].metadata.candidate_name,
-    "Supplies"
+    "Software Services"
   );
 });
 
@@ -321,19 +337,21 @@ test("exact canonical account appearing during final pre-create refresh is reuse
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([], {
     beforeFind(s) {
-      if (s.findCount === 2 && !s.accounts.some((account) => account.name === "Supplies & Materials")) {
-        s.accounts.push({ id: "materials", name: "Supplies & Materials", type: "Expense" });
+      if (s.findCount === 2 && !s.accounts.some((account) => account.name === "Software")) {
+        s.accounts.push({ id: "software", name: "Software", type: "Expense" });
       }
     },
   });
   const result = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
-    intent: "materials",
+    intent: "software",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(result.ok, true);
   assert.equal(result.status, "existing_exact");
-  assert.equal(result.account.id, "materials");
+  assert.equal(result.account.id, "software");
   assert.equal(state.createCount, 0);
   assert.equal(supabase.db.qbo_account_creation_intents[0].status, "mapped_existing");
 });
@@ -350,6 +368,8 @@ test("approved equivalent appearing during final pre-create refresh is reused", 
   const result = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
     intent: "software",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(result.ok, true);
@@ -365,6 +385,8 @@ test("no candidate after final pre-create refresh still creates exactly once", a
   const result = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
     intent: "software",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(result.ok, true);
@@ -377,8 +399,8 @@ test("two simultaneous Software requirements create at most one QBO account", as
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([]);
   const [first, second] = await Promise.all([
-    resolveCanonicalQboAccount({ businessId: BUSINESS_ID, intent: "software", dependencies: deps({ supabase, qbo }) }),
-    resolveCanonicalQboAccount({ businessId: BUSINESS_ID, intent: "software", dependencies: deps({ supabase, qbo }) }),
+    resolveCanonicalQboAccount({ businessId: BUSINESS_ID, intent: "software", allowCreate: true, source: "monthly_review", dependencies: deps({ supabase, qbo }) }),
+    resolveCanonicalQboAccount({ businessId: BUSINESS_ID, intent: "software", allowCreate: true, source: "monthly_review", dependencies: deps({ supabase, qbo }) }),
   ]);
   assert.equal(state.createCount, 1);
   assert.equal([first.ok, second.ok].filter(Boolean).length >= 1, true);
@@ -390,6 +412,8 @@ test("QBO success plus local timeout/crash reconciles existing account without d
   const first = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
     intent: "software",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(first.ok, true);
@@ -398,6 +422,8 @@ test("QBO success plus local timeout/crash reconciles existing account without d
   const second = await resolveCanonicalQboAccount({
     businessId: BUSINESS_ID,
     intent: "software",
+    allowCreate: true,
+    source: "monthly_review",
     dependencies: deps({ supabase, qbo }),
   });
   assert.equal(second.account.name, "Software");
@@ -417,7 +443,7 @@ test("sensitive equity/liability account requires review and is not auto-created
   assert.equal(state.createCount, 0);
 });
 
-test("clarification for Software resolves through canonical policy and reuses exact account", async () => {
+test("clarification for Software remains context only even when exact QBO account exists", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "software", name: "Software", type: "Expense" }]);
   const result = await mapAnswerToCoa({
@@ -426,11 +452,13 @@ test("clarification for Software resolves through canonical policy and reuses ex
     answerText: "This is software",
     dependencies: deps({ supabase, qbo }),
   });
-  assert.equal(result.account.id, "software");
+  assert.equal(result.account, null);
   assert.equal(result.canonical_account_key, "software");
-  assert.equal(result.canonical_resolution_status, "existing_exact");
+  assert.equal(result.canonical_resolution_status, "needs_review");
+  assert.equal(result.match_reason, "canonical_mapping_requires_internal_approval");
+  assert.equal(result.review_required, true);
   assert.equal(state.createCount, 0);
-  assert.equal(supabase.db.qbo_account_mapping_events[0].source, "clarification");
+  assert.equal(supabase.db.business_canonical_qbo_account_mappings[0].status, "needs_review");
 });
 
 test("clarification cannot fuzzy-map Software to Subscriptions and does not create from customer answer", async () => {

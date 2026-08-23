@@ -139,23 +139,23 @@ test("pair-level concurrency, duplicate preflight, and posted propagation are ex
 
 test("failed posts remain visible generically in Books Review handled state", () => {
   const cron = read("src/jobs/booksPost.cron.js");
-  const route = read("src/api/bookkeeping/routes/bookkeeping.transactions.routes.js");
+  const txFeedService = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
   const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
 
   assert.match(cron, /status: shouldStop \? "failed" : item\.status/);
   assert.match(cron, /posting_in_progress: false/);
-  assert.match(route, /\["approved", "auto_approved", "failed"\]\.includes\(status\)/);
+  assert.match(txFeedService, /\["approved", "auto_approved", "failed"\]\.includes\(status\)/);
   assert.match(page, /const handledStatuses = \["approved", "auto_approved", "failed"\]/);
   assert.match(feed, /\["approved", "auto_approved", "failed"\]\.includes\(txn\.status\)/);
 });
 
 test("credit-card-payment UI exposes transfer target state instead of only a generic GL category", () => {
-  const txRoute = read("src/api/bookkeeping/routes/bookkeeping.transactions.routes.js");
+  const txFeedService = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
   const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
 
-  assert.match(txRoute, /cc_payment_transfer_target_qbo_account_name/);
+  assert.match(txFeedService, /cc_payment_transfer_target_qbo_account_name/);
   assert.match(feed, /Credit Card Payment/);
   assert.match(feed, /ccSelectableAccounts/);
   assert.match(feed, /type === "creditcard"/);
@@ -179,23 +179,23 @@ test("taxonomy-only cc-payment stays suspected and does not lock the account pic
 test("durable pair target preselects and weaker mapping cannot overwrite it", () => {
   const suggest = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
-  const txRoute = read("src/api/bookkeeping/routes/bookkeeping.transactions.routes.js");
+  const txFeedService = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
 
   assert.match(suggest, /targetQboAccountId/);
   assert.match(suggest, /durable_pair_target/);
   assert.match(suggest, /suggestedAcct = \{\s*id: ccPaymentPair\.targetQboAccountId/s);
-  assert.match(txRoute, /cc_payment_transfer_target_qbo_account_id/);
+  assert.match(txFeedService, /cc_payment_transfer_target_qbo_account_id/);
   assert.match(feed, /ccTargetId/);
   assert.match(feed, /selectedAccountValue = accountSelections\.get\(txn\.id\).*ccTargetId/s);
 });
 
 test("customer-facing matched label is human-readable and never displays counterpart UUID text", () => {
   const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
-  const txRoute = read("src/api/bookkeeping/routes/bookkeeping.transactions.routes.js");
+  const txFeedService = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
 
   assert.match(service, /cc_payment_pair_counterpart_amount/);
-  assert.match(txRoute, /cc_payment_pair_counterpart_account_name/);
+  assert.match(txFeedService, /cc_payment_pair_counterpart_account_name/);
   assert.match(feed, /Matched to \$\{ccMatchedParts\.join/);
   assert.doesNotMatch(feed, /Matched counterpart/);
 });
