@@ -90,8 +90,9 @@ test("Monthly Review P&L source semantics use QBO snapshot instead of source led
   assert.match(ui, /Approve \{formatMonthShort\(month\)\} Books/);
   assert.match(ui, /function ReviewedStamp/);
   assert.match(ui, /Reopen Month/);
-  assert.match(ui, /Month Close Summary/);
-  assert.match(ui, /buildAccountingCloseSummary/);
+  assert.match(ui, /Publish Monthly Report/);
+  assert.doesNotMatch(ui, /Month Close Summary/);
+  assert.doesNotMatch(ui, /buildAccountingCloseSummary/);
 });
 
 test("Monthly Review QBO P&L account keys use snapshot or QBO identity without fabricating Bizzi rows", () => {

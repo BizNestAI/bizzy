@@ -12,6 +12,11 @@ import {
   fetchBookkeepingTransactions,
   matchesTransactionStatusFilter,
 } from "../../services/bookkeeping/bookkeepingTransactionFeedService.js";
+import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
+import {
+  deriveTraceReconciliationStatus,
+  formatPlaidAccountDisplayLabel,
+} from "../../services/bookkeeping/postingTraceDisplay.js";
 import {
   approveExistingQboAccountForCanonical,
   createPreferredQboAccountForCanonical,
@@ -2176,6 +2181,9 @@ async function buildMonthlySourceLedger(businessId, month) {
         "Monthly source ledger categorizations"
       )
     : [];
+  const plaidAccountIds = Array.from(new Set(bankRows.map((row) => row.plaid_account_id).filter(Boolean)));
+  const plaidAccountLabels = await loadPlaidAccountLabelsForMonthlyReview(businessId, plaidAccountIds);
+  const reconciliationItemByTxn = await loadReconciliationItemsForMonthlyTrace(businessId, month, txnIds);
   const previousBankRows = await safeRows(() =>
     applyActiveBookkeepingScope(
       supabase
@@ -2243,6 +2251,10 @@ async function buildMonthlySourceLedger(businessId, month) {
     const normalizedAmount = Number.isFinite(amount) ? amount : 0;
     const status = cat.status || "needs_review";
     const qboSyncStatus = deriveQboSyncStatus(cat);
+    const reconciliationStatus = deriveTraceReconciliationStatus({
+      lifecycle: qboSyncStatus,
+      reconciliationItem: reconciliationItemByTxn.get(String(row.id)) || null,
+    });
     const payee = row.counterparty_name || row.merchant_name || "";
     const materialityFlags = buildTransactionMaterialityFlags({
       amount: normalizedAmount,
@@ -2259,7 +2271,7 @@ async function buildMonthlySourceLedger(businessId, month) {
       id: row.id,
       plaid_transaction_id: row.plaid_transaction_id || null,
       plaid_account_id: row.plaid_account_id || null,
-      bank_account: row.plaid_account_id || null,
+      bank_account: plaidAccountLabels.get(String(row.plaid_account_id)) || "Financial account",
       date: row.date,
       description: row.name || "",
       payee,
@@ -2275,6 +2287,9 @@ async function buildMonthlySourceLedger(businessId, month) {
       reason: cat.reason || null,
       post_error: cat.post_error || null,
       qbo_sync_status: qboSyncStatus,
+      qbo_lifecycle_status: qboSyncStatus,
+      reconciliation_status: reconciliationStatus,
+      reconciliation_item_status: reconciliationItemByTxn.get(String(row.id))?.status || null,
       books_review_tab: deriveBooksReviewTab(cat),
       final_qbo_account_id: cat.final_qbo_account_id || null,
       final_qbo_account_name: cat.final_qbo_account_name || null,
@@ -2306,7 +2321,8 @@ async function buildMonthlySourceLedger(businessId, month) {
       if (txn.books_review_tab === "needs_review") acc.needs_review_count += 1;
       if (txn.post_error) acc.post_error_count += 1;
       if (txn.books_review_tab === "posted") acc.posted_count += 1;
-      acc.qbo_sync_counts[txn.qbo_sync_status?.key || "not_posted"] = (acc.qbo_sync_counts[txn.qbo_sync_status?.key || "not_posted"] || 0) + 1;
+      const lifecycleKey = txn.qbo_lifecycle_status?.key || txn.qbo_sync_status?.key || "needs_review";
+      acc.qbo_sync_counts[lifecycleKey] = (acc.qbo_sync_counts[lifecycleKey] || 0) + 1;
       if (Array.isArray(txn.materiality_flags) && txn.materiality_flags.length) acc.materiality_count += 1;
     });
     return acc;
@@ -2323,25 +2339,22 @@ async function buildMonthlySourceLedger(businessId, month) {
       payee: txn.payee || txn.description || "",
       description: txn.description || "",
       amount: txn.amount || 0,
-      bank_account: txn.bank_account || txn.plaid_account_id || "Plaid account",
+      plaid_account_id: txn.plaid_account_id || null,
+      bank_account: txn.bank_account || "Financial account",
       bizzi_gl_account: txn.effective_account_name || "Uncategorized",
       qbo_txn_id: txn.qbo_txn_id || null,
+      qbo_lifecycle_status: txn.qbo_lifecycle_status || txn.qbo_sync_status,
       qbo_sync_status: txn.qbo_sync_status,
-      match_confidence: txn.qbo_sync_status?.key === "updated_in_qbo"
-        ? "high"
-        : txn.qbo_sync_status?.key === "queued"
-          ? "medium"
-          : txn.qbo_sync_status?.key === "failed"
-            ? "low"
-            : "pending",
+      reconciliation_status: txn.reconciliation_status,
     }));
   const reconciliationTotals = reconciliationTrace.reduce((acc, row) => {
     acc.plaid_count += 1;
-    if (row.qbo_sync_status?.key === "updated_in_qbo") acc.matched_qbo_count += 1;
-    if (["queued", "not_posted"].includes(row.qbo_sync_status?.key)) acc.pending_count += 1;
-    if (row.qbo_sync_status?.key === "failed" || row.match_confidence === "low") acc.exception_count += 1;
+    if (row.qbo_lifecycle_status?.key === "posted") acc.posted_to_qbo_count += 1;
+    if (row.qbo_lifecycle_status?.key === "needs_review") acc.needs_review_count += 1;
+    if (["handled_not_posted", "queued"].includes(row.qbo_lifecycle_status?.key)) acc.awaiting_qbo_count += 1;
+    if (row.reconciliation_status?.exception === true) acc.reconciliation_exception_count += 1;
     return acc;
-  }, { plaid_count: 0, matched_qbo_count: 0, pending_count: 0, exception_count: 0 });
+  }, { plaid_count: 0, posted_to_qbo_count: 0, awaiting_qbo_count: 0, needs_review_count: 0, reconciliation_exception_count: 0 });
 
   return {
     totals,
@@ -2363,6 +2376,71 @@ async function buildMonthlySourceLedger(businessId, month) {
     reconciliation_trace: reconciliationTrace,
     reconciliation_totals: reconciliationTotals,
   };
+}
+
+async function loadPlaidAccountLabelsForMonthlyReview(businessId, plaidAccountIds = []) {
+  const ids = Array.from(new Set((plaidAccountIds || []).filter(Boolean).map(String)));
+  if (!businessId || !ids.length) return new Map();
+
+  const accountRows = await safeRows(() =>
+    supabase
+      .from("plaid_accounts")
+      .select("plaid_account_id,plaid_item_id,name,official_name,mask,type,subtype,is_active")
+      .eq("business_id", businessId)
+      .in("plaid_account_id", ids),
+    "Monthly source ledger Plaid accounts"
+  );
+  const itemIds = Array.from(new Set((accountRows || []).map((row) => row.plaid_item_id).filter(Boolean)));
+  const itemRows = itemIds.length
+    ? await safeRows(() =>
+        supabase
+          .from("plaid_items")
+          .select("plaid_item_id,institution_name")
+          .eq("business_id", businessId)
+          .in("plaid_item_id", itemIds),
+        "Monthly source ledger Plaid items"
+      )
+    : [];
+  const institutionByItemId = new Map((itemRows || []).map((row) => [String(row.plaid_item_id), row.institution_name || null]));
+  return new Map((accountRows || []).map((row) => [
+    String(row.plaid_account_id),
+    formatPlaidAccountDisplayLabel({
+      ...row,
+      institution_name: institutionByItemId.get(String(row.plaid_item_id)) || null,
+    }),
+  ]));
+}
+
+async function loadReconciliationItemsForMonthlyTrace(businessId, month, transactionIds = []) {
+  const ids = Array.from(new Set((transactionIds || []).filter(Boolean).map(String)));
+  if (!businessId || !ids.length) return new Map();
+  const [start, end] = monthBounds(month);
+  const runs = await safeRows(() =>
+    supabase
+      .from("reconciliation_runs")
+      .select("id,period_start,last_checked_at,created_at")
+      .eq("business_id", businessId)
+      .or(`period_start.gte.${start},last_checked_at.gte.${start},created_at.gte.${start}`)
+      .order("last_checked_at", { ascending: false, nullsLast: true })
+      .limit(5),
+    "Monthly source ledger reconciliation runs"
+  );
+  const run = runs.find((item) => {
+    const periodStart = toDateString(item.period_start || item.created_at || item.last_checked_at);
+    return !periodStart || periodStart < end;
+  }) || runs[0] || null;
+  if (!run?.id) return new Map();
+
+  const items = await safeRows(() =>
+    supabase
+      .from("reconciliation_items")
+      .select("id,bank_transaction_id,status,note,details,qbo_txn_id,qbo_txn_type,reconciled_at,posted_at")
+      .eq("business_id", businessId)
+      .eq("run_id", run.id)
+      .in("bank_transaction_id", ids),
+    "Monthly source ledger reconciliation items"
+  );
+  return new Map((items || []).filter((row) => row.bank_transaction_id).map((row) => [String(row.bank_transaction_id), row]));
 }
 
 async function fetchOperatorResponsesAwaitingReview(businessId, month) {
@@ -2910,46 +2988,7 @@ function roundCurrency(value) {
 }
 
 function deriveQboSyncStatus(cat = {}) {
-  const status = String(cat.status || "").toLowerCase();
-  if (cat.post_error || ["failed", "failed_post", "post_failed", "blocked"].includes(status)) {
-    return {
-      key: "failed",
-      label: "Failed",
-      tone: "danger",
-      detail: cat.post_error || "QBO posting failed.",
-    };
-  }
-  if (cat.qbo_txn_id) {
-    const adjusted = cat.meta?.monthly_review_qbo_update?.ok === true || cat.meta?.monthly_review_adjusted === true;
-    return {
-      key: "updated_in_qbo",
-      label: adjusted ? "Updated in QBO" : "Posted in QBO",
-      tone: "good",
-      detail: `${cat.qbo_txn_type || "QBO transaction"} ${cat.qbo_txn_id}`,
-    };
-  }
-  if (cat.post_after) {
-    return {
-      key: "queued",
-      label: "Queued for QBO",
-      tone: "warning",
-      detail: cat.post_after ? `Queued for ${formatDateTime(cat.post_after)}` : "Queued for QBO posting.",
-    };
-  }
-  if (["approved", "auto_approved"].includes(status)) {
-    return {
-      key: "not_posted",
-      label: "Not posted",
-      tone: "neutral",
-      detail: "Handled in Bizzi; no QBO transaction has been created yet.",
-    };
-  }
-  return {
-    key: "not_posted",
-    label: "Not posted",
-    tone: "neutral",
-    detail: "No QBO transaction has been created yet.",
-  };
+  return deriveQboPostingLifecycle(cat);
 }
 
 function deriveBooksReviewTab(cat = {}) {
@@ -2989,7 +3028,7 @@ function summarizeLedgerForEvidence(sourceLedger = {}) {
         amount: txn.amount,
         effective_account_id: txn.effective_account_id || null,
         effective_account_name: txn.effective_account_name || null,
-        qbo_sync_key: txn.qbo_sync_status?.key || "not_posted",
+        qbo_sync_key: txn.qbo_lifecycle_status?.key || txn.qbo_sync_status?.key || "needs_review",
         qbo_txn_id: txn.qbo_txn_id || null,
       })),
     })),
@@ -3023,7 +3062,7 @@ function buildSectionSourceReview(sectionKey, summary = {}, sourceLedger = {}) {
   return {
     exception_count: warnings.length,
     sync_state: sectionKey === "books"
-      ? ((syncCounts.failed || syncCounts.queued || syncCounts.not_posted) ? "attention" : "synced")
+      ? ((syncCounts.failed || syncCounts.queued || syncCounts.handled_not_posted || syncCounts.not_posted) ? "attention" : "synced")
       : (warnings.length ? "attention" : "clear"),
     last_refreshed_at: summary?.generated_at || new Date().toISOString(),
     pass_fail: sectionBlockers ? "fail" : "pass",

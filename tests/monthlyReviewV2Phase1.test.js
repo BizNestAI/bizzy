@@ -90,23 +90,17 @@ test("Monthly Review V2 phase 1 finalization preserves stamps audit and reopen b
   assert.match(reopenRoute, /eventType: "reopened"/);
 });
 
-test("Monthly Review V2 phase 1 summary and detail use the same accounting-close guard", () => {
+test("Monthly Review V2 phase 1 detail keeps accounting-close guard while UI omits obsolete summary card", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
   const ui = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   const detailRoute = extractRouteBody(route, "/businesses/:businessId", "get");
 
   assert.match(detailRoute, /buildAccountingCloseFinalizationGuard/);
-  assert.match(ui, /const finalizationGuard = detail\?\.finalization_guard \|\| sourceLedger\?\.finalization_guard \|\| \{\}/);
   assert.doesNotMatch(ui, /Number\(business\.reviewed_sections \|\| 0\) \/ Math\.max/);
   assert.match(ui, /getBusinessQueueProgress\(business\)/);
-  assert.match(ui, /sourceLedger\?\.totals\?\.needs_review_count/);
-  assert.match(ui, /detail\?\.operator_responses\?\.count/);
-  assert.match(ui, /detail\?\.canonical_chart_of_accounts\?\.summary\?\.needs_review_count/);
-  assert.match(ui, /finalizationGuard\?\.counts\?\.qbo_failed/);
-  assert.match(ui, /counts\.needs_review_transactions/);
-  assert.match(ui, /counts\.operator_responses_unresolved/);
-  assert.match(ui, /counts\.canonical_coa_needs_review/);
-  assert.match(ui, /counts\.reconciliation_exception/);
+  assert.match(ui, /Publish Monthly Report/);
+  assert.doesNotMatch(ui, /Month Close Summary/);
+  assert.doesNotMatch(ui, /buildCloseBlockerText/);
 });
 
 test("Monthly Review V2 phase 1 exposes safe header actions and reviewed stamp", () => {
@@ -124,7 +118,8 @@ test("Monthly Review V2 phase 1 exposes safe header actions and reviewed stamp",
   assert.match(ui, /function ReviewedStamp/);
   assert.match(ui, /Reviewed by \{formatReviewerName/);
   assert.match(ui, /Reopen Month/);
-  assert.match(ui, /Month Close Summary/);
+  assert.match(ui, /Publish Monthly Report/);
+  assert.doesNotMatch(ui, /Month Close Summary/);
   assert.match(ui, /getMonthlyCloseStatus/);
 });
 

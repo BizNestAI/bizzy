@@ -41,20 +41,19 @@ test("Auto-post policy remains explicit and approval grace uses the configured 2
 test("Monthly Review QBO labels distinguish Handled from Posted and scheduled queue state", () => {
   const monthly = read("src/api/admin/monthlyReview.routes.js");
   const mirror = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  const lifecycle = read("src/services/bookkeeping/qboPostingLifecycle.js");
   const statusBody = sliceBetween(monthly, "function deriveQboSyncStatus", "function deriveBooksReviewTab");
   const mirrorStatusBody = sliceBetween(mirror, "export function deriveMirrorQboPostingStatus", "function qboBadgeClass");
 
-  assert.match(statusBody, /if \(cat\.qbo_txn_id\)/);
-  assert.match(statusBody, /if \(cat\.post_after\)/);
-  assert.match(statusBody, /label:\s*"Queued for QBO"/);
-  assert.match(statusBody, /label:\s*"Not posted"[\s\S]*Handled in Bizzi; no QBO transaction has been created yet/);
-  assert.doesNotMatch(statusBody, /\["approved", "auto_approved"\]\.includes\(status\) \|\| cat\.post_after/);
+  assert.match(statusBody, /return deriveQboPostingLifecycle\(cat\)/);
+  assert.match(lifecycle, /if \(hasQboTxn\)/);
+  assert.match(lifecycle, /key:\s*"posted"/);
+  assert.match(lifecycle, /key:\s*"queued"/);
+  assert.match(lifecycle, /label:\s*"Handled · Not posted"/);
+  assert.match(lifecycle, /key:\s*"needs_review"/);
+  assert.doesNotMatch(lifecycle, /post_error[\s\S]{0,120}hasQboTxn/);
 
-  assert.match(mirrorStatusBody, /if \(row\.qbo_txn_id\)/);
-  assert.match(mirrorStatusBody, /label:\s*"Posted"/);
-  assert.match(mirrorStatusBody, /if \(row\.post_after\)/);
-  assert.match(mirrorStatusBody, /label:\s*"Queued for QBO"/);
-  assert.match(mirrorStatusBody, /"posted"\]\.includes\(status\)[\s\S]*label:\s*"Not posted"/);
+  assert.match(mirrorStatusBody, /return deriveQboPostingLifecycle\(row\)/);
 });
 
 test("Operator Request submission removes confirmed rows locally before silent revalidation", () => {

@@ -3,7 +3,7 @@ export function buildFinalizationGuard(sourceLedger = {}) {
   const blockers = [];
   for (const group of groups) {
     for (const txn of group.transactions || []) {
-      const syncKey = txn.qbo_sync_status?.key || "not_posted";
+      const syncKey = txn.qbo_lifecycle_status?.key || txn.qbo_sync_status?.key || "needs_review";
       const label = `${txn.payee || txn.description || txn.id} ${txn.date ? `(${txn.date})` : ""}`.trim();
       const itemKey = blockerItemKey("transaction", txn.id);
       if (!txn.effective_account_id && !txn.effective_account_name) {
@@ -15,7 +15,7 @@ export function buildFinalizationGuard(sourceLedger = {}) {
       if (syncKey === "queued") {
         blockers.push({ type: "qbo_queued", transaction_id: txn.id, item_key: itemKey, label, message: "QBO sync is still queued." });
       }
-      if (syncKey === "not_posted") {
+      if (syncKey === "not_posted" || syncKey === "handled_not_posted") {
         blockers.push({ type: "qbo_not_posted", transaction_id: txn.id, item_key: itemKey, label, message: "Transaction has not been posted or updated in QBO." });
       }
     }
@@ -169,7 +169,7 @@ export function canonicalKeyFromCategorization(cat = {}) {
 function reconciliationExceptionBlockers(sourceLedger = {}, reconciliationEvidence = {}) {
   const blockers = [];
   for (const row of sourceLedger.reconciliation_trace || []) {
-    if (row.qbo_sync_status?.key !== "failed" && row.match_confidence !== "low") continue;
+    if (row.qbo_lifecycle_status?.key !== "failed" && row.qbo_sync_status?.key !== "failed" && row.reconciliation_status?.exception !== true) continue;
     blockers.push({
       type: "reconciliation_exception",
       transaction_id: row.transaction_id || null,

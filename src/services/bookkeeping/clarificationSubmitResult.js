@@ -4,7 +4,7 @@ const CLARIFICATION_SUBMIT_ERROR_MESSAGES = {
   transaction_not_needs_review: "This transaction is no longer awaiting review.",
   canonical_transaction_not_found: "This transaction could not be found. Refresh and try again.",
   plaid_accounting_review_required: "This bank transaction needs an internal account review before it can be answered.",
-  pending_transaction_not_postable: "This transaction is still pending at the bank.",
+  pending_transaction_not_postable: "This transaction is still pending at the bank. Please wait 1-2 business days.",
   clarification_update_failed: "We could not save that answer. Try again.",
   clarification_update_not_confirmed: "We could not confirm that answer was saved. Try again.",
   clarification_create_failed: "We could not create the request record. Try again.",

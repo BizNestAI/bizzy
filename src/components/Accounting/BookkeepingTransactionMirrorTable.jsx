@@ -1,5 +1,6 @@
 import React from "react";
 import { CoaDropdown } from "./BookkeepingFeed.jsx";
+import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 
 const BADGE_BASE = "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium";
 
@@ -186,45 +187,7 @@ function buildStateBadges(row) {
 }
 
 export function deriveMirrorQboPostingStatus(row = {}) {
-  const status = String(row.status || "").toLowerCase();
-  if (row.qbo_txn_id) {
-    return {
-      key: "posted",
-      label: "Posted",
-      tone: "good",
-      detail: `${row.qbo_txn_type || "QBO transaction"} ${row.qbo_txn_id}`,
-    };
-  }
-  if (row.post_error || ["failed", "failed_post", "post_failed", "blocked"].includes(status)) {
-    return {
-      key: "failed",
-      label: "Failed",
-      tone: "danger",
-      detail: row.post_error || "QBO posting failed.",
-    };
-  }
-  if (row.post_after) {
-    return {
-      key: "queued",
-      label: "Queued for QBO",
-      tone: "warning",
-      detail: `Posts after ${formatShortDateTime(row.post_after)}`,
-    };
-  }
-  if (["approved", "auto_approved", "handled", "posted"].includes(status)) {
-    return {
-      key: "not_posted",
-      label: "Not posted",
-      tone: "neutral",
-      detail: "Handled in Bizzi; no QBO transaction has been created yet.",
-    };
-  }
-  return {
-    key: "not_ready",
-    label: "Not ready",
-    tone: "neutral",
-    detail: "Needs review before QBO posting.",
-  };
+  return deriveQboPostingLifecycle(row);
 }
 
 function qboBadgeClass(status) {
@@ -271,13 +234,6 @@ function formatShortDate(value) {
   const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 10);
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
-}
-
-function formatShortDateTime(value) {
-  if (!value) return "";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value);
-  return parsed.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function formatMoney(value) {

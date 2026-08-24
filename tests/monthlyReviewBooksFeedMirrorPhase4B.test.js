@@ -133,7 +133,8 @@ test("Monthly Review renders collapsible Needs Review and Handled mirrors with b
 test("mirror row presenter preserves customer-answer, QBO, and special-workflow state without mutations", () => {
   const tableSource = readFileSync(join(root, "src/components/Accounting/BookkeepingTransactionMirrorTable.jsx"), "utf8");
   assert.match(tableSource, /Customer answered/);
-  assert.match(tableSource, /qboStatusLabel/);
+  assert.match(tableSource, /deriveQboPostingLifecycle/);
+  assert.match(tableSource, /const qboLabel = qboStatus\.label/);
   assert.match(tableSource, /Credit-card payment/);
   assert.match(tableSource, /Possible card payment/);
   assert.match(tableSource, /Duplicate risk/);

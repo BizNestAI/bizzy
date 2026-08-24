@@ -5,6 +5,8 @@ import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.j
 import { CoaDropdown } from "../../components/Accounting/BookkeepingFeed.jsx";
 import BookkeepingTransactionMirrorTable from "../../components/Accounting/BookkeepingTransactionMirrorTable.jsx";
 import { ADMIN_VIEW_RETURN_MESSAGE } from "../../services/adminViewReturn.js";
+import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
+import { deriveTraceReconciliationStatus } from "../../services/bookkeeping/postingTraceDisplay.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -124,11 +126,8 @@ export default function MonthlyReviewConsole() {
     return sections.filter((section) => ["reviewed", "not_applicable"].includes(section.status)).length;
   }, [detail?.sections]);
   const totalCount = detail?.sections?.length || 0;
-  const finalizationGuard = detail?.finalization_guard || sourceLedger?.finalization_guard || {};
-  const pnlPublished = Boolean(detail?.pnl_report?.monthly_review_published_at && detail?.pnl_report?.storage_path);
   const canRequestApproval = Boolean(detail?.run?.id && !detail?.stamp && !finalizing);
   const selectedReviewStatus = getMonthlyCloseStatus(detail, selectedBusiness);
-  const closeSummary = buildAccountingCloseSummary({ detail, sourceLedger, finalizationGuard });
   const mirrorFeedAccounts = useMemo(
     () => (sourceLedger?.chart_accounts || []).map(normalizeAccountForBooksDropdown),
     [sourceLedger?.chart_accounts]
@@ -1101,6 +1100,15 @@ export default function MonthlyReviewConsole() {
                       {busyAction === "customer-view" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
                       View Customer App
                     </button>
+                    <button
+                      type="button"
+                      onClick={publishMonthlyReport}
+                      disabled={busyAction === "publish-report" || !detail?.run?.id}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300/20 bg-sky-300/[0.09] px-4 py-2 text-sm font-semibold text-sky-100 transition hover:bg-sky-300/[0.14] disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      {busyAction === "publish-report" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                      Publish Monthly Report
+                    </button>
                     {detail?.stamp ? (
                       <button
                         type="button"
@@ -1124,42 +1132,6 @@ export default function MonthlyReviewConsole() {
                     )}
                   </div>
                 </div>
-
-	                <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-white">Month Close Summary</div>
-                      <p className="mt-1 text-xs text-white/50">Can this company's books be closed for {formatMonth(month)}?</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={publishMonthlyReport}
-                      disabled={busyAction === "publish-report" || !detail?.run?.id}
-                      className="inline-flex min-h-9 items-center justify-center gap-2 rounded-xl border border-sky-300/20 bg-sky-300/[0.09] px-3 py-2 text-xs font-semibold text-sky-100 transition hover:bg-sky-300/[0.14] disabled:opacity-45"
-                    >
-                      {busyAction === "publish-report" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                      Publish Monthly Report
-                    </button>
-                  </div>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                    {closeSummary.map((item) => (
-                      <MiniStat key={item.label} label={item.label} value={item.value} />
-                    ))}
-                  </div>
-                  {finalizationGuard?.can_finalize === false ? (
-                    <div className="mt-3 rounded-xl border border-amber-300/16 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-100/90">
-                      {buildCloseBlockerText(finalizationGuard, pnlPublished)}
-                    </div>
-                  ) : !pnlPublished ? (
-                    <div className="mt-3 rounded-xl border border-amber-300/16 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-100/90">
-                      QuickBooks P&amp;L data refresh is separate from monthly report publication. Publish the monthly report before approving this month.
-                    </div>
-                  ) : (
-                    <div className="mt-3 rounded-xl border border-emerald-300/14 bg-emerald-300/[0.055] px-3 py-2 text-xs text-emerald-100/85">
-                      Accounting close summary is clear based on currently loaded live records.
-                    </div>
-	                  )}
-	                </div>
 
 	                <ConnectedAccountsPanel
 	                  data={connectedAccounts}
@@ -2127,11 +2099,12 @@ function ReconciliationTracePanel({ ledger, loading }) {
           <div className="text-xs uppercase tracking-[0.14em] text-emerald-200/75">Plaid to QBO Reconciliation</div>
           <h3 className="mt-1 text-lg font-semibold text-white">Posting Trace</h3>
         </div>
-        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
           <MiniStat label="Plaid Rows" value={totals.plaid_count ?? rows.length} />
-          <MiniStat label="Matched QBO" value={totals.matched_qbo_count ?? 0} />
-          <MiniStat label="Pending" value={totals.pending_count ?? 0} />
-          <MiniStat label="Exceptions" value={totals.exception_count ?? 0} />
+          <MiniStat label="Posted to QBO" value={totals.posted_to_qbo_count ?? totals.matched_qbo_count ?? 0} />
+          <MiniStat label="Awaiting QBO" value={totals.awaiting_qbo_count ?? totals.pending_count ?? 0} />
+          <MiniStat label="Needs Review" value={totals.needs_review_count ?? 0} />
+          <MiniStat label="Recon Exceptions" value={totals.reconciliation_exception_count ?? totals.exception_count ?? 0} />
         </div>
       </div>
 
@@ -2142,7 +2115,7 @@ function ReconciliationTracePanel({ ledger, loading }) {
           <div>Bank Account</div>
           <div>Bizzi GL</div>
           <div>QBO Status</div>
-          <div>Match</div>
+          <div>Reconciliation</div>
         </div>
         <div className="max-h-[420px] divide-y divide-white/[0.06] overflow-y-auto">
           {loading ? (
@@ -2163,8 +2136,8 @@ function ReconciliationTracePanel({ ledger, loading }) {
                   <div className="truncate text-white/80">{row.bizzi_gl_account || "Uncategorized"}</div>
                   <div className="text-[11px] text-white/35">{formatCurrency(row.amount)}</div>
                 </div>
-                <QboSyncStatusBadge status={row.qbo_sync_status} compact />
-                <ReconciliationMatchBadge confidence={row.match_confidence} />
+                <QboSyncStatusBadge status={row.qbo_lifecycle_status || row.qbo_sync_status} compact />
+                <ReconciliationStatusBadge status={row.reconciliation_status} />
               </div>
             ))
           ) : (
@@ -2481,7 +2454,7 @@ function MiniStat({ label, value }) {
 }
 
 function QboSyncStatusBadge({ status, compact = false }) {
-  const normalized = status || { key: "not_posted", label: "Not posted", tone: "neutral", detail: "" };
+  const normalized = status || { key: "needs_review", label: "Needs Review", tone: "neutral", detail: "" };
   const cls = normalized.tone === "good"
     ? "border-emerald-300/20 bg-emerald-300/[0.09] text-emerald-100"
     : normalized.tone === "warning"
@@ -2503,18 +2476,21 @@ function QboSyncStatusBadge({ status, compact = false }) {
   );
 }
 
-function ReconciliationMatchBadge({ confidence }) {
-  const normalized = String(confidence || "pending").toLowerCase();
-  const cls = normalized === "high"
+function ReconciliationStatusBadge({ status }) {
+  const normalized = status || { key: "not_yet_eligible", label: "Not yet eligible", tone: "neutral" };
+  const tone = normalized.tone || "neutral";
+  const cls = tone === "good"
     ? "border-emerald-300/20 bg-emerald-300/[0.09] text-emerald-100"
-    : normalized === "medium"
+    : tone === "info"
       ? "border-sky-300/18 bg-sky-300/[0.08] text-sky-100"
-      : normalized === "low"
+      : tone === "warning"
         ? "border-amber-300/22 bg-amber-300/[0.09] text-amber-100"
-        : "border-white/10 bg-white/[0.05] text-white/58";
+        : tone === "danger"
+          ? "border-rose-300/24 bg-rose-300/[0.1] text-rose-100"
+          : "border-white/10 bg-white/[0.05] text-white/58";
   return (
-    <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-[11px] font-medium ${cls}`}>
-      {normalized === "pending" ? "Pending" : titleCase(normalized)}
+    <span className={`inline-flex w-fit max-w-full rounded-full border px-2.5 py-1 text-[11px] font-medium ${cls}`} title={normalized.detail || normalized.label}>
+      <span className="truncate">{normalized.label}</span>
     </span>
   );
 }
@@ -2632,54 +2608,6 @@ function getBusinessQueueProgress(business = {}) {
   return 50;
 }
 
-function buildAccountingCloseSummary({ detail, sourceLedger, finalizationGuard }) {
-  const reconciliationExceptions = Math.max(
-    Number(sourceLedger?.reconciliation_totals?.exception_count || 0),
-    Number(findSectionRawMetric(detail, "reconciliations", "exceptionCount") || 0)
-  );
-  return [
-    { label: "Needs Review", value: sourceLedger?.totals?.needs_review_count ?? 0 },
-    { label: "Operator Responses", value: detail?.operator_responses?.count ?? detail?.operator_responses?.rows?.length ?? 0 },
-    { label: "COA Approvals", value: detail?.canonical_chart_of_accounts?.summary?.needs_review_count ?? 0 },
-    { label: "Failed QBO", value: finalizationGuard?.counts?.qbo_failed ?? 0 },
-    { label: "Reconciliation Exceptions", value: reconciliationExceptions },
-  ];
-}
-
-function findSectionRawMetric(detail, sectionKey, metricKey) {
-  const section = (detail?.sections || []).find((item) => item.section_key === sectionKey);
-  return section?.summary?.raw?.[metricKey] ?? null;
-}
-
-function buildCloseBlockerText(guard = {}, pnlPublished = false) {
-  if (!pnlPublished) return "Pull and publish the monthly P&L before approving this month.";
-  const count = Number(guard.unique_blocking_item_count || guard.blocker_count || 0);
-  const reasonCount = Number(guard.reason_count || guard.blockers?.length || 0);
-  if (!count) return "Accounting close blockers are clear.";
-  const counts = guard.counts || {};
-  const parts = [
-    counts.needs_review_transactions ? `${counts.needs_review_transactions} Needs Review transaction${counts.needs_review_transactions === 1 ? "" : "s"}` : null,
-    counts.operator_responses_unresolved ? `${counts.operator_responses_unresolved} Operator Response${counts.operator_responses_unresolved === 1 ? "" : "s"}` : null,
-    counts.canonical_coa_needs_review ? `${counts.canonical_coa_needs_review} COA approval${counts.canonical_coa_needs_review === 1 ? "" : "s"}` : null,
-    counts.qbo_failed ? `${counts.qbo_failed} failed QBO posting${counts.qbo_failed === 1 ? "" : "s"}` : null,
-    counts.qbo_queued ? `${counts.qbo_queued} queued QBO posting${counts.qbo_queued === 1 ? "" : "s"}` : null,
-    counts.qbo_not_posted ? `${counts.qbo_not_posted} not posted` : null,
-    counts.missing_gl_account ? `${counts.missing_gl_account} missing GL account${counts.missing_gl_account === 1 ? "" : "s"}` : null,
-    counts.reconciliation_exception ? `${counts.reconciliation_exception} reconciliation exception${counts.reconciliation_exception === 1 ? "" : "s"}` : null,
-  ].filter(Boolean);
-  const reasonText = parts.length ? ` Reasons: ${parts.join(", ")}.` : "";
-  const expanded = reasonCount > count ? ` across ${reasonCount} reason${reasonCount === 1 ? "" : "s"}` : "";
-  return `${count} transaction/item${count === 1 ? "" : "s"} blocking close${expanded}.${reasonText}`;
-}
-
-function firstFiniteNumber(...values) {
-  for (const value of values) {
-    const number = Number(value);
-    if (Number.isFinite(number)) return number;
-  }
-  return 0;
-}
-
 function formatReviewerName(value) {
   const raw = String(value || "Internal staff").trim();
   if (!raw.includes("@")) return raw;
@@ -2719,8 +2647,8 @@ function buildDemoReviewDetail(data, month) {
   const demoReconciliationTotals = sourceLedger.reconciliation_totals || {};
   const demoPlaidTotal = sourceLedger.totals.transaction_count || demoReconciliationTotals.plaid_count || 0;
   const demoNeedsGl = sourceLedger.totals.needs_review_count || 0;
-  const demoReconciled = demoReconciliationTotals.matched_qbo_count || 0;
-  const demoPostedQbo = sourceLedger.totals.posted_count || demoReconciled;
+  const demoReconciled = demoReconciliationTotals.reconciliation_exception_count ? 0 : demoReconciliationTotals.posted_to_qbo_count || 0;
+  const demoPostedQbo = sourceLedger.totals.posted_count || demoReconciliationTotals.posted_to_qbo_count || 0;
   const demoFailedPosting = sourceLedger.totals.qbo_sync_counts?.failed || 0;
   const sections = [
     demoSection("forecasting", "Forecasting", "reviewed", {
@@ -2862,6 +2790,7 @@ function buildDemoSourceLedger(existing = {}, month) {
       const mappedAccount = resolveDemoAccount(txn, chartAccounts);
       const syncStatus = buildDemoQboSyncStatus(txn);
       const date = dateInReviewMonth(txn.date, selectedMonth, index);
+      const reconciliationStatus = deriveTraceReconciliationStatus({ lifecycle: syncStatus });
       return {
         id: txn.id,
         plaid_transaction_id: txn.plaid_transaction_id || `plaid-${txn.id}`,
@@ -2872,15 +2801,17 @@ function buildDemoSourceLedger(existing = {}, month) {
         payee: txn.vendor || "",
         amount: Number(txn.amount || 0),
         status: txn.status || (txn.qbo_txn_id ? "posted" : "needs_review"),
-        posted: syncStatus.key === "updated_in_qbo",
+        posted: syncStatus.key === "posted",
         qbo_txn_id: txn.qbo_txn_id || null,
         qbo_txn_type: txn.qbo_txn_type || (Number(txn.amount || 0) > 0 ? "Deposit" : "Expense"),
-        posted_at: txn.posted_at || (syncStatus.key === "updated_in_qbo" ? `${date}T15:30:00.000Z` : null),
+        posted_at: txn.posted_at || (syncStatus.key === "posted" ? `${date}T15:30:00.000Z` : null),
         post_after: syncStatus.key === "queued" ? `${date}T18:00:00.000Z` : null,
         confidence: txn.confidence || "demo",
         reason: txn.reason || "Demo monthly review source data.",
         post_error: syncStatus.key === "failed" ? "Demo QBO mapping failure." : null,
         qbo_sync_status: syncStatus,
+        qbo_lifecycle_status: syncStatus,
+        reconciliation_status: reconciliationStatus,
         final_qbo_account_id: mappedAccount?.id || null,
         final_qbo_account_name: mappedAccount?.name || "",
         effective_account_id: mappedAccount?.id || null,
@@ -2926,10 +2857,10 @@ function buildDemoSourceLedger(existing = {}, month) {
       if (!txn.effective_account_id) acc.uncategorized_count += 1;
       if (String(txn.status || "").toLowerCase() === "needs_review") acc.needs_review_count += 1;
       if (txn.post_error) acc.post_error_count += 1;
-      const syncKey = txn.qbo_sync_status?.key || "not_posted";
-      if (syncKey === "updated_in_qbo") acc.posted_count += 1;
+      const syncKey = txn.qbo_lifecycle_status?.key || txn.qbo_sync_status?.key || "needs_review";
+      if (syncKey === "posted") acc.posted_count += 1;
       if (acc.qbo_sync_counts[syncKey] !== undefined) acc.qbo_sync_counts[syncKey] += 1;
-      else acc.qbo_sync_counts.not_posted += 1;
+      else acc.qbo_sync_counts.needs_review += 1;
     });
     return acc;
   }, {
@@ -2940,7 +2871,7 @@ function buildDemoSourceLedger(existing = {}, month) {
     posted_count: 0,
     uncategorized_count: 0,
     materiality_count: 0,
-    qbo_sync_counts: { updated_in_qbo: 0, queued: 0, failed: 0, not_posted: 0 },
+    qbo_sync_counts: { posted: 0, queued: 0, failed: 0, handled_not_posted: 0, needs_review: 0 },
   });
 
   const reconciliation_trace = transactions
@@ -2957,23 +2888,19 @@ function buildDemoSourceLedger(existing = {}, month) {
       bank_account: txn.bank_account,
       bizzi_gl_account: txn.effective_account_name,
       qbo_txn_id: txn.qbo_txn_id,
+      qbo_lifecycle_status: txn.qbo_lifecycle_status || txn.qbo_sync_status,
       qbo_sync_status: txn.qbo_sync_status,
-      match_confidence: txn.qbo_sync_status?.key === "updated_in_qbo"
-        ? "high"
-        : txn.qbo_sync_status?.key === "queued"
-          ? "medium"
-          : txn.qbo_sync_status?.key === "failed"
-            ? "low"
-            : "pending",
+      reconciliation_status: txn.reconciliation_status,
     }));
 
   const reconciliation_totals = reconciliation_trace.reduce((acc, row) => {
     acc.plaid_count += 1;
-    if (row.qbo_sync_status?.key === "updated_in_qbo") acc.matched_qbo_count += 1;
-    if (["queued", "not_posted"].includes(row.qbo_sync_status?.key)) acc.pending_count += 1;
-    if (row.qbo_sync_status?.key === "failed" || row.match_confidence === "low") acc.exception_count += 1;
+    if (row.qbo_lifecycle_status?.key === "posted") acc.posted_to_qbo_count += 1;
+    if (row.qbo_lifecycle_status?.key === "needs_review") acc.needs_review_count += 1;
+    if (["handled_not_posted", "queued"].includes(row.qbo_lifecycle_status?.key)) acc.awaiting_qbo_count += 1;
+    if (row.reconciliation_status?.exception === true) acc.reconciliation_exception_count += 1;
     return acc;
-  }, { plaid_count: 0, matched_qbo_count: 0, pending_count: 0, exception_count: 0 });
+  }, { plaid_count: 0, posted_to_qbo_count: 0, awaiting_qbo_count: 0, needs_review_count: 0, reconciliation_exception_count: 0 });
 
   const finalizationGuard = buildDemoFinalizationGuard(transactions);
 
@@ -3008,36 +2935,15 @@ function resolveDemoAccount(txn = {}, chartAccounts = []) {
 
 function buildDemoQboSyncStatus(txn = {}) {
   const status = String(txn.status || "").toLowerCase();
-  if (txn.qbo_txn_id) {
-    return {
-      key: "updated_in_qbo",
-      label: "Posted in QBO",
-      tone: "good",
-      detail: `${txn.qbo_txn_type || "QBO"} ${txn.qbo_txn_id}`,
-    };
-  }
-  if (status === "approved" || status === "handled") {
-    return {
-      key: "queued",
-      label: "Queued",
-      tone: "warning",
-      detail: "Ready for QBO posting",
-    };
-  }
-  if (status === "failed" || txn.post_error) {
-    return {
-      key: "failed",
-      label: "Failed",
-      tone: "danger",
-      detail: txn.post_error || "QBO posting needs retry",
-    };
-  }
-  return {
-    key: "not_posted",
-    label: "Not posted",
-    tone: "neutral",
-    detail: status === "needs_review" ? "Needs review before posting" : "Not ready for QBO",
+  const normalized = {
+    ...txn,
+    status,
+    qbo_txn_type: txn.qbo_txn_type || (Number(txn.amount || 0) > 0 ? "Deposit" : "Expense"),
+    post_after: ["approved", "handled"].includes(status) && !txn.qbo_txn_id && !txn.post_error
+      ? txn.post_after || "2026-08-24T18:00:00.000Z"
+      : txn.post_after,
   };
+  return deriveQboPostingLifecycle(normalized);
 }
 
 function buildDemoMaterialityFlags(txn = {}) {
@@ -3060,12 +2966,13 @@ function buildDemoFinalizationGuard(transactions = []) {
         message: "Missing a final GL category.",
       });
     }
-    if (["failed", "queued", "not_posted"].includes(txn.qbo_sync_status?.key)) {
+    if (["failed", "queued", "handled_not_posted"].includes(txn.qbo_lifecycle_status?.key || txn.qbo_sync_status?.key)) {
+      const qboKey = txn.qbo_lifecycle_status?.key || txn.qbo_sync_status?.key;
       blockers.push({
-        type: `qbo_${txn.qbo_sync_status.key}`,
+        type: qboKey === "handled_not_posted" ? "qbo_not_posted" : `qbo_${qboKey}`,
         transaction_id: txn.id,
         label: txn.payee || txn.description || "Transaction",
-        message: txn.qbo_sync_status.detail || "QBO sync is not complete.",
+        message: txn.qbo_lifecycle_status?.detail || txn.qbo_sync_status?.detail || "QBO sync is not complete.",
       });
     }
   });
