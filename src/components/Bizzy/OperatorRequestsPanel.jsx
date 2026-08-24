@@ -79,7 +79,6 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
           ? "Saved some answers. Please review the remaining requests."
           : "Saved. Your response is ready for accountant review."
       );
-      await onSubmitted?.();
       setAnswers((prev) => {
         const next = { ...prev };
         persistedIds.forEach((id) => {
@@ -87,6 +86,7 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
         });
         return next;
       });
+      onSubmitted?.(persistedIds, result);
       if (result?.outcome === "partial_success") {
         setSubmitError(summarizeClarificationSubmitFailure(result));
       }
@@ -318,10 +318,13 @@ export default function OperatorRequestsPanel({ businessId, onCountChange, openE
   const [outstandingCount, setOutstandingCount] = useState(0);
   const [error, setError] = useState("");
 
-  const load = useCallback(async (nextPage = 1) => {
+  const load = useCallback(async (nextPage = 1, options = {}) => {
     if (!businessId) return;
-    setLoading(true);
-    setError("");
+    const silent = options?.silent === true;
+    if (!silent) {
+      setLoading(true);
+      setError("");
+    }
     try {
       const res = await getOperatorRequests(businessId, { page: nextPage, page_size: 25 });
       const rows = res?.rows || res || [];
@@ -334,7 +337,7 @@ export default function OperatorRequestsPanel({ businessId, onCountChange, openE
       console.warn("[OperatorRequests] fetch failed", e);
       setError(e?.message || "Could not load Operator Requests.");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [businessId]);
 
@@ -389,8 +392,11 @@ export default function OperatorRequestsPanel({ businessId, onCountChange, openE
         }}
         requests={requests}
         businessId={businessId}
-        onSubmitted={async () => {
-          await load(page);
+        onSubmitted={(persistedIds) => {
+          setRequests((prev) => prev.filter((row) => !persistedIds.has(String(row.id))));
+          setOutstandingCount((prev) => Math.max(0, Number(prev || 0) - persistedIds.size));
+          if (onCountChange) onCountChange(Math.max(0, Number(outstandingCount || requests.length) - persistedIds.size));
+          Promise.resolve(load(page, { silent: true })).catch(() => {});
         }}
         page={page}
         pageCount={pageCount}

@@ -2928,12 +2928,20 @@ function deriveQboSyncStatus(cat = {}) {
       detail: `${cat.qbo_txn_type || "QBO transaction"} ${cat.qbo_txn_id}`,
     };
   }
-  if (["approved", "auto_approved"].includes(status) || cat.post_after) {
+  if (cat.post_after) {
     return {
       key: "queued",
-      label: "Queued",
+      label: "Queued for QBO",
       tone: "warning",
       detail: cat.post_after ? `Queued for ${formatDateTime(cat.post_after)}` : "Queued for QBO posting.",
+    };
+  }
+  if (["approved", "auto_approved"].includes(status)) {
+    return {
+      key: "not_posted",
+      label: "Not posted",
+      tone: "neutral",
+      detail: "Handled in Bizzi; no QBO transaction has been created yet.",
     };
   }
   return {

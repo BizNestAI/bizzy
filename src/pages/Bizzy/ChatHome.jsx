@@ -97,13 +97,14 @@ function ChatHomeInner() {
     });
   }, [isMockMode]);
 
-  const loadNeedsReviewRequests = useCallback(async () => {
+  const loadNeedsReviewRequests = useCallback(async (options = {}) => {
+    const silent = options?.silent === true;
     if (isMockMode) {
       setNeedsReviewRequests(mockNeedsReviewRequests);
       setOperatorOutstandingCount(mockNeedsReviewRequests.length);
-      setOperatorRequestsPrefetching(false);
+      if (!silent) setOperatorRequestsPrefetching(false);
       setOperatorRequestsPrefetchFailed(false);
-      setClarLoading(false);
+      if (!silent) setClarLoading(false);
       setClarError("");
       return;
     }
@@ -111,15 +112,17 @@ function ChatHomeInner() {
       operatorRequestPrefetchSeq.current += 1;
       setNeedsReviewRequests([]);
       setOperatorOutstandingCount(0);
-      setOperatorRequestsPrefetching(false);
+      if (!silent) setOperatorRequestsPrefetching(false);
       setOperatorRequestsPrefetchFailed(false);
       setClarError("");
       return;
     }
-    setClarLoading(true);
-    setClarError("");
-    setNeedsReviewRequests([]);
-    setOperatorRequestsPrefetching(false);
+    if (!silent) {
+      setClarLoading(true);
+      setClarError("");
+      setNeedsReviewRequests([]);
+      setOperatorRequestsPrefetching(false);
+    }
     setOperatorRequestsPrefetchFailed(false);
     const loadSeq = operatorRequestPrefetchSeq.current + 1;
     operatorRequestPrefetchSeq.current = loadSeq;
@@ -134,7 +137,7 @@ function ChatHomeInner() {
         return;
       }
 
-      setOperatorRequestsPrefetching(true);
+      if (!silent) setOperatorRequestsPrefetching(true);
       getOperatorRequests(businessId, {
         page: 1,
         page_size: OPERATOR_REQUEST_PREFETCH_PAGE_SIZE,
@@ -151,12 +154,12 @@ function ChatHomeInner() {
         })
         .finally(() => {
           if (operatorRequestPrefetchSeq.current !== loadSeq) return;
-          setOperatorRequestsPrefetching(false);
+          if (!silent) setOperatorRequestsPrefetching(false);
         });
     } catch (err) {
       setClarError(err?.message || "Could not load Operator Requests.");
     } finally {
-      setClarLoading(false);
+      if (!silent) setClarLoading(false);
     }
   }, [businessId, isMockMode, mockNeedsReviewRequests]);
   // Ensure IBM Plex Sans is available (once)
@@ -347,7 +350,7 @@ function ChatHomeInner() {
                           subtitle={statusSubtitle}
                         onReview={handleReview}
                         businessId={businessId}
-                        onRefresh={loadNeedsReviewRequests}
+                        onRefresh={() => loadNeedsReviewRequests({ silent: true })}
                         mockMode={isMockMode}
                         mockRequests={mockNeedsReviewRequests}
                         requests={isMockMode || !operatorRequestsPrefetchFailed ? needsReviewRequests : null}

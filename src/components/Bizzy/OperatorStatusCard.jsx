@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   getOperatorRequests,
   getPersistedClarificationRequestIds,
@@ -110,6 +111,7 @@ export default function OperatorStatusCard({
   const [answers, setAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [submittingId, setSubmittingId] = useState(null);
+  const [rowErrors, setRowErrors] = useState({});
   const [submitError, setSubmitError] = useState("");
 
   const mergeRequests = useCallback((current = [], incoming = []) => {
@@ -197,6 +199,7 @@ export default function OperatorStatusCard({
 
   const handleChip = (id, chip) => {
     setSubmitError("");
+    setRowErrors((prev) => ({ ...prev, [id]: "" }));
     setAnswers((prev) => {
       const current = (prev[id] || "").trim();
       const next = current.toLowerCase() === chip.toLowerCase() ? "" : chip;
@@ -205,6 +208,7 @@ export default function OperatorStatusCard({
   };
   const handleChange = (id, text) => {
     setSubmitError("");
+    setRowErrors((prev) => ({ ...prev, [id]: "" }));
     setAnswers((prev) => ({ ...prev, [id]: text }));
   };
 
@@ -218,6 +222,23 @@ export default function OperatorStatusCard({
       .filter((a) => a.answer_text.length >= 3);
   }, [requests, answers]);
   const answeredCount = readyAnswers.length;
+
+  const revalidateSilently = useCallback(() => {
+    Promise.resolve(onRefresh?.()).catch((err) => {
+      console.warn("[OperatorStatusCard] background revalidation failed", err);
+    });
+    if (!externalRequests && businessId && !mockMode) {
+      getOperatorRequests(businessId, { page: 1, page_size: OPERATOR_REQUEST_PAGE_SIZE })
+        .then((res) => {
+          const rows = res?.rows || res || [];
+          setRequests(preserveRequestOrder(rows));
+          setLoadedPage(rows.length ? 1 : 0);
+        })
+        .catch((err) => {
+          console.warn("[OperatorStatusCard] background clarification refresh failed", err);
+        });
+    }
+  }, [businessId, externalRequests, mockMode, onRefresh]);
 
   const onSubmit = async () => {
     if (mockMode) {
@@ -247,19 +268,10 @@ export default function OperatorStatusCard({
         });
         return next;
       });
-      if (onRefresh) await onRefresh();
       setRequests((prev) => prev.filter((r) => !persistedIds.has(String(r.id))));
+      revalidateSilently();
       if (result?.outcome === "partial_success") {
         setSubmitError(summarizeClarificationSubmitFailure(result));
-      }
-      if (!externalRequests) {
-        // refetch to show remaining only when we manage our own list
-        const res = await getOperatorRequests(businessId, { page: 1, page_size: 25 });
-        const rows = res?.rows || res || [];
-        setRequests(preserveRequestOrder(rows));
-        if (!rows.length && onRefresh) {
-          setExpanded(false);
-        }
       }
     } catch (e) {
       console.warn("[OperatorStatusCard] submit failed", e);
@@ -284,6 +296,7 @@ export default function OperatorStatusCard({
     if (!businessId) return;
     setSubmittingId(req.id);
     setSubmitError("");
+    setRowErrors((prev) => ({ ...prev, [req.id]: "" }));
     try {
       const result = await submitClarificationAnswers(businessId, {
         answers: [
@@ -296,7 +309,7 @@ export default function OperatorStatusCard({
       });
       const persistedIds = getPersistedClarificationRequestIds(result);
       if (!persistedIds.has(String(req.id))) {
-        setSubmitError(summarizeClarificationSubmitFailure(result));
+        setRowErrors((prev) => ({ ...prev, [req.id]: summarizeClarificationSubmitFailure(result) }));
         return;
       }
       setAnswers((prev) => {
@@ -304,11 +317,11 @@ export default function OperatorStatusCard({
         delete next[req.id];
         return next;
       });
-      if (onRefresh) await onRefresh();
       setRequests((prev) => prev.filter((r) => r.id !== req.id));
+      revalidateSilently();
     } catch (e) {
       console.warn("[OperatorStatusCard] submit single failed", e);
-      setSubmitError(summarizeClarificationSubmitFailure(e));
+      setRowErrors((prev) => ({ ...prev, [req.id]: summarizeClarificationSubmitFailure(e) }));
     } finally {
       setSubmittingId(null);
     }
@@ -377,19 +390,27 @@ export default function OperatorStatusCard({
               className="space-y-2 max-h-[300px] overflow-y-auto pr-1 pb-12 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-900/60"
               style={{ scrollbarColor: "rgba(107,114,128,0.85) rgba(26,28,30,0.7)" }}
             >
+              <AnimatePresence initial={false}>
               {requests.map((req) => {
                 const txn = req.txn || {};
                 const memo = txn.name || "";
                 const merchant = txn.merchant_name || txn.counterparty_name || "Unknown merchant";
                 const answered = (answers[req.id] || "").trim().length >= 3;
                 const canSubmit = answered;
+                const rowSubmitting = submittingId === req.id;
+                const rowError = rowErrors[req.id] || "";
                 const direction = getMoneyDirection(txn.amount);
                 const DirectionIcon = direction.Icon;
                 const promptLabel = Number(txn.amount) > 0 ? "What was this deposit for?" : "What was this charge for?";
                 return (
-                  <div
+                  <motion.div
                     key={req.id}
-                    className="rounded-lg border border-white/10 bg-[#151717] px-3 py-1.5 shadow-inner shadow-black/30 transition-transform transition-colors duration-200 hover:-translate-y-[1px] hover:border-emerald-300/22 hover:bg-emerald-300/[0.06] hover:shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
+                    layout
+                    initial={{ opacity: 0, height: 0, y: -4 }}
+                    animate={{ opacity: 1, height: "auto", y: 0 }}
+                    exit={{ opacity: 0, height: 0, y: -6, marginTop: 0, marginBottom: 0 }}
+                    transition={{ duration: 0.22, ease: "easeOut" }}
+                    className="overflow-hidden rounded-lg border border-white/10 bg-[#151717] px-3 py-1.5 shadow-inner shadow-black/30 transition-transform transition-colors duration-200 hover:-translate-y-[1px] hover:border-emerald-300/22 hover:bg-emerald-300/[0.06] hover:shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
                   >
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1 space-y-0.5 pt-0.5">
@@ -420,14 +441,16 @@ export default function OperatorStatusCard({
                     name={`operator-status-answer-${req.id}`}
                     value={answers[req.id] || ""}
                     onChange={(e) => handleChange(req.id, e.target.value)}
+                    disabled={rowSubmitting}
                     placeholder="e.g., materials for Elm St roof"
-                    className="bizzy-operator-input h-8 w-full rounded-lg bg-black/40 border border-white/12 px-2.5 pr-8 text-[12px] text-white placeholder-white/30 focus:outline-none"
+                    className="bizzy-operator-input h-8 w-full rounded-lg bg-black/40 border border-white/12 px-2.5 pr-8 text-[12px] text-white placeholder-white/30 focus:outline-none disabled:cursor-wait disabled:opacity-60"
                   />
                   {answers[req.id] ? (
                     <button
                       type="button"
                       onClick={() => handleChange(req.id, "")}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-white/50 hover:text-white/80 text-xs"
+                      disabled={rowSubmitting}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-white/50 hover:text-white/80 text-xs disabled:cursor-wait disabled:opacity-40"
                       aria-label="Clear answer"
                       title="Clear"
                     >
@@ -439,9 +462,9 @@ export default function OperatorStatusCard({
                   <button
                     type="button"
                     onClick={() => submitOne(req)}
-                    disabled={submittingId === req.id || !canSubmit}
+                    disabled={rowSubmitting || !canSubmit}
                     className={`flex items-center justify-center rounded-full h-7 w-7 flex-shrink-0 transition border ${
-                      submittingId === req.id || !canSubmit
+                      rowSubmitting || !canSubmit
                         ? "bg-white/8 text-white/35 border-white/10 cursor-not-allowed"
                         : "bg-[rgba(30,180,124,0.16)] text-white border-[rgba(30,180,124,0.34)] hover:shadow-[0_0_10px_rgba(30,180,124,0.20)]"
                     }`}
@@ -463,11 +486,12 @@ export default function OperatorStatusCard({
                         key={chip}
                                 type="button"
                                 onClick={() => handleChip(req.id, chip)}
+                                disabled={rowSubmitting}
                                 className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition border flex-shrink-0 ${
                                   active
                                     ? "bg-emerald-500/15 text-emerald-50 border-emerald-400/50"
                                     : "bg-white/5 text-white/70 border-white/12 hover:border-white/30"
-                                }`}
+                                } disabled:cursor-wait disabled:opacity-50`}
                               >
                                 {chip}
                               </button>
@@ -476,9 +500,11 @@ export default function OperatorStatusCard({
                         </div>
                       </div>
                     </div>
-                  </div>
+                    {rowError ? <div className="mt-2 text-[11px] text-amber-100/90">{rowError}</div> : null}
+                  </motion.div>
                 );
               })}
+              </AnimatePresence>
               {canLoadMore ? (
                 <button
                   type="button"

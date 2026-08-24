@@ -60,12 +60,13 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
   React.useEffect(() => {
     setSelectedAccountId(initialAccountId);
   }, [initialAccountId, row.id]);
-  const qboLabel = qboStatusLabel(row);
+  const qboStatus = deriveMirrorQboPostingStatus(row);
+  const qboLabel = qboStatus.label;
   const isNeedsReviewFeed = feedStatus === "needs_review";
   const isHandledFeed = feedStatus === "handled";
-  const isPosted = qboLabel === "Posted";
-  const isFailed = qboLabel === "Failed";
-  const isQueued = qboLabel === "Queued";
+  const isPosted = qboStatus.key === "posted";
+  const isFailed = qboStatus.key === "failed";
+  const isQueued = qboStatus.key === "queued";
   const isActionBusy = (action) => busyAction === `${action}:${row.id}`;
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
@@ -98,7 +99,8 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
         ))}
       </div>
       <div>
-        <span className={`${BADGE_BASE} ${qboBadgeClass(row)}`}>{qboLabel}</span>
+        <span className={`${BADGE_BASE} ${qboBadgeClass(qboStatus)}`} title={qboStatus.detail || qboLabel}>{qboLabel}</span>
+        {qboStatus.detail ? <div className="mt-1 truncate text-[10px] text-white/35">{qboStatus.detail}</div> : null}
       </div>
       <div className="space-y-2">
         {genericActionsBlocked ? (
@@ -183,19 +185,52 @@ function buildStateBadges(row) {
   return badges;
 }
 
-function qboStatusLabel(row) {
-  if (row.qbo_txn_id || row.status === "posted") return "Posted";
-  if (row.post_error || row.status === "failed") return "Failed";
-  if (row.post_after) return "Queued";
-  if (["approved", "auto_approved"].includes(row.status)) return "Not posted";
-  return "Not ready";
+export function deriveMirrorQboPostingStatus(row = {}) {
+  const status = String(row.status || "").toLowerCase();
+  if (row.qbo_txn_id) {
+    return {
+      key: "posted",
+      label: "Posted",
+      tone: "good",
+      detail: `${row.qbo_txn_type || "QBO transaction"} ${row.qbo_txn_id}`,
+    };
+  }
+  if (row.post_error || ["failed", "failed_post", "post_failed", "blocked"].includes(status)) {
+    return {
+      key: "failed",
+      label: "Failed",
+      tone: "danger",
+      detail: row.post_error || "QBO posting failed.",
+    };
+  }
+  if (row.post_after) {
+    return {
+      key: "queued",
+      label: "Queued for QBO",
+      tone: "warning",
+      detail: `Posts after ${formatShortDateTime(row.post_after)}`,
+    };
+  }
+  if (["approved", "auto_approved", "handled", "posted"].includes(status)) {
+    return {
+      key: "not_posted",
+      label: "Not posted",
+      tone: "neutral",
+      detail: "Handled in Bizzi; no QBO transaction has been created yet.",
+    };
+  }
+  return {
+    key: "not_ready",
+    label: "Not ready",
+    tone: "neutral",
+    detail: "Needs review before QBO posting.",
+  };
 }
 
-function qboBadgeClass(row) {
-  const label = qboStatusLabel(row);
-  if (label === "Posted") return "border-emerald-300/25 bg-emerald-300/10 text-emerald-100";
-  if (label === "Failed") return "border-rose-300/25 bg-rose-300/10 text-rose-100";
-  if (label === "Queued") return "border-amber-300/25 bg-amber-300/10 text-amber-100";
+function qboBadgeClass(status) {
+  if (status?.tone === "good") return "border-emerald-300/25 bg-emerald-300/10 text-emerald-100";
+  if (status?.tone === "danger") return "border-rose-300/25 bg-rose-300/10 text-rose-100";
+  if (status?.tone === "warning") return "border-amber-300/25 bg-amber-300/10 text-amber-100";
   return "border-white/10 bg-white/[0.06] text-white/55";
 }
 
@@ -236,6 +271,13 @@ function formatShortDate(value) {
   const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00Z`);
   if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 10);
   return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+function formatShortDateTime(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
 function formatMoney(value) {
