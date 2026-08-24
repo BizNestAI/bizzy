@@ -1,5 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { getOperatorRequests, submitClarificationAnswers } from "../../services/bookkeeping/bookkeepingClient";
+import {
+  getOperatorRequests,
+  getPersistedClarificationRequestIds,
+  submitClarificationAnswers,
+  summarizeClarificationSubmitFailure,
+} from "../../services/bookkeeping/bookkeepingClient";
 import { ArrowDownLeft, ArrowUpRight, Check } from "lucide-react";
 
 const OPERATOR_REQUEST_PAGE_SIZE = 25;
@@ -105,6 +110,7 @@ export default function OperatorStatusCard({
   const [answers, setAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [submittingId, setSubmittingId] = useState(null);
+  const [submitError, setSubmitError] = useState("");
 
   const mergeRequests = useCallback((current = [], incoming = []) => {
     const merged = [];
@@ -190,6 +196,7 @@ export default function OperatorStatusCard({
   }, [businessId, canLoadMore, loadedPage, loadingList, loadingMore, mergeRequests]);
 
   const handleChip = (id, chip) => {
+    setSubmitError("");
     setAnswers((prev) => {
       const current = (prev[id] || "").trim();
       const next = current.toLowerCase() === chip.toLowerCase() ? "" : chip;
@@ -197,6 +204,7 @@ export default function OperatorStatusCard({
     });
   };
   const handleChange = (id, text) => {
+    setSubmitError("");
     setAnswers((prev) => ({ ...prev, [id]: text }));
   };
 
@@ -224,10 +232,26 @@ export default function OperatorStatusCard({
     }
     if (!businessId || !readyAnswers.length) return;
     setSubmitting(true);
+    setSubmitError("");
     try {
-      await submitClarificationAnswers(businessId, { answers: readyAnswers });
-      setAnswers({});
+      const result = await submitClarificationAnswers(businessId, { answers: readyAnswers });
+      const persistedIds = getPersistedClarificationRequestIds(result);
+      if (!persistedIds.size) {
+        setSubmitError(summarizeClarificationSubmitFailure(result));
+        return;
+      }
+      setAnswers((prev) => {
+        const next = { ...prev };
+        persistedIds.forEach((id) => {
+          delete next[id];
+        });
+        return next;
+      });
       if (onRefresh) await onRefresh();
+      setRequests((prev) => prev.filter((r) => !persistedIds.has(String(r.id))));
+      if (result?.outcome === "partial_success") {
+        setSubmitError(summarizeClarificationSubmitFailure(result));
+      }
       if (!externalRequests) {
         // refetch to show remaining only when we manage our own list
         const res = await getOperatorRequests(businessId, { page: 1, page_size: 25 });
@@ -239,6 +263,7 @@ export default function OperatorStatusCard({
       }
     } catch (e) {
       console.warn("[OperatorStatusCard] submit failed", e);
+      setSubmitError(summarizeClarificationSubmitFailure(e));
     } finally {
       setSubmitting(false);
     }
@@ -258,8 +283,9 @@ export default function OperatorStatusCard({
     }
     if (!businessId) return;
     setSubmittingId(req.id);
+    setSubmitError("");
     try {
-      await submitClarificationAnswers(businessId, {
+      const result = await submitClarificationAnswers(businessId, {
         answers: [
           {
             request_id: req.id,
@@ -268,6 +294,11 @@ export default function OperatorStatusCard({
           },
         ],
       });
+      const persistedIds = getPersistedClarificationRequestIds(result);
+      if (!persistedIds.has(String(req.id))) {
+        setSubmitError(summarizeClarificationSubmitFailure(result));
+        return;
+      }
       setAnswers((prev) => {
         const next = { ...prev };
         delete next[req.id];
@@ -277,7 +308,8 @@ export default function OperatorStatusCard({
       setRequests((prev) => prev.filter((r) => r.id !== req.id));
     } catch (e) {
       console.warn("[OperatorStatusCard] submit single failed", e);
-  } finally {
+      setSubmitError(summarizeClarificationSubmitFailure(e));
+    } finally {
       setSubmittingId(null);
     }
   };
@@ -339,7 +371,7 @@ export default function OperatorStatusCard({
               <span>Loading remaining transactions for your review...</span>
             </div>
           )}
-          {error ? <div className="mb-2 text-xs text-amber-100/85">{error}</div> : null}
+          {error || submitError ? <div className="mb-2 text-xs text-amber-100/85">{submitError || error}</div> : null}
           {showList && (
             <div
               className="space-y-2 max-h-[300px] overflow-y-auto pr-1 pb-12 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-900/60"

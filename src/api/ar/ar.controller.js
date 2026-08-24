@@ -3,6 +3,7 @@ import { syncOpenItems, fetchTopOpenItems, fetchInvoiceDetails } from "./ar.serv
 import { supabase } from "../../services/supabaseAdmin.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../services/insights/contractorCfoTriggerService.js";
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 
 function getBusinessId(req) {
   const { business_id, businessId } = req.body || {};
@@ -230,6 +231,29 @@ export async function getInvoiceDetailsHandler(req, res) {
     if (!businessId) return sendError(res, 400, "business_id is required");
     const qboInvoiceId = req.params?.qbo_invoice_id;
     if (!qboInvoiceId) return sendError(res, 400, "qbo_invoice_id is required");
+
+    if (isAdminViewRequest(req)) {
+      const { data, error } = await supabase
+        .from("ar_open_items")
+        .select("*")
+        .eq("business_id", businessId)
+        .eq("qbo_env", qboEnvName)
+        .eq("qbo_invoice_id", qboInvoiceId)
+        .maybeSingle();
+      if (error) throw new Error(error.message || "Failed to read invoice detail");
+      if (!data) {
+        return sendAdminViewReadOnlyUnavailable(res, {
+          error: "admin_view_read_only_data_unavailable",
+        });
+      }
+      return res.status(200).json({
+        invoice: data,
+        source: "persisted",
+        business_id: businessId,
+        qbo_invoice_id: qboInvoiceId,
+        admin_view_cache_only: true,
+      });
+    }
 
     const result = await fetchInvoiceDetails({ businessId, qboInvoiceId });
     return res.status(200).json(result);

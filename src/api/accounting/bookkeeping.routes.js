@@ -5,6 +5,7 @@ import { getQBOClient } from "../../utils/qboClient.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import OpenAI from "openai";
 import { getBookkeepingHealth, upsertBookkeepingHealth } from "./bookkeepingHealth.js";
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 
 const router = express.Router();
 // DEPRECATED: Legacy QBO-only bookkeeping APIs. Plaid-first flows live under /api/bookkeeping.
@@ -122,6 +123,9 @@ async function fetchUncategorizedTransactions({ businessId, sinceDate, limit = 5
 // GET /api/accounting/uncategorized
 router.get("/uncategorized", requireAuth, async (req, res) => {
   try {
+    if (isAdminViewRequest(req)) {
+      return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_provider_refresh_blocked" });
+    }
     const { businessId } = readCtx(req);
     if (!businessId) return res.status(400).json({ error: "missing businessId" });
     const qbo = await getQBOClient(businessId);

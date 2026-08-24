@@ -1,6 +1,7 @@
 // /src/utils/safeFetch.js
 import { supabase } from "../services/supabaseClient";
 import apiBaseUrl, { getApiBase } from "./apiBase.js";
+import { applyAdminViewHeaders, clearStoredAdminViewSession, isAdminViewAuthError } from "../services/adminViewClient.js";
 
 // --- Base resolver -----------------------------------------------------------
 function resolveApiBase() {
@@ -82,6 +83,7 @@ export async function safeFetch(input, init = {}) {
     'Accept': 'application/json',
   };
   const headers = mergeHeaders(defaultHeaders, init.headers);
+  applyAdminViewHeaders(headers);
   if (token && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${token}`);
   }
@@ -140,6 +142,7 @@ export async function safeFetch(input, init = {}) {
     err.status = res.status;
     err.url = url;
     err.body = json ?? text?.slice(0, 1000);
+    if (isAdminViewAuthError(json)) clearStoredAdminViewSession(json?.code || json?.error || "admin_view_invalid");
     throw err;
   }
 

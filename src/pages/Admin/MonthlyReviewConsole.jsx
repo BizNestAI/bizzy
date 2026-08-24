@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Circle, ClipboardCheck, ExternalLink, Loader2, Lock, RefreshCcw, RotateCcw, Search, ShieldCheck } from "lucide-react";
 import { safeFetch } from "../../utils/safeFetch.js";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
@@ -40,6 +40,7 @@ const QUEUE_STATUS_OPTIONS = [
 ];
 
 const BOOKKEEPING_FEED_PAGE_SIZE = 25;
+const QBO_PNL_DETAIL_PAGE_SIZE = 25;
 const BOOKKEEPING_FEED_CONFIG = {
   needs_review: {
     label: "Needs Review",
@@ -74,6 +75,13 @@ export default function MonthlyReviewConsole() {
   const [detail, setDetail] = useState(null);
   const [sourceLedger, setSourceLedger] = useState(null);
   const [connectedAccounts, setConnectedAccounts] = useState(null);
+  const [qboPnlSnapshot, setQboPnlSnapshot] = useState(null);
+  const [loadingQboPnl, setLoadingQboPnl] = useState(false);
+  const [qboPnlError, setQboPnlError] = useState("");
+  const [refreshingQboPnl, setRefreshingQboPnl] = useState(false);
+  const [qboPnlRefreshMessage, setQboPnlRefreshMessage] = useState("");
+  const [qboPnlAccountDetails, setQboPnlAccountDetails] = useState({});
+  const qboPnlSnapshotIdRef = useRef(null);
   const [bookkeepingFeeds, setBookkeepingFeeds] = useState(() => buildInitialBookkeepingFeeds());
   const [loadingBookkeepingCounts, setLoadingBookkeepingCounts] = useState(false);
   const [bookkeepingCountsError, setBookkeepingCountsError] = useState("");
@@ -96,6 +104,7 @@ export default function MonthlyReviewConsole() {
   const [reminderMessage, setReminderMessage] = useState("");
   const [reminderDueAt, setReminderDueAt] = useState("");
   const [busyAction, setBusyAction] = useState("");
+  const [customerViewError, setCustomerViewError] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
   const [activeLock, setActiveLock] = useState(null);
   const [historyDrawer, setHistoryDrawer] = useState({ open: false, transaction: null, rows: [], loading: false });
@@ -184,6 +193,129 @@ export default function MonthlyReviewConsole() {
       setLoadingLedger(false);
     }
   }, [demoMode, month, selectedBusinessId]);
+
+  const applyQboPnlSnapshot = useCallback((snapshot) => {
+    const incomingSnapshotId = snapshot?.id || null;
+    const previousSnapshotId = qboPnlSnapshotIdRef.current;
+    qboPnlSnapshotIdRef.current = incomingSnapshotId;
+    setQboPnlSnapshot(snapshot);
+    if (String(previousSnapshotId || "") !== String(incomingSnapshotId || "") && previousSnapshotId) {
+      setQboPnlAccountDetails({});
+    }
+  }, []);
+
+  const loadQboPnlSnapshot = useCallback(async () => {
+    if (!selectedBusinessId) {
+      applyQboPnlSnapshot(null);
+      setQboPnlError("");
+      return null;
+    }
+    setLoadingQboPnl(true);
+    setQboPnlError("");
+    try {
+      const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/qbo-pnl?year=${encodeURIComponent(month.slice(0, 4))}&month=${encodeURIComponent(Number(month.slice(5, 7)))}`);
+      const snapshot = data?.snapshot || null;
+      applyQboPnlSnapshot(snapshot);
+      return snapshot;
+    } catch (e) {
+      applyQboPnlSnapshot(null);
+      setQboPnlError(e?.body?.message || e?.message || "Could not load the QuickBooks P&L snapshot.");
+      return null;
+    } finally {
+      setLoadingQboPnl(false);
+    }
+  }, [applyQboPnlSnapshot, month, selectedBusinessId]);
+
+  const refreshQboPnlSnapshot = useCallback(async ({ afterReclassification = false } = {}) => {
+    if (!selectedBusinessId) return null;
+    setRefreshingQboPnl(true);
+    setQboPnlError("");
+    setQboPnlRefreshMessage("");
+    try {
+      const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/qbo-pnl/refresh`, {
+        method: "POST",
+        body: {
+          year: Number(month.slice(0, 4)),
+          month: Number(month.slice(5, 7)),
+        },
+      });
+      const snapshot = data?.snapshot || await loadQboPnlSnapshot();
+      applyQboPnlSnapshot(snapshot);
+      setQboPnlAccountDetails({});
+      setQboPnlRefreshMessage(afterReclassification
+        ? "QuickBooks update succeeded. P&L refreshed from QuickBooks."
+        : "QuickBooks P&L refreshed.");
+      return snapshot;
+    } catch (e) {
+      const message = e?.body?.message || e?.message || "Refresh from QuickBooks failed.";
+      setQboPnlError(message);
+      setQboPnlRefreshMessage(afterReclassification ? "QuickBooks update succeeded. Report refresh pending." : "");
+      return null;
+    } finally {
+      setRefreshingQboPnl(false);
+    }
+  }, [applyQboPnlSnapshot, loadQboPnlSnapshot, month, selectedBusinessId]);
+
+  const loadQboPnlAccountTransactions = useCallback(async (account, { reset = false } = {}) => {
+    if (!selectedBusinessId || !qboPnlSnapshot?.id || !account) return;
+    const requestSnapshotId = qboPnlSnapshot.id;
+    const accountKey = getQboPnlAccountKey(account);
+    const endpointAccountId = getQboPnlEndpointAccountId(account);
+    if (!endpointAccountId) {
+      setQboPnlAccountDetails((current) => ({
+        ...current,
+        [accountKey]: {
+          ...(current[accountKey] || {}),
+          loading: false,
+          snapshotId: requestSnapshotId,
+          error: "This account's QuickBooks identity is unresolved. Refresh from QuickBooks before reviewing its detail.",
+        },
+      }));
+      return;
+    }
+    const currentDetail = qboPnlAccountDetails[accountKey] || {};
+    const nextPage = reset ? 1 : Math.max(Number(currentDetail.page || 0) + 1, 1);
+    setQboPnlAccountDetails((current) => ({
+      ...current,
+      [accountKey]: {
+          ...(current[accountKey] || {}),
+          loading: true,
+          snapshotId: requestSnapshotId,
+          error: "",
+        },
+      }));
+    try {
+      const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/qbo-pnl/accounts/${encodeURIComponent(endpointAccountId)}/transactions?year=${encodeURIComponent(month.slice(0, 4))}&month=${encodeURIComponent(Number(month.slice(5, 7)))}&page=${encodeURIComponent(nextPage)}&page_size=${QBO_PNL_DETAIL_PAGE_SIZE}`);
+      const responseSnapshotId = data?.snapshot_id || requestSnapshotId;
+      if (String(responseSnapshotId || "") !== String(qboPnlSnapshotIdRef.current || "")) return;
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      const totalCount = Number(data?.total_count ?? data?.meta?.total_count ?? rows.length);
+      setQboPnlAccountDetails((current) => ({
+        ...current,
+        [accountKey]: String(responseSnapshotId || "") === String(qboPnlSnapshotIdRef.current || "") ? {
+          rows: reset ? rows : [...(current[accountKey]?.rows || []), ...rows],
+          totalCount,
+          page: Number(data?.meta?.page || nextPage),
+          pageSize: Number(data?.meta?.page_size || QBO_PNL_DETAIL_PAGE_SIZE),
+          loading: false,
+          error: "",
+          loaded: true,
+          snapshotId: responseSnapshotId,
+        } : current[accountKey],
+      }));
+    } catch (e) {
+      if (String(requestSnapshotId || "") !== String(qboPnlSnapshotIdRef.current || "")) return;
+      setQboPnlAccountDetails((current) => ({
+        ...current,
+        [accountKey]: {
+          ...(current[accountKey] || {}),
+          loading: false,
+          snapshotId: requestSnapshotId,
+          error: e?.body?.message || e?.message || "Could not load QuickBooks P&L transactions.",
+        },
+      }));
+    }
+  }, [month, qboPnlAccountDetails, qboPnlSnapshot?.id, selectedBusinessId]);
 
   const loadConnectedAccounts = useCallback(async () => {
     if (!selectedBusinessId) {
@@ -286,6 +418,10 @@ export default function MonthlyReviewConsole() {
   }, [loadSourceLedger]);
 
   useEffect(() => {
+    loadQboPnlSnapshot();
+  }, [loadQboPnlSnapshot]);
+
+  useEffect(() => {
     loadConnectedAccounts();
   }, [loadConnectedAccounts]);
 
@@ -299,6 +435,10 @@ export default function MonthlyReviewConsole() {
     setSelectedBusinessId(businessId);
     setDetail(null);
     setSourceLedger(null);
+    applyQboPnlSnapshot(null);
+    setQboPnlError("");
+    setQboPnlRefreshMessage("");
+    setQboPnlAccountDetails({});
     setConnectedAccounts(null);
     setConnectedAccountsError("");
     setBookkeepingFeeds(buildInitialBookkeepingFeeds());
@@ -307,20 +447,24 @@ export default function MonthlyReviewConsole() {
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
     updateReviewUrl({ businessId, month });
-  }, [month, selectedBusinessId]);
+  }, [applyQboPnlSnapshot, month, selectedBusinessId]);
 
   const selectMonth = useCallback((nextMonth) => {
     if (!nextMonth || nextMonth === month) return;
     setMonth(nextMonth);
     setDetail(null);
     setSourceLedger(null);
+    applyQboPnlSnapshot(null);
+    setQboPnlError("");
+    setQboPnlRefreshMessage("");
+    setQboPnlAccountDetails({});
     setBookkeepingFeeds(buildInitialBookkeepingFeeds());
     setBookkeepingCountsError("");
     setError("");
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
     updateReviewUrl({ businessId: selectedBusinessId, month: nextMonth });
-  }, [month, selectedBusinessId]);
+  }, [applyQboPnlSnapshot, month, selectedBusinessId]);
 
   const toggleBookkeepingFeed = useCallback((status) => {
     const current = bookkeepingFeeds[status];
@@ -351,13 +495,14 @@ export default function MonthlyReviewConsole() {
     await Promise.all([
       loadDetail(),
       loadSourceLedger(),
+      loadQboPnlSnapshot(),
       loadBusinesses(),
       loadBookkeepingFeedCounts(),
     ]);
     await Promise.all(Object.keys(BOOKKEEPING_FEED_CONFIG).map((status) => (
       bookkeepingFeeds[status]?.expanded ? loadBookkeepingFeed(status, { reset: true }) : Promise.resolve()
     )));
-  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadBusinesses, loadDetail, loadSourceLedger]);
+  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadBusinesses, loadDetail, loadQboPnlSnapshot, loadSourceLedger]);
 
   const runBookkeepingFeedAction = useCallback(async (actionKey, row, accountId = null) => {
     if (!detail?.run?.id || !row?.id) return;
@@ -441,13 +586,14 @@ export default function MonthlyReviewConsole() {
   };
 
   const updateTransactionAccount = async (transaction, accountId) => {
-    if (!detail?.run?.id || !transaction?.id || !accountId) return;
+    const transactionId = transaction?.id || transaction?.bizzi_transaction_id;
+    if (!detail?.run?.id || !transactionId || !accountId) return;
     const account = (sourceLedger?.chart_accounts || []).find((item) => String(item.id) === String(accountId));
     if (!account) return;
-    setBusyTransaction(transaction.id);
+    setBusyTransaction(transactionId);
     setError("");
     try {
-      await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(transaction.id)}/account`, {
+      await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(transactionId)}/account`, {
         method: "PATCH",
         body: {
           final_qbo_account_id: account.id,
@@ -458,6 +604,7 @@ export default function MonthlyReviewConsole() {
       await loadSourceLedger();
       await loadDetail();
       await loadBusinesses();
+      await refreshQboPnlSnapshot({ afterReclassification: true });
     } catch (e) {
       setError(e?.body?.message || e?.message || "Could not update transaction GL account.");
     } finally {
@@ -595,9 +742,9 @@ export default function MonthlyReviewConsole() {
     }
   };
 
-  const pullPnlReport = async () => {
+  const publishMonthlyReport = async () => {
     if (!detail?.run?.id) return;
-    setBusyAction("pull-pnl");
+    setBusyAction("publish-report");
     setError("");
     try {
       await safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/pull-pnl`, {
@@ -606,7 +753,41 @@ export default function MonthlyReviewConsole() {
       await loadDetail();
       await loadBusinesses();
     } catch (e) {
-      setError(e?.body?.message || e?.message || "Could not pull the P&L report from QuickBooks.");
+      setError(e?.body?.message || e?.message || "Could not publish the monthly report.");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const openCustomerApp = async () => {
+    if (!selectedBusinessId) return;
+    setBusyAction("customer-view");
+    setCustomerViewError("");
+    setError("");
+    const placeholderTab = typeof window !== "undefined" ? window.open("about:blank", "_blank") : null;
+    if (placeholderTab) placeholderTab.opener = null;
+    try {
+      const returnUrl = buildMonthlyReviewReturnUrl({ month, businessId: selectedBusinessId });
+      const data = await safeFetch("/api/admin/customer-view/sessions", {
+        method: "POST",
+        body: {
+          business_id: selectedBusinessId,
+          source: "monthly_review",
+          return_url: returnUrl,
+        },
+      });
+      const handoffUrl = data?.handoff_url || data?.handoffUrl;
+      if (!handoffUrl) throw new Error("Admin View handoff URL was missing.");
+      if (placeholderTab && !placeholderTab.closed) {
+        placeholderTab.location.assign(handoffUrl);
+      } else {
+        window.open(handoffUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (e) {
+      if (placeholderTab && !placeholderTab.closed) placeholderTab.close();
+      const message = e?.body?.message || e?.body?.error || e?.message || "Your Admin View session could not be created.";
+      setCustomerViewError(message);
+      setError("Could not open Admin View.");
     } finally {
       setBusyAction("");
     }
@@ -787,6 +968,7 @@ export default function MonthlyReviewConsole() {
 	              onClick={() => {
 	                loadBusinesses();
 	                loadDetail();
+	                loadQboPnlSnapshot();
 	                loadConnectedAccounts();
                   refreshBookkeepingFeeds();
 	              }}
@@ -884,15 +1066,21 @@ export default function MonthlyReviewConsole() {
                         Active editor: {activeLock.email || "Internal reviewer"} until {formatShortTime(activeLock.expires_at)}
                       </p>
                     ) : null}
+                    {customerViewError ? (
+                      <p className="mt-2 rounded-lg border border-rose-300/18 bg-rose-300/[0.08] px-2 py-1 text-xs text-rose-100">
+                        {customerViewError}
+                      </p>
+                    ) : null}
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row xl:flex-col xl:items-stretch">
                     <button
                       type="button"
-                      disabled
-                      title="Admin customer view coming in the next implementation phase."
-                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/40 disabled:cursor-not-allowed"
+                      onClick={openCustomerApp}
+                      disabled={!selectedBusinessId || busyAction === "customer-view"}
+                      title={selectedBusinessId ? "Open this customer workspace in read-only Admin View." : "Select a business first."}
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-white/78 transition hover:border-emerald-300/26 hover:bg-emerald-300/[0.08] hover:text-emerald-50 disabled:cursor-not-allowed disabled:opacity-45"
                     >
-                      <ExternalLink className="h-4 w-4" />
+                      {busyAction === "customer-view" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
                       View Customer App
                     </button>
                     {detail?.stamp ? (
@@ -927,12 +1115,12 @@ export default function MonthlyReviewConsole() {
                     </div>
                     <button
                       type="button"
-                      onClick={pullPnlReport}
-                      disabled={busyAction === "pull-pnl" || !detail?.run?.id}
+                      onClick={publishMonthlyReport}
+                      disabled={busyAction === "publish-report" || !detail?.run?.id}
                       className="inline-flex min-h-9 items-center justify-center gap-2 rounded-xl border border-sky-300/20 bg-sky-300/[0.09] px-3 py-2 text-xs font-semibold text-sky-100 transition hover:bg-sky-300/[0.14] disabled:opacity-45"
                     >
-                      {busyAction === "pull-pnl" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                      Pull P&amp;L
+                      {busyAction === "publish-report" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                      Publish Monthly Report
                     </button>
                   </div>
                   <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
@@ -946,7 +1134,7 @@ export default function MonthlyReviewConsole() {
                     </div>
                   ) : !pnlPublished ? (
                     <div className="mt-3 rounded-xl border border-amber-300/16 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-100/90">
-                      Pull and publish the monthly P&amp;L before approving this month.
+                      QuickBooks P&amp;L data refresh is separate from monthly report publication. Publish the monthly report before approving this month.
                     </div>
                   ) : (
                     <div className="mt-3 rounded-xl border border-emerald-300/14 bg-emerald-300/[0.055] px-3 py-2 text-xs text-emerald-100/85">
@@ -991,19 +1179,24 @@ export default function MonthlyReviewConsole() {
                 ) : null}
 
                 <SourceLedgerPanel
-                  ledger={sourceLedger}
-                  loading={loadingLedger}
+                  snapshot={qboPnlSnapshot}
+                  loading={loadingQboPnl}
+                  error={qboPnlError}
+                  refreshing={refreshingQboPnl}
+                  refreshMessage={qboPnlRefreshMessage}
+                  accountDetails={qboPnlAccountDetails}
+                  accounts={sourceLedger?.chart_accounts || []}
                   busyTransaction={busyTransaction}
-                  retryingTransaction={retryingTransaction}
                   businessId={selectedBusinessId}
                   month={month}
                   accountSearch={accountSearch}
                   onAccountSearch={setAccountSearch}
-                  onRefresh={loadSourceLedger}
+                  onRefresh={() => refreshQboPnlSnapshot()}
+                  onLoadAccountTransactions={loadQboPnlAccountTransactions}
                   onAccountChange={updateTransactionAccount}
-                  onRetry={retryQboSync}
-                  onHistory={openTransactionHistory}
                 />
+
+                <ReconciliationTracePanel ledger={sourceLedger} loading={loadingLedger} />
 
                 <OperatorResponsesPanel
                   data={detail?.operator_responses}
@@ -1527,62 +1720,104 @@ function VendorAuditTable({ title, rows = [], empty, dateKey }) {
 }
 
 function SourceLedgerPanel({
-  ledger,
+  snapshot,
   loading,
+  error,
+  refreshing,
+  refreshMessage,
+  accountDetails,
+  accounts,
   busyTransaction,
-  retryingTransaction,
   businessId,
   month,
   accountSearch,
   onAccountSearch,
   onRefresh,
+  onLoadAccountTransactions,
   onAccountChange,
-  onRetry,
-  onHistory,
 }) {
-  const groups = Array.isArray(ledger?.account_groups) ? ledger.account_groups : [];
-  const accounts = Array.isArray(ledger?.chart_accounts) ? ledger.chart_accounts : [];
-  const warnings = Array.isArray(ledger?.warnings) ? ledger.warnings : [];
+  const snapshotAccounts = Array.isArray(snapshot?.accounts) ? snapshot.accounts : [];
+  const accountDetailState = accountDetails || {};
   const [expandedAccountKeys, setExpandedAccountKeys] = useState(() => new Set());
-  const filteredAccounts = useMemo(() => {
+  const filteredSnapshotAccounts = useMemo(() => {
     const query = String(accountSearch || "").trim().toLowerCase();
-    return accounts
-      .filter((account) => !query || `${account.name || ""} ${account.type || ""}`.toLowerCase().includes(query))
-      .sort((a, b) => accountSortRank(a.type, a.name) - accountSortRank(b.type, b.name) || String(a.name || "").localeCompare(String(b.name || "")));
-  }, [accounts, accountSearch]);
-  const dropdownAccounts = useMemo(() => filteredAccounts.map(normalizeAccountForBooksDropdown), [filteredAccounts]);
-  const toggleAccountGroup = useCallback((groupKey) => {
+    return snapshotAccounts
+      .filter((account) => !query || `${account.account_path || account.account_name || ""} ${account.account_type || ""}`.toLowerCase().includes(query))
+      .sort((a, b) => Number(a.display_order || 0) - Number(b.display_order || 0) || Number(a.row_order || 0) - Number(b.row_order || 0) || String(a.account_name || "").localeCompare(String(b.account_name || "")));
+  }, [accountSearch, snapshotAccounts]);
+  const dropdownAccounts = useMemo(() => (accounts || []).map(normalizeAccountForBooksDropdown), [accounts]);
+  const toggleAccountGroup = useCallback((account) => {
+    const groupKey = getQboPnlAccountKey(account);
+    let shouldLoad = false;
     setExpandedAccountKeys((current) => {
       const next = new Set(current);
       if (next.has(groupKey)) next.delete(groupKey);
-      else next.add(groupKey);
+      else {
+        next.add(groupKey);
+        const detail = accountDetailState[groupKey];
+        const currentDetail = String(detail?.snapshotId || "") === String(snapshot?.id || "") ? detail : null;
+        shouldLoad = !currentDetail?.loaded && !currentDetail?.loading;
+      }
       return next;
     });
-  }, []);
+    if (shouldLoad) onLoadAccountTransactions?.(account, { reset: true });
+  }, [accountDetailState, onLoadAccountTransactions, snapshot?.id]);
 
   useEffect(() => {
     setExpandedAccountKeys(new Set());
   }, [businessId, month]);
 
+  const hasSnapshot = Boolean(snapshot?.id);
+  const lastRefreshed = snapshot?.pulled_at ? formatDateTime(snapshot.pulled_at) : "";
+
+  useEffect(() => {
+    if (!hasSnapshot) return;
+    filteredSnapshotAccounts.forEach((account) => {
+      const key = getQboPnlAccountKey(account);
+      const detail = accountDetailState[key];
+      const currentDetail = String(detail?.snapshotId || "") === String(snapshot?.id || "") ? detail : null;
+      if (expandedAccountKeys.has(key) && !currentDetail?.loaded && !currentDetail?.loading) {
+        onLoadAccountTransactions?.(account, { reset: true });
+      }
+    });
+  }, [accountDetailState, expandedAccountKeys, filteredSnapshotAccounts, hasSnapshot, onLoadAccountTransactions, snapshot?.id]);
+
+  const handleRefresh = useCallback(async () => {
+    await onRefresh?.();
+  }, [onRefresh]);
+
   return (
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
       <div className="flex flex-col gap-3 border-b border-white/10 pb-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <div className="text-xs uppercase tracking-[0.14em] text-emerald-200/75">P&L Source Data</div>
-          <h3 className="mt-1 text-lg font-semibold text-white">Monthly GL Review</h3>
+          <div className="text-xs uppercase tracking-[0.14em] text-emerald-200/75">QuickBooks P&amp;L</div>
+          <h3 className="mt-1 text-lg font-semibold text-white">Monthly P&amp;L Review</h3>
+          <p className="mt-1 text-xs text-white/45">Live review of the selected month&apos;s QuickBooks Profit &amp; Loss.</p>
+          {lastRefreshed ? <p className="mt-1 text-xs text-white/35">Last refreshed {lastRefreshed}</p> : null}
         </div>
         <button
           type="button"
-          onClick={onRefresh}
-          disabled={loading}
+          onClick={handleRefresh}
+          disabled={refreshing}
           className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-2 text-sm text-white/75 hover:bg-white/[0.1] disabled:opacity-50"
         >
-          <RefreshCcw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
+          <RefreshCcw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+          {refreshing ? "Refreshing..." : "Refresh from QuickBooks"}
         </button>
       </div>
 
-      <PnlPreview preview={ledger?.pnl_preview} />
+      {error ? (
+        <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-xs text-amber-100">
+          Refresh failed: {error}
+        </div>
+      ) : null}
+      {refreshMessage ? (
+        <div className="mt-3 rounded-xl border border-emerald-300/14 bg-emerald-300/[0.055] px-3 py-2 text-xs text-emerald-100/85">
+          {refreshMessage}
+        </div>
+      ) : null}
+
+      <QboPnlPreview snapshot={snapshot} />
 
       <div className="mt-4 flex flex-col gap-2 rounded-2xl border border-white/8 bg-black/18 p-3 sm:flex-row sm:items-center">
         <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-white/10 bg-[#101216] px-3 py-2">
@@ -1590,99 +1825,143 @@ function SourceLedgerPanel({
           <input
             value={accountSearch}
             onChange={(event) => onAccountSearch(event.target.value)}
-            placeholder="Search GL accounts by name or type"
+            placeholder="Search QuickBooks P&L accounts by name or type"
             className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/35"
           />
         </div>
-        <div className="text-xs text-white/45">{filteredAccounts.length} accounts available</div>
+        <div className="text-xs text-white/45">{filteredSnapshotAccounts.length} P&amp;L accounts</div>
       </div>
-
-      {warnings.length ? (
-        <div className="mt-3 space-y-1.5">
-          {warnings.map((warning) => (
-            <div key={warning} className="rounded-xl border border-amber-300/16 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-100/90">
-              {warning}
-            </div>
-          ))}
-        </div>
-      ) : null}
 
       <div className="mt-4 max-h-[720px] space-y-2 overflow-y-auto pr-1">
         {loading ? (
           <div className="flex min-h-40 items-center justify-center rounded-xl border border-white/8 bg-white/[0.03] text-sm text-white/55">
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            Loading monthly source ledger...
+            Loading QuickBooks P&amp;L snapshot...
           </div>
-        ) : groups.length ? (
-          groups.map((group) => {
-            const groupKey = getAccountGroupKey(group);
+        ) : !hasSnapshot ? (
+          <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-8 text-center text-sm text-white/50">
+            No QuickBooks P&amp;L snapshot has been pulled for {formatMonth(month)}.
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-300/[0.09] px-3 py-2 text-xs font-semibold text-emerald-100 hover:bg-emerald-300/[0.14] disabled:opacity-45"
+              >
+                {refreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                {refreshing ? "Refreshing..." : "Refresh from QuickBooks"}
+              </button>
+            </div>
+          </div>
+        ) : filteredSnapshotAccounts.length ? (
+          filteredSnapshotAccounts.map((account) => {
+            const groupKey = getQboPnlAccountKey(account);
             const expanded = expandedAccountKeys.has(groupKey);
-            const transactionCount = Number(group.transaction_count ?? group.transactions?.length ?? 0);
+            const cachedDetail = accountDetailState[groupKey] || {};
+            const detail = String(cachedDetail?.snapshotId || "") === String(snapshot?.id || "") ? cachedDetail : {};
+            const rows = Array.isArray(detail.rows) ? detail.rows : [];
+            const loadedCount = rows.length;
+            const totalCount = Number(detail.totalCount ?? account.metadata?.transaction_count ?? loadedCount);
+            const hasMore = detail.loaded && loadedCount < totalCount;
             return (
               <div key={groupKey} className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.03]">
                 <button
                   type="button"
-                  onClick={() => toggleAccountGroup(groupKey)}
+                  onClick={() => toggleAccountGroup(account)}
                   aria-expanded={expanded}
-                  aria-controls={`monthly-review-gl-${groupKey}`}
+                  aria-controls={`monthly-review-qbo-pnl-${groupKey}`}
                   className="flex w-full flex-col gap-2 px-3 py-3 text-left transition hover:bg-white/[0.045] focus:outline-none focus:ring-2 focus:ring-emerald-300/45 md:grid md:grid-cols-[minmax(220px,1fr)_150px_150px] md:items-center"
                 >
                   <div className="flex min-w-0 items-center gap-2">
                     {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-white/45" /> : <ChevronRight className="h-4 w-4 shrink-0 text-white/45" />}
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold leading-tight text-white">{group.account_name || "Uncategorized"}</div>
-                      <div className="text-[10px] uppercase tracking-[0.12em] text-white/35">{group.account_type || "Account"}</div>
+                      <div className="truncate text-sm font-semibold leading-tight text-white">{account.account_path || account.account_name || "QuickBooks account"}</div>
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-white/35">{account.account_type || "P&L Account"}</div>
                     </div>
                   </div>
                   <div className="text-xs text-white/50 md:text-right">
-                    {transactionCount} transaction{transactionCount === 1 ? "" : "s"}
+                    {detail.loaded ? `${totalCount} transaction${totalCount === 1 ? "" : "s"}` : "Expand for transactions"}
                   </div>
-                  <div className={`text-sm font-semibold md:text-right ${Number(group.total_amount || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
-                    {formatCurrency(group.total_amount)}
+                  <div className={`text-sm font-semibold md:text-right ${Number(account.total_amount || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
+                    {formatCurrency(account.total_amount)}
                   </div>
                 </button>
 
                 {expanded ? (
-                  <div id={`monthly-review-gl-${groupKey}`} className="divide-y divide-white/[0.06] border-t border-white/8">
-                    {(group.transactions || []).map((txn) => (
-                      <div key={txn.id} className="grid gap-2 px-3 py-2 text-xs xl:grid-cols-[76px_minmax(200px,1fr)_105px_118px_minmax(210px,280px)_36px] xl:items-center">
-                        <div className="whitespace-nowrap text-white/45">{formatShortDate(txn.date)}</div>
-                        <div className="min-w-0">
-                          <div className="truncate font-medium leading-tight text-white">{txn.payee || txn.description || "Transaction"}</div>
-                          <div className="truncate text-[11px] leading-tight text-white/38">{txn.description || txn.reason || txn.status}</div>
-                          {txn.post_error ? <div className="truncate text-[11px] leading-tight text-rose-200">{txn.post_error}</div> : null}
-                        </div>
-                        <div className={`font-semibold xl:text-right ${Number(txn.amount || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
-                          {formatCurrency(txn.amount)}
-                        </div>
-                        <QboSyncStatusBadge status={txn.qbo_sync_status} compact />
-                        <div className="flex items-center gap-2">
-                          <CoaDropdown
-                            value={txn.effective_account_id || ""}
-                            suggestedId={txn.effective_account_id || txn.suggested_qbo_account_id || ""}
-                            suggestedName={txn.effective_account_name || txn.suggested_qbo_account_name || ""}
-                            accounts={dropdownAccounts}
-                            status={txn.status}
-                            onChange={(accountId) => onAccountChange(txn, accountId)}
-                            disabled={busyTransaction === txn.id || !accounts.length}
-                          />
-                          {busyTransaction === txn.id ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/45" /> : null}
-                        </div>
-                        <div className="flex items-center gap-1.5 xl:justify-end">
-                          {txn.qbo_sync_status?.key === "failed" || txn.qbo_sync_status?.key === "queued" || txn.qbo_sync_status?.key === "not_posted" ? (
+                  <div id={`monthly-review-qbo-pnl-${groupKey}`} className="divide-y divide-white/[0.06] border-t border-white/8">
+                    {detail.loading && !rows.length ? (
+                      <div className="flex min-h-24 items-center justify-center px-3 py-5 text-sm text-white/50">
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Loading QuickBooks transactions...
+                      </div>
+                    ) : detail.error ? (
+                      <div className="px-3 py-4 text-sm text-amber-100">{detail.error}</div>
+                    ) : rows.length ? (
+                      <>
+                        {rows.map((txn) => {
+                          const linked = Boolean(txn.bizzi_transaction_id);
+                          const busy = busyTransaction === txn.bizzi_transaction_id;
+                          return (
+                            <div key={txn.id || `${txn.qbo_txn_type}-${txn.qbo_txn_id}-${txn.txn_date}`} className="grid gap-2 px-3 py-2 text-xs xl:grid-cols-[76px_minmax(200px,1fr)_105px_110px_105px_minmax(210px,280px)] xl:items-center">
+                              <div className="whitespace-nowrap text-white/45">{formatShortDate(txn.txn_date)}</div>
+                              <div className="min-w-0">
+                                <div className="truncate font-medium leading-tight text-white">{txn.entity_name || txn.payee_name || txn.vendor_name || txn.customer_name || txn.description || "QBO transaction"}</div>
+                                <div className="truncate text-[11px] leading-tight text-white/38">{txn.memo || txn.description || txn.qbo_txn_id}</div>
+                              </div>
+                              <div className={`font-semibold xl:text-right ${Number(txn.amount || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
+                                {formatCurrency(txn.amount)}
+                              </div>
+                              <span className="inline-flex w-fit rounded-full border border-sky-300/18 bg-sky-300/[0.08] px-2 py-0.5 text-[10px] font-medium text-sky-100">
+                                {txn.qbo_txn_type || "QBO"}
+                              </span>
+                              <span
+                                className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[10px] font-medium ${linked ? "border-emerald-300/18 bg-emerald-300/[0.08] text-emerald-100" : "border-white/10 bg-white/[0.05] text-white/58"}`}
+                                title={linked ? "Linked to a Bizzi bank transaction." : "This transaction exists in QuickBooks but is not linked to a Bizzi bank transaction."}
+                              >
+                                {linked ? "Bizzi linked" : "QBO only"}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                {linked ? (
+                                  <>
+                                    <CoaDropdown
+                                      value={txn.qbo_account_id || ""}
+                                      suggestedId={txn.qbo_account_id || ""}
+                                      suggestedName={txn.qbo_account_name || ""}
+                                      accounts={dropdownAccounts}
+                                      status="posted"
+                                      onChange={(accountId) => onAccountChange(txn, accountId)}
+                                      disabled={busy || !dropdownAccounts.length}
+                                    />
+                                    {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/45" /> : null}
+                                  </>
+                                ) : (
+                                  <span className="text-[11px] text-white/42" title="This transaction exists in QuickBooks but is not linked to a Bizzi bank transaction.">
+                                    Read-only
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {hasMore ? (
+                          <div className="px-3 py-3">
                             <button
                               type="button"
-                              onClick={() => onRetry(txn)}
-                              disabled={retryingTransaction === txn.id || busyTransaction === txn.id}
-                              className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-amber-300/18 bg-amber-300/[0.08] text-amber-100 hover:bg-amber-300/[0.14] disabled:opacity-45"
-                              title="Retry QBO sync"
+                              onClick={() => onLoadAccountTransactions?.(account)}
+                              disabled={detail.loading}
+                              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-semibold text-white/70 hover:bg-white/[0.1] disabled:opacity-45"
                             >
-                              {retryingTransaction === txn.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
+                              {detail.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                              Load More
                             </button>
-                          ) : null}
-                        </div>
+                          </div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <div className="px-3 py-5 text-center text-sm text-white/45">
+                        No QuickBooks transactions were returned for this account in {formatMonth(month)}.
                       </div>
-                    ))}
+                    )}
                   </div>
                 ) : null}
               </div>
@@ -1690,12 +1969,38 @@ function SourceLedgerPanel({
           })
         ) : (
           <div className="rounded-xl border border-white/8 bg-white/[0.03] px-4 py-8 text-center text-sm text-white/45">
-            No source transactions found for this month.
+            No QuickBooks P&amp;L accounts found in this snapshot.
           </div>
         )}
       </div>
+    </div>
+  );
+}
 
-      <ReconciliationTracePanel ledger={ledger} loading={loading} />
+function QboPnlPreview({ snapshot }) {
+  const rows = [
+    ["Revenue", snapshot?.revenue],
+    ["COGS", snapshot?.cogs],
+    ["Expenses", snapshot?.expenses],
+    ["Net Profit", snapshot?.net_profit],
+  ];
+
+  return (
+    <div className="mt-4 rounded-2xl border border-white/8 bg-white/[0.035] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-white">QuickBooks P&amp;L Snapshot</div>
+          <div className="mt-0.5 text-xs text-white/45">Authoritative totals from the selected month&apos;s QuickBooks Profit &amp; Loss.</div>
+        </div>
+        <div className={`text-lg font-semibold ${Number(snapshot?.net_profit || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
+          {formatCurrency(snapshot?.net_profit)}
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+        {rows.map(([label, value]) => (
+          <MiniStat key={label} label={label} value={formatCurrency(value)} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -2846,6 +3151,23 @@ function updateReviewUrl({ businessId, month }) {
   }
 }
 
+function buildMonthlyReviewReturnUrl({ businessId, month }) {
+  if (typeof window === "undefined") return "/monthly-review";
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("token");
+    if (businessId) url.searchParams.set("business_id", businessId);
+    if (month) url.searchParams.set("review_month", month);
+    return url.toString();
+  } catch {
+    const params = new URLSearchParams();
+    if (businessId) params.set("business_id", businessId);
+    if (month) params.set("review_month", month);
+    const suffix = params.toString();
+    return `/monthly-review${suffix ? `?${suffix}` : ""}`;
+  }
+}
+
 function buildDisplayBusiness(business) {
   if (!business) return business;
   if (!shouldUseDemoData(business)) return business;
@@ -2941,6 +3263,17 @@ function getAccountGroupKey(group = {}) {
   const name = String(group.account_name || "Uncategorized").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
   const type = String(group.account_type || "account").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
   return `account-name:${name || "uncategorized"}:${type || "account"}`;
+}
+
+function getQboPnlAccountKey(account = {}) {
+  if (account.qbo_account_id) return `qbo-account:${account.qbo_account_id}`;
+  if (account.id) return `snapshot-account:${account.id}`;
+  const name = String(account.account_path || account.account_name || "unresolved").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  return `qbo-account-name:${name || "unresolved"}`;
+}
+
+function getQboPnlEndpointAccountId(account = {}) {
+  return account.qbo_account_id || account.id || "";
 }
 
 function normalizeAccountForBooksDropdown(account = {}) {

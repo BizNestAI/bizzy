@@ -81,7 +81,12 @@ router.post("/clarifications/submit", requireAuth, async (req, res) => {
   try {
     const result = await processClarificationAnswers({ businessId, answers, answeredByUserId: req.user?.id || null });
     if (!result.ok) {
-      return res.status(400).json({ ok: false, error: result.error || "clarifications_submit_failed" });
+      const statusCode = result.outcome === "partial_success" ? 207 : 400;
+      return res.status(statusCode).json({
+        ...result,
+        ok: false,
+        error: result.error || result.rows?.find((row) => row?.error)?.error || "clarifications_submit_failed",
+      });
     }
     return res.json(result);
   } catch (err) {

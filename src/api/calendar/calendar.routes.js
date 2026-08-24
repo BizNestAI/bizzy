@@ -1,7 +1,7 @@
 // File: /src/api/calendar/calendar.routes.js
 import { Router } from 'express';
 import { requireAuth } from '../gpt/middlewares/requireAuth.js';
-import { requireBusinessAccess } from '../_shared/tenantAuth.js';
+import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from '../_shared/tenantAuth.js';
 import {
   healthRoute,
   getEvents,
@@ -28,7 +28,7 @@ const router = Router();
 
 router.get('/health', healthRoute);
 
-const privateBusinessRoute = [requireAuth, requireBusinessAccess()];
+const privateBusinessRoute = [requireAuthOrAdminView, requireBusinessAccess(), rejectAdminViewWrites()];
 
 router.get('/events', ...privateBusinessRoute, getEvents);
 router.post('/events', ...privateBusinessRoute, postEvent);

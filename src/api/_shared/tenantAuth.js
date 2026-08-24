@@ -1,4 +1,10 @@
 import { supabase as defaultSupabase } from "../../services/supabaseAdmin.js";
+import { requireAuth } from "../gpt/middlewares/requireAuth.js";
+import {
+  AdminViewSessionError,
+  extractAdminViewToken,
+  getAdminViewSession,
+} from "../../services/adminViewSessionService.js";
 
 export const TENANT_AUTH_CODES = Object.freeze({
   AUTH_REQUIRED: "AUTH_REQUIRED",
@@ -7,6 +13,10 @@ export const TENANT_AUTH_CODES = Object.freeze({
   BUSINESS_NOT_FOUND: "BUSINESS_NOT_FOUND",
   BUSINESS_ACCESS_DENIED: "BUSINESS_ACCESS_DENIED",
   AMBIGUOUS_BUSINESS_CONTEXT: "AMBIGUOUS_BUSINESS_CONTEXT",
+  ADMIN_VIEW_INVALID: "admin_view_invalid",
+  ADMIN_VIEW_EXPIRED: "admin_view_expired",
+  ADMIN_VIEW_BUSINESS_MISMATCH: "admin_view_business_mismatch",
+  ADMIN_VIEW_READ_ONLY: "admin_view_read_only",
 });
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -89,11 +99,86 @@ async function hasBusinessMembership({ supabase, userId, businessId }) {
   return Boolean(data);
 }
 
+function mapAdminViewError(err) {
+  if (err?.code === "admin_view_session_expired") {
+    return new TenantAuthError(TENANT_AUTH_CODES.ADMIN_VIEW_EXPIRED, "Admin View session expired.", 401);
+  }
+  return new TenantAuthError(TENANT_AUTH_CODES.ADMIN_VIEW_INVALID, "Admin View session is invalid.", 401);
+}
+
+function assertAdminViewBusinessFixity(req, businessId, explicitBusinessId = undefined) {
+  if (explicitBusinessId && String(explicitBusinessId) !== String(businessId)) {
+    throw new TenantAuthError(
+      TENANT_AUTH_CODES.ADMIN_VIEW_BUSINESS_MISMATCH,
+      "Admin View business context cannot be changed by route authority.",
+      403
+    );
+  }
+  const sources = compactTenantSources(req);
+  for (const source of sources) {
+    if (!UUID_RE.test(source.value)) {
+      throw new TenantAuthError(
+        TENANT_AUTH_CODES.BUSINESS_INVALID,
+        "Business id must be a valid UUID.",
+        400
+      );
+    }
+    if (String(source.value) !== String(businessId)) {
+      throw new TenantAuthError(
+        TENANT_AUTH_CODES.ADMIN_VIEW_BUSINESS_MISMATCH,
+        "Admin View business context cannot be changed by request input.",
+        403
+      );
+    }
+  }
+}
+
+async function resolveAdminViewBusiness({ req, businessId: explicitBusinessId = undefined, supabase = defaultSupabase, now = new Date() } = {}) {
+  const token = extractAdminViewToken(req);
+  if (!token) return null;
+
+  let result;
+  try {
+    result = await getAdminViewSession({ token, db: supabase, now, touch: true });
+  } catch (err) {
+    if (err instanceof AdminViewSessionError) throw mapAdminViewError(err);
+    throw err;
+  }
+
+  const context = result.context || {};
+  if (context.read_only !== true) {
+    throw new TenantAuthError(TENANT_AUTH_CODES.ADMIN_VIEW_INVALID, "Admin View session is invalid.", 401);
+  }
+
+  const sessionBusinessId = context.business_id;
+  assertAdminViewBusinessFixity(req, sessionBusinessId, explicitBusinessId);
+
+  return {
+    id: sessionBusinessId,
+    businessId: sessionBusinessId,
+    ownerUserId: null,
+    businessName: context.business_name || null,
+    accessVia: "admin_view",
+    tenantMode: "admin_view",
+    readOnly: true,
+    staffUserId: result.session?.staff_user_id || null,
+    staffRole: context.staff_role || result.session?.staff_role || null,
+    adminViewSessionId: result.session?.id || null,
+    adminViewSource: context.source || "monthly_review",
+    adminViewExpiresAt: context.expires_at || null,
+    adminViewReturnUrl: context.return_url || null,
+  };
+}
+
 export async function resolveAuthorizedBusiness({
   req,
   businessId = undefined,
   supabase = defaultSupabase,
+  now = new Date(),
 } = {}) {
+  const adminViewBusiness = await resolveAdminViewBusiness({ req, businessId, supabase, now });
+  if (adminViewBusiness) return adminViewBusiness;
+
   const userId = getAuthenticatedUserId(req);
   if (!userId) {
     throw new TenantAuthError(TENANT_AUTH_CODES.AUTH_REQUIRED, "Authentication is required.", 401);
@@ -141,6 +226,9 @@ export async function resolveAuthorizedBusiness({
     ownerUserId,
     businessName: business.business_name || null,
     accessVia: isOwner ? "owner" : "membership",
+    tenantMode: "customer",
+    readOnly: false,
+    userId,
   };
   req.__businessAccessCache.set(cacheKey, context);
   return context;
@@ -155,6 +243,21 @@ export function attachAuthorizedBusiness(req, business) {
   };
   req.auth ||= {};
   req.auth.businessId = business.id;
+  req.auth.tenantMode = business.tenantMode || "customer";
+
+  req.tenantContext = {
+    mode: business.tenantMode || "customer",
+    businessId: business.id,
+    business: req.business,
+    readOnly: business.readOnly === true,
+    userId: business.userId || req.auth.userId || null,
+    staffUserId: business.staffUserId || null,
+    staffRole: business.staffRole || null,
+    adminViewSessionId: business.adminViewSessionId || null,
+    source: business.adminViewSource || null,
+    expiresAt: business.adminViewExpiresAt || null,
+    returnUrl: business.adminViewReturnUrl || null,
+  };
 
   // Compatibility only for legacy controllers. This field is attached only
   // after DB authorization; requireAuth never copies client tenant headers.
@@ -176,6 +279,7 @@ export function requireBusinessAccess(options = {}) {
         req,
         businessId: options.businessId,
         supabase: options.supabase || defaultSupabase,
+        now: options.now || new Date(),
       });
       attachAuthorizedBusiness(req, business);
       return next();
@@ -187,5 +291,41 @@ export function requireBusinessAccess(options = {}) {
         new TenantAuthError(TENANT_AUTH_CODES.BUSINESS_ACCESS_DENIED, "Business access denied.", 403)
       );
     }
+  };
+}
+
+export function requireAuthOrAdminView(req, res, next) {
+  if (extractAdminViewToken(req)) {
+    req.auth ||= {};
+    req.auth.adminViewRequested = true;
+    return next();
+  }
+  return requireAuth(req, res, next);
+}
+
+export function isAdminViewRequest(req) {
+  return req?.tenantContext?.mode === "admin_view";
+}
+
+export function sendAdminViewReadOnlyUnavailable(res, details = {}) {
+  return res.status(details.status || 409).json({
+    ok: false,
+    error: details.error || "admin_view_read_only_data_unavailable",
+    code: details.error || "admin_view_read_only_data_unavailable",
+    admin_view_read_only: true,
+  });
+}
+
+export function rejectAdminViewWrites(options = {}) {
+  const allowed = new Set((options.allowMethods || ["GET", "HEAD", "OPTIONS"]).map((method) => String(method).toUpperCase()));
+  return function rejectAdminViewWritesMiddleware(req, res, next) {
+    if (req.tenantContext?.mode === "admin_view" && !allowed.has(String(req.method || "").toUpperCase())) {
+      return res.status(403).json({
+        ok: false,
+        error: TENANT_AUTH_CODES.ADMIN_VIEW_READ_ONLY,
+        code: TENANT_AUTH_CODES.ADMIN_VIEW_READ_ONLY,
+      });
+    }
+    return next();
   };
 }

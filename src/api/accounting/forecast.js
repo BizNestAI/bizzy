@@ -4,6 +4,8 @@ import {
   generateCashFlowForecast,
   upsertForecastRows,
 } from './generateCashFlowForecast.js';
+import { supabase } from '../../services/supabaseAdmin.js';
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from '../_shared/tenantAuth.js';
 
 const router = express.Router();
 
@@ -17,10 +19,11 @@ const router = express.Router();
  *  - mockOnly=true|false (optional; forces mock generation)
  */
 router.get('/', async (req, res) => {
-  const { userId, businessId } = req.query;
+  const businessId = req.business?.id || req.auth?.businessId || req.query.businessId || req.query.business_id;
+  const userId = req.auth?.userId || req.user?.id || req.query.userId || req.query.user_id;
   let { months = '12', mockOnly } = req.query;
 
-  if (!userId || !businessId) {
+  if ((!userId && !isAdminViewRequest(req)) || !businessId) {
     return res.status(400).json({ error: 'Missing userId or businessId' });
   }
 
@@ -29,6 +32,28 @@ router.get('/', async (req, res) => {
   const forceMock = String(mockOnly).toLowerCase() === 'true';
 
   try {
+    if (isAdminViewRequest(req)) {
+      const { data, error } = await supabase
+        .from('cashflow_forecast')
+        .select('*')
+        .eq('business_id', businessId)
+        .order('month', { ascending: true })
+        .limit(months);
+
+      if (error) {
+        console.error('[Forecast Cache Fetch Error]', error?.message || error);
+        return res.status(500).json({ error: 'Failed to fetch cash flow forecast.' });
+      }
+      if (!Array.isArray(data) || data.length === 0) {
+        return sendAdminViewReadOnlyUnavailable(res, { error: 'admin_view_read_only_data_unavailable' });
+      }
+      res.set('Cache-Control', 'private, max-age=30');
+      return res.status(200).json({
+        forecast: data,
+        admin_view_cache_only: true,
+      });
+    }
+
     const forecast = await generateCashFlowForecast({
       userId,
       businessId,

@@ -155,6 +155,15 @@ export function __setRequireAuthTestDeps(deps = null) {
 export async function requireAuth(req, res, next) {
   try {
     if (req.method === 'OPTIONS') return next();
+    if (req.tenantContext?.mode === 'admin_view') {
+      req.auth ||= {};
+      req.auth.tenantMode = 'admin_view';
+      req.auth.businessId = req.tenantContext.businessId;
+      req.auth.adminViewSessionId = req.tenantContext.adminViewSessionId || null;
+      req.user ||= {};
+      req.user.business_id = req.tenantContext.businessId;
+      return next();
+    }
     if (BYPASS) {
       req.auth = { userId: 'dev-user', email: null, role: 'dev' };
       // Compatibility only. Never include unverified tenant context here.

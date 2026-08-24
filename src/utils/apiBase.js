@@ -43,13 +43,16 @@ export async function apiFetch(path, options = {}) {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 7000);
+  const headers = mergeApiFetchHeaders(options.headers);
   try {
     const res = await fetch(full, {
       credentials: options.credentials ?? "include",
       ...options,
+      headers,
       signal: options.signal || controller.signal,
     });
     clearTimeout(timeout);
+    clearAdminViewOnAuthFailure(res, headers);
     return res;
   } catch (err) {
     clearTimeout(timeout);
@@ -59,3 +62,34 @@ export async function apiFetch(path, options = {}) {
 
 export const apiBaseUrl = getApiBase();
 export default apiBaseUrl;
+
+function mergeApiFetchHeaders(provided = {}) {
+  const headers = new Headers(provided || {});
+  if (typeof window === "undefined") return headers;
+  try {
+    const token = window.sessionStorage?.getItem("bizzi:admin_view_session") || "";
+    if (!token) return headers;
+    headers.set("x-bizzi-admin-view", token);
+    const rawContext = window.sessionStorage?.getItem("bizzi:admin_view_context") || "";
+    const context = rawContext ? JSON.parse(rawContext) : null;
+    if (context?.businessId) headers.set("x-business-id", context.businessId);
+    else headers.delete("x-business-id");
+  } catch {
+    /* ignore malformed local context; server validation remains authoritative */
+  }
+  return headers;
+}
+
+async function clearAdminViewOnAuthFailure(response, headers) {
+  if (!headers?.has?.("x-bizzi-admin-view") || response?.ok || typeof window === "undefined") return;
+  try {
+    const payload = await response.clone().json();
+    const code = payload?.code || payload?.error || "";
+    if (!String(code).startsWith("admin_view_")) return;
+    window.sessionStorage?.removeItem("bizzi:admin_view_session");
+    window.sessionStorage?.removeItem("bizzi:admin_view_context");
+    window.dispatchEvent(new CustomEvent("bizzy:admin-view-cleared", { detail: { reason: code } }));
+  } catch {
+    /* ignore non-json error responses */
+  }
+}

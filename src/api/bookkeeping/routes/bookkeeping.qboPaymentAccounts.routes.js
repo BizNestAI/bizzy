@@ -2,6 +2,7 @@ import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../../_shared/tenantAuth.js";
 import {
   ensurePaymentAccount,
   fetchPaymentAccounts,
@@ -44,6 +45,9 @@ function getQboErrorMessage(err) {
 router.get("/qbo/payment-accounts", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  if (isAdminViewRequest(req)) {
+    return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_provider_refresh_blocked", status: 403 });
+  }
 
   try {
     const accounts = await fetchPaymentAccounts(businessId);

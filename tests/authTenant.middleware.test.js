@@ -12,17 +12,23 @@ const BUSINESS_A = "11111111-1111-4111-8111-111111111111";
 const BUSINESS_B = "22222222-2222-4222-8222-222222222222";
 const BUSINESS_SHARED = "33333333-3333-4333-8333-333333333333";
 const BUSINESS_MISSING = "44444444-4444-4444-8444-444444444444";
+const ADMIN_VIEW_TOKEN = "valid-admin-view-token";
+const ADMIN_VIEW_SESSION_ID = "55555555-5555-4555-8555-555555555555";
 
 const authMod = await import("../src/api/gpt/middlewares/requireAuth.js");
 const tenantMod = await import("../src/api/_shared/tenantAuth.js");
+const adminViewMod = await import("../src/services/adminViewSessionService.js");
 
 const { requireAuth, __setRequireAuthTestDeps } = authMod;
 const {
   getRequestedBusinessId,
+  rejectAdminViewWrites,
+  requireAuthOrAdminView,
   requireBusinessAccess,
   resolveAuthorizedBusiness,
   TENANT_AUTH_CODES,
 } = tenantMod;
+const { hashAdminViewToken } = adminViewMod;
 
 test.afterEach(() => {
   __setRequireAuthTestDeps(null);
@@ -279,6 +285,143 @@ test("valid multi-business membership authorizes only explicit memberships", asy
   );
 });
 
+test("valid Admin View session resolves read-only tenant context for its fixed business without customer auth", async () => {
+  const supabase = makeTenantSupabase(adminViewInitialState());
+  const req = makeReq({ headers: { "x-bizzi-admin-view": ADMIN_VIEW_TOKEN } });
+  const res = makeRes();
+  let nextCalled = false;
+
+  requireAuthOrAdminView(req, res, () => {});
+  await requireBusinessAccess({ supabase, now: new Date("2026-08-23T12:05:00.000Z") })(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, true);
+  assert.equal(req.tenantContext.mode, "admin_view");
+  assert.equal(req.tenantContext.readOnly, true);
+  assert.equal(req.tenantContext.businessId, BUSINESS_A);
+  assert.equal(req.tenantContext.staffUserId, USER_A);
+  assert.equal(req.tenantContext.staffRole, "owner_admin");
+  assert.equal(req.business.id, BUSINESS_A);
+  assert.equal(req.auth.businessId, BUSINESS_A);
+  assert.equal(req.auth.tenantMode, "admin_view");
+});
+
+test("Admin View business id cannot be overridden by header query body or route authority", async () => {
+  const supabase = makeTenantSupabase(adminViewInitialState());
+  const attempts = [
+    makeReq({ headers: { "x-bizzi-admin-view": ADMIN_VIEW_TOKEN, "x-business-id": BUSINESS_B } }),
+    makeReq({ headers: { "x-bizzi-admin-view": ADMIN_VIEW_TOKEN }, query: { business_id: BUSINESS_B } }),
+    makeReq({ headers: { "x-bizzi-admin-view": ADMIN_VIEW_TOKEN }, body: { business_id: BUSINESS_B } }),
+  ];
+
+  for (const req of attempts) {
+    const res = makeRes();
+    requireAuthOrAdminView(req, res, () => {});
+    await requireBusinessAccess({ supabase, now: new Date("2026-08-23T12:05:00.000Z") })(req, res, () => {});
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.body.code, TENANT_AUTH_CODES.ADMIN_VIEW_BUSINESS_MISMATCH);
+    assert.equal(req.business, undefined);
+  }
+
+  await assert.rejects(
+    () =>
+      resolveAuthorizedBusiness({
+        req: makeReq({ headers: { "x-bizzi-admin-view": ADMIN_VIEW_TOKEN } }),
+        businessId: BUSINESS_B,
+        supabase,
+        now: new Date("2026-08-23T12:05:00.000Z"),
+      }),
+    (err) => err.code === TENANT_AUTH_CODES.ADMIN_VIEW_BUSINESS_MISMATCH
+  );
+});
+
+test("invalid Admin View token fails closed instead of falling back to valid customer auth", async () => {
+  const supabase = makeTenantSupabase(adminViewInitialState());
+  const req = makeReq({
+    auth: { userId: USER_A },
+    headers: { "x-bizzi-admin-view": "fabricated-token" },
+    query: { business_id: BUSINESS_A },
+  });
+  const res = makeRes();
+
+  requireAuthOrAdminView(req, res, () => {});
+  await requireBusinessAccess({ supabase, now: new Date("2026-08-23T12:05:00.000Z") })(req, res, () => {});
+
+  assert.equal(res.statusCode, 401);
+  assert.equal(res.body.code, TENANT_AUTH_CODES.ADMIN_VIEW_INVALID);
+  assert.equal(req.business, undefined);
+});
+
+test("Admin View validation denies expired revoked ended inactive and role-revoked sessions", async () => {
+  const cases = [
+    {
+      patchSession: { expires_at: "2026-08-23T12:04:59.000Z" },
+      code: TENANT_AUTH_CODES.ADMIN_VIEW_EXPIRED,
+    },
+    {
+      patchSession: { revoked_at: "2026-08-23T12:04:00.000Z" },
+      code: TENANT_AUTH_CODES.ADMIN_VIEW_INVALID,
+    },
+    {
+      patchSession: { ended_at: "2026-08-23T12:04:00.000Z" },
+      code: TENANT_AUTH_CODES.ADMIN_VIEW_INVALID,
+    },
+    {
+      patchStaff: { active: false },
+      code: TENANT_AUTH_CODES.ADMIN_VIEW_INVALID,
+    },
+    {
+      patchStaff: { role: "viewer" },
+      code: TENANT_AUTH_CODES.ADMIN_VIEW_INVALID,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const state = adminViewInitialState();
+    Object.assign(state.internal_admin_view_sessions[0], testCase.patchSession || {});
+    Object.assign(state.internal_staff_users[0], testCase.patchStaff || {});
+    const req = makeReq({ headers: { "x-bizzi-admin-view": ADMIN_VIEW_TOKEN } });
+    const res = makeRes();
+    requireAuthOrAdminView(req, res, () => {});
+    await requireBusinessAccess({ supabase: makeTenantSupabase(state), now: new Date("2026-08-23T12:05:00.000Z") })(req, res, () => {});
+    assert.equal(res.statusCode, 401);
+    assert.equal(res.body.code, testCase.code);
+  }
+});
+
+test("default Admin View write guard denies mutations while preserving normal customer writes", () => {
+  const guard = rejectAdminViewWrites();
+  const adminReq = makeReq({
+    method: "POST",
+    tenantContext: { mode: "admin_view", businessId: BUSINESS_A, readOnly: true },
+  });
+  const adminRes = makeRes();
+  let adminNext = false;
+
+  guard(adminReq, adminRes, () => {
+    adminNext = true;
+  });
+
+  assert.equal(adminNext, false);
+  assert.equal(adminRes.statusCode, 403);
+  assert.equal(adminRes.body.code, TENANT_AUTH_CODES.ADMIN_VIEW_READ_ONLY);
+
+  const customerReq = makeReq({
+    method: "POST",
+    tenantContext: { mode: "customer", businessId: BUSINESS_A, readOnly: false },
+  });
+  const customerRes = makeRes();
+  let customerNext = false;
+
+  guard(customerReq, customerRes, () => {
+    customerNext = true;
+  });
+
+  assert.equal(customerNext, true);
+  assert.equal(customerRes.body, null);
+});
+
 function makeReq(overrides = {}) {
   return {
     method: "GET",
@@ -316,6 +459,8 @@ function makeTenantSupabase(initial = {}) {
   const store = {
     business_profiles: initial.business_profiles || [],
     user_business_link: initial.user_business_link || [],
+    internal_staff_users: initial.internal_staff_users || [],
+    internal_admin_view_sessions: initial.internal_admin_view_sessions || [],
   };
   return {
     from(table) {
@@ -324,11 +469,42 @@ function makeTenantSupabase(initial = {}) {
   };
 }
 
+function adminViewInitialState() {
+  return {
+    business_profiles: [
+      { id: BUSINESS_A, user_id: USER_B, business_name: "Business A" },
+      { id: BUSINESS_B, user_id: USER_B, business_name: "Business B" },
+    ],
+    user_business_link: [],
+    internal_staff_users: [
+      { user_id: USER_A, role: "owner_admin", active: true },
+    ],
+    internal_admin_view_sessions: [
+      {
+        id: ADMIN_VIEW_SESSION_ID,
+        staff_user_id: USER_A,
+        staff_role: "owner_admin",
+        business_id: BUSINESS_A,
+        source: "monthly_review",
+        read_only: true,
+        session_token_hash: hashAdminViewToken(ADMIN_VIEW_TOKEN),
+        started_at: "2026-08-23T12:00:00.000Z",
+        last_seen_at: "2026-08-23T12:00:00.000Z",
+        expires_at: "2026-08-23T16:00:00.000Z",
+        ended_at: null,
+        revoked_at: null,
+        return_url: "/monthly-review",
+      },
+    ],
+  };
+}
+
 class Query {
   constructor(store, table) {
     this.store = store;
     this.table = table;
     this.filters = [];
+    this.pendingUpdate = null;
   }
 
   select() {
@@ -340,14 +516,40 @@ class Query {
     return this;
   }
 
+  is(field, value) {
+    this.filters.push((row) => (value === null ? row[field] == null : row[field] === value));
+    return this;
+  }
+
+  gt(field, value) {
+    this.filters.push((row) => String(row[field] || "") > String(value));
+    return this;
+  }
+
+  update(payload) {
+    this.pendingUpdate = payload;
+    return this;
+  }
+
   limit() {
     return this;
   }
 
   maybeSingle() {
-    const rows = (this.store[this.table] || []).filter((row) =>
+    const rows = this.rows();
+    if (this.pendingUpdate && rows[0]) Object.assign(rows[0], this.pendingUpdate);
+    return Promise.resolve({ data: rows[0] || null, error: null });
+  }
+
+  then(resolve) {
+    const rows = this.rows();
+    if (this.pendingUpdate) rows.forEach((row) => Object.assign(row, this.pendingUpdate));
+    return resolve({ data: rows, error: null });
+  }
+
+  rows() {
+    return (this.store[this.table] || []).filter((row) =>
       this.filters.every((filter) => filter(row))
     );
-    return Promise.resolve({ data: rows[0] || null, error: null });
   }
 }

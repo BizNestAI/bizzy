@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import { supabase } from '../../services/supabaseAdmin.js';
 import fetch from 'node-fetch';
 import { attachCTA } from './headline.cta.js';
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from '../_shared/tenantAuth.js';
 
 const CONTRACTOR_CFO_MODULE = 'contractor_cfo';
 
@@ -141,7 +142,7 @@ function chooseHeadline({ acc, tax, deadline, rng }) {
 /* ----------------------- Controller entrypoint --------------------- */
 export async function getDailyHeadline(req, res) {
   try {
-    const business_id = req.business?.id || req.auth?.businessId || req.query.business_id || req.query.businessId || req.headers['x-business-id'];
+    const business_id = req.tenantContext?.businessId || req.business?.id || req.auth?.businessId || req.query.business_id || req.query.businessId || req.headers['x-business-id'];
     const user_id     = req.auth?.userId || req.user?.id || req.query.user_id || req.query.userId || req.headers['x-user-id'];
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
 
@@ -166,6 +167,10 @@ export async function getDailyHeadline(req, res) {
         legacy_dashboard_only: true,
         module: CONTRACTOR_CFO_MODULE,
       });
+    }
+
+    if (isAdminViewRequest(req)) {
+      return sendAdminViewReadOnlyUnavailable(res, { error: 'admin_view_read_only_data_unavailable' });
     }
 
     // 2) seed RNG with business + date → variety per day per account

@@ -21,10 +21,10 @@ const normalize = (str = "") => (str || "").toLowerCase().replace(/[^a-z0-9\s&-]
 const CLARIFICATION_TXN_SELECT =
   "id,date,plaid_transaction_id,pending_transaction_id,duplicate_fingerprint,is_archived,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,amount,direction,check_number,category_primary,personal_finance_category,pending,accounting_review_required,accounting_review_reason";
 
-async function resolveCanonicalTransactionForClarification({ businessId, transactionId }) {
+async function resolveCanonicalTransactionForClarification({ businessId, transactionId, db = supabase }) {
   if (!businessId || !transactionId) return null;
 
-  const { data: exactRow, error: exactErr } = await supabase
+  const { data: exactRow, error: exactErr } = await db
     .from("bank_transactions")
     .select(CLARIFICATION_TXN_SELECT)
     .eq("business_id", businessId)
@@ -73,7 +73,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
 
   if (exactRow.plaid_transaction_id) {
     const replacement = await pickReplacement(
-      supabase
+      db
         .from("bank_transactions")
         .select(CLARIFICATION_TXN_SELECT)
         .eq("business_id", businessId)
@@ -88,7 +88,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
 
   if (exactRow.pending_transaction_id) {
     const replacement = await pickReplacement(
-      supabase
+      db
         .from("bank_transactions")
         .select(CLARIFICATION_TXN_SELECT)
         .eq("business_id", businessId)
@@ -102,7 +102,7 @@ async function resolveCanonicalTransactionForClarification({ businessId, transac
   }
 
   if (exactRow.duplicate_fingerprint) {
-    const { data, error } = await supabase
+    const { data, error } = await db
       .from("bank_transactions")
       .select(CLARIFICATION_TXN_SELECT)
       .eq("business_id", businessId)
@@ -266,11 +266,11 @@ export async function mapAnswerToCoa({
   };
 }
 
-export async function createOrUpdateClarificationRequest({ businessId, txn, reason_code = "other", meta = {}, prompt_text = "What was this for?" }) {
+export async function createOrUpdateClarificationRequest({ businessId, txn, reason_code = "other", meta = {}, prompt_text = "What was this for?", db = supabase }) {
   if (!businessId || !txn?.id) return { ok: false, error: "missing_inputs" };
   const nowIso = new Date().toISOString();
 
-  const { data: existing, error: selErr } = await supabase
+  const { data: existing, error: selErr } = await db
     .from("clarification_requests")
     .select("id,status,dismissed_until,answered_at")
     .eq("business_id", businessId)
@@ -305,7 +305,7 @@ export async function createOrUpdateClarificationRequest({ businessId, txn, reas
   };
 
   if (existing?.id) {
-    const { error: updErr, data: updData } = await supabase
+    const { error: updErr, data: updData } = await db
       .from("clarification_requests")
       .update(payload)
       .eq("id", existing.id)
@@ -315,7 +315,7 @@ export async function createOrUpdateClarificationRequest({ businessId, txn, reas
     return { ok: true, id: updData?.id || existing.id, updated: true };
   }
 
-  const { data: insData, error: insErr } = await supabase
+  const { data: insData, error: insErr } = await db
     .from("clarification_requests")
     .upsert(payload, { onConflict: "business_id,transaction_id" })
     .select("id")
@@ -640,7 +640,50 @@ async function upsertVendorRuleFromClarification({ businessId, txn, accountId, a
   return { ok: true, rule: insData };
 }
 
-export async function processClarificationAnswers({ businessId, answers = [], answeredByUserId = null }) {
+function failedClarificationResult(ans, error, extra = {}) {
+  return {
+    request_id: ans?.request_id || null,
+    transaction_id: ans?.transaction_id || null,
+    success: false,
+    persisted: false,
+    error,
+    ...extra,
+  };
+}
+
+function buildClarificationSubmissionResult({ requestedCount, rows, mapped, unmapped }) {
+  const successfulRows = rows.filter((row) => row?.success === true && row?.persisted === true);
+  const failedRows = rows.filter((row) => row?.success !== true || row?.persisted !== true);
+  const successfulCount = successfulRows.length;
+  const failedCount = failedRows.length;
+  const outcome = successfulCount === requestedCount
+    ? "all_succeeded"
+    : successfulCount > 0
+      ? "partial_success"
+      : "all_failed";
+
+  return {
+    ok: outcome === "all_succeeded",
+    outcome,
+    requested_count: requestedCount,
+    successful_count: successfulCount,
+    failed_count: failedCount,
+    updated: successfulCount,
+    mapped,
+    unmapped,
+    rows,
+  };
+}
+
+export async function processClarificationAnswers({
+  businessId,
+  answers = [],
+  answeredByUserId = null,
+  db = supabase,
+  mapAnswer = mapAnswerToCoa,
+  resolveTxn = resolveCanonicalTransactionForClarification,
+  refreshSummary = refreshOperatorRequestSummaryBestEffort,
+} = {}) {
   if (!businessId) return { ok: false, error: "missing_business_id" };
   if (!Array.isArray(answers) || !answers.length) return { ok: false, error: "missing_answers" };
 
@@ -657,7 +700,7 @@ export async function processClarificationAnswers({ businessId, answers = [], an
   const requestIds = sanitized.map((a) => a.request_id);
   const nowIso = new Date().toISOString();
 
-  const { data: reqRows, error: reqErr } = await supabase
+  const { data: reqRows, error: reqErr } = await db
     .from("clarification_requests")
     .select("*")
     .eq("business_id", businessId)
@@ -671,9 +714,10 @@ export async function processClarificationAnswers({ businessId, answers = [], an
   const resolutionMap = {};
   for (const ans of sanitized) {
     try {
-      resolutionMap[ans.request_id] = await resolveCanonicalTransactionForClarification({
+      resolutionMap[ans.request_id] = await resolveTxn({
         businessId,
         transactionId: ans.transaction_id,
+        db,
       });
     } catch (err) {
       return { ok: false, error: err?.message || "canonical_resolution_failed" };
@@ -689,7 +733,7 @@ export async function processClarificationAnswers({ businessId, answers = [], an
   );
 
   const { data: catRows } = canonicalTxnIds.length
-    ? await supabase
+    ? await db
         .from("transaction_categorizations")
         .select("transaction_id,status,meta")
         .eq("business_id", businessId)
@@ -700,7 +744,7 @@ export async function processClarificationAnswers({ businessId, answers = [], an
     catMeta[row.transaction_id] = row.meta || {};
   });
 
-  const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+  const bookkeepingStartDate = await getBookkeepingStartDate(db, businessId);
   const results = [];
   let mapped = 0;
   let unmapped = 0;
@@ -718,9 +762,10 @@ export async function processClarificationAnswers({ businessId, answers = [], an
         reason_code: "other",
         prompt_text: "What was this for?",
         meta: { source: "operator_requests_answer_submit" },
+        db,
       });
       if (created?.ok && created.id) {
-        const { data: createdReq, error: createdReqErr } = await supabase
+        const { data: createdReq, error: createdReqErr } = await db
           .from("clarification_requests")
           .select("*")
           .eq("business_id", businessId)
@@ -728,15 +773,19 @@ export async function processClarificationAnswers({ businessId, answers = [], an
           .maybeSingle();
         if (createdReqErr) return { ok: false, error: createdReqErr?.message || "clarification_create_fetch_failed" };
         effectiveReq = createdReq;
+      } else {
+        results.push(failedClarificationResult(ans, created?.error || "clarification_create_failed"));
+        unmapped += 1;
+        continue;
       }
     }
     if (!effectiveReq || effectiveReq.transaction_id !== ans.transaction_id) {
-      results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "not_found_or_mismatch" });
+      results.push(failedClarificationResult(ans, "not_found_or_mismatch"));
       unmapped += 1;
       continue;
     }
     if (effectiveReq.status !== "pending") {
-      results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "not_pending" });
+      results.push(failedClarificationResult(ans, "not_pending"));
       unmapped += 1;
       continue;
     }
@@ -748,12 +797,12 @@ export async function processClarificationAnswers({ businessId, answers = [], an
           remap_reason: resolved?.remapReason || null,
         });
       }
-      results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "canonical_transaction_not_found" });
+      results.push(failedClarificationResult(ans, "canonical_transaction_not_found"));
       unmapped += 1;
       continue;
     }
     if (txn.pending === true) {
-      await supabase
+      await db
         .from("transaction_categorizations")
         .upsert(
           {
@@ -767,57 +816,45 @@ export async function processClarificationAnswers({ businessId, answers = [], an
           },
           { onConflict: "business_id,transaction_id" }
         );
-      results.push({
-        request_id: ans.request_id,
-        transaction_id: ans.transaction_id,
+      results.push(failedClarificationResult(ans, "pending_transaction_not_postable", {
         canonical_transaction_id: canonicalTxnId,
-        error: "pending_transaction_not_postable",
-      });
+      }));
       unmapped += 1;
       continue;
     }
     if (txn.accounting_review_required === true) {
-      results.push({
-        request_id: ans.request_id,
-        transaction_id: ans.transaction_id,
+      results.push(failedClarificationResult(ans, "plaid_accounting_review_required", {
         canonical_transaction_id: canonicalTxnId,
-        error: "plaid_accounting_review_required",
-      });
+      }));
       unmapped += 1;
       continue;
     }
     if (!isTransactionInActiveBookkeepingScope(txn, bookkeepingStartDate)) {
-      results.push({
-        request_id: ans.request_id,
-        transaction_id: ans.transaction_id,
+      results.push(failedClarificationResult(ans, "transaction_before_bookkeeping_start_date", {
         canonical_transaction_id: canonicalTxnId,
-        error: "transaction_before_bookkeeping_start_date",
         bookkeeping_start_date: bookkeepingStartDate,
-      });
+      }));
       unmapped += 1;
       continue;
     }
     const currentCat = catRows?.find((row) => row.transaction_id === canonicalTxnId) || {};
     if (!matchesTransactionStatusFilter("needs_review", currentCat)) {
-      results.push({
-        request_id: ans.request_id,
-        transaction_id: ans.transaction_id,
+      results.push(failedClarificationResult(ans, "transaction_not_needs_review", {
         canonical_transaction_id: canonicalTxnId,
-        error: "transaction_not_needs_review",
-      });
+      }));
       unmapped += 1;
       continue;
     }
     const answerText = (ans.answer_text || "").trim();
     if (answerText.length < 2 || answerText.length > 200) {
-      results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "invalid_answer_length" });
+      results.push(failedClarificationResult(ans, "invalid_answer_length"));
       unmapped += 1;
       continue;
     }
 
     let mapping = null;
     try {
-      mapping = await mapAnswerToCoa({
+      mapping = await mapAnswer({
         businessId,
         txn,
         answerText,
@@ -836,7 +873,6 @@ export async function processClarificationAnswers({ businessId, answers = [], an
         resolution: null,
       };
     }
-    const baseMeta = { ...(catMeta[canonicalTxnId] || {}) };
     const requestMeta = {
       ...(effectiveReq.meta || {}),
       selected_intent: ans.selected_intent || null,
@@ -864,7 +900,7 @@ export async function processClarificationAnswers({ businessId, answers = [], an
     };
 
     if (resolved?.wasRemapped && canonicalTxnId && canonicalTxnId !== effectiveReq.transaction_id && txn.is_archived !== true) {
-      const { error: remapReqErr } = await supabase
+      const { error: remapReqErr } = await db
         .from("clarification_requests")
         .update({
           transaction_id: canonicalTxnId,
@@ -873,7 +909,7 @@ export async function processClarificationAnswers({ businessId, answers = [], an
         .eq("business_id", businessId)
         .eq("id", effectiveReq.id);
       if (remapReqErr) {
-        results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "clarification_repoint_failed" });
+        results.push(failedClarificationResult(ans, "clarification_repoint_failed"));
         unmapped += 1;
         continue;
       }
@@ -884,7 +920,7 @@ export async function processClarificationAnswers({ businessId, answers = [], an
       });
     }
 
-    const { error: clarErr } = await supabase
+    const { data: persistedReq, error: clarErr } = await db
       .from("clarification_requests")
       .update({
         status: "answered",
@@ -894,12 +930,20 @@ export async function processClarificationAnswers({ businessId, answers = [], an
         answer_text: answerText,
         selected_intent: ans.selected_intent || null,
         meta: requestMeta,
+        resolved_at: null,
         updated_at: nowIso,
       })
       .eq("business_id", businessId)
-      .eq("id", effectiveReq.id);
+      .eq("id", effectiveReq.id)
+      .select("id,status,answer_text,answered_at,resolved_at")
+      .maybeSingle();
     if (clarErr) {
-      results.push({ request_id: ans.request_id, transaction_id: ans.transaction_id, error: "clarification_update_failed" });
+      results.push(failedClarificationResult(ans, "clarification_update_failed"));
+      unmapped += 1;
+      continue;
+    }
+    if (persistedReq?.status !== "answered" || persistedReq?.answer_text !== answerText || persistedReq?.resolved_at) {
+      results.push(failedClarificationResult(ans, "clarification_update_not_confirmed"));
       unmapped += 1;
       continue;
     }
@@ -912,25 +956,38 @@ export async function processClarificationAnswers({ businessId, answers = [], an
 
     results.push({
       request_id: ans.request_id,
+      persisted_request_id: persistedReq.id || effectiveReq.id,
       transaction_id: ans.transaction_id,
       canonical_transaction_id: canonicalTxnId,
       remapped: !!resolved?.wasRemapped,
+      success: true,
+      persisted: true,
       mapped: Boolean(mapping?.account?.id),
+      mapping_status: mapping?.canonical_resolution_status || (mapping ? "unmapped" : "not_mapped"),
+      mapping_error: mapping?.canonical_resolution_status === "lookup_failed" ? "customer_answer_account_suggestion_failed" : null,
       status: "answered",
       accounting_status: "needs_review",
       final_qbo_account_id: null,
       final_qbo_account_name: null,
+      post_after: null,
+      qbo_provider_write: false,
+      qbo_account_created: false,
     });
   }
 
-  if (results.some((row) => row?.status === "answered")) {
-    await refreshOperatorRequestSummaryBestEffort({
+  if (results.some((row) => row?.success === true && row?.status === "answered")) {
+    await refreshSummary({
       businessId,
       reason: "customer_answer",
     });
   }
 
-  return { ok: true, updated: sanitized.length, mapped, unmapped, rows: results };
+  return buildClarificationSubmissionResult({
+    requestedCount: sanitized.length,
+    rows: results,
+    mapped,
+    unmapped,
+  });
 }
 
 export default {

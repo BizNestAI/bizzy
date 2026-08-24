@@ -41,14 +41,18 @@ const userScopedMounts = [
 ];
 
 test("major private business-scoped server mounts use canonical auth and tenant middleware", () => {
+  assert.match(
+    serverSource,
+    /const requireCustomerOrAdminView = \[requireAuthOrAdminView, requireBusinessContext, rejectAdminViewWrites\(\)\]/
+  );
   for (const mount of businessScopedMounts) {
     const escaped = mount.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = new RegExp(`app\\.use\\("${escaped}", requireAuth, requireBusinessContext, `);
-    assert.match(serverSource, pattern, `${mount} is not mounted with requireAuth + requireBusinessContext`);
+    const pattern = new RegExp(`app\\.use\\("${escaped}", \\.\\.\\.requireCustomerOrAdminView, `);
+    assert.match(serverSource, pattern, `${mount} is not mounted with verified customer/Admin View tenant context`);
   }
   assert.match(
     serverSource,
-    /app\.post\("\/api\/accounting\/affordabilityCheck", requireAuth, requireBusinessContext, affordabilityCheckHandler\)/
+    /app\.post\("\/api\/accounting\/affordabilityCheck", \.\.\.requireCustomerOrAdminView, affordabilityCheckHandler\)/
   );
 });
 
@@ -59,7 +63,7 @@ test("private user-scoped server mounts use canonical auth without requiring ten
     assert.match(serverSource, pattern, `${mount} is not mounted with requireAuth`);
     assert.doesNotMatch(
       serverSource,
-      new RegExp(`app\\.use\\("${escaped}", requireAuth, requireBusinessContext, `),
+      new RegExp(`app\\.use\\("${escaped}", \\.\\.\\.requireCustomerOrAdminView, `),
       `${mount} should not require business context`
     );
   }

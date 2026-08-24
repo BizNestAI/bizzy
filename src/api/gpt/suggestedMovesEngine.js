@@ -4,6 +4,7 @@ import "dotenv/config";
 import OpenAI from "openai";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { getEmbedding } from "../../utils/openaiEmbedding.js";
+import { isAdminViewRequest } from "../_shared/tenantAuth.js";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const ENV_MOCK = String(process.env.USE_MOCK_ACCOUNTING || "").toLowerCase() === "true";
@@ -335,17 +336,40 @@ const router = express.Router();
 router.get("/", async (req, res) => {
   const q = req.query || {};
   const user_id = req.auth?.userId || req.user?.id || q.user_id || q.userId || req.header("x-user-id") || null;
-  const business_id = req.business?.id || req.auth?.businessId || q.business_id || q.businessId || req.header("x-business-id") || null;
+  const business_id = req.tenantContext?.businessId || req.business?.id || req.auth?.businessId || q.business_id || q.businessId || req.header("x-business-id") || null;
   const year = Number(q.year || 0);
   const month = Number(q.month || 0);
   const wantMock = String(q.mock || "").toLowerCase() === "1";
   const monthText = year && month ? monthKey(year, month) : null;
 
-  if (!user_id || !business_id) {
+  if ((!user_id && !isAdminViewRequest(req)) || !business_id) {
     return res.status(400).json({ error: "Missing userId or businessId" });
   }
 
   try {
+    if (isAdminViewRequest(req)) {
+      let query = supabase
+        .from("financial_moves")
+        .select("title,rationale,timeframe,month")
+        .eq("business_id", business_id);
+
+      if (monthText) {
+        query = query.eq("month", monthText).order("created_at", { ascending: false }).limit(5);
+      } else {
+        query = query.order("month", { ascending: false }).limit(5);
+      }
+
+      const { data: rows, error } = await query;
+      if (error) {
+        console.error("[moves] admin view cache fetch failed", error?.message || error);
+        return res.status(500).json({ error: "moves_cache_fetch_failed" });
+      }
+      return res.json({
+        moves: rows || [],
+        admin_view_cache_only: true,
+      });
+    }
+
     // If specific month requested, prefer that; otherwise latest
     if (monthText) {
       // 🔧 mock short-circuit

@@ -37,7 +37,11 @@ test("canonical request helper attaches Supabase bearer credentials", () => {
 test("/api/chats remains protected by auth and tenant middleware", () => {
   assert.match(
     serverSource,
-    /app\.use\("\/api\/chats", requireAuth, requireBusinessContext, chatsRoutes\)/
+    /const requireCustomerOrAdminView = \[requireAuthOrAdminView, requireBusinessContext, rejectAdminViewWrites\(\)\]/
+  );
+  assert.match(
+    serverSource,
+    /app\.use\("\/api\/chats", \.\.\.requireCustomerOrAdminView, chatsRoutes\)/
   );
 });
 

@@ -28,6 +28,7 @@ import AccountingRules from "./pages/accounting/Rules.jsx";
 import ProtectedRoute from "./components/UserAdmin/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
 import { BusinessProvider, useBusiness } from "./context/BusinessContext";
+import { AdminViewProvider } from "./context/AdminViewContext.jsx";
 import { BizzyChatProvider } from "./context/BizzyChatContext";
 import { PeriodProvider } from "./context/PeriodContext";
 
@@ -50,6 +51,7 @@ import CompanionPage from "./pages/Companion/CompanionPage.jsx";
 import JobsDashboard from "./pages/LeadsJobs/JobsDashboard.jsx";
 import MonthlyReviewConsole from "./pages/Admin/MonthlyReviewConsole.jsx";
 import AdminLogin from "./pages/Admin/AdminLogin.jsx";
+import AdminViewRedeem from "./pages/AdminView/AdminViewRedeem.jsx";
 import AdminProtectedRoute from "./components/Admin/AdminProtectedRoute.jsx";
 import { getAdminRoutePath, getCurrentApplicationSurface } from "./utils/applicationSurface.js";
 
@@ -172,6 +174,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <BrowserRouter>
       <AuthProvider>
+        <AdminViewProvider>
         <PeriodProvider syncUrl writeUrl autoSnapToCurrentMonth>
           <Routes>
             {renderAdminRoutes && (
@@ -198,6 +201,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/auth/confirm" element={<EmailConfirmation />} />
+            <Route path="/admin-view/redeem" element={<AdminViewRedeem />} />
             <Route path="/reset-password" element={<ResetPassword />} />
 
             {/* Setup wizard (protected) */}
@@ -330,6 +334,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
             <Route path="*" element={<Navigate to={applicationSurface === "admin" ? "/" : "/dashboard/bizzi/chat"} replace />} />
           </Routes>
         </PeriodProvider>
+        </AdminViewProvider>
       </AuthProvider>
     </BrowserRouter>
   </React.StrictMode>

@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  getPersistedClarificationRequestIds,
   getOperatorRequests,
   submitClarificationAnswers,
+  summarizeClarificationSubmitFailure,
   snoozeClarifications,
 } from "../../services/bookkeeping/bookkeepingClient";
 
@@ -28,19 +30,23 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
   const [answers, setAnswers] = useState({});
   const [submitting, setSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
+  const [submitError, setSubmitError] = useState("");
 
   useEffect(() => {
     if (open) {
       setAnswers({});
       setSuccessMsg("");
+      setSubmitError("");
     }
   }, [open]);
 
   const handleChange = (id, text) => {
+    setSubmitError("");
     setAnswers((prev) => ({ ...prev, [id]: text }));
   };
 
   const handleChip = (id, chip) => {
+    setSubmitError("");
     setAnswers((prev) => ({ ...prev, [id]: chip }));
   };
 
@@ -60,13 +66,33 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
     if (!businessId || !readyAnswers.length) return;
     setSubmitting(true);
     setSuccessMsg("");
+    setSubmitError("");
     try {
-      await submitClarificationAnswers(businessId, { answers: readyAnswers });
-      setSuccessMsg("Saved. Your response is ready for accountant review.");
+      const result = await submitClarificationAnswers(businessId, { answers: readyAnswers });
+      const persistedIds = getPersistedClarificationRequestIds(result);
+      if (!persistedIds.size) {
+        setSubmitError(summarizeClarificationSubmitFailure(result));
+        return;
+      }
+      setSuccessMsg(
+        result?.outcome === "partial_success"
+          ? "Saved some answers. Please review the remaining requests."
+          : "Saved. Your response is ready for accountant review."
+      );
       await onSubmitted?.();
-      setAnswers({});
+      setAnswers((prev) => {
+        const next = { ...prev };
+        persistedIds.forEach((id) => {
+          delete next[id];
+        });
+        return next;
+      });
+      if (result?.outcome === "partial_success") {
+        setSubmitError(summarizeClarificationSubmitFailure(result));
+      }
     } catch (e) {
       console.warn("[OperatorRequests] submit failed", e);
+      setSubmitError(summarizeClarificationSubmitFailure(e));
     } finally {
       setSubmitting(false);
     }
@@ -241,7 +267,7 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
 
         <div className="flex items-center justify-between px-6 py-4 border-t border-white/10">
           <div className="text-xs text-white/60">
-            {error ? <span className="text-amber-200">{error}</span> : successMsg ? <span className="text-emerald-300">{successMsg}</span> : "Tip: Submit everything in one pass."}
+            {submitError || error ? <span className="text-amber-200">{submitError || error}</span> : successMsg ? <span className="text-emerald-300">{successMsg}</span> : "Tip: Submit everything in one pass."}
           </div>
           <div className="flex items-center gap-3">
             {pageCount > 1 ? (

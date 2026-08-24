@@ -3,6 +3,7 @@
 import { supabase } from '../../services/supabaseAdmin.js';
 import dayjs from 'dayjs';
 import fetch from 'node-fetch';
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from '../_shared/tenantAuth.js';
 
 const CONTRACTOR_CFO_MODULE = 'contractor_cfo';
 
@@ -49,8 +50,12 @@ function scoreInsight(ins) {
 export async function getTop3Alerts(req, res) {
   try {
     const business_id =
-      req.business?.id || req.auth?.businessId || req.query.business_id || req.query.businessId || req.headers['x-business-id'];
+      req.tenantContext?.businessId || req.business?.id || req.auth?.businessId || req.query.business_id || req.query.businessId || req.headers['x-business-id'];
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
+
+    if (isAdminViewRequest(req)) {
+      return sendAdminViewReadOnlyUnavailable(res, { error: 'admin_view_read_only_data_unavailable' });
+    }
 
     // Legacy dashboard-only endpoint. All DB reads are scoped by business_id,
     // and all returned cards are normalized to contractor_cfo.

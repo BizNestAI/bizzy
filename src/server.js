@@ -68,7 +68,7 @@ import taxRouter from "./api/tax/index.js";
 
 import bizzyInsightRouter from "./api/gpt/brain/bizzyInsight.js";
 import { requireAuth } from "./api/gpt/middlewares/requireAuth.js";
-import { requireBusinessAccess } from "./api/_shared/tenantAuth.js";
+import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from "./api/_shared/tenantAuth.js";
 import plaidIntegrationsRouter from "./api/integrations/plaid.routes.js";
 import { buildSafeErrorResponse, redactErrorForLog } from "./api/_shared/safeErrorResponse.js";
 
@@ -76,6 +76,8 @@ import { buildSafeErrorResponse, redactErrorForLog } from "./api/_shared/safeErr
 import heroInsightsRouter from "./api/hero-insights/router.js";
 import adminRouter from "./api/admin/admin.routes.js";
 import monthlyReviewAdminRouter from "./api/admin/monthlyReview.routes.js";
+import customerViewAdminRouter from "./api/admin/customerView.routes.js";
+import adminViewRouter from "./api/adminView/adminView.routes.js";
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -148,10 +150,11 @@ app.use((req, res, next) => {
   const headerSet = new Set(
     (reqHeaders && typeof reqHeaders === "string"
       ? reqHeaders.split(",").map((h) => h.trim())
-      : ["Content-Type", "Authorization", "x-data-mode", "x-debug", "x-user-id", "x-business-id"]
+      : ["Content-Type", "Authorization", "x-data-mode", "x-debug", "x-user-id", "x-business-id", "x-bizzi-admin-view"]
     ).filter(Boolean)
   );
   headerSet.add("x-data-mode");
+  headerSet.add("x-bizzi-admin-view");
   res.setHeader("Access-Control-Allow-Headers", Array.from(headerSet).join(", "));
   res.setHeader("Vary", "Access-Control-Request-Headers");
 
@@ -206,6 +209,7 @@ const DEV_BYPASS =
     process.env.MOCK_INVESTMENTS === "true");
 
 const requireBusinessContext = requireBusinessAccess();
+const requireCustomerOrAdminView = [requireAuthOrAdminView, requireBusinessContext, rejectAdminViewWrites()];
 app.use((req, _res, next) => {
   if (DEV_BYPASS && req.path.startsWith("/api/investments")) {
     if (!req.headers["x-user-id"])
@@ -219,7 +223,7 @@ app.use((req, _res, next) => {
 
 /* ---------------------------------- GPT & Chats ---------------------------------- */
 app.use("/api/gpt", gptRoutes);
-app.use("/api/chats", requireAuth, requireBusinessContext, chatsRoutes);
+app.use("/api/chats", ...requireCustomerOrAdminView, chatsRoutes);
 app.use("/api/bizzy", requireAuth, bizzyFollowupsRouter);
 
 /* ------------------------------------ Accounting ----------------------------------- */
@@ -227,23 +231,23 @@ app.use("/api/auth", signupConfirmationRouter);
 app.use("/api/onboarding", onboardingRouter);
 app.use("/auth", quickbooksAuth);
 app.use("/auth", socialAuthRouter);
-app.use("/api/accounting/metrics", requireAuth, requireBusinessContext, financialMetricsRoute);
-app.use("/api/accounting/pulse", requireAuth, requireBusinessContext, pulseRoute);
-app.use("/api/accounting/moves", requireAuth, requireBusinessContext, movesRoute);
-app.use("/api/accounting/expense-breakdown", requireAuth, requireBusinessContext, expenseBreakdownRouter);
-app.use("/api/accounting/revenue-series", requireAuth, requireBusinessContext, revenueSeriesRouter);
-app.use("/api/accounting/profit-series", requireAuth, requireBusinessContext, profitSeriesRouter);
-app.use("/api/accounting/reports-sync", requireAuth, requireBusinessContext, reportsSyncRouter);
-app.use("/api/accounting/pnl", requireAuth, requireBusinessContext, pnlPdfRouter);
-app.use("/api/accounting/forecast", requireAuth, requireBusinessContext, forecastRouter);
-app.use("/api/accounting/forecast-accuracy", requireAuth, requireBusinessContext, forecastAccuracyRouter);
-app.use("/api/accounting/scenarios", requireAuth, requireBusinessContext, scenariosRouter);
-app.use("/api/accounting", requireAuth, requireBusinessContext, bookkeepingRouter);
-app.use("/api/qbo", requireAuth, requireBusinessContext, qboSyncRouter);
-app.use("/api/qbo/backfill", requireAuth, requireBusinessContext, qboBackfillRouter);
-app.use("/api/ar", requireAuth, requireBusinessContext, arRouter);
-app.use("/api/bookkeeping", requireAuth, requireBusinessContext, bookkeepingPlaidRouter);
-app.post("/api/accounting/affordabilityCheck", requireAuth, requireBusinessContext, affordabilityCheckHandler);
+app.use("/api/accounting/metrics", ...requireCustomerOrAdminView, financialMetricsRoute);
+app.use("/api/accounting/pulse", ...requireCustomerOrAdminView, pulseRoute);
+app.use("/api/accounting/moves", ...requireCustomerOrAdminView, movesRoute);
+app.use("/api/accounting/expense-breakdown", ...requireCustomerOrAdminView, expenseBreakdownRouter);
+app.use("/api/accounting/revenue-series", ...requireCustomerOrAdminView, revenueSeriesRouter);
+app.use("/api/accounting/profit-series", ...requireCustomerOrAdminView, profitSeriesRouter);
+app.use("/api/accounting/reports-sync", ...requireCustomerOrAdminView, reportsSyncRouter);
+app.use("/api/accounting/pnl", ...requireCustomerOrAdminView, pnlPdfRouter);
+app.use("/api/accounting/forecast", ...requireCustomerOrAdminView, forecastRouter);
+app.use("/api/accounting/forecast-accuracy", ...requireCustomerOrAdminView, forecastAccuracyRouter);
+app.use("/api/accounting/scenarios", ...requireCustomerOrAdminView, scenariosRouter);
+app.use("/api/accounting", ...requireCustomerOrAdminView, bookkeepingRouter);
+app.use("/api/qbo", ...requireCustomerOrAdminView, qboSyncRouter);
+app.use("/api/qbo/backfill", ...requireCustomerOrAdminView, qboBackfillRouter);
+app.use("/api/ar", ...requireCustomerOrAdminView, arRouter);
+app.use("/api/bookkeeping", ...requireCustomerOrAdminView, bookkeepingPlaidRouter);
+app.post("/api/accounting/affordabilityCheck", ...requireCustomerOrAdminView, affordabilityCheckHandler);
 
 /* ----------------------- Bizzy Insight (requires auth) ----------------------- */
 app.use("/api/gpt/brain/bizzyInsight", requireAuth, bizzyInsightRouter);
@@ -256,12 +260,12 @@ app.get("/api/email/callback", gmailOAuthCallback);
 app.use("/api/email", requireAuth, emailRouter);
 
 /* ------------------------------------ Marketing ------------------------------------ */
-app.use("/api/marketing", requireAuth, requireBusinessContext, marketingRouter);
+app.use("/api/marketing", ...requireCustomerOrAdminView, marketingRouter);
 
-app.use("/api/jobs", requireAuth, requireBusinessContext, jobsRoutes);
-app.use("/api/job-costing", requireAuth, requireBusinessContext, jobCostingChangeOrdersRouter);
-app.use("/api/job-costing", requireAuth, requireBusinessContext, jobCostingBidBuilderRouter);
-app.use("/api/job-costing", requireAuth, requireBusinessContext, jobsRoutes);
+app.use("/api/jobs", ...requireCustomerOrAdminView, jobsRoutes);
+app.use("/api/job-costing", ...requireCustomerOrAdminView, jobCostingChangeOrdersRouter);
+app.use("/api/job-costing", ...requireCustomerOrAdminView, jobCostingBidBuilderRouter);
+app.use("/api/job-costing", ...requireCustomerOrAdminView, jobsRoutes);
 
 /* --------------------------- Investments & Calendar --------------------------- */
 app.use("/api/investments", requireAuth, investmentsRouter);
@@ -269,15 +273,15 @@ app.use("/api/calendar", calendarRoutes);
 app.get("/api/integrations/plaid/_ping", (_req, res) =>
   res.json({ ok: true, at: "plaid_routes_ping" })
 );
-app.use("/api/integrations/plaid", requireAuth, requireBusinessContext, plaidIntegrationsRouter);
+app.use("/api/integrations/plaid", ...requireCustomerOrAdminView, plaidIntegrationsRouter);
 
 /* -------------------------------- Reviews, Docs, Insights ------------------------------- */
-app.use("/api/reviews", requireAuth, requireBusinessContext, reviewsRouter);
-app.use("/api/docs", requireAuth, requireBusinessContext, docsRouter);
+app.use("/api/reviews", ...requireCustomerOrAdminView, reviewsRouter);
+app.use("/api/docs", ...requireCustomerOrAdminView, docsRouter);
 app.use("/api/insights", insightsRoutes);
 
 /* -------------------------------- Tax (authenticated) -------------------------------- */
-app.use("/api/tax", requireAuth, taxRouter);
+app.use("/api/tax", ...requireCustomerOrAdminView, taxRouter);
 
 /* 🔹 NEW: Hero Insights API
    - Public by default so we can show curated mock hero before sync
@@ -288,6 +292,8 @@ app.use("/api/hero-insights", heroInsightsRouter);
 /* -------------------------------- Internal Admin -------------------------------- */
 app.use("/api/admin", adminRouter);
 app.use("/api/admin/monthly-review", monthlyReviewAdminRouter);
+app.use("/api/admin/customer-view", customerViewAdminRouter);
+app.use("/api/admin-view", adminViewRouter);
 
 /* ------------------------------- Billing REST (non-webhook) ------------------------------ */
 app.use("/api/billing", express.json(), billingRouter);

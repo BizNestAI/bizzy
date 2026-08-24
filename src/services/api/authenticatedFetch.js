@@ -1,5 +1,6 @@
 import { supabase as defaultSupabase } from "../supabaseClient.js";
 import { getApiBase } from "../../utils/apiBase.js";
+import { applyAdminViewHeaders, clearStoredAdminViewSession, isAdminViewAuthError } from "../adminViewClient.js";
 
 export class ApiRequestError extends Error {
   constructor({
@@ -58,6 +59,7 @@ export async function authenticatedFetch(path, options = {}) {
     Accept: responseType === "blob" ? "*/*" : "application/json",
     ...(requestId ? { "x-request-id": requestId } : {}),
   }, providedHeaders);
+  applyAdminViewHeaders(headers);
   if (session?.access_token) headers.set("Authorization", `Bearer ${session.access_token}`);
   const body = normalizeBody(providedBody, headers);
 
@@ -129,6 +131,7 @@ function buildRequestError({ response, payload, text, requestId }) {
   const transitionalCode = typeof payload?.error === "string" ? payload.error : null;
   const code = canonical?.code || transitionalCode || statusCode(response.status);
   const message = canonical?.message || payload?.message || response.statusText || `HTTP ${response.status}`;
+  if (isAdminViewAuthError(code)) clearStoredAdminViewSession(code);
   return new ApiRequestError({
     code,
     message,

@@ -10,6 +10,8 @@ import SubsectionTabs from '../components/Navigation/SubsectionTabs.jsx';
 import FinancialMonthlyReviewStamp from '../components/Accounting/FinancialMonthlyReviewStamp.jsx';
 import ToastPortal from '../insights/ToastPortal';
 import { InsightsUnreadProvider } from '../insights/InsightsUnreadContext';
+import { useAdminView } from '../context/AdminViewContext.jsx';
+import AdminViewReadOnlyGuard from '../components/AdminView/AdminViewReadOnlyGuard.jsx';
 
 const RIGHT_RAIL_W = 320;  // keep in sync with DashboardLayout / InsightsRail width
 const GRID_GAP     = 6;    // the grid gap between center & right rail columns
@@ -17,8 +19,56 @@ const GRID_GAP     = 6;    // the grid gap between center & right rail columns
 /* Which module routes should use Chrome/Silver? */
 const CHROME_MODULES = new Set(['bizzy','leads-jobs','calendar','activity','docs','companion','settings']);
 
+function AdminViewBanner() {
+  const adminView = useAdminView();
+  const navigate = useNavigate();
+  if (!adminView.active) return null;
+
+  const returnToMonthlyReview = () => {
+    const target = adminView.returnUrl || "https://admin.bizzios.com/monthly-review";
+    window.location.assign(target);
+  };
+
+  const exitAdminView = async () => {
+    await adminView.endAdminView?.();
+    navigate("/login", { replace: true });
+  };
+
+  return (
+    <div className="fixed inset-x-0 top-0 z-[50000] border-b border-emerald-200/20 bg-[#07110d]/96 px-4 py-2 text-white shadow-[0_10px_28px_rgba(0,0,0,0.42)] backdrop-blur">
+      <div className="mx-auto flex max-w-[1400px] items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-emerald-200">
+            Admin View · Read Only
+          </div>
+          <div className="truncate text-sm font-semibold text-white/88">
+            Viewing: {adminView.businessName || "Selected business"}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={returnToMonthlyReview}
+            className="rounded-full border border-emerald-200/22 bg-emerald-300/10 px-3 py-1.5 text-xs font-semibold text-emerald-50 hover:bg-emerald-300/16"
+          >
+            Return to Monthly Review
+          </button>
+          <button
+            type="button"
+            onClick={exitAdminView}
+            className="rounded-full border border-white/12 bg-white/[0.05] px-3 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/[0.09]"
+          >
+            Exit Admin View
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const MainLayoutCore = ({ children }) => {
   const { user } = useAuth();
+  const adminView = useAdminView();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -39,6 +89,7 @@ const MainLayoutCore = ({ children }) => {
   const [isProfileComplete, setIsProfileComplete] = useState(null);
 
   const clearStoredBusiness = () => {
+    if (adminView.active) return;
     localStorage.removeItem('currentBusinessId');
     localStorage.removeItem('business_id');
     localStorage.removeItem('isProfileComplete');
@@ -47,6 +98,7 @@ const MainLayoutCore = ({ children }) => {
   const acceptBusiness = (business) => {
     setCurrentBusiness(business);
     setIsProfileComplete(true);
+    if (adminView.active) return;
     localStorage.setItem('isProfileComplete', 'true');
     localStorage.setItem('currentBusinessId', business.id);
     localStorage.setItem('business_id', business.id);
@@ -60,6 +112,17 @@ const MainLayoutCore = ({ children }) => {
   */
   useEffect(() => {
     const fetchCurrentBusiness = async () => {
+      if (adminView.loading) return;
+      if (adminView.active) {
+        setCurrentBusiness({
+          id: adminView.businessId,
+          business_name: adminView.businessName || 'Selected business',
+          admin_view: true,
+          read_only: true,
+        });
+        setIsProfileComplete(true);
+        return;
+      }
       if (!user?.id) return;
       try {
         const url = new URL(window.location.href);
@@ -123,7 +186,7 @@ const MainLayoutCore = ({ children }) => {
       }
     };
     fetchCurrentBusiness();
-  }, [user, location.search]);
+  }, [user, location.search, adminView.loading, adminView.active, adminView.businessId, adminView.businessName]);
 
   useEffect(() => {
     const handler = (event) => {
@@ -136,7 +199,7 @@ const MainLayoutCore = ({ children }) => {
     return () => window.removeEventListener('bizzy:navigate', handler);
   }, [navigate]);
 
-  const businessId = currentBusiness?.id || localStorage.getItem('currentBusinessId');
+  const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || localStorage.getItem('currentBusinessId'));
   const subnavItems = React.useMemo(() => {
     const path = location.pathname || "";
     if (path.startsWith("/dashboard/accounting")) {
@@ -190,7 +253,7 @@ const MainLayoutCore = ({ children }) => {
 
   return (
     <InsightsUnreadProvider userId={user?.id} businessId={businessId}>
-        <div className={`bizzy-app-shell min-h-screen h-screen ${textColor} font-sans relative`} style={{ paddingLeft: "var(--nav-w, 0px)" }}>
+        <div className={`bizzy-app-shell min-h-screen h-screen ${textColor} font-sans relative`} style={{ paddingLeft: "var(--nav-w, 0px)", paddingTop: adminView.active ? 44 : 0 }}>
         {/* Single global background layer */}
         <div
           aria-hidden
@@ -198,6 +261,8 @@ const MainLayoutCore = ({ children }) => {
           style={{ position: "fixed", inset: 0, zIndex: 0, backgroundColor: "var(--bg)", pointerEvents: "none" }}
         />
 
+        <AdminViewBanner />
+        <AdminViewReadOnlyGuard />
         <div style={{ position: "relative", zIndex: 1 }} className="flex flex-col min-h-screen">
           {/* Header */}
           <header className="relative shrink-0 z-[30] pt-2 bg-transparent" data-bizzy-header>

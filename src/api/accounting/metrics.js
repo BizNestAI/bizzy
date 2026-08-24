@@ -14,6 +14,7 @@ import { getQuickBooksAccessToken } from "../../services/quickbooksTokenService.
 import fetch from "node-fetch";
 import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
 import { monthKeyFromParts } from "../../utils/monthKey.js";
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 
 const PNL_CACHE = new Map(); // key => { report, ts }
 const PNL_TTL_MS = 60 * 1000;
@@ -488,7 +489,7 @@ function isAllZeroMetricsCached(cached) {
 router.get("/", async (req, res) => {
   res.set("Cache-Control", "no-store");
   const { user_id, business_id } = readIds(req);
-  if (!user_id || !business_id) {
+  if ((!user_id && !isAdminViewRequest(req)) || !business_id) {
     return res.status(400).json({ error: "Missing userId or businessId" });
   }
   const liveOnly = String(req.query?.live_only || req.query?.liveOnly || "").toLowerCase() === "true";
@@ -517,6 +518,34 @@ router.get("/", async (req, res) => {
   const monthText = monthKeyFromParts(curStart.getFullYear(), curStart.getMonth() + 1);
   const currentMonthText = monthKeyFromParts(new Date().getFullYear(), new Date().getMonth() + 1);
   const isCurrent = isCurrentMonth(curStart);
+
+  if (isAdminViewRequest(req)) {
+    const cached = await getCachedMetrics({ business_id, monthText });
+    if (!cached) {
+      return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_read_only_data_unavailable" });
+    }
+    const prior = await getPrevMonthMetrics({
+      business_id,
+      fetchReport: null,
+      prevStart,
+      prevEnd,
+    });
+    return res.status(200).json({
+      metrics: cached.metrics,
+      deltas: {
+        revenue_mom_pct: pctDelta(cached.metrics.totalRevenue, prior?.total_revenue),
+        expenses_mom_pct: pctDelta(cached.metrics.totalExpenses, prior?.total_expenses),
+        profit_mom_pct: pctDelta(cached.metrics.netProfit, prior?.net_profit),
+        margin_mom_pct: pctDelta(cached.metrics.profitMargin, prior?.profit_margin),
+      },
+      accountBreakdown: cached.accountBreakdown || [],
+      priorMonth: formatPrior(prior),
+      source: cached.source || "cache",
+      admin_view_cache_only: true,
+      stale: !isFresh(cached.meta, { current: isCurrent }),
+      last_refreshed_at: cached.meta?.updated_at || cached.meta?.created_at || null,
+    });
+  }
 
   console.log("[metrics] effective period", {
     qboEnvName,

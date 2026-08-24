@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { supabase } from "../services/supabaseClient";
 import { useBusiness } from "../context/BusinessContext";
+import { useAdminView } from "../context/AdminViewContext.jsx";
 import { ACCENT_HEX, ACCENT_SOFT } from "../config/accent";
 
 function hexToRgba(hex, alpha = 1) {
@@ -30,13 +31,16 @@ function initialsFromName(name = "") {
 
 export default function NavRailBusinessBadge() {
   const { currentBusiness } = useBusiness?.() || {};
+  const adminView = useAdminView();
   const businessId = useMemo(
     () =>
-      currentBusiness?.id ||
-      localStorage.getItem("currentBusinessId") ||
-      localStorage.getItem("business_id") ||
-      null,
-    [currentBusiness?.id]
+      adminView.active
+        ? adminView.businessId
+        : currentBusiness?.id ||
+          localStorage.getItem("currentBusinessId") ||
+          localStorage.getItem("business_id") ||
+          null,
+    [adminView.active, adminView.businessId, currentBusiness?.id]
   );
 
   const [profile, setProfile] = useState({
@@ -67,6 +71,7 @@ export default function NavRailBusinessBadge() {
 
   useEffect(() => {
     let cancelled = false;
+    if (adminView.active) return undefined;
     const needsFetch =
       !!businessId &&
       (!profile.business_name || !profile.founded_year);
@@ -92,7 +97,7 @@ export default function NavRailBusinessBadge() {
     return () => {
       cancelled = true;
     };
-  }, [businessId, profile.business_name]);
+  }, [adminView.active, businessId, profile.business_name]);
 
   const initials = initialsFromName(profile.business_name);
   const label = profile.business_name || "Business";
@@ -156,10 +161,14 @@ export default function NavRailBusinessBadge() {
       <button
         type="button"
         ref={badgeRef}
-        onClick={() => console.log("Business switcher coming soon")}
+        onClick={() => {
+          if (adminView.active) return;
+          console.log("Business switcher coming soon");
+        }}
+        disabled={adminView.active}
         className="w-8 h-8 rounded-full backdrop-blur-sm text-[11px] font-semibold tracking-wide flex items-center justify-center transition hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/30"
-        title={label}
-        aria-label={label}
+        title={adminView.active ? `${label} · Admin View business is fixed` : label}
+        aria-label={adminView.active ? `${label} Admin View business is fixed` : label}
         style={{
           backgroundColor: "var(--input-bg)",
           border: `1px solid ${hexToRgba(baseAccent, 0.55)}`,

@@ -4,6 +4,7 @@ import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../../../services/bookkeeping/bookkeepingScope.js";
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../../_shared/tenantAuth.js";
 
 const router = Router();
 
@@ -128,6 +129,9 @@ router.get("/accounts", requireAuth, async (req, res) => {
 router.get("/qbo/coa", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  if (isAdminViewRequest(req)) {
+    return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_provider_refresh_blocked", status: 403 });
+  }
   try {
     const coa = await fetchChartOfAccounts(businessId);
     return res.json({ ok: true, accounts: coa || [] });

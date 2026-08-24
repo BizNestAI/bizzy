@@ -4,6 +4,7 @@ import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.js";
 import { suggestQboAccountForPlaidAccount } from "../../../services/bookkeeping/accountMapping.js";
+import { isAdminViewRequest } from "../../_shared/tenantAuth.js";
 
 const router = Router();
 
@@ -34,11 +35,60 @@ function mapRailToPostingCategory(rail) {
   return "NotUsed";
 }
 
+export async function fetchAdminViewPersistedAccountMappings({ db = supabase, businessId }) {
+  const { data: plaidAccounts, error: acctErr } = await db
+    .from("plaid_accounts")
+    .select("plaid_account_id,name,official_name,mask,type,subtype,is_active")
+    .eq("business_id", businessId)
+    .eq("is_active", true);
+  if (acctErr) throw acctErr;
+
+  const { data: mappings, error: mapErr } = await db
+    .from("plaid_qbo_account_mappings")
+    .select("plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type")
+    .eq("business_id", businessId);
+  if (mapErr) throw mapErr;
+
+  const mappingByPlaid = (mappings || []).reduce((acc, row) => {
+    acc[row.plaid_account_id] = row;
+    return acc;
+  }, {});
+
+  const accounts = (plaidAccounts || []).map((acct) => {
+    const mapping = mappingByPlaid[acct.plaid_account_id] || null;
+    const rail = getPlaidPostingRail(acct.type, acct.subtype);
+    const postingCategory = mapRailToPostingCategory(rail);
+    const requiresMapping = postingCategory !== "NotUsed";
+    return {
+      plaid_account_id: acct.plaid_account_id,
+      plaid_name: acct.name || acct.official_name || null,
+      plaid_type: acct.type || null,
+      plaid_subtype: acct.subtype || null,
+      mask: acct.mask || null,
+      is_active: acct.is_active,
+      posting_category: postingCategory,
+      requires_mapping: requiresMapping,
+      mapped: Boolean(mapping?.qbo_account_id),
+      qbo_account_id: mapping?.qbo_account_id || null,
+      qbo_account_name: mapping?.qbo_account_name || null,
+      qbo_account_type: mapping?.qbo_account_type || null,
+      suggested: null,
+      qbo_options_hint: requiresMapping ? { type_needed: postingCategory } : null,
+    };
+  });
+
+  return { ok: true, accounts, admin_view_cache_only: true };
+}
+
 router.get("/account-mappings", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
 
   try {
+    if (isAdminViewRequest(req)) {
+      return res.json(await fetchAdminViewPersistedAccountMappings({ businessId }));
+    }
+
     const { data: plaidAccounts, error: acctErr } = await supabase
       .from("plaid_accounts")
       .select("plaid_account_id,name,official_name,mask,type,subtype,is_active")

@@ -1,6 +1,7 @@
 // File: /src/api/insights/pulse.controller.js
 /* global process */
 import fetch from 'node-fetch';
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from '../_shared/tenantAuth.js';
 
 const CONTRACTOR_CFO_MODULE = 'contractor_cfo';
 
@@ -92,8 +93,12 @@ function round1(n) { return Math.round(n * 10) / 10; }
 
 export async function getPulse(req, res) {
   try {
-    const business_id = req.business?.id || req.auth?.businessId || req.query.business_id || req.query.businessId || req.headers['x-business-id'];
+    const business_id = req.tenantContext?.businessId || req.business?.id || req.auth?.businessId || req.query.business_id || req.query.businessId || req.headers['x-business-id'];
     if (!business_id) return res.status(400).json({ error: 'missing business_id' });
+
+    if (isAdminViewRequest(req)) {
+      return sendAdminViewReadOnlyUnavailable(res, { error: 'admin_view_read_only_data_unavailable' });
+    }
 
     // Legacy dashboard-only endpoint. Signals are business-scoped through the
     // accounting API call, and the payload is always contractor_cfo.

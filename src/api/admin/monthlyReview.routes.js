@@ -32,6 +32,11 @@ import {
   updatePostedQboTransactionAccount,
 } from "../../services/bookkeeping/bookkeepingReclassificationService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../services/bookkeeping/operatorRequestSummaryService.js";
+import {
+  fetchMonthlyQboPnlAccountTransactions,
+  getMonthlyQboPnlSnapshot,
+  refreshMonthlyQboPnlSnapshot,
+} from "../../services/bookkeeping/qboMonthlyPnlIngestionService.js";
 import { getConnectedFinancialAccountsForBusiness } from "../../services/plaid/plaidIntegrationService.js";
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../_shared/internalStaffAuth.js";
 import {
@@ -56,6 +61,8 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES = new Set(["needs_review", "handled"]);
 const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_DEFAULT = 25;
 const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX = 100;
+const MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_DEFAULT = 100;
+const MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_MAX = 250;
 
 router.use(requireAuth);
 router.use(requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES));
@@ -244,6 +251,130 @@ router.get("/businesses/:businessId/connected-accounts", async (req, res) => {
       ok: false,
       error: "monthly_review_connected_accounts_failed",
       message: e?.message || "Could not load connected financial accounts.",
+    });
+  }
+});
+
+router.post("/businesses/:businessId/qbo-pnl/refresh", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const { year, month } = parseReviewYearMonth(req.body?.year || req.query?.year, req.body?.month || req.query?.month);
+    const business = await assertMonthlyReviewBusinessExists(businessId);
+    const result = await refreshMonthlyQboPnlSnapshot({
+      businessId,
+      year,
+      month,
+    });
+    return res.json({
+      ok: true,
+      business_id: business.id,
+      year,
+      month,
+      snapshot: result.snapshot,
+      account_count: result.accounts.length,
+      transaction_count: result.transactions.length,
+      linkage: result.linkage,
+      source: result.source,
+      provider_calls: {
+        qbo_reads: true,
+        qbo_writes: false,
+        plaid_calls: false,
+        ai_calls: false,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] QBO P&L refresh failed", e?.message || e);
+    return res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.error || "monthly_review_qbo_pnl_refresh_failed",
+      message: e?.message || "Could not refresh the QuickBooks P&L snapshot.",
+      details: e?.details || undefined,
+    });
+  }
+});
+
+router.get("/businesses/:businessId/qbo-pnl", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const { year, month } = parseReviewYearMonth(req.query?.year, req.query?.month);
+    const business = await assertMonthlyReviewBusinessExists(businessId);
+    const snapshot = await getMonthlyQboPnlSnapshot({
+      businessId,
+      year,
+      month,
+      includeAccounts: true,
+      includeTransactions: false,
+    });
+    return res.json({
+      ok: true,
+      business_id: business.id,
+      year,
+      month,
+      snapshot,
+      provider_calls: {
+        qbo_reads: false,
+        qbo_writes: false,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] QBO P&L snapshot load failed", e?.message || e);
+    return res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.error || "monthly_review_qbo_pnl_load_failed",
+      message: e?.message || "Could not load the QuickBooks P&L snapshot.",
+    });
+  }
+});
+
+router.get("/businesses/:businessId/qbo-pnl/accounts/:accountId/transactions", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const { year, month } = parseReviewYearMonth(req.query?.year, req.query?.month);
+    const accountId = String(req.params.accountId || "").trim();
+    if (!accountId) return res.status(400).json({ ok: false, error: "missing_account_id" });
+    await assertMonthlyReviewBusinessExists(businessId);
+    const page = Math.max(parseInt(req.query?.page, 10) || 1, 1);
+    const pageSize = Math.min(
+      Math.max(parseInt(req.query?.page_size, 10) || MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_DEFAULT, 1),
+      MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_MAX
+    );
+    const result = await fetchMonthlyQboPnlAccountTransactions({
+      businessId,
+      year,
+      month,
+      accountId,
+      page,
+      pageSize,
+    });
+    return res.json({
+      ok: true,
+      business_id: businessId,
+      year,
+      month,
+      account_id: accountId,
+      snapshot_id: result.snapshot?.id || null,
+      rows: result.rows,
+      total_count: result.totalCount,
+      meta: {
+        page: result.page,
+        page_size: result.pageSize,
+        total_count: result.totalCount,
+        page_count: Math.max(1, Math.ceil(Number(result.totalCount || 0) / result.pageSize)),
+      },
+      provider_calls: {
+        qbo_reads: false,
+        qbo_writes: false,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] QBO P&L account transactions load failed", e?.message || e);
+    return res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.error || "monthly_review_qbo_pnl_transactions_load_failed",
+      message: e?.message || "Could not load QuickBooks P&L transactions.",
     });
   }
 });
@@ -1484,6 +1615,42 @@ function normalizeMonth(value) {
   if (match) return `${match[1]}-${match[2]}-01`;
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
+function parseReviewYearMonth(yearValue, monthValue) {
+  const maybeMonthString = String(monthValue || yearValue || "").trim();
+  const match = maybeMonthString.match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/);
+  const year = match ? Number(match[1]) : Number(yearValue);
+  const month = match ? Number(match[2]) : Number(monthValue);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    const err = new Error("invalid_review_year");
+    err.status = 400;
+    err.error = "invalid_review_year";
+    throw err;
+  }
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    const err = new Error("invalid_review_month");
+    err.status = 400;
+    err.error = "invalid_review_month";
+    throw err;
+  }
+  return { year, month };
+}
+
+async function assertMonthlyReviewBusinessExists(businessId) {
+  const { data: business, error } = await supabase
+    .from("business_profiles")
+    .select("id")
+    .eq("id", businessId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!business) {
+    const err = new Error("business_not_found");
+    err.status = 404;
+    err.error = "business_not_found";
+    throw err;
+  }
+  return business;
 }
 
 async function fetchRunMap(businessIds, month) {

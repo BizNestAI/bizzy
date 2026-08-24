@@ -5,6 +5,7 @@ import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.js";
 import { suggestQboAccountForPlaidAccount } from "../../../services/bookkeeping/accountMapping.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../../../services/bookkeeping/bookkeepingScope.js";
+import { isAdminViewRequest } from "../../_shared/tenantAuth.js";
 
 const router = Router();
 
@@ -30,6 +31,97 @@ function getPlaidPostingRail(type, subtype) {
   return null;
 }
 
+export async function fetchAdminViewPersistedMappingStatus({
+  db = supabase,
+  businessId,
+  bookkeepingStartDate = null,
+  nowIso = new Date().toISOString(),
+}) {
+  const { data: catRows, error: catErr } = await db
+    .from("transaction_categorizations")
+    .select("transaction_id,status,post_after,qbo_txn_id")
+    .eq("business_id", businessId)
+    .in("status", ["approved", "auto_approved", "failed"])
+    .not("post_after", "is", null)
+    .neq("status", "posted")
+    .is("qbo_txn_id", null);
+  if (catErr) throw catErr;
+
+  const filteredCats = (catRows || []).filter((row) => {
+    if (!row?.post_after) return false;
+    const postTs = Date.parse(row.post_after);
+    if (Number.isNaN(postTs)) return false;
+    return postTs <= Date.parse(nowIso) + 48 * 60 * 60 * 1000;
+  });
+  const txnIds = filteredCats.map((c) => c.transaction_id).filter(Boolean);
+  if (!txnIds.length) {
+    return {
+      ok: true,
+      needs_mapping: false,
+      unmapped_plaid_account_ids: [],
+      unmapped_account_count: 0,
+      affected_txn_count: 0,
+      admin_view_cache_only: true,
+    };
+  }
+
+  const bankBaseQuery = db
+    .from("bank_transactions")
+    .select("id,plaid_account_id,date")
+    .eq("business_id", businessId)
+    .eq("is_archived", false)
+    .in("id", txnIds);
+  const { data: bankRows, error: bankErr } = await applyActiveBookkeepingScope(bankBaseQuery, bookkeepingStartDate);
+  if (bankErr) throw bankErr;
+
+  const plaidIds = Array.from(new Set((bankRows || []).map((b) => b.plaid_account_id).filter(Boolean)));
+  if (!plaidIds.length) {
+    return {
+      ok: true,
+      needs_mapping: false,
+      unmapped_plaid_account_ids: [],
+      unmapped_account_count: 0,
+      affected_txn_count: 0,
+      admin_view_cache_only: true,
+    };
+  }
+
+  const { data: mappings, error: mapErr } = await db
+    .from("plaid_qbo_account_mappings")
+    .select("plaid_account_id,source")
+    .eq("business_id", businessId)
+    .in("plaid_account_id", plaidIds);
+  if (mapErr) throw mapErr;
+
+  const mappedIds = new Set((mappings || []).map((m) => m.plaid_account_id));
+  let unmappedIds = plaidIds.filter((id) => !mappedIds.has(id));
+
+  if (unmappedIds.length) {
+    const { data: plaidAccounts, error: acctErr } = await db
+      .from("plaid_accounts")
+      .select("plaid_account_id,type,subtype")
+      .eq("business_id", businessId)
+      .in("plaid_account_id", unmappedIds);
+    if (acctErr) throw acctErr;
+    const postablePlaidIds = new Set(
+      (plaidAccounts || [])
+        .filter((acct) => Boolean(getPlaidPostingRail(acct?.type, acct?.subtype)))
+        .map((acct) => acct.plaid_account_id)
+    );
+    unmappedIds = unmappedIds.filter((id) => postablePlaidIds.has(id));
+  }
+
+  const affectedTxnCount = (bankRows || []).filter((row) => unmappedIds.includes(row.plaid_account_id)).length;
+  return {
+    ok: true,
+    needs_mapping: unmappedIds.length > 0,
+    unmapped_plaid_account_ids: unmappedIds,
+    unmapped_account_count: unmappedIds.length,
+    affected_txn_count: affectedTxnCount,
+    admin_view_cache_only: true,
+  };
+}
+
 router.get("/mapping-status", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
@@ -37,6 +129,10 @@ router.get("/mapping-status", requireAuth, async (req, res) => {
   try {
     const nowIso = new Date().toISOString();
     const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+    if (isAdminViewRequest(req)) {
+      return res.json(await fetchAdminViewPersistedMappingStatus({ businessId, bookkeepingStartDate, nowIso }));
+    }
+
     const { data: catRows, error: catErr } = await supabase
       .from("transaction_categorizations")
       .select("transaction_id,status,post_after,qbo_txn_id")

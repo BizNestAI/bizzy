@@ -1,4 +1,17 @@
 import { apiUrl, safeFetch } from "../../utils/safeFetch";
+import {
+  getPersistedClarificationRequestIds,
+  humanizeClarificationSubmitError,
+  isClarificationAnswerPersisted,
+  summarizeClarificationSubmitFailure,
+} from "./clarificationSubmitResult.js";
+
+export {
+  getPersistedClarificationRequestIds,
+  humanizeClarificationSubmitError,
+  isClarificationAnswerPersisted,
+  summarizeClarificationSubmitFailure,
+};
 
 function withBizHeaders(businessId, headers = {}) {
   const h = new Headers(headers);
@@ -434,16 +447,31 @@ export async function submitClarificationAnswers(businessId, payload = {}) {
     business_id: businessId,
     answers: payload.answers || [],
   };
-  const res = await safeFetch(apiUrl(`/api/bookkeeping/clarifications/submit`), {
-    method: "POST",
-    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
-    body: JSON.stringify(body),
-  });
-  if (res && res.ok === false) {
-    throw new Error(res.message || res.error || "clarifications_submit_failed");
+  let res;
+  try {
+    res = await safeFetch(apiUrl(`/api/bookkeeping/clarifications/submit`), {
+      method: "POST",
+      headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    const wrapped = new Error(humanizeClarificationSubmitError(err?.body?.error || err?.message || "clarifications_submit_failed"));
+    wrapped.code = err?.body?.error || null;
+    wrapped.status = err?.status || null;
+    wrapped.body = err?.body || null;
+    wrapped.rows = Array.isArray(err?.body?.rows) ? err.body.rows : [];
+    throw wrapped;
+  }
+  if (res && res.ok === false && res.outcome !== "partial_success") {
+    const err = new Error(humanizeClarificationSubmitError(res.error || "clarifications_submit_failed"));
+    err.code = res.error || null;
+    err.body = res;
+    err.rows = Array.isArray(res.rows) ? res.rows : [];
+    throw err;
   }
   return res;
 }
+
 
 export async function snoozeClarifications(businessId, payload = {}) {
   const body = {

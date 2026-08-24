@@ -273,7 +273,8 @@ test("Plaid browser routes remain auth-protected and tenant-scoped by server mou
   const serverSource = readFileSync(join(root, "src/server.js"), "utf8");
   const investmentsRoutesSource = readFileSync(join(root, "src/api/investments/investments.routes.js"), "utf8");
 
-  assert.match(serverSource, /app\.use\("\/api\/integrations\/plaid", requireAuth, requireBusinessContext, plaidIntegrationsRouter\)/);
+  assert.match(serverSource, /const requireCustomerOrAdminView = \[requireAuthOrAdminView, requireBusinessContext, rejectAdminViewWrites\(\)\]/);
+  assert.match(serverSource, /app\.use\("\/api\/integrations\/plaid", \.\.\.requireCustomerOrAdminView, plaidIntegrationsRouter\)/);
   assert.match(investmentsRoutesSource, /router\.post\('\/plaid\/create-link-token', ensureAuthIds, requireVerifiedBusiness, createLinkToken\)/);
   assert.match(investmentsRoutesSource, /router\.post\('\/plaid\/exchange-public-token', ensureAuthIds, requireVerifiedBusiness, exchangePublicToken\)/);
   assert.match(plaidRoutesSource, /router\.post\("\/disconnect-item", requireAuth,/);

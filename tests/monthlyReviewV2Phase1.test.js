@@ -113,8 +113,13 @@ test("Monthly Review V2 phase 1 exposes safe header actions and reviewed stamp",
   const ui = read("src/pages/Admin/MonthlyReviewConsole.jsx");
 
   assert.match(ui, /View Customer App/);
-  assert.match(ui, /Admin customer view coming in the next implementation phase\./);
-  assert.match(ui, /disabled/);
+  assert.match(ui, /const openCustomerApp = async \(\) =>/);
+  assert.match(ui, /safeFetch\("\/api\/admin\/customer-view\/sessions"/);
+  assert.match(ui, /business_id: selectedBusinessId/);
+  assert.match(ui, /window\.open\("about:blank", "_blank"\)/);
+  assert.match(ui, /placeholderTab\.location\.assign\(handoffUrl\)/);
+  assert.match(ui, /buildMonthlyReviewReturnUrl\(\{ month, businessId: selectedBusinessId \}\)/);
+  assert.doesNotMatch(ui, /Admin customer view coming in the next implementation phase\./);
   assert.match(ui, /Approve \{formatMonthShort\(month\)\} Books/);
   assert.match(ui, /function ReviewedStamp/);
   assert.match(ui, /Reviewed by \{formatReviewerName/);
@@ -127,7 +132,7 @@ test("Monthly Review V2 phase 1 preserves core accounting review sections", () =
   const ui = read("src/pages/Admin/MonthlyReviewConsole.jsx");
 
   assert.match(ui, /SourceLedgerPanel/);
-  assert.match(ui, /Monthly GL Review/);
+  assert.match(ui, /Monthly P&amp;L Review/);
   assert.match(ui, /OperatorResponsesPanel/);
   assert.match(ui, /Operator Responses/);
   assert.match(ui, /CanonicalCoaReviewPanel/);

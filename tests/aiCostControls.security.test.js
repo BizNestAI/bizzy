@@ -176,7 +176,7 @@ test("server response strips internal telemetry before returning to browser", ()
 });
 
 test("chat access billing gate uses canonical tenant authorization", () => {
-  assert.match(gptRoutesSource, /const privateBusinessRoute = \[requireAuth, requireBusinessAccess\(\)\]/);
+  assert.match(gptRoutesSource, /const privateBusinessRoute = \[requireAuthOrAdminView,\s+requireBusinessAccess\(\),\s+rejectAdminViewWrites\(\)\]/);
   assert.match(
     gptRoutesSource,
     /router\.get\('\/chat-access',\s+\.\.\.privateBusinessRoute,\s+getBizzyChatAccessHandler\)/

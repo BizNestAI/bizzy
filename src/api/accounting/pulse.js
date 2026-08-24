@@ -5,6 +5,7 @@ import {
   generateFinancialPulseSnapshot,
   shouldGenerateScheduledFinancialPulse,
 } from "./monthlyFinancialPulse.js";
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 
 const router = express.Router();
 const ENV_MOCK = String(process.env.USE_MOCK_ACCOUNTING || "").toLowerCase() === "true";
@@ -67,8 +68,51 @@ router.get("/", async (req, res) => {
     const mockRaw = String(q.mock ?? "");
     const wantMock = mockRaw === "1" || mockRaw.toLowerCase() === "true";
 
-    if (!user_id || !business_id) {
+    if ((!user_id && !isAdminViewRequest(req)) || !business_id) {
       return res.status(400).json({ error: "Missing user_id or business_id" });
+    }
+
+    if (isAdminViewRequest(req)) {
+      if (monthText) {
+        const { data, error, status } = await supabase
+          .from("monthly_financial_pulse")
+          .select("*")
+          .eq("business_id", business_id)
+          .eq("month", monthText)
+          .maybeSingle();
+
+        if (error && status !== 406) {
+          console.error("[Pulse Fetch Error]", error.message || error);
+          return res.status(500).json({ error: "Failed to fetch financial pulse." });
+        }
+        if (data) {
+          return res.status(200).json({
+            pulse: normalizePulse(data, monthText),
+            admin_view_cache_only: true,
+          });
+        }
+        return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_read_only_data_unavailable" });
+      }
+
+      const { data: latest, error: latestErr, status: latestStatus } = await supabase
+        .from("monthly_financial_pulse")
+        .select("*")
+        .eq("business_id", business_id)
+        .order("month", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestErr && latestStatus !== 406) {
+        console.error("[Pulse Latest Error]", latestErr.message || latestErr);
+        return res.status(500).json({ error: "Failed to fetch financial pulse." });
+      }
+      if (latest) {
+        return res.status(200).json({
+          pulse: normalizePulse(latest || null),
+          admin_view_cache_only: true,
+        });
+      }
+      return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_read_only_data_unavailable" });
     }
 
     // 🔧 Mock short-circuit (env or ?mock=1) for a specific month

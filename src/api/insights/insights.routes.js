@@ -8,8 +8,7 @@ import listHandler from './list.js';                // ✅ centralized list hand
 import { generateAllInsights } from './generators/runAll.js';
 import { generateContractorCfoInsights } from './generators/contractorCfo.generators.js';
 import { markInsightFeedback } from '../../services/insights/insightDedupeService.js';
-import { requireAuth } from '../gpt/middlewares/requireAuth.js';
-import { requireBusinessAccess } from '../_shared/tenantAuth.js';
+import { rejectAdminViewWrites, requireAuthOrAdminView, requireBusinessAccess } from '../_shared/tenantAuth.js';
 import { createRateLimiter } from '../_shared/rateLimit.js';
 
 const router = Router();
@@ -40,7 +39,7 @@ function readBusinessId(req) {
   );
 }
 
-const privateBusinessRoute = [requireAuth, requireBusinessAccess()];
+const privateBusinessRoute = [requireAuthOrAdminView, requireBusinessAccess(), rejectAdminViewWrites()];
 const insightGenerationRateLimit = createRateLimiter({
   windowMs: 60_000,
   max: Number(process.env.INSIGHTS_GENERATION_RATE_LIMIT_PER_MINUTE || 10),
