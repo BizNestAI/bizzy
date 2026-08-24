@@ -49,6 +49,13 @@ import {
 } from "../../services/jobCosting/qboProjectsService.js";
 const router = express.Router();
 
+const requireRouteAuth = (req, res, next) => {
+  if (req.tenantContext?.mode === "admin_view" || req.tenantContext?.mode === "customer") {
+    return next();
+  }
+  return requireAuth(req, res, next);
+};
+
 /* ---------- Helpers ---------- */
 const asNum = (n) => (typeof n === "number" ? n : Number(n || 0));
 const DEFAULT_MARGIN_TARGET = 35;
@@ -1480,7 +1487,7 @@ router.get("/activity", async (req, res) => {
   }
 });
 
-router.get("/job-costing", requireAuth, async (req, res) => {
+router.get("/job-costing", requireRouteAuth, async (req, res) => {
   try {
     const businessId = ensureBusinessId(req, res);
     if (!businessId) return;
@@ -2673,78 +2680,78 @@ async function handleManualJobCreate(req, res) {
   }
 }
 
-router.get("/assignment-history", requireAuth, handleAssignmentHistory);
-router.post("/assignment-preview", requireAuth, handleAssignmentPreview);
-router.post("/assignments/confirm", requireAuth, handleAssignmentConfirm);
-router.get("/assignments", requireAuth, handleAssignmentsGet);
-router.post("/assignments", requireAuth, handleAssignmentCreate);
-router.delete("/assignments/:assignmentId", requireAuth, handleAssignmentDelete);
-router.post("/assignments/manual", requireAuth, handleManualAssignment);
-router.get("/job-costing/assignment-history", requireAuth, handleAssignmentHistory);
-router.post("/job-costing/assignment-preview", requireAuth, handleAssignmentPreview);
-router.post("/job-costing/assignments/confirm", requireAuth, handleAssignmentConfirm);
-router.get("/job-costing/assignments", requireAuth, handleAssignmentsGet);
-router.post("/job-costing/assignments", requireAuth, handleAssignmentCreate);
-router.delete("/job-costing/assignments/:assignmentId", requireAuth, handleAssignmentDelete);
-router.post("/job-costing/assignments/manual", requireAuth, handleManualAssignment);
-router.get("/jobs/summary", requireAuth, handleJobsSummary);
-router.get("/job-costing/jobs/summary", requireAuth, handleJobsSummary);
-router.get("/jobs/:jobId/financial-summary", requireAuth, handleJobFinancialSummary);
-router.get("/job-costing/jobs/:jobId/financial-summary", requireAuth, handleJobFinancialSummary);
-router.get("/revenue-documents", requireAuth, handleRevenueDocumentsGet);
-router.post("/revenue-documents", requireAuth, handleRevenueDocumentsPost);
-router.get("/job-costing/revenue-documents", requireAuth, handleRevenueDocumentsGet);
-router.post("/job-costing/revenue-documents", requireAuth, handleRevenueDocumentsPost);
-router.get("/payments", requireAuth, handlePaymentsGet);
-router.post("/payments", requireAuth, handlePaymentAllocationPost);
-router.get("/job-costing/payments", requireAuth, handlePaymentsGet);
-router.post("/job-costing/payments", requireAuth, handlePaymentAllocationPost);
-router.get("/revenue-evidence", requireAuth, handleRevenueEvidenceGet);
-router.get("/job-costing/revenue-evidence", requireAuth, handleRevenueEvidenceGet);
-router.post("/assignment-impact-preview", requireAuth, handleAssignmentImpactPreview);
-router.post("/job-costing/assignment-impact-preview", requireAuth, handleAssignmentImpactPreview);
-router.post("/assignment-resolution/confirm", requireAuth, handleAssignmentResolutionConfirm);
-router.post("/job-costing/assignment-resolution/confirm", requireAuth, handleAssignmentResolutionConfirm);
-router.post("/jobs/:jobId/complete", requireAuth, handleJobComplete);
-router.post("/job-costing/jobs/:jobId/complete", requireAuth, handleJobComplete);
-router.post("/jobs/:jobId/reopen", requireAuth, handleJobReopen);
-router.post("/job-costing/jobs/:jobId/reopen", requireAuth, handleJobReopen);
-router.get("/job-candidates", requireAuth, handleJobCandidatesGet);
-router.get("/job-costing/job-candidates", requireAuth, handleJobCandidatesGet);
-router.post("/job-candidates/generate", requireAuth, highCostJobRouteRateLimit, handleJobCandidatesGenerate);
-router.post("/job-costing/job-candidates/generate", requireAuth, highCostJobRouteRateLimit, handleJobCandidatesGenerate);
-router.post("/job-candidates/:candidateId/approve-new", requireAuth, handleJobCandidateApproveNew);
-router.post("/job-costing/job-candidates/:candidateId/approve-new", requireAuth, handleJobCandidateApproveNew);
-router.post("/job-candidates/:candidateId/approval-preview", requireAuth, handleJobCandidateApprovalPreview);
-router.post("/job-costing/job-candidates/:candidateId/approval-preview", requireAuth, handleJobCandidateApprovalPreview);
-router.post("/job-candidates/:candidateId/link-existing", requireAuth, handleJobCandidateLinkExisting);
-router.post("/job-costing/job-candidates/:candidateId/link-existing", requireAuth, handleJobCandidateLinkExisting);
-router.post("/job-candidates/:candidateId/dismiss", requireAuth, handleJobCandidateDismiss);
-router.post("/job-costing/job-candidates/:candidateId/dismiss", requireAuth, handleJobCandidateDismiss);
-router.post("/job-candidates/merge", requireAuth, handleJobCandidatesMerge);
-router.post("/job-costing/job-candidates/merge", requireAuth, handleJobCandidatesMerge);
-router.post("/jobs/manual", requireAuth, handleManualJobCreate);
-router.post("/job-costing/jobs/manual", requireAuth, handleManualJobCreate);
-router.post("/qbo/job-costing/sync", requireAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
-router.post("/job-costing/qbo/sync", requireAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
-router.post("/qbo/job-costing/backfill", requireAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
-router.post("/job-costing/qbo/backfill", requireAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
-router.post("/qbo/job-costing/backfill/run", requireAuth, highCostJobRouteRateLimit, handleQboBackfillRun);
-router.post("/job-costing/qbo/backfill/run", requireAuth, highCostJobRouteRateLimit, handleQboBackfillRun);
-router.post("/qbo/job-costing/webhooks/process", requireAuth, highCostJobRouteRateLimit, handleQboWebhookQueueProcess);
-router.post("/job-costing/qbo/webhooks/process", requireAuth, highCostJobRouteRateLimit, handleQboWebhookQueueProcess);
-router.post("/qbo/job-costing/cdc", requireAuth, highCostJobRouteRateLimit, handleQboCdcSync);
-router.post("/job-costing/qbo/cdc", requireAuth, highCostJobRouteRateLimit, handleQboCdcSync);
-router.post("/qbo/job-costing/daily-reconciliation", requireAuth, highCostJobRouteRateLimit, handleQboDailyReconciliation);
-router.post("/job-costing/qbo/daily-reconciliation", requireAuth, highCostJobRouteRateLimit, handleQboDailyReconciliation);
-router.get("/qbo/job-costing/sync/diagnostics", requireAuth, handleQboJobCostingDiagnostics);
-router.get("/job-costing/qbo/sync/diagnostics", requireAuth, handleQboJobCostingDiagnostics);
-router.post("/qbo/job-costing/projects/capability", requireAuth, handleQboProjectsCapabilityCheck);
-router.post("/job-costing/qbo/projects/capability", requireAuth, handleQboProjectsCapabilityCheck);
-router.post("/qbo/job-costing/projects/sync", requireAuth, highCostJobRouteRateLimit, handleQboProjectsSync);
-router.post("/job-costing/qbo/projects/sync", requireAuth, highCostJobRouteRateLimit, handleQboProjectsSync);
-router.post("/jobs/:jobId/qbo/project", requireAuth, handleQboProjectCreateForJob);
-router.post("/job-costing/jobs/:jobId/qbo/project", requireAuth, handleQboProjectCreateForJob);
+router.get("/assignment-history", requireRouteAuth, handleAssignmentHistory);
+router.post("/assignment-preview", requireRouteAuth, handleAssignmentPreview);
+router.post("/assignments/confirm", requireRouteAuth, handleAssignmentConfirm);
+router.get("/assignments", requireRouteAuth, handleAssignmentsGet);
+router.post("/assignments", requireRouteAuth, handleAssignmentCreate);
+router.delete("/assignments/:assignmentId", requireRouteAuth, handleAssignmentDelete);
+router.post("/assignments/manual", requireRouteAuth, handleManualAssignment);
+router.get("/job-costing/assignment-history", requireRouteAuth, handleAssignmentHistory);
+router.post("/job-costing/assignment-preview", requireRouteAuth, handleAssignmentPreview);
+router.post("/job-costing/assignments/confirm", requireRouteAuth, handleAssignmentConfirm);
+router.get("/job-costing/assignments", requireRouteAuth, handleAssignmentsGet);
+router.post("/job-costing/assignments", requireRouteAuth, handleAssignmentCreate);
+router.delete("/job-costing/assignments/:assignmentId", requireRouteAuth, handleAssignmentDelete);
+router.post("/job-costing/assignments/manual", requireRouteAuth, handleManualAssignment);
+router.get("/jobs/summary", requireRouteAuth, handleJobsSummary);
+router.get("/job-costing/jobs/summary", requireRouteAuth, handleJobsSummary);
+router.get("/jobs/:jobId/financial-summary", requireRouteAuth, handleJobFinancialSummary);
+router.get("/job-costing/jobs/:jobId/financial-summary", requireRouteAuth, handleJobFinancialSummary);
+router.get("/revenue-documents", requireRouteAuth, handleRevenueDocumentsGet);
+router.post("/revenue-documents", requireRouteAuth, handleRevenueDocumentsPost);
+router.get("/job-costing/revenue-documents", requireRouteAuth, handleRevenueDocumentsGet);
+router.post("/job-costing/revenue-documents", requireRouteAuth, handleRevenueDocumentsPost);
+router.get("/payments", requireRouteAuth, handlePaymentsGet);
+router.post("/payments", requireRouteAuth, handlePaymentAllocationPost);
+router.get("/job-costing/payments", requireRouteAuth, handlePaymentsGet);
+router.post("/job-costing/payments", requireRouteAuth, handlePaymentAllocationPost);
+router.get("/revenue-evidence", requireRouteAuth, handleRevenueEvidenceGet);
+router.get("/job-costing/revenue-evidence", requireRouteAuth, handleRevenueEvidenceGet);
+router.post("/assignment-impact-preview", requireRouteAuth, handleAssignmentImpactPreview);
+router.post("/job-costing/assignment-impact-preview", requireRouteAuth, handleAssignmentImpactPreview);
+router.post("/assignment-resolution/confirm", requireRouteAuth, handleAssignmentResolutionConfirm);
+router.post("/job-costing/assignment-resolution/confirm", requireRouteAuth, handleAssignmentResolutionConfirm);
+router.post("/jobs/:jobId/complete", requireRouteAuth, handleJobComplete);
+router.post("/job-costing/jobs/:jobId/complete", requireRouteAuth, handleJobComplete);
+router.post("/jobs/:jobId/reopen", requireRouteAuth, handleJobReopen);
+router.post("/job-costing/jobs/:jobId/reopen", requireRouteAuth, handleJobReopen);
+router.get("/job-candidates", requireRouteAuth, handleJobCandidatesGet);
+router.get("/job-costing/job-candidates", requireRouteAuth, handleJobCandidatesGet);
+router.post("/job-candidates/generate", requireRouteAuth, highCostJobRouteRateLimit, handleJobCandidatesGenerate);
+router.post("/job-costing/job-candidates/generate", requireRouteAuth, highCostJobRouteRateLimit, handleJobCandidatesGenerate);
+router.post("/job-candidates/:candidateId/approve-new", requireRouteAuth, handleJobCandidateApproveNew);
+router.post("/job-costing/job-candidates/:candidateId/approve-new", requireRouteAuth, handleJobCandidateApproveNew);
+router.post("/job-candidates/:candidateId/approval-preview", requireRouteAuth, handleJobCandidateApprovalPreview);
+router.post("/job-costing/job-candidates/:candidateId/approval-preview", requireRouteAuth, handleJobCandidateApprovalPreview);
+router.post("/job-candidates/:candidateId/link-existing", requireRouteAuth, handleJobCandidateLinkExisting);
+router.post("/job-costing/job-candidates/:candidateId/link-existing", requireRouteAuth, handleJobCandidateLinkExisting);
+router.post("/job-candidates/:candidateId/dismiss", requireRouteAuth, handleJobCandidateDismiss);
+router.post("/job-costing/job-candidates/:candidateId/dismiss", requireRouteAuth, handleJobCandidateDismiss);
+router.post("/job-candidates/merge", requireRouteAuth, handleJobCandidatesMerge);
+router.post("/job-costing/job-candidates/merge", requireRouteAuth, handleJobCandidatesMerge);
+router.post("/jobs/manual", requireRouteAuth, handleManualJobCreate);
+router.post("/job-costing/jobs/manual", requireRouteAuth, handleManualJobCreate);
+router.post("/qbo/job-costing/sync", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
+router.post("/job-costing/qbo/sync", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
+router.post("/qbo/job-costing/backfill", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
+router.post("/job-costing/qbo/backfill", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
+router.post("/qbo/job-costing/backfill/run", requireRouteAuth, highCostJobRouteRateLimit, handleQboBackfillRun);
+router.post("/job-costing/qbo/backfill/run", requireRouteAuth, highCostJobRouteRateLimit, handleQboBackfillRun);
+router.post("/qbo/job-costing/webhooks/process", requireRouteAuth, highCostJobRouteRateLimit, handleQboWebhookQueueProcess);
+router.post("/job-costing/qbo/webhooks/process", requireRouteAuth, highCostJobRouteRateLimit, handleQboWebhookQueueProcess);
+router.post("/qbo/job-costing/cdc", requireRouteAuth, highCostJobRouteRateLimit, handleQboCdcSync);
+router.post("/job-costing/qbo/cdc", requireRouteAuth, highCostJobRouteRateLimit, handleQboCdcSync);
+router.post("/qbo/job-costing/daily-reconciliation", requireRouteAuth, highCostJobRouteRateLimit, handleQboDailyReconciliation);
+router.post("/job-costing/qbo/daily-reconciliation", requireRouteAuth, highCostJobRouteRateLimit, handleQboDailyReconciliation);
+router.get("/qbo/job-costing/sync/diagnostics", requireRouteAuth, handleQboJobCostingDiagnostics);
+router.get("/job-costing/qbo/sync/diagnostics", requireRouteAuth, handleQboJobCostingDiagnostics);
+router.post("/qbo/job-costing/projects/capability", requireRouteAuth, handleQboProjectsCapabilityCheck);
+router.post("/job-costing/qbo/projects/capability", requireRouteAuth, handleQboProjectsCapabilityCheck);
+router.post("/qbo/job-costing/projects/sync", requireRouteAuth, highCostJobRouteRateLimit, handleQboProjectsSync);
+router.post("/job-costing/qbo/projects/sync", requireRouteAuth, highCostJobRouteRateLimit, handleQboProjectsSync);
+router.post("/jobs/:jobId/qbo/project", requireRouteAuth, handleQboProjectCreateForJob);
+router.post("/job-costing/jobs/:jobId/qbo/project", requireRouteAuth, handleQboProjectCreateForJob);
 
 async function handleSuggestionsGenerate(req, res) {
   try {
@@ -2883,16 +2890,16 @@ async function handleSuggestionReject(req, res) {
   }
 }
 
-router.post("/suggestions/generate", requireAuth, highCostJobRouteRateLimit, handleSuggestionsGenerate);
-router.get("/suggestions", requireAuth, handleSuggestionsGet);
-router.post("/suggestions/:id/approve", requireAuth, handleSuggestionApprove);
-router.post("/suggestions/:id/accept", requireAuth, handleSuggestionApprove);
-router.post("/suggestions/:id/reject", requireAuth, handleSuggestionReject);
-router.post("/job-costing/suggestions/generate", requireAuth, highCostJobRouteRateLimit, handleSuggestionsGenerate);
-router.get("/job-costing/suggestions", requireAuth, handleSuggestionsGet);
-router.post("/job-costing/suggestions/:id/approve", requireAuth, handleSuggestionApprove);
-router.post("/job-costing/suggestions/:id/accept", requireAuth, handleSuggestionApprove);
-router.post("/job-costing/suggestions/:id/reject", requireAuth, handleSuggestionReject);
+router.post("/suggestions/generate", requireRouteAuth, highCostJobRouteRateLimit, handleSuggestionsGenerate);
+router.get("/suggestions", requireRouteAuth, handleSuggestionsGet);
+router.post("/suggestions/:id/approve", requireRouteAuth, handleSuggestionApprove);
+router.post("/suggestions/:id/accept", requireRouteAuth, handleSuggestionApprove);
+router.post("/suggestions/:id/reject", requireRouteAuth, handleSuggestionReject);
+router.post("/job-costing/suggestions/generate", requireRouteAuth, highCostJobRouteRateLimit, handleSuggestionsGenerate);
+router.get("/job-costing/suggestions", requireRouteAuth, handleSuggestionsGet);
+router.post("/job-costing/suggestions/:id/approve", requireRouteAuth, handleSuggestionApprove);
+router.post("/job-costing/suggestions/:id/accept", requireRouteAuth, handleSuggestionApprove);
+router.post("/job-costing/suggestions/:id/reject", requireRouteAuth, handleSuggestionReject);
 
 async function handleMarginTargetsGet(req, res) {
   try {
@@ -2954,12 +2961,12 @@ async function handleMarginInsights(req, res) {
   }
 }
 
-router.get("/margin-targets", requireAuth, handleMarginTargetsGet);
-router.put("/margin-targets", requireAuth, handleMarginTargetsPut);
-router.get("/insights", requireAuth, handleMarginInsights);
-router.get("/job-costing/margin-targets", requireAuth, handleMarginTargetsGet);
-router.put("/job-costing/margin-targets", requireAuth, handleMarginTargetsPut);
-router.get("/job-costing/insights", requireAuth, handleMarginInsights);
+router.get("/margin-targets", requireRouteAuth, handleMarginTargetsGet);
+router.put("/margin-targets", requireRouteAuth, handleMarginTargetsPut);
+router.get("/insights", requireRouteAuth, handleMarginInsights);
+router.get("/job-costing/margin-targets", requireRouteAuth, handleMarginTargetsGet);
+router.put("/job-costing/margin-targets", requireRouteAuth, handleMarginTargetsPut);
+router.get("/job-costing/insights", requireRouteAuth, handleMarginInsights);
 
 async function ensureJobBelongsToBusiness(businessId, jobId) {
   const { data, error } = await supabase
@@ -3036,12 +3043,12 @@ async function handleChangeOrdersPost(req, res) {
   }
 }
 
-router.get("/jobs/:jobId/change-orders", requireAuth, handleChangeOrdersGet);
-router.post("/jobs/:jobId/change-orders", requireAuth, handleChangeOrdersPost);
-router.get("/job-costing/jobs/:jobId/change-orders", requireAuth, handleChangeOrdersGet);
-router.post("/job-costing/jobs/:jobId/change-orders", requireAuth, handleChangeOrdersPost);
+router.get("/jobs/:jobId/change-orders", requireRouteAuth, handleChangeOrdersGet);
+router.post("/jobs/:jobId/change-orders", requireRouteAuth, handleChangeOrdersPost);
+router.get("/job-costing/jobs/:jobId/change-orders", requireRouteAuth, handleChangeOrdersGet);
+router.post("/job-costing/jobs/:jobId/change-orders", requireRouteAuth, handleChangeOrdersPost);
 
-router.post("/job-costing/assign-natural-language", requireAuth, highCostJobRouteRateLimit, async (req, res) => {
+router.post("/job-costing/assign-natural-language", requireRouteAuth, highCostJobRouteRateLimit, async (req, res) => {
   try {
     const businessId = ensureBusinessId(req, res);
     if (!businessId) return;

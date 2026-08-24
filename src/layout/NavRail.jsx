@@ -9,6 +9,7 @@ import bizzyLogo from '../assets/bizzy-logo.png';
 import { ACCENT_HEX, ACCENT_SOFT } from '../config/accent';
 import NavRailBusinessBadge from './NavRailBusinessBadge';
 import { getDemoMode } from '../services/demo/demoClient.js';
+import { useAdminView } from '../context/AdminViewContext.jsx';
 
 function moduleFromPath(path) {
   const seg = path.split('/')[2] || 'bizzy';
@@ -47,6 +48,7 @@ export default function NavRail({
 }) {
   const { openThread, threadsRefreshKey } = useBizzyChatContext();
   const { currentBusiness } = useBusiness();
+  const adminView = useAdminView();
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -177,6 +179,7 @@ export default function NavRail({
             <Sidebar
               compact
               collapsed={collapsed}
+              disableActiveBounce={adminView.active}
               onChatHistoryHover={(anchor) => chatDrawerRef.current?.openHistory(anchor, { align: 'bottom' })}
               onChatHistoryLeave={() => chatDrawerRef.current?.closeHistory()}
               onChatHistoryClick={(anchor) => chatDrawerRef.current?.openHistory(anchor, { align: 'bottom' })}

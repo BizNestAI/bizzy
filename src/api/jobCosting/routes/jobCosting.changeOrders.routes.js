@@ -23,7 +23,12 @@ export function __setChangeOrderRouteTestDeps(deps = {}) {
   detectPotential = deps.detectPotential || defaultDetectPotential;
 }
 
-const requireRouteAuth = (req, res, next) => authMiddleware(req, res, next);
+const requireRouteAuth = (req, res, next) => {
+  if (req.tenantContext?.mode === "admin_view" || req.tenantContext?.mode === "customer") {
+    return next();
+  }
+  return authMiddleware(req, res, next);
+};
 const changeOrderHighCostRateLimit = createRateLimiter({
   windowMs: 60_000,
   max: Number(process.env.CHANGE_ORDER_HIGH_COST_RATE_LIMIT_PER_MINUTE || 10),
@@ -286,15 +291,16 @@ router.get("/potential-change-orders", requireRouteAuth, async (req, res) => {
   try {
     const businessId = ensureBusinessId(req, res);
     if (!businessId) return;
+    const adminView = isAdminViewRequest(req);
 
-    if (!isAdminViewRequest(req)) {
+    if (!adminView) {
       await detectPotential({ businessId });
     }
 
     const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
     const query = supabaseClient
       .from("potential_change_orders")
-      .select(POTENTIAL_CHANGE_ORDER_SELECT)
+      .select(adminView ? "*" : POTENTIAL_CHANGE_ORDER_SELECT)
       .eq("business_id", businessId)
       .order("confidence_score", { ascending: false })
       .order("created_at", { ascending: false })
@@ -490,11 +496,12 @@ router.get("/change-orders", requireRouteAuth, async (req, res) => {
   try {
     const businessId = ensureBusinessId(req, res);
     if (!businessId) return;
+    const adminView = isAdminViewRequest(req);
 
     const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
     const query = supabaseClient
       .from("job_change_orders")
-      .select(CHANGE_ORDER_SELECT)
+      .select(adminView ? "*" : CHANGE_ORDER_SELECT)
       .eq("business_id", businessId)
       .order("created_at", { ascending: false })
       .limit(limit);
@@ -521,11 +528,12 @@ router.get("/jobs/:jobId/change-orders", requireRouteAuth, async (req, res) => {
   try {
     const businessId = ensureBusinessId(req, res);
     if (!businessId) return;
+    const adminView = isAdminViewRequest(req);
     const job = await ensureJobBelongsToBusiness(businessId, req.params.jobId);
 
     const { data, error } = await supabaseClient
       .from("job_change_orders")
-      .select(CHANGE_ORDER_SELECT)
+      .select(adminView ? "*" : CHANGE_ORDER_SELECT)
       .eq("business_id", businessId)
       .eq("job_id", req.params.jobId)
       .order("created_at", { ascending: false });

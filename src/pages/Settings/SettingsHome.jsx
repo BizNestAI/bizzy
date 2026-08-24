@@ -197,7 +197,7 @@ export default function SettingsHome() {
     let alive = true;
 
     const fallback = {
-      business_name: currentBusiness?.business_name || "",
+      business_name: currentBusiness?.business_name || adminView.businessName || "",
       industry: currentBusiness?.industry || "",
       team_size: currentBusiness?.team_size ?? "",
       state: currentBusiness?.state || "",
@@ -207,6 +207,17 @@ export default function SettingsHome() {
     const loadBusinessProfile = async () => {
       if (!businessId) {
         if (alive) setBusinessForm(EMPTY_BUSINESS_FORM);
+        return;
+      }
+
+      if (adminView.active) {
+        if (!alive) return;
+        setBusinessForm(fallback);
+        setCurrentBusiness((prev) => ({
+          ...(prev || {}),
+          id: businessId,
+          business_name: fallback.business_name || prev?.business_name || adminView.businessName || "",
+        }));
         return;
       }
 
@@ -243,7 +254,7 @@ export default function SettingsHome() {
     return () => {
       alive = false;
     };
-  }, [businessId, currentBusiness?.id, setCurrentBusiness]);
+  }, [adminView.active, adminView.businessName, businessId, currentBusiness?.id, setCurrentBusiness]);
 
   useEffect(() => {
     const checkout = searchParams.get("checkout");

@@ -169,14 +169,15 @@ function profileCompletion(completeness = {}) {
 }
 
 function buildProfileSummary(profile = {}) {
-  const completeness = profile?.completeness || {};
+  const source = profile && typeof profile === "object" ? profile : {};
+  const completeness = source?.completeness || {};
   const fields = [
-    { label: "State", value: profile.primaryState || profile.state || profile.stateCode },
-    { label: "Entity", value: profile.entityType },
-    { label: "Tax election", value: electionValue(profile) },
-    { label: "Filing", value: profile.filingStatus },
-    { label: "Books", value: profile.accountingMethod },
-    { label: "Prior year", value: profile.priorYearTotalTax == null ? null : "Entered" },
+    { label: "State", value: source.primaryState || source.state || source.stateCode },
+    { label: "Entity", value: source.entityType },
+    { label: "Tax election", value: electionValue(source) },
+    { label: "Filing", value: source.filingStatus },
+    { label: "Books", value: source.accountingMethod },
+    { label: "Prior year", value: source.priorYearTotalTax == null ? null : "Entered" },
   ].filter((field) => field.value != null && field.value !== "");
   return {
     complete: completeness.isCompleteForEstimate === true || completeness.percent === 100,
@@ -184,7 +185,7 @@ function buildProfileSummary(profile = {}) {
     totalCount: completeness.totalCount ?? null,
     percent: nullableNumber(completeness.percent),
     missingRequired: normalizeList(completeness.missingRequired),
-    lastReviewedAt: profile.lastReviewedAt || profile.reviewedAt || null,
+    lastReviewedAt: source.lastReviewedAt || source.reviewedAt || null,
     fields,
   };
 }

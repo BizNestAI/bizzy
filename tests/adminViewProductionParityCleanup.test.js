@@ -77,7 +77,7 @@ test("Job Costing Admin View skips GET-side generation and disables change-order
   const jobs = read("src/pages/LeadsJobs/JobsDashboard.jsx");
 
   const routeStart = changeRoutes.indexOf('router.get("/potential-change-orders"');
-  const adminGuard = changeRoutes.indexOf("if (!isAdminViewRequest(req))", routeStart);
+  const adminGuard = changeRoutes.indexOf("if (!adminView)", routeStart);
   const detectCall = changeRoutes.indexOf("await detectPotential({ businessId })", routeStart);
   assert.ok(routeStart > 0, "potential change order GET should exist");
   assert.ok(adminGuard > routeStart, "GET should branch for Admin View");
@@ -106,6 +106,7 @@ test("Tax Admin View overview is persisted-only and never recalculates on refres
 test("Docs, Settings, and Chat Admin View controls are visibly read-only", () => {
   const docs = read("src/pages/Docs/DocsLibraryPage.jsx");
   const sidebar = read("src/components/UserAdmin/Sidebar.jsx");
+  const navRail = read("src/layout/NavRail.jsx");
   const chatBar = read("src/components/Bizzy/BizzyChatBar.jsx");
   const canvasBar = read("src/components/Bizzy/ChatCanvasBar.jsx");
 
@@ -113,6 +114,7 @@ test("Docs, Settings, and Chat Admin View controls are visibly read-only", () =>
   assert.match(docs, /No persisted business documents are available for this Admin View session/);
   assert.match(sidebar, /disableActiveBounce=\{adminView\.active\}/);
   assert.match(sidebar, /if \(!disableActiveBounce && activePath\.startsWith/);
+  assert.match(navRail, /disableActiveBounce=\{adminView\.active\}/);
   assert.match(chatBar, /!\s*chatReadOnly \? \(/);
   assert.match(chatBar, /if \(chatReadOnly\) return/);
   assert.match(canvasBar, /!\s*chatReadOnly \? \(/);

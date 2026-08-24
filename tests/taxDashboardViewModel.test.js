@@ -18,6 +18,25 @@ test("dashboard view model preserves null and known zero distinctly", () => {
   assert.equal(model.primaryMetrics.remainingLiability, null);
 });
 
+test("dashboard view model treats null tax profile as missing setup instead of throwing", () => {
+  const model = buildTaxDashboardViewModel({
+    meta: { taxYear: 2026, status: "unavailable" },
+    readiness: {
+      status: "unavailable",
+      estimateReady: false,
+      reserveReady: false,
+      setupState: { code: "profile_incomplete" },
+    },
+    profile: null,
+    summary: {},
+  });
+
+  assert.equal(model.status.isUnavailable, true);
+  assert.deepEqual(model.profileSummary.fields, []);
+  assert.equal(model.profileSummary.complete, false);
+  assert.equal(model.status.setupState.message, "Complete your tax profile so Bizzi can estimate your federal and state taxes.");
+});
+
 test("dashboard view model exposes a date-only next deadline KPI model", () => {
   const model = buildTaxDashboardViewModel({
     meta: { taxYear: 2026, status: "completed" },

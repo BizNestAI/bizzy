@@ -175,6 +175,31 @@ function createApp(mockSupabase, detector = async () => ({ created: [] })) {
   return app;
 }
 
+function createAdminViewApp(mockSupabase, detector = async () => ({ created: [] })) {
+  let authCalled = false;
+  __setChangeOrderRouteTestDeps({
+    supabaseClient: mockSupabase.client,
+    authMiddleware: (_req, _res, next) => {
+      authCalled = true;
+      next();
+    },
+    detectPotential: detector,
+  });
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.tenantContext = {
+      mode: "admin_view",
+      businessId: BUSINESS_ID,
+      readOnly: true,
+      staffUserId: "staff-1",
+    };
+    next();
+  });
+  app.use("/api/job-costing", changeOrdersRouter);
+  return { app, getAuthCalled: () => authCalled };
+}
+
 async function request(app, path, { method = "GET", body, businessId = BUSINESS_ID } = {}) {
   const chunks = [];
   const requestBody = body ? JSON.stringify(body) : "";
@@ -246,6 +271,24 @@ describe("job costing change order routes", () => {
   afterEach(() => {
     console.error = originalConsoleError;
     __setChangeOrderRouteTestDeps();
+  });
+
+  test("Admin View list GETs return persisted empty state without customer auth or detection", async () => {
+    let detectCalls = 0;
+    const admin = createAdminViewApp(mockSupabase, async () => {
+      detectCalls += 1;
+      return { created: [] };
+    });
+
+    const changeOrders = await request(admin.app, "/api/job-costing/change-orders?limit=25");
+    const potential = await request(admin.app, "/api/job-costing/potential-change-orders?limit=25");
+
+    assert.equal(changeOrders.status, 200);
+    assert.deepEqual(changeOrders.body.change_orders, []);
+    assert.equal(potential.status, 200);
+    assert.deepEqual(potential.body.potential_change_orders, []);
+    assert.equal(detectCalls, 0);
+    assert.equal(admin.getAuthCalled(), false);
   });
 
   test("creates a change order, auto-prices when proposed price is blank, and writes activity", async () => {
