@@ -1,6 +1,7 @@
 import React, { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import useBillingStatus from "../../hooks/useBillingStatus";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
 
 const DEFAULT_MESSAGE = "Activate Bizzi to enable automated workflows.";
 
@@ -45,6 +46,7 @@ export default function BillingGate({
   hideBanner = false,
   children,
 }) {
+  const adminView = useAdminView();
   const shouldFetch = !statusProp;
   const { status: fetchedStatus, accessLevel } = useBillingStatus(
     shouldFetch ? businessId : null,
@@ -63,6 +65,7 @@ export default function BillingGate({
   const navigate = useNavigate();
 
   const goToBilling = () => {
+    if (adminView.active) return;
     try {
       navigate(ctaHref);
     } catch (e) {
@@ -83,7 +86,9 @@ export default function BillingGate({
             <button
               type="button"
               onClick={goToBilling}
+              disabled={adminView.active}
               className="rounded-full border border-amber-300/60 bg-amber-400/20 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-400/30"
+              title={adminView.active ? "Billing changes are unavailable in read-only Admin View." : undefined}
             >
               {ctaLabel}
             </button>
@@ -105,7 +110,9 @@ export default function BillingGate({
             <button
               type="button"
               onClick={goToBilling}
+              disabled={adminView.active}
               className="rounded-full border border-amber-300/60 bg-amber-400/20 px-3 py-1.5 text-xs font-semibold text-amber-100 hover:bg-amber-400/30"
+              title={adminView.active ? "Billing changes are unavailable in read-only Admin View." : undefined}
             >
               {ctaLabel}
             </button>
@@ -130,7 +137,9 @@ export default function BillingGate({
             <button
               type="button"
               onClick={goToBilling}
+              disabled={adminView.active}
               className="rounded-full border border-emerald-300/60 bg-emerald-400/20 px-3 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/30"
+              title={adminView.active ? "Billing changes are unavailable in read-only Admin View." : undefined}
             >
               {ctaLabel}
             </button>

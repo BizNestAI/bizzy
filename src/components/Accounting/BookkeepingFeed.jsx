@@ -602,7 +602,15 @@ export default function BookkeepingFeed({
                   return ccPairRole === "credit_card" ? type === "bank" : type === "creditcard";
                 })
               : accounts;
-            const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (hasCcPair ? ccTargetId : null) ?? txn.accountId ?? "";
+            const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (hasCcPair ? ccTargetId : null) ?? (readOnly ? "" : txn.accountId) ?? "";
+            const readOnlyGlLabel =
+              txn.glAccountName ||
+              txn.final_qbo_account_name ||
+              txn.finalQboAccountName ||
+              txn.suggestedAccountName ||
+              txn.suggested_qbo_account_name ||
+              txn.currentAccount ||
+              "Uncategorized";
             const canRejectCcPayment =
               !readOnly &&
               !isPosted &&
@@ -724,7 +732,7 @@ export default function BookkeepingFeed({
                     onChange={(id) => handleAccountSelect(txn.id, id)}
                   />
                 ) : (
-                  <span className="text-slate-400 text-[11px] truncate">{txn.currentAccount}</span>
+                  <span className="text-slate-400 text-[11px] truncate">{readOnlyGlLabel}</span>
                 )}
                 {txn.status === "auto_approved" ? (
                   <span className="inline-flex w-fit items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-wide text-emerald-200/90">

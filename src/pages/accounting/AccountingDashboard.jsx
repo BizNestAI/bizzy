@@ -1,6 +1,7 @@
 // File: /src/pages/Accounting/AccountingDashboard.jsx
 import React, { lazy, Suspense, useMemo, useEffect, useState, useRef, useCallback } from 'react';
 import { useBusiness } from '../../context/BusinessContext';
+import { useAdminView } from '../../context/AdminViewContext.jsx';
 import useModuleTheme from '../../hooks/useModuleTheme';
 import { useNavigate } from 'react-router-dom';
 import AgendaWidget from '../Calendar/AgendaWidget.jsx';
@@ -104,6 +105,7 @@ const TEMP_DEBUG_MOCK_HERO = {
 
 export default function AccountingDashboard() {
   const { currentBusiness, loading } = useBusiness();
+  const adminView = useAdminView();
   const businessId =
     currentBusiness?.id ||
     (typeof localStorage !== "undefined" ? localStorage.getItem("currentBusinessId") : "") ||
@@ -144,7 +146,10 @@ export default function AccountingDashboard() {
   const bgColor   = theme?.bgClass   || 'bg-app';
   const textColor = theme?.textClass || 'text-primary';
 
-  const userId = useMemo(() => localStorage.getItem('user_id') || '', []);
+  const userId = useMemo(
+    () => (adminView.active ? "admin_view" : (localStorage.getItem('user_id') || '')),
+    [adminView.active]
+  );
   const usingDemo = useMemo(() => shouldUseDemoData(currentBusiness), [currentBusiness]);
   const integrationManager = useIntegrationManager({ businessId });
   const qbState = integrationManager?.getStatus?.('quickbooks') || {};
@@ -206,7 +211,7 @@ export default function AccountingDashboard() {
   useEffect(() => {
     let alive = true;
     async function checkMetrics() {
-      if (!businessId || !userId || !year || !month) {
+      if (!businessId || (!userId && !adminView.active) || !year || !month) {
         if (alive) setHasMetrics(false);
         return;
       }
@@ -227,13 +232,13 @@ export default function AccountingDashboard() {
     }
     checkMetrics();
     return () => { alive = false; };
-  }, [businessId, userId, year, month]);
+  }, [adminView.active, businessId, userId, year, month]);
 
   // Poll backfill job status when connected (lightweight)
   useEffect(() => {
     let alive = true;
     async function loadBackfill() {
-      if (!businessId || qbStatus !== "connected") return;
+      if (!businessId || adminView.active || qbStatus !== "connected") return;
       try {
         const res = await safeFetch(`/api/qbo/backfill/status?business_id=${encodeURIComponent(businessId)}`);
         if (!alive) return;
@@ -248,13 +253,13 @@ export default function AccountingDashboard() {
     loadBackfill();
     const id = setInterval(loadBackfill, 5000);
     return () => { alive = false; clearInterval(id); };
-  }, [businessId, qbStatus]);
+  }, [adminView.active, businessId, qbStatus]);
 
   if (loading) return null;
   if (!businessId) return <div className="text-rose-400 p-4">Select a business to view financials.</div>;
   const qbConnected = qbStatus === 'connected';
   const backfillRunning = qbConnected && backfillStatus?.status === "running";
-  const needsSync = qbConnected && !usingDemo && !backfillRunning && !hasMetrics;
+  const needsSync = qbConnected && !usingDemo && !adminView.active && !backfillRunning && !hasMetrics;
   const canView = usingDemo || qbConnected;
   if (!canView) {
     return <LiveModePlaceholder title="Connect QuickBooks to view Financial Hub insights" />;
@@ -264,6 +269,10 @@ export default function AccountingDashboard() {
 
   const handleRefresh = async () => {
     if (!businessId) return;
+    if (adminView.active) {
+      setBackfillWarning("Live refresh is unavailable in read-only Admin View.");
+      return;
+    }
     setRefreshing(true);
     try {
       const qs = `business_id=${encodeURIComponent(businessId)}&data_mode=live&live_only=true`;
@@ -286,6 +295,10 @@ export default function AccountingDashboard() {
 
   const handleSyncNow = async () => {
     if (!businessId) return;
+    if (adminView.active) {
+      setSyncError("Sync is unavailable in read-only Admin View.");
+      return;
+    }
     setSyncing(true);
     setSyncError("");
     try {
@@ -397,11 +410,11 @@ export default function AccountingDashboard() {
                 <button
                   type="button"
                   onClick={handleRefresh}
-                  disabled={refreshing}
+                  disabled={refreshing || adminView.active}
                   className="inline-flex items-center justify-center rounded-full border w-8 h-8 text-white/85 transition disabled:opacity-60 hover:bg-white/14 hover:border-white/50 focus:outline-none focus:ring-2 focus:ring-white/14"
                   style={{ borderColor: "rgba(255,255,255,0.22)", background: "rgba(18,18,20,0.86)" }}
-                  aria-label="Refresh live data"
-                  title="Refresh"
+                  aria-label={adminView.active ? "Live refresh unavailable in Admin View" : "Refresh live data"}
+                  title={adminView.active ? "Live refresh is unavailable in read-only Admin View." : "Refresh"}
                 >
                   <RefreshCcw className={refreshing ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
                 </button>

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../services/supabaseClient";
 import { apiUrl, safeFetch } from "../utils/safeFetch";
 import { useBusiness } from "../context/BusinessContext";
+import { useAdminView } from "../context/AdminViewContext";
 
 const INITIAL_STATE = {
   loading: true,
@@ -97,19 +98,34 @@ async function markOnboardingCompletedOnce(businessId) {
   return { error: null };
 }
 
-async function fetchOnboardingStatus(businessId) {
+async function fetchOnboardingStatus(businessId, options = {}) {
+  const adminView = Boolean(options.adminView);
+  const contextBusiness = options.contextBusiness || null;
   if (!businessId) {
     return { ...INITIAL_STATE, loading: false };
   }
 
   // Business profile fallbacks: context/local first, then Supabase (best effort)
-  let profileRes = null;
+  let profileRes = contextBusiness?.id
+    ? {
+        data: {
+          id: contextBusiness.id,
+          business_name: contextBusiness.business_name || contextBusiness.businessName || contextBusiness.name || "",
+          industry: contextBusiness.industry || "",
+          state: contextBusiness.state || "",
+          services_offered: contextBusiness.services_offered || contextBusiness.servicesOffered || "",
+        },
+        error: null,
+      }
+    : null;
   try {
-    profileRes = await supabase
-      .from("business_profiles")
-      .select("id,business_name,industry,state,services_offered")
-      .eq("id", businessId)
-      .maybeSingle();
+    if (!adminView && !profileRes) {
+      profileRes = await supabase
+        .from("business_profiles")
+        .select("id,business_name,industry,state,services_offered")
+        .eq("id", businessId)
+        .maybeSingle();
+    }
   } catch (err) {
     profileRes = { data: null, error: err };
   }
@@ -119,7 +135,7 @@ async function fetchOnboardingStatus(businessId) {
   try {
     const res = await safeFetch(apiUrl(`/auth/status?business_id=${businessId}`), { method: "GET" });
     qbConnected = Boolean(res?.connected);
-    if (typeof window !== "undefined") {
+    if (!adminView && typeof window !== "undefined") {
       window.localStorage.setItem(LOCAL_KEYS.qbConnected, qbConnected ? "true" : "false");
     }
   } catch (err) {
@@ -127,7 +143,7 @@ async function fetchOnboardingStatus(businessId) {
       console.warn("[useOnboardingStatus] auth/status fetch failed", err);
     }
     // Local-only continuity fallback. Do not query server-only QBO credential tables from the browser.
-    qbConnected = qbConnected || Boolean(readLocalFlag(LOCAL_KEYS.qbConnected));
+    qbConnected = qbConnected || (!adminView && Boolean(readLocalFlag(LOCAL_KEYS.qbConnected)));
   }
 
   // Plaid connection: prefer authenticated status API (avoids RLS issues on client)
@@ -140,7 +156,7 @@ async function fetchOnboardingStatus(businessId) {
     const instCount = res?.institutions_count || 0;
     const acctCount = res?.accounts_count || 0;
     plaidConnected = instCount > 0 || acctCount > 0;
-    if (typeof window !== "undefined") {
+    if (!adminView && typeof window !== "undefined") {
       window.localStorage.setItem(LOCAL_KEYS.plaidConnected, plaidConnected ? "true" : "false");
     }
   } catch (err) {
@@ -148,7 +164,7 @@ async function fetchOnboardingStatus(businessId) {
       console.warn("[useOnboardingStatus] plaid status fetch failed", err);
     }
     // Local-only continuity fallback. Do not query server-only Plaid credential tables from the browser.
-    plaidConnected = plaidConnected || Boolean(readLocalFlag(LOCAL_KEYS.plaidConnected));
+    plaidConnected = plaidConnected || (!adminView && Boolean(readLocalFlag(LOCAL_KEYS.plaidConnected)));
   }
 
   const profile = profileRes?.data || null;
@@ -174,7 +190,7 @@ async function fetchOnboardingStatus(businessId) {
 
   const onboardingComplete = businessProfileComplete && qbConnected && plaidConnected && hasViewedIntegrationsPage;
 
-  if (onboardingComplete && !onboardingCompletedOnce) {
+  if (!adminView && onboardingComplete && !onboardingCompletedOnce) {
     const res = await markOnboardingCompletedOnce(businessId);
     if (res?.error && import.meta.env.DEV) {
       console.warn("[useOnboardingStatus] failed to mark onboarding_completed_once", res.error);
@@ -209,10 +225,13 @@ async function fetchOnboardingStatus(businessId) {
 
 export default function useOnboardingStatus(options = {}) {
   const businessCtx = useBusiness() || {};
+  const adminView = useAdminView();
   const contextBusinessId =
-    businessCtx?.currentBusiness?.id || businessCtx?.businessId || null;
+    adminView?.businessId || businessCtx?.currentBusiness?.id || businessCtx?.businessId || null;
   const explicitBusinessId = options?.businessId || null;
-  const businessId = explicitBusinessId || contextBusinessId || getStoredBusinessId();
+  const businessId = adminView?.active
+    ? adminView.businessId
+    : (explicitBusinessId || contextBusinessId || getStoredBusinessId());
 
   const [state, setState] = useState(INITIAL_STATE);
   const mountedRef = useRef(true);
@@ -235,7 +254,10 @@ export default function useOnboardingStatus(options = {}) {
       setState((prev) => ({ ...prev, loading: true, error: null }));
     }
     try {
-      const next = await fetchOnboardingStatus(businessId);
+      const next = await fetchOnboardingStatus(businessId, {
+        adminView: adminView?.active === true,
+        contextBusiness: businessCtx?.currentBusiness || null,
+      });
       if (mountedRef.current) {
         setState(next);
       }
@@ -244,7 +266,7 @@ export default function useOnboardingStatus(options = {}) {
         setState((prev) => ({ ...prev, loading: false, error: err }));
       }
     }
-  }, [businessId]);
+  }, [businessId, adminView?.active, businessCtx?.currentBusiness]);
 
   useEffect(() => {
     refresh();

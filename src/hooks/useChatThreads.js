@@ -1,6 +1,7 @@
 // File: /src/hooks/useChatThreads.js
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { apiUrl, safeFetch } from '../utils/safeFetch';
+import { useAdminView } from '../context/AdminViewContext.jsx';
 
 const DEBOUNCE_MS        = 300;
 const INITIAL_PAGE_SIZE  = 20;   // first page
@@ -8,6 +9,8 @@ const PAGE_SIZE          = 10;   // subsequent pages
 const SOFT_CAP           = 100;  // stop after this many rows (or when API says no more)
 
 export default function useChatThreads(businessId) {
+  const adminView = useAdminView();
+  const readOnly = adminView.active && adminView.readOnly;
   const [threads, setThreads] = useState([]);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState('');
@@ -135,6 +138,7 @@ export default function useChatThreads(businessId) {
   }, [fetchList, loading, hasMore, offset]);
 
   const patch = useCallback(async (id, body) => {
+    if (readOnly) return;
     if (!id) return;
     const prev = threads;
 
@@ -165,7 +169,7 @@ export default function useChatThreads(businessId) {
     } catch {
       setThreads(prev);
     }
-  }, [businessId, threads]);
+  }, [businessId, readOnly, threads]);
 
   return {
     threads,

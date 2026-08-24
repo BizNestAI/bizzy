@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import useGmailConnect from "./email/useGmailConnect";
 import { apiUrl, safeFetch } from "../utils/safeFetch";
 import { getDemoMode, setDemoMode } from "../services/demo/demoClient.js";
+import { useAdminView } from "../context/AdminViewContext.jsx";
 
 const STORAGE_KEY_PREFIX = "bizzy.integrations";
 const STORAGE_EVENT = "bizzy:integrations:update";
@@ -204,7 +205,9 @@ async function openPlaidLink(linkToken, businessId) {
 }
 
 export default function useIntegrationManager(options = {}) {
-  const resolvedBusinessId = resolveBusinessId(options.businessId);
+  const adminView = useAdminView();
+  const resolvedBusinessId = adminView.active && adminView.businessId ? adminView.businessId : resolveBusinessId(options.businessId);
+  const readOnly = adminView.active && adminView.readOnly;
   const [state, setState] = useState(() => readState(resolvedBusinessId));
   const { connect: connectGmail = noop } = useGmailConnect();
   const qbStatus = state?.quickbooks?.status || DEFAULT_STATE.quickbooks.status;
@@ -237,11 +240,13 @@ export default function useIntegrationManager(options = {}) {
           ...prev,
           [provider]: { ...prev[provider], ...patch },
         };
-        writeState(resolvedBusinessId, next);
+        if (!readOnly) {
+          writeState(resolvedBusinessId, next);
+        }
         return next;
       });
     },
-    [resolvedBusinessId]
+    [readOnly, resolvedBusinessId]
   );
 
   // Unified source of truth: fetch /auth/status for QuickBooks
@@ -282,7 +287,7 @@ export default function useIntegrationManager(options = {}) {
             /* ignore */
           }
         }
-        if (status === STATUS.CONNECTED) {
+        if (!readOnly && status === STATUS.CONNECTED) {
           try {
             if (typeof window !== "undefined") {
               window.localStorage.setItem("bizzy:qb_connected", "true");
@@ -293,7 +298,7 @@ export default function useIntegrationManager(options = {}) {
           } catch {
             /* ignore */
           }
-        } else if (status === STATUS.DISCONNECTED) {
+        } else if (!readOnly && status === STATUS.DISCONNECTED) {
           try {
             if (typeof window !== "undefined") {
               window.localStorage.removeItem("bizzy:qb_connected");
@@ -308,11 +313,11 @@ export default function useIntegrationManager(options = {}) {
     loadQbStatus();
     const id = setInterval(loadQbStatus, 30000);
     return () => { cancelled = true; clearInterval(id); };
-  }, [resolvedBusinessId, updateProvider]);
+  }, [readOnly, resolvedBusinessId, updateProvider]);
 
   // Parse OAuth callback query params (e.g., qb=connected) and mark status
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || readOnly) return;
     const params = new URLSearchParams(window.location.search || "");
     const qbFlag = (params.get("qb") || "").toLowerCase();
     const qbError = (params.get("qb_error") || "").toLowerCase();
@@ -371,21 +376,24 @@ export default function useIntegrationManager(options = {}) {
         window.history.replaceState({}, "", next);
       }
     }
-  }, [resolvedBusinessId, updateProvider]);
+  }, [readOnly, resolvedBusinessId, updateProvider]);
 
   // If QuickBooks is connected (persisted in local storage), force live unless user chose demo
   useEffect(() => {
-    if (qbStatus === STATUS.CONNECTED) {
+    if (!readOnly && qbStatus === STATUS.CONNECTED) {
       try {
         if (getDemoMode() !== "demo") setDemoMode("live");
       } catch {
         /* ignore */
       }
     }
-  }, [qbStatus]);
+  }, [qbStatus, readOnly]);
 
   const runAction = useCallback(
     async (provider, options = {}) => {
+      if (readOnly) {
+        throw new Error("admin_view_read_only");
+      }
       switch (provider) {
         case "quickbooks": {
           const urlObj = new URL(apiUrl("/auth/quickbooks"));
@@ -496,7 +504,7 @@ export default function useIntegrationManager(options = {}) {
           throw new Error(`Unsupported provider: ${provider}`);
       }
     },
-    [connectGmail, resolvedBusinessId]
+    [connectGmail, readOnly, resolvedBusinessId]
   );
 
   const connect = useCallback(
@@ -535,6 +543,7 @@ export default function useIntegrationManager(options = {}) {
   const disconnect = useCallback(
     async (provider) => {
       if (!INTEGRATION_META[provider]) return;
+      if (readOnly) return;
       try {
         if (provider === "quickbooks") {
           if (!resolvedBusinessId) throw new Error("missing_business_id");
@@ -572,7 +581,7 @@ export default function useIntegrationManager(options = {}) {
         });
       }
     },
-    [resolvedBusinessId, updateProvider]
+    [readOnly, resolvedBusinessId, updateProvider]
   );
 
   const markConnected = useCallback(
@@ -597,6 +606,7 @@ export default function useIntegrationManager(options = {}) {
   const refresh = useCallback(
     async (provider) => {
       if (!INTEGRATION_META[provider]) return;
+      if (readOnly) return;
       if (provider === "quickbooks") return;
       if (provider === "plaid") {
         if (!resolvedBusinessId) return;
@@ -647,7 +657,7 @@ export default function useIntegrationManager(options = {}) {
         }
       }
     },
-    [resolvedBusinessId, updateProvider]
+    [readOnly, resolvedBusinessId, updateProvider]
   );
 
   const isConnecting = useCallback(
@@ -677,5 +687,6 @@ export default function useIntegrationManager(options = {}) {
     markConnected,
     markStatus,
     refresh,
+    readOnly,
   };
 }

@@ -11,6 +11,7 @@ import RecordTaxPaymentModal from "../../components/Tax/Planning/RecordTaxPaymen
 import { resolveTaxSetupAction } from "../../components/Tax/Setup/taxSetupRouting.js";
 import { buildTaxDashboardViewModel } from "../../components/Tax/taxDashboardViewModel.js";
 import { useBusinessContext } from "../../context/BusinessContext";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
 import { useTaxOverview } from "../../hooks/tax/useTaxOverview.js";
 import { useTaxDeductions } from "../../hooks/tax/useTaxDeductions.js";
 import { useTaxPayments } from "../../hooks/tax/useTaxPayments.js";
@@ -23,7 +24,9 @@ const CURRENT_YEAR = new Date().getFullYear();
 
 export default function TaxDashboard({ onAskBizzy }) {
   const { currentBusiness } = (useBusinessContext?.() || {});
-  const businessId = currentBusiness?.id || getStoredBusinessId();
+  const adminView = useAdminView();
+  const readOnly = adminView.active && adminView.readOnly;
+  const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || getStoredBusinessId());
   const navigate = useNavigate();
   const taxYear = CURRENT_YEAR;
   const [setupWorkflow, setSetupWorkflow] = useState({ open: false, initialStepId: "business_structure" });
@@ -68,6 +71,10 @@ export default function TaxDashboard({ onAskBizzy }) {
   }), [model, tax.isDemo]);
 
   const handleAction = (action) => {
+    if (readOnly) {
+      setSetupNotice("Tax setup changes are unavailable in read-only Admin View.");
+      return;
+    }
     const resolved = resolveTaxSetupAction(action, model);
     if (resolved.type === "workflow") {
       setSetupWorkflow({ open: true, initialStepId: resolved.initialStepId || "business_structure" });
@@ -98,6 +105,10 @@ export default function TaxDashboard({ onAskBizzy }) {
   };
 
   const savePayment = async (payment) => {
+    if (readOnly) {
+      setSetupNotice("Tax payment changes are unavailable in read-only Admin View.");
+      return;
+    }
     await payments.createPayment(payment);
     setPaymentModalOpen(false);
     await refreshTaxPaymentState();
@@ -113,12 +124,24 @@ export default function TaxDashboard({ onAskBizzy }) {
 
   const headerControls = (
     <div className="flex flex-wrap items-center gap-2">
-      <TaxProfileButton model={model} profileOpen={profileOpen} onOpen={() => setProfileOpen(true)} />
+      <TaxProfileButton
+        model={model}
+        profileOpen={profileOpen}
+        onOpen={() => {
+          if (readOnly) setSetupNotice("Tax profile editing is unavailable in read-only Admin View.");
+          else setProfileOpen(true);
+        }}
+        disabled={readOnly}
+      />
       <NextDeadlineText deadline={model.primaryMetrics.nextDeadline} fallbackDate={model.primaryMetrics.nextPaymentDate} generatedAt={model.header.generatedAt} status={model.status} onViewCalculation={() => viewCalculation("reserve_bridge")} />
     </div>
   );
 
   const voidPayment = async (row) => {
+    if (readOnly) {
+      setSetupNotice("Tax payment changes are unavailable in read-only Admin View.");
+      return;
+    }
     if (!window.confirm("Void this tax payment record? The history entry is not hard-deleted.")) return;
     await payments.voidPayment(row.id, "Voided from Tax overview payment modal.");
     await refreshTaxPaymentState();
@@ -166,7 +189,10 @@ export default function TaxDashboard({ onAskBizzy }) {
               loading={tax.refreshing}
               error={tax.error && hasPreviousData ? tax.error.message : ""}
               source={tax.isDemo ? "demo" : "live"}
-              onRecordPayment={() => setPaymentModalOpen(true)}
+              onRecordPayment={() => {
+                if (readOnly) setSetupNotice("Tax payment changes are unavailable in read-only Admin View.");
+                else setPaymentModalOpen(true);
+              }}
               onViewCalculation={viewCalculation}
               headerActions={headerControls}
             />
@@ -176,12 +202,13 @@ export default function TaxDashboard({ onAskBizzy }) {
               <TaxDashboardDeductions
                 businessId={businessId}
                 year={taxYear}
+                readOnly={readOnly}
               />
             </section>
           </>
         )}
       </main>
-      <TaxSetupWorkflow
+      {!readOnly ? <TaxSetupWorkflow
         open={setupWorkflow.open}
         onClose={() => setSetupWorkflow((current) => ({ ...current, open: false }))}
         businessId={businessId}
@@ -191,16 +218,16 @@ export default function TaxDashboard({ onAskBizzy }) {
         initialStepId={setupWorkflow.initialStepId}
         onSaved={tax.refetch}
         onSaveAndCalculate={tax.refreshCalculation}
-      />
-      <TaxProfileModal
+      /> : null}
+      {!readOnly ? <TaxProfileModal
         open={profileOpen}
         businessId={businessId}
         year={taxYear}
         overviewProfile={tax.profile}
         onClose={() => setProfileOpen(false)}
         onSaved={tax.refetch}
-      />
-      <RecordTaxPaymentModal
+      /> : null}
+      {!readOnly ? <RecordTaxPaymentModal
         open={paymentModalOpen}
         year={taxYear}
         saving={payments.saving}
@@ -210,12 +237,12 @@ export default function TaxDashboard({ onAskBizzy }) {
         onClose={() => setPaymentModalOpen(false)}
         onSave={savePayment}
         onVoid={voidPayment}
-      />
+      /> : null}
     </div>
   );
 }
 
-function TaxProfileButton({ model, profileOpen = false, onOpen }) {
+function TaxProfileButton({ model, profileOpen = false, onOpen, disabled = false }) {
   const [showTooltip, setShowTooltip] = useState(false);
   const setup = model?.status?.setupState || {};
   const needsAttention =
@@ -239,7 +266,9 @@ function TaxProfileButton({ model, profileOpen = false, onOpen }) {
       <button
         type="button"
         onClick={openProfile}
-        className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/12 bg-white/[0.055] px-3 py-1.5 text-left text-[12px] font-semibold text-white/86 shadow-[0_12px_32px_rgba(0,0,0,0.24)] transition hover:border-emerald-200/28 hover:bg-emerald-300/[0.11] hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
+        disabled={disabled}
+        title={disabled ? "Tax profile editing is unavailable in read-only Admin View." : undefined}
+        className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/12 bg-white/[0.055] px-3 py-1.5 text-left text-[12px] font-semibold text-white/86 shadow-[0_12px_32px_rgba(0,0,0,0.24)] transition hover:border-emerald-200/28 hover:bg-emerald-300/[0.11] hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/35 disabled:cursor-not-allowed disabled:opacity-55"
       >
         <Settings2 className="h-4 w-4 shrink-0 text-white/72" />
         <span>Edit Tax Profile</span>
@@ -416,7 +445,7 @@ function resolveOverviewStatus(model, isDemo) {
   };
 }
 
-function TaxDashboardDeductions({ businessId, year }) {
+function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const [selectedCell, setSelectedCell] = useState(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 250, offset: 0 } });
   const matrix = useMemo(
@@ -537,12 +566,13 @@ function TaxDashboardDeductions({ businessId, year }) {
         selection={selectedCell}
         onClose={() => setSelectedCell(null)}
         onAssignTaxClassification={deductions.assignTaxClassification}
+        readOnly={readOnly}
       />
     </div>
   );
 }
 
-function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassification }) {
+function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassification, readOnly = false }) {
   const [assignmentByTxn, setAssignmentByTxn] = useState({});
   const [savingChanges, setSavingChanges] = useState(false);
   const [assignmentError, setAssignmentError] = useState("");
@@ -567,6 +597,10 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
   const pendingCount = pendingChanges.length;
 
   const stageAssignment = (row, nextTaxCategory) => {
+    if (readOnly) {
+      setAssignmentError("Tax classification changes are unavailable in read-only Admin View.");
+      return;
+    }
     const transactionId = row.id || row.raw?.transactionId;
     if (!transactionId) return;
     setAssignmentError("");
@@ -583,6 +617,10 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
   };
 
   const saveAssignments = async () => {
+    if (readOnly) {
+      setAssignmentError("Tax classification changes are unavailable in read-only Admin View.");
+      return;
+    }
     if (!pendingChanges.length || typeof onAssignTaxClassification !== "function") return;
     setSavingChanges(true);
     setAssignmentError("");
@@ -689,7 +727,7 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
                             <TaxCategorySelect
                               value={assignmentByTxn[row.id] ?? taxCategorySelectValue(row)}
                               currentLabel={row.taxCategoryLabel}
-                              disabled={savingChanges}
+                              disabled={readOnly || savingChanges}
                               tone="review"
                               onChange={(value) => stageAssignment(row, value)}
                             />
@@ -699,7 +737,7 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
                             <TaxCategorySelect
                               value={assignmentByTxn[row.id] ?? taxCategorySelectValue(row)}
                               currentLabel={row.taxCategoryLabel}
-                              disabled={savingChanges}
+                              disabled={readOnly || savingChanges}
                               onChange={(value) => stageAssignment(row, value)}
                             />
                           </div>
@@ -729,7 +767,7 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
                   setAssignmentByTxn({});
                   setAssignmentError("");
                 }}
-                disabled={savingChanges}
+                disabled={readOnly || savingChanges}
                 className="rounded-full border border-white/10 bg-black/18 px-3 py-1.5 text-xs font-semibold text-white/64 transition hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-55"
               >
                 Cancel
@@ -737,7 +775,7 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
               <button
                 type="button"
                 onClick={saveAssignments}
-                disabled={savingChanges}
+                disabled={readOnly || savingChanges}
                 className="rounded-full bg-emerald-300 px-4 py-1.5 text-xs font-semibold text-[#06100c] transition hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-55"
               >
                 {savingChanges ? "Saving..." : "Save Changes"}

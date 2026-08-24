@@ -12,6 +12,7 @@ import React, {
 import { useAuth } from './AuthContext';
 import { useBizzyChat } from '../hooks/useBizzyChat';
 import { useBusiness } from './BusinessContext';
+import { useAdminView } from './AdminViewContext.jsx';
 import { apiUrl, safeFetch } from '../utils/safeFetch';
 
 const BizzyChatContext = createContext(null);
@@ -20,6 +21,7 @@ export const useBizzyChatContext = () => useContext(BizzyChatContext);
 export const BizzyChatProvider = ({ children }) => {
   const { user } = useAuth();
   const { currentBusiness } = useBusiness();
+  const adminView = useAdminView();
 
   // ---------------- Core chat hook (your existing data flow) ----------------
   const {
@@ -34,7 +36,7 @@ export const BizzyChatProvider = ({ children }) => {
     usageCount,
     error,
     hydrate,
-  } = useBizzyChat(user?.id);
+  } = useBizzyChat(adminView.active ? null : user?.id);
 
   // ---------------- Biz / thread state ----------------
   const [businessId, setBusinessId] = useState(null);
@@ -42,11 +44,21 @@ export const BizzyChatProvider = ({ children }) => {
   const [chatGateNotice, setChatGateNotice] = useState(null);
 
   useEffect(() => {
-    if (currentBusiness?.id) setBusinessId(currentBusiness.id);
+    if (adminView.active && adminView.businessId) setBusinessId(adminView.businessId);
+    else if (currentBusiness?.id) setBusinessId(currentBusiness.id);
     else setBusinessId(localStorage.getItem('currentBusinessId') || null);
-  }, [currentBusiness?.id]);
+  }, [adminView.active, adminView.businessId, currentBusiness?.id]);
 
   const checkChatAccess = useCallback(async () => {
+    if (adminView.active) {
+      const notice = {
+        blocked: true,
+        title: 'Chat disabled in Admin View',
+        message: 'Customer chat is disabled while viewing as an administrator.',
+      };
+      setChatGateNotice(notice);
+      return { allowed: false, error: 'admin_view_read_only', ...notice };
+    }
     const resolvedBusinessId =
       businessId ||
       currentBusiness?.id ||
@@ -98,7 +110,7 @@ export const BizzyChatProvider = ({ children }) => {
     }
 
     return access;
-  }, [businessId, currentBusiness?.id]);
+  }, [adminView.active, businessId, currentBusiness?.id]);
 
   const dismissChatGateNotice = useCallback(() => {
     setChatGateNotice(null);
@@ -193,6 +205,14 @@ export const BizzyChatProvider = ({ children }) => {
   // ---------------- Send message / intent ----------------
   const sendMessage = async (text, options = {}) => {
     if (!text || (typeof text === 'string' && !text.trim())) return;
+    if (adminView.active) {
+      setChatGateNotice({
+        blocked: true,
+        title: 'Chat disabled in Admin View',
+        message: 'Customer chat is disabled while viewing as an administrator.',
+      });
+      return;
+    }
     const { newThread = false, ...messageOptions } = options || {};
 
     // keep legacy overlay wallet open-ish (not minimized) for consistency
@@ -221,6 +241,7 @@ export const BizzyChatProvider = ({ children }) => {
   };
 
   const chooseIntent = async (forcedIntent, depth = 'standard') => {
+    if (adminView.active) return;
     setIsChatOpen(true);
     setIsChatMinimized(false);
     return await hookChooseIntent(forcedIntent, depth, threadId);
@@ -302,6 +323,14 @@ export const BizzyChatProvider = ({ children }) => {
     newThread = false,
   }) => {
     if (!text) return;
+    if (adminView.active) {
+      setChatGateNotice({
+        blocked: true,
+        title: 'Chat disabled in Admin View',
+        message: 'Customer chat is disabled while viewing as an administrator.',
+      });
+      return;
+    }
 
     setIsChatOpen(true);
     setIsChatMinimized(false);
@@ -341,6 +370,7 @@ export const BizzyChatProvider = ({ children }) => {
       suggestedActions,
       clarify,
       chatGateNotice,
+      chatReadOnly: adminView.active && adminView.readOnly,
 
       // thread
       threadId,
@@ -385,6 +415,8 @@ export const BizzyChatProvider = ({ children }) => {
       suppressedUserTextRef,
     }),
     [
+      adminView.active,
+      adminView.readOnly,
       messages, isLoading, isGenerating, isFetchingThread, usageCount, error,
       followUpPrompt, suggestedActions, clarify, chatGateNotice,
       threadId, threadsRefreshKey,

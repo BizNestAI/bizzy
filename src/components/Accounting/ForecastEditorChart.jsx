@@ -57,7 +57,7 @@ const formatNumericMonthLabel = (value) => {
   return text;
 };
 
-export default function ForecastEditorChart({ userId, businessId, months = 12, useDemoData = false, controls = null }) {
+export default function ForecastEditorChart({ userId, businessId, months = 12, useDemoData = false, controls = null, readOnly = false }) {
   const gradientId = useId().replace(/:/g, '');
   const [rows, setRows] = useState([]);
   const [draft, setDraft] = useState([]);
@@ -232,7 +232,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
       setEdited(new Set());
       return;
     }
-    if (!hasEdits || !userId || !businessId) return;
+    if (readOnly || !hasEdits || !userId || !businessId) return;
     setSaving(true);
     setError('');
     try {
@@ -412,20 +412,20 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
       <div className="mt-6 overflow-hidden rounded-2xl bg-[#080d0b]/84 shadow-[0_18px_44px_rgba(0,0,0,0.28)] ring-1 ring-white/[0.04]">
         <div className="flex flex-col gap-3 bg-white/[0.025] px-4 py-3 text-xs uppercase tracking-wide text-white/60 md:flex-row md:items-center md:justify-between md:gap-4">
           <div className="flex items-center gap-3">
-            <div className="font-semibold tracking-[0.22em] text-white/72">Editable table</div>
+            <div className="font-semibold tracking-[0.22em] text-white/72">{readOnly ? "Read-only table" : "Editable table"}</div>
             <div className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[11px] uppercase text-white/50">As of {asOfLabel}</div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-[11px] normal-case text-white/70 md:justify-end">
             <div className="inline-flex items-center gap-2">
               <Info size={14} />
-              <span>Edits persist only after clicking</span>
+              <span>{readOnly ? "Forecast edits are unavailable in Admin View" : "Edits persist only after clicking"}</span>
               <Button
                 icon={saving ? Loader2 : Save}
                 spinning={saving}
                 size="sm"
                 label="Save all"
                 onClick={saveAll}
-                disabled={!hasEdits || saving || missingLiveBusiness}
+                disabled={readOnly || !hasEdits || saving || missingLiveBusiness}
                 variant="primary"
               />
               {hasEdits && (
@@ -441,7 +441,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button icon={Undo2} label="Revert" size="sm" onClick={revertChanges} disabled={!canRevert} />
+              <Button icon={Undo2} label="Revert" size="sm" onClick={revertChanges} disabled={readOnly || !canRevert} />
             </div>
           </div>
         </div>
@@ -468,10 +468,10 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
                   >
                     <Td className="whitespace-nowrap font-semibold text-white/86">{r.month_label || r.month}</Td>
                     <Td>
-                      <NumberInput value={r.revenue} onChange={(v) => handleCellChange(idx, 'revenue', v)} ariaLabel="Revenue" name={`forecast-revenue-${idx}`} />
+                      <NumberInput value={r.revenue} onChange={(v) => handleCellChange(idx, 'revenue', v)} ariaLabel="Revenue" name={`forecast-revenue-${idx}`} disabled={readOnly} />
                     </Td>
                     <Td>
-                      <NumberInput value={r.expenses} onChange={(v) => handleCellChange(idx, 'expenses', v)} ariaLabel="Expenses" name={`forecast-expenses-${idx}`} />
+                      <NumberInput value={r.expenses} onChange={(v) => handleCellChange(idx, 'expenses', v)} ariaLabel="Expenses" name={`forecast-expenses-${idx}`} disabled={readOnly} />
                     </Td>
                     <Td className="tabular-nums text-white/78">{currency(r.cash_in)}</Td>
                     <Td className="tabular-nums text-white/78">{currency(r.cash_out)}</Td>
@@ -566,8 +566,9 @@ function Td({ children, className = '' }) {
   return <td className={`px-4 py-3 align-middle ${className}`}>{children}</td>;
 }
 
-function NumberInput({ value, onChange, ariaLabel, name }) {
+function NumberInput({ value, onChange, ariaLabel, name, disabled = false }) {
   const handleKey = (e) => {
+    if (disabled) return;
     if (e.key === 'ArrowUp') onChange((+value || 0) + 100);
     if (e.key === 'ArrowDown') onChange(Math.max(0, (+value || 0) - 100));
   };
@@ -579,9 +580,13 @@ function NumberInput({ value, onChange, ariaLabel, name }) {
       name={name}
       value={value ?? 0}
       aria-label={ariaLabel}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(e) => {
+        if (!disabled) onChange(e.target.value);
+      }}
       onKeyDown={handleKey}
-      className="w-32 rounded-xl border border-white/12 bg-black/28 px-3 py-2 font-semibold tabular-nums text-white outline-none ring-emerald-500/30 transition-all hover:border-white/24 hover:bg-black/38 focus:border-emerald-300/45 focus:bg-black/50 focus:ring"
+      disabled={disabled}
+      readOnly={disabled}
+      className="w-32 rounded-xl border border-white/12 bg-black/28 px-3 py-2 font-semibold tabular-nums text-white outline-none ring-emerald-500/30 transition-all hover:border-white/24 hover:bg-black/38 focus:border-emerald-300/45 focus:bg-black/50 focus:ring disabled:cursor-not-allowed disabled:border-white/6 disabled:bg-black/16 disabled:text-white/55"
     />
   );
 }

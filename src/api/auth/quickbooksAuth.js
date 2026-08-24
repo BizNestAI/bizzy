@@ -17,7 +17,7 @@ import { backfillLast12Months } from "../../services/qboBackfillRunner.js";
 import { lastFullMonthParts } from "../../utils/monthKey.js";
 import { buildQuickBooksOAuthScopes } from "../../services/jobCosting/qboProjectsService.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
-import { requireBusinessAccess } from "../_shared/tenantAuth.js";
+import { requireAuthOrAdminView, requireBusinessAccess } from "../_shared/tenantAuth.js";
 import {
   cleanupExpiredQboOAuthStates,
   consumeQboOAuthState,
@@ -261,6 +261,7 @@ export async function saveQboTokens({
  * --------------------------------------------------------------------------- */
 
 const requireVerifiedBusiness = [requireAuth, requireBusinessAccess()];
+const requireVerifiedBusinessOrAdminView = [requireAuthOrAdminView, requireBusinessAccess()];
 
 // Step 1: Redirect to QuickBooks login
 router.get("/quickbooks", ...requireVerifiedBusiness, async (req, res) => {
@@ -594,7 +595,7 @@ router.post("/disconnect", ...requireVerifiedBusiness, async (req, res) => {
 });
 
 // Status: return minimal token info (for UI display)
-router.get("/status", ...requireVerifiedBusiness, async (req, res) => {
+router.get("/status", ...requireVerifiedBusinessOrAdminView, async (req, res) => {
   try {
     const business_id = req.business?.id || req.auth?.businessId || null;
     const envParam = qboEnvName;

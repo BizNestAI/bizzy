@@ -8,7 +8,7 @@ import {
 } from "./stripe.js";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
-import { requireBusinessAccess } from "../_shared/tenantAuth.js";
+import { isAdminViewRequest, requireAuthOrAdminView, requireBusinessAccess } from "../_shared/tenantAuth.js";
 import { claimStripeWebhookEventForProcessing } from "./stripeWebhookIdempotency.js";
 
 const APP_URL = process.env.APP_URL || process.env.APP_BASE_URL || "http://localhost:5173";
@@ -502,21 +502,17 @@ function mapSubStatus(status) {
 
 export const billingRouter = express.Router();
 const requireVerifiedBillingBusiness = [requireAuth, requireBusinessAccess()];
+const requireVerifiedBillingBusinessOrAdminView = [requireAuthOrAdminView, requireBusinessAccess()];
 
 // JSON for normal endpoints
 billingRouter.use(express.json());
 
 // Lightweight status endpoint
-billingRouter.get("/status", ...requireVerifiedBillingBusiness, async (req, res) => {
+billingRouter.get("/status", ...requireVerifiedBillingBusinessOrAdminView, async (req, res) => {
   const { business_id, user_id } = readIds(req);
   if (!business_id) return sendError(res, 400, "missing_business_id", "Business id is required.");
   if (!isUuid(business_id)) return sendError(res, 400, "invalid_ids", "Invalid business id.");
   try {
-    if (!user_id || !isUuid(user_id)) {
-      return sendError(res, 400, "invalid_ids", "Invalid user id.");
-    }
-    const owns = await assertBusinessOwnership(user_id, business_id);
-    if (!owns) return sendError(res, 403, "forbidden", "You do not own this business.");
     const { data: business, error: businessError } = await supabase
       .from("business_profiles")
       .select("id,user_id,business_name")
@@ -524,6 +520,14 @@ billingRouter.get("/status", ...requireVerifiedBillingBusiness, async (req, res)
       .maybeSingle();
     if (businessError || !business) {
       return sendError(res, 404, "business_not_found", "Business not found.");
+    }
+    const adminView = isAdminViewRequest(req);
+    if (!adminView) {
+      if (!user_id || !isUuid(user_id)) {
+        return sendError(res, 400, "invalid_ids", "Invalid user id.");
+      }
+      const owns = await assertBusinessOwnership(user_id, business_id);
+      if (!owns) return sendError(res, 403, "forbidden", "You do not own this business.");
     }
     const { data } = await supabase
       .from("business_billing")
@@ -546,10 +550,12 @@ billingRouter.get("/status", ...requireVerifiedBillingBusiness, async (req, res)
       updated_at: null,
     };
     const payload = { ...fallback, ...projectBillingRow(data) };
-    const customer = await resolveStripeCustomerForBusiness(business, data);
-    payload.stripe_customer_id = customer?.id || null;
+    if (!adminView) {
+      const customer = await resolveStripeCustomerForBusiness(business, data);
+      payload.stripe_customer_id = customer?.id || null;
+    }
 
-    if (payload.stripe_subscription_id) {
+    if (!adminView && payload.stripe_subscription_id) {
       try {
         const stripeSubscription = await stripe.subscriptions.retrieve(payload.stripe_subscription_id);
         const subscriptionCustomerId =

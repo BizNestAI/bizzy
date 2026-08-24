@@ -27,6 +27,9 @@ export function getAuthenticatedUserId(req) {
  */
 export function resolveTaxBusinessId(req) {
   const raw =
+    req?.tenantContext?.businessId ||
+    req?.business?.id ||
+    req?.auth?.businessId ||
     req?.params?.businessId ||
     req?.body?.businessId ||
     req?.body?.business_id ||
@@ -51,6 +54,19 @@ export function resolveTaxBusinessId(req) {
  * Member: user_business_link.user_id + business_id.
  */
 export async function assertTaxBusinessAccess({ req, businessId, supabase = defaultSupabase }) {
+  if (req?.tenantContext?.mode === "admin_view") {
+    const fixedBusinessId = req.tenantContext.businessId;
+    if (!fixedBusinessId || String(fixedBusinessId) !== String(businessId)) {
+      throw forbiddenBusinessError("Admin View business context cannot be changed.", { businessId });
+    }
+    return {
+      businessId: fixedBusinessId,
+      userId: null,
+      staffUserId: req.tenantContext.staffUserId || null,
+      tenantMode: "admin_view",
+      readOnly: true,
+    };
+  }
   const userId = getAuthenticatedUserId(req);
   if (!userId) throw unauthorizedError();
   if (!businessId) {
@@ -102,6 +118,22 @@ export function requireTaxBusiness(req, res, next) {
 }
 
 export async function getTaxRequestContext(req, _res, options = {}) {
+  if (req?.tenantContext?.mode === "admin_view") {
+    const calculation = options.calculation === true ? validateTaxCalculationRequest(req) : null;
+    const businessId = calculation?.businessId || req.tenantContext.businessId;
+    await assertTaxBusinessAccess({ req, businessId, supabase: options.supabase || defaultSupabase });
+
+    return {
+      userId: null,
+      staffUserId: req.tenantContext.staffUserId || null,
+      businessId,
+      taxYear: calculation?.taxYear ?? options.taxYear ?? null,
+      requestId: req?.id || req?.headers?.["x-request-id"] || null,
+      calculation,
+      tenantMode: "admin_view",
+      readOnly: true,
+    };
+  }
   const userId = getAuthenticatedUserId(req);
   if (!userId) throw unauthorizedError();
 

@@ -42,11 +42,12 @@ function normalizeIds(req, res, next) {
   const dev = process.env.NODE_ENV !== 'production';
   const fallback = '00000000-0000-0000-0000-000000000001';
 
-  const userIdRaw = req.auth?.userId || req.user?.id || q.user_id || q.userId || h['x-user-id'] || process.env.DEV_USER_ID;
-  const bizIdRaw  = req.business?.id || req.auth?.businessId || q.business_id || q.businessId || h['x-business-id'] || process.env.DEV_BUSINESS_ID;
+  const adminView = req.tenantContext?.mode === 'admin_view';
+  const userIdRaw = req.auth?.userId || req.user?.id || (adminView ? fallback : null) || q.user_id || q.userId || h['x-user-id'] || process.env.DEV_USER_ID;
+  const bizIdRaw  = req.tenantContext?.businessId || req.business?.id || req.auth?.businessId || q.business_id || q.businessId || h['x-business-id'] || process.env.DEV_BUSINESS_ID;
 
   if (!dev) {
-    if (!isUuid(userIdRaw)) return res.status(400).json({ error: 'missing_or_invalid_user_id', request_id: req.requestId });
+    if (!adminView && !isUuid(userIdRaw)) return res.status(400).json({ error: 'missing_or_invalid_user_id', request_id: req.requestId });
     if (!isUuid(bizIdRaw))  return res.status(400).json({ error: 'missing_or_invalid_business_id', request_id: req.requestId });
   }
 

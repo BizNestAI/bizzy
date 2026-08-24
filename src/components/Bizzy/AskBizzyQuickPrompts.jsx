@@ -68,6 +68,8 @@ export default function AskBizzyQuickPrompts({
   className = '',
   chipClassName = '',
   accentColor = null,
+  disabled = false,
+  disabledReason = "Chat is unavailable in read-only Admin View.",
 }) {
   const moduleKey = String(module).toLowerCase();
   const curated = CURATED[moduleKey] || CURATED.general;
@@ -80,6 +82,7 @@ export default function AskBizzyQuickPrompts({
   const logUsage = async () => {};
 
   const handleClick = async (text) => {
+    if (disabled) return;
     if (!text) return;
     logUsage(text);
     onPromptClick?.(text);
@@ -110,6 +113,8 @@ export default function AskBizzyQuickPrompts({
                 key={stableKey(moduleKey, idx, text)}
                 type="button"
                 title={tooltip}
+                disabled={disabled}
+                aria-disabled={disabled ? "true" : undefined}
                 onClick={() => handleClick(text)}
                 onMouseEnter={() => setHoverIdx(idx)}
                 onMouseLeave={() => setHoverIdx((prev) => (prev === idx ? null : prev))}
@@ -120,9 +125,11 @@ export default function AskBizzyQuickPrompts({
                   'px-3 py-1 text-sm',
                   'transition-all duration-300 ease-out',
                   'snap-start whitespace-nowrap select-none',
+                  disabled ? 'opacity-45 cursor-not-allowed' : '',
               chipClassName,
             ].join(' ')}
             data-bizzy-chip
+            data-admin-view-chat-disabled={disabled ? "true" : undefined}
             style={{
               color: isActive ? highlightHex : 'rgba(255,255,255,0.9)',
               borderColor: isActive ? 'var(--accent-line)' : 'var(--surface-border)',
@@ -135,6 +142,7 @@ export default function AskBizzyQuickPrompts({
             }}
               >
                 {text}
+                {disabled && idx === 0 ? <span className="sr-only"> {disabledReason}</span> : null}
               </button>
             );
           })}

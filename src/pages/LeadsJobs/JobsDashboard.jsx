@@ -7,6 +7,7 @@ import { getJobsTopUnpaid, getArStatus } from "../../services/jobs/jobs";
 import { getDemoJobsTopUnpaid } from "./jobsMockData.js";
 import useIntegrationManager from "../../hooks/useIntegrationManager.js";
 import { useBusiness } from "../../context/BusinessContext.jsx";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
 import { apiUrl, safeFetch } from "../../utils/safeFetch.js";
@@ -5818,7 +5819,7 @@ function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, o
   );
 }
 
-function JobCostingPage({ businessId, usingDemo }) {
+function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const location = useLocation();
   const [transactions, setTransactions] = useState([]);
   const [jobs, setJobs] = useState([]);
@@ -5965,6 +5966,10 @@ function JobCostingPage({ businessId, usingDemo }) {
       setProjectsCapability(demoProjectsCapability);
       return;
     }
+    if (readOnly) {
+      setProjectsCapability({ status: "unavailable", detail: "QuickBooks capability refresh is unavailable in read-only Admin View." });
+      return;
+    }
     if (!businessId) return;
     try {
       const data = await safeFetch(apiUrl("/api/job-costing/qbo/projects/capability"), {
@@ -5977,7 +5982,7 @@ function JobCostingPage({ businessId, usingDemo }) {
       console.warn("[JobCosting] QBO Projects capability failed", e?.message || e);
       setProjectsCapability({ status: "unknown", detail: e?.message || "Could not check Projects capability." });
     }
-  }, [businessId, usingDemo]);
+  }, [businessId, readOnly, usingDemo]);
 
   useEffect(() => {
     if (loading) return;
@@ -6010,6 +6015,10 @@ function JobCostingPage({ businessId, usingDemo }) {
         setQboGlAccounts([]);
         return;
       }
+      if (readOnly) {
+        setQboGlAccounts([]);
+        return;
+      }
       try {
         const data = await getQboCoa(businessId);
         if (!active) return;
@@ -6024,7 +6033,7 @@ function JobCostingPage({ businessId, usingDemo }) {
     return () => {
       active = false;
     };
-  }, [businessId, usingDemo]);
+  }, [businessId, readOnly, usingDemo]);
 
   const jobRows = useMemo(() => buildJobRows(jobs, transactions), [jobs, transactions]);
   const currentJobRows = useMemo(
@@ -6039,6 +6048,10 @@ function JobCostingPage({ businessId, usingDemo }) {
     ? jobRows.find((job) => String(job.id) === String(viewAssignedJob.id)) || viewAssignedJob
     : null;
   const openAssignmentPicker = useCallback((txn, job = null) => {
+    if (readOnly) {
+      setAssignmentError("Job assignment changes are unavailable in read-only Admin View.");
+      return;
+    }
     const remainingPercent = Math.max(0, Number(txn?.remaining_percent ?? (100 - Number(txn?.assigned_total_percent || 0))));
     const defaultPercent = remainingPercent > 0 && remainingPercent < 100 ? remainingPercent : 100;
     if (assignmentPickerTimerRef.current) window.clearTimeout(assignmentPickerTimerRef.current);
@@ -6048,7 +6061,7 @@ function JobCostingPage({ businessId, usingDemo }) {
     setAssignmentPickerPercent(String(Math.round(defaultPercent * 100) / 100));
     setAssignmentPickerAtBottom(false);
     window.requestAnimationFrame(() => setAssignmentPickerVisible(true));
-  }, []);
+  }, [readOnly]);
 
   const closeAssignmentPicker = useCallback(() => {
     setAssignmentPickerVisible(false);
@@ -6074,6 +6087,7 @@ function JobCostingPage({ businessId, usingDemo }) {
   }, [assignmentPickerTxn, closeAssignmentPicker]);
 
   const saveChangeOrder = useCallback(async (job, payload) => {
+    if (readOnly) throw new Error("Change orders are unavailable in read-only Admin View.");
     if (!job?.id) throw new Error("Job is missing an id.");
     setSavingChangeOrder(true);
     setChangeOrderMessage("");
@@ -7464,7 +7478,9 @@ function shouldRunDailySync(lastSyncedAt, businessId) {
 export default function JobsDashboard() {
   const location = useLocation();
   const { currentBusiness } = useBusiness?.() || {};
-  const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId") || "";
+  const adminView = useAdminView();
+  const readOnly = adminView.active && adminView.readOnly;
+  const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || localStorage.getItem("currentBusinessId") || "");
 
   const [openInvoices, setOpenInvoices] = useState([]);
   const [hero, setHero] = useState(null);
@@ -7502,6 +7518,10 @@ export default function JobsDashboard() {
 
   const refreshAr = useCallback(async ({ force = true, quiet = false } = {}) => {
     if (!businessId || usingDemo) return;
+    if (readOnly) {
+      if (!quiet) setArError("Live QuickBooks refresh is unavailable in read-only Admin View.");
+      return;
+    }
     if (!quiet) setSyncingAr(true);
     setArError("");
     try {
@@ -7522,7 +7542,7 @@ export default function JobsDashboard() {
     } finally {
       if (!quiet) setSyncingAr(false);
     }
-  }, [businessId, usingDemo]);
+  }, [businessId, readOnly, usingDemo]);
 
   const reloadOpenInvoices = useCallback(async () => {
     if (!businessId || usingDemo) return;
@@ -7583,6 +7603,10 @@ export default function JobsDashboard() {
       scheduled_for: null,
     });
     const qboInvoiceId = row.qbo_invoice_id;
+    if (readOnly) {
+      setArError("Follow-up generation is unavailable in read-only Admin View.");
+      return;
+    }
     if (usingDemo || !businessId || !qboInvoiceId) return;
     setArError("");
     try {
@@ -7600,7 +7624,7 @@ export default function JobsDashboard() {
       console.warn("[JobsDashboard] draft follow-up failed", e?.message || e);
       setArError(e?.message || "Failed to generate follow-up copy.");
     }
-  }, [applyFollowupOverride, businessId, reloadOpenInvoices, usingDemo]);
+  }, [applyFollowupOverride, businessId, readOnly, reloadOpenInvoices, usingDemo]);
 
   const markFollowupSent = useCallback(async (row, round, copy = {}) => {
     const sentAt = new Date();
@@ -7624,6 +7648,10 @@ export default function JobsDashboard() {
       });
     }
     const qboInvoiceId = row.qbo_invoice_id;
+    if (readOnly) {
+      setArError("Follow-up updates are unavailable in read-only Admin View.");
+      return;
+    }
     if (usingDemo || !businessId || !qboInvoiceId) return;
     setArError("");
     try {
@@ -7643,7 +7671,7 @@ export default function JobsDashboard() {
       console.warn("[JobsDashboard] mark follow-up sent failed", e?.message || e);
       setArError(e?.message || "Failed to mark follow-up sent.");
     }
-  }, [applyFollowupOverride, businessId, reloadOpenInvoices, usingDemo]);
+  }, [applyFollowupOverride, businessId, readOnly, reloadOpenInvoices, usingDemo]);
 
   useEffect(() => {
     let alive = true;
@@ -7663,13 +7691,13 @@ export default function JobsDashboard() {
       setOpenInvoices(u.status === "fulfilled" ? (u.value || []) : []);
       if (nextStatus) setArStatus(nextStatus);
       setLoading(false);
-      if (!usingDemo && qbStatus === "connected" && shouldRunDailySync(nextStatus?.last_synced_at, businessId)) {
+      if (!readOnly && !usingDemo && qbStatus === "connected" && shouldRunDailySync(nextStatus?.last_synced_at, businessId)) {
         refreshAr({ force: false, quiet: true });
       }
     }
     load();
     return () => { alive = false; };
-  }, [businessId, canView, qbStatus, refreshAr, usingDemo]);
+  }, [businessId, canView, qbStatus, readOnly, refreshAr, usingDemo]);
 
   const usingMock = usingDemo;
 
@@ -7730,7 +7758,7 @@ export default function JobsDashboard() {
   }
 
   if (isJobCosting) {
-    return <JobCostingPage businessId={businessId} usingDemo={usingDemo} />;
+    return <JobCostingPage businessId={businessId} usingDemo={usingDemo} readOnly={readOnly} />;
   }
 
   return (

@@ -9,6 +9,7 @@ import {
 
 import { listDocs, getDocFacets, createDoc } from '../../services/bizzyDocs/docsService';
 import { useCurrentBusiness } from '../../context/BusinessContext';
+import { useAdminView } from '../../context/AdminViewContext.jsx';
 import UploadDocModal from '../../components/BizzyDocs/UploadDocModal';
 
 /* ───────── Graphite tokens / neutrals ───────── */
@@ -64,6 +65,8 @@ function fileIcon(mimeOrExt=''){
 
 export default function DocsLibraryPage(props) {
   const navigate = useNavigate();
+  const adminView = useAdminView();
+  const readOnly = adminView.active && adminView.readOnly;
 
   const [showUpload, setShowUpload] = useState(false);
   const [showNewMenu, setShowNewMenu] = useState(false);
@@ -87,7 +90,7 @@ export default function DocsLibraryPage(props) {
   const propBusinessId = props?.businessId;
   const lsBusinessId =
     (typeof window !== 'undefined' && (localStorage.getItem('currentBusinessId') || localStorage.getItem('business_id'))) || '';
-  const effectiveBusinessId = propBusinessId || ctxBusinessId || lsBusinessId;
+  const effectiveBusinessId = adminView.active ? adminView.businessId : (propBusinessId || ctxBusinessId || lsBusinessId);
 
   // State
   const [docs, setDocs] = useState([]);
@@ -279,7 +282,11 @@ export default function DocsLibraryPage(props) {
             {/* New (compact menu) */}
             <div className="relative" ref={newMenuRef}>
               <button
-                onClick={() => setShowNewMenu(v => !v)}
+                onClick={() => {
+                  if (!readOnly) setShowNewMenu(v => !v);
+                }}
+                disabled={readOnly}
+                title={readOnly ? "Document changes are unavailable in read-only Admin View." : undefined}
                 className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition shadow-[0_10px_28px_rgba(0,0,0,0.35)]"
                 style={{
                   background: 'rgba(255,255,255,0.02)',
@@ -292,7 +299,7 @@ export default function DocsLibraryPage(props) {
                 New
                 <MoreVertical className="h-4 w-4 opacity-70" />
               </button>
-              {showNewMenu && (
+              {showNewMenu && !readOnly && (
                 <div
                   className="absolute right-0 mt-2 w-44 rounded-lg p-1 shadow-2xl z-10 border transition-all duration-150 ease-out"
                   style={{ background: PANEL_BG, borderColor: `rgba(var(--accent-rgb),0.16)`, boxShadow: '0 0 0 1px rgba(var(--accent-rgb),0.06), 0 18px 40px rgba(0,0,0,0.45)', transformOrigin: 'top right' }}
@@ -398,14 +405,20 @@ export default function DocsLibraryPage(props) {
             </div>
             <div className="mt-4 flex items-center justify-center gap-2">
               <button
-                onClick={() => setShowUpload(true)}
+                onClick={() => {
+                  if (!readOnly) setShowUpload(true);
+                }}
+                disabled={readOnly}
                 className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
                 style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
               >
                 <FileUp className="h-4 w-4" /> Upload
               </button>
               <button
-                onClick={() => createBlankNote(true)}
+                onClick={() => {
+                  if (!readOnly) createBlankNote(true);
+                }}
+                disabled={readOnly}
                 className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
                 style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
               >

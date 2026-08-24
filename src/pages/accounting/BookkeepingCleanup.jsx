@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { CheckCircle2, CircleAlert, UploadCloud } from "lucide-react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext.jsx";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
 import BookkeepingFeed, { CoaDropdown } from "../../components/Accounting/BookkeepingFeed.jsx";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader.jsx";
 import { AnimatePresence, motion } from "framer-motion";
@@ -423,13 +424,14 @@ function adjustCount(value, delta) {
 
 function BookkeepingCleanup() {
   const { currentBusiness } = useBusiness?.() || {};
+  const adminView = useAdminView();
   const usingDemo = shouldUseDemoData(currentBusiness);
   const rulesButtonDisabled = false;
   const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId");
-  const userId = localStorage.getItem("user_id");
+  const userId = adminView.active ? "admin_view" : localStorage.getItem("user_id");
   const { status: billingStatus, loading: loadingBillingStatus } = useBillingStatus(businessId, userId);
   const billingAccess = getBillingAccess(resolveStatusValue(billingStatus));
-  const canRunAI = usingDemo ? true : billingAccess.canRunAI;
+  const canRunAI = adminView.active ? false : (usingDemo ? true : billingAccess.canRunAI);
   const [accounts, setAccounts] = useState(usingDemo ? DEMO_ACCOUNT_LIST : []);
   const [chartAccounts, setChartAccounts] = useState(() => {
     if (!usingDemo) return [];
@@ -2105,7 +2107,7 @@ function BookkeepingCleanup() {
               onPageChange={(next) => setPage(next)}
               panelBg={PANEL_BG}
               panelBorder={PANEL_BORDER}
-              readOnly={!canRunAI}
+              readOnly={adminView.active || !canRunAI}
             />
           )}
         </motion.div>

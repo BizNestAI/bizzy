@@ -28,7 +28,7 @@ const BIZZI_ACCOUNTING_PLAN = {
 /**
  * BillingCard – Checkout + Portal
  */
-export default function BillingCard({ userId, businessId, status }) {
+export default function BillingCard({ userId, businessId, status, readOnly = false }) {
   const [busyAction, setBusyAction] = useState(null);
   const [showPlanDetails, setShowPlanDetails] = useState(false);
   const [portalError, setPortalError] = useState("");
@@ -172,6 +172,10 @@ export default function BillingCard({ userId, businessId, status }) {
   }, [businessId, status?.stripe_customer_id, status?.subscription_status]);
 
   async function startCheckout(planType) {
+    if (readOnly) {
+      setCheckoutError("Billing changes are unavailable in read-only Admin View.");
+      return;
+    }
     setBusyAction(`checkout_${planType}`);
     setCheckoutError("");
     try {
@@ -197,6 +201,10 @@ export default function BillingCard({ userId, businessId, status }) {
   }
 
   async function openPortal() {
+    if (readOnly) {
+      setPortalError("Billing changes are unavailable in read-only Admin View.");
+      return;
+    }
     setBusyAction("portal");
     setPortalError("");
     try {
@@ -229,23 +237,23 @@ export default function BillingCard({ userId, businessId, status }) {
     }
     if (hasLiveSubscription && canManagePortal) {
       return {
-        label: busyAction === "portal" ? "Opening portal…" : "Manage in Billing Portal",
-        disabled: busyAction !== null,
+        label: readOnly ? "Read Only" : busyAction === "portal" ? "Opening portal…" : "Manage in Billing Portal",
+        disabled: readOnly || busyAction !== null,
         action: openPortal,
         variant: "portal",
       };
     }
     if (canStartCheckout) {
       return {
-        label: isCheckoutBusy ? "Starting checkout…" : "Activate Bizzi",
-        disabled: busyAction !== null,
+        label: readOnly ? "Read Only" : isCheckoutBusy ? "Starting checkout…" : "Activate Bizzi",
+        disabled: readOnly || busyAction !== null,
         action: () => startCheckout(planTypeKey),
         variant: "activate",
       };
     }
     return {
       label: "Manage in Billing Portal",
-      disabled: !canManagePortal || busyAction !== null,
+      disabled: readOnly || !canManagePortal || busyAction !== null,
       action: openPortal,
       variant: "portal",
     };
@@ -306,7 +314,7 @@ export default function BillingCard({ userId, businessId, status }) {
                     : "border border-white/[0.1] bg-white/[0.04] text-white/85 hover:bg-white/[0.08]",
                 ].join(" ")}
               >
-                {planButtonState.variant === "activate" ? "Activate Bizzi" : planButtonState.label}
+                {readOnly ? "Read Only" : planButtonState.variant === "activate" ? "Activate Bizzi" : planButtonState.label}
               </button>
             )}
           </div>
@@ -359,7 +367,7 @@ export default function BillingCard({ userId, businessId, status }) {
               {canManageSubscription ? (
                 <button
                   onClick={openPortal}
-                  disabled={busyAction !== null}
+                  disabled={readOnly || busyAction !== null}
                   className="inline-flex items-center rounded-full border border-white/[0.1] px-3 py-1.5 text-xs font-semibold text-white/75 transition hover:bg-white/[0.05] disabled:opacity-60"
                 >
                   {busyAction === "portal" ? "Opening…" : "Manage"}

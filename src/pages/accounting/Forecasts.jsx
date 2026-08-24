@@ -8,6 +8,7 @@ import { ChevronDown } from "lucide-react";
 import { Listbox } from "@headlessui/react";
 import { useBusiness } from "../../context/BusinessContext";
 import { useAuth } from "../../context/AuthContext.jsx";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
 import AgendaWidget from "../Calendar/AgendaWidget.jsx";
 import { useRightExtras } from "../../insights/RightExtrasContext";
 import LiveModePlaceholder from "../../components/common/LiveModePlaceholder.jsx";
@@ -19,10 +20,11 @@ import useDemoMode from "../../hooks/useDemoMode.js";
 export default function Forecasts() {
   const { businessId: contextBusinessId, currentBusiness } = useBusiness();
   const { user } = useAuth() || {};
+  const adminView = useAdminView();
   const [storedUserId, setStoredUserId] = useState(null);
   const [storedBusinessId, setStoredBusinessId] = useState(null);
-  const userId = user?.id || storedUserId;
-  const businessId = currentBusiness?.id || contextBusinessId || storedBusinessId;
+  const userId = adminView.active ? "admin_view" : (user?.id || storedUserId);
+  const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || contextBusinessId || storedBusinessId);
   const integrationManager = useIntegrationManager({ businessId });
   const qbStatus = integrationManager?.getStatus?.("quickbooks")?.status || "disconnected";
 
@@ -143,6 +145,7 @@ export default function Forecasts() {
           businessId={businessId}
           months={editorMonths}
           useDemoData={usingDemo}
+          readOnly={adminView.active && adminView.readOnly}
           controls={forecastControls}
         />
       </section>

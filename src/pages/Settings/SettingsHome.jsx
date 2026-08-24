@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useAuth } from "../../context/AuthContext";
 import { useBusiness } from "../../context/BusinessContext";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
 import { supabase } from "../../services/supabaseClient";
 import { apiUrl, safeFetch } from "../../utils/safeFetch";
 import { updateBusinessProfile } from "../../services/businessService";
@@ -111,10 +112,12 @@ export default function SettingsHome() {
   const SHOW_MARKETING_COMMS = false;
   const { user } = useAuth();
   const { currentBusiness, setCurrentBusiness } = useBusiness();
+  const adminView = useAdminView();
+  const readOnly = adminView.active && adminView.readOnly;
   const { usageCount = 0 } = useBizzyChatContext() || {};
   const navigate = useNavigate();
-  const userId = user?.id || localStorage.getItem("user_id");
-  const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId");
+  const userId = adminView.active ? "admin_view" : (user?.id || localStorage.getItem("user_id"));
+  const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || localStorage.getItem("currentBusinessId"));
   const [searchParams, setSearchParams] = useSearchParams();
   const [billingRefresh, setBillingRefresh] = useState(0);
   const [billingToast, setBillingToast] = useState("");
@@ -287,6 +290,10 @@ export default function SettingsHome() {
 
   const handleSaveBusiness = async () => {
     if (!businessId) return;
+    if (readOnly) {
+      setBizErrorMsg("Business settings changes are unavailable in read-only Admin View.");
+      return;
+    }
     const currentStartDate = currentBusiness?.bookkeeping_start_date || "";
     const nextStartDate = businessForm.bookkeeping_start_date || "";
     if (currentStartDate && nextStartDate && nextStartDate < currentStartDate) {
@@ -362,6 +369,7 @@ export default function SettingsHome() {
   useEffect(() => {
     if (activeTab !== "Integrations") return;
     if (!businessId || hasMarkedIntegrationsRef.current) return;
+    if (readOnly) return;
     hasMarkedIntegrationsRef.current = true;
     markIntegrationsPageViewed({ businessId }).finally(() => {
       try {
@@ -378,7 +386,7 @@ export default function SettingsHome() {
         /* ignore */
       }
     });
-  }, [activeTab, businessId]);
+  }, [activeTab, businessId, readOnly]);
 
   // Fetch QuickBooks company name for display
   useEffect(() => {
@@ -409,11 +417,11 @@ useEffect(() => {
     plaidRefreshOnceRef.current = false;
     return;
   }
-  if (!businessId) return;
+  if (!businessId || readOnly) return;
   if (plaidRefreshOnceRef.current) return;
   plaidRefreshOnceRef.current = true;
   integrationManager.refresh?.("plaid").catch(() => {});
-}, [activeTab, businessId, integrationManager]);
+}, [activeTab, businessId, integrationManager, readOnly]);
 
   /* ---------------- Render ---------------- */
   return (
@@ -533,8 +541,8 @@ useEffect(() => {
                 <Field label="Full Name"><Input id="settings-full-name" name="full_name" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Your name" /></Field>
                 <Field label="Email"><Input id="settings-email" name="email" autoComplete="email" value={email} disabled /></Field>
                 <div className="flex flex-wrap gap-3 pt-2">
-                  <AccentButton onClick={handleSaveProfile} disabled={savingProfile} className="focus-visible:outline-none">
-                    {savingProfile ? "Saving…" : "Save Changes"}
+                  <AccentButton onClick={handleSaveProfile} disabled={readOnly || savingProfile} className="focus-visible:outline-none">
+                    {readOnly ? "Read Only" : savingProfile ? "Saving…" : "Save Changes"}
                   </AccentButton>
                   <GhostButton onClick={handleResetPassword} className="focus-visible:outline-none">Send Reset Email</GhostButton>
                 </div>
@@ -616,8 +624,8 @@ useEffect(() => {
                   </Field>
                 </div>
                 <div className="pt-2">
-                  <AccentButton onClick={handleSaveBusiness} disabled={savingBusiness} className="focus-visible:outline-none">
-                    {savingBusiness ? "Saving…" : "Save Changes"}
+                  <AccentButton onClick={handleSaveBusiness} disabled={readOnly || savingBusiness} className="focus-visible:outline-none">
+                    {readOnly ? "Read Only" : savingBusiness ? "Saving…" : "Save Changes"}
                   </AccentButton>
                   <InlineMsg ok={bizSuccessMsg} err={bizErrorMsg} className="mt-3" />
                 </div>
@@ -634,8 +642,8 @@ useEffect(() => {
                 subtitle="Connect your books and bank data."
                 icon={PlugZap}
               >
-                <IntegrationRow provider="quickbooks" manager={integrationManager} companyName={qbCompanyName} businessId={businessId} />
-                <PlaidIntegrationCard businessId={businessId} />
+                <IntegrationRow provider="quickbooks" manager={integrationManager} companyName={qbCompanyName} businessId={businessId} disabled={readOnly} />
+                <PlaidIntegrationCard businessId={businessId} readOnly={readOnly} />
               </Section>
 
               {SHOW_MARKETING_COMMS ? (
@@ -703,6 +711,7 @@ useEffect(() => {
                       userId={userId}
                       businessId={businessId}
                       status={billingStatus}
+                      readOnly={readOnly}
                       onBillingRefresh={() => setBillingRefresh((v) => v + 1)}
                     />
                   </div>
@@ -783,7 +792,7 @@ function StatusBadge({ label = "Unknown", tone = "slate" }) {
   );
 }
 
-function PlaidIntegrationCard({ businessId }) {
+function PlaidIntegrationCard({ businessId, readOnly = false }) {
   const mappingOverrideStorageKey = useMemo(
     () => (businessId ? `bizzy:plaid-mapping-overrides:${businessId}` : null),
     [businessId]
@@ -852,7 +861,7 @@ function PlaidIntegrationCard({ businessId }) {
         setInstitutions(nextInstitutions);
         setCounts(nextCounts);
         setHasDisconnected(nextHasDisconnected);
-        writePlaidStatusCache(businessId, {
+        if (!readOnly) writePlaidStatusCache(businessId, {
           institutions: nextInstitutions,
           counts: nextCounts,
           hasDisconnected: nextHasDisconnected,
@@ -867,14 +876,14 @@ function PlaidIntegrationCard({ businessId }) {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [businessId]);
+  }, [businessId, readOnly]);
 
   useEffect(() => {
     fetchStatus({ showLoading: !readPlaidStatusCache(businessId) });
   }, [fetchStatus]);
 
   const refreshMappings = useCallback(async () => {
-    if (!businessId) return;
+    if (!businessId || readOnly) return;
     if (!isConnected) {
       setMappingRows([]);
       setQboPaymentAccounts([]);
@@ -969,10 +978,10 @@ function PlaidIntegrationCard({ businessId }) {
     } finally {
       setLinking(false);
     }
-  }, [businessId, fetchStatus, refreshMappings]);
+  }, [businessId, fetchStatus, readOnly, refreshMappings]);
 
   const handleDisconnectAll = useCallback(async () => {
-    if (!businessId) return;
+    if (!businessId || readOnly) return;
     setDisconnectingAll(true);
     try {
       await disconnectPlaid(businessId);
@@ -999,7 +1008,7 @@ function PlaidIntegrationCard({ businessId }) {
     } finally {
       setDisconnectingAll(false);
     }
-  }, [businessId, fetchStatus, refreshMappings]);
+  }, [businessId, fetchStatus, readOnly, refreshMappings]);
 
   const toggleDisconnectConfirm = useCallback((acctId) => {
     setConfirmDisconnectByAccount((prev) => ({
@@ -1009,7 +1018,7 @@ function PlaidIntegrationCard({ businessId }) {
   }, []);
 
   const handleDisconnectItem = useCallback(async (plaidItemId) => {
-    if (!businessId || !plaidItemId) return;
+    if (!businessId || readOnly || !plaidItemId) return;
     setDisconnectingItem(plaidItemId);
     try {
       await disconnectPlaidItem(businessId, plaidItemId);
@@ -1027,7 +1036,7 @@ function PlaidIntegrationCard({ businessId }) {
     } finally {
       setDisconnectingItem(null);
     }
-  }, [businessId, fetchStatus, refreshMappings]);
+  }, [businessId, fetchStatus, readOnly, refreshMappings]);
 
   const latestSyncAt = useMemo(() => {
     const timestamps = institutions
@@ -1066,7 +1075,7 @@ function PlaidIntegrationCard({ businessId }) {
   const hasMappingNeeds = unmappedPostableRows.length > 0;
 
   const handleMappingChange = useCallback(async (plaidAccountId, value) => {
-    if (!businessId || !plaidAccountId) return;
+    if (!businessId || readOnly || !plaidAccountId) return;
     setMappingSaving((prev) => ({ ...prev, [plaidAccountId]: true }));
     try {
       if (value === "__create__") {
@@ -1168,7 +1177,7 @@ function PlaidIntegrationCard({ businessId }) {
     } finally {
       setMappingSaving((prev) => ({ ...prev, [plaidAccountId]: false }));
     }
-  }, [businessId, qboPaymentAccounts, refreshMappings]);
+  }, [businessId, qboPaymentAccounts, readOnly, refreshMappings]);
 
   return (
     <div
@@ -1199,14 +1208,14 @@ function PlaidIntegrationCard({ businessId }) {
         </div>
         {isConnected ? (
         <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
-          <GhostButton onClick={openPlaid} disabled={linking} className={INTEGRATION_ACTION_BUTTON_CLASS}>
+          <GhostButton onClick={openPlaid} disabled={readOnly || linking} className={INTEGRATION_ACTION_BUTTON_CLASS}>
             {linking ? "Opening…" : "Add another bank"}
           </GhostButton>
           {confirmDisconnectAll ? (
             <>
               <GhostButton
                 onClick={handleDisconnectAll}
-                disabled={disconnectingAll}
+                disabled={readOnly || disconnectingAll}
                 className={`${INTEGRATION_ACTION_BUTTON_CLASS} text-rose-200 border-rose-400/40 hover:border-rose-300/60`}
               >
                 {disconnectingAll ? "Disconnecting…" : "Confirm disconnect"}
@@ -1220,7 +1229,10 @@ function PlaidIntegrationCard({ businessId }) {
             </>
           ) : (
             <GhostButton
-              onClick={() => setConfirmDisconnectAll(true)}
+              onClick={() => {
+                if (!readOnly) setConfirmDisconnectAll(true);
+              }}
+              disabled={readOnly}
               className={`${INTEGRATION_ACTION_BUTTON_CLASS} text-rose-200 border-rose-400/40 hover:border-rose-300/60`}
             >
               Disconnect Plaid
@@ -1229,13 +1241,13 @@ function PlaidIntegrationCard({ businessId }) {
         </div>
       ) : isDisconnected ? (
         <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
-          <AccentButton onClick={openPlaid} disabled={linking} className={INTEGRATION_ACTION_BUTTON_CLASS}>
+          <AccentButton onClick={openPlaid} disabled={readOnly || linking} className={INTEGRATION_ACTION_BUTTON_CLASS}>
             {linking ? "Opening…" : "Reconnect Plaid"}
           </AccentButton>
         </div>
       ) : (
         <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
-          <AccentButton onClick={openPlaid} disabled={linking} className={INTEGRATION_ACTION_BUTTON_CLASS}>
+          <AccentButton onClick={openPlaid} disabled={readOnly || linking} className={INTEGRATION_ACTION_BUTTON_CLASS}>
             {linking ? "Opening…" : "Connect Plaid"}
           </AccentButton>
         </div>
@@ -1390,7 +1402,7 @@ function PlaidIntegrationCard({ businessId }) {
                           <DarkMappingDropdown
                             value={selectedValue}
                             onChange={(nextValue) => handleMappingChange(acct.plaid_account_id, nextValue)}
-                            disabled={mappingLoading || saving}
+                            disabled={readOnly || mappingLoading || saving}
                             placeholder="Select QuickBooks account..."
                             options={[
                               { value: "__none__", label: "None / remove mapping" },
@@ -1428,14 +1440,17 @@ function PlaidIntegrationCard({ businessId }) {
                               <button
                                 type="button"
                                 onClick={() => handleDisconnectItem(acct.plaid_item_id)}
-                                disabled={disconnectingItem === acct.plaid_item_id}
+                                disabled={readOnly || disconnectingItem === acct.plaid_item_id}
                                 className="px-2 py-1 text-[11px] rounded-md border border-rose-400/40 text-rose-200 hover:border-rose-300/70 hover:text-rose-100 transition disabled:opacity-50"
                               >
                                 {disconnectingItem === acct.plaid_item_id ? "Disconnecting…" : "Confirm"}
                               </button>
                               <button
                                 type="button"
-                                onClick={() => toggleDisconnectConfirm(acct.plaid_account_id)}
+                                onClick={() => {
+                                  if (!readOnly) toggleDisconnectConfirm(acct.plaid_account_id);
+                                }}
+                                disabled={readOnly}
                                 className="px-2 py-1 text-[11px] rounded-md border border-white/15 text-white/60 hover:text-white/80 transition"
                               >
                                 Cancel
@@ -1444,7 +1459,10 @@ function PlaidIntegrationCard({ businessId }) {
                           ) : (
                             <button
                               type="button"
-                              onClick={() => toggleDisconnectConfirm(acct.plaid_account_id)}
+                              onClick={() => {
+                                if (!readOnly) toggleDisconnectConfirm(acct.plaid_account_id);
+                              }}
+                              disabled={readOnly}
                               className="px-2 py-1 text-[11px] rounded-md border border-white/15 text-white/60 hover:text-white/80 hover:border-white/30 transition"
                             >
                               Disconnect
@@ -1624,6 +1642,7 @@ function formatRelative(ts) {
 }
 
 function IntegrationRow({ provider, manager, name, description, companyName = "", disabled = false, businessId = null }) {
+  const readOnly = disabled === true && Boolean(provider);
   const meta = provider ? INTEGRATION_META[provider] : null;
   const label = name || meta?.label || provider;
   const detail = description || meta?.description || "";
@@ -1679,16 +1698,19 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
   );
 
   const handleConnect = () => {
+    if (readOnly) return;
     if (!provider || !manager) return;
     manager.connect(provider);
   };
   const handleForceReconnect = () => {
+    if (readOnly) return;
     if (!provider || !manager) return;
     manager.connect(provider, { forceSwitchCompany: true });
     setShowCompanyMismatch(false);
     mismatchDismissedRef.current = true;
   };
   const handleDisconnect = async () => {
+    if (readOnly) return;
     if (!provider || !manager) return;
     await manager.disconnect(provider);
     setConfirmDisconnect(false);
@@ -1746,6 +1768,7 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
   }, [provider, fetchBackfillStatus, backfillStatus?.status]);
 
   const startBackfill = useCallback(async (force = false) => {
+    if (readOnly) return;
     if (!businessId) return;
     setBackfillLoading(true);
     try {
@@ -1760,7 +1783,7 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
     } finally {
       setBackfillLoading(false);
     }
-  }, [businessId]);
+  }, [businessId, readOnly]);
 
   return (
     <div
@@ -1822,12 +1845,12 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
         {provider === "quickbooks" && state === "connected" ? (
           <div className="flex flex-col gap-2 mt-2">
             <div className="flex gap-2 flex-wrap">
-              <AccentButton onClick={() => startBackfill(false)} disabled={backfillLoading}>
+              <AccentButton onClick={() => startBackfill(false)} disabled={readOnly || backfillLoading}>
                 {backfillLoading ? "Starting..." : "Backfill last 12 months"}
               </AccentButton>
               <GhostButton
                 onClick={() => startBackfill(true)}
-                disabled={backfillLoading}
+                disabled={readOnly || backfillLoading}
                 className="border-rose-500/50 text-rose-200 hover:border-rose-400/80"
               >
                 Force re-sync
@@ -1849,7 +1872,7 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
       </div>
       <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
         {disabled ? (
-          <GhostButton disabled className={INTEGRATION_ACTION_BUTTON_CLASS}>Coming soon</GhostButton>
+          <GhostButton disabled className={INTEGRATION_ACTION_BUTTON_CLASS}>{readOnly ? "Read Only" : "Coming soon"}</GhostButton>
         ) : state === "connected" ? (
           <div className="relative">
             <GhostButton

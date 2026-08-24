@@ -19,6 +19,7 @@ export default function ChatCanvasBar({
     quickPrompts = [],
     checkChatAccess,
     chatGateNotice,
+    chatReadOnly,
     dismissChatGateNotice,
   } = useBizzyChatContext();
 
@@ -28,6 +29,7 @@ export default function ChatCanvasBar({
 
   const handleSubmit = async (e) => {
     e?.preventDefault();
+    if (chatReadOnly) return;
     const text = (input || "").trim();
     if (!text || isLoading) return;
     const access = await checkChatAccess?.();
@@ -37,6 +39,7 @@ export default function ChatCanvasBar({
   };
 
   const handlePromptClick = async (text) => {
+    if (chatReadOnly) return;
     if (!text || isLoading) return;
     const access = await checkChatAccess?.();
     if (!access?.allowed) return;
@@ -50,6 +53,7 @@ export default function ChatCanvasBar({
       const text = (event?.detail?.text || "").toString();
       const autoSend = !!event?.detail?.autoSend;
       if (!text) return;
+      if (chatReadOnly) return;
       setInput(text);
       if (autoSend && !isLoading) {
         setTimeout(async () => {
@@ -64,7 +68,7 @@ export default function ChatCanvasBar({
     };
     window.addEventListener("bizzy:prefill-chat", handler);
     return () => window.removeEventListener("bizzy:prefill-chat", handler);
-  }, [currentModule, isLoading, sendMessage, openCanvas, checkChatAccess]);
+  }, [chatReadOnly, currentModule, isLoading, sendMessage, openCanvas, checkChatAccess]);
 
   const shellClassName = "bg-transparent text-white";
   const neutralShellBg = "linear-gradient(180deg, var(--chatbar-bg), var(--chatbar-bg-2))";
@@ -87,11 +91,17 @@ export default function ChatCanvasBar({
           onPromptClick={handlePromptClick}
           max={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
           className="px-0"
+          disabled={chatReadOnly}
+          disabledReason="Chat is unavailable in read-only Admin View."
         />
       </div>
       {/* Input bar */}
       <div data-bizzy-chatbar-shell data-bizzy-chatbar-measured>
-        {chatGateNotice ? (
+        {chatReadOnly ? (
+          <div className="mb-2 rounded-full border border-emerald-200/18 bg-emerald-300/[0.08] px-4 py-2 text-xs font-semibold text-emerald-50/82">
+            Chat is unavailable in read-only Admin View.
+          </div>
+        ) : chatGateNotice ? (
           <ChatGateNotice
             notice={chatGateNotice}
             onDismiss={dismissChatGateNotice}
@@ -120,14 +130,24 @@ export default function ChatCanvasBar({
               id="bizzy-canvas-chat-input"
               name="bizzy-canvas-chat-input"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                if (chatReadOnly) return;
+                setInput(e.target.value);
+              }}
               onKeyDown={(e) => {
+                if (chatReadOnly) {
+                  if (e.key === "Enter") e.preventDefault();
+                  return;
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   handleSubmit(e);
                 }
               }}
-              placeholder={placeholder || "Talk to Bizzi about your books, cash flow, jobs, or taxes…"}
+              placeholder={chatReadOnly ? "Chat is unavailable in read-only Admin View." : placeholder || "Talk to Bizzi about your books, cash flow, jobs, or taxes…"}
+              disabled={chatReadOnly}
+              readOnly={chatReadOnly}
+              aria-disabled={chatReadOnly ? "true" : undefined}
               rows={1}
               className={[
                 "flex-1 resize-none px-0 py-2 bg-transparent text-white focus:outline-none placeholder:text-white/50",
@@ -146,8 +166,14 @@ export default function ChatCanvasBar({
             <div
               role="button"
               tabIndex={0}
-              onClick={() => setIsRecording((p) => !p)}
-              onKeyDown={(e) => e.key === "Enter" && setIsRecording((p) => !p)}
+              onClick={() => {
+                if (chatReadOnly) return;
+                setIsRecording((p) => !p);
+              }}
+              onKeyDown={(e) => {
+                if (chatReadOnly) return;
+                if (e.key === "Enter") setIsRecording((p) => !p);
+              }}
               className={[
                 "ml-3 h-8.5 w-8.5 rounded-full flex items-center justify-center select-none transition-colors",
                 effectiveTone === "neutral"
@@ -155,18 +181,19 @@ export default function ChatCanvasBar({
                   : "bg-[#0f141b] text-[var(--accent)] border",
               ].join(" ")}
               aria-label="Toggle voice"
-              title="Toggle voice"
+              title={chatReadOnly ? "Voice input is unavailable in read-only Admin View." : "Toggle voice"}
+              aria-disabled={chatReadOnly ? "true" : undefined}
             >
               <BizzyVoiceIcon
-                isRecording={isRecording}
-                onToggle={() => setIsRecording((p) => !p)}
-                setInput={setInput}
+                isRecording={chatReadOnly ? false : isRecording}
+                onToggle={chatReadOnly ? () => {} : () => setIsRecording((p) => !p)}
+                setInput={chatReadOnly ? () => {} : setInput}
               />
             </div>
 
             {/* Submit */}
             <div className="ml-2 no-purple-glow">
-              <BizzySubmitButton onClick={handleSubmit} isLoading={!!isLoading} />
+              <BizzySubmitButton onClick={chatReadOnly ? undefined : handleSubmit} isLoading={!!isLoading} disabled={chatReadOnly} />
             </div>
           </div>
         </form>

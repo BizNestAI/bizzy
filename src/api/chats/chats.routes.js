@@ -11,12 +11,14 @@ function readTenant(req) {
   const user_id =
     req.auth?.userId ||
     req.user?.id ||
+    req.tenantContext?.staffUserId ||
     req.header('x-user-id') ||
     req.query.user_id ||
     req.body?.user_id ||
     null;
 
   const business_id =
+    req.tenantContext?.businessId ||
     req.business?.id ||
     req.auth?.businessId ||
     req.user?.business_id ||
@@ -44,6 +46,11 @@ async function assertMembership(user_id, business_id) {
 async function tenantGuard(req, res, next) {
   try {
     const { user_id, business_id } = readTenant(req);
+    if (req.tenantContext?.mode === 'admin_view') {
+      if (!business_id) return res.status(400).json({ error: 'missing_business' });
+      req.tenant = { user_id: user_id || null, business_id };
+      return next();
+    }
     if (!user_id || !business_id) {
       return res.status(400).json({ error: 'missing_user_or_business' });
     }
