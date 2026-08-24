@@ -218,6 +218,40 @@ test("Phase 5B submit returns after durable answer persistence without waiting f
   await resultPromise;
 });
 
+test("Phase 5B submit returns after durable answer persistence without waiting for account suggestion enrichment", async () => {
+  const store = baseStore();
+  let mappingStarted = false;
+  let releaseMapping;
+  const mappingPromise = new Promise((resolve) => {
+    releaseMapping = () => resolve(null);
+  });
+
+  const resultPromise = submit(store, [{ request_id: "req-1", transaction_id: "txn-1", answer_text: "software subscription" }], {
+    mapAnswer: async () => {
+      mappingStarted = true;
+      await mappingPromise;
+      return null;
+    },
+  });
+
+  const result = await Promise.race([
+    resultPromise,
+    new Promise((resolve) => setTimeout(() => resolve("blocked_on_mapping"), 25)),
+  ]);
+
+  assert.notEqual(result, "blocked_on_mapping");
+  assert.equal(result.ok, true);
+  assert.equal(result.rows[0].persisted, true);
+  assert.equal(result.rows[0].mapping_status, "pending_non_authoritative_lookup");
+  assert.equal(store.clarification_requests[0].status, "answered");
+  assert.equal(store.clarification_requests[0].meta.non_authoritative_account_evidence_status, "pending");
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(mappingStarted, true);
+  releaseMapping();
+  await new Promise((resolve) => setTimeout(resolve, 5));
+});
+
 test("Phase 5B invalid answer fails authoritatively and leaves request pending", async () => {
   const store = baseStore();
   const result = await submit(store, [{ request_id: "req-1", transaction_id: "txn-1", answer_text: "x" }]);
@@ -261,10 +295,11 @@ test("Phase 5B mapping failure stays non-blocking and Monthly Review still has a
 
   assert.equal(result.ok, true);
   assert.equal(result.rows[0].success, true);
-  assert.equal(result.rows[0].mapping_status, "lookup_failed");
+  assert.equal(result.rows[0].mapping_status, "pending_non_authoritative_lookup");
   assert.equal(store.clarification_requests[0].status, "answered");
   assert.equal(store.clarification_requests[0].resolved_at, null);
   assert.equal(store.clarification_requests[0].meta.customer_context_only, true);
+  assert.equal(store.clarification_requests[0].meta.non_authoritative_account_evidence_status, "pending");
   assert.equal(store.transaction_categorizations[0].status, "needs_review");
 });
 

@@ -675,6 +675,92 @@ function buildClarificationSubmissionResult({ requestedCount, rows, mapped, unma
   };
 }
 
+function buildNonAuthoritativeAccountEvidence(mapping = {}) {
+  return {
+    qbo_account_id: mapping.account?.id || null,
+    qbo_account_name: mapping.account?.name || null,
+    canonical_account_key: mapping.canonical_account_key || null,
+    canonical_account_name: mapping.canonical_account_name || null,
+    resolution_status: mapping.canonical_resolution_status || null,
+    match_reason: mapping.match_reason || null,
+    review_required: mapping.review_required === true,
+  };
+}
+
+function scheduleClarificationAnswerMappingEnrichment({
+  businessId,
+  requestId,
+  answerText,
+  selectedIntent,
+  txn,
+  mapAnswer,
+  db,
+}) {
+  if (!businessId || !requestId || !answerText || !txn || typeof mapAnswer !== "function") return;
+
+  setTimeout(() => {
+    Promise.resolve()
+      .then(async () => {
+        let mapping = null;
+        try {
+          mapping = await mapAnswer({
+            businessId,
+            txn,
+            answerText,
+            allowQboAccountCreate: false,
+            allowProviderWrites: false,
+          });
+        } catch (err) {
+          mapping = {
+            account: null,
+            canonical_account_key: null,
+            canonical_account_name: null,
+            canonical_resolution_status: "lookup_failed",
+            match_reason: err?.message || "customer_answer_account_suggestion_failed",
+            confidence: "low",
+            review_required: true,
+            resolution: null,
+          };
+        }
+
+        const evidence = mapping ? buildNonAuthoritativeAccountEvidence(mapping) : null;
+        const evidenceStatus = mapping?.canonical_resolution_status || (mapping ? "unmapped" : "not_mapped");
+        const { data: currentReq, error: currentErr } = await db
+          .from("clarification_requests")
+          .select("id,status,answer_text,meta,resolved_at")
+          .eq("business_id", businessId)
+          .eq("id", requestId)
+          .maybeSingle();
+        if (currentErr || !currentReq) return;
+        if (currentReq.status !== "answered" || currentReq.answer_text !== answerText || currentReq.resolved_at) return;
+
+        const nextMeta = {
+          ...(currentReq.meta || {}),
+          selected_intent: selectedIntent || currentReq.meta?.selected_intent || null,
+          customer_context_only: true,
+          non_authoritative_account_evidence: evidence,
+          non_authoritative_account_evidence_status: evidenceStatus,
+        };
+        await db
+          .from("clarification_requests")
+          .update({
+            meta: nextMeta,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("business_id", businessId)
+          .eq("id", requestId)
+          .eq("status", "answered");
+      })
+      .catch((err) => {
+        console.warn("[operator-requests] customer answer account enrichment failed", {
+          business_id: businessId,
+          request_id: requestId,
+          message: err?.message || String(err),
+        });
+      });
+  }, 0);
+}
+
 export async function processClarificationAnswers({
   businessId,
   answers = [],
@@ -852,42 +938,12 @@ export async function processClarificationAnswers({
       continue;
     }
 
-    let mapping = null;
-    try {
-      mapping = await mapAnswer({
-        businessId,
-        txn,
-        answerText,
-        allowQboAccountCreate: false,
-        allowProviderWrites: false,
-      });
-    } catch (err) {
-      mapping = {
-        account: null,
-        canonical_account_key: null,
-        canonical_account_name: null,
-        canonical_resolution_status: "lookup_failed",
-        match_reason: err?.message || "customer_answer_account_suggestion_failed",
-        confidence: "low",
-        review_required: true,
-        resolution: null,
-      };
-    }
     const requestMeta = {
       ...(effectiveReq.meta || {}),
       selected_intent: ans.selected_intent || null,
       customer_context_only: true,
-      non_authoritative_account_evidence: mapping
-        ? {
-            qbo_account_id: mapping.account?.id || null,
-            qbo_account_name: mapping.account?.name || null,
-            canonical_account_key: mapping.canonical_account_key || null,
-            canonical_account_name: mapping.canonical_account_name || null,
-            resolution_status: mapping.canonical_resolution_status || null,
-            match_reason: mapping.match_reason || null,
-            review_required: mapping.review_required === true,
-          }
-        : null,
+      non_authoritative_account_evidence: null,
+      non_authoritative_account_evidence_status: "pending",
       transaction_context_snapshot: {
         date: txn.date || null,
         amount: txn.amount ?? null,
@@ -948,11 +1004,17 @@ export async function processClarificationAnswers({
       continue;
     }
 
-    if (mapping?.account?.id && mapping?.account?.name) {
-      mapped += 1;
-    } else {
-      unmapped += 1;
-    }
+    scheduleClarificationAnswerMappingEnrichment({
+      businessId,
+      requestId: persistedReq.id || effectiveReq.id,
+      answerText,
+      selectedIntent: ans.selected_intent || null,
+      txn,
+      mapAnswer,
+      db,
+    });
+
+    unmapped += 1;
 
     results.push({
       request_id: ans.request_id,
@@ -962,9 +1024,9 @@ export async function processClarificationAnswers({
       remapped: !!resolved?.wasRemapped,
       success: true,
       persisted: true,
-      mapped: Boolean(mapping?.account?.id),
-      mapping_status: mapping?.canonical_resolution_status || (mapping ? "unmapped" : "not_mapped"),
-      mapping_error: mapping?.canonical_resolution_status === "lookup_failed" ? "customer_answer_account_suggestion_failed" : null,
+      mapped: false,
+      mapping_status: "pending_non_authoritative_lookup",
+      mapping_error: null,
       status: "answered",
       accounting_status: "needs_review",
       final_qbo_account_id: null,

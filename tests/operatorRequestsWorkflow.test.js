@@ -224,6 +224,10 @@ test("customer answer path has zero QBO provider-write capability", () => {
     service.indexOf("export async function processClarificationAnswers"),
     service.indexOf("export default")
   );
+  const answerMappingPath = service.slice(
+    service.indexOf("function scheduleClarificationAnswerMappingEnrichment"),
+    service.indexOf("export default")
+  );
   const mappingBody = service.slice(
     service.indexOf("export async function mapAnswerToCoa"),
     service.indexOf("export async function createOrUpdateClarificationRequest")
@@ -232,9 +236,9 @@ test("customer answer path has zero QBO provider-write capability", () => {
   assert.match(mappingBody, /allowQboAccountCreate = false/);
   assert.match(mappingBody, /allowProviderWrites = false/);
   assert.match(mappingBody, /allowCreate:\s*allowQboAccountCreate === true && allowProviderWrites === true/);
-  assert.match(answerBody, /allowQboAccountCreate:\s*false/);
-  assert.match(answerBody, /allowProviderWrites:\s*false/);
-  assert.match(answerBody, /catch \(err\)[\s\S]*customer_answer_account_suggestion_failed/);
+  assert.match(answerMappingPath, /allowQboAccountCreate:\s*false/);
+  assert.match(answerMappingPath, /allowProviderWrites:\s*false/);
+  assert.match(answerMappingPath, /catch \(err\)[\s\S]*customer_answer_account_suggestion_failed/);
   assert.doesNotMatch(answerBody, /createQboAccountFromCanonical|claimCreationIntent|createQboVendor|postToQbo|createQboTransfer|createQboPurchase|createQboDeposit/);
   assert.match(resolver, /allowCreate = false/);
   assert.match(resolver, /creationAuthorizedByInternalAccountant/);
