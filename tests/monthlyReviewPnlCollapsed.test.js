@@ -90,7 +90,7 @@ test("Monthly Review P&L source semantics use QBO snapshot instead of source led
   assert.match(ui, /Approve \{formatMonthShort\(month\)\} Books/);
   assert.match(ui, /function ReviewedStamp/);
   assert.match(ui, /Reopen Month/);
-  assert.match(ui, /Publish Monthly Report/);
+  assert.match(ui, /Publish Final P&amp;L Report PDF/);
   assert.doesNotMatch(ui, /Month Close Summary/);
   assert.doesNotMatch(ui, /buildAccountingCloseSummary/);
 });

@@ -1,8 +1,10 @@
 import React from "react";
 import { CoaDropdown } from "./BookkeepingFeed.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
+import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 
 const BADGE_BASE = "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium";
+const MIRROR_TABLE_GRID = "grid grid-cols-[92px_minmax(260px,1.55fr)_minmax(170px,0.9fr)_minmax(240px,1fr)_minmax(150px,0.72fr)_minmax(220px,0.88fr)]";
 
 export default function BookkeepingTransactionMirrorTable({
   rows = [],
@@ -25,15 +27,13 @@ export default function BookkeepingTransactionMirrorTable({
 
   return (
     <div className="overflow-hidden rounded-xl border border-white/10">
-      <div className="grid grid-cols-[96px_minmax(240px,1.6fr)_minmax(150px,0.9fr)_minmax(170px,0.9fr)_minmax(180px,1fr)_minmax(120px,0.7fr)_minmax(220px,0.95fr)_140px] border-b border-white/10 bg-white/[0.045] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white/40">
+      <div className={`${MIRROR_TABLE_GRID} border-b border-white/10 bg-white/[0.045] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white/40`}>
         <span>Date</span>
         <span>Transaction</span>
-        <span>Account</span>
-        <span>GL</span>
-        <span>State</span>
-        <span>QBO</span>
-        <span>Actions</span>
-        <span className="text-right">Amount</span>
+        <span>Bank Account</span>
+        <span>GL Account</span>
+        <span>QBO Status</span>
+        <span>Action</span>
       </div>
       <div className="divide-y divide-white/10">
         {rows.map((row) => (
@@ -55,12 +55,13 @@ export default function BookkeepingTransactionMirrorTable({
 }
 
 function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction, onApprove, onReclassify, onPost, onRetry }) {
-  const badges = buildStateBadges(row);
   const initialAccountId = row.final_qbo_account_id || row.glAccountId || row.suggestedAccountId || "";
   const [selectedAccountId, setSelectedAccountId] = React.useState(initialAccountId);
+
   React.useEffect(() => {
     setSelectedAccountId(initialAccountId);
   }, [initialAccountId, row.id]);
+
   const qboStatus = deriveMirrorQboPostingStatus(row);
   const qboLabel = qboStatus.label;
   const isNeedsReviewFeed = feedStatus === "needs_review";
@@ -71,43 +72,52 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
   const isActionBusy = (action) => busyAction === `${action}:${row.id}`;
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
-  const genericActionsBlocked = isGenericFeedActionBlocked(row);
+  const protectedReason = getProtectedWorkflowReason(row);
+  const genericActionsBlocked = Boolean(protectedReason);
+  const bankAccountLabel = formatBankAccountLabel(row);
+  const bankAccountMeta = formatBankAccountMeta(row);
+  const glAccountLabel = row.final_qbo_account_name || row.glAccountName || row.suggestedAccountName || "Uncategorized";
+  const flags = buildTransactionFlags(row);
+
   return (
-    <div className="grid grid-cols-[96px_minmax(240px,1.6fr)_minmax(150px,0.9fr)_minmax(170px,0.9fr)_minmax(180px,1fr)_minmax(120px,0.7fr)_minmax(220px,0.95fr)_140px] items-center gap-3 px-4 py-3 text-sm text-white/75">
+    <div className={`${MIRROR_TABLE_GRID} items-center gap-3 px-4 py-3 text-sm text-white/75`}>
       <div className="text-white/45">{formatShortDate(row.date)}</div>
+
       <div className="min-w-0">
-        <div className="truncate font-semibold text-white">{row.payee || row.vendor || row.description || "Transaction"}</div>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-semibold text-white">{row.payee || row.vendor || row.description || "Transaction"}</span>
+          <span className={`shrink-0 text-xs font-semibold ${Number(row.amount || 0) < 0 ? "text-rose-100" : "text-emerald-100"}`}>
+            {formatMoney(row.amount)}
+          </span>
+        </div>
         <div className="truncate text-xs text-white/45">{row.description || row.vendor || row.payee || "No memo"}</div>
         {row.customer_answered ? (
           <div className="mt-1 truncate text-xs text-emerald-100/80">Customer answered: {row.customer_response}</div>
         ) : null}
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-white/70">{row.currentAccount || "Unassigned account"}</div>
-        <div className="truncate text-xs text-white/40">{formatAccountType(row)}</div>
-      </div>
-      <div className="min-w-0">
-        <div className="truncate text-white/75">{row.final_qbo_account_name || row.glAccountName || row.suggestedAccountName || "Uncategorized"}</div>
-        {row.suggestedAccountName && !row.final_qbo_account_name ? (
-          <div className="truncate text-xs text-white/40">Suggested</div>
+        {flags.length ? (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {flags.map((badge) => (
+              <span key={badge.label} className={`${BADGE_BASE} ${badge.className}`}>
+                {badge.label}
+              </span>
+            ))}
+          </div>
         ) : null}
       </div>
-      <div className="flex flex-wrap gap-1.5">
-        {badges.map((badge) => (
-          <span key={badge.label} className={`${BADGE_BASE} ${badge.className}`}>
-            {badge.label}
-          </span>
-        ))}
+
+      <div className="min-w-0">
+        <div className="truncate text-white/70">{bankAccountLabel}</div>
+        {bankAccountMeta ? <div className="truncate text-xs text-white/40">{bankAccountMeta}</div> : null}
       </div>
-      <div>
-        <span className={`${BADGE_BASE} ${qboBadgeClass(qboStatus)}`} title={qboStatus.detail || qboLabel}>{qboLabel}</span>
-        {qboStatus.detail ? <div className="mt-1 truncate text-[10px] text-white/35">{qboStatus.detail}</div> : null}
-      </div>
-      <div className="space-y-2">
+
+      <div className="min-w-0">
         {genericActionsBlocked ? (
-          <div className="rounded-lg border border-amber-300/18 bg-amber-300/[0.08] px-2 py-1 text-[11px] text-amber-100">
-            Special workflow
-          </div>
+          <>
+            <div className="truncate text-white/75">{glAccountLabel}</div>
+            {row.suggestedAccountName && !row.final_qbo_account_name ? (
+              <div className="truncate text-xs text-white/40">Suggested</div>
+            ) : null}
+          </>
         ) : (
           <CoaDropdown
             value={selectedAccountId}
@@ -119,6 +129,19 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
             onChange={(accountId) => setSelectedAccountId(accountId)}
           />
         )}
+      </div>
+
+      <div>
+        <span className={`${BADGE_BASE} ${qboBadgeClass(qboStatus)}`} title={qboStatus.detail || qboLabel}>{qboLabel}</span>
+        {qboStatus.detail ? <div className="mt-1 truncate text-[10px] text-white/35">{qboStatus.detail}</div> : null}
+      </div>
+
+      <div className="space-y-1.5">
+        {genericActionsBlocked ? (
+          <div className="rounded-lg border border-amber-300/18 bg-amber-300/[0.08] px-2 py-1 text-[11px] text-amber-100" title={protectedReason.detail || protectedReason.label}>
+            {protectedReason.label}
+          </div>
+        ) : null}
         <div className="flex flex-wrap gap-1.5">
           {isNeedsReviewFeed && !genericActionsBlocked ? (
             <button
@@ -142,7 +165,7 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
           ) : null}
         </div>
         <div className="mt-1 flex flex-wrap gap-1.5">
-          {isHandledFeed && !isPosted && !isFailed && !isQueued ? (
+          {isHandledFeed && !genericActionsBlocked && !isPosted && !isFailed && !isQueued ? (
             <button
               type="button"
               onClick={() => onPost?.(row)}
@@ -152,7 +175,7 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
               {isActionBusy("post") ? "Posting..." : "Post to QBO"}
             </button>
           ) : null}
-          {isHandledFeed && isFailed ? (
+          {isHandledFeed && !genericActionsBlocked && isFailed ? (
             <button
               type="button"
               onClick={() => onRetry?.(row)}
@@ -164,17 +187,12 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
           ) : null}
         </div>
       </div>
-      <div className={`text-right font-semibold ${Number(row.amount || 0) < 0 ? "text-rose-100" : "text-emerald-100"}`}>
-        {formatMoney(row.amount)}
-      </div>
     </div>
   );
 }
 
-function buildStateBadges(row) {
-  const badges = [
-    { label: statusLabel(row.status), className: "border-white/10 bg-white/[0.06] text-white/65" },
-  ];
+function buildTransactionFlags(row) {
+  const badges = [];
   if (row.customer_answered) badges.push({ label: "Customer answered", className: "border-emerald-300/25 bg-emerald-300/10 text-emerald-100" });
   if (row.pending) badges.push({ label: "Pending", className: "border-amber-300/25 bg-amber-300/10 text-amber-100" });
   if (row.is_check) badges.push({ label: row.check_number ? `Check ${row.check_number}` : "Check", className: "border-sky-300/25 bg-sky-300/10 text-sky-100" });
@@ -197,36 +215,64 @@ function qboBadgeClass(status) {
   return "border-white/10 bg-white/[0.06] text-white/55";
 }
 
-function isGenericFeedActionBlocked(row = {}) {
+export function getProtectedWorkflowReason(row = {}) {
   const taxonomy = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
-  if (row.pending || row.accounting_review_required) return true;
-  if (row.cc_payment_pair_id || row.cc_payment_rejected === false) return true;
-  if (taxonomy === "cc_payment") return true;
-  return [
-    "transfer_internal",
-    "bank_transfer",
-    "owner_draw",
-    "owner_contribution",
-    "owner_distribution",
-    "refund",
-    "loan_movement",
-    "tax_payment",
-    "payroll",
-  ].includes(taxonomy);
-}
-
-function statusLabel(status) {
-  const value = String(status || "needs_review").replace(/_/g, " ");
-  return value.replace(/\b\w/g, (char) => char.toUpperCase());
+  const reason = String(row.accounting_review_reason || row.meta?.accounting_review_reason || "").toLowerCase();
+  if (row.pending) return { label: "Pending bank transaction", detail: "Wait for the bank to finalize this transaction before accounting changes." };
+  if (row.cc_payment_pair_id || row.cc_payment_rejected === false || taxonomy === "cc_payment") {
+    return { label: "Credit card payment", detail: "Credit card payment handling uses the protected transfer workflow." };
+  }
+  if (row.is_check && /check/.test(reason)) return { label: row.check_number ? `Check ${row.check_number}` : "Check", detail: "Checks use the protected check workflow." };
+  if (["transfer_internal", "bank_transfer"].includes(taxonomy)) return { label: "Transfer", detail: "Transfers use the protected transfer workflow." };
+  if (["owner_draw", "owner_contribution", "owner_distribution"].includes(taxonomy)) return { label: "Owner movement", detail: "Owner equity movements use a protected workflow." };
+  if (taxonomy === "refund") return { label: "Refund", detail: "Refunds use a protected workflow." };
+  if (taxonomy === "loan_movement") return { label: "Loan movement", detail: "Loan movements use a protected workflow." };
+  if (taxonomy === "tax_payment") return { label: "Tax payment", detail: "Tax payments use a protected workflow." };
+  if (taxonomy === "payroll") return { label: "Payroll", detail: "Payroll uses a protected workflow." };
+  if (row.accounting_review_required && reason && !/uncategorized|needs review|review required/.test(reason)) {
+    return { label: "Other protected workflow", detail: row.accounting_review_reason };
+  }
+  if (row.accounting_review_required) {
+    return { label: "Bank account review", detail: "This bank transaction needs internal account review before accounting changes." };
+  }
+  return null;
 }
 
 function formatTaxonomy(value) {
   return String(value || "").replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function formatAccountType(row) {
-  const parts = [row.plaidAccountId || row.plaid_account_id || "", row.direction || ""].filter(Boolean);
-  return parts.length ? parts.join(" · ") : "Connected account";
+function formatBankAccountLabel(row) {
+  const rawPlaidId = String(row.plaidAccountId || row.plaid_account_id || "");
+  const label = [
+    row.bank_account,
+    row.currentAccount,
+    row.account_name,
+    row.account_official_name,
+    row.plaidAccountName,
+    row.plaid_account_name,
+  ]
+    .map((value) => String(value || "").trim())
+    .find((value) => value && value !== rawPlaidId);
+
+  return formatPlaidAccountDisplayLabel({
+    name: label || null,
+    official_name: row.account_official_name || null,
+    mask: row.account_mask || row.mask || row.plaidAccountMask || null,
+    type: row.account_type || row.type || null,
+    subtype: row.account_subtype || row.subtype || null,
+  });
+}
+
+function formatBankAccountMeta(row) {
+  const parts = [
+    row.institution_name || row.institutionName || row.institution,
+    row.account_subtype || row.subtype || row.account_type || row.type,
+    row.direction,
+  ]
+    .map((value) => String(value || "").replace(/[_-]+/g, " ").trim())
+    .filter(Boolean);
+  return parts.length ? parts.join(" · ") : "";
 }
 
 function formatShortDate(value) {

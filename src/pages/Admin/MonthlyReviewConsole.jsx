@@ -1107,7 +1107,7 @@ export default function MonthlyReviewConsole() {
                       className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300/20 bg-sky-300/[0.09] px-4 py-2 text-sm font-semibold text-sky-100 transition hover:bg-sky-300/[0.14] disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       {busyAction === "publish-report" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
-                      Publish Monthly Report
+                      Publish Final P&amp;L Report PDF
                     </button>
                     {detail?.stamp ? (
                       <button

@@ -1,4 +1,5 @@
 import { supabase } from "../supabaseAdmin.js";
+import { formatPlaidAccountDisplayLabel } from "./postingTraceDisplay.js";
 
 function firstDayOfMonth() {
   const now = new Date();
@@ -100,6 +101,13 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     category_detailed: row.category_detailed || null,
     personal_finance_category: row.personal_finance_category || null,
     currentAccount: acctName,
+    bank_account: acctName,
+    account_name: row.account_name || null,
+    account_official_name: row.account_official_name || null,
+    account_mask: row.account_mask || row.mask || null,
+    account_type: row.account_type || null,
+    account_subtype: row.account_subtype || null,
+    institution_name: row.institution_name || row.institution || null,
     suggestedAccountId: suggestedId,
     suggestedAccountName: suggestedName,
     suggested_canonical_account_key: cat.suggested_canonical_account_key || null,
@@ -191,6 +199,33 @@ export function normalizeBookkeepingRpcRow(row = {}) {
     row.account_name || row.account_official_name || null,
     operatorRequest
   );
+}
+
+async function fetchPlaidAccountDisplayMap({ db = supabase, businessId, plaidAccountIds = [] } = {}) {
+  const ids = Array.from(new Set((plaidAccountIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
+  if (!ids.length || !businessId || typeof db?.from !== "function") return new Map();
+
+  const { data, error } = await db
+    .from("plaid_accounts")
+    .select("plaid_account_id,name,official_name,mask,type,subtype,institution_name,institution")
+    .eq("business_id", businessId)
+    .in("plaid_account_id", ids);
+
+  if (error) return new Map();
+
+  return new Map((data || []).map((account) => [
+    String(account.plaid_account_id),
+    {
+      bank_account: formatPlaidAccountDisplayLabel(account),
+      currentAccount: formatPlaidAccountDisplayLabel(account),
+      account_name: account.name || null,
+      account_official_name: account.official_name || null,
+      account_mask: account.mask || null,
+      account_type: account.type || null,
+      account_subtype: account.subtype || null,
+      institution_name: account.institution_name || account.institution || null,
+    },
+  ]));
 }
 
 export async function countBookkeepingTransactions({
@@ -287,5 +322,14 @@ export async function fetchBookkeepingTransactions({
     });
   }
   const rows = pageRows.map((row) => normalizeBookkeepingRpcRow(row));
-  return { rows, totalCount };
+  const accountDisplayMap = await fetchPlaidAccountDisplayMap({
+    db,
+    businessId,
+    plaidAccountIds: rows.map((row) => row.plaid_account_id || row.plaidAccountId),
+  });
+  const enrichedRows = rows.map((row) => {
+    const display = accountDisplayMap.get(String(row.plaid_account_id || row.plaidAccountId || ""));
+    return display ? { ...row, ...display } : row;
+  });
+  return { rows: enrichedRows, totalCount };
 }

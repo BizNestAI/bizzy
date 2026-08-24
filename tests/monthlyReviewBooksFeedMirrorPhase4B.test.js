@@ -88,6 +88,67 @@ test("shared service sends exact selected-month end bound before pagination", as
   assert.equal(result.rows[0].cc_payment_pair_id, "pair-1");
 });
 
+test("shared feed service enriches Plaid account ids into human-readable bank labels", async () => {
+  const { fetchBookkeepingTransactions } = await servicePromise;
+  const rpcCalls = [];
+  const fromCalls = [];
+  const db = {
+    rpc: async (name, params) => {
+      rpcCalls.push({ name, params });
+      return {
+        data: [{
+          id: "txn-1",
+          plaid_account_id: "raw-plaid-account-id",
+          date: "2026-08-12",
+          name: "Publix",
+          amount: -42.5,
+          cat_status: "needs_review",
+          total_count: 1,
+        }],
+        error: null,
+      };
+    },
+    from: (table) => ({
+      select: (columns) => ({
+        eq: (column, value) => ({
+          in: async (inColumn, ids) => {
+            fromCalls.push({ table, columns, column, value, inColumn, ids });
+            return {
+              data: [{
+                plaid_account_id: "raw-plaid-account-id",
+                name: "Blue Cash Everyday®",
+                official_name: "American Express Blue Cash Everyday",
+                mask: "1008",
+                type: "credit",
+                subtype: "credit card",
+                institution_name: "American Express",
+              }],
+              error: null,
+            };
+          },
+        }),
+      }),
+    }),
+  };
+
+  const result = await fetchBookkeepingTransactions({
+    businessId: "biz-1",
+    statusFilter: "needs_review",
+    rangeStart: "2026-08-01",
+    rangeEnd: "2026-09-01",
+    db,
+  });
+
+  assert.equal(rpcCalls.length, 1);
+  assert.equal(fromCalls[0].table, "plaid_accounts");
+  assert.equal(fromCalls[0].column, "business_id");
+  assert.deepEqual(fromCalls[0].ids, ["raw-plaid-account-id"]);
+  assert.equal(result.rows[0].currentAccount, "Blue Cash Everyday® ••••1008");
+  assert.equal(result.rows[0].bank_account, "Blue Cash Everyday® ••••1008");
+  assert.notEqual(result.rows[0].bank_account, "raw-plaid-account-id");
+  assert.equal(result.rows[0].account_subtype, "credit card");
+});
+
 test("SQL RPC overload filters by range end before pagination and remains service-role only", () => {
   assert.match(migration, /p_range_end date default null/);
   assert.match(migration, /and \(p_range_end is null or bt\.date < p_range_end\)/);
@@ -132,12 +193,26 @@ test("Monthly Review renders collapsible Needs Review and Handled mirrors with b
 
 test("mirror row presenter preserves customer-answer, QBO, and special-workflow state without mutations", () => {
   const tableSource = readFileSync(join(root, "src/components/Accounting/BookkeepingTransactionMirrorTable.jsx"), "utf8");
+  assert.match(tableSource, /Bank Account/);
+  assert.match(tableSource, /GL Account/);
+  assert.match(tableSource, /QBO Status/);
+  assert.match(tableSource, /Action/);
+  assert.doesNotMatch(tableSource, /<span>State<\/span>/);
+  assert.doesNotMatch(tableSource, /<span className="text-right">Amount<\/span>/);
   assert.match(tableSource, /Customer answered/);
   assert.match(tableSource, /deriveQboPostingLifecycle/);
   assert.match(tableSource, /const qboLabel = qboStatus\.label/);
   assert.match(tableSource, /Credit-card payment/);
   assert.match(tableSource, /Possible card payment/);
   assert.match(tableSource, /Duplicate risk/);
+  assert.match(tableSource, /formatPlaidAccountDisplayLabel/);
+  assert.match(tableSource, /formatBankAccountLabel/);
+  assert.match(tableSource, /getProtectedWorkflowReason/);
+  assert.match(tableSource, /Pending bank transaction/);
+  assert.match(tableSource, /Owner movement/);
+  assert.match(tableSource, /Tax payment/);
+  assert.doesNotMatch(tableSource, />\s*Special workflow\s*</);
+  assert.doesNotMatch(tableSource, /formatAccountType/);
   assert.doesNotMatch(tableSource, /safeFetch/);
   assert.doesNotMatch(tableSource, /fetch\(|createQbo|runBooksPostOnce|postSingleBookkeepingTransactionNow/);
   assert.match(tableSource, /onApprove/);

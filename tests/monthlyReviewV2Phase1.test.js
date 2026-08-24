@@ -98,7 +98,7 @@ test("Monthly Review V2 phase 1 detail keeps accounting-close guard while UI omi
   assert.match(detailRoute, /buildAccountingCloseFinalizationGuard/);
   assert.doesNotMatch(ui, /Number\(business\.reviewed_sections \|\| 0\) \/ Math\.max/);
   assert.match(ui, /getBusinessQueueProgress\(business\)/);
-  assert.match(ui, /Publish Monthly Report/);
+  assert.match(ui, /Publish Final P&amp;L Report PDF/);
   assert.doesNotMatch(ui, /Month Close Summary/);
   assert.doesNotMatch(ui, /buildCloseBlockerText/);
 });
@@ -118,7 +118,7 @@ test("Monthly Review V2 phase 1 exposes safe header actions and reviewed stamp",
   assert.match(ui, /function ReviewedStamp/);
   assert.match(ui, /Reviewed by \{formatReviewerName/);
   assert.match(ui, /Reopen Month/);
-  assert.match(ui, /Publish Monthly Report/);
+  assert.match(ui, /Publish Final P&amp;L Report PDF/);
   assert.doesNotMatch(ui, /Month Close Summary/);
   assert.match(ui, /getMonthlyCloseStatus/);
 });

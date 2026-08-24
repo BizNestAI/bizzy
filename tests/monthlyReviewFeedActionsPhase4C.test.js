@@ -107,7 +107,12 @@ test("Monthly Review mirror UI requires explicit actions and does not mutate on 
   assert.match(table, />\s*\{isActionBusy\("reclassify"\) \? "Saving\.\.\." : "Reclassify"\}\s*</);
   assert.match(table, /Post to QBO/);
   assert.match(table, /Retry QBO/);
-  assert.match(table, /isGenericFeedActionBlocked/);
+  assert.match(table, /getProtectedWorkflowReason/);
+  assert.match(table, /onChange=\{\(accountId\) => setSelectedAccountId\(accountId\)\}/);
+  assert.match(table, /Bank Account/);
+  assert.match(table, /GL Account/);
+  assert.match(table, /QBO Status/);
+  assert.doesNotMatch(table, />\s*Special workflow\s*</);
 });
 
 test("Monthly Review feed actions preserve Phase 4B bounded mirror source", () => {
