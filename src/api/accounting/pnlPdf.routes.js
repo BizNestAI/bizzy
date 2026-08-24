@@ -1,7 +1,58 @@
 import express from "express";
 import { ensurePnLPdf } from "./pnlPdfService.js";
+import { supabase } from "../../services/supabaseAdmin.js";
 
 const router = express.Router();
+
+function getRequestBusinessId(req) {
+  return req?.tenantContext?.businessId || req?.business?.id || req?.auth?.businessId || req?.query?.business_id || req?.query?.businessId || null;
+}
+
+/**
+ * GET /api/accounting/pnl/archive
+ * Read persisted report metadata for the verified tenant business.
+ */
+router.get("/archive", async (req, res) => {
+  try {
+    const businessId = getRequestBusinessId(req);
+    if (!businessId) return res.status(400).json({ ok: false, error: "missing_business_id" });
+
+    let query = supabase
+      .from("report_metadata")
+      .select("*")
+      .eq("business_id", businessId)
+      .order("year", { ascending: false })
+      .order("month", { ascending: false });
+
+    if (req.query?.published_only !== "false") {
+      query = query.not("monthly_review_published_at", "is", null);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.error("[pnl/archive] report metadata read failed", error?.message || error);
+      return res.status(500).json({ ok: false, error: "report_metadata_read_failed" });
+    }
+
+    const reports = await Promise.all(
+      (Array.isArray(data) ? data : []).map(async (row) => {
+        let signed_url = null;
+        if (row?.storage_path) {
+          const { data: signed, error: signedErr } = await supabase.storage
+            .from("financial-reports")
+            .createSignedUrl(row.storage_path, 60 * 10);
+          if (!signedErr) signed_url = signed?.signedUrl || null;
+        }
+        return { ...row, signed_url };
+      })
+    );
+
+    return res.status(200).json({ ok: true, reports });
+  } catch (e) {
+    console.error("[pnl/archive] error", e?.message || e);
+    return res.status(500).json({ ok: false, error: "report_archive_failed" });
+  }
+});
 
 /**
  * POST /api/accounting/pnl/pdf

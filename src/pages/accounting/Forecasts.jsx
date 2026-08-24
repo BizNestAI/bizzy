@@ -26,7 +26,8 @@ export default function Forecasts() {
   const userId = adminView.active ? "admin_view" : (user?.id || storedUserId);
   const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || contextBusinessId || storedBusinessId);
   const integrationManager = useIntegrationManager({ businessId });
-  const qbStatus = integrationManager?.getStatus?.("quickbooks")?.status || "disconnected";
+  const qbStatus = integrationManager?.getStatus?.("quickbooks")?.status || (adminView.active ? "loading" : "disconnected");
+  const qbStatusLoading = adminView.active && ["loading", "connecting"].includes(qbStatus);
 
   // Page controls
   const [editorMonths, setEditorMonths] = useState(12);  // horizon for forecast editor
@@ -130,7 +131,19 @@ export default function Forecasts() {
   );
 
   return (
-    canView ? (
+    qbStatusLoading ? (
+      <div className="px-3 md:px-4 pt-0 pb-8 text-white space-y-5">
+        <ModuleHeader
+          module="financials"
+          title="Cash Flow Forecasts"
+          subtitle="Loading QuickBooks connection state for Admin View."
+          className="mb-2"
+        />
+        <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 text-sm text-white/55">
+          Loading persisted customer forecast state...
+        </div>
+      </div>
+    ) : canView ? (
     <div className="px-3 md:px-4 pt-0 pb-8 text-white space-y-5">
       <ModuleHeader
         module="financials"
@@ -156,6 +169,7 @@ export default function Forecasts() {
           businessId={businessId}
           months={compareMonths}
           useDemoData={usingDemo}
+          readOnly={adminView.active && adminView.readOnly}
         />
       </section>
     </div>

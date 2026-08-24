@@ -279,48 +279,45 @@ export default function DocsLibraryPage(props) {
               )}
             </div>
 
-            {/* New (compact menu) */}
-            <div className="relative" ref={newMenuRef}>
-              <button
-                onClick={() => {
-                  if (!readOnly) setShowNewMenu(v => !v);
-                }}
-                disabled={readOnly}
-                title={readOnly ? "Document changes are unavailable in read-only Admin View." : undefined}
-                className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition shadow-[0_10px_28px_rgba(0,0,0,0.35)]"
-                style={{
-                  background: 'rgba(255,255,255,0.02)',
-                  border: `1px solid rgba(var(--accent-rgb),0.16)`,
-                  boxShadow: '0 0 0 1px rgba(var(--accent-rgb),0.06), 0 10px 28px rgba(0,0,0,0.35)',
-                  color: TEXT_MAIN
-                }}
-              >
-                <PlusCircle className="h-4 w-4" />
-                New
-                <MoreVertical className="h-4 w-4 opacity-70" />
-              </button>
-              {showNewMenu && !readOnly && (
-                <div
-                  className="absolute right-0 mt-2 w-44 rounded-lg p-1 shadow-2xl z-10 border transition-all duration-150 ease-out"
-                  style={{ background: PANEL_BG, borderColor: `rgba(var(--accent-rgb),0.16)`, boxShadow: '0 0 0 1px rgba(var(--accent-rgb),0.06), 0 18px 40px rgba(0,0,0,0.45)', transformOrigin: 'top right' }}
+            {!readOnly ? (
+              <div className="relative" ref={newMenuRef}>
+                <button
+                  onClick={() => setShowNewMenu(v => !v)}
+                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition shadow-[0_10px_28px_rgba(0,0,0,0.35)]"
+                  style={{
+                    background: 'rgba(255,255,255,0.02)',
+                    border: `1px solid rgba(var(--accent-rgb),0.16)`,
+                    boxShadow: '0 0 0 1px rgba(var(--accent-rgb),0.06), 0 10px 28px rgba(0,0,0,0.35)',
+                    color: TEXT_MAIN
+                  }}
                 >
-                  <button
-                    onClick={() => { closeNewMenu(); setShowUpload(true); }}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
-                    style={{ color: TEXT_MAIN }}
+                  <PlusCircle className="h-4 w-4" />
+                  New
+                  <MoreVertical className="h-4 w-4 opacity-70" />
+                </button>
+                {showNewMenu ? (
+                  <div
+                    className="absolute right-0 mt-2 w-44 rounded-lg p-1 shadow-2xl z-10 border transition-all duration-150 ease-out"
+                    style={{ background: PANEL_BG, borderColor: `rgba(var(--accent-rgb),0.16)`, boxShadow: '0 0 0 1px rgba(var(--accent-rgb),0.06), 0 18px 40px rgba(0,0,0,0.45)', transformOrigin: 'top right' }}
                   >
-                    <FileUp className="h-4 w-4" /> Upload file
-                  </button>
-                  <button
-                    onClick={() => { closeNewMenu(); createBlankNote(true); }}
-                    className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
-                    style={{ color: TEXT_MAIN }}
-                  >
-                    <FileText className="h-4 w-4" /> New note
-                  </button>
-                </div>
-              )}
-            </div>
+                    <button
+                      onClick={() => { closeNewMenu(); setShowUpload(true); }}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
+                      style={{ color: TEXT_MAIN }}
+                    >
+                      <FileUp className="h-4 w-4" /> Upload file
+                    </button>
+                    <button
+                      onClick={() => { closeNewMenu(); createBlankNote(true); }}
+                      className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
+                      style={{ color: TEXT_MAIN }}
+                    >
+                      <FileText className="h-4 w-4" /> New note
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -401,30 +398,26 @@ export default function DocsLibraryPage(props) {
             </div>
             <div className="font-medium" style={{ color: TEXT_MAIN }}>No docs yet</div>
             <div className="text-sm mt-1" style={{ color: TEXT_MUTED }}>
-              Upload files or create a note to get started.
+              {readOnly ? "No persisted business documents are available for this Admin View session." : "Upload files or create a note to get started."}
             </div>
-            <div className="mt-4 flex items-center justify-center gap-2">
-              <button
-                onClick={() => {
-                  if (!readOnly) setShowUpload(true);
-                }}
-                disabled={readOnly}
-                className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
-                style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
-              >
-                <FileUp className="h-4 w-4" /> Upload
-              </button>
-              <button
-                onClick={() => {
-                  if (!readOnly) createBlankNote(true);
-                }}
-                disabled={readOnly}
-                className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
-                style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
-              >
-                <FileText className="h-4 w-4" /> New note
-              </button>
-            </div>
+            {!readOnly ? (
+              <div className="mt-4 flex items-center justify-center gap-2">
+                <button
+                  onClick={() => setShowUpload(true)}
+                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
+                  style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
+                >
+                  <FileUp className="h-4 w-4" /> Upload
+                </button>
+                <button
+                  onClick={() => createBlankNote(true)}
+                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
+                  style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
+                >
+                  <FileText className="h-4 w-4" /> New note
+                </button>
+              </div>
+            ) : null}
           </div>
         )}
 

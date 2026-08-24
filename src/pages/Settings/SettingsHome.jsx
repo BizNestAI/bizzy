@@ -906,7 +906,7 @@ function PlaidIntegrationCard({ businessId, readOnly = false }) {
     } finally {
       setMappingLoading(false);
     }
-  }, [businessId, isConnected]);
+  }, [businessId, isConnected, readOnly]);
 
   useEffect(() => {
     refreshMappings();

@@ -11,6 +11,7 @@ const STORAGE_VERSION = 3;
 const PLAID_LINK_SCRIPT = "https://cdn.plaid.com/link/v2/stable/link-initialize.js";
 
 const STATUS = {
+  LOADING: "loading",
   DISCONNECTED: "disconnected",
   CONNECTING: "connecting",
   AWAITING: "awaiting",
@@ -116,6 +117,17 @@ function readState(businessId) {
   }
 }
 
+function withReadOnlyLoadingState(raw = DEFAULT_STATE) {
+  return {
+    ...raw,
+    quickbooks: {
+      ...(raw.quickbooks || DEFAULT_STATE.quickbooks),
+      status: STATUS.LOADING,
+      error: null,
+    },
+  };
+}
+
 function writeState(businessId, state) {
   if (typeof window === "undefined") return;
   try {
@@ -208,20 +220,32 @@ export default function useIntegrationManager(options = {}) {
   const adminView = useAdminView();
   const resolvedBusinessId = adminView.active && adminView.businessId ? adminView.businessId : resolveBusinessId(options.businessId);
   const readOnly = adminView.active && adminView.readOnly;
-  const [state, setState] = useState(() => readState(resolvedBusinessId));
+  const [state, setState] = useState(() => {
+    const initial = readState(resolvedBusinessId);
+    return readOnly ? withReadOnlyLoadingState(initial) : initial;
+  });
   const { connect: connectGmail = noop } = useGmailConnect();
   const qbStatus = state?.quickbooks?.status || DEFAULT_STATE.quickbooks.status;
 
+  const readStateForMode = useCallback(
+    (businessId) => {
+      const next = readState(businessId);
+      if (!readOnly) return next;
+      return withReadOnlyLoadingState(next);
+    },
+    [readOnly]
+  );
+
   useEffect(() => {
-    setState(readState(resolvedBusinessId));
-  }, [resolvedBusinessId]);
+    setState(readStateForMode(resolvedBusinessId));
+  }, [readStateForMode, resolvedBusinessId]);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const handler = (event) => {
       const target = event?.detail?.businessId;
       if (!target || target === resolvedBusinessId) {
-        setState(readState(resolvedBusinessId));
+        setState(readStateForMode(resolvedBusinessId));
       }
     };
     window.addEventListener(STORAGE_EVENT, handler);
@@ -230,7 +254,7 @@ export default function useIntegrationManager(options = {}) {
       window.removeEventListener(STORAGE_EVENT, handler);
       window.removeEventListener("storage", handler);
     };
-  }, [resolvedBusinessId]);
+  }, [readStateForMode, resolvedBusinessId]);
 
   // Parse OAuth callback query params (e.g., qb=connected) and mark status
   const updateProvider = useCallback(

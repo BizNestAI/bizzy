@@ -163,9 +163,9 @@ test("explicit mock liability mode is labeled as mock", async () => {
   assert.equal(res.body.meta.source, "mock");
 });
 
-test("server mounts the central tax router behind requireAuth only", () => {
+test("server mounts the central tax router behind the shared tenant auth stack", () => {
   const server = readFileSync(new URL("../src/server.js", import.meta.url), "utf8");
-  assert.match(server, /app\.use\("\/api\/tax", requireAuth, taxRouter\)/);
+  assert.match(server, /app\.use\("\/api\/tax", \.\.\.requireCustomerOrAdminView, taxRouter\)/);
   assert.doesNotMatch(server, /app\.use\("\/api\/tax", taxRoutes\)/);
   assert.doesNotMatch(server, /app\.use\("\/api\/tax\/deductions", requireAuth, taxDeductionsRouter\)/);
 });

@@ -10,6 +10,7 @@ import AskBizzyInsightButton from "../Bizzy/AskBizzyInsightButton";
 import { getMonthName } from "../../utils/dateUtils";
 import { apiFetch, getApiBase } from "../../utils/apiBase.js";
 import { shouldUseDemoData } from "../../services/demo/demoClient.js";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
 
 const SYNC_ENDPOINT = "/api/accounting/reports-sync";
 
@@ -22,6 +23,8 @@ const MONTHS = [
 export default function PNLArchiveViewer() {
   const user = useUser();
   const { currentBusiness } = useCurrentBusiness();
+  const adminView = useAdminView();
+  const readOnly = adminView.active && adminView.readOnly;
   const usingDemo = shouldUseDemoData(currentBusiness);
   const [reports, setReports] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +48,23 @@ export default function PNLArchiveViewer() {
   async function fetchReports() {
     if (!currentBusiness?.id) return;
     setLoading(true);
+    if (adminView.active) {
+      try {
+        const res = await apiFetch("/api/accounting/pnl/archive");
+        if (!res.ok) {
+          setReports([]);
+          return;
+        }
+        const data = await res.json();
+        setReports(Array.isArray(data?.reports) ? data.reports : []);
+      } catch (error) {
+        console.warn("[PNLArchiveViewer] Admin View archive fetch failed:", error?.message || error);
+        setReports([]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     let query = supabase
       .from("report_metadata")
       .select("*")
@@ -67,6 +87,7 @@ export default function PNLArchiveViewer() {
   }
 
   async function maybeSeedMockOnce() {
+    if (adminView.active) return;
     if (!usingDemo) return;
     if (!currentBusiness?.id) return;
     const key = `pnl_mock_seeded_${currentBusiness.id}`;
@@ -105,7 +126,7 @@ export default function PNLArchiveViewer() {
       await maybeSeedMockOnce();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentBusiness?.id]);
+  }, [adminView.active, currentBusiness?.id]);
 
   useEffect(() => {
     const cls = "pdf-modal-open";
@@ -175,6 +196,14 @@ export default function PNLArchiveViewer() {
       let signedUrl = null;
       let source = "bizzi";
 
+      if (readOnly) {
+        signedUrl = report.signed_url || report.signedUrl || null;
+        if (!signedUrl) {
+          alert("This archived report is unavailable in read-only Admin View.");
+          return;
+        }
+      }
+
       if (!signedUrl) {
         const generated = await generatePdfOnDemand(report, { forceRefresh: !usingDemo });
         if (generated?.signed_url) {
@@ -206,6 +235,17 @@ export default function PNLArchiveViewer() {
   }
 
   async function downloadPdf(report) {
+    if (readOnly) {
+      const signedUrl = report.signed_url || report.signedUrl || null;
+      if (!signedUrl) return;
+      const a = document.createElement("a");
+      a.href = signedUrl;
+      a.download = `${report.year}-${String(report.month).padStart(2, "0")}-pnl.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      return;
+    }
     console.log("[PNLArchiveViewer] downloadPdf start", {
       userId: user?.id,
       businessId: currentBusiness?.id,

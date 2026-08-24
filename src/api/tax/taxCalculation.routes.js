@@ -315,11 +315,15 @@ router.get("/overview", async (req, res) => {
     const supabase = req.app?.locals?.supabase || defaultSupabase;
     const apiVersion = resolveTaxApiVersion(req);
     const include = parseTaxApiIncludes(req.query?.include);
-    const businessId = validateBusinessIdInput(req);
+    const isAdminView = req?.tenantContext?.mode === "admin_view";
+    const businessId = isAdminView ? req.tenantContext.businessId : validateBusinessIdInput(req);
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const taxYear = optionalTaxYear(req.query?.year ?? req.query?.taxYear, new Date().getFullYear());
     const requestedAsOfDate = optionalDate(req.query?.asOfDate, "asOfDate");
     const refresh = String(req.query?.refresh || "").toLowerCase() === "true";
+    if (isAdminView && refresh) {
+      return sendTaxSuccess(res, adminViewTaxUnavailableDto({ businessId, taxYear, apiVersion }));
+    }
     if (refresh) {
       const data = await runCanonicalTaxCalculation({
         supabase,
@@ -333,8 +337,16 @@ router.get("/overview", async (req, res) => {
       return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ canonicalResult: data, include, apiVersion }));
     }
     const latest = await getLatestTaxRun({ supabase, businessId, taxYear });
-    if (!latest) throw notFoundError("tax_calculation_not_found", "No completed tax calculation exists for this business and year.", { businessId, taxYear });
+    if (!latest) {
+      if (isAdminView) {
+        return sendTaxSuccess(res, adminViewTaxUnavailableDto({ businessId, taxYear, apiVersion }));
+      }
+      throw notFoundError("tax_calculation_not_found", "No completed tax calculation exists for this business and year.", { businessId, taxYear });
+    }
     if (requestedAsOfDate && String(latest.as_of_date || "") !== requestedAsOfDate) {
+      if (isAdminView) {
+        return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ run: latest, include, apiVersion }));
+      }
       const data = await runCanonicalTaxCalculation({
         supabase,
         businessId,
@@ -353,6 +365,47 @@ router.get("/overview", async (req, res) => {
 });
 
 export default router;
+
+function adminViewTaxUnavailableDto({ businessId, taxYear, apiVersion }) {
+  return {
+    ok: true,
+    data: {
+      meta: {
+        apiVersion,
+        businessId,
+        taxYear,
+        status: "unavailable",
+        source: "admin_view_persisted_only",
+        adminViewUnavailable: true,
+      },
+      readiness: {
+        estimateReady: false,
+        reserveReady: false,
+        profileStatus: null,
+        setupState: "unavailable",
+        status: "unavailable",
+      },
+      summary: {},
+      profile: null,
+      actuals: null,
+      projection: null,
+      federal: null,
+      state: null,
+      payments: null,
+      safeHarbor: null,
+      reserve: null,
+      deadlines: [],
+      confidence: null,
+      warnings: [],
+      assumptions: [],
+      unsupportedItems: [],
+      supportedButDeferred: [],
+      explanationSummary: null,
+      links: {},
+      admin_view_read_only_data_unavailable: true,
+    },
+  };
+}
 
 async function loadRunComponents({ supabase, businessId, runId }) {
   const { data, error } = await supabase

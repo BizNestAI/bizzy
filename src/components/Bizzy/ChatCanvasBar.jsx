@@ -77,24 +77,23 @@ export default function ChatCanvasBar({
 
   return (
     <div className="w-full pointer-events-auto">
-      {/* Quick Prompts */}
-      <div className="pt-2 pb-0 bizzy-qprompts">
-        <AskBizzyGuidedPrompts
-          module={currentModule}
-          prompts={
-            isOnboardingMode
-              ? ONBOARDING_PROMPTS
-              : quickPrompts?.length
-                ? quickPrompts
-                : undefined
-          }
-          onPromptClick={handlePromptClick}
-          max={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
-          className="px-0"
-          disabled={chatReadOnly}
-          disabledReason="Chat is unavailable in read-only Admin View."
-        />
-      </div>
+      {!chatReadOnly ? (
+        <div className="pt-2 pb-0 bizzy-qprompts">
+          <AskBizzyGuidedPrompts
+            module={currentModule}
+            prompts={
+              isOnboardingMode
+                ? ONBOARDING_PROMPTS
+                : quickPrompts?.length
+                  ? quickPrompts
+                  : undefined
+            }
+            onPromptClick={handlePromptClick}
+            max={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
+            className="px-0"
+          />
+        </div>
+      ) : null}
       {/* Input bar */}
       <div data-bizzy-chatbar-shell data-bizzy-chatbar-measured>
         {chatReadOnly ? (

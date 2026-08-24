@@ -148,7 +148,7 @@ test("unclassified query only suppresses classifications for same tax year", asy
 test("tax transactions API is mounted behind auth and validates business access/pagination", () => {
   const server = readFileSync(resolve(__dirname, "../src/server.js"), "utf8");
   const routes = readFileSync(resolve(__dirname, "../src/api/tax/taxTransactions.routes.js"), "utf8");
-  assert.match(server, /app\.use\("\/api\/tax", requireAuth, taxRouter\)/);
+  assert.match(server, /app\.use\("\/api\/tax", \.\.\.requireCustomerOrAdminView, taxRouter\)/);
   assert.match(routes, /assertTaxBusinessAccess/);
   assert.match(routes, /validatePagination/);
   assert.match(routes, /optionalTaxYear/);

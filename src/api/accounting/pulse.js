@@ -67,6 +67,7 @@ router.get("/", async (req, res) => {
     const shouldGenerate = String(q.generate || "0") === "1";
     const mockRaw = String(q.mock ?? "");
     const wantMock = mockRaw === "1" || mockRaw.toLowerCase() === "true";
+    const adminViewOptional = q.admin_view_optional === "1" || q.admin_view_optional === "true";
 
     if ((!user_id && !isAdminViewRequest(req)) || !business_id) {
       return res.status(400).json({ error: "Missing user_id or business_id" });
@@ -91,6 +92,14 @@ router.get("/", async (req, res) => {
             admin_view_cache_only: true,
           });
         }
+        if (adminViewOptional) {
+          return res.status(200).json({
+            pulse: null,
+            admin_view_cache_only: true,
+            admin_view_unavailable: true,
+            message: "No persisted financial pulse is available for this business.",
+          });
+        }
         return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_read_only_data_unavailable" });
       }
 
@@ -110,6 +119,14 @@ router.get("/", async (req, res) => {
         return res.status(200).json({
           pulse: normalizePulse(latest || null),
           admin_view_cache_only: true,
+        });
+      }
+      if (adminViewOptional) {
+        return res.status(200).json({
+          pulse: null,
+          admin_view_cache_only: true,
+          admin_view_unavailable: true,
+          message: "No persisted financial pulse is available for this business.",
         });
       }
       return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_read_only_data_unavailable" });

@@ -2768,6 +2768,7 @@ function JobAssignmentBoard({
   onAddJob,
   onImportJobs,
   onRefresh,
+  readOnly = false,
 }) {
   const postedTransactions = transactions.filter((txn) => String(txn.status || "").toLowerCase() === "posted");
   const pendingCandidates = useMemo(() => (
@@ -2775,7 +2776,7 @@ function JobAssignmentBoard({
       .filter((candidate) => String(candidate.candidate_status || candidate.status || "pending") === "pending")
       .map(normalizeCandidateView)
   ), [jobCandidates]);
-  const assignmentDisabled = bucketMode !== "live";
+  const assignmentDisabled = readOnly || bucketMode !== "live";
   const visibleJobs = bucketMode === "completed" ? completedJobs : jobs;
   const [dateRangeFilter, setDateRangeFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
@@ -3011,7 +3012,9 @@ function JobAssignmentBoard({
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
-            onClick={onAddJob}
+            onClick={readOnly ? undefined : onAddJob}
+            disabled={readOnly}
+            title={readOnly ? "Job changes are unavailable in read-only Admin View." : undefined}
             className="inline-flex h-9 items-center gap-2 rounded-full border border-emerald-300/24 bg-emerald-300/[0.09] px-3 text-xs font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.15] focus:outline-none focus:ring-2 focus:ring-emerald-300/18"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -3019,7 +3022,9 @@ function JobAssignmentBoard({
           </button>
           <button
             type="button"
-            onClick={onImportJobs}
+            onClick={readOnly ? undefined : onImportJobs}
+            disabled={readOnly}
+            title={readOnly ? "Job imports are unavailable in read-only Admin View." : undefined}
             className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 text-xs font-semibold text-white/70 transition hover:border-emerald-300/20 hover:bg-emerald-300/[0.07] hover:text-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-300/16"
           >
             <UploadCloud className="h-3.5 w-3.5" />
@@ -3073,10 +3078,11 @@ function JobAssignmentBoard({
                       candidate={candidate}
                       jobs={jobs}
                       busyId={jobCandidateBusyId}
-                      onApproveNew={onApproveCandidateNew}
-                      onLinkExisting={onLinkCandidateExisting}
-                      onDismiss={onDismissCandidate}
-                      onMerge={onMergeCandidates}
+                      onApproveNew={readOnly ? null : onApproveCandidateNew}
+                      onLinkExisting={readOnly ? null : onLinkCandidateExisting}
+                      onDismiss={readOnly ? null : onDismissCandidate}
+                      onMerge={readOnly ? null : onMergeCandidates}
+                      readOnly={readOnly}
                     />
                   ))
                 ) : (
@@ -3148,7 +3154,9 @@ function JobAssignmentBoard({
             <div className="grid gap-2 md:grid-cols-[auto_0.62fr_0.62fr_minmax(180px,1.1fr)_0.8fr]">
               <button
                 type="button"
-                onClick={openAssignmentModal}
+                onClick={readOnly ? undefined : openAssignmentModal}
+                disabled={readOnly}
+                title={readOnly ? "Assignments are unavailable in read-only Admin View." : undefined}
                 className="inline-flex h-9 items-center justify-center gap-2 rounded-[14px] border border-emerald-300/25 bg-emerald-300/[0.08] px-3 text-xs font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-300/14"
               >
                 <Wand2 className="h-3.5 w-3.5" />
@@ -3351,6 +3359,7 @@ function JobDeepDive({
   onDismissPotentialChangeOrder,
   changeOrderSaving,
   changeOrderMessage,
+  readOnly = false,
 }) {
   const [changeOrderOpen, setChangeOrderOpen] = useState(false);
   const [changeOrderForm, setChangeOrderForm] = useState({
@@ -3405,6 +3414,10 @@ function JobDeepDive({
     setChangeOrderCopied(false);
   };
   const previewChangeOrderPrice = async () => {
+    if (readOnly) {
+      setChangeOrderError("Change orders are unavailable in read-only Admin View.");
+      return;
+    }
     const estimatedCost = Number(changeOrderForm.estimated_cost || 0);
     const targetMargin = changeOrderForm.target_margin_percent === "" ? null : Number(changeOrderForm.target_margin_percent);
     if (!Number.isFinite(estimatedCost) || estimatedCost < 0) {
@@ -3446,6 +3459,10 @@ function JobDeepDive({
   };
   const submitChangeOrder = async (event) => {
     event.preventDefault();
+    if (readOnly) {
+      setChangeOrderError("Change orders are unavailable in read-only Admin View.");
+      return;
+    }
     const title = changeOrderForm.title.trim();
     const description = changeOrderForm.description.trim();
     const estimatedCost = Number(changeOrderForm.estimated_cost || 0);
@@ -3490,6 +3507,10 @@ function JobDeepDive({
     }
   };
   const updateChangeOrderStatus = async (order, status) => {
+    if (readOnly) {
+      setChangeOrderError("Change order updates are unavailable in read-only Admin View.");
+      return;
+    }
     if (!order?.id) return;
     setChangeOrderActionId(`${order.id}:${status}`);
     setChangeOrderError("");
@@ -3507,6 +3528,10 @@ function JobDeepDive({
     }
   };
   const convertPotentialChangeOrder = async (suggestion) => {
+    if (readOnly) {
+      setChangeOrderError("Change orders are unavailable in read-only Admin View.");
+      return;
+    }
     if (!suggestion?.id) return;
     setPotentialChangeOrderBusyId(`${suggestion.id}:convert`);
     setChangeOrderError("");
@@ -3519,6 +3544,10 @@ function JobDeepDive({
     }
   };
   const dismissPotentialChangeOrder = async (suggestion) => {
+    if (readOnly) {
+      setChangeOrderError("Change order suggestions are read-only in Admin View.");
+      return;
+    }
     if (!suggestion?.id) return;
     setPotentialChangeOrderBusyId(`${suggestion.id}:dismiss`);
     setChangeOrderError("");
@@ -3627,8 +3656,10 @@ function JobDeepDive({
           </div>
           <button
             type="button"
-            onClick={onAssignMore}
-            className="mt-4 rounded-full border border-emerald-300/35 bg-emerald-300/12 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-300/18"
+            onClick={readOnly ? undefined : onAssignMore}
+            disabled={readOnly}
+            title={readOnly ? "Assignments are unavailable in read-only Admin View." : undefined}
+            className="mt-4 rounded-full border border-emerald-300/35 bg-emerald-300/12 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-300/18 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Assign More Transactions
           </button>
@@ -3673,7 +3704,8 @@ function JobDeepDive({
                     <button
                       type="button"
                       onClick={() => convertPotentialChangeOrder(suggestion)}
-                      disabled={potentialChangeOrderBusyId === `${suggestion.id}:convert`}
+                      disabled={readOnly || potentialChangeOrderBusyId === `${suggestion.id}:convert`}
+                      title={readOnly ? "Change orders are unavailable in read-only Admin View." : undefined}
                       className="rounded-full border border-emerald-300/35 bg-emerald-300/12 px-3 py-2 text-xs font-semibold text-emerald-50 hover:bg-emerald-300/18 disabled:opacity-55"
                     >
                       {potentialChangeOrderBusyId === `${suggestion.id}:convert` ? "Creating..." : "Create Change Order"}
@@ -3681,7 +3713,8 @@ function JobDeepDive({
                     <button
                       type="button"
                       onClick={() => dismissPotentialChangeOrder(suggestion)}
-                      disabled={potentialChangeOrderBusyId === `${suggestion.id}:dismiss`}
+                      disabled={readOnly || potentialChangeOrderBusyId === `${suggestion.id}:dismiss`}
+                      title={readOnly ? "Change order suggestions are read-only in Admin View." : undefined}
                       className="rounded-full border border-white/10 bg-white/[0.05] px-3 py-2 text-xs font-semibold text-white/65 hover:bg-white/[0.09] disabled:opacity-55"
                     >
                       {potentialChangeOrderBusyId === `${suggestion.id}:dismiss` ? "Dismissing..." : "Dismiss"}
@@ -3706,8 +3739,10 @@ function JobDeepDive({
           </div>
           <button
             type="button"
-            onClick={() => setChangeOrderOpen(true)}
-            className="rounded-full border border-emerald-300/35 bg-emerald-300/12 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-300/18"
+            onClick={readOnly ? undefined : () => setChangeOrderOpen(true)}
+            disabled={readOnly}
+            title={readOnly ? "Change orders are unavailable in read-only Admin View." : undefined}
+            className="rounded-full border border-emerald-300/35 bg-emerald-300/12 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-300/18 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Log Change Order
           </button>
@@ -3772,7 +3807,8 @@ function JobDeepDive({
                               key={action.status}
                               type="button"
                               onClick={() => updateChangeOrderStatus(order, action.status)}
-                              disabled={changeOrderActionId === `${order.id}:${action.status}`}
+                              disabled={readOnly || changeOrderActionId === `${order.id}:${action.status}`}
+                              title={readOnly ? "Change order updates are unavailable in read-only Admin View." : undefined}
                               className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1 text-[11px] font-semibold text-white/70 hover:border-emerald-300/30 hover:bg-emerald-300/10 hover:text-emerald-50 disabled:opacity-50"
                             >
                               {changeOrderActionId === `${order.id}:${action.status}` ? "Saving..." : action.label}
@@ -5500,7 +5536,7 @@ function RevenueDetailDrawer({ job, onClose }) {
   );
 }
 
-function CandidateBucketCard({ candidate, jobs = [], busyId, onApproveNew, onLinkExisting, onDismiss, onMerge }) {
+function CandidateBucketCard({ candidate, jobs = [], busyId, onApproveNew, onLinkExisting, onDismiss, onMerge, readOnly = false }) {
   const firstMatch = candidate.possibleMatches?.[0] || null;
   const matchJobId = firstMatch?.job_id || firstMatch?.id || jobs?.[0]?.id || "";
   const busy = busyId === candidate.id;
@@ -5548,18 +5584,18 @@ function CandidateBucketCard({ candidate, jobs = [], busyId, onApproveNew, onLin
       </div>
 
       <div className="mt-auto grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => onApproveNew?.(candidate.raw)} disabled={busy} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-emerald-300/28 bg-emerald-300/[0.1] px-2.5 py-1.5 text-[11px] font-semibold text-emerald-50 hover:bg-emerald-300/[0.16] disabled:opacity-50">
+        <button type="button" onClick={() => onApproveNew?.(candidate.raw)} disabled={busy || readOnly} title={readOnly ? "Suggested job changes are unavailable in read-only Admin View." : undefined} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-emerald-300/28 bg-emerald-300/[0.1] px-2.5 py-1.5 text-[11px] font-semibold text-emerald-50 hover:bg-emerald-300/[0.16] disabled:opacity-50">
           <Plus className="h-3.5 w-3.5" />
           Create job
         </button>
-        <button type="button" onClick={() => matchJobId && onLinkExisting?.(candidate.raw, matchJobId)} disabled={busy || !matchJobId} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-semibold text-white/65 hover:border-emerald-300/25 hover:bg-emerald-300/[0.08] hover:text-emerald-50 disabled:opacity-50">
+        <button type="button" onClick={() => matchJobId && onLinkExisting?.(candidate.raw, matchJobId)} disabled={busy || readOnly || !matchJobId} title={readOnly ? "Suggested job changes are unavailable in read-only Admin View." : undefined} className="inline-flex items-center justify-center gap-1.5 rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-semibold text-white/65 hover:border-emerald-300/25 hover:bg-emerald-300/[0.08] hover:text-emerald-50 disabled:opacity-50">
           <Link2 className="h-3.5 w-3.5" />
           Link
         </button>
-        <button type="button" onClick={() => onMerge?.([candidate.raw])} disabled={busy} className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-semibold text-white/60 hover:bg-white/[0.09] disabled:opacity-50">
+        <button type="button" onClick={() => onMerge?.([candidate.raw])} disabled={busy || readOnly} title={readOnly ? "Suggested job changes are unavailable in read-only Admin View." : undefined} className="rounded-full border border-white/10 bg-white/[0.05] px-2.5 py-1.5 text-[11px] font-semibold text-white/60 hover:bg-white/[0.09] disabled:opacity-50">
           Merge
         </button>
-        <button type="button" onClick={() => onDismiss?.(candidate.raw)} disabled={busy} className="rounded-full border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] font-semibold text-white/45 hover:bg-white/[0.08] disabled:opacity-50">
+        <button type="button" onClick={() => onDismiss?.(candidate.raw)} disabled={busy || readOnly} title={readOnly ? "Suggested job changes are unavailable in read-only Admin View." : undefined} className="rounded-full border border-white/10 bg-white/[0.035] px-2.5 py-1.5 text-[11px] font-semibold text-white/45 hover:bg-white/[0.08] disabled:opacity-50">
           Dismiss
         </button>
       </div>
@@ -6153,9 +6189,10 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } finally {
       setSavingChangeOrder(false);
     }
-  }, [businessId, loadJobCosting, loadSuggestions, usingDemo]);
+  }, [businessId, loadJobCosting, loadSuggestions, readOnly, usingDemo]);
 
   const previewChangeOrderPrice = useCallback(async (job, payload) => {
+    if (readOnly) throw new Error("Change order pricing is unavailable in read-only Admin View.");
     if (usingDemo) {
       const estimatedCost = Number(payload?.estimated_cost || 0);
       const targetMargin = Number(payload?.target_margin_percent || 35);
@@ -6181,9 +6218,10 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       },
     });
     return data?.recommendation || null;
-  }, [businessId, usingDemo]);
+  }, [businessId, readOnly, usingDemo]);
 
   const updateChangeOrder = useCallback(async (order, patch) => {
+    if (readOnly) throw new Error("Change order updates are unavailable in read-only Admin View.");
     if (!order?.id) throw new Error("Change order is missing an id.");
     if (usingDemo) {
       setJobs((prev) => prev.map((item) => {
@@ -6223,9 +6261,10 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     setChangeOrderMessage("Change order updated.");
     await loadJobCosting();
     return data?.change_order || null;
-  }, [businessId, loadJobCosting, usingDemo]);
+  }, [businessId, loadJobCosting, readOnly, usingDemo]);
 
   const convertPotentialChangeOrder = useCallback(async (suggestion) => {
+    if (readOnly) throw new Error("Change orders are unavailable in read-only Admin View.");
     if (!suggestion?.id) throw new Error("Potential change order is missing an id.");
     if (usingDemo) {
       const changeOrder = {
@@ -6265,9 +6304,10 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     await loadJobCosting();
     await loadSuggestions();
     return data?.change_order || null;
-  }, [businessId, loadJobCosting, loadSuggestions, usingDemo]);
+  }, [businessId, loadJobCosting, loadSuggestions, readOnly, usingDemo]);
 
   const dismissPotentialChangeOrder = useCallback(async (suggestion) => {
+    if (readOnly) throw new Error("Change order suggestions are read-only in Admin View.");
     if (!suggestion?.id) throw new Error("Potential change order is missing an id.");
     if (usingDemo) {
       setPotentialChangeOrders((prev) => prev.filter((item) => String(item.id) !== String(suggestion.id)));
@@ -6279,7 +6319,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     });
     setPotentialChangeOrders((prev) => prev.filter((item) => String(item.id) !== String(suggestion.id)));
     return null;
-  }, [businessId, usingDemo]);
+  }, [businessId, readOnly, usingDemo]);
 
   const approveCandidateNew = useCallback(async (candidate) => {
     if (!candidate?.id) return;
@@ -7068,9 +7108,10 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             onConfirmAssignment={confirmAssignment}
             onCancelAssignment={cancelAssignment}
             onStartVoice={startVoice}
-            onAddJob={() => setAddJobOpen(true)}
-            onImportJobs={() => setImportJobsOpen(true)}
+            onAddJob={readOnly ? null : () => setAddJobOpen(true)}
+            onImportJobs={readOnly ? null : () => setImportJobsOpen(true)}
             onRefresh={loadJobCosting}
+            readOnly={readOnly}
           />
         </div>
 
@@ -7089,6 +7130,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             onDismissPotentialChangeOrder={dismissPotentialChangeOrder}
             changeOrderSaving={savingChangeOrder}
             changeOrderMessage={changeOrderMessage}
+            readOnly={readOnly}
           />
         ) : null}
 
@@ -7493,7 +7535,8 @@ export default function JobsDashboard() {
 
   const integrationManager = useIntegrationManager({ businessId });
   const { getStatus, markStatus } = integrationManager;
-  const qbStatus = getStatus("quickbooks")?.status;
+  const qbStatus = getStatus("quickbooks")?.status || (adminView.active ? "loading" : "disconnected");
+  const qbStatusLoading = adminView.active && ["loading", "connecting"].includes(qbStatus);
 
   const usingDemo = useMemo(() => {
     void demoModeVersion;
@@ -7744,6 +7787,17 @@ export default function JobsDashboard() {
       }, followupOverrides[getInvoiceKey(row)]),
     }));
   }, [followupOverrides, openInvoices, usingMock]);
+
+  if (qbStatusLoading) {
+    return (
+      <div className="w-full px-3 md:px-4 pt-0 pb-4">
+        <div className="max-w-[1100px] mx-auto space-y-4">
+          <ModuleHeader module="jobs" subtitle="Loading persisted QuickBooks status for Admin View." />
+          <SkeletonCard lines={5} />
+        </div>
+      </div>
+    );
+  }
 
   if (!canView) {
     return <LiveModePlaceholder title="Connect QuickBooks to view Jobs" />;

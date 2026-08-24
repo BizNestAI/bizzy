@@ -111,8 +111,18 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
           months: String(Math.max(2, Math.min(12, Number(months) || 12))),
           mockOnly: opts.forceModel ? 'false' : undefined,
         });
+        if (readOnly) params.set('admin_view_optional', '1');
         const resp = await safeFetch(`/api/accounting/forecast?${params.toString()}`);
         const data = Array.isArray(resp?.forecast) ? resp.forecast : [];
+        if (readOnly && (!data.length || resp?.admin_view_unavailable)) {
+          setRows([]);
+          setDraft([]);
+          setPreviousRows(null);
+          setLastSavedAt(null);
+          setEdited(new Set());
+          setError(resp?.message || 'No persisted forecast is available for this business.');
+          return;
+        }
         if (!data.length) throw new Error('no-data');
         const normalized = alignForecastHorizon(data, months);
         setRows(normalized);
@@ -121,6 +131,15 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
         setLastSavedAt(null);
         setEdited(new Set());
       } catch (err) {
+        if (readOnly) {
+          setRows([]);
+          setDraft([]);
+          setPreviousRows(null);
+          setLastSavedAt(null);
+          setEdited(new Set());
+          setError('No persisted forecast is available for this business.');
+          return;
+        }
         const fallback = alignForecastHorizon(buildMockForecast(months), months);
         setRows(fallback);
         setDraft(fallback);
@@ -133,7 +152,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
         setLoading(false);
       }
     },
-    [userId, businessId, months, isDemo, demoForecast]
+    [userId, businessId, months, isDemo, demoForecast, readOnly]
   );
 
   useEffect(() => {

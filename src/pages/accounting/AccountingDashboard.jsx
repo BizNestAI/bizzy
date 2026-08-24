@@ -153,7 +153,8 @@ export default function AccountingDashboard() {
   const usingDemo = useMemo(() => shouldUseDemoData(currentBusiness), [currentBusiness]);
   const integrationManager = useIntegrationManager({ businessId });
   const qbState = integrationManager?.getStatus?.('quickbooks') || {};
-  const qbStatus = qbState?.status || 'disconnected';
+  const qbStatus = qbState?.status || (adminView.active ? 'loading' : 'disconnected');
+  const qbStatusLoading = adminView.active && ['loading', 'connecting'].includes(qbStatus);
   const periodValue = `${year || new Date().getFullYear()}-${padMonth(month || new Date().getMonth() + 1)}`;
   const periodLabel = useCallback(
     () => {
@@ -257,6 +258,19 @@ export default function AccountingDashboard() {
 
   if (loading) return null;
   if (!businessId) return <div className="text-rose-400 p-4">Select a business to view financials.</div>;
+  if (qbStatusLoading) {
+    return (
+      <div className={`${bgColor} ${textColor} px-3 md:px-4 pt-0 pb-8 space-y-6`}>
+        <ModuleHeader
+          module="financials"
+          title="Financial Hub"
+          subtitle="Loading persisted QuickBooks status for Admin View."
+          className="mb-2"
+        />
+        <CardSkeleton h="h-40" lines={4} />
+      </div>
+    );
+  }
   const qbConnected = qbStatus === 'connected';
   const backfillRunning = qbConnected && backfillStatus?.status === "running";
   const needsSync = qbConnected && !usingDemo && !adminView.active && !backfillRunning && !hasMetrics;

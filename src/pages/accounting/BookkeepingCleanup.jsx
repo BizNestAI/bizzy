@@ -224,6 +224,43 @@ function isInconsistentEmptyTransactionPage(payload = {}) {
   return rows.length === 0 && Number(total || 0) > 0;
 }
 
+function derivePersistedChartAccountsFromTransactions(rows = []) {
+  const byId = new Map();
+  const byName = new Map();
+  const addAccount = (id, name, type = null) => {
+    const cleanName = typeof name === "string" ? name.trim() : "";
+    if (!cleanName) return;
+    const cleanId = typeof id === "string" && id.trim() ? id.trim() : `persisted:${cleanName.toLowerCase()}`;
+    const account = {
+      id: cleanId,
+      name: cleanName,
+      fullyQualifiedName: cleanName,
+      type: type || "unknown",
+      account_type: type || null,
+      persisted: true,
+    };
+    if (!byId.has(cleanId)) byId.set(cleanId, account);
+    if (!byName.has(cleanName.toLowerCase())) byName.set(cleanName.toLowerCase(), account);
+  };
+
+  (Array.isArray(rows) ? rows : []).forEach((txn) => {
+    addAccount(
+      txn.glAccountId || txn.final_qbo_account_id || txn.finalQboAccountId || txn.suggestedAccountId || null,
+      txn.glAccountName ||
+        txn.final_qbo_account_name ||
+        txn.finalQboAccountName ||
+        txn.suggestedAccountName ||
+        txn.suggested_qbo_account_name ||
+        null,
+      txn.glAccountType || txn.final_qbo_account_type || txn.suggestedAccountType || null
+    );
+  });
+
+  return Array.from(new Map([...byId, ...byName].map(([, account]) => [account.id, account])).values()).sort((a, b) =>
+    String(a.name || "").localeCompare(String(b.name || ""))
+  );
+}
+
 function SummaryCard({ value, label, subtext }) {
   return (
     <div
@@ -1412,6 +1449,9 @@ function BookkeepingCleanup() {
 
   const reloadCoa = useCallback(async () => {
     if (usingDemo || !businessId) return;
+    if (adminView.active) {
+      return;
+    }
     try {
       const res = await fetchQboCoa(businessId);
       const accountsRes = res?.accounts || res?.chartOfAccounts || res || [];
@@ -1419,7 +1459,7 @@ function BookkeepingCleanup() {
     } catch (e) {
       console.warn("[bookkeeping] COA load failed", e?.message || e);
     }
-  }, [businessId, usingDemo]);
+  }, [adminView.active, businessId, usingDemo]);
 
   const reloadTransactions = useCallback(async () => {
     if (usingDemo || !businessId) return;
@@ -1624,6 +1664,12 @@ function BookkeepingCleanup() {
     reloadCoa();
     loadAutoPostStatus();
   }, [usingDemo, reloadAccounts, reloadCoa, loadAutoPostStatus]);
+
+  useEffect(() => {
+    if (!adminView.active || usingDemo) return;
+    const persisted = derivePersistedChartAccountsFromTransactions(transactions);
+    if (persisted.length) setChartAccounts(persisted);
+  }, [adminView.active, transactions, usingDemo]);
 
   useEffect(() => {
     if (usingDemo) return;

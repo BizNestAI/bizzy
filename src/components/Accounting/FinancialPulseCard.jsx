@@ -5,6 +5,7 @@ import { RefreshCw, MessageCircle } from "lucide-react";
 import CardHeader from "../UI/CardHeader"; // ⬅️ unify header style
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { apiFetch } from "../../utils/apiBase.js";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
 
 // normalize either camelCase or snake_case into a consistent shape
 function normalizePulse(pulse) {
@@ -42,6 +43,7 @@ function timeAgo(ts) {
 }
 
 export default function FinancialPulseCard({ userId, businessId }) {
+  const adminView = useAdminView();
   const { year, month } = useFinancialPeriod(businessId);
   const [pulse, setPulse] = useState(null);
   const [loading, setLoading] = useState(!!(userId && businessId));
@@ -78,7 +80,8 @@ export default function FinancialPulseCard({ userId, businessId }) {
         `?user_id=${encodeURIComponent(userId)}` +
         `&business_id=${encodeURIComponent(businessId)}` +
         `&year=${encodeURIComponent(year)}` +
-        `&month=${encodeURIComponent(month)}`;
+        `&month=${encodeURIComponent(month)}` +
+        (adminView.active ? `&admin_view_optional=1` : "");
 
       const res = await apiFetch(url, {
         method: "GET",
@@ -97,10 +100,15 @@ export default function FinancialPulseCard({ userId, businessId }) {
         throw new Error(`Non-JSON response (${ct}): ${raw.slice(0, 160)}`);
 
       const data = JSON.parse(raw);
+      if (adminView.active && data?.admin_view_unavailable) {
+        setPulse(null);
+        setError("No persisted financial pulse is available for this business.");
+        return;
+      }
       setPulse(normalizePulse(data?.pulse ?? null));
     } catch (err) {
       if (err.name !== "AbortError") {
-        console.error("[FinancialPulseCard] fetch failed:", err);
+        if (!adminView.active) console.error("[FinancialPulseCard] fetch failed:", err);
         setError(err.message || "Failed to load financial pulse.");
         setPulse(null);
       }
@@ -113,6 +121,10 @@ export default function FinancialPulseCard({ userId, businessId }) {
     if (demoPulse) {
       setPulse(demoPulse);
       setError(null);
+      return;
+    }
+    if (adminView.active) {
+      setError("Pulse generation is unavailable in read-only Admin View.");
       return;
     }
     if (!userId || !businessId || !year || !month) return;
@@ -146,7 +158,7 @@ export default function FinancialPulseCard({ userId, businessId }) {
     const ac = new AbortController();
     fetchPulse(ac.signal);
     return () => ac.abort();
-  }, [userId, businessId, year, month, demoPulse]);
+  }, [userId, businessId, year, month, demoPulse, adminView.active]);
 
   // UI
   const monthPill = (
@@ -163,13 +175,13 @@ export default function FinancialPulseCard({ userId, businessId }) {
       )}
       <button
         onClick={pulse ? () => fetchPulse() : handleGenerate}
-        disabled={generating || loading}
+        disabled={generating || loading || adminView.active}
         className={[
           "text-xs px-2 py-1 rounded-md border flex items-center gap-1",
           "hover:bg-white/10 transition-colors",
           generating || loading ? "opacity-50 cursor-not-allowed" : "",
         ].join(" ")}
-        title={pulse ? "Refresh snapshot" : "Generate snapshot"}
+        title={adminView.active ? "Live pulse generation is unavailable in read-only Admin View." : pulse ? "Refresh snapshot" : "Generate snapshot"}
       >
         {pulse ? (
           <>

@@ -6,6 +6,7 @@ import { buildChangeOrderDraft as defaultBuildDraft } from "../../../services/jo
 import { detectPotentialChangeOrders as defaultDetectPotential } from "../../../services/jobCosting/potentialChangeOrderDetector.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../../services/insights/contractorCfoTriggerService.js";
 import { createRateLimiter } from "../../_shared/rateLimit.js";
+import { isAdminViewRequest } from "../../_shared/tenantAuth.js";
 
 const router = express.Router();
 let supabaseClient = defaultSupabaseClient;
@@ -97,7 +98,7 @@ function normalizeText(value) {
 }
 
 function getBusinessId(req) {
-  return req.business?.id || req.auth?.businessId || req.user?.business_id || req.get("x-business-id") || req.query.business_id || req.body?.business_id || req.body?.businessId || null;
+  return req.tenantContext?.businessId || req.business?.id || req.auth?.businessId || req.user?.business_id || req.get("x-business-id") || req.query.business_id || req.body?.business_id || req.body?.businessId || null;
 }
 
 function ensureBusinessId(req, res) {
@@ -286,7 +287,9 @@ router.get("/potential-change-orders", requireRouteAuth, async (req, res) => {
     const businessId = ensureBusinessId(req, res);
     if (!businessId) return;
 
-    await detectPotential({ businessId });
+    if (!isAdminViewRequest(req)) {
+      await detectPotential({ businessId });
+    }
 
     const limit = Math.min(Math.max(Number(req.query.limit || 50), 1), 200);
     const query = supabaseClient

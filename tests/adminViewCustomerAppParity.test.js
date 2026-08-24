@@ -30,7 +30,9 @@ test("Books Review Admin View shows persisted GL category instead of source acco
   const cleanup = read("src/pages/accounting/BookkeepingCleanup.jsx");
 
   assert.match(feed, /const selectedAccountValue =[\s\S]*\(readOnly \? "" : txn\.accountId\)/);
-  assert.match(feed, /const readOnlyGlLabel =[\s\S]*txn\.glAccountName[\s\S]*txn\.final_qbo_account_name[\s\S]*txn\.suggested_qbo_account_name[\s\S]*txn\.currentAccount/);
+  const labelBlock = feed.slice(feed.indexOf("const readOnlyGlLabel ="), feed.indexOf("const canRejectCcPayment"));
+  assert.match(labelBlock, /txn\.glAccountName[\s\S]*txn\.final_qbo_account_name[\s\S]*txn\.suggested_qbo_account_name[\s\S]*"Uncategorized"/);
+  assert.doesNotMatch(labelBlock, /txn\.currentAccount/);
   assert.match(feed, /\{readOnlyGlLabel\}/);
 
   assert.match(cleanup, /const userId = adminView\.active \? "admin_view" : localStorage\.getItem\("user_id"\)/);
@@ -54,8 +56,10 @@ test("Admin View chat is disabled before subscription or GPT requests while hist
   assert.match(promptChips, /if \(disabled\) return/);
   assert.match(promptChips, /data-admin-view-chat-disabled/);
   assert.match(chatBar, /if \(chatReadOnly\) return/);
+  assert.match(chatBar, /!\s*chatReadOnly \? \(/);
   assert.match(chatBar, /disabled=\{chatReadOnly\}/);
   assert.match(canvasBar, /if \(chatReadOnly\) return/);
+  assert.match(canvasBar, /!\s*chatReadOnly \? \(/);
   assert.match(canvasBar, /disabled=\{chatReadOnly\}/);
 
   assert.match(chatsRoutes, /req\.tenantContext\?\.businessId/);
@@ -80,10 +84,12 @@ test("Forecasts, Financials, Jobs, Tax, Docs, and Settings expose persisted read
 
   assert.match(forecasts, /const userId = adminView\.active \? "admin_view"/);
   assert.match(forecasts, /readOnly=\{adminView\.active && adminView\.readOnly\}/);
+  assert.match(forecasts, /qbStatusLoading/);
   assert.match(forecastEditor, /if \(readOnly \|\| !hasEdits/);
   assert.match(forecastEditor, /disabled=\{readOnly \|\| !hasEdits/);
 
   assert.match(jobs, /const businessId = adminView\.active \? adminView\.businessId/);
+  assert.match(jobs, /qbStatusLoading/);
   assert.match(jobs, /Live QuickBooks refresh is unavailable in read-only Admin View/);
   assert.match(jobs, /if \(!readOnly && !usingDemo && qbStatus === "connected"/);
   assert.match(jobs, /<JobCostingPage businessId=\{businessId\} usingDemo=\{usingDemo\} readOnly=\{readOnly\}/);
@@ -96,7 +102,7 @@ test("Forecasts, Financials, Jobs, Tax, Docs, and Settings expose persisted read
   assert.match(docsRoutes, /const adminView = req\.tenantContext\?\.mode === 'admin_view'/);
   assert.match(docsRoutes, /if \(!adminView && !isUuid\(userIdRaw\)\)/);
   assert.match(docs, /const effectiveBusinessId = adminView\.active \? adminView\.businessId/);
-  assert.match(docs, /Document changes are unavailable in read-only Admin View/);
+  assert.match(docs, /No persisted business documents are available for this Admin View session/);
 
   assert.match(settings, /const userId = adminView\.active \? "admin_view"/);
   assert.match(settings, /const businessId = adminView\.active \? adminView\.businessId/);

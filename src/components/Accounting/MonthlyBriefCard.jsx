@@ -4,6 +4,7 @@ import CardHeader from "../UI/CardHeader";
 import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import { apiFetch } from "../../utils/apiBase.js";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
 
 function monthLabel(y, m) {
   if (!y || !m) return "";
@@ -79,6 +80,7 @@ function adaptDemoPulseToPeriod(pulse, year, month) {
 }
 
 export default function MonthlyBriefCard({ userId, businessId }) {
+  const adminView = useAdminView();
   const { year, month } = useFinancialPeriod(businessId);
   const [pulse, setPulse] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -111,7 +113,8 @@ export default function MonthlyBriefCard({ userId, businessId }) {
         `?user_id=${encodeURIComponent(userId)}` +
         `&business_id=${encodeURIComponent(businessId)}` +
         `&year=${encodeURIComponent(year)}` +
-        `&month=${encodeURIComponent(month)}`;
+        `&month=${encodeURIComponent(month)}` +
+        (adminView.active ? `&admin_view_optional=1` : "");
 
       const res = await apiFetch(url, {
         method: "GET",
@@ -127,17 +130,22 @@ export default function MonthlyBriefCard({ userId, businessId }) {
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${raw.slice(0, 160)}`);
       if (!ct.includes("application/json")) throw new Error(`Non-JSON response (${ct})`);
       const data = JSON.parse(raw);
+      if (adminView.active && data?.admin_view_unavailable) {
+        setPulse(null);
+        setError("No persisted monthly brief is available for this business.");
+        return;
+      }
       setPulse(normalizePulse(data?.pulse ?? null));
     } catch (err) {
       if (err.name !== "AbortError") {
-        console.error("[MonthlyBrief] pulse fetch failed:", err);
+        if (!adminView.active) console.error("[MonthlyBrief] pulse fetch failed:", err);
         setError(err.message || "Failed to load monthly pulse.");
         setPulse(null);
       }
     } finally {
       setLoading(false);
     }
-  }, [businessId, demoPulse, month, userId, year]);
+  }, [adminView.active, businessId, demoPulse, month, userId, year]);
 
   const handleRefresh = useCallback(async () => {
     const ac = new AbortController();

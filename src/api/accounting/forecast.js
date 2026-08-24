@@ -22,6 +22,7 @@ router.get('/', async (req, res) => {
   const businessId = req.business?.id || req.auth?.businessId || req.query.businessId || req.query.business_id;
   const userId = req.auth?.userId || req.user?.id || req.query.userId || req.query.user_id;
   let { months = '12', mockOnly } = req.query;
+  const adminViewOptional = req.query.admin_view_optional === '1' || req.query.admin_view_optional === 'true';
 
   if ((!userId && !isAdminViewRequest(req)) || !businessId) {
     return res.status(400).json({ error: 'Missing userId or businessId' });
@@ -45,6 +46,14 @@ router.get('/', async (req, res) => {
         return res.status(500).json({ error: 'Failed to fetch cash flow forecast.' });
       }
       if (!Array.isArray(data) || data.length === 0) {
+        if (adminViewOptional) {
+          return res.status(200).json({
+            forecast: [],
+            admin_view_cache_only: true,
+            admin_view_unavailable: true,
+            message: 'No persisted forecast is available for this business.',
+          });
+        }
         return sendAdminViewReadOnlyUnavailable(res, { error: 'admin_view_read_only_data_unavailable' });
       }
       res.set('Cache-Control', 'private, max-age=30');

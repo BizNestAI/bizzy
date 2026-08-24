@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom';
 import { subSidebarConfig } from '../../utils/subSidebarConfig';
 import { useInsightsUnread } from '../../insights/InsightsUnreadContext';
 import { ACCENT_HEX, ACCENT_SOFT } from '../../config/accent';
+import { useAdminView } from '../../context/AdminViewContext.jsx';
 
 /* ------------------------------ Tabs ------------------------------ */
 const tabs = [
@@ -164,6 +165,7 @@ const PureSidebar = React.memo(function PureSidebar({
   onChatHistoryHover,
   onChatHistoryLeave,
   onChatHistoryClick,
+  disableActiveBounce = false,
 }) {
   const navigate = useNavigate();
   const [hoveredTab, setHoveredTab] = useState(null);
@@ -183,12 +185,12 @@ const PureSidebar = React.memo(function PureSidebar({
       return;
     }
     // From any dashboard view, clicking the active icon should bounce back to ChatHome
-    if (activePath.startsWith('/dashboard/') && !activePath.startsWith('/dashboard/bizzi/chat') && pathActive(path, activePath)) {
+    if (!disableActiveBounce && activePath.startsWith('/dashboard/') && !activePath.startsWith('/dashboard/bizzi/chat') && pathActive(path, activePath)) {
       navigate('/dashboard/bizzi/chat');
       return;
     }
     navigate(path);
-  }, [navigate, activePath]);
+  }, [disableActiveBounce, navigate, activePath]);
 
   const sz = useMemo(() => ({
     outerPad:  compact ? 'p-3' : 'pl-3 pr-2',
@@ -507,7 +509,8 @@ function areEqual(prev, next) {
     prevSig === nextSig &&
     prev.onChatHistoryHover === next.onChatHistoryHover &&
     prev.onChatHistoryLeave === next.onChatHistoryLeave &&
-    prev.onChatHistoryClick === next.onChatHistoryClick
+    prev.onChatHistoryClick === next.onChatHistoryClick &&
+    prev.disableActiveBounce === next.disableActiveBounce
   );
 }
 
@@ -515,6 +518,7 @@ function areEqual(prev, next) {
 export default function SidebarContainer(props) {
   const location = useLocation();
   const { unreadByModule: rawUnread = {}, markModuleAsRead } = useInsightsUnread?.() || {};
+  const adminView = useAdminView();
 
   const unreadByModule = useMemo(() => normalizeUnreadMap(rawUnread), [rawUnread]);
   const activePath = location.pathname;
@@ -551,6 +555,7 @@ export default function SidebarContainer(props) {
       {...props}
       activePath={activePath}
       unreadByModule={unreadByModule}
+      disableActiveBounce={adminView.active}
     />
   );
 }

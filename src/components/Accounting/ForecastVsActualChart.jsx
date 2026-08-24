@@ -28,7 +28,7 @@ function mape(rows, actualKey, forecastKey) {
   return Math.round((s / pts.length) * 1000) / 10;
 }
 
-export default function ForecastVsActualChart({ userId, businessId, months = 6, useDemoData = false }) {
+export default function ForecastVsActualChart({ userId, businessId, months = 6, useDemoData = false, readOnly = false }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [metric, setMetric] = useState('Revenue');
@@ -71,6 +71,11 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
         setRows(alignToRollingWindow(data, months));
       } catch (err) {
         if (ignore) return;
+        if (readOnly) {
+          setRows([]);
+          setError('No persisted forecast accuracy is available for this business.');
+          return;
+        }
         setRows(buildMockAccuracy(months));
         setError('Unable to load live accuracy. Showing sample comparison.');
         console.warn('[ForecastVsActualChart] falling back to mock data:', err?.message);
@@ -83,7 +88,7 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
     return () => {
       ignore = true;
     };
-  }, [userId, businessId, months, isDemo, demoAccuracy, demoFinancials]);
+  }, [userId, businessId, months, isDemo, demoAccuracy, demoFinancials, readOnly]);
 
   const keys = useMemo(() => {
     const base = metric;

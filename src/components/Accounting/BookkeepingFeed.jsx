@@ -609,7 +609,6 @@ export default function BookkeepingFeed({
               txn.finalQboAccountName ||
               txn.suggestedAccountName ||
               txn.suggested_qbo_account_name ||
-              txn.currentAccount ||
               "Uncategorized";
             const canRejectCcPayment =
               !readOnly &&

@@ -195,7 +195,7 @@ test("diagnostics route is read-only and central tax router mounts it behind aut
   assert.doesNotMatch(routes, /router\.(post|patch|put|delete)\("/);
 
   const server = readFileSync(resolve(__dirname, "../src/server.js"), "utf8");
-  assert.match(server, /app\.use\("\/api\/tax", requireAuth, taxRouter\)/);
+  assert.match(server, /app\.use\("\/api\/tax", \.\.\.requireCustomerOrAdminView, taxRouter\)/);
 });
 
 test("canonical state engine is quarantined from legacy tax_state_rates fallback", () => {

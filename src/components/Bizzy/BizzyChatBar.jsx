@@ -271,34 +271,33 @@ export default function BizzyChatBar({
     <div className={[containerClass, className].join(" ")}>
       <div className="w-full">
         <div className="w-full px-3 py-0 transition-all bg-transparent shadow-none border-0">
-          {/* Quick Prompts */}
-          <div
-            className="pt-2 pb-0 bizzy-qprompts"
-            style={{
-              ...widthWrapperStyle,
-              "--qp-accent": accentHex,
-              "--qp-frame": quickPromptFrame,
-            }}
-            data-bizzy-chatbar-measured
-          >
-            <AskBizzyGuidedPrompts
-              module={currentModule}
-              prompts={
-                isOnboardingMode
-                  ? ONBOARDING_PROMPTS
-                  : quickPrompts?.length
-                    ? quickPrompts
-                    : undefined
-              }
-              onPromptClick={handlePromptClick}
-              max={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
-              accentColor={quickPromptAccent}
-              className={promptContainerClass}
-              chipClassName={promptChipClass}
-              disabled={chatReadOnly}
-              disabledReason="Chat is unavailable in read-only Admin View."
-            />
-          </div>
+          {!chatReadOnly ? (
+            <div
+              className="pt-2 pb-0 bizzy-qprompts"
+              style={{
+                ...widthWrapperStyle,
+                "--qp-accent": accentHex,
+                "--qp-frame": quickPromptFrame,
+              }}
+              data-bizzy-chatbar-measured
+            >
+              <AskBizzyGuidedPrompts
+                module={currentModule}
+                prompts={
+                  isOnboardingMode
+                    ? ONBOARDING_PROMPTS
+                    : quickPrompts?.length
+                      ? quickPrompts
+                      : undefined
+                }
+                onPromptClick={handlePromptClick}
+                max={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
+                accentColor={quickPromptAccent}
+                className={promptContainerClass}
+                chipClassName={promptChipClass}
+              />
+            </div>
+          ) : null}
           {/* Input bar */}
           <div
             style={widthWrapperStyle}
@@ -375,7 +374,10 @@ export default function BizzyChatBar({
                 <div
                   role="button"
                   tabIndex={0}
-                  onClick={() => setIsRecording((p) => !p)}
+                  onClick={() => {
+                    if (chatReadOnly) return;
+                    setIsRecording((p) => !p);
+                  }}
                   onKeyDown={(e) => {
                     if (chatReadOnly) return;
                     if (e.key === "Enter") setIsRecording((p) => !p);
