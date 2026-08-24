@@ -19,6 +19,7 @@ const mainLayoutSource = read("src/layout/MainLayout.jsx");
 const navRailBusinessBadgeSource = read("src/layout/NavRailBusinessBadge.jsx");
 const readOnlyGuardSource = read("src/components/AdminView/AdminViewReadOnlyGuard.jsx");
 const monthlyReviewSource = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+const adminViewReturnSource = read("src/services/adminViewReturn.js");
 
 test("customer app exposes an Admin View redemption route without enabling Monthly Review button", () => {
   assert.match(mainSource, /import AdminViewRedeem from "\.\/pages\/AdminView\/AdminViewRedeem\.jsx"/);
@@ -57,6 +58,11 @@ test("safe fetch helpers attach x-bizzi-admin-view and override stale business h
   assert.match(apiBaseSource, /clearAdminViewOnAuthFailure\(res, headers\)/);
   assert.match(safeFetchSource, /isAdminViewAuthError\(json\).*clearStoredAdminViewSession/s);
   assert.match(authenticatedFetchSource, /isAdminViewAuthError\(code\).*clearStoredAdminViewSession/s);
+  assert.match(adminViewClientSource, /isTerminalAdminViewSessionError/);
+  assert.match(adminViewClientSource, /admin_view_session_expired/);
+  assert.doesNotMatch(adminViewClientSource, /startsWith\("admin_view_"\)/);
+  assert.match(apiBaseSource, /admin_view_session_expired/);
+  assert.doesNotMatch(apiBaseSource, /startsWith\("admin_view_"\)/);
 });
 
 test("BusinessContext and ProtectedRoute use server-fixed Admin View business instead of ownership", () => {
@@ -77,7 +83,11 @@ test("persistent Admin View banner exposes read-only state, return, and exit", (
   assert.match(mainLayoutSource, /Viewing: \{adminView\.businessName/);
   assert.match(mainLayoutSource, /Return to Monthly Review/);
   assert.match(mainLayoutSource, /Exit Admin View/);
-  assert.match(mainLayoutSource, /await adminView\.endAdminView\?\.\(\)/);
+  assert.match(mainLayoutSource, /endAndReturnToMonthlyReview/);
+  assert.doesNotMatch(mainLayoutSource, /navigate\("\/login"/);
+  assert.match(adminViewReturnSource, /opener\.postMessage/);
+  assert.match(adminViewReturnSource, /opener\.focus/);
+  assert.match(adminViewReturnSource, /window\.close\(\)/);
   assert.match(mainLayoutSource, /paddingTop: adminView\.active \? 44 : 0/);
   assert.match(mainLayoutSource, /<AdminViewReadOnlyGuard \/>/);
   assert.match(readOnlyGuardSource, /MUTATION_LABEL_RE/);
@@ -106,7 +116,7 @@ test("Monthly Review View Customer App mints handoff for selected business and o
   assert.doesNotMatch(monthlyReviewSource, /Admin customer view coming in the next implementation phase/);
   assert.match(monthlyReviewSource, /const openCustomerApp = async \(\) =>/);
   assert.match(monthlyReviewSource, /window\.open\("about:blank", "_blank"\)/);
-  assert.match(monthlyReviewSource, /placeholderTab\.opener = null/);
+  assert.doesNotMatch(monthlyReviewSource, /placeholderTab\.opener = null/);
   assert.match(monthlyReviewSource, /safeFetch\("\/api\/admin\/customer-view\/sessions"/);
   assert.match(monthlyReviewSource, /business_id: selectedBusinessId/);
   assert.match(monthlyReviewSource, /source: "monthly_review"/);
@@ -114,6 +124,9 @@ test("Monthly Review View Customer App mints handoff for selected business and o
   assert.match(monthlyReviewSource, /placeholderTab\.location\.assign\(handoffUrl\)/);
   assert.match(monthlyReviewSource, /placeholderTab\.close\(\)/);
   assert.match(monthlyReviewSource, /buildMonthlyReviewReturnUrl\(\{ month, businessId: selectedBusinessId \}\)/);
+  assert.match(monthlyReviewSource, /ADMIN_VIEW_RETURN_MESSAGE/);
+  assert.match(monthlyReviewSource, /window\.addEventListener\("message", onAdminViewReturn\)/);
+  assert.match(monthlyReviewSource, /window\.location\.reload\(\)/);
 });
 
 test("Monthly Review return URL preserves selected business and month without privileged tokens", () => {
@@ -169,4 +182,14 @@ test("Admin View client redeems handoff into sessionStorage and omits raw token 
   assert.match(storage.get(ADMIN_VIEW_CONTEXT_STORAGE_KEY), /"businessId":"business-a"/);
   assert.equal(global.window.localStorage, undefined);
   global.window = previousWindow;
+});
+
+test("read-only unavailable errors do not terminate Admin View session", async () => {
+  const { isAdminViewAuthError } = await import(`../src/services/adminViewClient.js?terminal=${Date.now()}`);
+  assert.equal(isAdminViewAuthError("admin_view_provider_refresh_blocked"), false);
+  assert.equal(isAdminViewAuthError("admin_view_read_only_data_unavailable"), false);
+  assert.equal(isAdminViewAuthError("admin_view_read_only"), false);
+  assert.equal(isAdminViewAuthError("admin_view_session_expired"), true);
+  assert.equal(isAdminViewAuthError("admin_view_session_revoked"), true);
+  assert.equal(isAdminViewAuthError("admin_view_staff_not_allowed"), true);
 });

@@ -4,6 +4,7 @@ import { safeFetch } from "../../utils/safeFetch.js";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { CoaDropdown } from "../../components/Accounting/BookkeepingFeed.jsx";
 import BookkeepingTransactionMirrorTable from "../../components/Accounting/BookkeepingTransactionMirrorTable.jsx";
+import { ADMIN_VIEW_RETURN_MESSAGE } from "../../services/adminViewReturn.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -430,6 +431,24 @@ export default function MonthlyReviewConsole() {
     loadBookkeepingFeedCounts();
   }, [loadBookkeepingFeedCounts]);
 
+  useEffect(() => {
+    const onAdminViewReturn = (event) => {
+      const detail = event?.data || {};
+      if (detail?.type !== ADMIN_VIEW_RETURN_MESSAGE) return;
+      if (!isAllowedAdminViewReturnOrigin(event.origin)) return;
+      const target = normalizeMonthlyReviewReturnUrl(detail.returnUrl);
+      if (!target) return;
+      try { window.focus?.(); } catch {}
+      if (target === window.location.href) {
+        window.location.reload();
+      } else {
+        window.location.assign(target);
+      }
+    };
+    window.addEventListener("message", onAdminViewReturn);
+    return () => window.removeEventListener("message", onAdminViewReturn);
+  }, []);
+
   const selectBusiness = useCallback((businessId) => {
     if (!businessId || String(businessId) === String(selectedBusinessId)) return;
     setSelectedBusinessId(businessId);
@@ -765,7 +784,6 @@ export default function MonthlyReviewConsole() {
     setCustomerViewError("");
     setError("");
     const placeholderTab = typeof window !== "undefined" ? window.open("about:blank", "_blank") : null;
-    if (placeholderTab) placeholderTab.opener = null;
     try {
       const returnUrl = buildMonthlyReviewReturnUrl({ month, businessId: selectedBusinessId });
       const data = await safeFetch("/api/admin/customer-view/sessions", {
@@ -3148,6 +3166,38 @@ function updateReviewUrl({ businessId, month }) {
     window.history.replaceState({}, "", url);
   } catch {
     // URL persistence is a convenience; it should never block the review workflow.
+  }
+}
+
+function isAllowedAdminViewReturnOrigin(origin) {
+  if (!origin) return false;
+  try {
+    const url = new URL(origin);
+    return (
+      url.origin === window.location.origin ||
+      url.hostname === "app.bizzios.com" ||
+      url.hostname === "localhost" ||
+      url.hostname === "127.0.0.1"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function normalizeMonthlyReviewReturnUrl(returnUrl) {
+  if (typeof window === "undefined") return null;
+  try {
+    const url = new URL(returnUrl || window.location.href, window.location.href);
+    const current = new URL(window.location.href);
+    const sameOrigin = url.origin === current.origin;
+    const adminHost = url.hostname === "admin.bizzios.com" || url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    if (!sameOrigin && !adminHost) return null;
+    url.searchParams.delete("token");
+    url.searchParams.delete("handoff");
+    url.searchParams.delete("admin_view_session");
+    return url.toString();
+  } catch {
+    return window.location.href;
   }
 }
 

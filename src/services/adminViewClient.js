@@ -86,7 +86,25 @@ export function isAdminViewAuthError(errorOrCode) {
     typeof errorOrCode === "string"
       ? errorOrCode
       : errorOrCode?.code || errorOrCode?.error || errorOrCode?.body?.code || errorOrCode?.body?.error || "";
-  return String(code || "").startsWith("admin_view_");
+  return isTerminalAdminViewSessionError(code);
+}
+
+export function isTerminalAdminViewSessionError(errorOrCode) {
+  const code =
+    typeof errorOrCode === "string"
+      ? errorOrCode
+      : errorOrCode?.code || errorOrCode?.error || errorOrCode?.body?.code || errorOrCode?.body?.error || "";
+  return [
+    "admin_view_invalid",
+    "admin_view_expired",
+    "admin_view_session_not_found",
+    "admin_view_session_revoked",
+    "admin_view_session_ended",
+    "admin_view_session_expired",
+    "admin_view_staff_not_allowed",
+    "admin_view_staff_role_mismatch",
+    "admin_view_staff_role_changed",
+  ].includes(String(code || ""));
 }
 
 async function parseJsonResponse(response) {

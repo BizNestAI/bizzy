@@ -85,7 +85,17 @@ async function clearAdminViewOnAuthFailure(response, headers) {
   try {
     const payload = await response.clone().json();
     const code = payload?.code || payload?.error || "";
-    if (!String(code).startsWith("admin_view_")) return;
+    if (![
+      "admin_view_invalid",
+      "admin_view_expired",
+      "admin_view_session_not_found",
+      "admin_view_session_revoked",
+      "admin_view_session_ended",
+      "admin_view_session_expired",
+      "admin_view_staff_not_allowed",
+      "admin_view_staff_role_mismatch",
+      "admin_view_staff_role_changed",
+    ].includes(String(code))) return;
     window.sessionStorage?.removeItem("bizzi:admin_view_session");
     window.sessionStorage?.removeItem("bizzi:admin_view_context");
     window.dispatchEvent(new CustomEvent("bizzy:admin-view-cleared", { detail: { reason: code } }));

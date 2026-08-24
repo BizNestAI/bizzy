@@ -28,7 +28,7 @@ import AccountingRules from "./pages/accounting/Rules.jsx";
 import ProtectedRoute from "./components/UserAdmin/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
 import { BusinessProvider, useBusiness } from "./context/BusinessContext";
-import { AdminViewProvider } from "./context/AdminViewContext.jsx";
+import { AdminViewProvider, useAdminView } from "./context/AdminViewContext.jsx";
 import { BizzyChatProvider } from "./context/BizzyChatContext";
 import { PeriodProvider } from "./context/PeriodContext";
 
@@ -63,7 +63,9 @@ installTabVisibilityMotionGuard();
 /* -------------------------- Helpers / Wrappers -------------------------- */
 function WithUnreadProvider({ children }) {
   const { currentBusiness } = useBusiness?.() || {};
+  const adminView = useAdminView();
   const businessId =
+    (adminView.active ? adminView.businessId : null) ||
     currentBusiness?.id ||
     localStorage.getItem("currentBusinessId") ||
     "";
@@ -77,19 +79,22 @@ function WithUnreadProvider({ children }) {
 
 function ReviewsPageWrapper() {
   const { currentBusiness } = useBusiness();
-  const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId") || "";
+  const adminView = useAdminView();
+  const businessId = (adminView.active ? adminView.businessId : null) || currentBusiness?.id || localStorage.getItem("currentBusinessId") || "";
   return <ReviewsPage businessId={businessId} />;
 }
 
 function DocsPageWrapper() {
   const { currentBusiness } = useBusiness();
-  const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId") || "";
+  const adminView = useAdminView();
+  const businessId = (adminView.active ? adminView.businessId : null) || currentBusiness?.id || localStorage.getItem("currentBusinessId") || "";
   return <DocsLibraryPage businessId={businessId} />;
 }
 
 function DocDetailWrapper() {
   const { currentBusiness } = useBusiness();
-  const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId") || "";
+  const adminView = useAdminView();
+  const businessId = (adminView.active ? adminView.businessId : null) || currentBusiness?.id || localStorage.getItem("currentBusinessId") || "";
   return <DocDetail businessId={businessId} />;
 }
 
@@ -101,6 +106,24 @@ function ChatRedirect() {
     console.log("[Router] redirecting /chat -> /dashboard/bizzi/chat", search);
   }
   return <Navigate to={`/dashboard/bizzi/chat${search}`} replace />;
+}
+
+function CustomerRouteFallback() {
+  const adminView = useAdminView();
+  if (adminView.active) {
+    return (
+      <div className="min-h-screen bg-[#050606] px-6 py-10 text-white">
+        <div className="mx-auto mt-[12vh] max-w-lg rounded-[18px] border border-white/12 bg-[#111312] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.48)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-200/80">Admin View</p>
+          <h1 className="mt-3 text-2xl font-semibold">Section unavailable</h1>
+          <p className="mt-3 text-sm leading-6 text-white/62">
+            This section is unavailable in read-only Admin View.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return <Navigate to={applicationSurface === "admin" ? "/" : "/dashboard/bizzi/chat"} replace />;
 }
 
 function RootRedirect() {
@@ -331,7 +354,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
               </>
             )}
 
-            <Route path="*" element={<Navigate to={applicationSurface === "admin" ? "/" : "/dashboard/bizzi/chat"} replace />} />
+            <Route path="*" element={<CustomerRouteFallback />} />
           </Routes>
         </PeriodProvider>
         </AdminViewProvider>

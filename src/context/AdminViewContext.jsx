@@ -63,7 +63,12 @@ export function AdminViewProvider({ children }) {
       return next;
     } catch (err) {
       clearStoredAdminViewSession();
-      setState({ ...emptyState, loading: false, error: err?.code || err?.message || "admin_view_context_failed" });
+      setState((prev) => ({
+        ...emptyState,
+        loading: false,
+        returnUrl: prev.returnUrl,
+        error: err?.code || err?.message || "admin_view_context_failed",
+      }));
       return null;
     }
   }, []);
@@ -75,11 +80,12 @@ export function AdminViewProvider({ children }) {
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
     const onCleared = (event) => {
-      setState({
+      setState((prev) => ({
         ...emptyState,
         loading: false,
+        returnUrl: prev.returnUrl,
         error: event?.detail?.reason || "admin_view_session_cleared",
-      });
+      }));
     };
     window.addEventListener("bizzy:admin-view-cleared", onCleared);
     return () => window.removeEventListener("bizzy:admin-view-cleared", onCleared);

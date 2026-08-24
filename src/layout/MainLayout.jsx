@@ -12,6 +12,7 @@ import ToastPortal from '../insights/ToastPortal';
 import { InsightsUnreadProvider } from '../insights/InsightsUnreadContext';
 import { useAdminView } from '../context/AdminViewContext.jsx';
 import AdminViewReadOnlyGuard from '../components/AdminView/AdminViewReadOnlyGuard.jsx';
+import { endAndReturnToMonthlyReview } from '../services/adminViewReturn.js';
 
 const RIGHT_RAIL_W = 320;  // keep in sync with DashboardLayout / InsightsRail width
 const GRID_GAP     = 6;    // the grid gap between center & right rail columns
@@ -21,17 +22,20 @@ const CHROME_MODULES = new Set(['bizzy','leads-jobs','calendar','activity','docs
 
 function AdminViewBanner() {
   const adminView = useAdminView();
-  const navigate = useNavigate();
   if (!adminView.active) return null;
 
-  const returnToMonthlyReview = () => {
-    const target = adminView.returnUrl || "https://admin.bizzios.com/monthly-review";
-    window.location.assign(target);
+  const returnToMonthlyReview = async () => {
+    await endAndReturnToMonthlyReview({
+      returnUrl: adminView.returnUrl,
+      endAdminView: adminView.endAdminView,
+    });
   };
 
   const exitAdminView = async () => {
-    await adminView.endAdminView?.();
-    navigate("/login", { replace: true });
+    await endAndReturnToMonthlyReview({
+      returnUrl: adminView.returnUrl,
+      endAdminView: adminView.endAdminView,
+    });
   };
 
   return (

@@ -4,6 +4,7 @@ import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../services/supabaseClient.js";
 import { clearStoredAuthAndBusinessState } from "../../services/authSessionCleanup.js";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
+import { endAndReturnToMonthlyReview } from "../../services/adminViewReturn.js";
 
 function isConfirmedUser(user) {
   return Boolean(user?.email_confirmed_at || user?.confirmed_at);
@@ -111,7 +112,7 @@ const ProtectedRoute = ({ children }) => {
           </p>
           <button
             type="button"
-            onClick={() => window.location.assign("https://admin.bizzios.com/monthly-review")}
+            onClick={() => endAndReturnToMonthlyReview({ returnUrl: adminView.returnUrl, endAdminView: adminView.endAdminView })}
             className="mt-5 rounded-full border border-emerald-200/22 bg-emerald-300/10 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-300/16"
           >
             Return to Monthly Review
