@@ -976,9 +976,14 @@ export async function processClarificationAnswers({
   }
 
   if (results.some((row) => row?.success === true && row?.status === "answered")) {
-    await refreshSummary({
+    Promise.resolve(refreshSummary({
       businessId,
       reason: "customer_answer",
+    })).catch((err) => {
+      console.warn("[operator-summary] customer answer background reconcile failed", {
+        business_id: businessId,
+        message: err?.message || String(err),
+      });
     });
   }
 

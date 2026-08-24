@@ -187,6 +187,37 @@ test("Phase 5B successful single answer persists answered state without accounti
   assert.deepEqual(store.qboWrites, []);
 });
 
+test("Phase 5B submit returns after durable answer persistence without waiting for summary reconciliation", async () => {
+  const store = baseStore();
+  let refreshStarted = false;
+  let releaseRefresh;
+  const refreshPromise = new Promise((resolve) => {
+    releaseRefresh = resolve;
+  });
+
+  const resultPromise = submit(store, [{ request_id: "req-1", transaction_id: "txn-1", answer_text: "software subscription" }], {
+    refreshSummary: async () => {
+      refreshStarted = true;
+      await refreshPromise;
+      return { ok: true };
+    },
+  });
+
+  const result = await Promise.race([
+    resultPromise,
+    new Promise((resolve) => setTimeout(() => resolve("blocked_on_refresh"), 25)),
+  ]);
+
+  assert.notEqual(result, "blocked_on_refresh");
+  assert.equal(result.ok, true);
+  assert.equal(result.rows[0].persisted, true);
+  assert.equal(refreshStarted, true);
+  assert.equal(store.clarification_requests[0].status, "answered");
+
+  releaseRefresh();
+  await resultPromise;
+});
+
 test("Phase 5B invalid answer fails authoritatively and leaves request pending", async () => {
   const store = baseStore();
   const result = await submit(store, [{ request_id: "req-1", transaction_id: "txn-1", answer_text: "x" }]);
