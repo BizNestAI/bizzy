@@ -480,7 +480,8 @@ async function markSnapshotReady({ db, businessId, snapshotId, status }) {
       .update({ is_current: false, status: status || "validated", updated_at: new Date().toISOString() })
       .eq("business_id", businessId)
       .eq("id", snapshotId)
-      .select("*")
+      .select("*"),
+    "snapshot_status_update_failed"
   );
   if (!snapshot) throw new QboMonthlyPnlSnapshotError("snapshot_stage_ready_failed", 500);
   return snapshot;
@@ -542,9 +543,9 @@ async function selectSingleSnapshot(query) {
   return data || null;
 }
 
-async function insertSingle(query) {
+async function insertSingle(query, errorName = "snapshot_insert_failed") {
   const { data, error } = await query;
-  if (error) throw new QboMonthlyPnlSnapshotError("snapshot_insert_failed", 500, { cause: error.message });
+  if (error) throw new QboMonthlyPnlSnapshotError(errorName, 500, { cause: error.message });
   if (Array.isArray(data)) return data[0] || null;
   return data || null;
 }

@@ -10,6 +10,7 @@ const {
   getLatestMonthlyPnlSnapshot,
   invalidateMonthlyPnlSnapshot,
   linkSnapshotTransactionsToBizzi,
+  promoteMonthlyPnlSnapshotCurrent,
 } = await import("../src/services/bookkeeping/qboMonthlyPnlSnapshotService.js");
 
 const BUSINESS_ID = "00000000-0000-4000-8000-000000000001";
@@ -156,6 +157,7 @@ function sampleTransaction(overrides = {}) {
 test("migration creates internal versioned QBO P&L snapshot tables with service-role-only access", () => {
   const migration = read("supabase/migrations/20260910_monthly_review_qbo_pnl_snapshots.sql");
   const promotionMigration = read("supabase/migrations/20260911_monthly_review_qbo_pnl_atomic_promotion.sql");
+  const validatedStatusMigration = read("supabase/migrations/20260913_monthly_review_qbo_pnl_validated_status.sql");
 
   assert.match(migration, /create table if not exists public\.monthly_review_qbo_pnl_snapshots/i);
   assert.match(migration, /create table if not exists public\.monthly_review_qbo_pnl_accounts/i);
@@ -173,6 +175,124 @@ test("migration creates internal versioned QBO P&L snapshot tables with service-
   assert.match(promotionMigration, /for update/i);
   assert.match(promotionMigration, /grant execute on function public\.promote_monthly_review_qbo_pnl_snapshot/i);
   assert.match(promotionMigration, /to service_role/i);
+  assert.match(validatedStatusMigration, /drop constraint if exists monthly_review_qbo_pnl_snapshots_status_check/i);
+  assert.match(validatedStatusMigration, /add constraint monthly_review_qbo_pnl_snapshots_status_check/i);
+  assert.match(validatedStatusMigration, /status in \('building', 'validated', 'current', 'superseded', 'invalidated', 'failed'\)/i);
+  assert.doesNotMatch(validatedStatusMigration, /status in \([^)]*draft/i);
+  assert.doesNotMatch(validatedStatusMigration, /status text/i);
+});
+
+test("validated status migration keeps the snapshot status domain closed", () => {
+  const migration = read("supabase/migrations/20260913_monthly_review_qbo_pnl_validated_status.sql");
+  const match = migration.match(/status in \(([^)]+)\)/i);
+  assert.ok(match);
+  const allowed = match[1].split(",").map((value) => value.trim().replace(/^'|'$/g, ""));
+
+  assert.deepEqual(allowed, ["building", "validated", "current", "superseded", "invalidated", "failed"]);
+  for (const status of ["building", "current", "superseded", "invalidated", "failed"]) {
+    assert.ok(allowed.includes(status));
+  }
+  assert.equal(allowed.includes("unsupported"), false);
+  assert.equal(allowed.includes("draft"), false);
+});
+
+test("staged snapshots can move from building to validated without becoming current", async () => {
+  const db = makeDb();
+
+  const result = await createOrReplaceMonthlyPnlSnapshot({
+    businessId: BUSINESS_ID,
+    reviewYear: 2026,
+    reviewMonth: 8,
+    accounts: [sampleAccount()],
+    transactions: [sampleTransaction()],
+    linkTransactions: false,
+    promote: false,
+    db,
+  });
+
+  assert.equal(result.snapshot.status, "validated");
+  assert.equal(result.snapshot.is_current, false);
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots[0].status, "validated");
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots[0].is_current, false);
+});
+
+test("validated staged snapshot promotes atomically and supersedes previous current only during promotion", async () => {
+  const db = makeDb();
+
+  const previous = await createOrReplaceMonthlyPnlSnapshot({
+    businessId: BUSINESS_ID,
+    reviewYear: 2026,
+    reviewMonth: 8,
+    transactions: [sampleTransaction({ qbo_txn_id: "old" })],
+    linkTransactions: false,
+    db,
+  });
+  const staged = await createOrReplaceMonthlyPnlSnapshot({
+    businessId: BUSINESS_ID,
+    reviewYear: 2026,
+    reviewMonth: 8,
+    transactions: [sampleTransaction({ qbo_txn_id: "new" })],
+    linkTransactions: false,
+    promote: false,
+    db,
+  });
+
+  assert.equal(staged.snapshot.status, "validated");
+  assert.equal(staged.snapshot.is_current, false);
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.find((row) => row.id === previous.snapshot.id).status, "current");
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.find((row) => row.id === previous.snapshot.id).is_current, true);
+
+  const promoted = await promoteMonthlyPnlSnapshotCurrent({
+    businessId: BUSINESS_ID,
+    reviewYear: 2026,
+    reviewMonth: 8,
+    snapshotId: staged.snapshot.id,
+    db,
+  });
+
+  assert.equal(promoted.id, staged.snapshot.id);
+  assert.equal(promoted.status, "current");
+  assert.equal(promoted.is_current, true);
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.find((row) => row.id === previous.snapshot.id).status, "superseded");
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.find((row) => row.id === previous.snapshot.id).is_current, false);
+});
+
+test("snapshot status update failures are reported distinctly from insert failures", async () => {
+  const db = makeDb();
+  const originalFrom = db.from.bind(db);
+  db.from = (table) => {
+    const query = originalFrom(table);
+    if (table !== "monthly_review_qbo_pnl_snapshots") return query;
+    const originalThen = query.then.bind(query);
+    query.then = (resolve) => {
+      if (query.pendingUpdate?.status === "validated") {
+        return resolve({
+          data: null,
+          error: {
+            message: "new row violates check constraint monthly_review_qbo_pnl_snapshots_status_check",
+          },
+        });
+      }
+      return originalThen(resolve);
+    };
+    return query;
+  };
+
+  await assert.rejects(() => createOrReplaceMonthlyPnlSnapshot({
+    businessId: BUSINESS_ID,
+    reviewYear: 2026,
+    reviewMonth: 8,
+    linkTransactions: false,
+    promote: false,
+    db,
+  }), (err) => {
+    assert.equal(err.error, "snapshot_status_update_failed");
+    assert.match(err.details.cause, /monthly_review_qbo_pnl_snapshots_status_check/);
+    return true;
+  });
+
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots[0].status, "building");
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots[0].is_current, false);
 });
 
 test("snapshot creation persists current snapshot, account rows, transaction rows, and QBO account identity", async () => {
