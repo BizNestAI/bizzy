@@ -9,6 +9,7 @@ import {
 } from "./creditCardPaymentPairService.js";
 import { fetchChartOfAccounts, validateBusinessQboCreditCardAccount } from "./qboAccounts.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
+import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
 
 export class BookkeepingApprovalError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -177,6 +178,21 @@ export async function approveBookkeepingTransactions({
     const meta = existingMetaMap[txnId] || {};
     if (meta?.taxonomy_type !== "cc_payment") continue;
     const explicitFinalId = finalIdFromItem(item);
+    const durableCcPayment = isProtectedCreditCardPaymentWorkflow({ meta });
+    if (!durableCcPayment && explicitFinalId) {
+      existingMetaMap[txnId] = {
+        ...meta,
+        cc_payment_rejected: true,
+        cc_payment_rejected_at: nowIso,
+        taxonomy_override: "not_cc_payment",
+        safe_to_auto_handle: false,
+        safe_to_auto_post: true,
+        auto_approve_reason: "manual_user",
+      };
+      delete existingMetaMap[txnId].taxonomy_type;
+      delete existingMetaMap[txnId].taxonomy_subtype;
+      continue;
+    }
     if (!meta.cc_payment_pair_id && explicitFinalId) {
       const targetValidation = await validateBusinessQboCreditCardAccount(businessId, explicitFinalId);
       if (!targetValidation?.ok) {

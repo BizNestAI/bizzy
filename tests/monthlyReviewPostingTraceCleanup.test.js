@@ -36,7 +36,7 @@ test("Posting Trace bank account labels use persisted Plaid account identity, no
   const route = read("src/api/admin/monthlyReview.routes.js");
   assert.match(route, /\.from\("plaid_accounts"\)[\s\S]*\.eq\("business_id", businessId\)[\s\S]*\.in\("plaid_account_id", ids\)/);
   assert.match(route, /bank_account:\s*plaidAccountLabels\.get\(String\(row\.plaid_account_id\)\) \|\| "Financial account"/);
-  assert.match(route, /bank_account:\s*txn\.bank_account \|\| "Financial account"/);
+  assert.match(route, /bank_account:\s*plaidAccountLabels\.get\(String\(row\.plaid_account_id\)\) \|\| "Financial account"/);
   assert.doesNotMatch(route, /bank_account:\s*txn\.plaid_account_id \|\| "Plaid account"/);
 });
 
@@ -75,7 +75,7 @@ test("Posting Trace reconciliation states are separate from QBO posted lifecycle
 
 test("Posting Trace UI and KPIs no longer use fake match confidence", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
-  const traceBody = sliceBetween(route, "const reconciliationTrace = accountGroups", "const reconciliationTotals = reconciliationTrace.reduce");
+  const traceBody = sliceBetween(route, "const reconciliationTrace = authoritativePlaidRows", "const reconciliationTotals = reconciliationTrace.reduce");
   const ui = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   const guard = read("src/api/admin/monthlyReviewCloseGuard.js");
 

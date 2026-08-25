@@ -301,7 +301,14 @@ test("Monthly Review generic reclassification rejects protected special workflow
   ]) {
     const db = makeDb({
       bank_transactions: [bankTxn()],
-      transaction_categorizations: [cat({ status: "approved", meta: { taxonomy_type: taxonomy, cc_payment_pair_id: taxonomy === "cc_payment" ? "pair-1" : undefined } })],
+      transaction_categorizations: [cat({ status: "approved", meta: {
+        taxonomy_type: taxonomy,
+        cc_payment_pair_id: taxonomy === "cc_payment" ? "pair-1" : undefined,
+        cc_payment_pair_status: taxonomy === "cc_payment" ? "confirmed" : undefined,
+        cc_payment_pair_confidence: taxonomy === "cc_payment" ? "high" : undefined,
+        cc_payment_bank_qbo_account_id: taxonomy === "cc_payment" ? "bank-qbo" : undefined,
+        cc_payment_cc_qbo_account_id: taxonomy === "cc_payment" ? "cc-qbo" : undefined,
+      } })],
     });
     await assert.rejects(
       reclassifyBookkeepingTransaction({
@@ -317,6 +324,31 @@ test("Monthly Review generic reclassification rejects protected special workflow
   }
 }
 );
+
+test("Monthly Review generic reclassification allows stale cc_payment taxonomy without durable pair evidence", async () => {
+  const db = makeDb({
+    bank_transactions: [bankTxn({ name: "APPLE.COM/BILL", amount: -21.62 })],
+    transaction_categorizations: [cat({
+      status: "approved",
+      final_qbo_account_id: "old",
+      final_qbo_account_name: "Old",
+      meta: { taxonomy_type: "cc_payment", cc_payment_rejected: false },
+    })],
+  });
+
+  const result = await reclassifyBookkeepingTransaction({
+    businessId: "biz-1",
+    transactionId: "txn-1",
+    targetQboAccountId: "acct-meals",
+    actor: "admin-1",
+    db,
+    validateQboAccount: validAccount(),
+  });
+
+  assert.equal(result.mode, "handled_unposted_reclassification");
+  assert.equal(result.categorization.final_qbo_account_id, "acct-meals");
+  assert.equal(result.categorization.qbo_txn_id, null);
+});
 
 test("Monthly Review route is thin and no longer owns provider update or forced unposted posting", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");

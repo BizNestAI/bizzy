@@ -1471,7 +1471,7 @@ export async function runBookkeepingSuggestionPass({
         hasCreditCardPaymentPair: Boolean(ccPaymentPair?.txnId),
         suppressCcPayment: ccPaymentRejected,
         taxonomyOverride: ccPaymentRejected ? "not_cc_payment" : null,
-        targetAccountTypes: ccPaymentPair?.txnId || plaidAccountLooksCredit(plaidAcctForTxn) ? ["credit"] : [],
+        targetAccountTypes: ccPaymentPair?.txnId ? ["credit"] : [],
       };
       const freshTaxHit = classifyTaxonomy(row, rowTaxonomyContext);
       const freshUniversalHint = await getUniversalVendorHintForTransaction({ bankTxn: row });

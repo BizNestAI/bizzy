@@ -2170,20 +2170,22 @@ async function buildMonthlySourceLedger(businessId, month) {
     ),
     "Monthly source ledger transactions"
   );
+  const authoritativePlaidRows = await loadAuthoritativeMonthlyPlaidTransactions(businessId, start, end);
   const txnIds = bankRows.map((row) => row.id).filter(Boolean);
-  const catRows = txnIds.length
+  const allTxnIds = Array.from(new Set([...txnIds, ...authoritativePlaidRows.map((row) => row.id).filter(Boolean)]));
+  const catRows = allTxnIds.length
     ? await safeRows(() =>
         supabase
           .from("transaction_categorizations")
           .select("transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key,final_qbo_account_id,final_qbo_account_name,final_canonical_account_key,qbo_txn_id,qbo_txn_type,posted_at,post_after,confidence,reason,post_error,meta")
           .eq("business_id", businessId)
-          .in("transaction_id", txnIds),
+          .in("transaction_id", allTxnIds),
         "Monthly source ledger categorizations"
       )
     : [];
-  const plaidAccountIds = Array.from(new Set(bankRows.map((row) => row.plaid_account_id).filter(Boolean)));
+  const plaidAccountIds = Array.from(new Set([...bankRows, ...authoritativePlaidRows].map((row) => row.plaid_account_id).filter(Boolean)));
   const plaidAccountLabels = await loadPlaidAccountLabelsForMonthlyReview(businessId, plaidAccountIds);
-  const reconciliationItemByTxn = await loadReconciliationItemsForMonthlyTrace(businessId, month, txnIds);
+  const reconciliationItemByTxn = await loadReconciliationItemsForMonthlyTrace(businessId, month, allTxnIds);
   const previousBankRows = await safeRows(() =>
     applyActiveBookkeepingScope(
       supabase
@@ -2328,24 +2330,15 @@ async function buildMonthlySourceLedger(businessId, month) {
     return acc;
   }, { transaction_count: 0, total_amount: 0, needs_review_count: 0, post_error_count: 0, posted_count: 0, uncategorized_count: 0, materiality_count: 0, qbo_sync_counts: {} });
 
-  const reconciliationTrace = accountGroups
-    .flatMap((group) => group.transactions || [])
+  const reconciliationTrace = authoritativePlaidRows
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))
-    .map((txn) => ({
-      id: `recon-${txn.id}`,
-      transaction_id: txn.id,
-      plaid_transaction_id: txn.plaid_transaction_id || null,
-      plaid_date: txn.date,
-      payee: txn.payee || txn.description || "",
-      description: txn.description || "",
-      amount: txn.amount || 0,
-      plaid_account_id: txn.plaid_account_id || null,
-      bank_account: txn.bank_account || "Financial account",
-      bizzi_gl_account: txn.effective_account_name || "Uncategorized",
-      qbo_txn_id: txn.qbo_txn_id || null,
-      qbo_lifecycle_status: txn.qbo_lifecycle_status || txn.qbo_sync_status,
-      qbo_sync_status: txn.qbo_sync_status,
-      reconciliation_status: txn.reconciliation_status,
+    .map((row) => buildAuthoritativePlaidTraceRow({
+      row,
+      cat: catByTxn.get(row.id) || {},
+      plaidAccountLabels,
+      accountById,
+      accountByName,
+      reconciliationItem: reconciliationItemByTxn.get(String(row.id)) || null,
     }));
   const reconciliationTotals = reconciliationTrace.reduce((acc, row) => {
     acc.plaid_count += 1;
@@ -2363,6 +2356,7 @@ async function buildMonthlySourceLedger(businessId, month) {
       source_tables: ["bank_transactions", "transaction_categorizations"],
       date_basis: "bank_transactions.date",
       status_basis: "Books Review needs_review/handled/posted semantics",
+      plaid_rows_basis: "canonical active Plaid-backed bank_transactions for selected month",
     },
     pnl_preview: buildPnlPreview(accountGroups),
     finalization_guard: buildFinalizationGuard({ account_groups: accountGroups, totals }),
@@ -2375,6 +2369,72 @@ async function buildMonthlySourceLedger(businessId, month) {
     account_groups: accountGroups,
     reconciliation_trace: reconciliationTrace,
     reconciliation_totals: reconciliationTotals,
+  };
+}
+
+async function loadAuthoritativeMonthlyPlaidTransactions(businessId, start, end) {
+  const rows = await safeRows(() =>
+    supabase
+      .from("bank_transactions")
+      .select("id,plaid_account_id,plaid_transaction_id,pending_transaction_id,date,name,merchant_name,counterparty_name,amount,signed_amount,direction,pending,is_archived")
+      .eq("business_id", businessId)
+      .eq("is_archived", false)
+      .not("plaid_transaction_id", "is", null)
+      .not("plaid_account_id", "is", null)
+      .gte("date", start)
+      .lt("date", end)
+      .order("date", { ascending: true }),
+    "Authoritative monthly Plaid transactions"
+  );
+  return removeSupersededPendingPlaidRows(rows);
+}
+
+export function removeSupersededPendingPlaidRows(rows = []) {
+  const activePostedPendingRefs = new Set(
+    (rows || [])
+      .filter((row) => row?.pending !== true && row?.pending_transaction_id)
+      .map((row) => String(row.pending_transaction_id))
+  );
+  return (rows || []).filter((row) => {
+    if (row?.pending === true && row?.plaid_transaction_id && activePostedPendingRefs.has(String(row.plaid_transaction_id))) {
+      return false;
+    }
+    return true;
+  });
+}
+
+export function buildAuthoritativePlaidTraceRow({
+  row,
+  cat = {},
+  plaidAccountLabels = new Map(),
+  accountById = new Map(),
+  accountByName = new Map(),
+  reconciliationItem = null,
+} = {}) {
+  const accountId = cat.final_qbo_account_id || cat.suggested_qbo_account_id || null;
+  const accountName = cat.final_qbo_account_name || cat.suggested_qbo_account_name || "Uncategorized";
+  const chartAccount = accountId ? accountById.get(String(accountId)) : accountByName.get(normalizeAccountName(accountName));
+  const qboSyncStatus = deriveQboSyncStatus(cat);
+  const reconciliationStatus = deriveTraceReconciliationStatus({
+    lifecycle: qboSyncStatus,
+    reconciliationItem,
+  });
+  const amount = Number(row.signed_amount ?? row.amount ?? 0);
+  return {
+    id: `recon-${row.id}`,
+    transaction_id: row.id,
+    plaid_transaction_id: row.plaid_transaction_id || null,
+    plaid_date: row.date,
+    payee: row.counterparty_name || row.merchant_name || row.name || "",
+    description: row.name || "",
+    amount: Number.isFinite(amount) ? amount : 0,
+    plaid_account_id: row.plaid_account_id || null,
+    bank_account: plaidAccountLabels.get(String(row.plaid_account_id)) || "Financial account",
+    bizzi_gl_account: chartAccount?.name || accountName || "Uncategorized",
+    qbo_txn_id: cat.qbo_txn_id || null,
+    qbo_lifecycle_status: qboSyncStatus,
+    qbo_sync_status: qboSyncStatus,
+    reconciliation_status: reconciliationStatus,
   };
 }
 

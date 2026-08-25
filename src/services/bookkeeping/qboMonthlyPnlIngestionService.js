@@ -338,7 +338,7 @@ export function normalizeQboPnlSnapshotPayload({
     accountingMethod,
   });
   const resolver = buildAccountIdentityResolver(qboAccounts);
-  const accounts = resolveAccountRows(summary.account_rows, resolver);
+  let accounts = resolveAccountRows(summary.account_rows, resolver);
   const transactions = normalizeDetailTransactions(detailReport, {
     detailReportName,
     sourceStartDate,
@@ -347,6 +347,7 @@ export function normalizeQboPnlSnapshotPayload({
     qboAccounts,
   });
   const reconciliation = reconcileNormalizedPnl({ summary, accounts, transactions, detailReportName });
+  accounts = applyDetailCompletenessToAccounts(accounts, reconciliation);
   const metadata = {
     source: {
       summary_report: SUMMARY_REPORT,
@@ -643,8 +644,41 @@ function validateNormalizedPayload({ sourceStartDate, sourceEndDate, summary, ac
   if (reconciliation?.status === "failed") {
     throw new QboMonthlyPnlIngestionError("qbo_pnl_reconciliation_failed", 409, {
       checks: reconciliation.checks,
+      diagnostics: buildSafeReconciliationDiagnostics(reconciliation),
     });
   }
+}
+
+function applyDetailCompletenessToAccounts(accounts = [], reconciliation = {}) {
+  const byKey = new Map((reconciliation.account_detail_completeness || []).map((row) => [row.key, row]));
+  return accounts.map((account) => {
+    const key = account.qbo_account_id || `name:${normalizePath(account.account_name)}`;
+    const detail = byKey.get(key) || null;
+    return {
+      ...account,
+      metadata: {
+        ...(account.metadata || {}),
+        detail_completeness: detail?.detail_completeness || "unavailable",
+        detail_total: detail?.detail_total ?? null,
+        detail_difference: detail?.difference ?? null,
+        detail_transaction_count: detail?.detail_transaction_count ?? 0,
+      },
+    };
+  });
+}
+
+function buildSafeReconciliationDiagnostics(reconciliation = {}) {
+  return {
+    detail_report: reconciliation.detail_report || null,
+    detail_status: reconciliation.detail_status || null,
+    detail_accounts_compared: reconciliation.detail_accounts_compared || 0,
+    summary_totals: reconciliation.summary_totals || {},
+    account_totals: reconciliation.account_totals || {},
+    detail_totals: reconciliation.detail_totals || {},
+    parsed_counts: reconciliation.parsed_counts || {},
+    account_detail_completeness: reconciliation.account_detail_completeness || [],
+    failed_checks: (reconciliation.checks || []).filter((check) => check.status === "failed"),
+  };
 }
 
 function validatePersistedStagedSnapshotIntegrity({ persisted, normalized }) {
@@ -766,33 +800,62 @@ function reconcileNormalizedPnl({ summary, accounts, transactions, detailReportN
   );
 
   const detailByAccount = new Map();
+  const detailCountByAccount = new Map();
   for (const txn of transactions) {
     const key = txn.qbo_account_id || `name:${normalizePath(txn.qbo_account_name)}`;
     detailByAccount.set(key, roundMoney((detailByAccount.get(key) || 0) + Number(txn.amount || 0)));
+    detailCountByAccount.set(key, (detailCountByAccount.get(key) || 0) + 1);
   }
+  const detailTotals = {};
+  for (const [key, amount] of detailByAccount.entries()) detailTotals[key] = amount;
   let detailComparable = 0;
+  const accountDetailCompleteness = [];
   for (const account of accounts) {
     const key = account.qbo_account_id || `name:${normalizePath(account.account_name)}`;
+    const detailTotal = detailByAccount.get(key) || 0;
+    const detailCount = detailCountByAccount.get(key) || 0;
+    const difference = roundMoney(detailTotal - Number(account.total_amount || 0));
     if (!detailByAccount.has(key)) {
-      if (Math.abs(roundMoney(account.total_amount)) > RECONCILIATION_TOLERANCE) {
-        addReconciliationCheck(checks, `account_vs_detail.${account.account_path || account.account_name}`, account.total_amount, 0);
-      }
+      accountDetailCompleteness.push({
+        key,
+        account_name: account.account_name,
+        account_path: account.account_path || account.account_name || null,
+        detail_completeness: Math.abs(roundMoney(account.total_amount)) > RECONCILIATION_TOLERANCE ? "unavailable" : "complete",
+        account_total: roundMoney(account.total_amount),
+        detail_total: 0,
+        difference: roundMoney(-Number(account.total_amount || 0)),
+        detail_transaction_count: 0,
+      });
       continue;
     }
-    detailComparable += 1;
-    addReconciliationCheck(
-      checks,
-      `account_vs_detail.${account.account_path || account.account_name}`,
-      account.total_amount,
-      detailByAccount.get(key)
-    );
+    const complete = Math.abs(difference) <= RECONCILIATION_TOLERANCE;
+    accountDetailCompleteness.push({
+      key,
+      account_name: account.account_name,
+      account_path: account.account_path || account.account_name || null,
+      detail_completeness: complete ? "complete" : "incomplete",
+      account_total: roundMoney(account.total_amount),
+      detail_total: detailTotal,
+      difference,
+      detail_transaction_count: detailCount,
+    });
+    if (complete) {
+      detailComparable += 1;
+      addReconciliationCheck(
+        checks,
+        `account_vs_detail.${account.account_path || account.account_name}`,
+        account.total_amount,
+        detailTotal
+      );
+    }
   }
+  const hasIncompleteDetail = accountDetailCompleteness.some((row) => row.detail_completeness !== "complete");
   const failed = checks.filter((check) => check.status === "failed");
   const rounded = checks.filter((check) => check.status === "valid_with_nonmaterial_rounding");
   return {
     status: failed.length > 0 ? "failed" : (rounded.length > 0 ? "valid_with_nonmaterial_rounding" : "valid"),
     tolerance: RECONCILIATION_TOLERANCE,
-    detail_status: transactions.length === 0 ? "incomplete_detail" : "complete",
+    detail_status: transactions.length === 0 ? "unavailable" : (hasIncompleteDetail ? "incomplete" : "complete"),
     detail_report: detailReportName,
     detail_accounts_compared: detailComparable,
     summary_totals: {
@@ -804,6 +867,13 @@ function reconcileNormalizedPnl({ summary, accounts, transactions, detailReportN
       net_profit: summary.net_profit,
     },
     account_totals: accountTotals,
+    detail_totals: detailTotals,
+    parsed_counts: {
+      account_rows: accounts.length,
+      detail_rows: transactions.length,
+      detail_accounts: detailByAccount.size,
+    },
+    account_detail_completeness: accountDetailCompleteness,
     checks,
   };
 }

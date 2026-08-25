@@ -8,6 +8,7 @@ import {
   BookkeepingApprovalError,
 } from "./bookkeepingApprovalService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
+import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
 
 export class BookkeepingReclassificationError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -299,19 +300,13 @@ function assertGenericReclassificationAllowed({ bankTxn, categorization }) {
   }
   const meta = categorization?.meta || {};
   const taxonomyType = String(meta.taxonomy_type || "").toLowerCase();
-  const looksCcPayment =
-    taxonomyType === "cc_payment" ||
-    meta.cc_payment_pair_id ||
-    meta.cc_payment_bank_qbo_account_id ||
-    meta.cc_payment_cc_qbo_account_id ||
-    meta.cc_payment_mapping_confidence;
-  if (looksCcPayment) {
+  if (isProtectedCreditCardPaymentWorkflow({ ...(categorization || {}), meta })) {
     throw new BookkeepingReclassificationError("cc_payment_generic_reclassification_not_supported", 409, {
       transaction_id: bankTxn.id,
       cc_payment_pair_id: meta.cc_payment_pair_id || null,
     });
   }
-  if (taxonomyType && GENERIC_RECLASS_BLOCKED_TAXONOMIES.has(taxonomyType)) {
+  if (taxonomyType && taxonomyType !== "cc_payment" && GENERIC_RECLASS_BLOCKED_TAXONOMIES.has(taxonomyType)) {
     throw new BookkeepingReclassificationError("special_workflow_reclassification_not_supported", 409, {
       transaction_id: bankTxn.id,
       taxonomy_type: taxonomyType,

@@ -14,6 +14,7 @@ const customerRoute = readFileSync(join(root, "src/api/bookkeeping/routes/bookke
 const migration = readFileSync(join(root, "supabase/migrations/20260909_bookkeeping_bounded_month_end.sql"), "utf8");
 
 const servicePromise = import("../src/services/bookkeeping/bookkeepingTransactionFeedService.js");
+const workflowPromise = import("../src/services/bookkeeping/protectedWorkflow.js");
 
 test("shared feed service preserves Books Review status semantics", async () => {
   const { matchesTransactionStatusFilter } = await servicePromise;
@@ -193,6 +194,7 @@ test("Monthly Review renders collapsible Needs Review and Handled mirrors with b
 
 test("mirror row presenter preserves customer-answer, QBO, and special-workflow state without mutations", () => {
   const tableSource = readFileSync(join(root, "src/components/Accounting/BookkeepingTransactionMirrorTable.jsx"), "utf8");
+  const workflowSource = readFileSync(join(root, "src/services/bookkeeping/protectedWorkflow.js"), "utf8");
   assert.match(tableSource, /Bank Account/);
   assert.match(tableSource, /GL Account/);
   assert.match(tableSource, /QBO Status/);
@@ -208,9 +210,9 @@ test("mirror row presenter preserves customer-answer, QBO, and special-workflow 
   assert.match(tableSource, /formatPlaidAccountDisplayLabel/);
   assert.match(tableSource, /formatBankAccountLabel/);
   assert.match(tableSource, /getProtectedWorkflowReason/);
-  assert.match(tableSource, /Pending bank transaction/);
-  assert.match(tableSource, /Owner movement/);
-  assert.match(tableSource, /Tax payment/);
+  assert.match(workflowSource, /Pending bank transaction/);
+  assert.match(workflowSource, /Owner movement/);
+  assert.match(workflowSource, /Tax payment/);
   assert.doesNotMatch(tableSource, />\s*Special workflow\s*</);
   assert.doesNotMatch(tableSource, /formatAccountType/);
   assert.doesNotMatch(tableSource, /safeFetch/);
@@ -218,4 +220,46 @@ test("mirror row presenter preserves customer-answer, QBO, and special-workflow 
   assert.match(tableSource, /onApprove/);
   assert.match(tableSource, /onPost/);
   assert.match(tableSource, /onRetry/);
+});
+
+test("ordinary credit-card merchant purchases are editable and true card payments stay protected", async () => {
+  const { getProtectedWorkflowReason, isProtectedCreditCardPaymentWorkflow } = await workflowPromise;
+
+  for (const merchant of ["Apple", "Spotify", "Publix", "Railway", "Instantly", "Atlassian"]) {
+    const row = {
+      id: `txn-${merchant}`,
+      payee: merchant,
+      account_type: "credit",
+      account_subtype: "credit card",
+      pending: false,
+      cc_payment_rejected: false,
+      taxonomy_type: null,
+      meta: {},
+    };
+    assert.equal(isProtectedCreditCardPaymentWorkflow(row), false);
+    assert.equal(getProtectedWorkflowReason(row), null);
+  }
+
+  const truePayment = {
+    taxonomy_type: "cc_payment",
+    cc_payment_pair_id: "pair-1",
+    cc_payment_pair_status: "confirmed",
+    cc_payment_pair_confidence: "high",
+    cc_payment_bank_qbo_account_id: "bank-qbo",
+    cc_payment_cc_qbo_account_id: "cc-qbo",
+  };
+  assert.equal(isProtectedCreditCardPaymentWorkflow(truePayment), true);
+  assert.equal(getProtectedWorkflowReason(truePayment).label, "Credit card payment");
+});
+
+test("pending Plaid rows are protected specifically as pending bank transactions", async () => {
+  const { getProtectedWorkflowReason } = await workflowPromise;
+  const reason = getProtectedWorkflowReason({
+    pending: true,
+    payee: "Apple",
+    account_type: "credit",
+    account_subtype: "credit card",
+    cc_payment_rejected: false,
+  });
+  assert.equal(reason.label, "Pending bank transaction");
 });

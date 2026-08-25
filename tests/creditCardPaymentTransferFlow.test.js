@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { classifyTaxonomy } from "../src/services/bookkeeping/taxonomyClassifier.js";
 
 const root = process.cwd();
 
@@ -174,6 +175,39 @@ test("taxonomy-only cc-payment stays suspected and does not lock the account pic
   assert.match(approvals, /taxonomy_override: "not_cc_payment"/);
   assert.match(approvals, /validateBusinessQboCreditCardAccount\(businessId, explicitFinalId\)/);
   assert.match(classifier, /suppressCcPayment/);
+});
+
+test("taxonomy classifier does not treat ordinary credit-card merchant purchases as card payments", () => {
+  for (const merchant of ["Apple", "Spotify", "Publix", "Railway", "Instantly", "Atlassian"]) {
+    const hit = classifyTaxonomy(
+      {
+        name: merchant,
+        merchant_name: merchant,
+        counterparty_name: merchant,
+        amount: -21.62,
+        direction: "OUTFLOW",
+      },
+      {
+        currentAccountType: "credit",
+        currentAccountSubtype: "credit card",
+        targetAccountTypes: [],
+      }
+    );
+    assert.notEqual(hit?.type, "cc_payment");
+  }
+
+  const payment = classifyTaxonomy(
+    {
+      name: "ONLINE PAYMENT THANK YOU AMEX",
+      amount: -500,
+      direction: "OUTFLOW",
+    },
+    {
+      hasCreditCardPaymentPair: true,
+      targetAccountTypes: ["credit"],
+    }
+  );
+  assert.equal(payment.type, "cc_payment");
 });
 
 test("durable pair target preselects and weaker mapping cannot overwrite it", () => {

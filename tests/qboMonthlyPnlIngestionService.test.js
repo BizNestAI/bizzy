@@ -640,10 +640,10 @@ test("GeneralLedger fallback keeps only QBO COA P&L accounts", () => {
   assert.equal(rows[0].qbo_account_id, "3");
 });
 
-test("material account/detail reconciliation mismatch fails before snapshot persistence", async () => {
+test("incomplete account detail is explicit metadata and does not block QBO-authoritative snapshot", async () => {
   const db = makeDb();
 
-  await assert.rejects(() => refreshMonthlyQboPnlSnapshot({
+  const result = await refreshMonthlyQboPnlSnapshot({
     businessId: BUSINESS_ID,
     year: 2026,
     month: 8,
@@ -655,12 +655,101 @@ test("material account/detail reconciliation mismatch fails before snapshot pers
       : { report: pnlDetailFixture({
           Rows: {
             Row: [{
-              Header: { ColData: [{ value: "Meals", id: "3" }] },
-              Rows: { Row: [pnlDetailFixture().Rows.Row[2].Rows.Row[0]] },
+              Header: { ColData: [{ value: "Sales of Product Income", id: "1" }] },
+              Rows: { Row: [pnlDetailFixture().Rows.Row[0].Rows.Row[0]] },
             }],
           },
         }), reportName },
-  }), /qbo_pnl_reconciliation_failed/);
+  });
+
+  assert.equal(result.snapshot.revenue, 3217.45);
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.length, 1);
+  const meals = db.tables.monthly_review_qbo_pnl_accounts.find((row) => row.account_name === "Meals");
+  assert.equal(meals.metadata.detail_completeness, "unavailable");
+  assert.equal(result.snapshot.metadata.reconciliation.detail_status, "incomplete");
+});
+
+test("realistic August 2026 QBO P&L summary ingests with incomplete detail semantics", async () => {
+  const db = makeDb();
+  const result = await refreshMonthlyQboPnlSnapshot({
+    businessId: BUSINESS_ID,
+    year: 2026,
+    month: 8,
+    db,
+    loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
+    fetchAccounts: async () => coaFixture(),
+    fetchReport: async ({ reportName }) => reportName === "ProfitAndLoss"
+      ? { report: pnlSummaryFixture({
+          sales: 1175,
+          cogs: 0,
+          expenses: 192.9,
+          net: 982.1,
+        }), reportName }
+      : { report: pnlDetailFixture({
+          Rows: {
+            Row: [{
+              Header: { ColData: [{ value: "Sales of Product Income", id: "1" }] },
+              Rows: {
+                Row: [{
+                  type: "Data",
+                  ColData: [
+                    { value: "2026-08-10" },
+                    { value: "Deposit", id: "income-aug-1" },
+                    { value: "Intuit" },
+                    { value: "ACH credit" },
+                    { value: "Sales of Product Income", id: "1" },
+                    { value: "1175.00" },
+                  ],
+                }],
+              },
+            }],
+          },
+        }), reportName },
+  });
+
+  assert.equal(Number(result.snapshot.revenue), 1175);
+  assert.equal(Number(result.snapshot.expenses), 192.9);
+  assert.equal(Number(result.snapshot.net_profit), 982.1);
+  assert.equal(result.snapshot.metadata.reconciliation.status, "valid");
+  assert.equal(result.snapshot.metadata.reconciliation.detail_status, "incomplete");
+  assert.equal(result.transactions.length, 1);
+  const meals = db.tables.monthly_review_qbo_pnl_accounts.find((row) => row.account_name === "Meals");
+  assert.equal(meals.metadata.detail_completeness, "unavailable");
+});
+
+test("material summary/account reconciliation mismatch fails before snapshot persistence", async () => {
+  const db = makeDb();
+
+  await assert.rejects(() => refreshMonthlyQboPnlSnapshot({
+    businessId: BUSINESS_ID,
+    year: 2026,
+    month: 8,
+    db,
+    loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
+    fetchAccounts: async () => coaFixture(),
+    fetchReport: async ({ reportName }) => reportName === "ProfitAndLoss"
+      ? { report: pnlSummaryFixture({
+          Rows: { Row: [
+            {
+              Header: { ColData: [{ value: "Income" }] },
+              Rows: { Row: [{ type: "Data", ColData: [{ value: "Sales of Product Income", id: "1" }, { value: "1000.00" }] }] },
+              Summary: { ColData: [{ value: "Total Income" }, { value: "1175.00" }] },
+            },
+            pnlSummaryFixture().Rows.Row[2],
+            { Summary: { ColData: [{ value: "Net Income" }, { value: "1132.50" }] } },
+          ] },
+        }), reportName }
+      : { report: pnlDetailFixture(), reportName },
+  }), (err) => {
+    assert.equal(err.error, "qbo_pnl_reconciliation_failed");
+    assert.ok(Array.isArray(err.details.checks));
+    assert.equal(err.details.diagnostics.detail_report, "ProfitAndLossDetail");
+    assert.equal(err.details.diagnostics.summary_totals.revenue, 1175);
+    assert.equal(err.details.diagnostics.account_totals.revenue, 1000);
+    assert.ok(err.details.diagnostics.failed_checks.some((check) => check.name === "summary_vs_accounts.revenue"));
+    assert.equal(err.details.diagnostics.raw_qbo_payload, undefined);
+    return true;
+  });
 
   assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.length, 0);
 });

@@ -2,6 +2,7 @@ import React from "react";
 import { CoaDropdown } from "./BookkeepingFeed.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
+import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
 
 const BADGE_BASE = "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium";
 const MIRROR_TABLE_GRID = "grid grid-cols-[92px_minmax(260px,1.55fr)_minmax(170px,0.9fr)_minmax(240px,1fr)_minmax(150px,0.72fr)_minmax(220px,0.88fr)]";
@@ -216,26 +217,7 @@ function qboBadgeClass(status) {
 }
 
 export function getProtectedWorkflowReason(row = {}) {
-  const taxonomy = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
-  const reason = String(row.accounting_review_reason || row.meta?.accounting_review_reason || "").toLowerCase();
-  if (row.pending) return { label: "Pending bank transaction", detail: "Wait for the bank to finalize this transaction before accounting changes." };
-  if (row.cc_payment_pair_id || row.cc_payment_rejected === false || taxonomy === "cc_payment") {
-    return { label: "Credit card payment", detail: "Credit card payment handling uses the protected transfer workflow." };
-  }
-  if (row.is_check && /check/.test(reason)) return { label: row.check_number ? `Check ${row.check_number}` : "Check", detail: "Checks use the protected check workflow." };
-  if (["transfer_internal", "bank_transfer"].includes(taxonomy)) return { label: "Transfer", detail: "Transfers use the protected transfer workflow." };
-  if (["owner_draw", "owner_contribution", "owner_distribution"].includes(taxonomy)) return { label: "Owner movement", detail: "Owner equity movements use a protected workflow." };
-  if (taxonomy === "refund") return { label: "Refund", detail: "Refunds use a protected workflow." };
-  if (taxonomy === "loan_movement") return { label: "Loan movement", detail: "Loan movements use a protected workflow." };
-  if (taxonomy === "tax_payment") return { label: "Tax payment", detail: "Tax payments use a protected workflow." };
-  if (taxonomy === "payroll") return { label: "Payroll", detail: "Payroll uses a protected workflow." };
-  if (row.accounting_review_required && reason && !/uncategorized|needs review|review required/.test(reason)) {
-    return { label: "Other protected workflow", detail: row.accounting_review_reason };
-  }
-  if (row.accounting_review_required) {
-    return { label: "Bank account review", detail: "This bank transaction needs internal account review before accounting changes." };
-  }
-  return null;
+  return getSharedProtectedWorkflowReason(row);
 }
 
 function formatTaxonomy(value) {
