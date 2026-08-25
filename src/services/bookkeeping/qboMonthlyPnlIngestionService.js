@@ -60,7 +60,7 @@ export async function refreshMonthlyQboPnlSnapshot({
       endDate: sourceEndDate,
       accountingMethod,
     });
-    const detailResponse = await fetchPreferredDetailReport({
+    let detailResponse = await fetchPreferredDetailReport({
       businessId,
       realmId: qboContext.realmId,
       startDate: sourceStartDate,
@@ -69,7 +69,7 @@ export async function refreshMonthlyQboPnlSnapshot({
       fetchReport,
     });
     const qboAccounts = await fetchAccounts({ businessId });
-    const normalized = normalizeQboPnlSnapshotPayload({
+    let normalized = normalizeQboPnlSnapshotPayload({
       businessId,
       reviewYear,
       reviewMonth,
@@ -83,6 +83,47 @@ export async function refreshMonthlyQboPnlSnapshot({
       detailReportName: detailResponse.reportName,
       qboAccounts,
     });
+    if (shouldTryGeneralLedgerZeroDetailFallback(normalized, detailResponse.reportName)) {
+      try {
+        const fallbackResponse = await fetchReport({
+          businessId,
+          realmId: qboContext.realmId,
+          reportName: "GeneralLedger",
+          startDate: sourceStartDate,
+          endDate: sourceEndDate,
+          accountingMethod,
+        });
+        const fallbackNormalized = normalizeQboPnlSnapshotPayload({
+          businessId,
+          reviewYear,
+          reviewMonth,
+          realmId: qboContext.realmId,
+          qboEnvironment: qboContext.qboEnvironment,
+          accountingMethod,
+          sourceStartDate,
+          sourceEndDate,
+          summaryReport: summaryResponse.report,
+          detailReport: fallbackResponse.report,
+          detailReportName: fallbackResponse.reportName,
+          qboAccounts,
+        });
+        fallbackNormalized.metadata.source.detail_fallback = {
+          from: detailResponse.reportName,
+          to: fallbackResponse.reportName,
+          reason: "zero_detail_for_nonzero_pnl_accounts",
+        };
+        normalized = fallbackNormalized;
+        detailResponse = fallbackResponse;
+      } catch (fallbackErr) {
+        normalized.metadata.source.detail_fallback = {
+          from: detailResponse.reportName,
+          to: "GeneralLedger",
+          reason: "zero_detail_for_nonzero_pnl_accounts",
+          status: "failed",
+          error: fallbackErr?.error || fallbackErr?.message || "general_ledger_fallback_failed",
+        };
+      }
+    }
 
     const persisted = await persistSnapshot({
       businessId,
@@ -498,7 +539,9 @@ export function normalizeDetailTransactions(report, {
   const columns = reportColumns(report);
   const rows = [];
   const stats = {
+    traversed_report_rows: 0,
     raw_detail_rows: 0,
+    skipped_structural_rows: 0,
     normalized_detail_rows: 0,
     skipped_missing_date: 0,
     skipped_outside_month: 0,
@@ -511,7 +554,11 @@ export function normalizeDetailTransactions(report, {
   };
   const qboAccountById = new Map(qboAccounts.filter((account) => account?.id).map((account) => [String(account.id), account]));
   walkReportRows(report?.Rows?.Row || [], [], (row, ancestors) => {
-    if (!isTransactionDataRow(row)) return;
+    stats.traversed_report_rows += 1;
+    if (!isTransactionDataRow(row)) {
+      stats.skipped_structural_rows += 1;
+      return;
+    }
     stats.raw_detail_rows += 1;
     const values = columnsToObject(row.ColData, columns);
     const txnDate = normalizeDate(pickValue(values, ["date", "txndate"]) || firstDateValue(row.ColData));
@@ -524,8 +571,15 @@ export function normalizeDetailTransactions(report, {
       return;
     }
     const accountContext = nearestAccountContext(ancestors);
-    const accountName = pickValue(values, ["account", "split", "distributionaccount"]) || accountContext?.name || accountNameFromColData(row.ColData, qboAccountById) || null;
-    const accountId = firstId(row.ColData, ["account", "split", "distributionaccount"], columns) || accountContext?.id || accountIdFromColData(row.ColData, qboAccountById);
+    const accountName = cleanQboReportAccountName(
+      pickValue(values, ["account", "accountname", "split", "splitaccount", "distributionaccount", "itemsplitaccount"])
+        || accountNameFromColData(row.ColData, qboAccountById)
+        || accountContext?.name
+        || null
+    );
+    const accountId = firstId(row.ColData, ["account", "accountname", "split", "splitaccount", "distributionaccount", "itemsplitaccount"], columns)
+      || accountIdFromColData(row.ColData, qboAccountById)
+      || accountContext?.id;
     if (!accountName && !accountId) {
       stats.skipped_missing_account_context += 1;
       return;
@@ -541,7 +595,7 @@ export function normalizeDetailTransactions(report, {
     }
     const txnType = normalizeQboTxnType(pickValue(values, ["txntype", "transactiontype", "type"]) || transactionTypeFromColData(row.ColData) || row?.TxnType || null);
     const txnId = transactionIdFromRow(row, columns, txnType, accountId) || null;
-    const amount = amountFromCandidates(values, ["amount", "debit", "credit", "netamount", "total"]) ?? amountFromColData(row.ColData);
+    const amount = amountFromCandidates(values, ["amount", "netamount", "subtnatamount", "natamount", "total", "debit", "credit"]) ?? amountFromColData(row.ColData);
     if (amount === null || !Number.isFinite(Number(amount))) {
       stats.skipped_invalid_amount += 1;
       return;
@@ -571,6 +625,9 @@ export function normalizeDetailTransactions(report, {
         account_identity_status: accountRef.status,
         account_identity_source: accountRef.source,
         transaction_identity_source: txnId ? transactionIdentitySource(row, columns, txnType, accountId) : "missing",
+        qbo_doc_number: pickValue(values, ["num", "docnum", "docnumber"]) || null,
+        qbo_split_account: pickValue(values, ["itemsplitaccount", "split", "splitaccount", "distributionaccount"]) || null,
+        qbo_report_columns: columns.map((column) => column.key),
         qbo_identity_complete: hasCompleteIdentity,
         visibility_authoritative: true,
         read_only_reason: hasCompleteIdentity ? null : "missing_qbo_transaction_identity",
@@ -700,6 +757,12 @@ function applyDetailCompletenessToAccounts(accounts = [], reconciliation = {}) {
       },
     };
   });
+}
+
+function shouldTryGeneralLedgerZeroDetailFallback(normalized = {}, detailReportName = "") {
+  if (detailReportName !== "ProfitAndLossDetail") return false;
+  if (Number(normalized?.transactions?.length || 0) > 0) return false;
+  return (normalized?.accounts || []).some((account) => Math.abs(roundMoney(account.total_amount)) > RECONCILIATION_TOLERANCE);
 }
 
 function buildSafeReconciliationDiagnostics(reconciliation = {}) {
@@ -908,7 +971,9 @@ function reconcileNormalizedPnl({ summary, accounts, transactions, detailReportN
       account_rows: accounts.length,
       detail_rows: transactions.length,
       detail_accounts: detailByAccount.size,
+      traversed_report_rows: detailNormalizationStats.traversed_report_rows ?? null,
       raw_detail_rows: detailNormalizationStats.raw_detail_rows ?? null,
+      skipped_structural_rows: detailNormalizationStats.skipped_structural_rows ?? null,
       normalized_detail_rows: detailNormalizationStats.normalized_detail_rows ?? transactions.length,
       skipped_missing_date: detailNormalizationStats.skipped_missing_date ?? null,
       skipped_outside_month: detailNormalizationStats.skipped_outside_month ?? null,
@@ -941,7 +1006,7 @@ function addReconciliationCheck(checks, name, expected, actual) {
 function nearestAccountContext(ancestors = []) {
   for (let i = ancestors.length - 1; i >= 0; i -= 1) {
     const row = ancestors[i];
-    const label = rowLabel(row);
+    const label = cleanQboReportAccountName(rowLabel(row));
     if (label && !/^total /i.test(label)) {
       const id = row?.Header?.ColData?.[0]?.id || row?.ColData?.[0]?.id || null;
       return { name: label, id };
@@ -1061,6 +1126,15 @@ function firstTextAfterTransactionType(colData = [], txnType) {
   return null;
 }
 
+function cleanQboReportAccountName(value) {
+  const text = nullableText(value);
+  if (!text) return null;
+  return text
+    .replace(/\s+\(\d+\)\s*$/g, "")
+    .replace(/^total\s+for\s+/i, "")
+    .trim() || null;
+}
+
 function descriptionFromColData(colData = [], txnType) {
   const wantedType = normalizeQboTxnType(txnType);
   const typeIndex = (colData || []).findIndex((col) => normalizeQboTxnType(col?.value) === wantedType);
@@ -1130,12 +1204,27 @@ function firstId(colData, keys, columns) {
 function normalizeColumnKey(value) {
   const normalized = normalizeLabel(value).replace(/\s+/g, "");
   const aliases = {
+    account: "account",
+    accountname: "account",
+    name: "name",
     transactiontype: "txntype",
     transactiondate: "date",
+    txdate: "date",
+    date: "date",
+    num: "num",
     docnumber: "docnum",
+    docnum: "docnum",
     distributionaccount: "distributionaccount",
     memodescription: "memo",
+    description: "description",
+    memo: "memo",
     splitaccount: "split",
+    itemsplitaccount: "itemsplitaccount",
+    amount: "amount",
+    balance: "balance",
+    subtamount: "subtnatamount",
+    subtnatamount: "subtnatamount",
+    natamount: "natamount",
   };
   return aliases[normalized] || normalized;
 }

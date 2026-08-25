@@ -941,6 +941,214 @@ test("August QBO P&L refresh persists authoritative account drill-down rows by P
   assert.equal(softwareRows.rows.find((row) => row.qbo_txn_id === "soft-aug-2").metadata.mutation_authoritative, false);
 });
 
+test("real QuickBooks transaction report columns persist Services invoices and Software expense detail", async () => {
+  const db = makeDb();
+  const accounts = coaFixture([
+    { id: "20", name: "Services", fullyQualifiedName: "Services", type: "Income" },
+    { id: "21", name: "Payment Processing Fees", fullyQualifiedName: "Payment Processing Fees", type: "Expense" },
+    { id: "22", name: "Software", fullyQualifiedName: "Software", type: "Expense" },
+  ]);
+  const summary = pnlSummaryFixture({
+    sales: 1175,
+    cogs: 0,
+    expenses: 192.9,
+    net: 982.1,
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Income" }] },
+          Rows: { Row: [{ type: "Data", ColData: [{ value: "Services", id: "20" }, { value: "1175.00" }] }] },
+          Summary: { ColData: [{ value: "Total Income" }, { value: "1175.00" }] },
+        },
+        {
+          Header: { ColData: [{ value: "Expenses" }] },
+          Rows: { Row: [
+            { type: "Data", ColData: [{ value: "Payment Processing Fees", id: "21" }, { value: "32.90" }] },
+            { type: "Data", ColData: [{ value: "Software", id: "22" }, { value: "160.00" }] },
+          ] },
+          Summary: { ColData: [{ value: "Total Expenses" }, { value: "192.90" }] },
+        },
+        { Summary: { ColData: [{ value: "Net Income" }, { value: "982.10" }] } },
+      ],
+    },
+  });
+  const detail = {
+    Header: { ReportName: "ProfitAndLossDetail", StartPeriod: "2026-08-01", EndPeriod: "2026-08-31" },
+    Columns: {
+      Column: [
+        { ColTitle: "Transaction date" },
+        { ColTitle: "Transaction type" },
+        { ColTitle: "Num" },
+        { ColTitle: "Name" },
+        { ColTitle: "Description" },
+        { ColTitle: "Account Name" },
+        { ColTitle: "Item split account" },
+        { ColTitle: "Amount" },
+        { ColTitle: "Balance" },
+      ],
+    },
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Services (5)" }] },
+          Rows: { Row: [
+            { type: "Data", ColData: [{ value: "08/06/2026" }, { value: "Invoice" }, { value: "1098" }, { value: "Projection and Video LLC" }, { value: "July 2026" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "300.00" }, { value: "300.00" }] },
+            { type: "Data", ColData: [{ value: "08/06/2026" }, { value: "Invoice" }, { value: "1099" }, { value: "AV Educate Inc" }, { value: "July 2026" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "200.00" }, { value: "500.00" }] },
+            { type: "Data", ColData: [{ value: "08/19/2026" }, { value: "Invoice" }, { value: "1103" }, { value: "AV Educate Inc" }, { value: "August 2026 Bookkeeping" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "200.00" }, { value: "700.00" }] },
+            { type: "Data", ColData: [{ value: "08/20/2026" }, { value: "Invoice" }, { value: "1100" }, { value: "PeriSocialHouseHotel" }, { value: "August 2026 Bookkeeping" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "125.00" }, { value: "825.00" }] },
+            { type: "Data", ColData: [{ value: "08/20/2026" }, { value: "Invoice" }, { value: "1101" }, { value: "PeriSocialHouseLLC" }, { value: "August 2026 Bookkeeping" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "350.00" }, { value: "1175.00" }] },
+          ] },
+          Summary: { ColData: [{ value: "Total for Services" }, {}, {}, {}, {}, {}, {}, { value: "1175.00" }] },
+        },
+        {
+          Header: { ColData: [{ value: "Payment Processing Fees" }] },
+          Rows: { Row: [
+            { type: "Data", ColData: [{ value: "08/10/2026" }, { value: "Expense" }, { value: "" }, { value: "Intuit" }, { value: "Processing fees" }, { value: "Payment Processing Fees", id: "21" }, { value: "Checking" }, { value: "32.90" }, { value: "32.90" }] },
+          ] },
+        },
+        {
+          Header: { ColData: [{ value: "Software" }] },
+          Rows: { Row: [
+            { type: "Data", ColData: [{ value: "08/16/2026" }, { value: "Expense" }, { value: "" }, { value: "Instantly" }, { value: "Software subscription" }, { value: "Software", id: "22" }, { value: "Credit Card" }, { value: "160.00" }, { value: "160.00" }] },
+          ] },
+        },
+      ],
+    },
+  };
+
+  const result = await refreshMonthlyQboPnlSnapshot({
+    businessId: BUSINESS_ID,
+    year: 2026,
+    month: 8,
+    db,
+    loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
+    fetchAccounts: async () => accounts,
+    fetchReport: async ({ reportName }) => ({ report: reportName === "ProfitAndLoss" ? summary : detail, reportName }),
+  });
+
+  assert.equal(result.snapshot.revenue, 1175);
+  assert.equal(result.snapshot.expenses, 192.9);
+  assert.equal(result.snapshot.net_profit, 982.1);
+  assert.equal(result.transactions.length, 7);
+  assert.equal(result.linkage.missingIdentity, 7);
+  assert.equal(result.source.detail_report, "ProfitAndLossDetail");
+
+  const services = result.accounts.find((row) => row.qbo_account_id === "20");
+  const fees = result.accounts.find((row) => row.qbo_account_id === "21");
+  const software = result.accounts.find((row) => row.qbo_account_id === "22");
+  assert.equal(services.metadata.transaction_count, 5);
+  assert.equal(fees.metadata.transaction_count, 1);
+  assert.equal(software.metadata.transaction_count, 1);
+
+  const serviceRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "20", db });
+  const softwareRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "22", db });
+  assert.equal(serviceRows.totalCount, 5);
+  assert.equal(serviceRows.rows.reduce((sum, row) => sum + Number(row.amount), 0), 1175);
+  assert.ok(serviceRows.rows.every((row) => row.qbo_txn_type === "Invoice"));
+  assert.ok(serviceRows.rows.every((row) => row.linkage_status === "missing_qbo_identity"));
+  assert.equal(serviceRows.rows[0].metadata.qbo_doc_number, "1098");
+  assert.equal(serviceRows.rows[0].metadata.qbo_split_account, "Accounts Receivable (A/R)");
+  assert.equal(softwareRows.totalCount, 1);
+  assert.equal(Number(softwareRows.rows[0].amount), 160);
+  assert.equal(softwareRows.rows[0].qbo_txn_type, "Purchase");
+  assert.equal(softwareRows.rows[0].linkage_status, "missing_qbo_identity");
+});
+
+test("zero-row ProfitAndLossDetail for non-zero accounts falls back to P&L-filtered GeneralLedger detail", async () => {
+  const db = makeDb();
+  const reportsCalled = [];
+  const accounts = coaFixture([
+    { id: "20", name: "Services", fullyQualifiedName: "Services", type: "Income" },
+    { id: "22", name: "Software", fullyQualifiedName: "Software", type: "Expense" },
+    { id: "10", name: "Checking", fullyQualifiedName: "Checking", type: "Bank" },
+  ]);
+  const summary = pnlSummaryFixture({
+    sales: 1175,
+    cogs: 0,
+    expenses: 160,
+    net: 1015,
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Income" }] },
+          Rows: { Row: [{ type: "Data", ColData: [{ value: "Services", id: "20" }, { value: "1175.00" }] }] },
+          Summary: { ColData: [{ value: "Total Income" }, { value: "1175.00" }] },
+        },
+        {
+          Header: { ColData: [{ value: "Expenses" }] },
+          Rows: { Row: [{ type: "Data", ColData: [{ value: "Software", id: "22" }, { value: "160.00" }] }] },
+          Summary: { ColData: [{ value: "Total Expenses" }, { value: "160.00" }] },
+        },
+        { Summary: { ColData: [{ value: "Net Income" }, { value: "1015.00" }] } },
+      ],
+    },
+  });
+  const emptyProfitAndLossDetail = {
+    Header: { ReportName: "ProfitAndLossDetail", StartPeriod: "2026-08-01", EndPeriod: "2026-08-31" },
+    Columns: { Column: [{ ColTitle: "Transaction date" }, { ColTitle: "Amount" }] },
+    Rows: { Row: [] },
+  };
+  const generalLedger = {
+    Header: { ReportName: "GeneralLedger", StartPeriod: "2026-08-01", EndPeriod: "2026-08-31" },
+    Columns: {
+      Column: [
+        { ColTitle: "Transaction date" },
+        { ColTitle: "Transaction type" },
+        { ColTitle: "Num" },
+        { ColTitle: "Name" },
+        { ColTitle: "Description" },
+        { ColTitle: "Account Name" },
+        { ColTitle: "Amount" },
+      ],
+    },
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Software" }] },
+          Rows: { Row: [
+            { type: "Data", ColData: [{ value: "08/16/2026" }, { value: "Expense" }, { value: "" }, { value: "Instantly" }, { value: "Software subscription" }, { value: "Software", id: "22" }, { value: "160.00" }] },
+          ] },
+        },
+        {
+          Header: { ColData: [{ value: "Checking" }] },
+          Rows: { Row: [
+            { type: "Data", ColData: [{ value: "08/17/2026" }, { value: "Deposit" }, { value: "" }, { value: "Bank" }, { value: "Balance sheet row" }, { value: "Checking", id: "10" }, { value: "160.00" }] },
+          ] },
+        },
+      ],
+    },
+  };
+
+  const result = await refreshMonthlyQboPnlSnapshot({
+    businessId: BUSINESS_ID,
+    year: 2026,
+    month: 8,
+    db,
+    loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
+    fetchAccounts: async () => accounts,
+    fetchReport: async ({ reportName }) => {
+      reportsCalled.push(reportName);
+      if (reportName === "ProfitAndLoss") return { report: summary, reportName };
+      if (reportName === "ProfitAndLossDetail") return { report: emptyProfitAndLossDetail, reportName };
+      return { report: generalLedger, reportName };
+    },
+  });
+
+  assert.deepEqual(reportsCalled, ["ProfitAndLoss", "ProfitAndLossDetail", "GeneralLedger"]);
+  assert.equal(result.source.detail_report, "GeneralLedger");
+  assert.deepEqual(result.source.detail_fallback, {
+    from: "ProfitAndLossDetail",
+    to: "GeneralLedger",
+    reason: "zero_detail_for_nonzero_pnl_accounts",
+  });
+  assert.equal(result.transactions.length, 1);
+  assert.equal(result.transactions[0].qbo_account_id, "22");
+  assert.equal(result.transactions[0].qbo_account_name, "Software");
+  assert.equal(Number(result.transactions[0].amount), 160);
+  assert.equal(db.tables.monthly_review_qbo_pnl_transactions.length, 1);
+  assert.equal(db.tables.monthly_review_qbo_pnl_transactions[0].qbo_account_id, "22");
+});
+
 test("material summary/account reconciliation mismatch fails before snapshot persistence", async () => {
   const db = makeDb();
 

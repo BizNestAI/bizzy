@@ -71,12 +71,15 @@ test("Monthly Review expanded QBO P&L rows separate QBO-only from linked Bizzi r
   assert.match(expandedBlock, /QBO only/);
   assert.match(expandedBlock, /QBO detail/);
   assert.match(expandedBlock, /identityComplete/);
+  assert.match(expandedBlock, /qbo_doc_number/);
+  assert.match(expandedBlock, /qbo_split_account/);
   assert.match(expandedBlock, /lacks mutation-grade transaction identity and is read-only/);
   assert.match(expandedBlock, /Read-only/);
   assert.match(expandedBlock, /<CoaDropdown/);
   assert.match(expandedBlock, /linked \? \(/);
   assert.match(expandedBlock, /onChange=\{\(accountId\) => onAccountChange\(txn, accountId\)\}/);
   assert.match(expandedBlock, /txn\.entity_name \|\| txn\.payee_name \|\| txn\.vendor_name \|\| txn\.customer_name/);
+  assert.match(ui, /QuickBooks detail could not be loaded for this account/);
 });
 
 test("Monthly Review P&L source semantics use QBO snapshot instead of source ledger preview", () => {

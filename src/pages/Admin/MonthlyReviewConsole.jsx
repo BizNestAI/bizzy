@@ -1891,19 +1891,20 @@ function SourceLedgerPanel({
                         {rows.map((txn) => {
                           const linked = Boolean(txn.bizzi_transaction_id);
                           const identityComplete = Boolean(txn.qbo_txn_id && txn.qbo_txn_type);
+                          const docNumber = txn.metadata?.qbo_doc_number || "";
                           const busy = busyTransaction === txn.bizzi_transaction_id;
                           return (
                             <div key={txn.id || `${txn.qbo_txn_type}-${txn.qbo_txn_id}-${txn.txn_date}`} className="grid gap-2 px-3 py-2 text-xs xl:grid-cols-[76px_minmax(200px,1fr)_105px_110px_105px_minmax(210px,280px)] xl:items-center">
                               <div className="whitespace-nowrap text-white/45">{formatShortDate(txn.txn_date)}</div>
                               <div className="min-w-0">
                                 <div className="truncate font-medium leading-tight text-white">{txn.entity_name || txn.payee_name || txn.vendor_name || txn.customer_name || txn.description || "QBO transaction"}</div>
-                                <div className="truncate text-[11px] leading-tight text-white/38">{txn.memo || txn.description || txn.qbo_txn_id}</div>
+                                <div className="truncate text-[11px] leading-tight text-white/38">{txn.memo || txn.description || txn.metadata?.qbo_split_account || txn.qbo_txn_id}</div>
                               </div>
                               <div className={`font-semibold xl:text-right ${Number(txn.amount || 0) < 0 ? "text-rose-200" : "text-emerald-100"}`}>
                                 {formatCurrency(txn.amount)}
                               </div>
                               <span className="inline-flex w-fit rounded-full border border-sky-300/18 bg-sky-300/[0.08] px-2 py-0.5 text-[10px] font-medium text-sky-100">
-                                {txn.qbo_txn_type || "QBO"}
+                                {[txn.qbo_txn_type || "QBO", docNumber].filter(Boolean).join(" ")}
                               </span>
                               <span
                                 className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[10px] font-medium ${linked ? "border-emerald-300/18 bg-emerald-300/[0.08] text-emerald-100" : "border-white/10 bg-white/[0.05] text-white/58"}`}
@@ -1950,7 +1951,9 @@ function SourceLedgerPanel({
                       </>
                     ) : (
                       <div className="px-3 py-5 text-center text-sm text-white/45">
-                        No QuickBooks transactions were returned for this account in {formatMonth(month)}.
+                        {Number(account.total_amount || 0) !== 0 && account.metadata?.detail_status === "unavailable"
+                          ? "QuickBooks detail could not be loaded for this account."
+                          : `No QuickBooks transactions were returned for this account in ${formatMonth(month)}.`}
                       </div>
                     )}
                   </div>
