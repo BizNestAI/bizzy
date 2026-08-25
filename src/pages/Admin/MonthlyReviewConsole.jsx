@@ -1890,6 +1890,7 @@ function SourceLedgerPanel({
                       <>
                         {rows.map((txn) => {
                           const linked = Boolean(txn.bizzi_transaction_id);
+                          const identityComplete = Boolean(txn.qbo_txn_id && txn.qbo_txn_type);
                           const busy = busyTransaction === txn.bizzi_transaction_id;
                           return (
                             <div key={txn.id || `${txn.qbo_txn_type}-${txn.qbo_txn_id}-${txn.txn_date}`} className="grid gap-2 px-3 py-2 text-xs xl:grid-cols-[76px_minmax(200px,1fr)_105px_110px_105px_minmax(210px,280px)] xl:items-center">
@@ -1906,9 +1907,9 @@ function SourceLedgerPanel({
                               </span>
                               <span
                                 className={`inline-flex w-fit rounded-full border px-2 py-0.5 text-[10px] font-medium ${linked ? "border-emerald-300/18 bg-emerald-300/[0.08] text-emerald-100" : "border-white/10 bg-white/[0.05] text-white/58"}`}
-                                title={linked ? "Linked to a Bizzi bank transaction." : "This transaction exists in QuickBooks but is not linked to a Bizzi bank transaction."}
+                                title={linked ? "Linked to a Bizzi bank transaction." : (identityComplete ? "This transaction exists in QuickBooks but is not linked to a Bizzi bank transaction." : "This QuickBooks report detail row lacks mutation-grade transaction identity and is read-only.")}
                               >
-                                {linked ? "Bizzi linked" : "QBO only"}
+                                {linked ? "Bizzi linked" : (identityComplete ? "QBO only" : "QBO detail")}
                               </span>
                               <div className="flex items-center gap-2">
                                 {linked ? (

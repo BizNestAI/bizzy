@@ -497,33 +497,67 @@ export function normalizeDetailTransactions(report, {
 } = {}) {
   const columns = reportColumns(report);
   const rows = [];
-  const missingIdentity = [];
+  const stats = {
+    raw_detail_rows: 0,
+    normalized_detail_rows: 0,
+    skipped_missing_date: 0,
+    skipped_outside_month: 0,
+    skipped_missing_account_context: 0,
+    skipped_non_pnl_account: 0,
+    skipped_invalid_amount: 0,
+    complete_qbo_identity_rows: 0,
+    incomplete_qbo_identity_rows: 0,
+    rows_by_qbo_account_id: {},
+  };
   const qboAccountById = new Map(qboAccounts.filter((account) => account?.id).map((account) => [String(account.id), account]));
   walkReportRows(report?.Rows?.Row || [], [], (row, ancestors) => {
     if (!isTransactionDataRow(row)) return;
+    stats.raw_detail_rows += 1;
     const values = columnsToObject(row.ColData, columns);
     const txnDate = normalizeDate(pickValue(values, ["date", "txndate"]) || firstDateValue(row.ColData));
-    if (!txnDate) return;
-    if (txnDate < sourceStartDate || txnDate > sourceEndDate) return;
+    if (!txnDate) {
+      stats.skipped_missing_date += 1;
+      return;
+    }
+    if (txnDate < sourceStartDate || txnDate > sourceEndDate) {
+      stats.skipped_outside_month += 1;
+      return;
+    }
     const accountContext = nearestAccountContext(ancestors);
     const accountName = pickValue(values, ["account", "split", "distributionaccount"]) || accountContext?.name || accountNameFromColData(row.ColData, qboAccountById) || null;
     const accountId = firstId(row.ColData, ["account", "split", "distributionaccount"], columns) || accountContext?.id || accountIdFromColData(row.ColData, qboAccountById);
+    if (!accountName && !accountId) {
+      stats.skipped_missing_account_context += 1;
+      return;
+    }
     const accountRef = resolver.resolve({
       id: accountId,
       name: accountName,
       path: accountName,
     });
     if (detailReportName === "GeneralLedger" && !isPnlAccount(accountRef.account || qboAccountById.get(String(accountId || "")))) {
+      stats.skipped_non_pnl_account += 1;
       return;
     }
     const txnType = normalizeQboTxnType(pickValue(values, ["txntype", "transactiontype", "type"]) || transactionTypeFromColData(row.ColData) || row?.TxnType || null);
     const txnId = transactionIdFromRow(row, columns, txnType, accountId) || null;
-    const amount = amountFromCandidates(values, ["amount", "debit", "credit", "netamount", "total"]) || amountFromColData(row.ColData);
+    const amount = amountFromCandidates(values, ["amount", "debit", "credit", "netamount", "total"]) ?? amountFromColData(row.ColData);
+    if (amount === null || !Number.isFinite(Number(amount))) {
+      stats.skipped_invalid_amount += 1;
+      return;
+    }
+    const hasCompleteIdentity = Boolean(txnId && txnType);
+    const qboAccountId = accountRef.account?.id || null;
+    const accountBucket = qboAccountId || `name:${normalizePath(accountRef.account?.name || accountName || "unresolved")}`;
+    stats.normalized_detail_rows += 1;
+    if (hasCompleteIdentity) stats.complete_qbo_identity_rows += 1;
+    else stats.incomplete_qbo_identity_rows += 1;
+    stats.rows_by_qbo_account_id[accountBucket] = (stats.rows_by_qbo_account_id[accountBucket] || 0) + 1;
     const normalized = {
       qbo_txn_id: txnId ? String(txnId) : null,
       qbo_txn_type: txnType || null,
       txn_date: txnDate,
-      qbo_account_id: accountRef.account?.id || null,
+      qbo_account_id: qboAccountId,
       qbo_account_name: accountRef.account?.name || accountName || null,
       entity_name: pickValue(values, ["name", "entity", "payee", "vendor", "customer"]) || firstTextAfterTransactionType(row.ColData, txnType),
       payee_name: pickValue(values, ["name", "payee"]) || firstTextAfterTransactionType(row.ColData, txnType),
@@ -537,23 +571,19 @@ export function normalizeDetailTransactions(report, {
         account_identity_status: accountRef.status,
         account_identity_source: accountRef.source,
         transaction_identity_source: txnId ? transactionIdentitySource(row, columns, txnType, accountId) : "missing",
-        mutation_authoritative: Boolean(accountRef.account?.id && accountRef.status === "resolved"),
+        qbo_identity_complete: hasCompleteIdentity,
+        visibility_authoritative: true,
+        read_only_reason: hasCompleteIdentity ? null : "missing_qbo_transaction_identity",
+        mutation_authoritative: Boolean(hasCompleteIdentity && accountRef.account?.id && accountRef.status === "resolved"),
       },
       raw_ref: safeRawRef(row),
     };
-    if (!normalized.qbo_txn_id || !normalized.qbo_txn_type) {
-      missingIdentity.push({ txn_date: txnDate, amount, description: normalized.description });
-      return;
-    }
     rows.push(normalized);
   });
-  if (missingIdentity.length > 0) {
-    throw new QboMonthlyPnlIngestionError("qbo_detail_transaction_identity_missing", 409, {
-      detail_report: detailReportName,
-      missing_count: missingIdentity.length,
-      examples: missingIdentity.slice(0, 3),
-    });
-  }
+  Object.defineProperty(rows, "normalization_stats", {
+    value: stats,
+    enumerable: false,
+  });
   return rows;
 }
 
@@ -785,6 +815,7 @@ function canonicalPnlType(value) {
 
 function reconcileNormalizedPnl({ summary, accounts, transactions, detailReportName }) {
   const checks = [];
+  const detailNormalizationStats = transactions?.normalization_stats || {};
   const accountTotals = {
     revenue: roundMoney(sumAccountRows(accounts, "Income")),
     cogs: roundMoney(sumAccountRows(accounts, "Cost of Goods Sold")),
@@ -877,6 +908,16 @@ function reconcileNormalizedPnl({ summary, accounts, transactions, detailReportN
       account_rows: accounts.length,
       detail_rows: transactions.length,
       detail_accounts: detailByAccount.size,
+      raw_detail_rows: detailNormalizationStats.raw_detail_rows ?? null,
+      normalized_detail_rows: detailNormalizationStats.normalized_detail_rows ?? transactions.length,
+      skipped_missing_date: detailNormalizationStats.skipped_missing_date ?? null,
+      skipped_outside_month: detailNormalizationStats.skipped_outside_month ?? null,
+      skipped_missing_account_context: detailNormalizationStats.skipped_missing_account_context ?? null,
+      skipped_non_pnl_account: detailNormalizationStats.skipped_non_pnl_account ?? null,
+      skipped_invalid_amount: detailNormalizationStats.skipped_invalid_amount ?? null,
+      complete_qbo_identity_rows: detailNormalizationStats.complete_qbo_identity_rows ?? transactions.filter((row) => row.qbo_txn_id && row.qbo_txn_type).length,
+      incomplete_qbo_identity_rows: detailNormalizationStats.incomplete_qbo_identity_rows ?? transactions.filter((row) => !row.qbo_txn_id || !row.qbo_txn_type).length,
+      rows_by_qbo_account_id: detailNormalizationStats.rows_by_qbo_account_id || detailTotals,
     },
     account_detail_completeness: accountDetailCompleteness,
     checks,
@@ -928,7 +969,7 @@ function amountFromCandidates(values, keys) {
     const parsed = parseMoney(values[key]);
     if (parsed !== null) return parsed;
   }
-  return 0;
+  return null;
 }
 
 function parseMoney(value) {

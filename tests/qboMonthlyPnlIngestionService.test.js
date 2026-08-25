@@ -479,7 +479,7 @@ test("ProfitAndLossDetail ignores summary, subtotal, blank, and parent rows as t
   assert.equal(rows[0].qbo_account_id, "3");
 });
 
-test("detail normalization rejects dated transaction rows without QBO id/type instead of fabricating identity", () => {
+test("detail normalization persists dated QBO detail rows without id/type as read-only visibility rows", () => {
   const detail = pnlDetailFixture({
     Rows: {
       Row: [{
@@ -487,15 +487,24 @@ test("detail normalization rejects dated transaction rows without QBO id/type in
       }],
     },
   });
-  assert.throws(() => normalizeDetailTransactions(detail, {
+  const rows = normalizeDetailTransactions(detail, {
     detailReportName: "ProfitAndLossDetail",
     sourceStartDate: "2026-08-01",
     sourceEndDate: "2026-08-31",
     resolver: buildAccountIdentityResolver(coaFixture()),
-  }), /qbo_detail_transaction_identity_missing/);
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].qbo_txn_id, null);
+  assert.equal(rows[0].qbo_txn_type, "Purchase");
+  assert.equal(rows[0].qbo_account_id, "3");
+  assert.equal(rows[0].metadata.qbo_identity_complete, false);
+  assert.equal(rows[0].metadata.visibility_authoritative, true);
+  assert.equal(rows[0].metadata.mutation_authoritative, false);
+  assert.equal(rows.normalization_stats.incomplete_qbo_identity_rows, 1);
 });
 
-test("detail normalization rejects QBO id with missing transaction type and never uses structural row.type", () => {
+test("detail normalization preserves QBO id with missing transaction type as non-mutation detail", () => {
   const detail = pnlDetailFixture({
     Columns: {
       Column: [
@@ -527,12 +536,18 @@ test("detail normalization rejects QBO id with missing transaction type and neve
     },
   });
 
-  assert.throws(() => normalizeDetailTransactions(detail, {
+  const rows = normalizeDetailTransactions(detail, {
     detailReportName: "ProfitAndLossDetail",
     sourceStartDate: "2026-08-01",
     sourceEndDate: "2026-08-31",
     resolver: buildAccountIdentityResolver(coaFixture()),
-  }), /qbo_detail_transaction_identity_missing/);
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].qbo_txn_id, "doc-id-1");
+  assert.equal(rows[0].qbo_txn_type, null);
+  assert.equal(rows[0].metadata.qbo_identity_complete, false);
+  assert.equal(rows[0].metadata.mutation_authoritative, false);
 });
 
 test("structural report row types never become qbo_txn_type", () => {
@@ -574,14 +589,16 @@ test("structural report row types never become qbo_txn_type", () => {
       resolver: buildAccountIdentityResolver(coaFixture()),
     });
     if (structuralType === "Data") {
-      assert.throws(run, /qbo_detail_transaction_identity_missing/);
+      const rows = run();
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].qbo_txn_type, null);
     } else {
       assert.deepEqual(run(), []);
     }
   }
 });
 
-test("merchant date amount account and memo do not infer missing qbo transaction type", () => {
+test("merchant date amount account and memo do not infer missing qbo transaction type but remain visible", () => {
   const detail = pnlDetailFixture({
     Columns: {
       Column: [
@@ -612,12 +629,17 @@ test("merchant date amount account and memo do not infer missing qbo transaction
     },
   });
 
-  assert.throws(() => normalizeDetailTransactions(detail, {
+  const rows = normalizeDetailTransactions(detail, {
     detailReportName: "ProfitAndLossDetail",
     sourceStartDate: "2026-08-01",
     sourceEndDate: "2026-08-31",
     resolver: buildAccountIdentityResolver(coaFixture()),
-  }), /qbo_detail_transaction_identity_missing/);
+  });
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].qbo_txn_id, "doc-id-2");
+  assert.equal(rows[0].qbo_txn_type, null);
+  assert.equal(rows[0].metadata.read_only_reason, "missing_qbo_transaction_identity");
 });
 
 test("detail fetch prefers ProfitAndLossDetail and falls back only to GeneralLedger when unsupported", async () => {
@@ -853,23 +875,24 @@ test("August QBO P&L refresh persists authoritative account drill-down rows by P
       Row: [
         {
           Header: { ColData: [{ value: "Services", id: "20" }] },
-          Rows: { Row: [{
-            type: "Data",
-            ColData: [{ value: "2026-08-10" }, { value: "Deposit", id: "dep-aug-1" }, { value: "Intuit" }, { value: "ACH credit" }, { value: "Services", id: "20" }, { value: "1175.00" }],
-          }] },
+          Rows: { Row: [
+            { type: "Data", ColData: [{ value: "2026-08-10" }, { value: "Deposit", id: "dep-aug-1" }, { value: "Intuit" }, { value: "ACH credit" }, { value: "Services", id: "20" }, { value: "500.00" }] },
+            { type: "Data", ColData: [{ value: "2026-08-11" }, { value: "Sales Receipt" }, { value: "Client" }, { value: "Services", id: "20" }, { value: "400.00" }] },
+            { type: "Data", ColData: [{ value: "2026-08-12" }, { value: "Payment" }, { value: "Client" }, { value: "Services", id: "20" }, { value: "275.00" }] },
+          ] },
         },
         {
           Header: { ColData: [{ value: "Payment Processing Fees", id: "21" }] },
-          Rows: { Row: [{
-            type: "Data",
-            ColData: [{ value: "2026-08-10" }, { value: "Expense", id: "fee-aug-1" }, { value: "Intuit" }, { value: "Processing fee" }, { value: "Payment Processing Fees", id: "21" }, { value: "32.90" }],
-          }] },
+          Rows: { Row: [
+            { type: "Data", ColData: [{ value: "2026-08-10" }, { value: "Expense", id: "fee-aug-1" }, { value: "Intuit" }, { value: "Processing fee" }, { value: "Payment Processing Fees", id: "21" }, { value: "20.00" }] },
+            { type: "Data", ColData: [{ value: "2026-08-11" }, { value: "Expense" }, { value: "Intuit" }, { value: "Processing fee" }, { value: "Payment Processing Fees", id: "21" }, { value: "12.90" }] },
+          ] },
         },
         {
           Header: { ColData: [{ value: "Software", id: "22" }] },
           Rows: { Row: [
             { type: "Data", ColData: [{ value: "2026-08-12" }, { value: "Expense", id: "soft-aug-1" }, { value: "Atlassian" }, { value: "Subscription" }, { value: "Software", id: "22" }, { value: "24.00" }] },
-            { type: "Data", ColData: [{ value: "2026-08-17" }, { value: "Credit Card Expense", id: "soft-aug-2" }, { value: "Instantly" }, { value: "Subscription" }, { value: "Software", id: "22" }, { value: "136.00" }] },
+            { id: "soft-aug-2", type: "Data", ColData: [{ value: "2026-08-17" }, { value: "DOC-SOFT-2" }, { value: "Instantly" }, { value: "Subscription" }, { value: "Software", id: "22" }, { value: "136.00" }] },
           ] },
         },
       ],
@@ -891,25 +914,31 @@ test("August QBO P&L refresh persists authoritative account drill-down rows by P
   assert.equal(Number(result.snapshot.revenue), 1175);
   assert.equal(Number(result.snapshot.expenses), 192.9);
   assert.equal(Number(result.snapshot.net_profit), 982.1);
-  assert.equal(result.transactions.length, 4);
+  assert.equal(result.transactions.length, 7);
   assert.equal(result.linkage.linked, 1);
-  assert.equal(result.linkage.qboOnly, 3);
+  assert.equal(result.linkage.qboOnly, 2);
+  assert.equal(result.linkage.missingIdentity, 4);
+  assert.equal(result.snapshot.metadata.reconciliation.parsed_counts.complete_qbo_identity_rows, 3);
+  assert.equal(result.snapshot.metadata.reconciliation.parsed_counts.incomplete_qbo_identity_rows, 4);
 
   const services = db.tables.monthly_review_qbo_pnl_accounts.find((row) => row.qbo_account_id === "20");
   const fees = db.tables.monthly_review_qbo_pnl_accounts.find((row) => row.qbo_account_id === "21");
   const software = db.tables.monthly_review_qbo_pnl_accounts.find((row) => row.qbo_account_id === "22");
-  assert.equal(services.metadata.transaction_count, 1);
-  assert.equal(fees.metadata.transaction_count, 1);
+  assert.equal(services.metadata.transaction_count, 3);
+  assert.equal(fees.metadata.transaction_count, 2);
   assert.equal(software.metadata.transaction_count, 2);
 
   const serviceRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "20", db });
   const feeRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "21", db });
   const softwareRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "22", db });
-  assert.equal(serviceRows.totalCount, 1);
+  assert.equal(serviceRows.totalCount, 3);
   assert.equal(feeRows.rows[0].qbo_txn_id, "fee-aug-1");
+  assert.equal(feeRows.rows.find((row) => row.qbo_txn_id === null).linkage_status, "missing_qbo_identity");
   assert.equal(softwareRows.totalCount, 2);
   assert.equal(softwareRows.rows.find((row) => row.qbo_txn_id === "soft-aug-1").bizzi_transaction_id, softwareTxnId);
   assert.equal(softwareRows.rows.find((row) => row.qbo_txn_id === "soft-aug-2").bizzi_transaction_id, null);
+  assert.equal(softwareRows.rows.find((row) => row.qbo_txn_id === "soft-aug-2").qbo_txn_type, null);
+  assert.equal(softwareRows.rows.find((row) => row.qbo_txn_id === "soft-aug-2").metadata.mutation_authoritative, false);
 });
 
 test("material summary/account reconciliation mismatch fails before snapshot persistence", async () => {
