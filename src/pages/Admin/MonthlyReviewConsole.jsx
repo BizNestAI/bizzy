@@ -239,7 +239,7 @@ export default function MonthlyReviewConsole() {
           month: Number(month.slice(5, 7)),
         },
       });
-      const snapshot = data?.snapshot || await loadQboPnlSnapshot();
+      const snapshot = await loadQboPnlSnapshot() || data?.snapshot || null;
       applyQboPnlSnapshot(snapshot);
       setQboPnlAccountDetails({});
       setQboPnlRefreshMessage(afterReclassification

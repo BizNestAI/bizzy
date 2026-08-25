@@ -352,9 +352,94 @@ test("ProfitAndLossDetail normalization preserves QBO transaction identity and f
 
   assert.equal(rows.length, 3);
   const meal = rows.find((row) => row.qbo_txn_id === "9001");
-  assert.equal(meal.qbo_txn_type, "Expense");
+  assert.equal(meal.qbo_txn_type, "Purchase");
   assert.equal(meal.qbo_account_id, "3");
   assert.equal(meal.description, "Team lunch");
+});
+
+test("ProfitAndLossDetail normalization handles QBO linked rows without declared columns", () => {
+  const accounts = coaFixture([
+    { id: "20", name: "Services", fullyQualifiedName: "Services", type: "Income" },
+    { id: "21", name: "Payment Processing Fees", fullyQualifiedName: "Payment Processing Fees", type: "Expense" },
+    { id: "22", name: "Software", fullyQualifiedName: "Software", type: "Expense" },
+  ]);
+  const detail = {
+    Header: { ReportName: "ProfitAndLossDetail", StartPeriod: "2026-08-01", EndPeriod: "2026-08-31" },
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Services", id: "20" }] },
+          Rows: { Row: [{
+            type: "Data",
+            ColData: [
+              { value: "2026-08-10" },
+              { value: "Deposit", id: "dep-aug-1" },
+              { value: "Intuit" },
+              { value: "ACH credit" },
+              { value: "Services", id: "20" },
+              { value: "1175.00" },
+            ],
+          }] },
+        },
+        {
+          Header: { ColData: [{ value: "Payment Processing Fees", id: "21" }] },
+          Rows: { Row: [{
+            type: "Data",
+            ColData: [
+              { value: "2026-08-10" },
+              { value: "Expense", id: "fee-aug-1" },
+              { value: "Intuit" },
+              { value: "Processing fee" },
+              { value: "Payment Processing Fees", id: "21" },
+              { value: "32.90" },
+            ],
+          }] },
+        },
+        {
+          Header: { ColData: [{ value: "Software", id: "22" }] },
+          Rows: { Row: [
+            {
+              type: "Data",
+              ColData: [
+                { value: "2026-08-12" },
+                { value: "Expense", id: "soft-aug-1" },
+                { value: "Atlassian" },
+                { value: "Subscription" },
+                { value: "Software", id: "22" },
+                { value: "24.00" },
+              ],
+            },
+            {
+              type: "Data",
+              ColData: [
+                { value: "2026-08-17" },
+                { value: "Credit Card Expense", id: "soft-aug-2" },
+                { value: "Instantly" },
+                { value: "Subscription" },
+                { value: "Software", id: "22" },
+                { value: "136.00" },
+              ],
+            },
+          ] },
+        },
+      ],
+    },
+  };
+
+  const rows = normalizeDetailTransactions(detail, {
+    detailReportName: "ProfitAndLossDetail",
+    sourceStartDate: "2026-08-01",
+    sourceEndDate: "2026-08-31",
+    resolver: buildAccountIdentityResolver(accounts),
+    qboAccounts: accounts,
+  });
+
+  assert.equal(rows.length, 4);
+  assert.equal(rows.find((row) => row.qbo_txn_id === "dep-aug-1").qbo_account_id, "20");
+  assert.equal(rows.find((row) => row.qbo_txn_id === "fee-aug-1").qbo_account_id, "21");
+  assert.equal(rows.filter((row) => row.qbo_account_id === "22").length, 2);
+  assert.equal(rows.find((row) => row.qbo_txn_id === "soft-aug-1").qbo_txn_type, "Purchase");
+  assert.equal(rows.find((row) => row.qbo_txn_id === "soft-aug-2").qbo_txn_type, "CreditCardCharge");
 });
 
 test("ProfitAndLossDetail ignores summary, subtotal, blank, and parent rows as transactions", () => {
@@ -717,6 +802,116 @@ test("realistic August 2026 QBO P&L summary ingests with incomplete detail seman
   assert.equal(meals.metadata.detail_completeness, "unavailable");
 });
 
+test("August QBO P&L refresh persists authoritative account drill-down rows by P&L account", async () => {
+  const softwareTxnId = "00000000-0000-4000-8000-000000000202";
+  const staleUnpostedTxnId = "00000000-0000-4000-8000-000000000203";
+  const db = makeDb({
+    bank_transactions: [
+      { id: softwareTxnId, business_id: BUSINESS_ID, is_archived: false },
+      { id: staleUnpostedTxnId, business_id: BUSINESS_ID, is_archived: false },
+    ],
+    transaction_categorizations: [
+      { business_id: BUSINESS_ID, transaction_id: softwareTxnId, qbo_txn_id: "soft-aug-1", qbo_txn_type: "Purchase", status: "posted" },
+      { business_id: BUSINESS_ID, transaction_id: staleUnpostedTxnId, qbo_txn_id: "soft-aug-2", qbo_txn_type: "CreditCardCharge", status: "approved" },
+    ],
+  });
+  const accounts = coaFixture([
+    { id: "20", name: "Services", fullyQualifiedName: "Services", type: "Income" },
+    { id: "21", name: "Payment Processing Fees", fullyQualifiedName: "Payment Processing Fees", type: "Expense" },
+    { id: "22", name: "Software", fullyQualifiedName: "Software", type: "Expense" },
+  ]);
+  const summaryReport = pnlSummaryFixture({
+    sales: 1175,
+    cogs: 0,
+    expenses: 192.9,
+    net: 982.1,
+    Rows: { Row: [
+      {
+        Header: { ColData: [{ value: "Income" }] },
+        Rows: { Row: [{ type: "Data", ColData: [{ value: "Services", id: "20" }, { value: "1175.00" }] }] },
+        Summary: { ColData: [{ value: "Total Income" }, { value: "1175.00" }] },
+      },
+      {
+        Header: { ColData: [{ value: "Cost of Goods Sold" }] },
+        Rows: { Row: [] },
+        Summary: { ColData: [{ value: "Total Cost of Goods Sold" }, { value: "0.00" }] },
+      },
+      {
+        Header: { ColData: [{ value: "Expenses" }] },
+        Rows: { Row: [
+          { type: "Data", ColData: [{ value: "Payment Processing Fees", id: "21" }, { value: "32.90" }] },
+          { type: "Data", ColData: [{ value: "Software", id: "22" }, { value: "160.00" }] },
+        ] },
+        Summary: { ColData: [{ value: "Total Expenses" }, { value: "192.90" }] },
+      },
+      { Summary: { ColData: [{ value: "Net Income" }, { value: "982.10" }] } },
+    ] },
+  });
+  const detailReport = {
+    Header: { ReportName: "ProfitAndLossDetail", StartPeriod: "2026-08-01", EndPeriod: "2026-08-31" },
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Services", id: "20" }] },
+          Rows: { Row: [{
+            type: "Data",
+            ColData: [{ value: "2026-08-10" }, { value: "Deposit", id: "dep-aug-1" }, { value: "Intuit" }, { value: "ACH credit" }, { value: "Services", id: "20" }, { value: "1175.00" }],
+          }] },
+        },
+        {
+          Header: { ColData: [{ value: "Payment Processing Fees", id: "21" }] },
+          Rows: { Row: [{
+            type: "Data",
+            ColData: [{ value: "2026-08-10" }, { value: "Expense", id: "fee-aug-1" }, { value: "Intuit" }, { value: "Processing fee" }, { value: "Payment Processing Fees", id: "21" }, { value: "32.90" }],
+          }] },
+        },
+        {
+          Header: { ColData: [{ value: "Software", id: "22" }] },
+          Rows: { Row: [
+            { type: "Data", ColData: [{ value: "2026-08-12" }, { value: "Expense", id: "soft-aug-1" }, { value: "Atlassian" }, { value: "Subscription" }, { value: "Software", id: "22" }, { value: "24.00" }] },
+            { type: "Data", ColData: [{ value: "2026-08-17" }, { value: "Credit Card Expense", id: "soft-aug-2" }, { value: "Instantly" }, { value: "Subscription" }, { value: "Software", id: "22" }, { value: "136.00" }] },
+          ] },
+        },
+      ],
+    },
+  };
+
+  const result = await refreshMonthlyQboPnlSnapshot({
+    businessId: BUSINESS_ID,
+    year: 2026,
+    month: 8,
+    db,
+    loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
+    fetchAccounts: async () => accounts,
+    fetchReport: async ({ reportName }) => reportName === "ProfitAndLoss"
+      ? { report: summaryReport, reportName }
+      : { report: detailReport, reportName },
+  });
+
+  assert.equal(Number(result.snapshot.revenue), 1175);
+  assert.equal(Number(result.snapshot.expenses), 192.9);
+  assert.equal(Number(result.snapshot.net_profit), 982.1);
+  assert.equal(result.transactions.length, 4);
+  assert.equal(result.linkage.linked, 1);
+  assert.equal(result.linkage.qboOnly, 3);
+
+  const services = db.tables.monthly_review_qbo_pnl_accounts.find((row) => row.qbo_account_id === "20");
+  const fees = db.tables.monthly_review_qbo_pnl_accounts.find((row) => row.qbo_account_id === "21");
+  const software = db.tables.monthly_review_qbo_pnl_accounts.find((row) => row.qbo_account_id === "22");
+  assert.equal(services.metadata.transaction_count, 1);
+  assert.equal(fees.metadata.transaction_count, 1);
+  assert.equal(software.metadata.transaction_count, 2);
+
+  const serviceRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "20", db });
+  const feeRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "21", db });
+  const softwareRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "22", db });
+  assert.equal(serviceRows.totalCount, 1);
+  assert.equal(feeRows.rows[0].qbo_txn_id, "fee-aug-1");
+  assert.equal(softwareRows.totalCount, 2);
+  assert.equal(softwareRows.rows.find((row) => row.qbo_txn_id === "soft-aug-1").bizzi_transaction_id, softwareTxnId);
+  assert.equal(softwareRows.rows.find((row) => row.qbo_txn_id === "soft-aug-2").bizzi_transaction_id, null);
+});
+
 test("material summary/account reconciliation mismatch fails before snapshot persistence", async () => {
   const db = makeDb();
 
@@ -936,6 +1131,8 @@ test("admin routes are internal-only; GET reads persisted snapshots and POST ref
   assert.match(routes, /post\("\/businesses\/:businessId\/qbo-pnl\/refresh"/);
   assert.match(routes, /get\("\/businesses\/:businessId\/qbo-pnl"/);
   assert.match(routes, /getMonthlyQboPnlSnapshot/);
+  assert.match(routes, /includeAccounts: true/);
+  assert.match(routes, /snapshot: snapshot \|\| result\.snapshot/);
   assert.match(routes, /refreshMonthlyQboPnlSnapshot/);
   assert.match(routes, /qbo_reads: false/);
   assert.match(routes, /qbo_reads: true/);

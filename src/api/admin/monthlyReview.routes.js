@@ -271,13 +271,20 @@ router.post("/businesses/:businessId/qbo-pnl/refresh", async (req, res) => {
       year,
       month,
     });
+    const snapshot = await getMonthlyQboPnlSnapshot({
+      businessId,
+      year,
+      month,
+      includeAccounts: true,
+      includeTransactions: false,
+    });
     return res.json({
       ok: true,
       business_id: business.id,
       year,
       month,
-      snapshot: result.snapshot,
-      account_count: result.accounts.length,
+      snapshot: snapshot || result.snapshot,
+      account_count: Array.isArray(snapshot?.accounts) ? snapshot.accounts.length : result.accounts.length,
       transaction_count: result.transactions.length,
       linkage: result.linkage,
       source: result.source,

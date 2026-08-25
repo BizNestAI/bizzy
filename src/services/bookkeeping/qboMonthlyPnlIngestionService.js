@@ -11,6 +11,7 @@ import {
   createOrReplaceMonthlyPnlSnapshot,
   getLatestMonthlyPnlSnapshot,
   getMonthlySourceRange,
+  normalizeQboTxnType,
   promoteMonthlyPnlSnapshotCurrent,
   QboMonthlyPnlSnapshotError,
 } from "./qboMonthlyPnlSnapshotService.js";
@@ -501,39 +502,41 @@ export function normalizeDetailTransactions(report, {
   walkReportRows(report?.Rows?.Row || [], [], (row, ancestors) => {
     if (!isTransactionDataRow(row)) return;
     const values = columnsToObject(row.ColData, columns);
-    const txnDate = normalizeDate(pickValue(values, ["date", "txndate"]));
+    const txnDate = normalizeDate(pickValue(values, ["date", "txndate"]) || firstDateValue(row.ColData));
     if (!txnDate) return;
     if (txnDate < sourceStartDate || txnDate > sourceEndDate) return;
     const accountContext = nearestAccountContext(ancestors);
-    const accountName = pickValue(values, ["account", "split", "distributionaccount"]) || accountContext?.name || null;
+    const accountName = pickValue(values, ["account", "split", "distributionaccount"]) || accountContext?.name || accountNameFromColData(row.ColData, qboAccountById) || null;
+    const accountId = firstId(row.ColData, ["account", "split", "distributionaccount"], columns) || accountContext?.id || accountIdFromColData(row.ColData, qboAccountById);
     const accountRef = resolver.resolve({
-      id: firstId(row.ColData, ["account", "split", "distributionaccount"], columns),
+      id: accountId,
       name: accountName,
       path: accountName,
     });
-    if (detailReportName === "GeneralLedger" && !isPnlAccount(accountRef.account || qboAccountById.get(String(firstId(row.ColData, ["account", "split", "distributionaccount"], columns) || "")))) {
+    if (detailReportName === "GeneralLedger" && !isPnlAccount(accountRef.account || qboAccountById.get(String(accountId || "")))) {
       return;
     }
-    const txnId = firstId(row.ColData, ["txntype", "transactiontype", "type", "num", "docnum"], columns) || null;
-    const txnType = pickValue(values, ["txntype", "transactiontype", "type"]) || row?.TxnType || null;
-    const amount = amountFromCandidates(values, ["amount", "debit", "credit", "netamount", "total"]);
+    const txnType = normalizeQboTxnType(pickValue(values, ["txntype", "transactiontype", "type"]) || transactionTypeFromColData(row.ColData) || row?.TxnType || null);
+    const txnId = transactionIdFromRow(row, columns, txnType, accountId) || null;
+    const amount = amountFromCandidates(values, ["amount", "debit", "credit", "netamount", "total"]) || amountFromColData(row.ColData);
     const normalized = {
       qbo_txn_id: txnId ? String(txnId) : null,
       qbo_txn_type: txnType || null,
       txn_date: txnDate,
       qbo_account_id: accountRef.account?.id || null,
       qbo_account_name: accountRef.account?.name || accountName || null,
-      entity_name: pickValue(values, ["name", "entity", "payee", "vendor", "customer"]),
-      payee_name: pickValue(values, ["name", "payee"]),
+      entity_name: pickValue(values, ["name", "entity", "payee", "vendor", "customer"]) || firstTextAfterTransactionType(row.ColData, txnType),
+      payee_name: pickValue(values, ["name", "payee"]) || firstTextAfterTransactionType(row.ColData, txnType),
       customer_name: pickValue(values, ["customer"]),
       vendor_name: pickValue(values, ["vendor"]),
       memo: pickValue(values, ["memo"]),
-      description: pickValue(values, ["memo", "description", "name"]),
+      description: pickValue(values, ["memo", "description", "name"]) || descriptionFromColData(row.ColData, txnType),
       amount,
       metadata: {
         detail_report: detailReportName,
         account_identity_status: accountRef.status,
         account_identity_source: accountRef.source,
+        transaction_identity_source: txnId ? transactionIdentitySource(row, columns, txnType, accountId) : "missing",
         mutation_authoritative: Boolean(accountRef.account?.id && accountRef.status === "resolved"),
       },
       raw_ref: safeRawRef(row),
@@ -662,6 +665,8 @@ function applyDetailCompletenessToAccounts(accounts = [], reconciliation = {}) {
         detail_total: detail?.detail_total ?? null,
         detail_difference: detail?.difference ?? null,
         detail_transaction_count: detail?.detail_transaction_count ?? 0,
+        transaction_count: detail?.detail_transaction_count ?? 0,
+        detail_status: detail?.detail_completeness || "unavailable",
       },
     };
   });
@@ -950,6 +955,104 @@ function findHeaderOption(header, name) {
   return (header?.Option || []).find((item) => normalizeLabel(item?.Name) === wanted)?.Value || null;
 }
 
+function firstDateValue(colData = []) {
+  for (const col of colData || []) {
+    const date = normalizeDate(col?.value);
+    if (date) return date;
+  }
+  return null;
+}
+
+function transactionTypeFromColData(colData = []) {
+  for (const col of colData || []) {
+    const type = normalizeQboTxnType(col?.value);
+    if (isSupportedQboDetailTxnType(type)) return type;
+  }
+  return null;
+}
+
+function transactionIdFromRow(row, columns, txnType, accountId) {
+  return firstId(row.ColData || [], ["txntype", "transactiontype", "type", "num", "docnum"], columns)
+    || transactionLinkedIdFromColData(row.ColData || [], txnType, accountId)
+    || nullableText(row?.id || row?.Id || row?.txnId || row?.TxnId);
+}
+
+function transactionIdentitySource(row, columns, txnType, accountId) {
+  if (firstId(row.ColData || [], ["txntype", "transactiontype", "type", "num", "docnum"], columns)) return "typed_column_id";
+  if (transactionLinkedIdFromColData(row.ColData || [], txnType, accountId)) return "linked_coldata_id";
+  if (nullableText(row?.id || row?.Id || row?.txnId || row?.TxnId)) return "row_id";
+  return "missing";
+}
+
+function transactionLinkedIdFromColData(colData = [], txnType, accountId) {
+  const wantedType = normalizeQboTxnType(txnType);
+  for (const col of colData || []) {
+    const id = nullableText(col?.id);
+    if (!id || (accountId && String(id) === String(accountId))) continue;
+    const colType = normalizeQboTxnType(col?.value);
+    if (wantedType && colType === wantedType) return id;
+  }
+  return null;
+}
+
+function accountIdFromColData(colData = [], qboAccountById = new Map()) {
+  for (const col of colData || []) {
+    const id = nullableText(col?.id);
+    if (id && qboAccountById.has(id)) return id;
+  }
+  return null;
+}
+
+function accountNameFromColData(colData = [], qboAccountById = new Map()) {
+  const id = accountIdFromColData(colData, qboAccountById);
+  return id ? qboAccountById.get(id)?.name || null : null;
+}
+
+function firstTextAfterTransactionType(colData = [], txnType) {
+  const wantedType = normalizeQboTxnType(txnType);
+  const typeIndex = (colData || []).findIndex((col) => normalizeQboTxnType(col?.value) === wantedType);
+  if (typeIndex < 0) return null;
+  for (let i = typeIndex + 1; i < colData.length; i += 1) {
+    const text = nullableText(colData[i]?.value);
+    if (!text || normalizeDate(text) || parseMoney(text) !== null || normalizeQboTxnType(text) === wantedType) continue;
+    return text;
+  }
+  return null;
+}
+
+function descriptionFromColData(colData = [], txnType) {
+  const wantedType = normalizeQboTxnType(txnType);
+  const typeIndex = (colData || []).findIndex((col) => normalizeQboTxnType(col?.value) === wantedType);
+  const start = typeIndex >= 0 ? typeIndex + 1 : 0;
+  const candidates = [];
+  for (let i = start; i < colData.length; i += 1) {
+    const text = nullableText(colData[i]?.value);
+    if (!text || normalizeDate(text) || parseMoney(text) !== null || normalizeQboTxnType(text) === wantedType) continue;
+    candidates.push(text);
+  }
+  return candidates[1] || candidates[0] || null;
+}
+
+function isSupportedQboDetailTxnType(type) {
+  return Boolean(normalizeQboTxnType(type) && [
+    "Bill",
+    "BillPayment",
+    "Check",
+    "CreditCardCharge",
+    "CreditCardCredit",
+    "CreditMemo",
+    "Deposit",
+    "Invoice",
+    "JournalEntry",
+    "Payment",
+    "Purchase",
+    "RefundReceipt",
+    "SalesReceipt",
+    "Transfer",
+    "VendorCredit",
+  ].includes(normalizeQboTxnType(type)));
+}
+
 function reportColumns(report) {
   return (report?.Columns?.Column || []).map((col, index) => ({
     key: normalizeColumnKey(col?.ColTitle || col?.ColType || `col_${index}`),
@@ -1011,6 +1114,12 @@ function normalizeLabel(value) {
 
 function normalizePath(value) {
   return String(value || "").toLowerCase().replace(/\s*:\s*/g, ":").replace(/\s+/g, " ").trim();
+}
+
+function nullableText(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text || null;
 }
 
 function addBucket(map, key, value) {

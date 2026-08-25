@@ -113,7 +113,9 @@ test("Monthly Review QBO P&L wiring uses persisted GET on load and explicit refr
   assert.match(ui, /\/qbo-pnl\/refresh/);
   assert.match(ui, /method: "POST"/);
   assert.match(ui, /setQboPnlAccountDetails\(\{\}\)/);
-  assert.match(ui, /loadQboPnlSnapshot\(\);/);
+  assert.match(ui, /const snapshot = await loadQboPnlSnapshot\(\) \|\| data\?\.snapshot \|\| null/);
+  assert.match(ui, /applyQboPnlSnapshot\(snapshot\)/);
+  assert.doesNotMatch(ui, /const snapshot = data\?\.snapshot \|\| await loadQboPnlSnapshot\(\)/);
 });
 
 test("Monthly Review QBO P&L detail cache is invalidated when snapshot id changes", () => {
@@ -134,6 +136,7 @@ test("Monthly Review QBO P&L detail cache reuse requires matching snapshot id", 
   assert.match(panel, /String\(cachedDetail\?\.snapshotId \|\| ""\) === String\(snapshot\?\.id \|\| ""\) \? cachedDetail : \{\}/);
   assert.match(panel, /!currentDetail\?\.loaded && !currentDetail\?\.loading/);
   assert.match(panel, /rows = Array\.isArray\(detail\.rows\) \? detail\.rows : \[\]/);
+  assert.match(panel, /account\.metadata\?\.transaction_count/);
 });
 
 test("Monthly Review QBO P&L rejects stale async detail responses", () => {

@@ -32,6 +32,7 @@ export function normalizeQboTxnType(value) {
     billpayment: "BillPayment",
     check: "Check",
     creditcardcharge: "CreditCardCharge",
+    creditcardexpense: "CreditCardCharge",
     creditcardcredit: "CreditCardCredit",
     creditmemo: "CreditMemo",
     deposit: "Deposit",
@@ -392,6 +393,7 @@ export async function linkSnapshotTransactionsToBizzi({
   const matchesByIdentity = new Map();
   for (const cat of categorizations) {
     if (cat?.business_id !== businessId) continue;
+    if (cat?.status !== "posted") continue;
     if (!cat?.transaction_id || !activeTxnIds.has(String(cat.transaction_id))) continue;
     const key = identityKey(cat.qbo_txn_id, cat.qbo_txn_type);
     if (!key) continue;
