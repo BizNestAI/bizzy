@@ -87,6 +87,8 @@ export async function reclassifyBookkeepingTransaction({
       qboTxnType: previous.qbo_txn_type,
       accountId: targetAccount.id,
       accountName: targetAccount.name,
+      accountType: targetAccount.type,
+      accountSubType: targetAccount.subType,
       getQBOClient,
     });
     const updated = await updateCategorizationAfterPostedReclassification({
@@ -207,6 +209,8 @@ export async function updatePostedQboTransactionAccount({
   qboTxnType,
   accountId,
   accountName,
+  accountType = null,
+  accountSubType = null,
   getQBOClient = defaultGetQBOClient,
 } = {}) {
   const txnType = normalizeQboTxnType(qboTxnType);
@@ -229,7 +233,16 @@ export async function updatePostedQboTransactionAccount({
   }
 
   const updatedTxn = rewriteQboTransactionAccount(baseTxn, txnType, accountId, accountName);
-  const providerResponse = await updateQboTransaction(qbo, txnType, updatedTxn);
+  const providerResponse = await updateQboTransaction(qbo, txnType, updatedTxn, {
+    txnType,
+    qboTxnId,
+    baseTxn,
+    targetAccount: {
+      id: accountId,
+      type: accountType,
+      subType: accountSubType,
+    },
+  });
 
   return {
     ok: true,
@@ -567,7 +580,7 @@ async function fetchQboTransaction(qbo, txnType, txnId) {
   throw new BookkeepingReclassificationError(`qbo_get_failed_${txnType}`, 502, { message: lastError?.message || String(lastError || "") });
 }
 
-async function updateQboTransaction(qbo, txnType, payload) {
+async function updateQboTransaction(qbo, txnType, payload, context = {}) {
   const directMethod = `update${txnType}`;
   const candidates = [
     typeof qbo?.[directMethod] === "function" ? qbo[directMethod].bind(qbo) : null,
@@ -587,7 +600,28 @@ async function updateQboTransaction(qbo, txnType, payload) {
       lastError = e;
     }
   }
-  throw new BookkeepingReclassificationError(`qbo_update_failed_${txnType}`, 502, { message: lastError?.message || String(lastError || "") });
+  const providerError = sanitizeQboProviderError(lastError, {
+    operation: directMethod,
+    qboTxnType: txnType,
+    qboTxnId: context.qboTxnId,
+  });
+  const updateDiagnostic = buildQboUpdateDiagnostic({
+    operation: directMethod,
+    txnType,
+    qboTxnId: context.qboTxnId,
+    baseTxn: context.baseTxn,
+    targetAccount: context.targetAccount,
+  });
+  console.error("[bookkeeping-reclassification] qbo transaction update failed", {
+    ...updateDiagnostic,
+    provider_error: providerError,
+  });
+  throw new BookkeepingReclassificationError(`qbo_update_failed_${txnType}`, 502, {
+    message: providerError.message || lastError?.message || String(lastError || ""),
+    diagnostic_code: classifyQboProviderError(providerError),
+    qbo_provider_error: providerError,
+    qbo_update_diagnostic: updateDiagnostic,
+  });
 }
 
 function nestedQboMethod(qbo, txnType, method) {
@@ -645,4 +679,95 @@ function rewriteQboTransactionAccount(baseTxn, txnType, accountId, accountName) 
 
   if (!changed) throw new BookkeepingReclassificationError(`qbo_transaction_has_no_editable_account_line_${txnType}`, 409);
   return payload;
+}
+
+function buildQboUpdateDiagnostic({ operation, txnType, qboTxnId, baseTxn = {}, targetAccount = {} } = {}) {
+  const lines = Array.isArray(baseTxn?.Line) ? baseTxn.Line : [];
+  return {
+    operation: operation || `update${txnType || ""}`,
+    qbo_txn_type: txnType || null,
+    qbo_txn_id: qboTxnId ? String(qboTxnId) : null,
+    sync_token_present: Boolean(baseTxn?.SyncToken),
+    fetched_payment_type: baseTxn?.PaymentType || null,
+    fetched_payment_account_ref_present: Boolean(baseTxn?.AccountRef?.value || baseTxn?.CreditCardPayment?.CCAccountRef?.value),
+    line_count: lines.length,
+    line_detail_types: [...new Set(lines.map(lineDetailType).filter(Boolean))],
+    target_qbo_account_id: targetAccount?.id ? String(targetAccount.id) : null,
+    target_qbo_account_type: targetAccount?.type || null,
+    target_qbo_account_subtype: targetAccount?.subType || targetAccount?.subtype || null,
+  };
+}
+
+function lineDetailType(line = {}) {
+  if (line.DetailType) return String(line.DetailType);
+  if (line.AccountBasedExpenseLineDetail) return "AccountBasedExpenseLineDetail";
+  if (line.DepositLineDetail) return "DepositLineDetail";
+  if (line.SalesItemLineDetail) return "SalesItemLineDetail";
+  if (line.ItemBasedExpenseLineDetail) return "ItemBasedExpenseLineDetail";
+  if (line.JournalEntryLineDetail) return "JournalEntryLineDetail";
+  return null;
+}
+
+function sanitizeQboProviderError(error, { operation, qboTxnType, qboTxnId } = {}) {
+  const source = parseErrorBody(error);
+  const fault = source?.Fault || source?.fault || error?.Fault || error?.fault || null;
+  const faultError = Array.isArray(fault?.Error) ? fault.Error[0] : Array.isArray(fault?.error) ? fault.error[0] : null;
+  return {
+    operation: operation || null,
+    qbo_txn_type: qboTxnType || null,
+    qbo_txn_id: qboTxnId ? String(qboTxnId) : null,
+    http_status: firstPresent(error?.statusCode, error?.status, error?.response?.statusCode, error?.response?.status),
+    intuit_fault_type: safeText(fault?.type || fault?.Type || source?.type || error?.type),
+    intuit_error_code: safeText(faultError?.code || faultError?.Code || error?.code),
+    message: safeText(faultError?.Message || faultError?.message || source?.Message || source?.message || error?.message),
+    detail: safeText(faultError?.Detail || faultError?.detail || source?.Detail || source?.detail),
+    field_path: safeText(faultError?.element || faultError?.Element || faultError?.field || faultError?.Field || source?.element || source?.field),
+  };
+}
+
+function parseErrorBody(error) {
+  const candidates = [
+    error?.response?.body,
+    error?.response?.data,
+    error?.body,
+    error?.data,
+    error?.intuit_tid ? null : error?.message,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (typeof candidate === "object") return candidate;
+    if (typeof candidate === "string") {
+      const trimmed = candidate.trim();
+      if (!trimmed.startsWith("{")) continue;
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        // Ignore non-JSON provider messages.
+      }
+    }
+  }
+  return null;
+}
+
+function classifyQboProviderError(providerError = {}) {
+  const combined = `${providerError.intuit_error_code || ""} ${providerError.message || ""} ${providerError.detail || ""}`.toLowerCase();
+  if (/sync\s*token|stale|object\s*not\s*current|another\s*user/.test(combined)) return "qbo_stale_object";
+  if (/accountref|account\s*ref|invalid\s*account|account.*inactive|invalid.*reference/.test(combined)) return "qbo_invalid_account_reference";
+  if (/line|accountbasedexpenselinedetail|depositlinedetail|unsupported/.test(combined)) return "qbo_unsupported_line_mutation";
+  if (/required|missing|required param/.test(combined)) return "qbo_missing_required_field";
+  if (/validation|business/.test(combined)) return "qbo_business_validation_error";
+  if (/malformed|parse|invalid.*purchase|invalid.*object/.test(combined)) return "qbo_malformed_update_payload";
+  return "qbo_provider_update_failed";
+}
+
+function firstPresent(...values) {
+  return values.find((value) => value !== undefined && value !== null) ?? null;
+}
+
+function safeText(value, maxLength = 500) {
+  if (value === undefined || value === null) return null;
+  return String(value)
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/(access_token|refresh_token|authorization|client_secret)["'=:\s]+[^"',\s}]+/gi, "$1=[redacted]")
+    .slice(0, maxLength);
 }

@@ -421,23 +421,95 @@ test("Monthly Review posted provider failure fails closed before Bizzi GL persis
     bank_transactions: [bankTxn()],
     transaction_categorizations: [cat({ status: "posted", qbo_txn_id: "qbo-1", qbo_txn_type: "Purchase", final_qbo_account_id: "old" })],
   });
-  await assert.rejects(
-    reclassifyBookkeepingTransaction({
-      businessId: "biz-1",
-      transactionId: "txn-1",
-      targetQboAccountId: "acct-new",
-      actor: "admin-1",
-      db,
-      validateQboAccount: validAccount(),
-      getQBOClient: async () => ({
-        getPurchase: (id, cb) => cb(null, { Purchase: { Id: "qbo-1", SyncToken: "2", Line: [{ AccountBasedExpenseLineDetail: { AccountRef: { value: "old" } } }] } }),
-        updatePurchase: (payload, cb) => cb(new Error("stale SyncToken")),
+  const originalConsoleError = console.error;
+  const logs = [];
+  console.error = (...args) => logs.push(args);
+  try {
+    await assert.rejects(
+      reclassifyBookkeepingTransaction({
+        businessId: "biz-1",
+        transactionId: "txn-1",
+        targetQboAccountId: "acct-new",
+        actor: "admin-1",
+        db,
+        validateQboAccount: validAccount(),
+        getQBOClient: async () => ({
+          getPurchase: (id, cb) => cb(null, {
+            Purchase: {
+              Id: "qbo-1",
+              SyncToken: "2",
+              PaymentType: "CreditCard",
+              AccountRef: { value: "card-1" },
+              Line: [{ AccountBasedExpenseLineDetail: { AccountRef: { value: "old" } } }],
+            },
+          }),
+          updatePurchase: (payload, cb) => {
+            const err = new Error("Business Validation Error token access_token=secret");
+            err.statusCode = 400;
+            err.Fault = {
+              type: "ValidationFault",
+              Error: [{
+                code: "6000",
+                Message: "Business Validation Error",
+                Detail: "Stale SyncToken on AccountRef",
+                element: "Line.AccountBasedExpenseLineDetail.AccountRef",
+              }],
+            };
+            cb(err);
+          },
+        }),
       }),
-    }),
-    (err) => err instanceof BookkeepingReclassificationError && err.error === "qbo_update_failed_Purchase"
-  );
+      (err) => {
+        assert.ok(err instanceof BookkeepingReclassificationError);
+        assert.equal(err.error, "qbo_update_failed_Purchase");
+        assert.equal(err.details.diagnostic_code, "qbo_stale_object");
+        assert.equal(err.details.qbo_provider_error.operation, "updatePurchase");
+        assert.equal(err.details.qbo_provider_error.http_status, 400);
+        assert.equal(err.details.qbo_provider_error.intuit_fault_type, "ValidationFault");
+        assert.equal(err.details.qbo_provider_error.intuit_error_code, "6000");
+        assert.equal(err.details.qbo_provider_error.message, "Business Validation Error");
+        assert.equal(err.details.qbo_provider_error.detail, "Stale SyncToken on AccountRef");
+        assert.equal(err.details.qbo_provider_error.field_path, "Line.AccountBasedExpenseLineDetail.AccountRef");
+        assert.equal(err.details.qbo_update_diagnostic.operation, "updatePurchase");
+        assert.equal(err.details.qbo_update_diagnostic.qbo_txn_type, "Purchase");
+        assert.equal(err.details.qbo_update_diagnostic.qbo_txn_id, "qbo-1");
+        assert.equal(err.details.qbo_update_diagnostic.sync_token_present, true);
+        assert.equal(err.details.qbo_update_diagnostic.fetched_payment_type, "CreditCard");
+        assert.equal(err.details.qbo_update_diagnostic.fetched_payment_account_ref_present, true);
+        assert.equal(err.details.qbo_update_diagnostic.line_count, 1);
+        assert.deepEqual(err.details.qbo_update_diagnostic.line_detail_types, ["AccountBasedExpenseLineDetail"]);
+        assert.equal(err.details.qbo_update_diagnostic.target_qbo_account_id, "acct-new");
+        assert.equal(err.details.qbo_update_diagnostic.target_qbo_account_type, "Expense");
+        assert.equal(JSON.stringify(err.details).includes("access_token=secret"), false);
+        return true;
+      }
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][0], "[bookkeeping-reclassification] qbo transaction update failed");
+  assert.equal(logs[0][1].operation, "updatePurchase");
+  assert.equal(logs[0][1].provider_error.intuit_error_code, "6000");
   assert.equal(db.tables.transaction_categorizations[0].final_qbo_account_id, "old");
   assert.equal(db.tables.transaction_categorizations[0].qbo_txn_id, "qbo-1");
+});
+
+test("Monthly Review QBO provider diagnostics do not include raw update payloads or tokens", () => {
+  const service = read("src/services/bookkeeping/bookkeepingReclassificationService.js");
+  const route = read("src/api/admin/monthlyReview.routes.js");
+
+  assert.match(service, /sanitizeQboProviderError/);
+  assert.match(service, /buildQboUpdateDiagnostic/);
+  assert.match(service, /qbo_provider_error/);
+  assert.match(service, /qbo_update_diagnostic/);
+  assert.match(service, /line_detail_types/);
+  assert.match(service, /target_qbo_account_type/);
+  assert.match(service, /classifyQboProviderError/);
+  assert.match(route, /qbo_provider_error: e\?\.details\?\.qbo_provider_error/);
+  assert.match(route, /qbo_update_diagnostic: e\?\.details\?\.qbo_update_diagnostic/);
+  assert.doesNotMatch(service, /payload:\s*payload|raw_payload|Authorization|refresh_token:/);
+  assert.doesNotMatch(route, /req\.headers\.authorization|access_token|refresh_token/);
 });
 
 test("Monthly Review generic reclassification rejects protected special workflows", async () => {

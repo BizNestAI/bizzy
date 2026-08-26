@@ -1234,7 +1234,12 @@ router.patch("/runs/:runId/transactions/:transactionId/account", async (req, res
       posting_summary: result.posting_summary || null,
     });
   } catch (e) {
-    console.error("[monthly-review] account adjustment failed", e?.message || e);
+    console.error("[monthly-review] account adjustment failed", {
+      error: e?.message || e,
+      diagnostic_code: e?.details?.diagnostic_code || null,
+      qbo_provider_error: e?.details?.qbo_provider_error || null,
+      qbo_update_diagnostic: e?.details?.qbo_update_diagnostic || null,
+    });
     const status = e instanceof BookkeepingReclassificationError ? e.status || 400 : e?.status || 500;
     res.status(status).json({
       ok: false,
