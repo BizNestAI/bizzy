@@ -232,7 +232,7 @@ export async function updatePostedQboTransactionAccount({
     });
   }
 
-  const updatedTxn = rewriteQboTransactionAccount(baseTxn, txnType, accountId, accountName);
+  const updatedTxn = buildQboTransactionAccountUpdatePayload(baseTxn, txnType, accountId, accountName);
   const providerResponse = await updateQboTransaction(qbo, txnType, updatedTxn, {
     txnType,
     qboTxnId,
@@ -587,6 +587,12 @@ async function updateQboTransaction(qbo, txnType, payload, context = {}) {
     nestedQboMethod(qbo, txnType, "update"),
   ].filter(Boolean);
   if (!candidates.length) throw new BookkeepingReclassificationError(`qbo_update_not_supported_${txnType}`, 409);
+  console.info("[bookkeeping-reclassification] qbo transaction update payload shape", describeQboUpdatePayloadShape({
+    operation: directMethod,
+    txnType,
+    qboTxnId: context.qboTxnId,
+    payload,
+  }));
   let lastError = null;
   for (const fn of candidates) {
     try {
@@ -641,44 +647,167 @@ function unwrapQboTransactionResponse(resp, txnType) {
   return resp[txnType] || resp[txnType.charAt(0).toLowerCase() + txnType.slice(1)] || resp;
 }
 
-function rewriteQboTransactionAccount(baseTxn, txnType, accountId, accountName) {
+function buildQboTransactionAccountUpdatePayload(baseTxn, txnType, accountId, accountName) {
   const accountRef = { value: String(accountId), ...(accountName ? { name: accountName } : {}) };
-  let changed = false;
-  const payload = {
-    ...baseTxn,
-    Sparse: true,
+  if (txnType === "Deposit") return buildDepositUpdatePayload(baseTxn, accountRef);
+  if (txnType === "Purchase" || txnType === "CreditCardCharge") {
+    return buildAccountBasedExpenseUpdatePayload(baseTxn, txnType, accountRef);
+  }
+  throw new BookkeepingReclassificationError(`unsupported_qbo_txn_type_${txnType}`, 409);
+}
+
+function buildAccountBasedExpenseUpdatePayload(baseTxn, txnType, accountRef) {
+  const payload = pickDefined({
     Id: baseTxn.Id || baseTxn.id,
     SyncToken: baseTxn.SyncToken,
-  };
+    sparse: true,
+    PaymentType: baseTxn.PaymentType,
+    AccountRef: cloneRef(baseTxn.AccountRef),
+    EntityRef: cloneRef(baseTxn.EntityRef),
+    TxnDate: baseTxn.TxnDate,
+    DocNumber: baseTxn.DocNumber,
+    PrivateNote: baseTxn.PrivateNote,
+    CurrencyRef: cloneRef(baseTxn.CurrencyRef),
+    ExchangeRate: baseTxn.ExchangeRate,
+    Line: buildUpdatedLines(baseTxn.Line, "AccountBasedExpenseLineDetail", accountRef),
+  });
+  if (!payload.Id) throw new BookkeepingReclassificationError("qbo_transaction_not_found", 404);
+  if (!payload.SyncToken) throw new BookkeepingReclassificationError("qbo_transaction_missing_sync_token", 409);
+  if (!payload.Line?.length) throw new BookkeepingReclassificationError(`qbo_transaction_has_no_editable_account_line_${txnType}`, 409);
+  return payload;
+}
 
-  if (Array.isArray(payload.Line)) {
-    payload.Line = payload.Line.map((line) => {
-      if (txnType === "Deposit" && line.DepositLineDetail) {
-        changed = true;
-        return {
-          ...line,
-          DepositLineDetail: {
-            ...line.DepositLineDetail,
-            AccountRef: accountRef,
-          },
-        };
-      }
-      if (line.AccountBasedExpenseLineDetail) {
-        changed = true;
-        return {
-          ...line,
-          AccountBasedExpenseLineDetail: {
-            ...line.AccountBasedExpenseLineDetail,
-            AccountRef: accountRef,
-          },
-        };
-      }
-      return line;
+function buildDepositUpdatePayload(baseTxn, accountRef) {
+  const payload = pickDefined({
+    Id: baseTxn.Id || baseTxn.id,
+    SyncToken: baseTxn.SyncToken,
+    sparse: true,
+    TxnDate: baseTxn.TxnDate,
+    DocNumber: baseTxn.DocNumber,
+    PrivateNote: baseTxn.PrivateNote,
+    CurrencyRef: cloneRef(baseTxn.CurrencyRef),
+    ExchangeRate: baseTxn.ExchangeRate,
+    DepositToAccountRef: cloneRef(baseTxn.DepositToAccountRef),
+    CashBack: cloneDepositCashBack(baseTxn.CashBack),
+    Line: buildUpdatedLines(baseTxn.Line, "DepositLineDetail", accountRef),
+  });
+  if (!payload.Id) throw new BookkeepingReclassificationError("qbo_transaction_not_found", 404);
+  if (!payload.SyncToken) throw new BookkeepingReclassificationError("qbo_transaction_missing_sync_token", 409);
+  if (!payload.Line?.length) throw new BookkeepingReclassificationError("qbo_transaction_has_no_editable_account_line_Deposit", 409);
+  return payload;
+}
+
+function buildUpdatedLines(lines, editableDetailKey, accountRef) {
+  let changed = false;
+  const updated = (Array.isArray(lines) ? lines : []).map((line) => {
+    if (!line?.[editableDetailKey]) return cloneSupportedPassthroughLine(line);
+    changed = true;
+    return buildSupportedLine(line, {
+      [editableDetailKey]: buildSupportedLineDetail(line[editableDetailKey], editableDetailKey, accountRef),
+    });
+  }).filter(Boolean);
+  return changed ? updated : [];
+}
+
+function cloneSupportedPassthroughLine(line = {}) {
+  const detailKey = lineDetailType(line);
+  if (!detailKey || !line?.[detailKey]) return buildSupportedLine(line);
+  return buildSupportedLine(line, {
+    [detailKey]: buildSupportedLineDetail(line[detailKey], detailKey),
+  });
+}
+
+function buildSupportedLine(line = {}, detailOverride = {}) {
+  return pickDefined({
+    Id: line.Id,
+    LineNum: line.LineNum,
+    Description: line.Description,
+    Amount: line.Amount,
+    DetailType: line.DetailType || Object.keys(detailOverride)[0] || lineDetailType(line),
+    ...detailOverride,
+  });
+}
+
+function buildSupportedLineDetail(detail = {}, detailKey, replacementAccountRef = null) {
+  if (detailKey === "AccountBasedExpenseLineDetail") {
+    return pickDefined({
+      AccountRef: replacementAccountRef || cloneRef(detail.AccountRef),
+      CustomerRef: cloneRef(detail.CustomerRef),
+      ClassRef: cloneRef(detail.ClassRef),
+      BillableStatus: detail.BillableStatus,
+      TaxCodeRef: cloneRef(detail.TaxCodeRef),
+      TaxAmount: detail.TaxAmount,
+      MarkupInfo: cloneMarkupInfo(detail.MarkupInfo),
     });
   }
+  if (detailKey === "DepositLineDetail") {
+    return pickDefined({
+      AccountRef: replacementAccountRef || cloneRef(detail.AccountRef),
+      PaymentMethodRef: cloneRef(detail.PaymentMethodRef),
+      ClassRef: cloneRef(detail.ClassRef),
+      CheckNum: detail.CheckNum,
+      TaxCodeRef: cloneRef(detail.TaxCodeRef),
+      TaxAmount: detail.TaxAmount,
+      Entity: cloneDepositEntity(detail.Entity),
+    });
+  }
+  return pickDefined({
+    AccountRef: replacementAccountRef || cloneRef(detail.AccountRef),
+  });
+}
 
-  if (!changed) throw new BookkeepingReclassificationError(`qbo_transaction_has_no_editable_account_line_${txnType}`, 409);
-  return payload;
+function cloneRef(ref) {
+  if (!ref || typeof ref !== "object") return undefined;
+  return pickDefined({
+    value: ref.value,
+    name: ref.name,
+    type: ref.type,
+  });
+}
+
+function cloneMarkupInfo(markup) {
+  if (!markup || typeof markup !== "object") return undefined;
+  return pickDefined({
+    PriceLevelRef: cloneRef(markup.PriceLevelRef),
+    Percent: markup.Percent,
+    MarkUpIncomeAccountRef: cloneRef(markup.MarkUpIncomeAccountRef),
+  });
+}
+
+function cloneDepositEntity(entity) {
+  if (!entity || typeof entity !== "object") return undefined;
+  return pickDefined({
+    Type: entity.Type,
+    EntityRef: cloneRef(entity.EntityRef),
+  });
+}
+
+function cloneDepositCashBack(cashBack) {
+  if (!cashBack || typeof cashBack !== "object") return undefined;
+  return pickDefined({
+    Amount: cashBack.Amount,
+    AccountRef: cloneRef(cashBack.AccountRef),
+    Memo: cashBack.Memo,
+  });
+}
+
+function pickDefined(obj = {}) {
+  return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined && value !== null));
+}
+
+function describeQboUpdatePayloadShape({ operation, txnType, qboTxnId, payload = {} } = {}) {
+  return {
+    operation: operation || `update${txnType || ""}`,
+    qbo_txn_type: txnType || null,
+    qbo_txn_id: qboTxnId ? String(qboTxnId) : null,
+    top_level_keys: Object.keys(payload || {}).sort(),
+    line_shapes: (Array.isArray(payload?.Line) ? payload.Line : []).map((line) => ({
+      keys: Object.keys(line || {}).sort(),
+      detail_type: lineDetailType(line),
+      account_based_expense_detail_keys: Object.keys(line?.AccountBasedExpenseLineDetail || {}).sort(),
+      deposit_line_detail_keys: Object.keys(line?.DepositLineDetail || {}).sort(),
+    })),
+  };
 }
 
 function buildQboUpdateDiagnostic({ operation, txnType, qboTxnId, baseTxn = {}, targetAccount = {} } = {}) {

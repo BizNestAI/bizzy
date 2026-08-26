@@ -268,6 +268,122 @@ test("Monthly Review posted Purchase Deposit and CreditCardCharge update existin
   }
 });
 
+test("Monthly Review posted Purchase builds allowlisted update payload from fetched QBO response", async () => {
+  const db = makeDb({
+    bank_transactions: [bankTxn()],
+    transaction_categorizations: [cat({
+      status: "posted",
+      qbo_txn_id: "1294",
+      qbo_txn_type: "Purchase",
+      final_qbo_account_id: "24",
+      final_qbo_account_name: "Software",
+    })],
+  });
+  const fetchedPurchase = {
+    Id: "1294",
+    SyncToken: "7",
+    domain: "QBO",
+    sparse: false,
+    MetaData: { CreateTime: "2026-08-15T00:00:00Z", LastUpdatedTime: "2026-08-25T00:00:00Z" },
+    CustomField: [{ DefinitionId: "1", StringValue: "response-only" }],
+    LinkedTxn: [{ TxnId: "linked-1" }],
+    TotalAmt: 160,
+    PrintStatus: "NeedToPrint",
+    PaymentType: "CreditCard",
+    AccountRef: { value: "19", name: "Credit Card" },
+    EntityRef: { value: "vendor-1", name: "Instantly" },
+    TxnDate: "2026-08-15",
+    DocNumber: "1294",
+    Line: [{
+      Id: "1",
+      LineNum: 1,
+      Description: "INSTANTLY",
+      Amount: 160,
+      DetailType: "AccountBasedExpenseLineDetail",
+      LinkedTxn: [{ TxnId: "line-linked" }],
+      AccountBasedExpenseLineDetail: {
+        AccountRef: { value: "24", name: "Software" },
+        CustomerRef: { value: "cust-1", name: "Client" },
+        ClassRef: { value: "class-1", name: "Ops" },
+        BillableStatus: "NotBillable",
+        TaxCodeRef: { value: "NON" },
+        UnsupportedReportField: "drop-me",
+      },
+    }],
+  };
+  const updates = [];
+  const originalConsoleInfo = console.info;
+  const payloadShapeLogs = [];
+  console.info = (...args) => payloadShapeLogs.push(args);
+  try {
+    const result = await reclassifyBookkeepingTransaction({
+      businessId: "biz-1",
+      transactionId: "txn-1",
+      targetQboAccountId: "1150040040",
+      actor: "admin-1",
+      db,
+      validateQboAccount: validAccount({
+        id: "1150040040",
+        name: "Apartment",
+        type: "Expense",
+        subType: "OtherMiscellaneousServiceCost",
+      }),
+      getQBOClient: async () => ({
+        getPurchase: (id, cb) => cb(null, { Purchase: fetchedPurchase }),
+        updatePurchase: (payload, cb) => {
+          updates.push(payload);
+          cb(null, { Purchase: { Id: "1294", SyncToken: "8" } });
+        },
+        createPurchase: () => {
+          throw new Error("createPurchase must not be called");
+        },
+      }),
+    });
+
+    assert.equal(result.qbo_update.qbo_txn_id, "1294");
+    assert.equal(result.qbo_update.sync_token_before, "7");
+    assert.equal(result.qbo_update.sync_token_after, "8");
+  } finally {
+    console.info = originalConsoleInfo;
+  }
+
+  assert.equal(updates.length, 1);
+  const payload = updates[0];
+  assert.equal(payload.Id, "1294");
+  assert.equal(payload.SyncToken, "7");
+  assert.equal(payload.sparse, true);
+  assert.equal(payload.PaymentType, "CreditCard");
+  assert.deepEqual(payload.AccountRef, { value: "19", name: "Credit Card" });
+  assert.deepEqual(payload.EntityRef, { value: "vendor-1", name: "Instantly" });
+  assert.equal(payload.TxnDate, "2026-08-15");
+  assert.equal(payload.DocNumber, "1294");
+  assert.equal(payload.Line.length, 1);
+  assert.equal(payload.Line[0].Id, "1");
+  assert.equal(payload.Line[0].Amount, 160);
+  assert.equal(payload.Line[0].DetailType, "AccountBasedExpenseLineDetail");
+  assert.equal(payload.Line[0].AccountBasedExpenseLineDetail.AccountRef.value, "1150040040");
+  assert.equal(payload.Line[0].AccountBasedExpenseLineDetail.AccountRef.name, "Apartment");
+  assert.equal(payload.Line[0].AccountBasedExpenseLineDetail.CustomerRef.value, "cust-1");
+  assert.equal(payload.Line[0].AccountBasedExpenseLineDetail.ClassRef.value, "class-1");
+  assert.equal(payload.Line[0].AccountBasedExpenseLineDetail.BillableStatus, "NotBillable");
+  assert.equal(payload.Line[0].AccountBasedExpenseLineDetail.TaxCodeRef.value, "NON");
+  assert.equal(payload.Line[0].LinkedTxn, undefined);
+  assert.equal(payload.Line[0].AccountBasedExpenseLineDetail.UnsupportedReportField, undefined);
+  assert.equal(payload.domain, undefined);
+  assert.equal(payload.Sparse, undefined);
+  assert.equal(payload.MetaData, undefined);
+  assert.equal(payload.CustomField, undefined);
+  assert.equal(payload.LinkedTxn, undefined);
+  assert.equal(payload.TotalAmt, undefined);
+  assert.equal(payload.PrintStatus, undefined);
+  assert.equal(db.tables.transaction_categorizations[0].final_qbo_account_id, "1150040040");
+  assert.equal(db.tables.transaction_categorizations[0].qbo_txn_id, "1294");
+  assert.equal(payloadShapeLogs.length, 1);
+  assert.equal(payloadShapeLogs[0][0], "[bookkeeping-reclassification] qbo transaction update payload shape");
+  assert.deepEqual(payloadShapeLogs[0][1].top_level_keys, ["AccountRef", "DocNumber", "EntityRef", "Id", "Line", "PaymentType", "SyncToken", "TxnDate", "sparse"]);
+  assert.deepEqual(payloadShapeLogs[0][1].line_shapes[0].keys, ["AccountBasedExpenseLineDetail", "Amount", "Description", "DetailType", "Id", "LineNum"]);
+});
+
 test("Monthly Review posted Purchase reclassification allows Expense and COGS targets", async () => {
   for (const target of [
     { id: "acct-expense", name: "Advertising", type: "Expense" },
