@@ -1036,6 +1036,24 @@ test("real QuickBooks transaction report columns persist Services invoices and S
   assert.equal(result.transactions.length, 9);
   assert.equal(result.linkage.qboOnly, 9);
   assert.equal(result.source.detail_report, "ProfitAndLossDetail");
+  assert.equal(result.source.detail_account_association.version, "pnl_group_context_v2");
+  assert.equal(result.source.detail_account_association.strategy, "profit_and_loss_group_context_before_counterpart");
+  assert.deepEqual(result.source.detail_account_association.rows_by_pnl_qbo_account_id, {
+    7: 5,
+    1150040000: 3,
+    24: 1,
+  });
+  assert.deepEqual(result.snapshot.metadata.reconciliation.parsed_counts.rows_by_qbo_account_id, {
+    7: 5,
+    1150040000: 3,
+    24: 1,
+  });
+  assert.equal(result.snapshot.metadata.reconciliation.detail_totals["7"], 1175);
+  assert.equal(result.snapshot.metadata.reconciliation.detail_totals["1150040000"], 32.9);
+  assert.equal(result.snapshot.metadata.reconciliation.detail_totals["24"], 160);
+  assert.equal(result.snapshot.metadata.reconciliation.detail_totals["15"], undefined);
+  assert.equal(result.snapshot.metadata.reconciliation.detail_totals["10"], undefined);
+  assert.equal(result.snapshot.metadata.reconciliation.detail_totals["19"], undefined);
 
   const services = result.accounts.find((row) => row.qbo_account_id === "7");
   const fees = result.accounts.find((row) => row.qbo_account_id === "1150040000");
@@ -1065,6 +1083,108 @@ test("real QuickBooks transaction report columns persist Services invoices and S
   assert.equal(softwareRows.rows[0].qbo_account_id, "24");
   assert.equal(softwareRows.rows[0].metadata.counterpart_account_id, "19");
   assert.equal(softwareRows.rows[0].linkage_status, "qbo_only");
+});
+
+test("ProfitAndLossDetail balance-sheet counterpart accounts never replace known P&L group association", () => {
+  const qboAccounts = coaFixture([
+    { id: "7", name: "Services", fullyQualifiedName: "Services", type: "Income" },
+    { id: "10", name: "Checking", fullyQualifiedName: "Checking", type: "Bank" },
+    { id: "11", name: "Credit Card", fullyQualifiedName: "Credit Card", type: "Credit Card" },
+    { id: "12", name: "Accounts Receivable (A/R)", fullyQualifiedName: "Accounts Receivable (A/R)", type: "Accounts Receivable" },
+    { id: "13", name: "Accounts Payable (A/P)", fullyQualifiedName: "Accounts Payable (A/P)", type: "Accounts Payable" },
+    { id: "14", name: "Undeposited Funds", fullyQualifiedName: "Undeposited Funds", type: "Other Current Asset" },
+    { id: "15", name: "Sales Tax Payable", fullyQualifiedName: "Sales Tax Payable", type: "Other Current Liability" },
+    { id: "16", name: "Owner's Equity", fullyQualifiedName: "Owner's Equity", type: "Equity" },
+  ]);
+  const summary = pnlSummaryFixture({
+    sales: 70,
+    cogs: 0,
+    expenses: 0,
+    net: 70,
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Income" }] },
+          Rows: { Row: [{ type: "Data", ColData: [{ value: "Services", id: "7" }, { value: "70.00" }] }] },
+          Summary: { ColData: [{ value: "Total Income" }, { value: "70.00" }] },
+        },
+        {
+          Header: { ColData: [{ value: "Expenses" }] },
+          Rows: { Row: [] },
+          Summary: { ColData: [{ value: "Total Expenses" }, { value: "0.00" }] },
+        },
+        { Summary: { ColData: [{ value: "Net Income" }, { value: "70.00" }] } },
+      ],
+    },
+  });
+  const counterpartRows = [
+    ["10", "Checking"],
+    ["11", "Credit Card"],
+    ["12", "Accounts Receivable (A/R)"],
+    ["13", "Accounts Payable (A/P)"],
+    ["14", "Undeposited Funds"],
+    ["15", "Sales Tax Payable"],
+    ["16", "Owner's Equity"],
+  ];
+  const detail = {
+    Header: { ReportName: "ProfitAndLossDetail", StartPeriod: "2026-08-01", EndPeriod: "2026-08-31" },
+    Columns: {
+      Column: [
+        { ColTitle: "Transaction date" },
+        { ColTitle: "Transaction type" },
+        { ColTitle: "Name" },
+        { ColTitle: "Description" },
+        { ColTitle: "Account Name" },
+        { ColTitle: "Amount" },
+      ],
+    },
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Services (7)" }] },
+          Rows: {
+            Row: counterpartRows.map(([id, name], index) => ({
+              type: "Data",
+              ColData: [
+                { value: `08/${String(index + 1).padStart(2, "0")}/2026` },
+                { value: "Invoice", id: `invoice-${id}` },
+                { value: "Customer" },
+                { value: "Services detail" },
+                { value: name, id },
+                { value: "10.00" },
+              ],
+            })),
+          },
+        },
+      ],
+    },
+  };
+
+  const result = normalizeQboPnlSnapshotPayload({
+    businessId: BUSINESS_ID,
+    reviewYear: 2026,
+    reviewMonth: 8,
+    realmId: "realm-1",
+    qboEnvironment: "production",
+    accountingMethod: "Cash",
+    sourceStartDate: "2026-08-01",
+    sourceEndDate: "2026-08-31",
+    summaryReport: summary,
+    detailReport: detail,
+    detailReportName: "ProfitAndLossDetail",
+    qboAccounts,
+  });
+
+  assert.equal(result.transactions.length, 7);
+  assert.ok(result.transactions.every((row) => row.qbo_account_id === "7"));
+  assert.ok(result.transactions.every((row) => row.qbo_account_name === "Services"));
+  assert.ok(result.transactions.every((row) => row.metadata.pnl_account_source === "report_group_context"));
+  assert.deepEqual(result.transactions.map((row) => row.metadata.counterpart_account_id), counterpartRows.map(([id]) => id));
+  assert.deepEqual(result.metadata.reconciliation.parsed_counts.rows_by_qbo_account_id, { 7: 7 });
+  assert.equal(result.metadata.reconciliation.detail_totals["7"], 70);
+  for (const [id] of counterpartRows) {
+    assert.equal(result.metadata.reconciliation.detail_totals[id], undefined);
+  }
 });
 
 test("zero-row ProfitAndLossDetail for non-zero accounts falls back to P&L-filtered GeneralLedger detail", async () => {

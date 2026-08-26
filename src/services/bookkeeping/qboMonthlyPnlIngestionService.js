@@ -21,6 +21,7 @@ const DETAIL_REPORTS = ["ProfitAndLossDetail", "GeneralLedger"];
 const FALLBACK_ALLOWED_STATUSES = new Set([404, 501]);
 const PNL_ACCOUNT_TYPES = new Set(["Income", "Cost of Goods Sold", "Expense", "Other Income", "Other Expense"]);
 const RECONCILIATION_TOLERANCE = 0.01;
+const PNL_DETAIL_ACCOUNT_ASSOCIATION_VERSION = "pnl_group_context_v2";
 
 export class QboMonthlyPnlIngestionError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -387,6 +388,7 @@ export function normalizeQboPnlSnapshotPayload({
     sourceEndDate,
     resolver,
     qboAccounts,
+    pnlAccounts: accounts,
   });
   const reconciliation = reconcileNormalizedPnl({ summary, accounts, transactions, detailReportName });
   accounts = applyDetailCompletenessToAccounts(accounts, reconciliation);
@@ -404,6 +406,15 @@ export function normalizeQboPnlSnapshotPayload({
       kpi_source: "qbo_profit_and_loss_summary",
       unposted_bizzi_transactions_included: false,
       qbo_writes: false,
+      detail_account_association: {
+        version: PNL_DETAIL_ACCOUNT_ASSOCIATION_VERSION,
+        strategy: detailReportName === "ProfitAndLossDetail"
+          ? "profit_and_loss_group_context_before_counterpart"
+          : "pnl_account_only",
+        transaction_count: transactions.length,
+        rows_by_pnl_qbo_account_id: transactions.normalization_stats?.rows_by_qbo_account_id || {},
+        counterpart_account_metadata: true,
+      },
     },
     reconciliation,
   };
@@ -535,6 +546,7 @@ export function normalizeDetailTransactions(report, {
   sourceEndDate,
   resolver,
   qboAccounts = [],
+  pnlAccounts = [],
 } = {}) {
   const columns = reportColumns(report);
   const rows = [];
@@ -553,6 +565,7 @@ export function normalizeDetailTransactions(report, {
     rows_by_qbo_account_id: {},
   };
   const qboAccountById = new Map(qboAccounts.filter((account) => account?.id).map((account) => [String(account.id), account]));
+  const knownPnlAccounts = buildKnownPnlAccountIndex(pnlAccounts);
   walkReportRows(report?.Rows?.Row || [], [], (row, ancestors) => {
     stats.traversed_report_rows += 1;
     if (!isTransactionDataRow(row)) {
@@ -582,6 +595,7 @@ export function normalizeDetailTransactions(report, {
       detailReportName,
       resolver,
       qboAccountById,
+      knownPnlAccounts,
       accountContext,
       rowAccountId,
       rowAccountName,
@@ -867,6 +881,7 @@ function resolveDetailPnlAccount({
   detailReportName,
   resolver,
   qboAccountById,
+  knownPnlAccounts,
   accountContext,
   rowAccountId,
   rowAccountName,
@@ -911,7 +926,14 @@ function resolveDetailPnlAccount({
       pnlAccountSource: candidate.source,
     };
     if (!fallback) fallback = shaped;
-    if (accountRef.status === "resolved" && account && isPnlAccount(account)) return shaped;
+    if (
+      accountRef.status === "resolved"
+      && account
+      && isPnlAccount(account)
+      && isKnownSnapshotPnlAccount({ account, candidate, knownPnlAccounts })
+    ) {
+      return shaped;
+    }
   }
   return fallback || {
     accountRef: { status: "unresolved", source: "none", account: null },
@@ -926,6 +948,37 @@ function isDetailRowPnlAccount({ detailReportName, accountRef, accountId, qboAcc
   if (account && !isPnlAccount(account)) return false;
   if (detailReportName === "GeneralLedger") return Boolean(account && isPnlAccount(account));
   return accountRef.status === "resolved" && Boolean(account && isPnlAccount(account));
+}
+
+function buildKnownPnlAccountIndex(accounts = []) {
+  const ids = new Set();
+  const labels = new Set();
+  for (const account of accounts || []) {
+    if (!account) continue;
+    if (account.qbo_account_id) ids.add(String(account.qbo_account_id));
+    for (const value of [account.account_name, account.account_path]) {
+      const cleaned = cleanQboReportAccountName(value);
+      if (cleaned) {
+        labels.add(normalizeLabel(cleaned));
+        labels.add(normalizePath(cleaned));
+      }
+    }
+  }
+  return { ids, labels };
+}
+
+function isKnownSnapshotPnlAccount({ account, candidate, knownPnlAccounts } = {}) {
+  if (!knownPnlAccounts) return true;
+  if (knownPnlAccounts.ids.size === 0 && knownPnlAccounts.labels.size === 0) return true;
+  if (account?.id && knownPnlAccounts.ids.has(String(account.id))) return true;
+  if (candidate?.id && knownPnlAccounts.ids.has(String(candidate.id))) return true;
+  for (const value of [candidate?.name, account?.name, account?.path]) {
+    const cleaned = cleanQboReportAccountName(value);
+    if (!cleaned) continue;
+    if (knownPnlAccounts.labels.has(normalizeLabel(cleaned))) return true;
+    if (knownPnlAccounts.labels.has(normalizePath(cleaned))) return true;
+  }
+  return false;
 }
 
 function isCompatiblePnlType(reportType, coaType) {
