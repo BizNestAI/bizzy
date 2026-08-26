@@ -422,6 +422,16 @@ export async function getReconciliationsTransactions(businessId, params = {}) {
   });
 }
 
+export async function getReconciliationsMonths(businessId, params = {}) {
+  const search = new URLSearchParams();
+  if (params.limit) search.set("limit", String(params.limit));
+  const qs = search.toString() ? `?${search.toString()}` : "";
+  return safeFetch(apiUrl(`/api/bookkeeping/reconciliations/months${qs}`), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+}
+
 export async function getReconciliationsRuns(businessId, params = {}) {
   const search = new URLSearchParams();
   if (params.limit) search.set("limit", String(params.limit));
@@ -645,6 +655,7 @@ export default {
   runReconciliations,
   getReconciliationsStatus,
   getReconciliationsTransactions,
+  getReconciliationsMonths,
   getReconciliationsRuns,
   getPlaidStatus,
   createPlaidLinkToken,

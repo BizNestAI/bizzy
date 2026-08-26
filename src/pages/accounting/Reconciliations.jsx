@@ -6,7 +6,7 @@ import { useBusiness } from "../../context/BusinessContext.jsx";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import {
   getAccounts,
-  getReconciliationsRuns,
+  getReconciliationsMonths,
   getReconciliationsStatus,
   getReconciliationsTransactions,
 } from "../../services/bookkeeping/bookkeepingClient.js";
@@ -21,6 +21,8 @@ function toDate(value) {
 }
 
 function monthKeyFromDate(value) {
+  const direct = String(value || "").match(/^(\d{4})-(\d{2})/);
+  if (direct) return `${direct[1]}-${direct[2]}`;
   const d = toDate(value);
   if (!d) return null;
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -37,7 +39,7 @@ function monthStart(monthKey) {
 function monthEnd(monthKey) {
   const [year, month] = String(monthKey).split("-").map(Number);
   if (!year || !month) return `${monthKey}-28`;
-  return new Date(year, month, 0).toISOString().slice(0, 10);
+  return new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
 }
 
 function monthRunTime(monthKey) {
@@ -314,10 +316,13 @@ export default function Reconciliations() {
     if (!businessId || usingDemoData) return;
     setLoadingRunHistory(true);
     try {
-      const res = await getReconciliationsRuns(businessId, { limit: 12 });
-      const runs = Array.isArray(res?.runs) ? res.runs : [];
-      setRunHistory(runs);
-      setSelectedRunId((current) => current || (runs[0]?.run_id || runs[0]?.id || monthlyAuditKey(currentMonthKey())));
+      const res = await getReconciliationsMonths(businessId, { limit: 24 });
+      const months = Array.isArray(res?.months) ? res.months : [];
+      setRunHistory(months);
+      setSelectedRunId((current) => {
+        if (current && months.some((run) => (run.run_id || run.id) === current)) return current;
+        return months[0]?.run_id || months[0]?.id || monthlyAuditKey(currentMonthKey());
+      });
     } catch {
       setRunHistory([]);
       setSelectedRunId((current) => current || monthlyAuditKey(currentMonthKey()));
@@ -380,13 +385,12 @@ export default function Reconciliations() {
     if (!businessId || usingDemoData) return;
     const targetRunId = opts.runIdOverride || selectedRunId || monthlyAuditKey(currentMonthKey());
     const effectivePage = Number.isFinite(opts.pageOverride) ? opts.pageOverride : page;
-    const targetMonth = opts.monthOverride || monthFromAuditKey(targetRunId) || null;
+    const targetMonth = opts.monthOverride || monthFromAuditKey(targetRunId) || currentMonthKey();
     setLoadingTxns(true);
     setTxnError(null);
     try {
       const params = {
-        run_id: isMonthlyAuditKey(targetRunId) ? undefined : targetRunId,
-        month: targetMonth || undefined,
+        month: targetMonth,
         status: filters.status === "all" ? undefined : filters.status,
         plaid_account_id: filters.account === "all" ? undefined : filters.account,
         search: searchTerm || undefined,
@@ -509,12 +513,12 @@ export default function Reconciliations() {
 
   const displayRunHistory = useMemo(() => {
     if (usingDemoData) return demoRunHistory;
-    const currentMonth = currentMonthKey();
-    const hasCurrentMonth = (runHistory || []).some((run) => monthKeyFromDate(run?.period_start || run?.period_end || run?.last_checked_at) === currentMonth);
-    return hasCurrentMonth ? runHistory : [buildCurrentMonthAuditPlaceholder(), ...runHistory];
+    return runHistory?.length ? runHistory : [buildCurrentMonthAuditPlaceholder()];
   }, [demoRunHistory, runHistory, usingDemoData]);
   const displaySelectedRunSummary = usingDemoData ? selectedDemoRunSummary : selectedRunSummary;
-  const displayLatestRunId = usingDemoData ? demoRunHistory[0]?.run_id || demoRunHistory[0]?.id || null : latestRunId;
+  const displayLatestRunId = usingDemoData
+    ? demoRunHistory[0]?.run_id || demoRunHistory[0]?.id || null
+    : displayRunHistory[0]?.run_id || displayRunHistory[0]?.id || latestRunId;
   const displayRows = usingDemoData ? pagedDemoRows : txns;
   const displayTotal = usingDemoData ? filteredDemoRows.length : totalTxns;
   const displayLoadingRunHistory = usingDemoData ? false : loadingRunHistory;
@@ -551,17 +555,25 @@ export default function Reconciliations() {
         setAuditClosing(false);
         if (!displayLatestRunId) return;
         setSelectedRunId(displayLatestRunId);
-        setSelectedRunSummary(usingDemoData ? demoRunHistory[0] || null : statusData.latest_run || null);
+        setSelectedRunSummary(usingDemoData ? demoRunHistory[0] || null : displayRunHistory[0] || null);
         setPage(1);
         if (!usingDemoData) {
-          loadTransactions({ runIdOverride: displayLatestRunId, pageOverride: 1 });
+          loadTransactions({
+            runIdOverride: displayLatestRunId,
+            monthOverride: monthFromAuditKey(displayLatestRunId) || displayRunHistory[0]?.period_key || currentMonthKey(),
+            pageOverride: 1,
+          });
         }
       }}
       onRefresh={async () => {
         if (usingDemoData) return;
         await loadStatus({ selectedRunIdOverride: selectedRunId });
         await loadRunHistory();
-        await loadTransactions({ runIdOverride: selectedRunId, pageOverride: page });
+        await loadTransactions({
+          runIdOverride: selectedRunId,
+          monthOverride: monthFromAuditKey(selectedRunId) || displaySelectedRunSummary?.period_key || currentMonthKey(),
+          pageOverride: page,
+        });
       }}
       onCollapse={() => {
         if (auditClosing) return;
@@ -616,7 +628,11 @@ export default function Reconciliations() {
           setSelectedRunSummary(run || null);
           setPage(1);
           if (!usingDemoData) {
-            loadTransactions({ runIdOverride: runId, pageOverride: 1 });
+            loadTransactions({
+              runIdOverride: runId,
+              monthOverride: monthFromAuditKey(runId) || run?.period_key || monthKeyFromDate(run?.period_start || run?.period_end) || currentMonthKey(),
+              pageOverride: 1,
+            });
           }
         }}
       />

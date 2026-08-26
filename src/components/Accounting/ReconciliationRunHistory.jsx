@@ -19,6 +19,11 @@ function formatDateTime(value) {
 
 function formatMonth(value) {
   if (!value) return "Unscoped month";
+  const direct = String(value || "").match(/^(\d{4})-(\d{2})/);
+  if (direct) {
+    const d = new Date(Date.UTC(Number(direct[1]), Number(direct[2]) - 1, 1));
+    return d.toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+  }
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "Unscoped month";
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
@@ -29,8 +34,11 @@ function resolveRunMonthDate(run) {
 }
 
 function monthKey(run) {
+  if (run?.period_key && /^\d{4}-\d{2}$/.test(String(run.period_key))) return run.period_key;
   const value = resolveRunMonthDate(run);
   if (!value) return "unscoped";
+  const direct = String(value || "").match(/^(\d{4})-(\d{2})/);
+  if (direct) return `${direct[1]}-${direct[2]}`;
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "unscoped";
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -194,7 +202,9 @@ export default function ReconciliationRunHistory({
                       >
                         <td className="px-3 py-3">
                           <div className="font-semibold text-slate-100">{formatMonth(resolveRunMonthDate(run))}</div>
-                          <div className="mt-1 text-[11px] text-slate-500">Run {formatDateTime(run.last_checked_at)}</div>
+                          <div className="mt-1 text-[11px] text-slate-500">
+                            {run.last_checked_at ? `Run ${formatDateTime(run.last_checked_at)}` : "Canonical Plaid history"}
+                          </div>
                           <div className="mt-1 flex h-[18px] flex-wrap items-center gap-1.5">
                             {isLatest ? (
                               <span className="inline-flex items-center rounded-full border border-emerald-400/30 bg-emerald-500/10 px-2 py-[2px] text-[10px] font-semibold leading-none text-emerald-100">

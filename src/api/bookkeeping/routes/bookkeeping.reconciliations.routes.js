@@ -5,7 +5,11 @@ import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { computeReconciliationRun } from "../../../services/bookkeeping/reconciliationRunService.js";
 import { evaluateReconciliationStatus } from "../../../services/bookkeeping/reconciliationEvaluator.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../../services/insights/contractorCfoTriggerService.js";
-import { loadMonthlyReconciliationPipeline } from "../../../services/bookkeeping/monthlyReconciliationPipelineService.js";
+import {
+  loadAvailableMonthlyReconciliationPeriods,
+  loadMonthlyReconciliationPipeline,
+  normalizeMonthKey,
+} from "../../../services/bookkeeping/monthlyReconciliationPipelineService.js";
 
 const router = Router();
 
@@ -40,6 +44,11 @@ function currentMonthKey() {
 function monthKeyFromDate(value) {
   const date = parseDate(String(value || "").slice(0, 10));
   return date ? date.slice(0, 7) : null;
+}
+
+function monthEndFromExclusiveEnd(end) {
+  if (!parseDate(end)) return null;
+  return new Date(Date.parse(`${end}T00:00:00.000Z`) - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function parseStatuses(input) {
@@ -159,6 +168,39 @@ function shapeRunSummary(run) {
       failed_post_count: run.failed_post_count || 0,
       missing_in_qbo_count: run.missing_in_qbo_count || 0,
       duplicate_in_qbo_count: run.duplicate_in_qbo_count || 0,
+    },
+  };
+}
+
+function pipelineRunSummary({ run = null, pipeline }) {
+  const shaped = shapeRunSummary(run) || {};
+  return {
+    ...shaped,
+    run_id: shaped.run_id || null,
+    status: shaped.status || "pipeline",
+    overall_status: shaped.overall_status || "pipeline",
+    overall_note:
+      shaped.overall_note ||
+      "Showing the selected monthly Plaid transaction pipeline. No reconciliation run is required.",
+    last_checked_at: shaped.last_checked_at || null,
+    scope: "month",
+    period_key: pipeline.month,
+    period_start: pipeline.start,
+    period_end: monthEndFromExclusiveEnd(pipeline.end),
+    details: {
+      ...(shaped.details || {}),
+      source: "monthly_reconciliation_pipeline",
+    },
+    counts: {
+      ...(shaped.counts || {}),
+      total_seen: pipeline.totals.plaid_transactions_count || 0,
+      needs_review_count: pipeline.totals.needs_review_count || 0,
+      handled_not_posted_count: pipeline.totals.handled_not_posted_count || 0,
+      matched_count: pipeline.totals.posted_matched_count || 0,
+      failed_post_count: pipeline.totals.posting_failed_count || 0,
+      exceptions_count: pipeline.totals.exceptions_count || 0,
+      duplicate_in_qbo_count: shaped.counts?.duplicate_in_qbo_count || 0,
+      missing_in_qbo_count: shaped.counts?.missing_in_qbo_count || 0,
     },
   };
 }
@@ -424,6 +466,28 @@ router.get("/reconciliations/status", requireAuth, async (req, res) => {
   }
 });
 
+router.get("/reconciliations/months", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const limit = parseLimit(req.query?.limit, 24);
+    const months = await loadAvailableMonthlyReconciliationPeriods(businessId, { limit });
+    return res.json({
+      ok: true,
+      months,
+      source_contract: {
+        population_basis: "canonical active Plaid-backed bank_transactions by calendar month",
+        reconciliation_runs_required: false,
+      },
+    });
+  } catch (err) {
+    console.error("[reconciliations][months] failed", err?.message || err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "reconciliation_months_failed", message: SAFE_RECONCILIATION_ERROR_MESSAGE });
+  }
+});
+
 router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
@@ -432,6 +496,10 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
     const offset = parseOffset(req.query?.offset);
     const plaidAccountId = req.query?.plaid_account_id || null;
     const statusFilters = parseStatuses(req.query?.status);
+    const requestedMonth = req.query?.month ? normalizeMonthKey(req.query.month) : null;
+    if (req.query?.month && !requestedMonth) {
+      return res.status(400).json({ ok: false, error: "invalid_month" });
+    }
     const runId = req.query?.run_id || null;
     const range = req.query?.range || "last_30_days";
     const parsed = parseRange(range, req.query?.date_from, req.query?.date_to);
@@ -451,11 +519,11 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
       });
     }
 
-    const runSummaryRow = runId ? await pickRunById(businessId, runId) : await pickLatestRun(businessId);
+    const runSummaryRow = runId ? await pickRunById(businessId, runId) : null;
     const month =
-      req.query?.month ||
-      monthKeyFromDate(dateFrom) ||
+      requestedMonth ||
       monthKeyFromDate(runSummaryRow?.period_start || runSummaryRow?.period_end || runSummaryRow?.last_checked_at) ||
+      monthKeyFromDate(dateFrom) ||
       currentMonthKey();
     const pipeline = await loadMonthlyReconciliationPipeline(businessId, {
       month,
@@ -465,26 +533,7 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
       limit,
       offset,
     });
-    const run_summary = shapeRunSummary(runSummaryRow) || {
-      run_id: null,
-      status: "not_run",
-      overall_status: "not_run",
-      overall_note: "No reconciliation run exists for this month yet.",
-      last_checked_at: null,
-      scope: "month",
-      period_start: pipeline.start,
-      period_end: new Date(Date.parse(`${pipeline.end}T00:00:00.000Z`) - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-      details: { source: "monthly_reconciliation_pipeline" },
-      counts: {
-        total_seen: pipeline.totals.plaid_transactions_count || 0,
-        needs_review_count: pipeline.totals.needs_review_count || 0,
-        handled_not_posted_count: pipeline.totals.handled_not_posted_count || 0,
-        matched_count: pipeline.totals.posted_matched_count || 0,
-        failed_post_count: pipeline.totals.posting_failed_count || 0,
-        duplicate_in_qbo_count: 0,
-        missing_in_qbo_count: 0,
-      },
-    };
+    const run_summary = pipelineRunSummary({ run: runSummaryRow, pipeline });
 
     return res.json({
       ok: true,
@@ -494,6 +543,8 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
       pipeline_totals: pipeline.totals,
       source_contract: pipeline.source_contract,
       month: pipeline.month,
+      period_start: pipeline.start,
+      period_end: monthEndFromExclusiveEnd(pipeline.end),
     });
   } catch (err) {
     console.error("[reconciliations][transactions] failed", err?.message || err);

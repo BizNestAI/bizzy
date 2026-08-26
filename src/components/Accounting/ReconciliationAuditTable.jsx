@@ -37,6 +37,11 @@ function formatDate(iso) {
 
 function formatMonth(value) {
   if (!value) return null;
+  const direct = String(value || "").match(/^(\d{4})-(\d{2})/);
+  if (direct) {
+    const d = new Date(Date.UTC(Number(direct[1]), Number(direct[2]) - 1, 1));
+    return d.toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
+  }
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });

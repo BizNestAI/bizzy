@@ -7,8 +7,19 @@ import {
   summarizePipelineStatuses,
 } from "./reconciliationPipelineStatus.js";
 
-function monthBounds(month) {
-  const [year, monthNumber] = String(month).split("-").map(Number);
+export function normalizeMonthKey(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const monthNumber = Number(match[2]);
+  if (!Number.isInteger(year) || !Number.isInteger(monthNumber) || monthNumber < 1 || monthNumber > 12) return null;
+  return `${match[1]}-${match[2]}`;
+}
+
+export function monthBounds(month) {
+  const normalized = normalizeMonthKey(month);
+  if (!normalized) throw new Error("invalid_month");
+  const [year, monthNumber] = normalized.split("-").map(Number);
   const start = new Date(Date.UTC(year, monthNumber - 1, 1)).toISOString().slice(0, 10);
   const end = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
   return [start, end];
@@ -268,9 +279,70 @@ export async function loadMonthlyReconciliationPipeline(businessId, opts = {}) {
   };
 }
 
+export async function loadAvailableMonthlyReconciliationPeriods(businessId, opts = {}) {
+  const limit = Math.min(Math.max(Number(opts.limit || 24), 1), 60);
+  const rows = await safeRows(() =>
+    supabase
+      .from("bank_transactions")
+      .select("id,plaid_account_id,plaid_transaction_id,pending_transaction_id,date,pending,is_archived")
+      .eq("business_id", businessId)
+      .eq("is_archived", false)
+      .not("plaid_transaction_id", "is", null)
+      .not("plaid_account_id", "is", null)
+      .order("date", { ascending: false }),
+    "Available monthly reconciliation periods"
+  );
+  const canonicalRows = removeSupersededPendingPlaidRows(rows);
+  const countsByMonth = new Map();
+  for (const row of canonicalRows) {
+    const month = normalizeMonthKey(String(row.date || "").slice(0, 7));
+    if (!month) continue;
+    countsByMonth.set(month, (countsByMonth.get(month) || 0) + 1);
+  }
+  const months = Array.from(countsByMonth.keys()).sort((a, b) => b.localeCompare(a)).slice(0, limit);
+  const includePipelineTotals = opts.includePipelineTotals !== false;
+  const periods = [];
+  for (const month of months) {
+    let totals = { plaid_transactions_count: countsByMonth.get(month) || 0 };
+    if (includePipelineTotals) {
+      const pipeline = await loadMonthlyReconciliationPipeline(businessId, { month });
+      totals = pipeline.totals;
+    }
+    const [start, end] = monthBounds(month);
+    periods.push({
+      id: `month:${month}`,
+      run_id: `month:${month}`,
+      period_key: month,
+      period_start: start,
+      period_end: new Date(Date.parse(`${end}T00:00:00.000Z`) - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      status: "pipeline",
+      overall_status: "pipeline",
+      last_checked_at: null,
+      counts: {
+        total_seen: totals.plaid_transactions_count || 0,
+        needs_review_count: totals.needs_review_count || 0,
+        handled_not_posted_count: totals.handled_not_posted_count || 0,
+        matched_count: totals.posted_matched_count || 0,
+        failed_post_count: totals.posting_failed_count || 0,
+        exceptions_count: totals.exceptions_count || 0,
+        duplicate_in_qbo_count: 0,
+        missing_in_qbo_count: 0,
+      },
+      pipeline_totals: totals,
+      source_contract: {
+        population_basis: "canonical active Plaid-backed bank_transactions for selected month",
+      },
+    });
+  }
+  return periods;
+}
+
 export default {
   loadAuthoritativeMonthlyPlaidTransactions,
+  loadAvailableMonthlyReconciliationPeriods,
   loadMonthlyReconciliationPipeline,
+  monthBounds,
+  normalizeMonthKey,
   removeSupersededPendingPlaidRows,
   buildMonthlyPipelineRow,
 };

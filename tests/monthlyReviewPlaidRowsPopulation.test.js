@@ -102,3 +102,19 @@ test("monthly review source ledger has independent authoritative Plaid Rows popu
   assert.match(service, /summarizePipelineStatuses\(rows\)/);
   assert.match(read("src/services/bookkeeping/reconciliationPipelineStatus.js"), /plaid_transactions_count/);
 });
+
+test("customer reconciliation month inventory is derived from the same canonical Plaid population", () => {
+  const service = read("src/services/bookkeeping/monthlyReconciliationPipelineService.js");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const route = read("src/api/bookkeeping/routes/bookkeeping.reconciliations.routes.js");
+  const page = read("src/pages/accounting/Reconciliations.jsx");
+
+  assert.match(service, /export async function loadAvailableMonthlyReconciliationPeriods/);
+  assert.match(service, /loadMonthlyReconciliationPipeline\(businessId, \{ month \}\)/);
+  assert.match(route, /router\.get\("\/reconciliations\/months"/);
+  assert.match(route, /reconciliation_runs_required: false/);
+  assert.match(client, /getReconciliationsMonths/);
+  assert.match(page, /getReconciliationsMonths\(businessId, \{ limit: 24 \}\)/);
+  assert.match(page, /monthOverride: monthFromAuditKey\(runId\) \|\| run\?\.period_key/);
+  assert.doesNotMatch(page, /getReconciliationsRuns/);
+});

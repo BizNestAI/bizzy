@@ -73,13 +73,43 @@ test("Monthly Review and customer reconciliation routes use the same shared pipe
 
   assert.match(monthlyRoute, /loadMonthlyReconciliationPipeline/);
   assert.match(customerRoute, /loadMonthlyReconciliationPipeline/);
+  assert.match(customerRoute, /loadAvailableMonthlyReconciliationPeriods/);
+  assert.match(customerRoute, /router\.get\("\/reconciliations\/months"/);
   assert.match(service, /derivePipelineStatus/);
   assert.match(service, /loadAuthoritativeMonthlyPlaidTransactions/);
   assert.doesNotMatch(customerRoute, /if \(!resolvedRunId\)[\s\S]*rows: \[\]/);
-  assert.match(customerPage, /monthlyAuditKey\(currentMonthKey\(\)\)/);
+  assert.match(customerPage, /getReconciliationsMonths/);
+  assert.match(customerPage, /month:\s*targetMonth/);
+  assert.doesNotMatch(customerPage, /getReconciliationsRuns/);
   assert.match(customerTable, /row\.pipeline_status\?\.label|pipeline_status/);
   assert.match(monthlyUi, /PipelineStatusBadge/);
   assert.match(monthlyUi, /Plaid Transactions/);
   assert.doesNotMatch(monthlyUi, /<div>QBO Status<\/div>/);
   assert.doesNotMatch(monthlyUi, /<div>Reconciliation<\/div>/);
+});
+
+test("customer reconciliation month selection uses explicit calendar month boundaries", () => {
+  const service = read("src/services/bookkeeping/monthlyReconciliationPipelineService.js");
+  const customerRoute = read("src/api/bookkeeping/routes/bookkeeping.reconciliations.routes.js");
+  const customerPage = read("src/pages/accounting/Reconciliations.jsx");
+
+  assert.match(service, /export function normalizeMonthKey/);
+  assert.match(service, /export function monthBounds/);
+  assert.match(service, /new Date\(Date\.UTC\(year, monthNumber - 1, 1\)\)/);
+  assert.match(service, /new Date\(Date\.UTC\(year, monthNumber, 1\)\)/);
+  assert.match(customerRoute, /const requestedMonth = req\.query\?\.month \? normalizeMonthKey\(req\.query\.month\) : null/);
+  assert.match(customerRoute, /month,\s+plaid_account_id/);
+  assert.doesNotMatch(customerRoute, /const runSummaryRow = runId \? await pickRunById\(businessId, runId\) : await pickLatestRun\(businessId\)/);
+  assert.ok(customerPage.includes('String(value || "").match(/^(\\d{4})-(\\d{2})/)'));
+  assert.match(customerPage, /new Date\(Date\.UTC\(year, month, 0\)\)/);
+});
+
+test("available reconciliation months use canonical Plaid rows and pending replacement dedupe", () => {
+  const service = read("src/services/bookkeeping/monthlyReconciliationPipelineService.js");
+  assert.match(service, /export async function loadAvailableMonthlyReconciliationPeriods/);
+  assert.match(service, /\.from\("bank_transactions"\)/);
+  assert.match(service, /\.eq\("is_archived", false\)/);
+  assert.match(service, /\.not\("plaid_transaction_id", "is", null\)/);
+  assert.match(service, /\.not\("plaid_account_id", "is", null\)/);
+  assert.match(service, /removeSupersededPendingPlaidRows\(rows\)/);
 });
