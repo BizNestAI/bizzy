@@ -42,6 +42,18 @@ const GENERIC_RECLASS_BLOCKED_ACCOUNT_TYPES = new Set([
   "accounts payable",
 ]);
 
+const PURCHASE_RECLASS_ACCOUNT_TYPES = new Set([
+  "expense",
+  "costofgoodssold",
+  "otherexpense",
+]);
+
+const DEPOSIT_RECLASS_ACCOUNT_TYPES = new Set([
+  "income",
+  "revenue",
+  "otherincome",
+]);
+
 export async function reclassifyBookkeepingTransaction({
   businessId,
   transactionId,
@@ -68,6 +80,7 @@ export async function reclassifyBookkeepingTransaction({
   const now = new Date().toISOString();
 
   if (posted) {
+    assertTargetAccountCompatibleWithPostedTxn(previous?.qbo_txn_type, targetAccount);
     const qboUpdate = await updatePostedQboTransactionAccount({
       businessId,
       qboTxnId: previous.qbo_txn_id,
@@ -260,6 +273,37 @@ async function resolveTargetAccount({ businessId, targetQboAccountId, validateQb
     });
   }
   return account;
+}
+
+function assertTargetAccountCompatibleWithPostedTxn(qboTxnType, targetAccount = {}) {
+  const txnType = normalizeQboTxnType(qboTxnType);
+  if (!txnType) throw new BookkeepingReclassificationError("missing_qbo_txn_type", 409);
+  const accountTypeKey = normalizeAccountTypeKey(targetAccount.type || targetAccount.accountType || targetAccount.account_type);
+  const details = {
+    qbo_txn_type: txnType,
+    account_id: targetAccount.id || null,
+    account_type: targetAccount.type || targetAccount.accountType || targetAccount.account_type || null,
+  };
+
+  if (txnType === "Purchase") {
+    if (!PURCHASE_RECLASS_ACCOUNT_TYPES.has(accountTypeKey)) {
+      throw new BookkeepingReclassificationError("target_account_not_valid_for_purchase_reclassification", 400, details);
+    }
+    return true;
+  }
+  if (txnType === "CreditCardCharge") {
+    if (!PURCHASE_RECLASS_ACCOUNT_TYPES.has(accountTypeKey)) {
+      throw new BookkeepingReclassificationError("target_account_not_valid_for_credit_card_charge_reclassification", 400, details);
+    }
+    return true;
+  }
+  if (txnType === "Deposit") {
+    if (!DEPOSIT_RECLASS_ACCOUNT_TYPES.has(accountTypeKey)) {
+      throw new BookkeepingReclassificationError("target_account_not_valid_for_deposit_reclassification", 400, details);
+    }
+    return true;
+  }
+  return true;
 }
 
 async function loadReclassificationContext({ db, businessId, transactionId }) {
@@ -493,6 +537,10 @@ function normalizeQboTxnType(value = "") {
   if (normalized === "creditcardpayment") return "CreditCardPayment";
   if (normalized === "transfer") return "Transfer";
   return value ? String(value) : "";
+}
+
+function normalizeAccountTypeKey(value = "") {
+  return String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
 }
 
 async function fetchQboTransaction(qbo, txnType, txnId) {

@@ -219,7 +219,7 @@ test("Monthly Review QBO P&L failed reclassification keeps draft selection and r
 
   assert.match(panel, /throwOnError: true/);
   assert.match(panel, /setPnlReclassErrors\(\(current\) => \(\{/);
-  assert.match(panel, /\[rowKey\]: e\?\.body\?\.message \|\| e\?\.message \|\| "Could not reclassify this QuickBooks transaction\."/);
+  assert.match(panel, /\[rowKey\]: friendlyReclassificationError\(e\)/);
   assert.match(panel, /rowError \? <div className="text-\[11px\] text-amber-100">\{rowError\}<\/div> : null/);
   assert.doesNotMatch(panel, /catch[\s\S]*delete next\[rowKey\]/);
 });
@@ -232,4 +232,32 @@ test("Monthly Review QBO P&L successful reclassification clears draft and refres
   assert.match(ui, /await refreshQboPnlSnapshot\(\{ afterReclassification: true \}\)/);
   assert.match(ui, /setQboPnlAccountDetails\(\{\}\)/);
   assert.doesNotMatch(ui, /createQbo|postSingleBookkeepingTransactionNow|approveBookkeepingTransactions/);
+});
+
+test("Monthly Review QBO P&L dropdown filters invalid target account classes by transaction type", () => {
+  const panel = extractFunction(ui, "SourceLedgerPanel");
+  const filterHelper = extractFunction(ui, "filterPnlReclassTargetAccounts");
+
+  assert.match(ui, /const EXPENSE_SIDE_RECLASS_ACCOUNT_TYPES = new Set\(\["expense", "costofgoodssold", "otherexpense"\]\)/);
+  assert.match(ui, /const DEPOSIT_RECLASS_ACCOUNT_TYPES = new Set\(\["income", "revenue", "otherincome"\]\)/);
+  assert.match(panel, /const rowDropdownAccounts = filterPnlReclassTargetAccounts\(dropdownAccounts, txn\.qbo_txn_type, currentAccountId\)/);
+  assert.match(panel, /accounts=\{rowDropdownAccounts\}/);
+  assert.match(panel, /disabled=\{busy \|\| !rowDropdownAccounts\.length\}/);
+  assert.match(filterHelper, /if \(currentAccountId && String\(account\.id \|\| ""\) === String\(currentAccountId\)\) return true/);
+  assert.match(filterHelper, /txnType === "Purchase" \|\| txnType === "CreditCardCharge"/);
+  assert.match(filterHelper, /EXPENSE_SIDE_RECLASS_ACCOUNT_TYPES\.has\(typeKey\)/);
+  assert.match(filterHelper, /txnType === "Deposit"/);
+  assert.match(filterHelper, /DEPOSIT_RECLASS_ACCOUNT_TYPES\.has\(typeKey\)/);
+  assert.match(ui, /qboAccountType: rawType/);
+});
+
+test("Monthly Review QBO P&L reclassification maps stable backend validation errors to friendly copy", () => {
+  const helper = extractFunction(ui, "friendlyReclassificationError");
+
+  assert.match(helper, /target_account_not_valid_for_purchase_reclassification/);
+  assert.match(helper, /Choose an expense or cost-of-goods-sold account for this purchase\./);
+  assert.match(helper, /target_account_not_valid_for_credit_card_charge_reclassification/);
+  assert.match(helper, /Choose an expense or cost-of-goods-sold account for this credit card charge\./);
+  assert.match(helper, /target_account_not_valid_for_deposit_reclassification/);
+  assert.match(helper, /Choose an income account for this deposit\./);
 });

@@ -268,6 +268,154 @@ test("Monthly Review posted Purchase Deposit and CreditCardCharge update existin
   }
 });
 
+test("Monthly Review posted Purchase reclassification allows Expense and COGS targets", async () => {
+  for (const target of [
+    { id: "acct-expense", name: "Advertising", type: "Expense" },
+    { id: "acct-cogs", name: "Materials", type: "Cost of Goods Sold" },
+    { id: "acct-other-expense", name: "Other Expense", type: "Other Expense" },
+  ]) {
+    const db = makeDb({
+      bank_transactions: [bankTxn()],
+      transaction_categorizations: [cat({
+        status: "posted",
+        qbo_txn_id: "qbo-1",
+        qbo_txn_type: "Purchase",
+        final_qbo_account_id: "old",
+        final_qbo_account_name: "Software",
+      })],
+    });
+    const updates = [];
+    const result = await reclassifyBookkeepingTransaction({
+      businessId: "biz-1",
+      transactionId: "txn-1",
+      targetQboAccountId: target.id,
+      actor: "admin-1",
+      db,
+      validateQboAccount: validAccount(target),
+      getQBOClient: async () => ({
+        getPurchase: (id, cb) => cb(null, { Purchase: { Id: "qbo-1", SyncToken: "2", Line: [{ AccountBasedExpenseLineDetail: { AccountRef: { value: "old" } } }] } }),
+        updatePurchase: (payload, cb) => {
+          updates.push(payload);
+          cb(null, { Purchase: { Id: "qbo-1", SyncToken: "3" } });
+        },
+      }),
+    });
+
+    assert.equal(result.qbo_update.qbo_txn_id, "qbo-1");
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].Line[0].AccountBasedExpenseLineDetail.AccountRef.value, target.id);
+  }
+});
+
+test("Monthly Review posted Purchase rejects incompatible target accounts before QBO update", async () => {
+  for (const target of [
+    { id: "acct-income", name: "Fantasy", type: "Income", expected: "target_account_not_valid_for_purchase_reclassification" },
+    { id: "acct-other-income", name: "Other Income", type: "Other Income", expected: "target_account_not_valid_for_purchase_reclassification" },
+    { id: "acct-bank", name: "Checking", type: "Bank", expected: "target_account_not_valid_for_generic_gl_reclassification" },
+    { id: "acct-card", name: "Credit Card", type: "Credit Card", expected: "target_account_not_valid_for_generic_gl_reclassification" },
+    { id: "acct-ar", name: "A/R", type: "Accounts Receivable", expected: "target_account_not_valid_for_generic_gl_reclassification" },
+    { id: "acct-ap", name: "A/P", type: "Accounts Payable", expected: "target_account_not_valid_for_generic_gl_reclassification" },
+    { id: "acct-asset", name: "Asset", type: "Other Current Asset", expected: "target_account_not_valid_for_purchase_reclassification" },
+    { id: "acct-liability", name: "Liability", type: "Other Current Liability", expected: "target_account_not_valid_for_purchase_reclassification" },
+    { id: "acct-equity", name: "Equity", type: "Equity", expected: "target_account_not_valid_for_purchase_reclassification" },
+  ]) {
+    const db = makeDb({
+      bank_transactions: [bankTxn()],
+      transaction_categorizations: [cat({ status: "posted", qbo_txn_id: "qbo-1", qbo_txn_type: "Purchase", final_qbo_account_id: "old" })],
+    });
+    let qboRequested = false;
+    await assert.rejects(
+      reclassifyBookkeepingTransaction({
+        businessId: "biz-1",
+        transactionId: "txn-1",
+        targetQboAccountId: target.id,
+        actor: "admin-1",
+        db,
+        validateQboAccount: validAccount(target),
+        getQBOClient: async () => {
+          qboRequested = true;
+          return {
+            getPurchase: (id, cb) => cb(null, { Purchase: { Id: "qbo-1", SyncToken: "2", Line: [{ AccountBasedExpenseLineDetail: { AccountRef: { value: "old" } } }] } }),
+            updatePurchase: (payload, cb) => cb(null, { SyncToken: "3" }),
+          };
+        },
+      }),
+      (err) => err instanceof BookkeepingReclassificationError && err.error === target.expected
+    );
+    assert.equal(qboRequested, false);
+    assert.equal(db.tables.transaction_categorizations[0].final_qbo_account_id, "old");
+  }
+});
+
+test("Monthly Review posted CreditCardCharge rejects Income target before provider update", async () => {
+  const db = makeDb({
+    bank_transactions: [bankTxn()],
+    transaction_categorizations: [cat({ status: "posted", qbo_txn_id: "qbo-1", qbo_txn_type: "CreditCardCharge", final_qbo_account_id: "old" })],
+  });
+  let qboRequested = false;
+  await assert.rejects(
+    reclassifyBookkeepingTransaction({
+      businessId: "biz-1",
+      transactionId: "txn-1",
+      targetQboAccountId: "acct-income",
+      actor: "admin-1",
+      db,
+      validateQboAccount: validAccount({ id: "acct-income", name: "Fantasy", type: "Income" }),
+      getQBOClient: async () => {
+        qboRequested = true;
+      },
+    }),
+    (err) => err.error === "target_account_not_valid_for_credit_card_charge_reclassification"
+  );
+  assert.equal(qboRequested, false);
+});
+
+test("Monthly Review posted Deposit uses independent income-side target validation", async () => {
+  const incomeDb = makeDb({
+    bank_transactions: [bankTxn({ amount: 100, signed_amount: 100, direction: "INFLOW" })],
+    transaction_categorizations: [cat({ status: "posted", qbo_txn_id: "dep-1", qbo_txn_type: "Deposit", final_qbo_account_id: "old" })],
+  });
+  const updates = [];
+  const result = await reclassifyBookkeepingTransaction({
+    businessId: "biz-1",
+    transactionId: "txn-1",
+    targetQboAccountId: "acct-income",
+    actor: "admin-1",
+    db: incomeDb,
+    validateQboAccount: validAccount({ id: "acct-income", name: "Services", type: "Income" }),
+    getQBOClient: async () => ({
+      getDeposit: (id, cb) => cb(null, { Deposit: { Id: "dep-1", SyncToken: "2", Line: [{ DepositLineDetail: { AccountRef: { value: "old" } } }] } }),
+      updateDeposit: (payload, cb) => {
+        updates.push(payload);
+        cb(null, { Deposit: { Id: "dep-1", SyncToken: "3" } });
+      },
+    }),
+  });
+  assert.equal(result.qbo_update.qbo_txn_id, "dep-1");
+  assert.equal(updates.length, 1);
+
+  const expenseDb = makeDb({
+    bank_transactions: [bankTxn({ amount: 100, signed_amount: 100, direction: "INFLOW" })],
+    transaction_categorizations: [cat({ status: "posted", qbo_txn_id: "dep-1", qbo_txn_type: "Deposit", final_qbo_account_id: "old" })],
+  });
+  let qboRequested = false;
+  await assert.rejects(
+    reclassifyBookkeepingTransaction({
+      businessId: "biz-1",
+      transactionId: "txn-1",
+      targetQboAccountId: "acct-expense",
+      actor: "admin-1",
+      db: expenseDb,
+      validateQboAccount: validAccount({ id: "acct-expense", name: "Meals", type: "Expense" }),
+      getQBOClient: async () => {
+        qboRequested = true;
+      },
+    }),
+    (err) => err.error === "target_account_not_valid_for_deposit_reclassification"
+  );
+  assert.equal(qboRequested, false);
+});
+
 test("Monthly Review posted provider failure fails closed before Bizzi GL persistence", async () => {
   const db = makeDb({
     bank_transactions: [bankTxn()],

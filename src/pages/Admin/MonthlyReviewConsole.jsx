@@ -45,6 +45,8 @@ const QUEUE_STATUS_OPTIONS = [
 const BOOKKEEPING_FEED_PAGE_SIZE = 25;
 const QBO_PNL_DETAIL_PAGE_SIZE = 25;
 const QBO_PNL_RECLASSIFIABLE_TYPES = new Set(["Purchase", "Deposit", "CreditCardCharge"]);
+const EXPENSE_SIDE_RECLASS_ACCOUNT_TYPES = new Set(["expense", "costofgoodssold", "otherexpense"]);
+const DEPOSIT_RECLASS_ACCOUNT_TYPES = new Set(["income", "revenue", "otherincome"]);
 const BOOKKEEPING_FEED_CONFIG = {
   needs_review: {
     label: "Needs Review",
@@ -633,7 +635,7 @@ export default function MonthlyReviewConsole() {
       await refreshQboPnlSnapshot({ afterReclassification: true });
       return { ok: true, transaction_id: transactionId };
     } catch (e) {
-      setError(e?.body?.message || e?.message || "Could not update transaction GL account.");
+      setError(friendlyReclassificationError(e));
       if (options.throwOnError) throw e;
       return null;
     } finally {
@@ -1859,7 +1861,7 @@ function SourceLedgerPanel({
     } catch (e) {
       setPnlReclassErrors((current) => ({
         ...current,
-        [rowKey]: e?.body?.message || e?.message || "Could not reclassify this QuickBooks transaction.",
+        [rowKey]: friendlyReclassificationError(e),
       }));
     }
   }, [onAccountChange, pnlAccountDrafts]);
@@ -1989,6 +1991,7 @@ function SourceLedgerPanel({
                           const hasDraft = Boolean(draftAccountId && draftAccountId !== currentAccountId);
                           const rowError = rowKey ? pnlReclassErrors[rowKey] : "";
                           const busy = Boolean(txn.bizzi_transaction_id) && busyTransaction === txn.bizzi_transaction_id;
+                          const rowDropdownAccounts = filterPnlReclassTargetAccounts(dropdownAccounts, txn.qbo_txn_type, currentAccountId);
                           return (
                             <div key={txn.id || `${txn.qbo_txn_type}-${txn.qbo_txn_id}-${txn.txn_date}`} className="grid gap-2 px-3 py-2 text-xs xl:grid-cols-[76px_minmax(200px,1fr)_105px_110px_105px_minmax(210px,280px)] xl:items-center">
                               <div className="whitespace-nowrap text-white/45">{formatShortDate(txn.txn_date)}</div>
@@ -2015,10 +2018,10 @@ function SourceLedgerPanel({
                                       value={selectedAccountId}
                                       suggestedId={currentAccountId}
                                       suggestedName={txn.qbo_account_name || ""}
-                                      accounts={dropdownAccounts}
+                                      accounts={rowDropdownAccounts}
                                       status="posted"
                                       onChange={(accountId) => handlePnlAccountDraftChange(txn, accountId)}
-                                      disabled={busy || !dropdownAccounts.length}
+                                      disabled={busy || !rowDropdownAccounts.length}
                                     />
                                     {hasDraft ? (
                                       <div className="flex flex-wrap items-center gap-1.5">
@@ -3366,12 +3369,55 @@ function getQboPnlTransactionKey(transaction = {}) {
 }
 
 function normalizeAccountForBooksDropdown(account = {}) {
+  const rawType = account.type || account.accountType || account.account_type || "";
   return {
     ...account,
     id: account.id,
     name: account.name,
-    type: normalizeBooksDropdownType(account.type || account.accountType || account.account_type),
+    qboAccountType: rawType,
+    type: normalizeBooksDropdownType(rawType),
   };
+}
+
+function filterPnlReclassTargetAccounts(accounts = [], qboTxnType = "", currentAccountId = "") {
+  const txnType = normalizeQboTxnTypeForUi(qboTxnType);
+  return (accounts || []).filter((account) => {
+    if (currentAccountId && String(account.id || "") === String(currentAccountId)) return true;
+    const typeKey = normalizeAccountTypeKey(account.qboAccountType || account.accountType || account.account_type || account.type);
+    if (txnType === "Purchase" || txnType === "CreditCardCharge") {
+      return EXPENSE_SIDE_RECLASS_ACCOUNT_TYPES.has(typeKey);
+    }
+    if (txnType === "Deposit") {
+      return DEPOSIT_RECLASS_ACCOUNT_TYPES.has(typeKey);
+    }
+    return false;
+  });
+}
+
+function normalizeQboTxnTypeForUi(value = "") {
+  const normalized = String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
+  if (normalized === "purchase") return "Purchase";
+  if (normalized === "deposit") return "Deposit";
+  if (normalized === "creditcardcharge" || normalized === "creditcardexpense") return "CreditCardCharge";
+  return value ? String(value) : "";
+}
+
+function normalizeAccountTypeKey(value = "") {
+  return String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
+}
+
+function friendlyReclassificationError(error) {
+  const code = error?.body?.error || error?.body?.message || error?.message || "";
+  if (code === "target_account_not_valid_for_purchase_reclassification") {
+    return "Choose an expense or cost-of-goods-sold account for this purchase.";
+  }
+  if (code === "target_account_not_valid_for_credit_card_charge_reclassification") {
+    return "Choose an expense or cost-of-goods-sold account for this credit card charge.";
+  }
+  if (code === "target_account_not_valid_for_deposit_reclassification") {
+    return "Choose an income account for this deposit.";
+  }
+  return error?.body?.message || error?.message || "Could not update transaction GL account.";
 }
 
 function formatFinancialAccountType(account = {}) {
