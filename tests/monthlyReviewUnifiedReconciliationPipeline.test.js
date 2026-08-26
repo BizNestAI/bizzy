@@ -66,12 +66,17 @@ test("posting failed requires durable QBO mutation-attempt evidence", () => {
 test("Monthly Review and customer reconciliation routes use the same shared pipeline read model", () => {
   const monthlyRoute = read("src/api/admin/monthlyReview.routes.js");
   const customerRoute = read("src/api/bookkeeping/routes/bookkeeping.reconciliations.routes.js");
+  const customerPage = read("src/pages/accounting/Reconciliations.jsx");
   const customerTable = read("src/components/Accounting/ReconciliationAuditTable.jsx");
   const monthlyUi = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const service = read("src/services/bookkeeping/monthlyReconciliationPipelineService.js");
 
-  assert.match(monthlyRoute, /derivePipelineStatus/);
-  assert.match(monthlyRoute, /summarizePipelineStatuses\(reconciliationTrace\)/);
-  assert.match(customerRoute, /derivePipelineStatus/);
+  assert.match(monthlyRoute, /loadMonthlyReconciliationPipeline/);
+  assert.match(customerRoute, /loadMonthlyReconciliationPipeline/);
+  assert.match(service, /derivePipelineStatus/);
+  assert.match(service, /loadAuthoritativeMonthlyPlaidTransactions/);
+  assert.doesNotMatch(customerRoute, /if \(!resolvedRunId\)[\s\S]*rows: \[\]/);
+  assert.match(customerPage, /monthlyAuditKey\(currentMonthKey\(\)\)/);
   assert.match(customerTable, /row\.pipeline_status\?\.label|pipeline_status/);
   assert.match(monthlyUi, /PipelineStatusBadge/);
   assert.match(monthlyUi, /Plaid Transactions/);

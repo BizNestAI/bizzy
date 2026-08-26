@@ -26,6 +26,10 @@ function monthKeyFromDate(value) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+function currentMonthKey() {
+  return monthKeyFromDate(new Date()) || new Date().toISOString().slice(0, 7);
+}
+
 function monthStart(monthKey) {
   return `${monthKey}-01`;
 }
@@ -38,6 +42,41 @@ function monthEnd(monthKey) {
 
 function monthRunTime(monthKey) {
   return `${monthEnd(monthKey)}T17:35:40.000Z`;
+}
+
+function monthlyAuditKey(monthKey) {
+  return `month:${monthKey}`;
+}
+
+function isMonthlyAuditKey(value) {
+  return String(value || "").startsWith("month:");
+}
+
+function monthFromAuditKey(value) {
+  return isMonthlyAuditKey(value) ? String(value).slice("month:".length) : null;
+}
+
+function buildCurrentMonthAuditPlaceholder() {
+  const monthKey = currentMonthKey();
+  return {
+    id: monthlyAuditKey(monthKey),
+    run_id: monthlyAuditKey(monthKey),
+    status: "not_run",
+    overall_status: "not_run",
+    overall_note: "Showing the current monthly Plaid transaction pipeline. No reconciliation run is required.",
+    period_key: monthKey,
+    period_start: monthStart(monthKey),
+    period_end: monthEnd(monthKey),
+    last_checked_at: null,
+    counts: {
+      total_seen: 0,
+      needs_review_count: 0,
+      handled_not_posted_count: 0,
+      matched_count: 0,
+      failed_post_count: 0,
+      duplicate_in_qbo_count: 0,
+    },
+  };
 }
 
 const AUDIT_COLLAPSE_ANIMATION_MS = 220;
@@ -278,8 +317,10 @@ export default function Reconciliations() {
       const res = await getReconciliationsRuns(businessId, { limit: 12 });
       const runs = Array.isArray(res?.runs) ? res.runs : [];
       setRunHistory(runs);
+      setSelectedRunId((current) => current || (runs[0]?.run_id || runs[0]?.id || monthlyAuditKey(currentMonthKey())));
     } catch {
       setRunHistory([]);
+      setSelectedRunId((current) => current || monthlyAuditKey(currentMonthKey()));
     } finally {
       setLoadingRunHistory(false);
     }
@@ -337,19 +378,15 @@ export default function Reconciliations() {
 
   const loadTransactions = useCallback(async (opts = {}) => {
     if (!businessId || usingDemoData) return;
-    const targetRunId = opts.runIdOverride || selectedRunId;
+    const targetRunId = opts.runIdOverride || selectedRunId || monthlyAuditKey(currentMonthKey());
     const effectivePage = Number.isFinite(opts.pageOverride) ? opts.pageOverride : page;
-    if (!targetRunId) {
-      setTxns([]);
-      setTotalTxns(0);
-      return;
-    }
+    const targetMonth = opts.monthOverride || monthFromAuditKey(targetRunId) || null;
     setLoadingTxns(true);
     setTxnError(null);
     try {
       const params = {
-        run_id: targetRunId,
-        range: "all",
+        run_id: isMonthlyAuditKey(targetRunId) ? undefined : targetRunId,
+        month: targetMonth || undefined,
         status: filters.status === "all" ? undefined : filters.status,
         plaid_account_id: filters.account === "all" ? undefined : filters.account,
         search: searchTerm || undefined,
@@ -470,7 +507,12 @@ export default function Reconciliations() {
     [filteredDemoRows, page, pageSize]
   );
 
-  const displayRunHistory = usingDemoData ? demoRunHistory : runHistory;
+  const displayRunHistory = useMemo(() => {
+    if (usingDemoData) return demoRunHistory;
+    const currentMonth = currentMonthKey();
+    const hasCurrentMonth = (runHistory || []).some((run) => monthKeyFromDate(run?.period_start || run?.period_end || run?.last_checked_at) === currentMonth);
+    return hasCurrentMonth ? runHistory : [buildCurrentMonthAuditPlaceholder(), ...runHistory];
+  }, [demoRunHistory, runHistory, usingDemoData]);
   const displaySelectedRunSummary = usingDemoData ? selectedDemoRunSummary : selectedRunSummary;
   const displayLatestRunId = usingDemoData ? demoRunHistory[0]?.run_id || demoRunHistory[0]?.id || null : latestRunId;
   const displayRows = usingDemoData ? pagedDemoRows : txns;

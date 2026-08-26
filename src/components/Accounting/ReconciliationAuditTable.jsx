@@ -7,21 +7,12 @@ import {
 
 const STATUS_OPTIONS = [
   { value: "all", label: "All pipeline states" },
-  { value: "archived", label: "Archived" },
-  { value: "duplicate_internal", label: "Internal duplicate suppressed" },
-  { value: "matched", label: "Posted & matched" },
   { value: "posted_matched", label: "Posted & matched" },
   { value: "needs_review", label: "Needs review" },
   { value: "handled_not_posted", label: "Handled not posted" },
   { value: "scheduled_for_qbo", label: "Scheduled for QBO" },
-  { value: "approved_waiting_post", label: "Approved waiting" },
-  { value: "pending", label: "Pending" },
   { value: "posting_failed", label: "Posting failed" },
   { value: "reconciliation_exception", label: "Reconciliation exception" },
-  { value: "failed_post", label: "Failed post" },
-  { value: "missing_in_qbo", label: "Missing in QBO" },
-  { value: "duplicate_in_qbo", label: "Duplicate in QBO" },
-  { value: "unknown", label: "Unknown" },
 ];
 
 const PANEL_BG = "#151717";
@@ -260,8 +251,8 @@ export default function ReconciliationAuditTable({
   onNextPage,
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const noConnectedIntegrations = !accounts.length;
-  const noRunYet = !latestRunId;
+  const noConnectedIntegrations = !accounts.length && !rows.length && Number(total || 0) === 0;
+  const noRunYet = !latestRunId && !rows.length && Number(total || 0) === 0;
   const selectedRunFailed =
     selectedRunSummary?.status === "failed" || selectedRunSummary?.overall_status === "failed";
   const filtersActive =
@@ -286,7 +277,9 @@ export default function ReconciliationAuditTable({
     formatMonth(selectedRunSummary?.period_end) ||
     "Selected month";
   const usingHistoricalRun = Boolean(isHistoricalSnapshot);
-  const viewLabel = usingHistoricalRun
+  const viewLabel = selectedRunSummary?.status === "not_run"
+    ? `Viewing ${selectedMonthLabel}`
+    : usingHistoricalRun
     ? `Viewing ${selectedMonthLabel}`
     : `Viewing latest monthly run: ${selectedMonthLabel}`;
   const accountOptions = React.useMemo(
@@ -413,34 +406,33 @@ export default function ReconciliationAuditTable({
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-white/6 bg-[#111313]">
         <div className={embeddedInHorizontalScroller ? "overflow-visible" : "overflow-x-auto"}>
-          <table className={`${embeddedInHorizontalScroller ? "min-w-[1160px]" : "min-w-[1040px]"} w-full text-sm text-slate-100`}>
+          <table className={`${embeddedInHorizontalScroller ? "min-w-[980px]" : "min-w-[940px]"} w-full text-sm text-slate-100`}>
             <thead className="bg-white/[0.03] text-[11px] uppercase tracking-[0.18em] text-slate-400">
               <tr className="border-b border-white/6">
                 <th className="px-3 py-2.5 text-left">Date</th>
-                <th className="px-3 py-2.5 text-left">Description</th>
-                <th className="px-3 py-2.5 text-left">Merchant / Payee</th>
-                <th className="px-3 py-2.5 text-left">Account</th>
+                <th className="px-3 py-2.5 text-left">Transaction</th>
+                <th className="px-3 py-2.5 text-left">Bank Account</th>
                 <th className="px-3 py-2.5 text-right">Amount</th>
-                <th className="px-3 py-2.5 text-left">Pipeline Status</th>
                 <th className="px-3 py-2.5 text-left">Category</th>
+                <th className="px-3 py-2.5 text-left">Pipeline Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/6">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-300">
+                  <td colSpan={6} className="px-4 py-10 text-center text-slate-300">
                     Loading audit rows…
                   </td>
                 </tr>
               ) : error ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-300">
+                  <td colSpan={6} className="px-4 py-10 text-center text-slate-300">
                     Failed to load reconciliation audit rows.
                   </td>
                 </tr>
               ) : noConnectedIntegrations ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6">
+                  <td colSpan={6} className="px-4 py-6">
                     <EmptyState
                       title="Connect Plaid and QuickBooks to start reconciliation."
                       copy="Bizzi needs both integrations connected before it can generate reconciliation audit rows."
@@ -449,7 +441,7 @@ export default function ReconciliationAuditTable({
                 </tr>
               ) : noRunYet ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6">
+                  <td colSpan={6} className="px-4 py-6">
                     <EmptyState
                       title="Waiting for the first monthly ledger rows"
                       copy="Plaid transactions will appear here automatically after bank sync, including uncategorized and unposted items."
@@ -458,7 +450,7 @@ export default function ReconciliationAuditTable({
                 </tr>
               ) : noResults ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6">
+                  <td colSpan={6} className="px-4 py-6">
                     <EmptyState title={emptyState?.title} copy={emptyState?.copy} />
                   </td>
                 </tr>
@@ -472,16 +464,19 @@ export default function ReconciliationAuditTable({
                       <td className="px-3 py-2 text-[12px] text-slate-200 whitespace-nowrap">{formatDate(row.txn_date)}</td>
                       <td className="px-3 py-2">
                         <div className="max-w-[320px] truncate text-[12px] font-medium text-slate-100" title={resolveDescription(row)}>
+                          {resolveMerchant(row) || resolveDescription(row)}
+                        </div>
+                        <div className="max-w-[320px] truncate text-[11px] text-slate-500" title={resolveDescription(row)}>
                           {resolveDescription(row)}
                         </div>
                       </td>
-                      <td className="px-3 py-2 text-[12px] text-slate-300">{resolveMerchant(row)}</td>
                       <td className="px-3 py-2 text-[12px] text-slate-300">{accountLabel}</td>
                       <td className={`px-3 py-2 text-right text-[12px] font-semibold ${amountClass(row.amount)}`}>
                         {formatMoney(row.amount)}
                       </td>
+                      <td className="px-3 py-2 text-[12px] text-slate-300">{resolveCategory(row)}</td>
                       <td className="px-3 py-2">
-                        <div>
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span
                             className={`inline-flex items-center rounded-full border px-2 py-[3px] text-[10px] font-semibold leading-tight ${
                               statusTone === "green"
@@ -497,9 +492,14 @@ export default function ReconciliationAuditTable({
                           >
                             {pipelineStatusDisplayLabel(row)}
                           </span>
+                          {Array.isArray(row.pipeline_status?.secondary_statuses) &&
+                          row.pipeline_status.secondary_statuses.some((item) => item?.key === "pending_bank_transaction") ? (
+                            <span className="inline-flex rounded-full border border-white/10 bg-white/[0.045] px-2 py-[2px] text-[10px] text-slate-300">
+                              Pending
+                            </span>
+                          ) : null}
                         </div>
                       </td>
-                      <td className="px-3 py-2 text-[12px] text-slate-300">{resolveCategory(row)}</td>
                     </tr>
                   );
                 })

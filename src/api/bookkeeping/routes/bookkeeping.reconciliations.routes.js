@@ -5,7 +5,7 @@ import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { computeReconciliationRun } from "../../../services/bookkeeping/reconciliationRunService.js";
 import { evaluateReconciliationStatus } from "../../../services/bookkeeping/reconciliationEvaluator.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../../services/insights/contractorCfoTriggerService.js";
-import { derivePipelineStatus } from "../../../services/bookkeeping/reconciliationPipelineStatus.js";
+import { loadMonthlyReconciliationPipeline } from "../../../services/bookkeeping/monthlyReconciliationPipelineService.js";
 
 const router = Router();
 
@@ -33,6 +33,15 @@ function parseDate(d) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(d)) ? d : null;
 }
 
+function currentMonthKey() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+function monthKeyFromDate(value) {
+  const date = parseDate(String(value || "").slice(0, 10));
+  return date ? date.slice(0, 7) : null;
+}
+
 function parseStatuses(input) {
   if (!input) return [];
   const raw = String(input)
@@ -42,25 +51,6 @@ function parseStatuses(input) {
   if (!raw.length) return [];
   if (raw.includes("all")) return [];
   return Array.from(new Set(raw));
-}
-
-function mapPipelineStatusFilter(status) {
-  switch (status) {
-    case "posted_matched":
-      return ["matched"];
-    case "handled_not_posted":
-      return ["handled_not_posted"];
-    case "scheduled_for_qbo":
-      return ["approved_waiting_post"];
-    case "posting_failed":
-      return ["failed_post"];
-    case "reconciliation_exception":
-      return ["missing_in_qbo", "duplicate_in_qbo", "failed_post"];
-    case "pending_bank_transaction":
-      return ["pending"];
-    default:
-      return [status];
-  }
 }
 
 function parseRange(range, dateFrom, dateTo) {
@@ -442,9 +432,6 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
     const offset = parseOffset(req.query?.offset);
     const plaidAccountId = req.query?.plaid_account_id || null;
     const statusFilters = parseStatuses(req.query?.status);
-    const storageStatusFilters = Array.from(
-      new Set(statusFilters.flatMap((status) => mapPipelineStatusFilter(status)))
-    );
     const runId = req.query?.run_id || null;
     const range = req.query?.range || "last_30_days";
     const parsed = parseRange(range, req.query?.date_from, req.query?.date_to);
@@ -464,79 +451,49 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
       });
     }
 
-    let resolvedRunId = runId;
-    if (!resolvedRunId) {
-      const latest = await pickLatestRun(businessId);
-      resolvedRunId = latest?.id || null;
-    }
-    if (!resolvedRunId) {
-      return res.json({ ok: true, rows: [], total: 0, run_summary: null });
-    }
-
-    const baseFilters = supabase
-      .from("reconciliation_items")
-      .select(
-        "id,run_id,bank_transaction_id,plaid_account_id,txn_date,merchant,description,amount,direction,category_name,posted_at,reconciled_at,qbo_txn_id,qbo_txn_type,status,note,details",
-        { count: "exact" }
-      )
-      .eq("business_id", businessId)
-      .eq("run_id", resolvedRunId);
-
-    let query = baseFilters;
-    if (plaidAccountId) query = query.eq("plaid_account_id", plaidAccountId);
-    if (storageStatusFilters.length === 1) query = query.eq("status", storageStatusFilters[0]);
-    if (storageStatusFilters.length > 1) query = query.in("status", storageStatusFilters);
-    if (dateFrom) query = query.gte("txn_date", dateFrom);
-    if (dateTo) query = query.lte("txn_date", dateTo);
-    const safeSearch = String(search || "").replace(/[,]/g, " ").trim();
-    if (safeSearch) {
-      query = query.or(`merchant.ilike.%${safeSearch}%,description.ilike.%${safeSearch}%`);
-    }
-    query = query.order("txn_date", { ascending: false, nullsLast: true }).range(offset, offset + limit - 1);
-
-    const { data: rows, error, count } = await query;
-    if (error) throw error;
-
-    const runSummaryRow = await pickRunById(businessId, resolvedRunId);
-    const run_summary = shapeRunSummary(runSummaryRow);
-
-    const hydratedRows = (rows || []).map((row) => {
-      const details = row.details || {};
-      const cat = {
-        status: details.categorization_status || row.status || null,
-        qbo_txn_id: row.qbo_txn_id || details.qbo_txn_id || null,
-        qbo_txn_type: row.qbo_txn_type || details.qbo_txn_type || null,
-        post_after: details.post_after || null,
-        post_error: details.post_error || null,
-        last_post_attempt_at: details.last_post_attempt_at || null,
-        latest_post_attempt_at: details.latest_post_attempt_at || null,
-        latest_post_attempt_status: details.latest_post_attempt_status || null,
-        post_attempt_count: details.post_attempt_count || 0,
-        meta: {
-          is_check: details.is_check === true,
-          pending: details.pending === true,
-          next_post_attempt_at: details.next_post_attempt_at || null,
-          posting_in_progress: details.posting_in_progress === true,
-        },
-      };
-      const pipelineStatus = derivePipelineStatus({
-        bank: { pending: row.status === "pending" || details.pending === true },
-        cat,
-        reconciliationItem: row,
-      });
-      return {
-        ...row,
-        pipeline_status: pipelineStatus,
-        pipeline_status_key: pipelineStatus.key,
-        pipeline_status_label: pipelineStatus.label,
-      };
+    const runSummaryRow = runId ? await pickRunById(businessId, runId) : await pickLatestRun(businessId);
+    const month =
+      req.query?.month ||
+      monthKeyFromDate(dateFrom) ||
+      monthKeyFromDate(runSummaryRow?.period_start || runSummaryRow?.period_end || runSummaryRow?.last_checked_at) ||
+      currentMonthKey();
+    const pipeline = await loadMonthlyReconciliationPipeline(businessId, {
+      month,
+      plaid_account_id: plaidAccountId || null,
+      status: statusFilters.length ? statusFilters.join(",") : null,
+      search,
+      limit,
+      offset,
     });
+    const run_summary = shapeRunSummary(runSummaryRow) || {
+      run_id: null,
+      status: "not_run",
+      overall_status: "not_run",
+      overall_note: "No reconciliation run exists for this month yet.",
+      last_checked_at: null,
+      scope: "month",
+      period_start: pipeline.start,
+      period_end: new Date(Date.parse(`${pipeline.end}T00:00:00.000Z`) - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      details: { source: "monthly_reconciliation_pipeline" },
+      counts: {
+        total_seen: pipeline.totals.plaid_transactions_count || 0,
+        needs_review_count: pipeline.totals.needs_review_count || 0,
+        handled_not_posted_count: pipeline.totals.handled_not_posted_count || 0,
+        matched_count: pipeline.totals.posted_matched_count || 0,
+        failed_post_count: pipeline.totals.posting_failed_count || 0,
+        duplicate_in_qbo_count: 0,
+        missing_in_qbo_count: 0,
+      },
+    };
 
     return res.json({
       ok: true,
-      rows: hydratedRows,
-      total: count || 0,
+      rows: pipeline.rows,
+      total: pipeline.total,
       run_summary,
+      pipeline_totals: pipeline.totals,
+      source_contract: pipeline.source_contract,
+      month: pipeline.month,
     });
   } catch (err) {
     console.error("[reconciliations][transactions] failed", err?.message || err);

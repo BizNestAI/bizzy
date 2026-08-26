@@ -10,7 +10,7 @@ const root = process.cwd();
 const read = (path) => readFileSync(join(root, path), "utf8");
 
 test("monthly Plaid population excludes superseded pending replacements without dropping legitimate rows", async () => {
-  const { removeSupersededPendingPlaidRows } = await import("../src/api/admin/monthlyReview.routes.js");
+  const { removeSupersededPendingPlaidRows } = await import("../src/services/bookkeeping/monthlyReconciliationPipelineService.js");
   const rows = [
     {
       id: "pending-apple",
@@ -48,11 +48,11 @@ test("monthly Plaid population excludes superseded pending replacements without 
 });
 
 test("monthly Plaid trace rows use actual GL and QBO lifecycle for all canonical states", async () => {
-  const { buildAuthoritativePlaidTraceRow } = await import("../src/api/admin/monthlyReview.routes.js");
+  const { buildMonthlyPipelineRow } = await import("../src/services/bookkeeping/monthlyReconciliationPipelineService.js");
   const labels = new Map([["plaid-cc", "Blue Cash Everyday® ••••1008"]]);
   const accountById = new Map([["acct-software", { id: "acct-software", name: "Software" }]]);
 
-  const row = buildAuthoritativePlaidTraceRow({
+  const row = buildMonthlyPipelineRow({
     row: {
       id: "txn-1",
       plaid_account_id: "plaid-cc",
@@ -86,7 +86,8 @@ test("monthly Plaid trace rows use actual GL and QBO lifecycle for all canonical
 
 test("monthly review source ledger has independent authoritative Plaid Rows population", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
-  const loadBody = route.slice(route.indexOf("async function loadAuthoritativeMonthlyPlaidTransactions"), route.indexOf("export function removeSupersededPendingPlaidRows"));
+  const service = read("src/services/bookkeeping/monthlyReconciliationPipelineService.js");
+  const loadBody = service.slice(service.indexOf("export async function loadAuthoritativeMonthlyPlaidTransactions"), service.indexOf("async function loadPlaidAccountLabels"));
 
   assert.match(loadBody, /\.from\("bank_transactions"\)/);
   assert.match(loadBody, /\.eq\("business_id", businessId\)/);
@@ -96,7 +97,8 @@ test("monthly review source ledger has independent authoritative Plaid Rows popu
   assert.match(loadBody, /\.gte\("date", start\)/);
   assert.match(loadBody, /\.lt\("date", end\)/);
   assert.doesNotMatch(loadBody, /applyActiveBookkeepingScope/);
-  assert.match(route, /reconciliationTrace = authoritativePlaidRows/);
-  assert.match(route, /summarizePipelineStatuses\(reconciliationTrace\)/);
+  assert.match(route, /loadMonthlyReconciliationPipeline/);
+  assert.match(route, /reconciliationTrace = monthlyPipeline\.rows/);
+  assert.match(service, /summarizePipelineStatuses\(rows\)/);
   assert.match(read("src/services/bookkeeping/reconciliationPipelineStatus.js"), /plaid_transactions_count/);
 });
