@@ -97,14 +97,35 @@ test("customer reconciliation month selection uses explicit calendar month bound
   const customerPage = read("src/pages/accounting/Reconciliations.jsx");
 
   assert.match(service, /export function normalizeMonthKey/);
+  assert.match(service, /export function normalizeMonthInput/);
+  assert.match(service, /if \(value && typeof value === "object"\)/);
+  assert.match(service, /startDate/);
+  assert.match(service, /endDateExclusive/);
+  assert.match(service, /\?:-\\d\{1,2\}\)\?\$/);
   assert.match(service, /export function monthBounds/);
-  assert.match(service, /new Date\(Date\.UTC\(year, monthNumber - 1, 1\)\)/);
-  assert.match(service, /new Date\(Date\.UTC\(year, monthNumber, 1\)\)/);
+  assert.match(service, /new Date\(Date\.UTC\(parts\.year, parts\.month - 1, 1\)\)/);
+  assert.match(service, /new Date\(Date\.UTC\(parts\.year, parts\.month, 1\)\)/);
   assert.match(customerRoute, /const requestedMonth = req\.query\?\.month \? normalizeMonthKey\(req\.query\.month\) : null/);
   assert.match(customerRoute, /month,\s+plaid_account_id/);
   assert.doesNotMatch(customerRoute, /const runSummaryRow = runId \? await pickRunById\(businessId, runId\) : await pickLatestRun\(businessId\)/);
   assert.ok(customerPage.includes('String(value || "").match(/^(\\d{4})-(\\d{2})/)'));
   assert.match(customerPage, /new Date\(Date\.UTC\(year, month, 0\)\)/);
+});
+
+test("Monthly Review keeps supporting month=YYYY-MM while malformed months fail as client errors", () => {
+  const adminRoute = read("src/api/admin/monthlyReview.routes.js");
+  const monthlyUi = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+
+  assert.match(monthlyUi, /month=\$\{encodeURIComponent\(month\)\}/);
+  assert.match(adminRoute, /normalizeMonthInput/);
+  assert.match(adminRoute, /if \(normalized\) return normalized\.startDate/);
+  assert.match(adminRoute, /err\.status = 400/);
+  assert.match(adminRoute, /err\.error = "invalid_month"/);
+  assert.match(adminRoute, /sendMonthlyReviewError\(res, "monthly_review_businesses_failed"/);
+  assert.match(adminRoute, /sendMonthlyReviewError\(res, "monthly_review_detail_failed"/);
+  assert.match(adminRoute, /sendMonthlyReviewError\(res, "monthly_review_source_ledger_failed"/);
+  assert.match(adminRoute, /sendMonthlyReviewError\(res, "monthly_review_bookkeeping_feed_counts_failed"/);
+  assert.match(adminRoute, /sendMonthlyReviewError\(res, "monthly_review_bookkeeping_feed_failed"/);
 });
 
 test("available reconciliation months use canonical Plaid rows and pending replacement dedupe", () => {

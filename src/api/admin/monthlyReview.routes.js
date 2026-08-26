@@ -21,6 +21,7 @@ import {
   buildMonthlyPipelineRow,
   loadAuthoritativeMonthlyPlaidTransactions as loadSharedAuthoritativeMonthlyPlaidTransactions,
   loadMonthlyReconciliationPipeline,
+  normalizeMonthInput,
   removeSupersededPendingPlaidRows as removeSharedSupersededPendingPlaidRows,
 } from "../../services/bookkeeping/monthlyReconciliationPipelineService.js";
 import {
@@ -77,6 +78,14 @@ const MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_MAX = 250;
 
 router.use(requireAuth);
 router.use(requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES));
+
+function sendMonthlyReviewError(res, fallbackError, fallbackMessage, e) {
+  return res.status(e?.status || 500).json({
+    ok: false,
+    error: e?.error || fallbackError,
+    message: e?.message || fallbackMessage,
+  });
+}
 
 async function assertRunTransactionInSelectedMonth(run, transactionId) {
   const [start, end] = monthBounds(run.review_month);
@@ -153,7 +162,7 @@ router.get("/businesses", async (req, res) => {
     res.json({ ok: true, month, businesses: rows });
   } catch (e) {
     console.error("[monthly-review] businesses failed", e?.message || e);
-    res.status(500).json({ ok: false, error: "monthly_review_businesses_failed", message: e?.message || "Could not load businesses." });
+    sendMonthlyReviewError(res, "monthly_review_businesses_failed", "Could not load businesses.", e);
   }
 });
 
@@ -233,7 +242,7 @@ router.get("/businesses/:businessId", async (req, res) => {
     });
   } catch (e) {
     console.error("[monthly-review] detail failed", e?.message || e);
-    res.status(500).json({ ok: false, error: "monthly_review_detail_failed", message: e?.message || "Could not load review." });
+    sendMonthlyReviewError(res, "monthly_review_detail_failed", "Could not load review.", e);
   }
 });
 
@@ -471,11 +480,7 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
     });
   } catch (e) {
     console.error("[monthly-review] bookkeeping feed counts failed", e?.message || e);
-    res.status(500).json({
-      ok: false,
-      error: "monthly_review_bookkeeping_feed_counts_failed",
-      message: e?.message || "Could not load bookkeeping feed counts.",
-    });
+    sendMonthlyReviewError(res, "monthly_review_bookkeeping_feed_counts_failed", "Could not load bookkeeping feed counts.", e);
   }
 });
 
@@ -539,11 +544,7 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
     });
   } catch (e) {
     console.error("[monthly-review] bookkeeping feed failed", e?.message || e);
-    res.status(500).json({
-      ok: false,
-      error: "monthly_review_bookkeeping_feed_failed",
-      message: e?.message || "Could not load bookkeeping transactions.",
-    });
+    sendMonthlyReviewError(res, "monthly_review_bookkeeping_feed_failed", "Could not load bookkeeping transactions.", e);
   }
 });
 
@@ -680,7 +681,7 @@ router.get("/businesses/:businessId/source-ledger", async (req, res) => {
     res.json({ ok: true, business_id: businessId, month, ...ledger });
   } catch (e) {
     console.error("[monthly-review] source ledger failed", e?.message || e);
-    res.status(500).json({ ok: false, error: "monthly_review_source_ledger_failed", message: e?.message || "Could not load source ledger." });
+    sendMonthlyReviewError(res, "monthly_review_source_ledger_failed", "Could not load source ledger.", e);
   }
 });
 
@@ -1657,8 +1658,14 @@ router.get("/runs/:runId/export", async (req, res) => {
 
 function normalizeMonth(value) {
   const raw = String(value || "").trim();
-  const match = raw.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
-  if (match) return `${match[1]}-${match[2]}-01`;
+  if (raw) {
+    const normalized = normalizeMonthInput(raw);
+    if (normalized) return normalized.startDate;
+    const err = new Error("invalid_month");
+    err.status = 400;
+    err.error = "invalid_month";
+    throw err;
+  }
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
 }

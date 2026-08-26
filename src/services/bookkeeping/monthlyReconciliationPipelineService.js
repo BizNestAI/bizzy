@@ -7,22 +7,46 @@ import {
   summarizePipelineStatuses,
 } from "./reconciliationPipelineStatus.js";
 
-export function normalizeMonthKey(value) {
-  const match = String(value || "").match(/^(\d{4})-(\d{2})$/);
+function normalizeMonthParts(value) {
+  if (value && typeof value === "object") {
+    const year = Number(value.year);
+    const monthNumber = Number(value.month);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) return null;
+    if (!Number.isInteger(monthNumber) || monthNumber < 1 || monthNumber > 12) return null;
+    return { year, month: monthNumber };
+  }
+  const match = String(value || "").trim().match(/^(\d{4})-(\d{1,2})(?:-\d{1,2})?$/);
   if (!match) return null;
   const year = Number(match[1]);
   const monthNumber = Number(match[2]);
-  if (!Number.isInteger(year) || !Number.isInteger(monthNumber) || monthNumber < 1 || monthNumber > 12) return null;
-  return `${match[1]}-${match[2]}`;
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) return null;
+  if (!Number.isInteger(monthNumber) || monthNumber < 1 || monthNumber > 12) return null;
+  return { year, month: monthNumber };
+}
+
+export function normalizeMonthInput(value) {
+  const parts = normalizeMonthParts(value);
+  if (!parts) return null;
+  const monthKey = `${parts.year}-${String(parts.month).padStart(2, "0")}`;
+  const startDate = new Date(Date.UTC(parts.year, parts.month - 1, 1)).toISOString().slice(0, 10);
+  const endDateExclusive = new Date(Date.UTC(parts.year, parts.month, 1)).toISOString().slice(0, 10);
+  return {
+    year: parts.year,
+    month: parts.month,
+    monthKey,
+    startDate,
+    endDateExclusive,
+  };
+}
+
+export function normalizeMonthKey(value) {
+  return normalizeMonthInput(value)?.monthKey || null;
 }
 
 export function monthBounds(month) {
-  const normalized = normalizeMonthKey(month);
+  const normalized = normalizeMonthInput(month);
   if (!normalized) throw new Error("invalid_month");
-  const [year, monthNumber] = normalized.split("-").map(Number);
-  const start = new Date(Date.UTC(year, monthNumber - 1, 1)).toISOString().slice(0, 10);
-  const end = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
-  return [start, end];
+  return [normalized.startDate, normalized.endDateExclusive];
 }
 
 function normalizeAccountName(value) {
@@ -223,7 +247,8 @@ function applyPipelineFilters(rows = [], opts = {}) {
 }
 
 export async function loadMonthlyReconciliationPipeline(businessId, opts = {}) {
-  const month = opts.month || (opts.date_from ? String(opts.date_from).slice(0, 7) : new Date().toISOString().slice(0, 7));
+  const month = normalizeMonthKey(opts.month || (opts.date_from ? String(opts.date_from).slice(0, 7) : new Date().toISOString().slice(0, 7)));
+  if (!month) throw new Error("invalid_month");
   const [start, end] = opts.date_from && opts.date_to
     ? [opts.date_from, opts.date_to]
     : monthBounds(month);
@@ -342,6 +367,7 @@ export default {
   loadAvailableMonthlyReconciliationPeriods,
   loadMonthlyReconciliationPipeline,
   monthBounds,
+  normalizeMonthInput,
   normalizeMonthKey,
   removeSupersededPendingPlaidRows,
   buildMonthlyPipelineRow,
