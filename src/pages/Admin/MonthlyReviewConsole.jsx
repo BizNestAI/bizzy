@@ -12,6 +12,13 @@ import {
   finalizePipelineTotals,
   summarizePipelineStatuses,
 } from "../../services/bookkeeping/reconciliationPipelineStatus.js";
+import {
+  buildLocallyPatchedBookkeepingRow,
+  findSourceLedgerAccount,
+  patchBookkeepingFeedsAfterApprovalState,
+  patchBookkeepingFeedsAfterReclassificationState,
+  patchSourceLedgerTransaction,
+} from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -96,6 +103,8 @@ export default function MonthlyReviewConsole() {
   const [bookkeepingFeeds, setBookkeepingFeeds] = useState(() => buildInitialBookkeepingFeeds());
   const [loadingBookkeepingCounts, setLoadingBookkeepingCounts] = useState(false);
   const [bookkeepingCountsError, setBookkeepingCountsError] = useState("");
+  const [busyFeedActions, setBusyFeedActions] = useState({});
+  const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
   const [loadingBusinesses, setLoadingBusinesses] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingLedger, setLoadingLedger] = useState(false);
@@ -540,17 +549,49 @@ export default function MonthlyReviewConsole() {
     )));
   }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadBusinesses, loadDetail, loadQboPnlSnapshot, loadSourceLedger]);
 
+  const patchBookkeepingFeedsAfterApproval = useCallback((row, accountId, result = {}) => {
+    const transactionId = row?.id;
+    if (!transactionId) return;
+    const targetAccount = result?.target_account || findSourceLedgerAccount(sourceLedger, accountId) || {};
+    const nextRow = buildLocallyPatchedBookkeepingRow(row, {
+      accountId,
+      targetAccount,
+      categorization: result?.categorization,
+      status: result?.categorization?.status || "approved",
+      pipelineStatusKey: "handled_not_posted",
+    });
+    setBookkeepingFeeds((current) => patchBookkeepingFeedsAfterApprovalState(current, row, accountId, result, sourceLedger));
+    setSourceLedger((current) => patchSourceLedgerTransaction(current, nextRow));
+  }, [sourceLedger]);
+
+  const patchBookkeepingFeedsAfterReclassification = useCallback((row, accountId, result = {}) => {
+    const transactionId = row?.id;
+    if (!transactionId) return;
+    const targetAccount = result?.target_account || findSourceLedgerAccount(sourceLedger, accountId) || {};
+    const nextRow = buildLocallyPatchedBookkeepingRow(row, {
+      accountId,
+      targetAccount,
+      categorization: result?.categorization,
+      status: result?.categorization?.status || row.status || "approved",
+    });
+    setBookkeepingFeeds((current) => patchBookkeepingFeedsAfterReclassificationState(current, row, accountId, result, sourceLedger));
+    setSourceLedger((current) => patchSourceLedgerTransaction(current, nextRow));
+  }, [sourceLedger]);
+
   const runBookkeepingFeedAction = useCallback(async (actionKey, row, accountId = null) => {
     if (!detail?.run?.id || !row?.id) return;
     const transactionId = row.id;
     const routeBase = `/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(transactionId)}`;
     const actionId = `${actionKey}:${transactionId}`;
+    setBusyFeedActions((current) => ({ ...current, [actionId]: true }));
     setBusyFeedAction(actionId);
+    setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: "" }));
     setError("");
     try {
+      let result = null;
       if (actionKey === "approve") {
         if (!accountId) throw new Error("Choose a GL account before approving.");
-        await safeFetch(`${routeBase}/approve`, {
+        result = await safeFetch(`${routeBase}/approve`, {
           method: "POST",
           body: {
             final_qbo_account_id: accountId,
@@ -559,7 +600,7 @@ export default function MonthlyReviewConsole() {
         });
       } else if (actionKey === "reclassify") {
         if (!accountId) throw new Error("Choose a GL account before reclassifying.");
-        await safeFetch(`${routeBase}/account`, {
+        result = await safeFetch(`${routeBase}/account`, {
           method: "PATCH",
           body: {
             final_qbo_account_id: accountId,
@@ -571,13 +612,29 @@ export default function MonthlyReviewConsole() {
       } else if (actionKey === "retry") {
         await safeFetch(`${routeBase}/retry-qbo-sync`, { method: "POST" });
       }
-      await refreshAfterFeedAction();
+      if (actionKey === "approve") {
+        patchBookkeepingFeedsAfterApproval(row, accountId, result);
+      } else if (actionKey === "reclassify") {
+        patchBookkeepingFeedsAfterReclassification(row, accountId, result);
+      } else {
+        await refreshAfterFeedAction();
+      }
     } catch (e) {
-      setError(e?.body?.message || e?.message || "Could not complete bookkeeping action.");
+      const message = e?.body?.message || e?.message || "Could not complete bookkeeping action.";
+      if (actionKey === "approve" || actionKey === "reclassify") {
+        setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: message }));
+      } else {
+        setError(message);
+      }
     } finally {
+      setBusyFeedActions((current) => {
+        const next = { ...current };
+        delete next[actionId];
+        return next;
+      });
       setBusyFeedAction("");
     }
-  }, [detail?.run?.id, refreshAfterFeedAction]);
+  }, [detail?.run?.id, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction]);
 
   useEffect(() => {
     if (!detail?.run?.id) return undefined;
@@ -1209,6 +1266,8 @@ export default function MonthlyReviewConsole() {
                   onRefresh={refreshBookkeepingFeeds}
                   accounts={mirrorFeedAccounts}
                   busyAction={busyFeedAction}
+                  busyActions={busyFeedActions}
+                  rowErrors={bookkeepingFeedActionErrors}
                   onApprove={(row, accountId) => runBookkeepingFeedAction("approve", row, accountId)}
                   onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
                   onPost={(row) => runBookkeepingFeedAction("post", row)}
@@ -1296,6 +1355,8 @@ function BookkeepingFeedMirrorPanels({
   onRefresh,
   accounts,
   busyAction,
+  busyActions,
+  rowErrors,
   onApprove,
   onReclassify,
   onPost,
@@ -1335,6 +1396,8 @@ function BookkeepingFeedMirrorPanels({
             onLoadMore={() => onLoadMore(status)}
             accounts={accounts}
             busyAction={busyAction}
+            busyActions={busyActions}
+            rowErrors={rowErrors}
             onApprove={onApprove}
             onReclassify={onReclassify}
             onPost={onPost}
@@ -1355,6 +1418,8 @@ function BookkeepingFeedMirrorSection({
   onLoadMore,
   accounts,
   busyAction,
+  busyActions,
+  rowErrors,
   onApprove,
   onReclassify,
   onPost,
@@ -1401,6 +1466,8 @@ function BookkeepingFeedMirrorSection({
               status={status}
               accounts={accounts}
               busyAction={busyAction}
+              busyActions={busyActions}
+              rowErrors={rowErrors}
               onApprove={onApprove}
               onReclassify={onReclassify}
               onPost={onPost}

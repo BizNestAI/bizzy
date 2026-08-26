@@ -98,7 +98,11 @@ test("Monthly Review mirror UI requires explicit actions and does not mutate on 
   assert.match(page, /\$\{routeBase\}\/post-qbo/);
   assert.match(page, /\$\{routeBase\}\/retry-qbo-sync/);
   assert.match(page, /refreshAfterFeedAction/);
-  assert.match(page, /loadBookkeepingFeed\(status,\s*\{\s*reset:\s*true\s*\}\)/);
+  assert.match(page, /patchBookkeepingFeedsAfterApproval\(row,\s*accountId,\s*result\)/);
+  assert.match(page, /patchBookkeepingFeedsAfterReclassification\(row,\s*accountId,\s*result\)/);
+  assert.match(page, /setBookkeepingFeedActionErrors/);
+  assert.match(page, /setBusyFeedActions/);
+  assert.match(page, /else\s*\{\s*await refreshAfterFeedAction\(\);\s*\}/);
 
   const dropdownSnippet = table.slice(table.indexOf("<CoaDropdown"), table.indexOf("onChange={(accountId) => setSelectedAccountId(accountId)}") + 80);
   assert.match(dropdownSnippet, /onChange=\{\(accountId\) => setSelectedAccountId\(accountId\)\}/);
@@ -113,6 +117,27 @@ test("Monthly Review mirror UI requires explicit actions and does not mutate on 
   assert.match(table, /GL Account/);
   assert.match(table, /QBO Status/);
   assert.doesNotMatch(table, />\s*Special workflow\s*</);
+});
+
+test("Monthly Review mirror approve and reclassify patch local feed state instead of full workspace refresh", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const localState = read("src/services/bookkeeping/bookkeepingFeedMirrorLocalState.js");
+  const runStart = page.indexOf("const runBookkeepingFeedAction = useCallback");
+  assert.notEqual(runStart, -1, "runBookkeepingFeedAction missing");
+  const runEnd = page.indexOf("useEffect(() => {", runStart);
+  assert.notEqual(runEnd, -1, "runBookkeepingFeedAction end missing");
+  const runBody = page.slice(runStart, runEnd);
+
+  assert.match(runBody, /patchBookkeepingFeedsAfterApproval\(row,\s*accountId,\s*result\)/);
+  assert.match(runBody, /patchBookkeepingFeedsAfterReclassification\(row,\s*accountId,\s*result\)/);
+  assert.match(runBody, /else\s*\{\s*await refreshAfterFeedAction\(\);\s*\}/);
+
+  assert.match(localState, /removeBookkeepingRow\(needsReview\.rows,\s*transactionId\)/);
+  assert.match(localState, /decrementCount\(needsReview\.totalCount\)/);
+  assert.match(localState, /incrementCount\(handled\.totalCount\)/);
+  assert.match(localState, /upsertBookkeepingRow\(handled\.rows,\s*nextRow,\s*\{\s*prepend:\s*true\s*\}\)/);
+  assert.match(localState, /updateExistingBookkeepingRow\(feed\?\.rows,\s*nextRow\)/);
+  assert.match(page, /patchSourceLedgerTransaction\(current,\s*nextRow\)/);
 });
 
 test("Monthly Review feed actions preserve Phase 4B bounded mirror source", () => {

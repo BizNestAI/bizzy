@@ -12,6 +12,8 @@ export default function BookkeepingTransactionMirrorTable({
   status = "",
   accounts = [],
   busyAction = "",
+  busyActions = {},
+  rowErrors = {},
   onApprove,
   onReclassify,
   onPost,
@@ -44,6 +46,8 @@ export default function BookkeepingTransactionMirrorTable({
             feedStatus={status}
             accounts={accounts}
             busyAction={busyAction}
+            busyActions={busyActions}
+            rowError={rowErrors?.[row.id] || ""}
             onApprove={onApprove}
             onReclassify={onReclassify}
             onPost={onPost}
@@ -55,7 +59,7 @@ export default function BookkeepingTransactionMirrorTable({
   );
 }
 
-function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction, onApprove, onReclassify, onPost, onRetry }) {
+function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction, busyActions, rowError, onApprove, onReclassify, onPost, onRetry }) {
   const initialAccountId = row.final_qbo_account_id || row.glAccountId || row.suggestedAccountId || "";
   const [selectedAccountId, setSelectedAccountId] = React.useState(initialAccountId);
 
@@ -70,7 +74,7 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
   const isPosted = qboStatus.key === "posted";
   const isFailed = qboStatus.key === "failed";
   const isQueued = qboStatus.key === "queued";
-  const isActionBusy = (action) => busyAction === `${action}:${row.id}`;
+  const isActionBusy = (action) => Boolean(busyActions?.[`${action}:${row.id}`]) || busyAction === `${action}:${row.id}`;
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const protectedReason = getProtectedWorkflowReason(row);
@@ -187,6 +191,11 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
             </button>
           ) : null}
         </div>
+        {rowError ? (
+          <div className="mt-1 rounded-lg border border-amber-300/18 bg-amber-300/[0.08] px-2 py-1 text-[11px] text-amber-100">
+            {rowError}
+          </div>
+        ) : null}
       </div>
     </div>
   );
