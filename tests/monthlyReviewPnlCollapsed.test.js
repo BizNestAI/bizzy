@@ -28,7 +28,7 @@ test("Monthly Review P&L expansion resets when business or month changes", () =>
 
   assert.match(panel, /businessId,/);
   assert.match(panel, /month,/);
-  assert.match(panel, /useEffect\(\(\) => \{\s*setExpandedAccountKeys\(new Set\(\)\);\s*setPnlAccountDrafts\(\{\}\);\s*setPnlReclassErrors\(\{\}\);\s*\}, \[businessId, month\]\)/);
+  assert.match(panel, /useEffect\(\(\) => \{\s*setExpandedAccountKeys\(new Set\(\)\);\s*setPnlAccountDrafts\(\{\}\);\s*setPnlReclassErrors\(\{\}\);\s*setPnlReclassSuccesses\(\{\}\);\s*\}, \[businessId, month\]\)/);
   assert.match(callsite, /businessId=\{selectedBusinessId\}/);
   assert.match(callsite, /month=\{month\}/);
   assert.match(callsite, /snapshot=\{qboPnlSnapshot\}/);
@@ -124,7 +124,7 @@ test("Monthly Review QBO P&L wiring uses persisted GET on load and explicit refr
   assert.match(ui, /proof\.created_new_current_snapshot !== true/);
   assert.match(ui, /proof\.association_version !== "pnl_group_context_v2"/);
   assert.match(ui, /QuickBooks refresh did not produce a verified pnl_group_context_v2 snapshot/);
-  assert.match(ui, /const snapshot = await loadQboPnlSnapshot\(\) \|\| data\?\.snapshot \|\| null/);
+  assert.match(ui, /const snapshot = await loadQboPnlSnapshot\(\{ silent, apply: false \}\) \|\| data\?\.snapshot \|\| null/);
   assert.match(ui, /applyQboPnlSnapshot\(snapshot\)/);
   assert.doesNotMatch(ui, /const snapshot = data\?\.snapshot \|\| await loadQboPnlSnapshot\(\)/);
 });
@@ -163,19 +163,25 @@ test("Monthly Review QBO P&L rejects stale async detail responses", () => {
 test("Monthly Review QBO P&L business and month switches reset snapshot-aware cache state", () => {
   assert.match(ui, /applyQboPnlSnapshot\(null\)/);
   assert.match(ui, /setQboPnlAccountDetails\(\{\}\)/);
-  assert.match(ui, /useEffect\(\(\) => \{\s*setExpandedAccountKeys\(new Set\(\)\);\s*setPnlAccountDrafts\(\{\}\);\s*setPnlReclassErrors\(\{\}\);\s*\}, \[businessId, month\]\)/);
+  assert.match(ui, /useEffect\(\(\) => \{\s*setExpandedAccountKeys\(new Set\(\)\);\s*setPnlAccountDrafts\(\{\}\);\s*setPnlReclassErrors\(\{\}\);\s*setPnlReclassSuccesses\(\{\}\);\s*\}, \[businessId, month\]\)/);
 });
 
 test("Monthly Review linked QBO P&L reclassification uses Phase 2B route then authoritative snapshot refresh", () => {
   const panel = extractFunction(ui, "SourceLedgerPanel");
+  const accountUpdaterStart = ui.indexOf("const updateTransactionAccount = async");
+  const accountUpdaterEnd = ui.indexOf("const retryQboSync = async", accountUpdaterStart);
+  const accountUpdater = ui.slice(accountUpdaterStart, accountUpdaterEnd);
 
   assert.match(ui, /\/runs\/\$\{encodeURIComponent\(detail\.run\.id\)\}\/transactions\/\$\{encodeURIComponent\(transactionId\)\}\/account/);
   assert.match(ui, /final_qbo_account_id: account\.id/);
-  assert.match(ui, /await refreshQboPnlSnapshot\(\{ afterReclassification: true \}\)/);
+  assert.match(ui, /void refreshQboPnlSnapshot\(\{ afterReclassification: true, silent: true, expectedReclass \}\)/);
   assert.match(ui, /const transactionId = options\.transactionId \|\| \(options\.requireBizziLinked \? transaction\?\.bizzi_transaction_id : transaction\?\.id \|\| transaction\?\.bizzi_transaction_id\)/);
   assert.match(panel, /transactionId: txn\.bizzi_transaction_id/);
   assert.match(panel, /requireBizziLinked: true/);
-  assert.doesNotMatch(ui, /setQboPnlSnapshot\(\(current\)/);
+  assert.match(panel, /pnlOnly: true/);
+  assert.match(accountUpdater, /if \(options\.pnlOnly\) \{/);
+  assert.match(accountUpdater, /patchQboPnlReclassPresentation\(\{ transaction, targetAccount: account \}\)/);
+  assert.doesNotMatch(accountUpdater, /await loadSourceLedger\(\)[\s\S]*options\.pnlOnly/);
 });
 
 test("Monthly Review QBO P&L reclassification stages GL selection before explicit confirmation", () => {
@@ -183,6 +189,7 @@ test("Monthly Review QBO P&L reclassification stages GL selection before explici
 
   assert.match(panel, /const \[pnlAccountDrafts, setPnlAccountDrafts\] = useState\(\{\}\)/);
   assert.match(panel, /const \[pnlReclassErrors, setPnlReclassErrors\] = useState\(\{\}\)/);
+  assert.match(panel, /const \[pnlReclassSuccesses, setPnlReclassSuccesses\] = useState\(\{\}\)/);
   assert.match(panel, /const draftAccountId = rowKey \? pnlAccountDrafts\[rowKey\] : ""/);
   assert.match(panel, /const selectedAccountId = draftAccountId \|\| currentAccountId/);
   assert.match(panel, /value=\{selectedAccountId\}/);
@@ -224,14 +231,48 @@ test("Monthly Review QBO P&L failed reclassification keeps draft selection and r
   assert.doesNotMatch(panel, /catch[\s\S]*delete next\[rowKey\]/);
 });
 
-test("Monthly Review QBO P&L successful reclassification clears draft and refreshes from QBO authority", () => {
+test("Monthly Review QBO P&L successful reclassification patches presentation and silently refreshes QBO authority", () => {
   const panel = extractFunction(ui, "SourceLedgerPanel");
+  const patchSnapshot = extractFunction(ui, "patchQboPnlSnapshotForReclass");
+  const patchCaches = extractFunction(ui, "patchQboPnlDetailCachesForReclass");
+  const refreshFnStart = ui.indexOf("const refreshQboPnlSnapshot = useCallback");
+  const refreshFnEnd = ui.indexOf("const loadQboPnlAccountTransactions", refreshFnStart);
+  const refreshFn = ui.slice(refreshFnStart, refreshFnEnd);
 
   assert.match(panel, /if \(result\?\.ok\) \{/);
   assert.match(panel, /delete next\[rowKey\]/);
-  assert.match(ui, /await refreshQboPnlSnapshot\(\{ afterReclassification: true \}\)/);
-  assert.match(ui, /setQboPnlAccountDetails\(\{\}\)/);
+  assert.match(panel, /Reclassified in QuickBooks/);
+  assert.match(panel, /next\.add\(getQboPnlAccountKey\(\{ qbo_account_id: draftAccountId, id: draftAccountId \}\)\)/);
+  assert.match(ui, /patchQboPnlReclassPresentation/);
+  assert.match(patchSnapshot, /patchQboPnlAccountTotals\(account, -amount, -1\)/);
+  assert.match(patchSnapshot, /patchQboPnlAccountTotals\(account, amount, 1\)/);
+  assert.match(patchSnapshot, /buildTemporaryQboPnlAccount\(targetAccount, nextTransaction, amount\)/);
+  assert.match(ui, /buildExpectedPnlReclassState\(qboPnlSnapshot, transaction, account\)/);
+  assert.match(ui, /qboPnlSnapshotReflectsReclass\(snapshot, expectedReclass\)/);
+  assert.match(patchCaches, /oldKey = getQboPnlAccountKey\(\{ qbo_account_id: oldAccountId \}\)/);
+  assert.match(patchCaches, /targetKey = getQboPnlAccountKey\(targetAccountForKey\)/);
+  assert.match(patchCaches, /rows: \[movedRow, \.\.\.existingRows\.filter/);
+  assert.match(ui, /void refreshQboPnlSnapshot\(\{ afterReclassification: true, silent: true, expectedReclass \}\)/);
+  assert.match(refreshFn, /const snapshot = await loadQboPnlSnapshot\(\{ silent, apply: false \}\) \|\| data\?\.snapshot \|\| null/);
+  assert.match(refreshFn, /if \(!silent\) setQboPnlRefreshMessage\(""\)/);
+  assert.doesNotMatch(refreshFn, /QuickBooks update succeeded\. P&L refreshed from QuickBooks/);
   assert.doesNotMatch(ui, /createQbo|postSingleBookkeepingTransactionNow|approveBookkeepingTransactions/);
+});
+
+test("Monthly Review fast P&L reclassification does not trigger full workspace reload", () => {
+  const accountUpdaterStart = ui.indexOf("const updateTransactionAccount = async");
+  const accountUpdaterEnd = ui.indexOf("const retryQboSync = async", accountUpdaterStart);
+  const accountUpdater = ui.slice(accountUpdaterStart, accountUpdaterEnd);
+  const pnlOnlyStart = accountUpdater.indexOf("if (options.pnlOnly)");
+  const pnlOnlyBlock = accountUpdater.slice(pnlOnlyStart, accountUpdater.indexOf("await loadSourceLedger", pnlOnlyStart));
+
+  assert.match(pnlOnlyBlock, /setQboPnlRefreshMessage\(""\)/);
+  assert.match(pnlOnlyBlock, /patchQboPnlReclassPresentation/);
+  assert.match(pnlOnlyBlock, /void refreshQboPnlSnapshot\(\{ afterReclassification: true, silent: true, expectedReclass \}\)/);
+  assert.doesNotMatch(pnlOnlyBlock, /loadSourceLedger|loadDetail|loadBusinesses|refreshBookkeepingFeeds|loadConnectedAccounts/);
+  assert.match(accountUpdater, /await loadSourceLedger\(\)/);
+  assert.match(accountUpdater, /await loadDetail\(\)/);
+  assert.match(accountUpdater, /await loadBusinesses\(\)/);
 });
 
 test("Monthly Review QBO P&L dropdown filters invalid target account classes by transaction type", () => {

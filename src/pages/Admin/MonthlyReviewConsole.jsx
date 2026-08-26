@@ -207,33 +207,33 @@ export default function MonthlyReviewConsole() {
     }
   }, []);
 
-  const loadQboPnlSnapshot = useCallback(async () => {
+  const loadQboPnlSnapshot = useCallback(async ({ silent = false, apply = true } = {}) => {
     if (!selectedBusinessId) {
-      applyQboPnlSnapshot(null);
+      if (apply) applyQboPnlSnapshot(null);
       setQboPnlError("");
       return null;
     }
-    setLoadingQboPnl(true);
-    setQboPnlError("");
+    if (!silent) setLoadingQboPnl(true);
+    if (!silent) setQboPnlError("");
     try {
       const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/qbo-pnl?year=${encodeURIComponent(month.slice(0, 4))}&month=${encodeURIComponent(Number(month.slice(5, 7)))}`);
       const snapshot = data?.snapshot || null;
-      applyQboPnlSnapshot(snapshot);
+      if (apply) applyQboPnlSnapshot(snapshot);
       return snapshot;
     } catch (e) {
       applyQboPnlSnapshot(null);
-      setQboPnlError(e?.body?.message || e?.message || "Could not load the QuickBooks P&L snapshot.");
+      if (!silent) setQboPnlError(e?.body?.message || e?.message || "Could not load the QuickBooks P&L snapshot.");
       return null;
     } finally {
-      setLoadingQboPnl(false);
+      if (!silent) setLoadingQboPnl(false);
     }
   }, [applyQboPnlSnapshot, month, selectedBusinessId]);
 
-  const refreshQboPnlSnapshot = useCallback(async ({ afterReclassification = false } = {}) => {
+  const refreshQboPnlSnapshot = useCallback(async ({ afterReclassification = false, silent = false, expectedReclass = null } = {}) => {
     if (!selectedBusinessId) return null;
-    setRefreshingQboPnl(true);
-    setQboPnlError("");
-    setQboPnlRefreshMessage("");
+    if (!silent) setRefreshingQboPnl(true);
+    if (!silent) setQboPnlError("");
+    if (!silent) setQboPnlRefreshMessage("");
     try {
       const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/qbo-pnl/refresh`, {
         method: "POST",
@@ -249,20 +249,23 @@ export default function MonthlyReviewConsole() {
       ) {
         throw new Error("QuickBooks refresh did not produce a verified pnl_group_context_v2 snapshot.");
       }
-      const snapshot = await loadQboPnlSnapshot() || data?.snapshot || null;
+      const snapshot = await loadQboPnlSnapshot({ silent, apply: false }) || data?.snapshot || null;
+      if (silent && expectedReclass && !qboPnlSnapshotReflectsReclass(snapshot, expectedReclass)) {
+        return null;
+      }
       applyQboPnlSnapshot(snapshot);
       setQboPnlAccountDetails({});
-      setQboPnlRefreshMessage(afterReclassification
-        ? "QuickBooks update succeeded. P&L refreshed from QuickBooks."
-        : "QuickBooks P&L refreshed.");
+      if (!silent && !afterReclassification) setQboPnlRefreshMessage("QuickBooks P&L refreshed.");
       return snapshot;
     } catch (e) {
       const message = e?.body?.message || e?.message || "Refresh from QuickBooks failed.";
-      setQboPnlError(message);
-      setQboPnlRefreshMessage(afterReclassification ? "QuickBooks update succeeded. Report refresh pending." : "");
+      if (!silent) {
+        setQboPnlError(message);
+        setQboPnlRefreshMessage("");
+      }
       return null;
     } finally {
-      setRefreshingQboPnl(false);
+      if (!silent) setRefreshingQboPnl(false);
     }
   }, [applyQboPnlSnapshot, loadQboPnlSnapshot, month, selectedBusinessId]);
 
@@ -613,6 +616,38 @@ export default function MonthlyReviewConsole() {
     }
   };
 
+  const patchQboPnlReclassPresentation = useCallback(({ transaction, targetAccount }) => {
+    if (!transaction?.id || !targetAccount?.id) return;
+    const amount = Number(transaction.amount || 0);
+    const oldAccountId = String(transaction.qbo_account_id || "");
+    const targetAccountId = String(targetAccount.id || "");
+    if (!oldAccountId || oldAccountId === targetAccountId || !Number.isFinite(amount)) return;
+    const nextTxn = {
+      ...transaction,
+      qbo_account_id: targetAccountId,
+      qbo_account_name: targetAccount.name || targetAccount.fullyQualifiedName || targetAccount.FullyQualifiedName || transaction.qbo_account_name,
+      metadata: {
+        ...(transaction.metadata || {}),
+        optimistic_pnl_reclass: true,
+        previous_qbo_account_id: oldAccountId,
+      },
+    };
+    setQboPnlSnapshot((current) => patchQboPnlSnapshotForReclass(current, {
+      transaction,
+      nextTransaction: nextTxn,
+      targetAccount,
+      amount,
+    }));
+    setQboPnlAccountDetails((current) => patchQboPnlDetailCachesForReclass(current, {
+      snapshotId: qboPnlSnapshotIdRef.current,
+      transaction,
+      nextTransaction: nextTxn,
+      oldAccountId,
+      targetAccount,
+      amount,
+    }));
+  }, []);
+
   const updateTransactionAccount = async (transaction, accountId, options = {}) => {
     const transactionId = options.transactionId || (options.requireBizziLinked ? transaction?.bizzi_transaction_id : transaction?.id || transaction?.bizzi_transaction_id);
     if (!detail?.run?.id || !transactionId || !accountId) return null;
@@ -629,6 +664,13 @@ export default function MonthlyReviewConsole() {
           reason: "Adjusted GL account during monthly human review.",
         },
       });
+      if (options.pnlOnly) {
+        setQboPnlRefreshMessage("");
+        const expectedReclass = buildExpectedPnlReclassState(qboPnlSnapshot, transaction, account);
+        patchQboPnlReclassPresentation({ transaction, targetAccount: account });
+        void refreshQboPnlSnapshot({ afterReclassification: true, silent: true, expectedReclass });
+        return { ok: true, transaction_id: transactionId, target_account: account };
+      }
       await loadSourceLedger();
       await loadDetail();
       await loadBusinesses();
@@ -1102,13 +1144,13 @@ export default function MonthlyReviewConsole() {
                       </p>
                     ) : null}
                   </div>
-                  <div className="flex flex-col gap-2 sm:flex-row xl:flex-col xl:items-stretch">
+                  <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                     <button
                       type="button"
                       onClick={openCustomerApp}
                       disabled={!selectedBusinessId || busyAction === "customer-view"}
                       title={selectedBusinessId ? "Open this customer workspace in read-only Admin View." : "Select a business first."}
-                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-white/12 bg-white/[0.05] px-4 py-2 text-sm font-semibold text-white/78 transition hover:border-emerald-300/26 hover:bg-emerald-300/[0.08] hover:text-emerald-50 disabled:cursor-not-allowed disabled:opacity-45"
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-white/12 bg-white/[0.045] px-4 py-2 text-sm font-semibold text-white/82 shadow-sm transition hover:border-white/22 hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       {busyAction === "customer-view" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
                       View Customer App
@@ -1117,7 +1159,7 @@ export default function MonthlyReviewConsole() {
                       type="button"
                       onClick={publishMonthlyReport}
                       disabled={busyAction === "publish-report" || !detail?.run?.id}
-                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-sky-300/20 bg-sky-300/[0.09] px-4 py-2 text-sm font-semibold text-sky-100 transition hover:bg-sky-300/[0.14] disabled:cursor-not-allowed disabled:opacity-45"
+                      className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-950/35 px-4 py-2 text-sm font-semibold text-cyan-50 shadow-sm transition hover:border-cyan-300/32 hover:bg-cyan-900/42 disabled:cursor-not-allowed disabled:opacity-45"
                     >
                       {busyAction === "publish-report" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
                       Publish Final P&amp;L Report PDF
@@ -1127,7 +1169,7 @@ export default function MonthlyReviewConsole() {
                         type="button"
                         onClick={reopenReview}
                         disabled={busyAction === "reopen"}
-                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-amber-300/25 bg-amber-300/[0.1] px-4 py-2 text-sm font-semibold text-amber-100 transition hover:bg-amber-300/[0.16] disabled:opacity-45"
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-amber-500/24 bg-amber-950/34 px-4 py-2 text-sm font-semibold text-amber-50 shadow-sm transition hover:border-amber-400/36 hover:bg-amber-900/40 disabled:opacity-45"
                       >
                         {busyAction === "reopen" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                         Reopen Month
@@ -1137,7 +1179,7 @@ export default function MonthlyReviewConsole() {
                         type="button"
                         onClick={requestFinalizeReview}
                         disabled={!canRequestApproval}
-                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-300/[0.12] px-4 py-2 text-sm font-semibold text-emerald-100 transition hover:bg-emerald-300/[0.18] disabled:cursor-not-allowed disabled:opacity-45"
+                        className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-emerald-400/24 bg-emerald-950/40 px-4 py-2 text-sm font-semibold text-emerald-50 shadow-sm transition hover:border-emerald-300/36 hover:bg-emerald-900/46 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         {finalizing ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                         Approve {formatMonthShort(month)} Books
@@ -1744,6 +1786,7 @@ function SourceLedgerPanel({
   const [expandedAccountKeys, setExpandedAccountKeys] = useState(() => new Set());
   const [pnlAccountDrafts, setPnlAccountDrafts] = useState({});
   const [pnlReclassErrors, setPnlReclassErrors] = useState({});
+  const [pnlReclassSuccesses, setPnlReclassSuccesses] = useState({});
   const filteredSnapshotAccounts = useMemo(() => {
     const query = String(accountSearch || "").trim().toLowerCase();
     return snapshotAccounts
@@ -1772,11 +1815,13 @@ function SourceLedgerPanel({
     setExpandedAccountKeys(new Set());
     setPnlAccountDrafts({});
     setPnlReclassErrors({});
+    setPnlReclassSuccesses({});
   }, [businessId, month]);
 
   useEffect(() => {
     setPnlAccountDrafts({});
     setPnlReclassErrors({});
+    setPnlReclassSuccesses({});
   }, [snapshot?.id]);
 
   const hasSnapshot = Boolean(snapshot?.id);
@@ -1804,6 +1849,12 @@ function SourceLedgerPanel({
     const currentAccountId = String(txn?.qbo_account_id || "");
     const nextAccountId = String(accountId || "");
     setPnlReclassErrors((current) => {
+      if (!current[rowKey]) return current;
+      const next = { ...current };
+      delete next[rowKey];
+      return next;
+    });
+    setPnlReclassSuccesses((current) => {
       if (!current[rowKey]) return current;
       const next = { ...current };
       delete next[rowKey];
@@ -1848,6 +1899,7 @@ function SourceLedgerPanel({
       const result = await onAccountChange?.(txn, draftAccountId, {
         transactionId: txn.bizzi_transaction_id,
         requireBizziLinked: true,
+        pnlOnly: true,
         throwOnError: true,
       });
       if (result?.ok) {
@@ -1855,6 +1907,15 @@ function SourceLedgerPanel({
           if (!current[rowKey]) return current;
           const next = { ...current };
           delete next[rowKey];
+          return next;
+        });
+        setPnlReclassSuccesses((current) => ({
+          ...current,
+          [rowKey]: "Reclassified in QuickBooks",
+        }));
+        setExpandedAccountKeys((current) => {
+          const next = new Set(current);
+          next.add(getQboPnlAccountKey({ qbo_account_id: draftAccountId, id: draftAccountId }));
           return next;
         });
       }
@@ -1990,6 +2051,7 @@ function SourceLedgerPanel({
                           const selectedAccountId = draftAccountId || currentAccountId;
                           const hasDraft = Boolean(draftAccountId && draftAccountId !== currentAccountId);
                           const rowError = rowKey ? pnlReclassErrors[rowKey] : "";
+                          const rowSuccess = rowKey ? pnlReclassSuccesses[rowKey] : "";
                           const busy = Boolean(txn.bizzi_transaction_id) && busyTransaction === txn.bizzi_transaction_id;
                           const rowDropdownAccounts = filterPnlReclassTargetAccounts(dropdownAccounts, txn.qbo_txn_type, currentAccountId);
                           return (
@@ -2050,6 +2112,7 @@ function SourceLedgerPanel({
                                       </div>
                                     ) : null}
                                     {rowError ? <div className="text-[11px] text-amber-100">{rowError}</div> : null}
+                                    {!rowError && rowSuccess ? <div className="text-[11px] text-emerald-100/85">{rowSuccess}</div> : null}
                                   </div>
                                 ) : (
                                   <span className="text-[11px] text-white/42" title={linked && !supportedTxnType ? "This QuickBooks transaction type is read-only in Monthly Review." : "This transaction exists in QuickBooks but is not linked to a Bizzi bank transaction."}>
@@ -3366,6 +3429,171 @@ function getQboPnlTransactionKey(transaction = {}) {
   if (transaction.id) return `snapshot-transaction:${transaction.id}`;
   if (transaction.qbo_txn_id && transaction.qbo_txn_type) return `qbo-transaction:${transaction.qbo_txn_type}:${transaction.qbo_txn_id}`;
   return `qbo-detail:${transaction.qbo_account_id || "unresolved"}:${transaction.txn_date || "no-date"}:${transaction.amount || 0}:${transaction.row_order ?? ""}`;
+}
+
+function patchQboPnlSnapshotForReclass(snapshot, { transaction = {}, nextTransaction = {}, targetAccount = {}, amount = 0 } = {}) {
+  if (!snapshot?.id || !Array.isArray(snapshot.accounts)) return snapshot;
+  const oldAccountId = String(transaction.qbo_account_id || "");
+  const targetAccountId = String(targetAccount.id || "");
+  if (!oldAccountId || !targetAccountId || oldAccountId === targetAccountId) return snapshot;
+  let sawOld = false;
+  let sawTarget = false;
+  const accounts = snapshot.accounts.map((account) => {
+    const accountId = String(account.qbo_account_id || account.id || "");
+    if (accountId === oldAccountId) {
+      sawOld = true;
+      return patchQboPnlAccountTotals(account, -amount, -1);
+    }
+    if (accountId === targetAccountId) {
+      sawTarget = true;
+      return patchQboPnlAccountTotals(account, amount, 1);
+    }
+    return account;
+  });
+  if (!sawOld) return snapshot;
+  if (!sawTarget) {
+    accounts.push(buildTemporaryQboPnlAccount(targetAccount, nextTransaction, amount));
+  }
+  return {
+    ...patchQboPnlSummaryTotals(snapshot, transaction, targetAccount, amount),
+    accounts: accounts
+      .filter((account) => Number(account.total_amount || 0) !== 0 || Number(account.metadata?.transaction_count || 0) > 0)
+      .sort((a, b) => Number(a.display_order || 0) - Number(b.display_order || 0) || Number(a.row_order || 0) - Number(b.row_order || 0) || String(a.account_name || "").localeCompare(String(b.account_name || ""))),
+  };
+}
+
+function buildExpectedPnlReclassState(snapshot, transaction = {}, targetAccount = {}) {
+  const amount = Number(transaction.amount || 0);
+  const oldAccountId = String(transaction.qbo_account_id || "");
+  const targetAccountId = String(targetAccount.id || "");
+  if (!snapshot?.id || !oldAccountId || !targetAccountId || oldAccountId === targetAccountId || !Number.isFinite(amount)) return null;
+  const oldAccount = findQboPnlSnapshotAccount(snapshot, oldAccountId);
+  const targetSnapshotAccount = findQboPnlSnapshotAccount(snapshot, targetAccountId);
+  return {
+    old_account_id: oldAccountId,
+    target_account_id: targetAccountId,
+    old_total_after: oldAccount ? roundCurrency(Number(oldAccount.total_amount || 0) - amount) : null,
+    target_total_after: roundCurrency(Number(targetSnapshotAccount?.total_amount || 0) + amount),
+  };
+}
+
+function qboPnlSnapshotReflectsReclass(snapshot, expected = null) {
+  if (!expected || !snapshot?.id) return true;
+  const oldAccount = findQboPnlSnapshotAccount(snapshot, expected.old_account_id);
+  const targetAccount = findQboPnlSnapshotAccount(snapshot, expected.target_account_id);
+  const oldMatches = expected.old_total_after === null || amountsEqual(Number(oldAccount?.total_amount || 0), expected.old_total_after);
+  const targetMatches = Boolean(targetAccount) && amountsEqual(Number(targetAccount.total_amount || 0), expected.target_total_after);
+  return oldMatches && targetMatches;
+}
+
+function findQboPnlSnapshotAccount(snapshot = {}, qboAccountId = "") {
+  return (Array.isArray(snapshot.accounts) ? snapshot.accounts : []).find((account) => String(account.qbo_account_id || account.id || "") === String(qboAccountId || "")) || null;
+}
+
+function patchQboPnlAccountTotals(account = {}, amountDelta = 0, countDelta = 0) {
+  const currentCount = Number(account.metadata?.transaction_count || 0);
+  return {
+    ...account,
+    total_amount: roundCurrency(Number(account.total_amount || 0) + amountDelta),
+    metadata: {
+      ...(account.metadata || {}),
+      transaction_count: Math.max(0, currentCount + countDelta),
+      presentation_pending_qbo_refresh: true,
+    },
+  };
+}
+
+function buildTemporaryQboPnlAccount(targetAccount = {}, transaction = {}, amount = 0) {
+  const rawType = targetAccount.type || targetAccount.accountType || targetAccount.account_type || transaction.qbo_account_type || "P&L Account";
+  return {
+    id: `presentation-qbo-account-${targetAccount.id}`,
+    qbo_account_id: String(targetAccount.id || ""),
+    account_name: targetAccount.name || targetAccount.fullyQualifiedName || targetAccount.FullyQualifiedName || "Reclassified account",
+    account_path: targetAccount.fullyQualifiedName || targetAccount.FullyQualifiedName || targetAccount.name || "Reclassified account",
+    account_type: rawType,
+    account_subtype: targetAccount.subType || targetAccount.subtype || targetAccount.account_subtype || "",
+    total_amount: roundCurrency(amount),
+    display_order: accountSortRank(rawType, targetAccount.name),
+    row_order: 9999,
+    metadata: {
+      transaction_count: 1,
+      presentation_pending_qbo_refresh: true,
+    },
+  };
+}
+
+function patchQboPnlSummaryTotals(snapshot = {}, transaction = {}, targetAccount = {}, amount = 0) {
+  const fromBucket = qboPnlSummaryBucket(transaction.qbo_account_type || transaction.account_type || transaction.qbo_account_name);
+  const toBucket = qboPnlSummaryBucket(targetAccount.type || targetAccount.accountType || targetAccount.account_type || targetAccount.name);
+  if (!fromBucket || !toBucket || fromBucket === toBucket) {
+    return { ...snapshot, metadata: { ...(snapshot.metadata || {}), presentation_pending_qbo_refresh: true } };
+  }
+  const next = { ...snapshot };
+  next[fromBucket] = roundCurrency(Number(next[fromBucket] || 0) - amount);
+  next[toBucket] = roundCurrency(Number(next[toBucket] || 0) + amount);
+  next.net_profit = roundCurrency(Number(next.revenue || 0) - Number(next.cogs || 0) - Number(next.expenses || 0));
+  next.metadata = { ...(snapshot.metadata || {}), presentation_pending_qbo_refresh: true };
+  return next;
+}
+
+function qboPnlSummaryBucket(type = "") {
+  const normalized = normalizeAccountTypeKey(type);
+  if (normalized === "income" || normalized === "revenue" || normalized === "otherincome") return "revenue";
+  if (normalized === "costofgoodssold" || normalized === "cogs") return "cogs";
+  if (normalized === "expense" || normalized === "otherexpense") return "expenses";
+  return "";
+}
+
+function patchQboPnlDetailCachesForReclass(current = {}, { snapshotId, transaction = {}, nextTransaction = {}, oldAccountId = "", targetAccount = {}, amount = 0 } = {}) {
+  const oldKey = getQboPnlAccountKey({ qbo_account_id: oldAccountId });
+  const targetAccountForKey = { qbo_account_id: targetAccount.id, id: targetAccount.id };
+  const targetKey = getQboPnlAccountKey(targetAccountForKey);
+  const rowKey = getQboPnlTransactionKey(transaction);
+  const next = { ...current };
+  const oldDetail = next[oldKey];
+  if (oldDetail) {
+    const rows = (Array.isArray(oldDetail.rows) ? oldDetail.rows : []).filter((row) => getQboPnlTransactionKey(row) !== rowKey);
+    next[oldKey] = {
+      ...oldDetail,
+      rows,
+      totalCount: Math.max(0, Number(oldDetail.totalCount || 0) - 1),
+      loaded: oldDetail.loaded,
+      snapshotId: oldDetail.snapshotId || snapshotId,
+      syncing: true,
+    };
+  }
+  const targetDetail = next[targetKey] || {
+    rows: [],
+    totalCount: 0,
+    page: 1,
+    pageSize: QBO_PNL_DETAIL_PAGE_SIZE,
+    loading: false,
+    error: "",
+    loaded: true,
+    snapshotId,
+  };
+  const existingRows = Array.isArray(targetDetail.rows) ? targetDetail.rows : [];
+  const movedRow = {
+    ...nextTransaction,
+    qbo_account_id: String(targetAccount.id || ""),
+    qbo_account_name: targetAccount.name || targetAccount.fullyQualifiedName || targetAccount.FullyQualifiedName || nextTransaction.qbo_account_name,
+    amount: Number.isFinite(amount) ? amount : nextTransaction.amount,
+  };
+  next[targetKey] = {
+    ...targetDetail,
+    rows: [movedRow, ...existingRows.filter((row) => getQboPnlTransactionKey(row) !== rowKey)],
+    totalCount: Number(targetDetail.totalCount || existingRows.length || 0) + 1,
+    loaded: true,
+    loading: false,
+    error: "",
+    snapshotId: targetDetail.snapshotId || snapshotId,
+    syncing: true,
+  };
+  return next;
+}
+
+function amountsEqual(left, right) {
+  return Math.abs(roundCurrency(left) - roundCurrency(right)) <= 0.01;
 }
 
 function normalizeAccountForBooksDropdown(account = {}) {
