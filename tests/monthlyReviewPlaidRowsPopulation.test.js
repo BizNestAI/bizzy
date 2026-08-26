@@ -81,6 +81,7 @@ test("monthly Plaid trace rows use actual GL and QBO lifecycle for all canonical
   assert.equal(row.bank_account, "Blue Cash Everyday® ••••1008");
   assert.equal(row.bizzi_gl_account, "Software");
   assert.equal(row.qbo_lifecycle_status.key, "handled_not_posted");
+  assert.equal(row.pipeline_status.key, "handled_not_posted");
 });
 
 test("monthly review source ledger has independent authoritative Plaid Rows population", () => {
@@ -96,5 +97,6 @@ test("monthly review source ledger has independent authoritative Plaid Rows popu
   assert.match(loadBody, /\.lt\("date", end\)/);
   assert.doesNotMatch(loadBody, /applyActiveBookkeepingScope/);
   assert.match(route, /reconciliationTrace = authoritativePlaidRows/);
-  assert.match(route, /plaid_count \+= 1/);
+  assert.match(route, /summarizePipelineStatuses\(reconciliationTrace\)/);
+  assert.match(read("src/services/bookkeeping/reconciliationPipelineStatus.js"), /plaid_transactions_count/);
 });

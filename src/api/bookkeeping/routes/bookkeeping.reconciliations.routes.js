@@ -5,6 +5,7 @@ import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { computeReconciliationRun } from "../../../services/bookkeeping/reconciliationRunService.js";
 import { evaluateReconciliationStatus } from "../../../services/bookkeeping/reconciliationEvaluator.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../../services/insights/contractorCfoTriggerService.js";
+import { derivePipelineStatus } from "../../../services/bookkeeping/reconciliationPipelineStatus.js";
 
 const router = Router();
 
@@ -41,6 +42,25 @@ function parseStatuses(input) {
   if (!raw.length) return [];
   if (raw.includes("all")) return [];
   return Array.from(new Set(raw));
+}
+
+function mapPipelineStatusFilter(status) {
+  switch (status) {
+    case "posted_matched":
+      return ["matched"];
+    case "handled_not_posted":
+      return ["handled_not_posted"];
+    case "scheduled_for_qbo":
+      return ["approved_waiting_post"];
+    case "posting_failed":
+      return ["failed_post"];
+    case "reconciliation_exception":
+      return ["missing_in_qbo", "duplicate_in_qbo", "failed_post"];
+    case "pending_bank_transaction":
+      return ["pending"];
+    default:
+      return [status];
+  }
 }
 
 function parseRange(range, dateFrom, dateTo) {
@@ -128,6 +148,7 @@ async function pickLatestMatchingRun(businessId, opts = {}) {
 
 function shapeRunSummary(run) {
   if (!run) return null;
+  const detailsCounts = run.details?.counts || {};
   return {
     run_id: run.id,
     status: run.status || "unknown",
@@ -142,6 +163,7 @@ function shapeRunSummary(run) {
       total_seen: run.total_seen || 0,
       matched_count: run.matched_count || 0,
       needs_review_count: run.needs_review_count || 0,
+      handled_not_posted_count: detailsCounts.handled_not_posted_count || 0,
       approved_waiting_post_count: run.approved_waiting_post_count || 0,
       pending_count: run.pending_count || 0,
       failed_post_count: run.failed_post_count || 0,
@@ -420,6 +442,9 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
     const offset = parseOffset(req.query?.offset);
     const plaidAccountId = req.query?.plaid_account_id || null;
     const statusFilters = parseStatuses(req.query?.status);
+    const storageStatusFilters = Array.from(
+      new Set(statusFilters.flatMap((status) => mapPipelineStatusFilter(status)))
+    );
     const runId = req.query?.run_id || null;
     const range = req.query?.range || "last_30_days";
     const parsed = parseRange(range, req.query?.date_from, req.query?.date_to);
@@ -459,8 +484,8 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
 
     let query = baseFilters;
     if (plaidAccountId) query = query.eq("plaid_account_id", plaidAccountId);
-    if (statusFilters.length === 1) query = query.eq("status", statusFilters[0]);
-    if (statusFilters.length > 1) query = query.in("status", statusFilters);
+    if (storageStatusFilters.length === 1) query = query.eq("status", storageStatusFilters[0]);
+    if (storageStatusFilters.length > 1) query = query.in("status", storageStatusFilters);
     if (dateFrom) query = query.gte("txn_date", dateFrom);
     if (dateTo) query = query.lte("txn_date", dateTo);
     const safeSearch = String(search || "").replace(/[,]/g, " ").trim();
@@ -475,9 +500,41 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
     const runSummaryRow = await pickRunById(businessId, resolvedRunId);
     const run_summary = shapeRunSummary(runSummaryRow);
 
+    const hydratedRows = (rows || []).map((row) => {
+      const details = row.details || {};
+      const cat = {
+        status: details.categorization_status || row.status || null,
+        qbo_txn_id: row.qbo_txn_id || details.qbo_txn_id || null,
+        qbo_txn_type: row.qbo_txn_type || details.qbo_txn_type || null,
+        post_after: details.post_after || null,
+        post_error: details.post_error || null,
+        last_post_attempt_at: details.last_post_attempt_at || null,
+        latest_post_attempt_at: details.latest_post_attempt_at || null,
+        latest_post_attempt_status: details.latest_post_attempt_status || null,
+        post_attempt_count: details.post_attempt_count || 0,
+        meta: {
+          is_check: details.is_check === true,
+          pending: details.pending === true,
+          next_post_attempt_at: details.next_post_attempt_at || null,
+          posting_in_progress: details.posting_in_progress === true,
+        },
+      };
+      const pipelineStatus = derivePipelineStatus({
+        bank: { pending: row.status === "pending" || details.pending === true },
+        cat,
+        reconciliationItem: row,
+      });
+      return {
+        ...row,
+        pipeline_status: pipelineStatus,
+        pipeline_status_key: pipelineStatus.key,
+        pipeline_status_label: pipelineStatus.label,
+      };
+    });
+
     return res.json({
       ok: true,
-      rows: rows || [],
+      rows: hydratedRows,
       total: count || 0,
       run_summary,
     });

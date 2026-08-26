@@ -7,6 +7,11 @@ import BookkeepingTransactionMirrorTable from "../../components/Accounting/Bookk
 import { ADMIN_VIEW_RETURN_MESSAGE } from "../../services/adminViewReturn.js";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { deriveTraceReconciliationStatus } from "../../services/bookkeeping/postingTraceDisplay.js";
+import {
+  derivePipelineStatus,
+  finalizePipelineTotals,
+  summarizePipelineStatuses,
+} from "../../services/bookkeeping/reconciliationPipelineStatus.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -2292,22 +2297,22 @@ function ReconciliationTracePanel({ ledger, loading }) {
           <h3 className="mt-1 text-lg font-semibold text-white">Posting Trace</h3>
         </div>
         <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-5">
-          <MiniStat label="Plaid Rows" value={totals.plaid_count ?? rows.length} />
-          <MiniStat label="Posted to QBO" value={totals.posted_to_qbo_count ?? totals.matched_qbo_count ?? 0} />
-          <MiniStat label="Awaiting QBO" value={totals.awaiting_qbo_count ?? totals.pending_count ?? 0} />
+          <MiniStat label="Plaid Transactions" value={totals.plaid_transactions_count ?? totals.plaid_count ?? rows.length} />
           <MiniStat label="Needs Review" value={totals.needs_review_count ?? 0} />
-          <MiniStat label="Recon Exceptions" value={totals.reconciliation_exception_count ?? totals.exception_count ?? 0} />
+          <MiniStat label="Handled · Not Posted" value={totals.handled_not_posted_count ?? 0} />
+          <MiniStat label="Posted & Matched" value={totals.posted_matched_count ?? 0} />
+          <MiniStat label="Exceptions" value={totals.exceptions_count ?? 0} />
         </div>
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-white/8">
-        <div className="hidden grid-cols-[82px_minmax(180px,1fr)_120px_minmax(160px,1fr)_120px_92px] gap-2 border-b border-white/8 bg-white/[0.035] px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-white/38 lg:grid">
-          <div>Plaid Date</div>
-          <div>Plaid Transaction</div>
+        <div className="hidden grid-cols-[82px_minmax(220px,1.4fr)_150px_96px_minmax(150px,0.85fr)_154px] gap-3 border-b border-white/8 bg-white/[0.035] px-3 py-2 text-[10px] uppercase tracking-[0.12em] text-white/38 lg:grid">
+          <div>Date</div>
+          <div>Transaction</div>
           <div>Bank Account</div>
-          <div>Bizzi GL</div>
-          <div>QBO Status</div>
-          <div>Reconciliation</div>
+          <div className="text-right">Amount</div>
+          <div>Category</div>
+          <div>Pipeline Status</div>
         </div>
         <div className="max-h-[420px] divide-y divide-white/[0.06] overflow-y-auto">
           {loading ? (
@@ -2317,19 +2322,20 @@ function ReconciliationTracePanel({ ledger, loading }) {
             </div>
           ) : rows.length ? (
             rows.map((row) => (
-              <div key={row.id} className="grid gap-2 px-3 py-2 text-xs lg:grid-cols-[82px_minmax(180px,1fr)_120px_minmax(160px,1fr)_120px_92px] lg:items-center">
+              <div key={row.id} className="grid gap-2 px-3 py-2 text-xs lg:grid-cols-[82px_minmax(220px,1.4fr)_150px_96px_minmax(150px,0.85fr)_154px] lg:items-center">
                 <div className="whitespace-nowrap text-white/45">{formatShortDate(row.plaid_date)}</div>
                 <div className="min-w-0">
                   <div className="truncate font-medium leading-tight text-white">{row.payee || row.description || "Plaid transaction"}</div>
                   <div className="truncate text-[11px] leading-tight text-white/38">{row.description || row.plaid_transaction_id}</div>
                 </div>
-                <div className="text-xs text-white/50">{row.bank_account || "Bank account"}</div>
+                <div className="truncate text-xs text-white/50" title={row.bank_account || "Bank account"}>{row.bank_account || "Bank account"}</div>
+                <div className={`text-right text-xs font-semibold ${Number(row.amount || 0) < 0 ? "text-rose-100" : "text-emerald-100"}`}>
+                  {formatCurrency(row.amount)}
+                </div>
                 <div className="min-w-0">
                   <div className="truncate text-white/80">{row.bizzi_gl_account || "Uncategorized"}</div>
-                  <div className="text-[11px] text-white/35">{formatCurrency(row.amount)}</div>
                 </div>
-                <QboSyncStatusBadge status={row.qbo_lifecycle_status || row.qbo_sync_status} compact />
-                <ReconciliationStatusBadge status={row.reconciliation_status} />
+                <PipelineStatusBadge status={row.pipeline_status} />
               </div>
             ))
           ) : (
@@ -2645,6 +2651,33 @@ function MiniStat({ label, value }) {
   );
 }
 
+function PipelineStatusBadge({ status }) {
+  const normalized = status || { key: "needs_review", label: "Needs Review", tone: "warning", detail: "" };
+  const tone = normalized.tone || "neutral";
+  const cls = tone === "good"
+    ? "border-emerald-300/22 bg-emerald-300/[0.09] text-emerald-100"
+    : tone === "info"
+      ? "border-sky-300/18 bg-sky-300/[0.08] text-sky-100"
+      : tone === "warning"
+        ? "border-amber-300/22 bg-amber-300/[0.08] text-amber-100"
+        : tone === "danger"
+          ? "border-rose-300/24 bg-rose-300/[0.1] text-rose-100"
+          : "border-white/10 bg-white/[0.05] text-white/65";
+  const title = [normalized.detail, normalized.exception_reason].filter(Boolean).join(" · ") || normalized.label;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <span className={`inline-flex max-w-full rounded-full border px-2.5 py-1 text-[11px] font-medium ${cls}`} title={title}>
+        <span className="truncate">{normalized.label}</span>
+      </span>
+      {Array.isArray(normalized.secondary_statuses) && normalized.secondary_statuses.some((item) => item?.key === "pending_bank_transaction") ? (
+        <span className="inline-flex rounded-full border border-white/10 bg-white/[0.045] px-2 py-0.5 text-[10px] text-white/55">
+          Pending
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function QboSyncStatusBadge({ status, compact = false }) {
   const normalized = status || { key: "needs_review", label: "Needs Review", tone: "neutral", detail: "" };
   const cls = normalized.tone === "good"
@@ -2839,9 +2872,9 @@ function buildDemoReviewDetail(data, month) {
   const demoReconciliationTotals = sourceLedger.reconciliation_totals || {};
   const demoPlaidTotal = sourceLedger.totals.transaction_count || demoReconciliationTotals.plaid_count || 0;
   const demoNeedsGl = sourceLedger.totals.needs_review_count || 0;
-  const demoReconciled = demoReconciliationTotals.reconciliation_exception_count ? 0 : demoReconciliationTotals.posted_to_qbo_count || 0;
-  const demoPostedQbo = sourceLedger.totals.posted_count || demoReconciliationTotals.posted_to_qbo_count || 0;
-  const demoFailedPosting = sourceLedger.totals.qbo_sync_counts?.failed || 0;
+  const demoReconciled = demoReconciliationTotals.exceptions_count ? 0 : demoReconciliationTotals.posted_matched_count || 0;
+  const demoPostedQbo = sourceLedger.totals.posted_count || demoReconciliationTotals.posted_matched_count || 0;
+  const demoFailedPosting = demoReconciliationTotals.posting_failed_count || sourceLedger.totals.qbo_sync_counts?.failed || 0;
   const sections = [
     demoSection("forecasting", "Forecasting", "reviewed", {
       label: "Forecast vs actual",
@@ -2983,6 +3016,19 @@ function buildDemoSourceLedger(existing = {}, month) {
       const syncStatus = buildDemoQboSyncStatus(txn);
       const date = dateInReviewMonth(txn.date, selectedMonth, index);
       const reconciliationStatus = deriveTraceReconciliationStatus({ lifecycle: syncStatus });
+      const cat = {
+        status: txn.status || (txn.qbo_txn_id ? "posted" : "needs_review"),
+        qbo_txn_id: txn.qbo_txn_id || null,
+        qbo_txn_type: txn.qbo_txn_type || (Number(txn.amount || 0) > 0 ? "Deposit" : "Expense"),
+        post_after: syncStatus.key === "queued" ? `${date}T18:00:00.000Z` : null,
+        post_error: syncStatus.key === "failed" ? "Demo QBO mapping failure." : null,
+        last_post_attempt_at: syncStatus.key === "failed" ? `${date}T18:05:00.000Z` : null,
+        meta: {},
+      };
+      const pipelineStatus = derivePipelineStatus({
+        bank: { pending: txn.pending === true },
+        cat,
+      });
       return {
         id: txn.id,
         plaid_transaction_id: txn.plaid_transaction_id || `plaid-${txn.id}`,
@@ -2992,18 +3038,22 @@ function buildDemoSourceLedger(existing = {}, month) {
         description: txn.description || txn.vendor || "Demo transaction",
         payee: txn.vendor || "",
         amount: Number(txn.amount || 0),
-        status: txn.status || (txn.qbo_txn_id ? "posted" : "needs_review"),
+        status: cat.status,
         posted: syncStatus.key === "posted",
         qbo_txn_id: txn.qbo_txn_id || null,
-        qbo_txn_type: txn.qbo_txn_type || (Number(txn.amount || 0) > 0 ? "Deposit" : "Expense"),
+        qbo_txn_type: cat.qbo_txn_type,
         posted_at: txn.posted_at || (syncStatus.key === "posted" ? `${date}T15:30:00.000Z` : null),
-        post_after: syncStatus.key === "queued" ? `${date}T18:00:00.000Z` : null,
+        post_after: cat.post_after,
         confidence: txn.confidence || "demo",
         reason: txn.reason || "Demo monthly review source data.",
-        post_error: syncStatus.key === "failed" ? "Demo QBO mapping failure." : null,
+        post_error: cat.post_error,
+        last_post_attempt_at: cat.last_post_attempt_at,
         qbo_sync_status: syncStatus,
         qbo_lifecycle_status: syncStatus,
         reconciliation_status: reconciliationStatus,
+        pipeline_status: pipelineStatus,
+        pipeline_status_key: pipelineStatus.key,
+        pipeline_status_label: pipelineStatus.label,
         final_qbo_account_id: mappedAccount?.id || null,
         final_qbo_account_name: mappedAccount?.name || "",
         effective_account_id: mappedAccount?.id || null,
@@ -3083,16 +3133,12 @@ function buildDemoSourceLedger(existing = {}, month) {
       qbo_lifecycle_status: txn.qbo_lifecycle_status || txn.qbo_sync_status,
       qbo_sync_status: txn.qbo_sync_status,
       reconciliation_status: txn.reconciliation_status,
+      pipeline_status: txn.pipeline_status,
+      pipeline_status_key: txn.pipeline_status_key,
+      pipeline_status_label: txn.pipeline_status_label,
     }));
 
-  const reconciliation_totals = reconciliation_trace.reduce((acc, row) => {
-    acc.plaid_count += 1;
-    if (row.qbo_lifecycle_status?.key === "posted") acc.posted_to_qbo_count += 1;
-    if (row.qbo_lifecycle_status?.key === "needs_review") acc.needs_review_count += 1;
-    if (["handled_not_posted", "queued"].includes(row.qbo_lifecycle_status?.key)) acc.awaiting_qbo_count += 1;
-    if (row.reconciliation_status?.exception === true) acc.reconciliation_exception_count += 1;
-    return acc;
-  }, { plaid_count: 0, posted_to_qbo_count: 0, awaiting_qbo_count: 0, needs_review_count: 0, reconciliation_exception_count: 0 });
+  const reconciliation_totals = finalizePipelineTotals(summarizePipelineStatuses(reconciliation_trace));
 
   const finalizationGuard = buildDemoFinalizationGuard(transactions);
 

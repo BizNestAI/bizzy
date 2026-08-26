@@ -1,3 +1,5 @@
+import { hasProvenPostingFailure } from "./reconciliationPipelineStatus.js";
+
 function formatShortDateTime(value) {
   if (!value) return "";
   const date = new Date(value);
@@ -18,7 +20,7 @@ export function deriveQboPostingLifecycle(row = {}) {
     };
   }
 
-  if (row.post_error || ["failed", "failed_post", "post_failed", "blocked"].includes(status)) {
+  if (hasProvenPostingFailure(row)) {
     return {
       key: "failed",
       label: "Failed",

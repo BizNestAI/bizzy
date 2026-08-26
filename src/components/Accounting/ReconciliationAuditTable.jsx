@@ -10,9 +10,14 @@ const STATUS_OPTIONS = [
   { value: "archived", label: "Archived" },
   { value: "duplicate_internal", label: "Internal duplicate suppressed" },
   { value: "matched", label: "Posted & matched" },
+  { value: "posted_matched", label: "Posted & matched" },
   { value: "needs_review", label: "Needs review" },
+  { value: "handled_not_posted", label: "Handled not posted" },
+  { value: "scheduled_for_qbo", label: "Scheduled for QBO" },
   { value: "approved_waiting_post", label: "Approved waiting" },
   { value: "pending", label: "Pending" },
+  { value: "posting_failed", label: "Posting failed" },
+  { value: "reconciliation_exception", label: "Reconciliation exception" },
   { value: "failed_post", label: "Failed post" },
   { value: "missing_in_qbo", label: "Missing in QBO" },
   { value: "duplicate_in_qbo", label: "Duplicate in QBO" },
@@ -48,6 +53,18 @@ function formatMonth(value) {
 
 function pipelineStatusLabel(status) {
   switch (status) {
+    case "pending_bank_transaction":
+      return "Pending bank transaction";
+    case "handled_not_posted":
+      return "Handled · Not Posted";
+    case "scheduled_for_qbo":
+      return "Scheduled for QBO";
+    case "posted_matched":
+      return "Posted & Matched";
+    case "posting_failed":
+      return "Posting Failed";
+    case "reconciliation_exception":
+      return "Reconciliation Exception";
     case "duplicate_internal":
       return "Internal duplicate suppressed";
     case "archived":
@@ -72,6 +89,7 @@ function pipelineStatusLabel(status) {
 }
 
 function pipelineStatusDisplayLabel(row) {
+  if (row?.pipeline_status?.label) return row.pipeline_status.label;
   if (
     row?.status === "missing_in_qbo" &&
     (row?.details?.reason_code === "missing_post_schedule" || row?.details?.posting_state === "missing_post_schedule")
@@ -83,6 +101,16 @@ function pipelineStatusDisplayLabel(row) {
 
 function pipelineStatusClass(status) {
   switch (status) {
+    case "pending_bank_transaction":
+    case "handled_not_posted":
+      return "border-white/12 bg-white/[0.055] text-slate-200";
+    case "scheduled_for_qbo":
+      return "border-sky-400/35 bg-sky-500/12 text-sky-100";
+    case "posted_matched":
+      return "border-emerald-400/35 bg-emerald-500/12 text-emerald-100";
+    case "posting_failed":
+    case "reconciliation_exception":
+      return "border-rose-400/35 bg-rose-500/12 text-rose-100";
     case "duplicate_internal":
       return "border-amber-300/30 bg-amber-400/10 text-amber-100";
     case "archived":
@@ -437,7 +465,8 @@ export default function ReconciliationAuditTable({
               ) : (
                 rows.map((row) => {
                   const accountLabel = accountMap.get(row.plaid_account_id) || row.plaid_account_id || "—";
-                  const statusTone = getReconciliationTone(row.status, row.details || {});
+                  const pipelineKey = row.pipeline_status?.key || row.pipeline_status_key || row.status;
+                  const statusTone = row.pipeline_status?.tone || getReconciliationTone(row.status, row.details || {});
                   return (
                     <tr key={row.id} className="align-middle transition hover:bg-white/[0.025]">
                       <td className="px-3 py-2 text-[12px] text-slate-200 whitespace-nowrap">{formatDate(row.txn_date)}</td>
@@ -463,7 +492,7 @@ export default function ReconciliationAuditTable({
                                 ? "border-sky-400/35 bg-sky-500/12 text-sky-100"
                                 : statusTone === "rose"
                                 ? "border-rose-400/35 bg-rose-500/12 text-rose-100"
-                                : pipelineStatusClass(row.status)
+                                : pipelineStatusClass(pipelineKey)
                             }`}
                           >
                             {pipelineStatusDisplayLabel(row)}

@@ -18,6 +18,11 @@ import {
   formatPlaidAccountDisplayLabel,
 } from "../../services/bookkeeping/postingTraceDisplay.js";
 import {
+  derivePipelineStatus,
+  finalizePipelineTotals,
+  summarizePipelineStatuses,
+} from "../../services/bookkeeping/reconciliationPipelineStatus.js";
+import {
   approveExistingQboAccountForCanonical,
   createPreferredQboAccountForCanonical,
   fetchCanonicalAccountMappingsForBusiness,
@@ -2375,14 +2380,7 @@ async function buildMonthlySourceLedger(businessId, month) {
       accountByName,
       reconciliationItem: reconciliationItemByTxn.get(String(row.id)) || null,
     }));
-  const reconciliationTotals = reconciliationTrace.reduce((acc, row) => {
-    acc.plaid_count += 1;
-    if (row.qbo_lifecycle_status?.key === "posted") acc.posted_to_qbo_count += 1;
-    if (row.qbo_lifecycle_status?.key === "needs_review") acc.needs_review_count += 1;
-    if (["handled_not_posted", "queued"].includes(row.qbo_lifecycle_status?.key)) acc.awaiting_qbo_count += 1;
-    if (row.reconciliation_status?.exception === true) acc.reconciliation_exception_count += 1;
-    return acc;
-  }, { plaid_count: 0, posted_to_qbo_count: 0, awaiting_qbo_count: 0, needs_review_count: 0, reconciliation_exception_count: 0 });
+  const reconciliationTotals = finalizePipelineTotals(summarizePipelineStatuses(reconciliationTrace));
 
   return {
     totals,
@@ -2390,7 +2388,7 @@ async function buildMonthlySourceLedger(businessId, month) {
     source_contract: {
       source_tables: ["bank_transactions", "transaction_categorizations"],
       date_basis: "bank_transactions.date",
-      status_basis: "Books Review needs_review/handled/posted semantics",
+      status_basis: "Unified reconciliation pipeline status over Books Review, QBO posting, and reconciliation_items authority",
       plaid_rows_basis: "canonical active Plaid-backed bank_transactions for selected month",
     },
     pnl_preview: buildPnlPreview(accountGroups),
@@ -2454,6 +2452,11 @@ export function buildAuthoritativePlaidTraceRow({
     lifecycle: qboSyncStatus,
     reconciliationItem,
   });
+  const pipelineStatus = derivePipelineStatus({
+    bank: row,
+    cat,
+    reconciliationItem,
+  });
   const amount = Number(row.signed_amount ?? row.amount ?? 0);
   return {
     id: `recon-${row.id}`,
@@ -2470,6 +2473,10 @@ export function buildAuthoritativePlaidTraceRow({
     qbo_lifecycle_status: qboSyncStatus,
     qbo_sync_status: qboSyncStatus,
     reconciliation_status: reconciliationStatus,
+    pipeline_status: pipelineStatus,
+    pipeline_status_key: pipelineStatus.key,
+    pipeline_status_label: pipelineStatus.label,
+    pipeline_exception_detail: pipelineStatus.exception_reason || null,
   };
 }
 

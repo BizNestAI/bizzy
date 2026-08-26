@@ -3,6 +3,7 @@
 
 import { supabase } from "../supabaseAdmin.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "./bookkeepingScope.js";
+import { derivePipelineStatus, hasProvenPostingFailure } from "./reconciliationPipelineStatus.js";
 
 const CHUNK_SIZE = 500;
 const NOW = () => new Date().toISOString();
@@ -421,12 +422,7 @@ function categorizeItem({ bank, cat, nowTs, includePending }) {
     return { status: "pending", note: "Pending/settling", reason_code: "pending" };
   }
 
-  const lastAttempt = cat?.last_post_attempt_at ? Date.parse(cat.last_post_attempt_at) : null;
-  const staleAttempt = lastAttempt ? Date.now() - lastAttempt > 30 * 60 * 1000 : false;
-  if (
-    statusLower === "failed" ||
-    (cat?.post_error && !hasQbo && (retryCount >= 5 || staleAttempt))
-  ) {
+  if (hasProvenPostingFailure(cat)) {
     return { status: "failed_post", note: "Posting failed; retrying", reason_code: "failed_post" };
   }
 
@@ -441,18 +437,7 @@ function categorizeItem({ bank, cat, nowTs, includePending }) {
   }
 
   if (approvedLike && !hasQbo && !postAfterTs && !nextAttemptTs && !postingInProgress && !needsReview) {
-    devLog("approved_without_post_schedule", {
-      bank_transaction_id: bank?.id || null,
-      plaid_transaction_id: bank?.plaid_transaction_id || null,
-      categorization_status: cat?.status || null,
-      last_post_attempt_at: cat?.last_post_attempt_at || null,
-      post_error: cat?.post_error || null,
-    });
-    return {
-      status: "missing_in_qbo",
-      note: "Approved but no posting schedule found",
-      reason_code: "missing_post_schedule",
-    };
+    return { status: "handled_not_posted", note: "Handled in Bizzi; not posted", reason_code: "handled_not_posted" };
   }
 
   if (approvedLike && !hasQbo && postAfterTs && postAfterTs <= nowTs && !needsReview) {
@@ -669,6 +654,7 @@ export async function computeReconciliationRun(businessId, opts = {}) {
       total_seen: 0,
       matched_count: 0,
       needs_review_count: 0,
+      handled_not_posted_count: 0,
       approved_waiting_post_count: 0,
       pending_count: 0,
       failed_post_count: 0,
@@ -694,7 +680,13 @@ export async function computeReconciliationRun(businessId, opts = {}) {
       const dir = normalizeDirection(bank);
       const amount = Number.isFinite(Number(bank.signed_amount)) ? Number(bank.signed_amount) : Number(bank.amount);
       const statusMeta = categorizeItem({ bank, cat, nowTs, includePending });
-      const details = buildItemDetails({ bank, cat, statusMeta, nowTs });
+      const pipelineStatus = derivePipelineStatus({ bank, cat, nowTs });
+      const details = {
+        ...buildItemDetails({ bank, cat, statusMeta, nowTs }),
+        pipeline_status: pipelineStatus,
+        pipeline_status_key: pipelineStatus.key,
+        pipeline_status_label: pipelineStatus.label,
+      };
 
       const item = {
         run_id: runId,
@@ -877,6 +869,9 @@ export async function computeReconciliationRun(businessId, opts = {}) {
           break;
         case "approved_waiting_post":
           counts.approved_waiting_post_count += 1;
+          break;
+        case "handled_not_posted":
+          counts.handled_not_posted_count += 1;
           break;
         case "pending":
           counts.pending_count += 1;
