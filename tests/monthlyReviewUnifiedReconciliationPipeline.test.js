@@ -80,8 +80,11 @@ test("Monthly Review and customer reconciliation routes use the same shared pipe
   assert.doesNotMatch(customerRoute, /if \(!resolvedRunId\)[\s\S]*rows: \[\]/);
   assert.match(customerPage, /getReconciliationsMonths/);
   assert.match(customerPage, /month:\s*targetMonth/);
+  assert.match(customerPage, /const \[pageSize\] = useState\(200\)/);
   assert.doesNotMatch(customerPage, /getReconciliationsRuns/);
   assert.match(customerTable, /row\.pipeline_status\?\.label|pipeline_status/);
+  assert.match(customerTable, /max-h-\[min\(70vh,820px\)\] overflow-auto overscroll-contain/);
+  assert.match(customerTable, /sticky top-0/);
   assert.match(monthlyUi, /PipelineStatusBadge/);
   assert.match(monthlyUi, /Plaid Transactions/);
   assert.doesNotMatch(monthlyUi, /<div>QBO Status<\/div>/);

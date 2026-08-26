@@ -264,7 +264,7 @@ export default function Reconciliations() {
   const [selectedRunId, setSelectedRunId] = useState(null);
   const [totalTxns, setTotalTxns] = useState(0);
   const [page, setPage] = useState(1);
-  const [pageSize] = useState(50);
+  const [pageSize] = useState(200);
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [filters, setFilters] = useState({

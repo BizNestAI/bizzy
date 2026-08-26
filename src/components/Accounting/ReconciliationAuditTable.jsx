@@ -410,9 +410,15 @@ export default function ReconciliationAuditTable({
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-white/6 bg-[#111313]">
-        <div className={embeddedInHorizontalScroller ? "overflow-visible" : "overflow-x-auto"}>
+        <div
+          className={
+            embeddedInHorizontalScroller
+              ? "custom-scrollbar max-h-[min(70vh,820px)] overflow-auto overscroll-contain"
+              : "custom-scrollbar max-h-[min(70vh,820px)] overflow-auto overscroll-contain"
+          }
+        >
           <table className={`${embeddedInHorizontalScroller ? "min-w-[980px]" : "min-w-[940px]"} w-full text-sm text-slate-100`}>
-            <thead className="bg-white/[0.03] text-[11px] uppercase tracking-[0.18em] text-slate-400">
+            <thead className="sticky top-0 z-10 bg-[#171a19] text-[11px] uppercase tracking-[0.18em] text-slate-400 shadow-[0_1px_0_rgba(255,255,255,0.06)]">
               <tr className="border-b border-white/6">
                 <th className="px-3 py-2.5 text-left">Date</th>
                 <th className="px-3 py-2.5 text-left">Transaction</th>
