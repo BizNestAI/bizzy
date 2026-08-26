@@ -44,6 +44,7 @@ const QUEUE_STATUS_OPTIONS = [
 
 const BOOKKEEPING_FEED_PAGE_SIZE = 25;
 const QBO_PNL_DETAIL_PAGE_SIZE = 25;
+const QBO_PNL_RECLASSIFIABLE_TYPES = new Set(["Purchase", "Deposit", "CreditCardCharge"]);
 const BOOKKEEPING_FEED_CONFIG = {
   needs_review: {
     label: "Needs Review",
@@ -610,11 +611,11 @@ export default function MonthlyReviewConsole() {
     }
   };
 
-  const updateTransactionAccount = async (transaction, accountId) => {
-    const transactionId = transaction?.id || transaction?.bizzi_transaction_id;
-    if (!detail?.run?.id || !transactionId || !accountId) return;
+  const updateTransactionAccount = async (transaction, accountId, options = {}) => {
+    const transactionId = options.transactionId || (options.requireBizziLinked ? transaction?.bizzi_transaction_id : transaction?.id || transaction?.bizzi_transaction_id);
+    if (!detail?.run?.id || !transactionId || !accountId) return null;
     const account = (sourceLedger?.chart_accounts || []).find((item) => String(item.id) === String(accountId));
-    if (!account) return;
+    if (!account) return null;
     setBusyTransaction(transactionId);
     setError("");
     try {
@@ -630,8 +631,11 @@ export default function MonthlyReviewConsole() {
       await loadDetail();
       await loadBusinesses();
       await refreshQboPnlSnapshot({ afterReclassification: true });
+      return { ok: true, transaction_id: transactionId };
     } catch (e) {
       setError(e?.body?.message || e?.message || "Could not update transaction GL account.");
+      if (options.throwOnError) throw e;
+      return null;
     } finally {
       setBusyTransaction("");
     }
@@ -1736,6 +1740,8 @@ function SourceLedgerPanel({
   const snapshotAccounts = Array.isArray(snapshot?.accounts) ? snapshot.accounts : [];
   const accountDetailState = accountDetails || {};
   const [expandedAccountKeys, setExpandedAccountKeys] = useState(() => new Set());
+  const [pnlAccountDrafts, setPnlAccountDrafts] = useState({});
+  const [pnlReclassErrors, setPnlReclassErrors] = useState({});
   const filteredSnapshotAccounts = useMemo(() => {
     const query = String(accountSearch || "").trim().toLowerCase();
     return snapshotAccounts
@@ -1762,7 +1768,14 @@ function SourceLedgerPanel({
 
   useEffect(() => {
     setExpandedAccountKeys(new Set());
+    setPnlAccountDrafts({});
+    setPnlReclassErrors({});
   }, [businessId, month]);
+
+  useEffect(() => {
+    setPnlAccountDrafts({});
+    setPnlReclassErrors({});
+  }, [snapshot?.id]);
 
   const hasSnapshot = Boolean(snapshot?.id);
   const lastRefreshed = snapshot?.pulled_at ? formatDateTime(snapshot.pulled_at) : "";
@@ -1782,6 +1795,74 @@ function SourceLedgerPanel({
   const handleRefresh = useCallback(async () => {
     await onRefresh?.();
   }, [onRefresh]);
+
+  const handlePnlAccountDraftChange = useCallback((txn, accountId) => {
+    const rowKey = getQboPnlTransactionKey(txn);
+    if (!rowKey) return;
+    const currentAccountId = String(txn?.qbo_account_id || "");
+    const nextAccountId = String(accountId || "");
+    setPnlReclassErrors((current) => {
+      if (!current[rowKey]) return current;
+      const next = { ...current };
+      delete next[rowKey];
+      return next;
+    });
+    setPnlAccountDrafts((current) => {
+      const next = { ...current };
+      if (!nextAccountId || nextAccountId === currentAccountId) delete next[rowKey];
+      else next[rowKey] = nextAccountId;
+      return next;
+    });
+  }, []);
+
+  const handlePnlAccountDraftCancel = useCallback((txn) => {
+    const rowKey = getQboPnlTransactionKey(txn);
+    if (!rowKey) return;
+    setPnlAccountDrafts((current) => {
+      if (!current[rowKey]) return current;
+      const next = { ...current };
+      delete next[rowKey];
+      return next;
+    });
+    setPnlReclassErrors((current) => {
+      if (!current[rowKey]) return current;
+      const next = { ...current };
+      delete next[rowKey];
+      return next;
+    });
+  }, []);
+
+  const handlePnlConfirmReclass = useCallback(async (txn) => {
+    const rowKey = getQboPnlTransactionKey(txn);
+    const draftAccountId = rowKey ? pnlAccountDrafts[rowKey] : "";
+    if (!rowKey || !draftAccountId || !txn?.bizzi_transaction_id) return;
+    setPnlReclassErrors((current) => {
+      if (!current[rowKey]) return current;
+      const next = { ...current };
+      delete next[rowKey];
+      return next;
+    });
+    try {
+      const result = await onAccountChange?.(txn, draftAccountId, {
+        transactionId: txn.bizzi_transaction_id,
+        requireBizziLinked: true,
+        throwOnError: true,
+      });
+      if (result?.ok) {
+        setPnlAccountDrafts((current) => {
+          if (!current[rowKey]) return current;
+          const next = { ...current };
+          delete next[rowKey];
+          return next;
+        });
+      }
+    } catch (e) {
+      setPnlReclassErrors((current) => ({
+        ...current,
+        [rowKey]: e?.body?.message || e?.message || "Could not reclassify this QuickBooks transaction.",
+      }));
+    }
+  }, [onAccountChange, pnlAccountDrafts]);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
@@ -1898,8 +1979,16 @@ function SourceLedgerPanel({
                         {rows.map((txn) => {
                           const linked = Boolean(txn.bizzi_transaction_id);
                           const identityComplete = Boolean(txn.qbo_txn_id && txn.qbo_txn_type);
+                          const supportedTxnType = QBO_PNL_RECLASSIFIABLE_TYPES.has(String(txn.qbo_txn_type || ""));
+                          const editable = linked && identityComplete && supportedTxnType;
                           const docNumber = txn.metadata?.qbo_doc_number || "";
-                          const busy = busyTransaction === txn.bizzi_transaction_id;
+                          const rowKey = getQboPnlTransactionKey(txn);
+                          const currentAccountId = String(txn.qbo_account_id || "");
+                          const draftAccountId = rowKey ? pnlAccountDrafts[rowKey] : "";
+                          const selectedAccountId = draftAccountId || currentAccountId;
+                          const hasDraft = Boolean(draftAccountId && draftAccountId !== currentAccountId);
+                          const rowError = rowKey ? pnlReclassErrors[rowKey] : "";
+                          const busy = Boolean(txn.bizzi_transaction_id) && busyTransaction === txn.bizzi_transaction_id;
                           return (
                             <div key={txn.id || `${txn.qbo_txn_type}-${txn.qbo_txn_id}-${txn.txn_date}`} className="grid gap-2 px-3 py-2 text-xs xl:grid-cols-[76px_minmax(200px,1fr)_105px_110px_105px_minmax(210px,280px)] xl:items-center">
                               <div className="whitespace-nowrap text-white/45">{formatShortDate(txn.txn_date)}</div>
@@ -1920,21 +2009,47 @@ function SourceLedgerPanel({
                                 {linked ? "Bizzi linked" : (identityComplete ? "QBO only" : "QBO detail")}
                               </span>
                               <div className="flex items-center gap-2">
-                                {linked ? (
-                                  <>
+                                {editable ? (
+                                  <div className="min-w-0 flex-1 space-y-1.5">
                                     <CoaDropdown
-                                      value={txn.qbo_account_id || ""}
-                                      suggestedId={txn.qbo_account_id || ""}
+                                      value={selectedAccountId}
+                                      suggestedId={currentAccountId}
                                       suggestedName={txn.qbo_account_name || ""}
                                       accounts={dropdownAccounts}
                                       status="posted"
-                                      onChange={(accountId) => onAccountChange(txn, accountId)}
+                                      onChange={(accountId) => handlePnlAccountDraftChange(txn, accountId)}
                                       disabled={busy || !dropdownAccounts.length}
                                     />
-                                    {busy ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-white/45" /> : null}
-                                  </>
+                                    {hasDraft ? (
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <button
+                                          type="button"
+                                          onClick={() => handlePnlConfirmReclass(txn)}
+                                          disabled={busy}
+                                          className="inline-flex items-center gap-1 rounded-lg border border-emerald-300/18 bg-emerald-300/[0.09] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.14] disabled:opacity-45"
+                                        >
+                                          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                                          Confirm Reclass
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handlePnlAccountDraftCancel(txn)}
+                                          disabled={busy}
+                                          className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1 text-[11px] font-semibold text-white/58 hover:bg-white/[0.1] disabled:opacity-45"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    ) : busy ? (
+                                      <div className="flex items-center gap-1.5 text-[11px] text-white/45">
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        Reclassifying...
+                                      </div>
+                                    ) : null}
+                                    {rowError ? <div className="text-[11px] text-amber-100">{rowError}</div> : null}
+                                  </div>
                                 ) : (
-                                  <span className="text-[11px] text-white/42" title="This transaction exists in QuickBooks but is not linked to a Bizzi bank transaction.">
+                                  <span className="text-[11px] text-white/42" title={linked && !supportedTxnType ? "This QuickBooks transaction type is read-only in Monthly Review." : "This transaction exists in QuickBooks but is not linked to a Bizzi bank transaction."}>
                                     Read-only
                                   </span>
                                 )}
@@ -3242,6 +3357,12 @@ function getQboPnlAccountKey(account = {}) {
 
 function getQboPnlEndpointAccountId(account = {}) {
   return account.qbo_account_id || account.id || "";
+}
+
+function getQboPnlTransactionKey(transaction = {}) {
+  if (transaction.id) return `snapshot-transaction:${transaction.id}`;
+  if (transaction.qbo_txn_id && transaction.qbo_txn_type) return `qbo-transaction:${transaction.qbo_txn_type}:${transaction.qbo_txn_id}`;
+  return `qbo-detail:${transaction.qbo_account_id || "unresolved"}:${transaction.txn_date || "no-date"}:${transaction.amount || 0}:${transaction.row_order ?? ""}`;
 }
 
 function normalizeAccountForBooksDropdown(account = {}) {

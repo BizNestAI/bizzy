@@ -28,7 +28,7 @@ test("Monthly Review P&L expansion resets when business or month changes", () =>
 
   assert.match(panel, /businessId,/);
   assert.match(panel, /month,/);
-  assert.match(panel, /useEffect\(\(\) => \{\s*setExpandedAccountKeys\(new Set\(\)\);\s*\}, \[businessId, month\]\)/);
+  assert.match(panel, /useEffect\(\(\) => \{\s*setExpandedAccountKeys\(new Set\(\)\);\s*setPnlAccountDrafts\(\{\}\);\s*setPnlReclassErrors\(\{\}\);\s*\}, \[businessId, month\]\)/);
   assert.match(callsite, /businessId=\{selectedBusinessId\}/);
   assert.match(callsite, /month=\{month\}/);
   assert.match(callsite, /snapshot=\{qboPnlSnapshot\}/);
@@ -64,21 +64,21 @@ test("Monthly Review P&L transactions load lazily from persisted QBO snapshot de
 
 test("Monthly Review expanded QBO P&L rows separate QBO-only from linked Bizzi reclassification", () => {
   const panel = extractFunction(ui, "SourceLedgerPanel");
-  const expandedBlock = panel.slice(panel.indexOf("{expanded ? ("), panel.indexOf(") : null}", panel.indexOf("{expanded ? (")));
 
-  assert.match(expandedBlock, /const linked = Boolean\(txn\.bizzi_transaction_id\)/);
-  assert.match(expandedBlock, /Bizzi linked/);
-  assert.match(expandedBlock, /QBO only/);
-  assert.match(expandedBlock, /QBO detail/);
-  assert.match(expandedBlock, /identityComplete/);
-  assert.match(expandedBlock, /qbo_doc_number/);
-  assert.match(expandedBlock, /qbo_split_account/);
-  assert.match(expandedBlock, /lacks mutation-grade transaction identity and is read-only/);
-  assert.match(expandedBlock, /Read-only/);
-  assert.match(expandedBlock, /<CoaDropdown/);
-  assert.match(expandedBlock, /linked \? \(/);
-  assert.match(expandedBlock, /onChange=\{\(accountId\) => onAccountChange\(txn, accountId\)\}/);
-  assert.match(expandedBlock, /txn\.entity_name \|\| txn\.payee_name \|\| txn\.vendor_name \|\| txn\.customer_name/);
+  assert.match(panel, /const linked = Boolean\(txn\.bizzi_transaction_id\)/);
+  assert.match(panel, /Bizzi linked/);
+  assert.match(panel, /QBO only/);
+  assert.match(panel, /QBO detail/);
+  assert.match(panel, /identityComplete/);
+  assert.match(panel, /qbo_doc_number/);
+  assert.match(panel, /qbo_split_account/);
+  assert.match(panel, /lacks mutation-grade transaction identity and is read-only/);
+  assert.match(panel, /Read-only/);
+  assert.match(panel, /<CoaDropdown/);
+  assert.match(panel, /const editable = linked && identityComplete && supportedTxnType/);
+  assert.match(panel, /editable \? \(/);
+  assert.match(panel, /onChange=\{\(accountId\) => handlePnlAccountDraftChange\(txn, accountId\)\}/);
+  assert.match(panel, /txn\.entity_name \|\| txn\.payee_name \|\| txn\.vendor_name \|\| txn\.customer_name/);
   assert.match(ui, /QuickBooks detail could not be loaded for this account/);
 });
 
@@ -163,12 +163,73 @@ test("Monthly Review QBO P&L rejects stale async detail responses", () => {
 test("Monthly Review QBO P&L business and month switches reset snapshot-aware cache state", () => {
   assert.match(ui, /applyQboPnlSnapshot\(null\)/);
   assert.match(ui, /setQboPnlAccountDetails\(\{\}\)/);
-  assert.match(ui, /useEffect\(\(\) => \{\s*setExpandedAccountKeys\(new Set\(\)\);\s*\}, \[businessId, month\]\)/);
+  assert.match(ui, /useEffect\(\(\) => \{\s*setExpandedAccountKeys\(new Set\(\)\);\s*setPnlAccountDrafts\(\{\}\);\s*setPnlReclassErrors\(\{\}\);\s*\}, \[businessId, month\]\)/);
 });
 
 test("Monthly Review linked QBO P&L reclassification uses Phase 2B route then authoritative snapshot refresh", () => {
+  const panel = extractFunction(ui, "SourceLedgerPanel");
+
   assert.match(ui, /\/runs\/\$\{encodeURIComponent\(detail\.run\.id\)\}\/transactions\/\$\{encodeURIComponent\(transactionId\)\}\/account/);
   assert.match(ui, /final_qbo_account_id: account\.id/);
   assert.match(ui, /await refreshQboPnlSnapshot\(\{ afterReclassification: true \}\)/);
+  assert.match(ui, /const transactionId = options\.transactionId \|\| \(options\.requireBizziLinked \? transaction\?\.bizzi_transaction_id : transaction\?\.id \|\| transaction\?\.bizzi_transaction_id\)/);
+  assert.match(panel, /transactionId: txn\.bizzi_transaction_id/);
+  assert.match(panel, /requireBizziLinked: true/);
   assert.doesNotMatch(ui, /setQboPnlSnapshot\(\(current\)/);
+});
+
+test("Monthly Review QBO P&L reclassification stages GL selection before explicit confirmation", () => {
+  const panel = extractFunction(ui, "SourceLedgerPanel");
+
+  assert.match(panel, /const \[pnlAccountDrafts, setPnlAccountDrafts\] = useState\(\{\}\)/);
+  assert.match(panel, /const \[pnlReclassErrors, setPnlReclassErrors\] = useState\(\{\}\)/);
+  assert.match(panel, /const draftAccountId = rowKey \? pnlAccountDrafts\[rowKey\] : ""/);
+  assert.match(panel, /const selectedAccountId = draftAccountId \|\| currentAccountId/);
+  assert.match(panel, /value=\{selectedAccountId\}/);
+  assert.match(panel, /handlePnlAccountDraftChange\(txn, accountId\)/);
+  assert.match(panel, /if \(!nextAccountId \|\| nextAccountId === currentAccountId\) delete next\[rowKey\]/);
+  assert.doesNotMatch(panel, /onChange=\{\(accountId\) => onAccountChange\(txn, accountId\)\}/);
+});
+
+test("Monthly Review QBO P&L reclassification shows confirm and cancel only for changed drafts", () => {
+  const panel = extractFunction(ui, "SourceLedgerPanel");
+
+  assert.match(panel, /const hasDraft = Boolean\(draftAccountId && draftAccountId !== currentAccountId\)/);
+  assert.match(panel, /hasDraft \? \(/);
+  assert.match(panel, /Confirm Reclass/);
+  assert.match(panel, /handlePnlConfirmReclass\(txn\)/);
+  assert.match(panel, /handlePnlAccountDraftCancel\(txn\)/);
+  assert.match(panel, /Cancel/);
+});
+
+test("Monthly Review QBO P&L reclassification eligibility is limited to linked supported QBO identities", () => {
+  const panel = extractFunction(ui, "SourceLedgerPanel");
+
+  assert.match(ui, /const QBO_PNL_RECLASSIFIABLE_TYPES = new Set\(\["Purchase", "Deposit", "CreditCardCharge"\]\)/);
+  assert.match(panel, /const linked = Boolean\(txn\.bizzi_transaction_id\)/);
+  assert.match(panel, /const identityComplete = Boolean\(txn\.qbo_txn_id && txn\.qbo_txn_type\)/);
+  assert.match(panel, /const supportedTxnType = QBO_PNL_RECLASSIFIABLE_TYPES\.has\(String\(txn\.qbo_txn_type \|\| ""\)\)/);
+  assert.match(panel, /const editable = linked && identityComplete && supportedTxnType/);
+  assert.match(panel, /editable \? \(/);
+  assert.match(panel, /Read-only/);
+});
+
+test("Monthly Review QBO P&L failed reclassification keeps draft selection and row error", () => {
+  const panel = extractFunction(ui, "SourceLedgerPanel");
+
+  assert.match(panel, /throwOnError: true/);
+  assert.match(panel, /setPnlReclassErrors\(\(current\) => \(\{/);
+  assert.match(panel, /\[rowKey\]: e\?\.body\?\.message \|\| e\?\.message \|\| "Could not reclassify this QuickBooks transaction\."/);
+  assert.match(panel, /rowError \? <div className="text-\[11px\] text-amber-100">\{rowError\}<\/div> : null/);
+  assert.doesNotMatch(panel, /catch[\s\S]*delete next\[rowKey\]/);
+});
+
+test("Monthly Review QBO P&L successful reclassification clears draft and refreshes from QBO authority", () => {
+  const panel = extractFunction(ui, "SourceLedgerPanel");
+
+  assert.match(panel, /if \(result\?\.ok\) \{/);
+  assert.match(panel, /delete next\[rowKey\]/);
+  assert.match(ui, /await refreshQboPnlSnapshot\(\{ afterReclassification: true \}\)/);
+  assert.match(ui, /setQboPnlAccountDetails\(\{\}\)/);
+  assert.doesNotMatch(ui, /createQbo|postSingleBookkeepingTransactionNow|approveBookkeepingTransactions/);
 });

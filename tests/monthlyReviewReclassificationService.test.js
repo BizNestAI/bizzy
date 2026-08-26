@@ -394,5 +394,7 @@ test("Monthly Review Phase 2A collapsed P&L behavior remains wired after reclass
   assert.match(ui, /setExpandedAccountKeys\(\(current\) => \{/);
   assert.match(ui, /aria-expanded=\{expanded\}/);
   assert.match(ui, /\{expanded \? \(/);
-  assert.match(ui, /onChange=\{\(accountId\) => onAccountChange\(txn, accountId\)\}/);
+  assert.match(ui, /onChange=\{\(accountId\) => handlePnlAccountDraftChange\(txn, accountId\)\}/);
+  assert.match(ui, /Confirm Reclass/);
+  assert.match(ui, /transactionId: txn\.bizzi_transaction_id/);
 });
