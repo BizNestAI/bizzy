@@ -13,10 +13,12 @@ import {
   summarizePipelineStatuses,
 } from "../../services/bookkeeping/reconciliationPipelineStatus.js";
 import {
+  buildBookkeepingRowFromOperatorResponse,
   buildLocallyPatchedBookkeepingRow,
   findSourceLedgerAccount,
   patchBookkeepingFeedsAfterApprovalState,
   patchBookkeepingFeedsAfterReclassificationState,
+  patchOperatorResponseApprovalInDetail,
   patchSourceLedgerTransaction,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 
@@ -65,7 +67,7 @@ const BOOKKEEPING_FEED_CONFIG = {
     description: "Exact selected-month Books Review Needs Review population.",
   },
   handled: {
-    label: "Handled",
+    label: "Handled in Books Review",
     description: "Exact selected-month Books Review Handled population.",
   },
 };
@@ -124,6 +126,9 @@ export default function MonthlyReviewConsole() {
   const [reminderMessage, setReminderMessage] = useState("");
   const [reminderDueAt, setReminderDueAt] = useState("");
   const [busyAction, setBusyAction] = useState("");
+  const [busyOperatorResponseActions, setBusyOperatorResponseActions] = useState({});
+  const [operatorResponseActionErrors, setOperatorResponseActionErrors] = useState({});
+  const operatorResponseApprovalInFlightRef = useRef(new Set());
   const [customerViewError, setCustomerViewError] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
   const [activeLock, setActiveLock] = useState(null);
@@ -813,13 +818,18 @@ export default function MonthlyReviewConsole() {
 
   const approveOperatorResponse = async (response, accountId) => {
     if (!selectedBusinessId || !response?.request_id || !accountId) return;
-    const account = (sourceLedger?.chart_accounts || []).find((item) => String(item.id) === String(accountId));
+    const account = findSourceLedgerAccount(sourceLedger, accountId);
     if (!account) return;
-    const actionKey = `operator-response:${response.request_id}`;
+    const requestId = String(response.request_id);
+    if (operatorResponseApprovalInFlightRef.current.has(requestId)) return;
+    operatorResponseApprovalInFlightRef.current.add(requestId);
+    const actionKey = `operator-response:${requestId}`;
+    setBusyOperatorResponseActions((current) => ({ ...current, [requestId]: true }));
+    setOperatorResponseActionErrors((current) => ({ ...current, [requestId]: "" }));
     setBusyAction(actionKey);
     setError("");
     try {
-      await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/operator-responses/${encodeURIComponent(response.request_id)}/approve`, {
+      const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/operator-responses/${encodeURIComponent(response.request_id)}/approve`, {
         method: "POST",
         body: {
           month,
@@ -827,13 +837,38 @@ export default function MonthlyReviewConsole() {
           reason: "Approved from monthly Operator Response review.",
         },
       });
-      await loadDetail();
-      await loadSourceLedger();
-      await loadBusinesses();
+      const targetAccount = result?.target_account || account;
+      const sourceRow = buildBookkeepingRowFromOperatorResponse(response);
+      const patchResult = { ...result, target_account: targetAccount };
+      const patchedRow = buildLocallyPatchedBookkeepingRow(sourceRow, {
+        accountId: targetAccount.id,
+        targetAccount,
+        categorization: result?.categorization,
+        status: result?.bookkeeping_status || result?.categorization?.status || "approved",
+        pipelineStatusKey: "handled_not_posted",
+      });
+      setDetail((current) => patchOperatorResponseApprovalInDetail(current, requestId));
+      setBookkeepingFeeds((current) => patchBookkeepingFeedsAfterApprovalState(
+        current,
+        sourceRow,
+        targetAccount.id,
+        patchResult,
+        sourceLedger
+      ));
+      setSourceLedger((current) => patchSourceLedgerTransaction(current, patchedRow));
     } catch (e) {
-      setError(e?.body?.message || e?.message || "Could not approve Operator Response.");
+      setOperatorResponseActionErrors((current) => ({
+        ...current,
+        [requestId]: e?.body?.message || e?.message || "Could not approve Operator Response.",
+      }));
     } finally {
-      setBusyAction("");
+      operatorResponseApprovalInFlightRef.current.delete(requestId);
+      setBusyOperatorResponseActions((current) => {
+        const next = { ...current };
+        delete next[requestId];
+        return next;
+      });
+      setBusyAction((current) => (current === actionKey ? "" : current));
     }
   };
 
@@ -1311,6 +1346,8 @@ export default function MonthlyReviewConsole() {
                   data={detail?.operator_responses}
                   accounts={sourceLedger?.chart_accounts || []}
                   busyAction={busyAction}
+                  busyActions={busyOperatorResponseActions}
+                  rowErrors={operatorResponseActionErrors}
                   onApprove={approveOperatorResponse}
                 />
 
@@ -2259,13 +2296,17 @@ function QboPnlPreview({ snapshot }) {
   );
 }
 
-function OperatorResponsesPanel({ data, accounts = [], busyAction, onApprove }) {
+function OperatorResponsesPanel({ data, accounts = [], busyAction, busyActions = {}, rowErrors = {}, onApprove }) {
   const rows = Array.isArray(data?.rows) ? data.rows : [];
   const dropdownAccounts = useMemo(() => accounts.map(normalizeAccountForBooksDropdown), [accounts]);
+  const rowIdKey = rows.map((row) => row.request_id).join("|");
   const [selectedAccounts, setSelectedAccounts] = useState({});
   useEffect(() => {
-    setSelectedAccounts({});
-  }, [rows.map((row) => row.request_id).join("|")]);
+    const currentIds = new Set(rows.map((row) => String(row.request_id)));
+    setSelectedAccounts((current) => Object.fromEntries(
+      Object.entries(current || {}).filter(([requestId]) => currentIds.has(String(requestId)))
+    ));
+  }, [rowIdKey]);
   return (
     <div className="rounded-2xl border border-white/10 bg-black/18 p-4">
       <div className="flex flex-col gap-2 border-b border-white/10 pb-4 md:flex-row md:items-start md:justify-between">
@@ -2276,7 +2317,8 @@ function OperatorResponsesPanel({ data, accounts = [], busyAction, onApprove }) 
       </div>
       <div className="mt-4 space-y-3">
         {rows.length ? rows.map((row) => {
-          const busy = busyAction === `operator-response:${row.request_id}`;
+          const busy = Boolean(busyActions?.[row.request_id]) || busyAction === `operator-response:${row.request_id}`;
+          const rowError = rowErrors?.[row.request_id] || "";
           const selectedAccountId = selectedAccounts[row.request_id] || row.suggested_qbo_account_id || row.current_qbo_account_id || "";
           return (
             <div key={row.request_id} className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
@@ -2338,6 +2380,11 @@ function OperatorResponsesPanel({ data, accounts = [], busyAction, onApprove }) 
                     {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                     Approve
                   </button>
+                  {rowError ? (
+                    <div className="rounded-lg border border-amber-300/18 bg-amber-300/[0.06] px-3 py-2 text-xs font-medium text-amber-100/85">
+                      {rowError}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>

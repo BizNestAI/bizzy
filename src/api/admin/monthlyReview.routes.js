@@ -17,6 +17,7 @@ import {
   deriveTraceReconciliationStatus,
   formatPlaidAccountDisplayLabel,
 } from "../../services/bookkeeping/postingTraceDisplay.js";
+import { derivePipelineStatus } from "../../services/bookkeeping/reconciliationPipelineStatus.js";
 import {
   buildMonthlyPipelineRow,
   loadAuthoritativeMonthlyPlaidTransactions as loadSharedAuthoritativeMonthlyPlaidTransactions,
@@ -728,7 +729,7 @@ router.post("/businesses/:businessId/operator-responses/:requestId/approve", asy
     }
     const { data: currentCat, error: catErr } = await supabase
       .from("transaction_categorizations")
-      .select("transaction_id,status,meta")
+      .select("transaction_id,status,post_after,qbo_txn_id,qbo_txn_type,posted_at,post_error,last_post_attempt_at,meta")
       .eq("business_id", businessId)
       .eq("transaction_id", requestRow.transaction_id)
       .maybeSingle();
@@ -806,7 +807,24 @@ router.post("/businesses/:businessId/operator-responses/:requestId/approve", asy
       notes: "Approved customer Operator Response during monthly review.",
     }).catch(() => null);
 
-    return res.json({ ok: true, request_id: requestId, transaction_id: requestRow.transaction_id, categorization: updated });
+    const qboLifecycleStatus = deriveQboPostingLifecycle(updated || {});
+    const pipelineStatus = derivePipelineStatus({
+      bank: bankTxn,
+      cat: updated || {},
+    });
+
+    return res.json({
+      ok: true,
+      request_id: requestId,
+      transaction_id: requestRow.transaction_id,
+      categorization: updated,
+      target_account: targetAccount,
+      bookkeeping_status: updated?.status || "approved",
+      qbo_lifecycle_status: qboLifecycleStatus,
+      qbo_sync_status: qboLifecycleStatus,
+      pipeline_status: pipelineStatus,
+      pending: bankTxn.pending === true,
+    });
   } catch (e) {
     if (e instanceof BookkeepingApprovalError) {
       return res.status(e.status || 400).json({ ok: false, error: e.error, ...e.details });
@@ -2553,7 +2571,7 @@ async function fetchOperatorResponsesAwaitingReview(businessId, month) {
     ? await safeRows(() =>
         supabase
           .from("transaction_categorizations")
-          .select("transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,final_qbo_account_id,final_qbo_account_name,post_after,qbo_txn_id,posted_at,meta")
+          .select("transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,final_qbo_account_id,final_qbo_account_name,post_after,qbo_txn_id,qbo_txn_type,posted_at,post_error,last_post_attempt_at,meta")
           .eq("business_id", businessId)
           .in("transaction_id", bankRows.map((row) => row.id)),
         "Operator response categorizations"
@@ -2605,8 +2623,16 @@ async function fetchOperatorResponsesAwaitingReview(businessId, month) {
         merchant: bank.counterparty_name || bank.merchant_name || bank.name || "Transaction",
         description: bank.name || "",
         bank_memo: bank.name || "",
+        pending: bank.pending === true,
         status: cat.status || "needs_review",
         qbo_sync_status: deriveQboSyncStatus(cat),
+        qbo_txn_id: cat.qbo_txn_id || null,
+        qbo_txn_type: cat.qbo_txn_type || null,
+        posted_at: cat.posted_at || null,
+        post_after: cat.post_after || null,
+        post_error: cat.post_error || null,
+        last_post_attempt_at: cat.last_post_attempt_at || null,
+        meta: cat.meta || null,
         final_qbo_account_id: cat.final_qbo_account_id || null,
         final_qbo_account_name: cat.final_qbo_account_name || null,
         current_qbo_account_id: currentAccountId,

@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildBookkeepingRowFromOperatorResponse,
   buildLocallyPatchedBookkeepingRow,
   patchBookkeepingFeedsAfterApprovalState,
+  patchOperatorResponseApprovalInDetail,
   patchBookkeepingFeedsAfterReclassificationState,
   patchSourceLedgerTransaction,
 } from "../src/services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
@@ -104,4 +106,35 @@ test("source ledger trace category and pipeline totals patch without a full ledg
   assert.equal(traceRow.bizzi_gl_account, "Meals");
   assert.equal(traceRow.pipeline_status_key, "handled_not_posted");
   assert.equal(next.reconciliation_totals.handled_not_posted_count, 2);
+});
+
+test("operator response approval can build the same transaction row and remove only the resolved response", () => {
+  const response = {
+    request_id: "request-1",
+    transaction_id: "txn-1",
+    date: "2026-08-23",
+    amount: -13.97,
+    merchant: "Amelies",
+    description: "APLPay TST AMELIES",
+    source_account: "Blue Cash Everyday",
+    status: "needs_review",
+    suggested_qbo_account_id: "42",
+    suggested_qbo_account_name: "Meals",
+    pending: false,
+  };
+  const row = buildBookkeepingRowFromOperatorResponse(response);
+  assert.equal(row.id, "txn-1");
+  assert.equal(row.transaction_id, "txn-1");
+  assert.equal(row.status, "needs_review");
+  assert.equal(row.effective_account_name, "Meals");
+
+  const detail = {
+    operator_responses: {
+      count: 2,
+      rows: [response, { request_id: "request-2", transaction_id: "txn-2" }],
+    },
+  };
+  const next = patchOperatorResponseApprovalInDetail(detail, "request-1");
+  assert.equal(next.operator_responses.count, 1);
+  assert.deepEqual(next.operator_responses.rows.map((item) => item.request_id), ["request-2"]);
 });

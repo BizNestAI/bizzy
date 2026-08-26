@@ -183,7 +183,7 @@ test("admin Monthly Review exposes internal-only bounded mirror endpoints", () =
 test("Monthly Review renders collapsible Needs Review and Handled mirrors with bounded load-more paging", () => {
   assert.match(monthlyReviewUi, /BOOKKEEPING_FEED_PAGE_SIZE = 25/);
   assert.match(monthlyReviewUi, /needs_review:\s*\{[\s\S]*label:\s*"Needs Review"/);
-  assert.match(monthlyReviewUi, /handled:\s*\{[\s\S]*label:\s*"Handled"/);
+  assert.match(monthlyReviewUi, /handled:\s*\{[\s\S]*label:\s*"Handled in Books Review"/);
   assert.match(monthlyReviewUi, /BookkeepingFeedMirrorPanels/);
   assert.match(monthlyReviewUi, /aria-expanded=\{expanded\}/);
   assert.match(monthlyReviewUi, /\/bookkeeping\/transactions\/counts\?month=/);

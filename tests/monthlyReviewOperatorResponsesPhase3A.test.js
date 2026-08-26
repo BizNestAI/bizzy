@@ -41,6 +41,27 @@ test("Monthly Review Operator Responses use explicit accountant approval action 
   assert.doesNotMatch(submit, /final_qbo_account_name:\s*account\.name/);
 });
 
+test("Monthly Review Operator Response approval patches local state instead of reloading workspace", () => {
+  const ui = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const submitStart = ui.indexOf("const approveOperatorResponse");
+  const submitEnd = ui.indexOf("const openTransactionHistory", submitStart);
+  const submit = ui.slice(submitStart, submitEnd);
+  const panelStart = ui.indexOf("function OperatorResponsesPanel");
+  const panelEnd = ui.indexOf("function ReconciliationTracePanel", panelStart);
+  const panel = ui.slice(panelStart, panelEnd);
+
+  assert.match(submit, /operatorResponseApprovalInFlightRef/);
+  assert.match(submit, /setBusyOperatorResponseActions/);
+  assert.match(submit, /patchOperatorResponseApprovalInDetail/);
+  assert.match(submit, /patchBookkeepingFeedsAfterApprovalState/);
+  assert.match(submit, /patchSourceLedgerTransaction/);
+  assert.doesNotMatch(submit, /await loadDetail\(/);
+  assert.doesNotMatch(submit, /await loadSourceLedger\(/);
+  assert.doesNotMatch(submit, /await loadBusinesses\(/);
+  assert.match(panel, /rowErrors/);
+  assert.match(panel, /setSelectedAccounts\(\(current\) => Object\.fromEntries/);
+});
+
 test("Monthly Review Operator Response approval is server-authoritative and shared-service backed", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
   const approvalService = read("src/services/bookkeeping/bookkeepingApprovalService.js");
@@ -56,6 +77,9 @@ test("Monthly Review Operator Response approval is server-authoritative and shar
   assert.match(approveRoute, /approveBookkeepingTransactions\(\{/);
   assert.match(approveRoute, /requireNeedsReview:\s*true/);
   assert.match(approveRoute, /allowCcPaymentRejection:\s*false/);
+  assert.match(approveRoute, /target_account:\s*targetAccount/);
+  assert.match(approveRoute, /pipeline_status:\s*pipelineStatus/);
+  assert.match(approveRoute, /qbo_lifecycle_status:\s*qboLifecycleStatus/);
   assert.match(approvalService, /getAutoPostToQuickBooks/);
   assert.match(approvalService, /computePostAfterForAutoPost\(autoPostEnabled, 24\)/);
 });

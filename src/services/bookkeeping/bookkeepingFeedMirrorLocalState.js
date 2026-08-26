@@ -169,3 +169,44 @@ export function patchSourceLedgerTransaction(sourceLedger = null, nextRow = {}) 
       : sourceLedger.reconciliation_totals,
   };
 }
+
+export function buildBookkeepingRowFromOperatorResponse(response = {}) {
+  const accountId = response.final_qbo_account_id || response.current_qbo_account_id || response.suggested_qbo_account_id || null;
+  const accountName = response.final_qbo_account_name || response.current_qbo_account_name || response.suggested_qbo_account_name || "Uncategorized";
+  return {
+    ...response,
+    id: response.transaction_id,
+    transaction_id: response.transaction_id,
+    date: response.date,
+    amount: response.amount,
+    pending: response.pending === true,
+    description: response.description || response.bank_memo || response.merchant || "Transaction",
+    merchant: response.merchant || response.description || "Transaction",
+    source_account: response.source_account || null,
+    bank_account: response.source_account || null,
+    status: response.status || "needs_review",
+    final_qbo_account_id: response.final_qbo_account_id || null,
+    final_qbo_account_name: response.final_qbo_account_name || null,
+    suggested_qbo_account_id: response.suggested_qbo_account_id || null,
+    suggested_qbo_account_name: response.suggested_qbo_account_name || null,
+    glAccountId: accountId,
+    glAccountName: accountName,
+    effective_account_id: accountId,
+    effective_account_name: accountName,
+  };
+}
+
+export function patchOperatorResponseApprovalInDetail(detail = null, requestId = "") {
+  if (!detail?.operator_responses) return detail;
+  const rows = Array.isArray(detail.operator_responses.rows) ? detail.operator_responses.rows : [];
+  const nextRows = rows.filter((row) => String(row.request_id) !== String(requestId));
+  const removed = nextRows.length !== rows.length;
+  return {
+    ...detail,
+    operator_responses: {
+      ...detail.operator_responses,
+      rows: nextRows,
+      count: removed ? decrementCount(detail.operator_responses.count ?? rows.length) : detail.operator_responses.count,
+    },
+  };
+}
