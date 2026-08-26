@@ -571,25 +571,27 @@ export function normalizeDetailTransactions(report, {
       return;
     }
     const accountContext = nearestAccountContext(ancestors);
-    const accountName = cleanQboReportAccountName(
+    const rowAccountName = cleanQboReportAccountName(
       pickValue(values, ["account", "accountname", "split", "splitaccount", "distributionaccount", "itemsplitaccount"])
         || accountNameFromColData(row.ColData, qboAccountById)
-        || accountContext?.name
         || null
     );
-    const accountId = firstId(row.ColData, ["account", "accountname", "split", "splitaccount", "distributionaccount", "itemsplitaccount"], columns)
-      || accountIdFromColData(row.ColData, qboAccountById)
-      || accountContext?.id;
-    if (!accountName && !accountId) {
+    const rowAccountId = firstId(row.ColData, ["account", "accountname", "split", "splitaccount", "distributionaccount", "itemsplitaccount"], columns)
+      || accountIdFromColData(row.ColData, qboAccountById);
+    const detailAccount = resolveDetailPnlAccount({
+      detailReportName,
+      resolver,
+      qboAccountById,
+      accountContext,
+      rowAccountId,
+      rowAccountName,
+    });
+    if (!detailAccount.accountName && !detailAccount.accountId) {
       stats.skipped_missing_account_context += 1;
       return;
     }
-    const accountRef = resolver.resolve({
-      id: accountId,
-      name: accountName,
-      path: accountName,
-    });
-    if (detailReportName === "GeneralLedger" && !isPnlAccount(accountRef.account || qboAccountById.get(String(accountId || "")))) {
+    const { accountRef, accountId, accountName, pnlAccountSource } = detailAccount;
+    if (!isDetailRowPnlAccount({ detailReportName, accountRef, accountId, qboAccountById })) {
       stats.skipped_non_pnl_account += 1;
       return;
     }
@@ -627,6 +629,9 @@ export function normalizeDetailTransactions(report, {
         transaction_identity_source: txnId ? transactionIdentitySource(row, columns, txnType, accountId) : "missing",
         qbo_doc_number: pickValue(values, ["num", "docnum", "docnumber"]) || null,
         qbo_split_account: pickValue(values, ["itemsplitaccount", "split", "splitaccount", "distributionaccount"]) || null,
+        counterpart_account_id: rowAccountId ? String(rowAccountId) : null,
+        counterpart_account_name: rowAccountName,
+        pnl_account_source: pnlAccountSource,
         qbo_report_columns: columns.map((column) => column.key),
         qbo_identity_complete: hasCompleteIdentity,
         visibility_authoritative: true,
@@ -856,6 +861,71 @@ function isTransactionDataRow(row) {
 
 function isPnlAccount(account) {
   return PNL_ACCOUNT_TYPES.has(canonicalPnlType(account?.type || account?.account_type || account?.AccountType));
+}
+
+function resolveDetailPnlAccount({
+  detailReportName,
+  resolver,
+  qboAccountById,
+  accountContext,
+  rowAccountId,
+  rowAccountName,
+}) {
+  const candidates = [];
+  if (detailReportName === "ProfitAndLossDetail") {
+    if (accountContext?.name || accountContext?.id) {
+      candidates.push({
+        source: "report_group_context",
+        id: accountContext?.id || null,
+        name: accountContext?.name || null,
+      });
+    }
+    if (rowAccountId || rowAccountName) {
+      candidates.push({ source: "row_account_context", id: rowAccountId || null, name: rowAccountName || null });
+    }
+  } else {
+    if (rowAccountId || rowAccountName) {
+      candidates.push({ source: "row_account_context", id: rowAccountId || null, name: rowAccountName || null });
+    }
+    if (accountContext?.name || accountContext?.id) {
+      candidates.push({
+        source: "report_group_context",
+        id: accountContext?.id || null,
+        name: accountContext?.name || null,
+      });
+    }
+  }
+
+  let fallback = null;
+  for (const candidate of candidates) {
+    const accountRef = resolver.resolve({
+      id: candidate.id,
+      name: candidate.name,
+      path: candidate.name,
+    });
+    const account = accountRef.account || qboAccountById.get(String(candidate.id || ""));
+    const shaped = {
+      accountRef,
+      accountId: candidate.id,
+      accountName: candidate.name,
+      pnlAccountSource: candidate.source,
+    };
+    if (!fallback) fallback = shaped;
+    if (accountRef.status === "resolved" && account && isPnlAccount(account)) return shaped;
+  }
+  return fallback || {
+    accountRef: { status: "unresolved", source: "none", account: null },
+    accountId: null,
+    accountName: null,
+    pnlAccountSource: "missing",
+  };
+}
+
+function isDetailRowPnlAccount({ detailReportName, accountRef, accountId, qboAccountById }) {
+  const account = accountRef.account || qboAccountById.get(String(accountId || ""));
+  if (account && !isPnlAccount(account)) return false;
+  if (detailReportName === "GeneralLedger") return Boolean(account && isPnlAccount(account));
+  return accountRef.status === "resolved" && Boolean(account && isPnlAccount(account));
 }
 
 function isCompatiblePnlType(reportType, coaType) {

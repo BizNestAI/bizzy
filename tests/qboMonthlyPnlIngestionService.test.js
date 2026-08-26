@@ -944,9 +944,12 @@ test("August QBO P&L refresh persists authoritative account drill-down rows by P
 test("real QuickBooks transaction report columns persist Services invoices and Software expense detail", async () => {
   const db = makeDb();
   const accounts = coaFixture([
-    { id: "20", name: "Services", fullyQualifiedName: "Services", type: "Income" },
-    { id: "21", name: "Payment Processing Fees", fullyQualifiedName: "Payment Processing Fees", type: "Expense" },
-    { id: "22", name: "Software", fullyQualifiedName: "Software", type: "Expense" },
+    { id: "7", name: "Services", fullyQualifiedName: "Services", type: "Income" },
+    { id: "1150040000", name: "Payment Processing Fees", fullyQualifiedName: "Payment Processing Fees", type: "Expense" },
+    { id: "24", name: "Software", fullyQualifiedName: "Software", type: "Expense" },
+    { id: "15", name: "Accounts Receivable (A/R)", fullyQualifiedName: "Accounts Receivable (A/R)", type: "Accounts Receivable" },
+    { id: "10", name: "Checking", fullyQualifiedName: "Checking", type: "Bank" },
+    { id: "19", name: "CREDIT CARD (8193) - 3", fullyQualifiedName: "CREDIT CARD (8193) - 3", type: "Credit Card" },
   ]);
   const summary = pnlSummaryFixture({
     sales: 1175,
@@ -957,14 +960,14 @@ test("real QuickBooks transaction report columns persist Services invoices and S
       Row: [
         {
           Header: { ColData: [{ value: "Income" }] },
-          Rows: { Row: [{ type: "Data", ColData: [{ value: "Services", id: "20" }, { value: "1175.00" }] }] },
+          Rows: { Row: [{ type: "Data", ColData: [{ value: "Services", id: "7" }, { value: "1175.00" }] }] },
           Summary: { ColData: [{ value: "Total Income" }, { value: "1175.00" }] },
         },
         {
           Header: { ColData: [{ value: "Expenses" }] },
           Rows: { Row: [
-            { type: "Data", ColData: [{ value: "Payment Processing Fees", id: "21" }, { value: "32.90" }] },
-            { type: "Data", ColData: [{ value: "Software", id: "22" }, { value: "160.00" }] },
+            { type: "Data", ColData: [{ value: "Payment Processing Fees", id: "1150040000" }, { value: "32.90" }] },
+            { type: "Data", ColData: [{ value: "Software", id: "24" }, { value: "160.00" }] },
           ] },
           Summary: { ColData: [{ value: "Total Expenses" }, { value: "192.90" }] },
         },
@@ -982,7 +985,6 @@ test("real QuickBooks transaction report columns persist Services invoices and S
         { ColTitle: "Name" },
         { ColTitle: "Description" },
         { ColTitle: "Account Name" },
-        { ColTitle: "Item split account" },
         { ColTitle: "Amount" },
         { ColTitle: "Balance" },
       ],
@@ -992,24 +994,26 @@ test("real QuickBooks transaction report columns persist Services invoices and S
         {
           Header: { ColData: [{ value: "Services (5)" }] },
           Rows: { Row: [
-            { type: "Data", ColData: [{ value: "08/06/2026" }, { value: "Invoice" }, { value: "1098" }, { value: "Projection and Video LLC" }, { value: "July 2026" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "300.00" }, { value: "300.00" }] },
-            { type: "Data", ColData: [{ value: "08/06/2026" }, { value: "Invoice" }, { value: "1099" }, { value: "AV Educate Inc" }, { value: "July 2026" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "200.00" }, { value: "500.00" }] },
-            { type: "Data", ColData: [{ value: "08/19/2026" }, { value: "Invoice" }, { value: "1103" }, { value: "AV Educate Inc" }, { value: "August 2026 Bookkeeping" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "200.00" }, { value: "700.00" }] },
-            { type: "Data", ColData: [{ value: "08/20/2026" }, { value: "Invoice" }, { value: "1100" }, { value: "PeriSocialHouseHotel" }, { value: "August 2026 Bookkeeping" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "125.00" }, { value: "825.00" }] },
-            { type: "Data", ColData: [{ value: "08/20/2026" }, { value: "Invoice" }, { value: "1101" }, { value: "PeriSocialHouseLLC" }, { value: "August 2026 Bookkeeping" }, { value: "Services", id: "20" }, { value: "Accounts Receivable (A/R)" }, { value: "350.00" }, { value: "1175.00" }] },
+            { type: "Data", ColData: [{ value: "08/06/2026" }, { value: "Invoice", id: "1283" }, { value: "1098" }, { value: "Projection and Video LLC" }, { value: "July 2026" }, { value: "Accounts Receivable (A/R)", id: "15" }, { value: "300.00" }, { value: "300.00" }] },
+            { type: "Data", ColData: [{ value: "08/06/2026" }, { value: "Invoice", id: "1284" }, { value: "1099" }, { value: "AV Educate Inc" }, { value: "July 2026" }, { value: "Accounts Receivable (A/R)", id: "15" }, { value: "200.00" }, { value: "500.00" }] },
+            { type: "Data", ColData: [{ value: "08/19/2026" }, { value: "Invoice", id: "1292" }, { value: "1103" }, { value: "AV Educate Inc" }, { value: "August 2026 Bookkeeping" }, { value: "Accounts Receivable (A/R)", id: "15" }, { value: "200.00" }, { value: "700.00" }] },
+            { type: "Data", ColData: [{ value: "08/20/2026" }, { value: "Invoice", id: "1289" }, { value: "1100" }, { value: "PeriSocialHouseHotel" }, { value: "August 2026 Bookkeeping" }, { value: "Accounts Receivable (A/R)", id: "15" }, { value: "125.00" }, { value: "825.00" }] },
+            { type: "Data", ColData: [{ value: "08/20/2026" }, { value: "Invoice", id: "1290" }, { value: "1101" }, { value: "PeriSocialHouseLLC" }, { value: "August 2026 Bookkeeping" }, { value: "Accounts Receivable (A/R)", id: "15" }, { value: "350.00" }, { value: "1175.00" }] },
           ] },
           Summary: { ColData: [{ value: "Total for Services" }, {}, {}, {}, {}, {}, {}, { value: "1175.00" }] },
         },
         {
           Header: { ColData: [{ value: "Payment Processing Fees" }] },
           Rows: { Row: [
-            { type: "Data", ColData: [{ value: "08/10/2026" }, { value: "Expense" }, { value: "" }, { value: "Intuit" }, { value: "Processing fees" }, { value: "Payment Processing Fees", id: "21" }, { value: "Checking" }, { value: "32.90" }, { value: "32.90" }] },
+            { type: "Data", ColData: [{ value: "08/07/2026" }, { value: "Expense", id: "1288" }, { value: "" }, { value: "QuickBooks Payments" }, { value: "Processing fees" }, { value: "Checking", id: "10" }, { value: "14.00" }, { value: "14.00" }] },
+            { type: "Data", ColData: [{ value: "08/19/2026" }, { value: "Expense", id: "1296" }, { value: "" }, { value: "QuickBooks Payments" }, { value: "Processing fees" }, { value: "Checking", id: "10" }, { value: "5.60" }, { value: "19.60" }] },
+            { type: "Data", ColData: [{ value: "08/20/2026" }, { value: "Expense", id: "1300" }, { value: "" }, { value: "QuickBooks Payments" }, { value: "Processing fees" }, { value: "Checking", id: "10" }, { value: "13.30" }, { value: "32.90" }] },
           ] },
         },
         {
           Header: { ColData: [{ value: "Software" }] },
           Rows: { Row: [
-            { type: "Data", ColData: [{ value: "08/16/2026" }, { value: "Expense" }, { value: "" }, { value: "Instantly" }, { value: "Software subscription" }, { value: "Software", id: "22" }, { value: "Credit Card" }, { value: "160.00" }, { value: "160.00" }] },
+            { type: "Data", ColData: [{ value: "08/16/2026" }, { value: "Expense", id: "1294" }, { value: "" }, { value: "Instantly" }, { value: "Software subscription" }, { value: "CREDIT CARD (8193) - 3", id: "19" }, { value: "160.00" }, { value: "160.00" }] },
           ] },
         },
       ],
@@ -1029,29 +1033,38 @@ test("real QuickBooks transaction report columns persist Services invoices and S
   assert.equal(result.snapshot.revenue, 1175);
   assert.equal(result.snapshot.expenses, 192.9);
   assert.equal(result.snapshot.net_profit, 982.1);
-  assert.equal(result.transactions.length, 7);
-  assert.equal(result.linkage.missingIdentity, 7);
+  assert.equal(result.transactions.length, 9);
+  assert.equal(result.linkage.qboOnly, 9);
   assert.equal(result.source.detail_report, "ProfitAndLossDetail");
 
-  const services = result.accounts.find((row) => row.qbo_account_id === "20");
-  const fees = result.accounts.find((row) => row.qbo_account_id === "21");
-  const software = result.accounts.find((row) => row.qbo_account_id === "22");
+  const services = result.accounts.find((row) => row.qbo_account_id === "7");
+  const fees = result.accounts.find((row) => row.qbo_account_id === "1150040000");
+  const software = result.accounts.find((row) => row.qbo_account_id === "24");
   assert.equal(services.metadata.transaction_count, 5);
-  assert.equal(fees.metadata.transaction_count, 1);
+  assert.equal(fees.metadata.transaction_count, 3);
   assert.equal(software.metadata.transaction_count, 1);
 
-  const serviceRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "20", db });
-  const softwareRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "22", db });
+  const serviceRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "7", db });
+  const feeRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "1150040000", db });
+  const softwareRows = await fetchMonthlyQboPnlAccountTransactions({ businessId: BUSINESS_ID, year: 2026, month: 8, accountId: "24", db });
   assert.equal(serviceRows.totalCount, 5);
   assert.equal(serviceRows.rows.reduce((sum, row) => sum + Number(row.amount), 0), 1175);
   assert.ok(serviceRows.rows.every((row) => row.qbo_txn_type === "Invoice"));
-  assert.ok(serviceRows.rows.every((row) => row.linkage_status === "missing_qbo_identity"));
+  assert.ok(serviceRows.rows.every((row) => row.qbo_account_id === "7"));
+  assert.ok(serviceRows.rows.every((row) => row.metadata.counterpart_account_id === "15"));
+  assert.ok(serviceRows.rows.every((row) => row.linkage_status === "qbo_only"));
   assert.equal(serviceRows.rows[0].metadata.qbo_doc_number, "1098");
-  assert.equal(serviceRows.rows[0].metadata.qbo_split_account, "Accounts Receivable (A/R)");
+  assert.equal(serviceRows.rows[0].metadata.counterpart_account_name, "Accounts Receivable (A/R)");
+  assert.equal(feeRows.totalCount, 3);
+  assert.equal(Math.round(feeRows.rows.reduce((sum, row) => sum + Number(row.amount), 0) * 100) / 100, 32.9);
+  assert.ok(feeRows.rows.every((row) => row.qbo_account_id === "1150040000"));
+  assert.ok(feeRows.rows.every((row) => row.metadata.counterpart_account_id === "10"));
   assert.equal(softwareRows.totalCount, 1);
   assert.equal(Number(softwareRows.rows[0].amount), 160);
   assert.equal(softwareRows.rows[0].qbo_txn_type, "Purchase");
-  assert.equal(softwareRows.rows[0].linkage_status, "missing_qbo_identity");
+  assert.equal(softwareRows.rows[0].qbo_account_id, "24");
+  assert.equal(softwareRows.rows[0].metadata.counterpart_account_id, "19");
+  assert.equal(softwareRows.rows[0].linkage_status, "qbo_only");
 });
 
 test("zero-row ProfitAndLossDetail for non-zero accounts falls back to P&L-filtered GeneralLedger detail", async () => {
