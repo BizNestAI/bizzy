@@ -239,6 +239,13 @@ export default function MonthlyReviewConsole() {
           month: Number(month.slice(5, 7)),
         },
       });
+      const proof = data?.refresh_proof || {};
+      if (
+        proof.created_new_current_snapshot !== true ||
+        proof.association_version !== "pnl_group_context_v2"
+      ) {
+        throw new Error("QuickBooks refresh did not produce a verified pnl_group_context_v2 snapshot.");
+      }
       const snapshot = await loadQboPnlSnapshot() || data?.snapshot || null;
       applyQboPnlSnapshot(snapshot);
       setQboPnlAccountDetails({});

@@ -1360,6 +1360,16 @@ test("refresh builds a QBO-authoritative snapshot, preserves QBO-only rows, and 
       { business_id: BUSINESS_ID, transaction_id: TXN_ID, qbo_txn_id: "9001", qbo_txn_type: "Purchase", status: "posted" },
     ],
   });
+  const previous = await createOrReplaceMonthlyPnlSnapshot({
+    businessId: BUSINESS_ID,
+    reviewYear: 2026,
+    reviewMonth: 8,
+    revenue: 1,
+    accounts: [{ qbo_account_id: "1", account_name: "Sales of Product Income", account_type: "Income", total_amount: 1 }],
+    transactions: [],
+    linkTransactions: false,
+    db,
+  });
   const reportsCalled = [];
   const result = await refreshMonthlyQboPnlSnapshot({
     businessId: BUSINESS_ID,
@@ -1401,12 +1411,27 @@ test("refresh builds a QBO-authoritative snapshot, preserves QBO-only rows, and 
 
   assert.deepEqual(reportsCalled, ["ProfitAndLoss", "ProfitAndLossDetail"]);
   assert.equal(result.snapshot.is_current, true);
+  assert.notEqual(result.snapshot.id, previous.snapshot.id);
+  assert.equal(result.previousSnapshot.id, previous.snapshot.id);
+  assert.equal(result.previousSnapshot.snapshot_version, 1);
+  assert.equal(result.refreshProof.created_new_current_snapshot, true);
+  assert.equal(result.refreshProof.previous_snapshot.id, previous.snapshot.id);
+  assert.equal(result.refreshProof.new_snapshot.id, result.snapshot.id);
+  assert.equal(result.refreshProof.new_snapshot.snapshot_version, 2);
+  assert.equal(result.refreshProof.association_version, "pnl_group_context_v2");
+  assert.equal(result.refreshProof.detail_transaction_count, 4);
+  assert.deepEqual(result.refreshProof.rows_by_pnl_qbo_account_id, { 1: 2, 2: 1, 3: 1 });
+  assert.ok(Object.hasOwn(result.refreshProof, "backend_build"));
+  assert.equal(result.source.detail_account_association.version, "pnl_group_context_v2");
+  assert.ok(Object.hasOwn(result.source.detail_account_association.backend_build, "build_started_at"));
   assert.equal(result.snapshot.revenue, 3267.45);
   assert.equal(result.linkage.linked, 1);
   assert.equal(result.linkage.qboOnly, 3);
   assert.equal(db.tables.monthly_review_qbo_pnl_transactions.length, 4);
   assert.equal(db.tables.monthly_review_qbo_pnl_transactions.find((row) => row.qbo_txn_id === "qbo-only-1").bizzi_transaction_id, null);
   assert.equal(db.tables.bank_transactions.length, 1);
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.filter((row) => row.is_current).length, 1);
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots.find((row) => row.id === previous.snapshot.id).status, "superseded");
 });
 
 test("persisted QBO P&L account detail reads by QBO account id or snapshot account row id without provider calls", async () => {
@@ -1504,7 +1529,21 @@ test("admin routes are internal-only; GET reads persisted snapshots and POST ref
   assert.match(routes, /includeAccounts: true/);
   assert.match(routes, /snapshot: snapshot \|\| result\.snapshot/);
   assert.match(routes, /refreshMonthlyQboPnlSnapshot/);
+  assert.match(routes, /previous_snapshot/);
+  assert.match(routes, /refresh_proof/);
+  assert.match(routes, /association_version/);
+  assert.match(routes, /backend_build/);
   assert.match(routes, /qbo_reads: false/);
   assert.match(routes, /qbo_reads: true/);
   assert.doesNotMatch(ingestion, /createQbo|updateQbo|postSingleBookkeepingTransactionNow|reclassifyBookkeepingTransaction|approveBookkeepingTransactions|plaid|OpenAI|new OpenAI/i);
+});
+
+test("backend health exposes safe build metadata without secrets", () => {
+  const server = read("src/server.js");
+  const buildInfo = read("src/utils/buildInfo.js");
+  assert.match(server, /\/healthz/);
+  assert.match(server, /getBackendBuildInfo\(\)/);
+  assert.match(buildInfo, /RAILWAY_GIT_COMMIT_SHA/);
+  assert.match(buildInfo, /build_started_at/);
+  assert.doesNotMatch(buildInfo, /SUPABASE_SERVICE_ROLE_KEY|QUICKBOOKS_CLIENT_SECRET|access_token|refresh_token/);
 });

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { getQBOClient as defaultGetQBOClient } from "../../utils/qboClient.js";
 import { qbApiBase, qboEnvName } from "../../utils/qboEnv.js";
+import { getBackendBuildInfo } from "../../utils/buildInfo.js";
 import {
   getLatestQuickBooksTokenRow,
   getQuickBooksAccessToken,
@@ -50,6 +51,15 @@ export async function refreshMonthlyQboPnlSnapshot({
   const reviewMonth = Number(month);
   const { sourceStartDate, sourceEndDate } = getMonthlySourceRange(reviewYear, reviewMonth);
   const qboContext = await loadContext({ businessId });
+  const backendBuild = getBackendBuildInfo();
+  const previousSnapshot = await getLatestMonthlyPnlSnapshot({
+    businessId,
+    reviewYear,
+    reviewMonth,
+    includeAccounts: false,
+    includeTransactions: false,
+    db,
+  });
 
   let stagedSnapshot = null;
   try {
@@ -83,6 +93,7 @@ export async function refreshMonthlyQboPnlSnapshot({
       detailReport: detailResponse.report,
       detailReportName: detailResponse.reportName,
       qboAccounts,
+      backendBuild,
     });
     if (shouldTryGeneralLedgerZeroDetailFallback(normalized, detailResponse.reportName)) {
       try {
@@ -107,6 +118,7 @@ export async function refreshMonthlyQboPnlSnapshot({
           detailReport: fallbackResponse.report,
           detailReportName: fallbackResponse.reportName,
           qboAccounts,
+          backendBuild,
         });
         fallbackNormalized.metadata.source.detail_fallback = {
           from: detailResponse.reportName,
@@ -158,9 +170,22 @@ export async function refreshMonthlyQboPnlSnapshot({
       snapshotId: persisted.snapshot.id,
       status: normalized.reconciliation.status === "valid_with_nonmaterial_rounding" ? "current" : "current",
     });
+    validateRefreshPromotionProof({ previousSnapshot, stagedSnapshot: persisted.snapshot, promotedSnapshot });
+    const refreshProof = buildRefreshProof({
+      previousSnapshot,
+      newSnapshot: promotedSnapshot,
+      normalized,
+      backendBuild,
+    });
     return {
       ok: true,
       snapshot: promotedSnapshot,
+      previousSnapshot: previousSnapshot ? {
+        id: previousSnapshot.id,
+        snapshot_version: previousSnapshot.snapshot_version,
+        pulled_at: previousSnapshot.pulled_at || null,
+      } : null,
+      refreshProof,
       accounts: persisted.accounts,
       transactions: persisted.transactions,
       linkage: persisted.linkage,
@@ -372,6 +397,7 @@ export function normalizeQboPnlSnapshotPayload({
   detailReport,
   detailReportName,
   qboAccounts = [],
+  backendBuild = getBackendBuildInfo(),
 } = {}) {
   const summary = parseProfitAndLossSummary(summaryReport, {
     reviewYear,
@@ -414,6 +440,7 @@ export function normalizeQboPnlSnapshotPayload({
         transaction_count: transactions.length,
         rows_by_pnl_qbo_account_id: transactions.normalization_stats?.rows_by_qbo_account_id || {},
         counterpart_account_metadata: true,
+        backend_build: backendBuild,
       },
     },
     reconciliation,
@@ -795,6 +822,51 @@ function buildSafeReconciliationDiagnostics(reconciliation = {}) {
     parsed_counts: reconciliation.parsed_counts || {},
     account_detail_completeness: reconciliation.account_detail_completeness || [],
     failed_checks: (reconciliation.checks || []).filter((check) => check.status === "failed"),
+  };
+}
+
+function validateRefreshPromotionProof({ previousSnapshot, stagedSnapshot, promotedSnapshot } = {}) {
+  if (!stagedSnapshot?.id || !promotedSnapshot?.id) {
+    throw new QboMonthlyPnlIngestionError("qbo_pnl_refresh_promotion_unverified", 500);
+  }
+  if (String(promotedSnapshot.id) !== String(stagedSnapshot.id)) {
+    throw new QboMonthlyPnlIngestionError("qbo_pnl_refresh_promoted_unexpected_snapshot", 500, {
+      expected_snapshot_id: stagedSnapshot.id,
+      promoted_snapshot_id: promotedSnapshot.id,
+      previous_snapshot_id: previousSnapshot?.id || null,
+    });
+  }
+  if (previousSnapshot?.id && String(previousSnapshot.id) === String(promotedSnapshot.id)) {
+    throw new QboMonthlyPnlIngestionError("qbo_pnl_refresh_reused_previous_snapshot", 500, {
+      previous_snapshot_id: previousSnapshot.id,
+    });
+  }
+}
+
+function buildRefreshProof({ previousSnapshot, newSnapshot, normalized, backendBuild } = {}) {
+  const association = normalized?.metadata?.source?.detail_account_association || {};
+  return {
+    previous_snapshot: previousSnapshot ? {
+      id: previousSnapshot.id,
+      snapshot_version: previousSnapshot.snapshot_version,
+      pulled_at: previousSnapshot.pulled_at || null,
+    } : null,
+    new_snapshot: newSnapshot ? {
+      id: newSnapshot.id,
+      snapshot_version: newSnapshot.snapshot_version,
+      pulled_at: newSnapshot.pulled_at || null,
+      status: newSnapshot.status || null,
+      is_current: newSnapshot.is_current === true,
+    } : null,
+    created_new_current_snapshot: Boolean(
+      newSnapshot?.id
+      && newSnapshot?.is_current === true
+      && (!previousSnapshot?.id || String(newSnapshot.id) !== String(previousSnapshot.id))
+    ),
+    association_version: association.version || null,
+    detail_transaction_count: association.transaction_count ?? normalized?.transactions?.length ?? 0,
+    rows_by_pnl_qbo_account_id: association.rows_by_pnl_qbo_account_id || {},
+    backend_build: backendBuild || null,
   };
 }
 

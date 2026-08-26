@@ -4,6 +4,7 @@ import express from "express";
 import cors from "cors";
 import fileUpload from "express-fileupload";
 import morgan from "morgan";
+import { getBackendBuildInfo } from "./utils/buildInfo.js";
 
 // Accounting routers
 import quickbooksAuth from "./api/auth/quickbooksAuth.js";
@@ -189,7 +190,10 @@ app.use((req, res, next) => {
 });
 
 /* ------------------------------------ Healthcheck ------------------------------------- */
-app.get("/healthz", (_req, res) => res.status(200).json({ ok: true }));
+app.get("/healthz", (_req, res) => res.status(200).json({
+  ok: true,
+  build: getBackendBuildInfo(),
+}));
 
 /* ------------------------ Dev bypass for Investments (no token) ------------------------ */
 const PROD_AUTH_BYPASS_FLAGS = [

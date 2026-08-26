@@ -120,6 +120,10 @@ test("Monthly Review QBO P&L wiring uses persisted GET on load and explicit refr
   assert.match(ui, /\/qbo-pnl\/refresh/);
   assert.match(ui, /method: "POST"/);
   assert.match(ui, /setQboPnlAccountDetails\(\{\}\)/);
+  assert.match(ui, /const proof = data\?\.refresh_proof \|\| \{\}/);
+  assert.match(ui, /proof\.created_new_current_snapshot !== true/);
+  assert.match(ui, /proof\.association_version !== "pnl_group_context_v2"/);
+  assert.match(ui, /QuickBooks refresh did not produce a verified pnl_group_context_v2 snapshot/);
   assert.match(ui, /const snapshot = await loadQboPnlSnapshot\(\) \|\| data\?\.snapshot \|\| null/);
   assert.match(ui, /applyQboPnlSnapshot\(snapshot\)/);
   assert.doesNotMatch(ui, /const snapshot = data\?\.snapshot \|\| await loadQboPnlSnapshot\(\)/);
