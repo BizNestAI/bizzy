@@ -6,6 +6,7 @@ import { decideBookkeepingCategorization } from "./bookkeepingCategorizationDeci
 import { resolveCanonicalVendorForTransaction } from "./canonicalVendorService.js";
 import { resolveCanonicalQboAccount, validateCanonicalQboAccountForPromotion } from "./canonicalQboAccountResolver.js";
 import { resolveIntentToCanonicalKey } from "./canonicalCoaRegistry.js";
+import { mapIntentToCoa } from "./intentToCoaMapper.js";
 import { getUniversalVendorHintForTransaction } from "./universalVendorHintMatcher.js";
 import { getVendorRuleForTransaction } from "./vendorRuleMatcher.js";
 import { canonicalTxnDirection, looksLikeTaxonomyLandmineMemo } from "./vendorRuleLearner.js";
@@ -71,15 +72,15 @@ function accountFromCategorization(cat = {}) {
   };
 }
 
-async function fetchActiveQboAccountById({ businessId, accountId, fallbackName = null, db, dependencies = {} }) {
-  if (!businessId || !accountId) return null;
+async function fetchActiveQboAccounts({ businessId, dependencies = {} }) {
+  if (!businessId) return [];
   const getQBOClient = dependencies.getQBOClient || (async (id) => {
     const mod = await import("../../utils/qboClient.js");
     return mod.getQBOClient(id);
   });
   try {
     const qbo = await getQBOClient(businessId);
-    if (!qbo?.findAccounts) return { id: String(accountId), name: fallbackName || String(accountId), type: null, subType: null };
+    if (!qbo?.findAccounts) return [];
     const result = await new Promise((resolve, reject) => {
       qbo.findAccounts({ Active: true }, (err, data) => {
         if (err) return reject(err);
@@ -87,17 +88,56 @@ async function fetchActiveQboAccountById({ businessId, accountId, fallbackName =
       });
     });
     const accounts = Array.isArray(result?.QueryResponse?.Account) ? result.QueryResponse.Account : [];
-    const hit = accounts.find((account) => String(account.Id || account.id) === String(accountId));
-    if (!hit || hit.Active === false) return null;
-    return {
-      id: String(hit.Id || hit.id),
-      name: hit.Name || hit.name || fallbackName || String(accountId),
-      type: hit.AccountType || hit.type || null,
-      subType: hit.AccountSubType || hit.subType || null,
-    };
+    return accounts
+      .filter((account) => account?.Active !== false)
+      .map((account) => ({
+        id: String(account.Id || account.id),
+        name: account.Name || account.name || null,
+        type: account.AccountType || account.type || null,
+        subType: account.AccountSubType || account.subType || null,
+      }))
+      .filter((account) => account.id && account.name);
   } catch {
-    return { id: String(accountId), name: fallbackName || String(accountId), type: null, subType: null };
+    return [];
   }
+}
+
+async function fetchActiveQboAccountById({ businessId, accountId, fallbackName = null, db, dependencies = {} }) {
+  void db;
+  if (!businessId || !accountId) return null;
+  const accounts = await fetchActiveQboAccounts({ businessId, dependencies });
+  const hit = accounts.find((account) => String(account.id) === String(accountId));
+  if (!hit) return null;
+  return {
+    id: hit.id,
+    name: hit.name || fallbackName || String(accountId),
+    type: hit.type || null,
+    subType: hit.subType || null,
+  };
+}
+
+async function resolveStrongSemanticCoaAccount({ businessId, intent, dependencies = {} }) {
+  if (!businessId || !intent) return null;
+  const accounts = await fetchActiveQboAccounts({ businessId, dependencies });
+  if (!accounts.length) return null;
+  const match = mapIntentToCoa({
+    businessId,
+    intent,
+    coaAccounts: accounts,
+    allowSemanticFallbackForCanonicalOnly: true,
+  });
+  if (!match?.qbo_account_id || !match?.qbo_account_name) return null;
+  const account = accounts.find((item) => String(item.id) === String(match.qbo_account_id));
+  if (!account) return null;
+  const score = Number(match.score || 0);
+  if (!Number.isFinite(score) || score < 32) return null;
+  return {
+    id: account.id,
+    name: account.name,
+    type: account.type || null,
+    subType: account.subType || null,
+    match,
+  };
 }
 
 function canonicalAccountKey(cat = {}, meta = {}) {
@@ -450,7 +490,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           supabase: db,
         },
       });
-      const account =
+      let account =
         canonicalResolution?.ok && canonicalResolution?.account?.id && canonicalResolution?.review_required !== true
           ? {
               id: String(canonicalResolution.account.id),
@@ -459,6 +499,22 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
               subType: canonicalResolution.account.subType || canonicalResolution.account.AccountSubType || null,
             }
           : { id: null, name: null };
+      let semanticResolution = null;
+      if (!account.id) {
+        semanticResolution = await resolveStrongSemanticCoaAccount({
+          businessId,
+          intent: universalHint.primary_intent,
+          dependencies,
+        });
+        if (semanticResolution?.id && semanticResolution?.name) {
+          account = {
+            id: semanticResolution.id,
+            name: semanticResolution.name,
+            type: semanticResolution.type,
+            subType: semanticResolution.subType,
+          };
+        }
+      }
       const vendorEvidence = await resolveVendorEvidence({
         db,
         businessId,
@@ -470,18 +526,19 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         },
       });
       const canonicalAccountResolved = Boolean(account.id && account.name);
+      const semanticAccountResolved = Boolean(semanticResolution?.id && semanticResolution?.name);
       const decision = decideBookkeepingCategorization({
         transaction: bankTxn,
         account,
         evidence: {
-          source: "universal_hint",
+          source: semanticAccountResolved ? "universal_hint_semantic_coa" : "universal_hint",
           confidenceTier: universalHint.confidence || "high",
           taxonomyType: meta.taxonomy_type || null,
           isCheck: false,
           meta,
-          canonicalAccountResolved,
+          canonicalAccountResolved: canonicalAccountResolved || semanticAccountResolved,
           canonicalAccountKey: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
-          canonicalAccountReviewRequired: canonicalAccountResolved !== true,
+          canonicalAccountReviewRequired: canonicalAccountResolved !== true && semanticAccountResolved !== true,
           canonicalVendorId: vendorEvidence.canonicalVendorId || null,
           canonicalVendorReliable: vendorEvidence.canonicalVendorReliable === true,
           weakVendorEvidence: vendorEvidence.weakVendorEvidence === true,
@@ -510,9 +567,11 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           canonical_resolution_status: canonicalResolution?.status || null,
         },
         canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
-        canonical_coa_resolved: canonicalAccountResolved,
-        canonical_account_review_required: canonicalAccountResolved !== true,
-        canonical_setup_required: canonicalAccountResolved !== true,
+        canonical_coa_resolved: canonicalResolution?.ok === true && Boolean(canonicalResolution?.account?.id),
+        semantic_coa_resolved: semanticAccountResolved,
+        semantic_coa_match: semanticResolution?.match || null,
+        canonical_account_review_required: canonicalAccountResolved !== true && semanticAccountResolved !== true,
+        canonical_setup_required: canonicalAccountResolved !== true && semanticAccountResolved !== true,
         canonical_setup_required_reason: canonicalResolution?.reason || null,
         canonical_vendor_id: vendorEvidence.canonicalVendorId || null,
         canonical_vendor_reliable: vendorEvidence.canonicalVendorReliable === true,
@@ -540,7 +599,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           suggested_canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
           final_qbo_account_id: account.id,
           final_qbo_account_name: account.name,
-          final_canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+          final_canonical_account_key: semanticAccountResolved ? null : canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
           confidence: universalHint.confidence || "high",
           status: "auto_approved",
           post_after: postAfter,

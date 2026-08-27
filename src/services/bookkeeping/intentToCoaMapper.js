@@ -90,7 +90,7 @@ const RELATED_INTENT_KEYS = {
   travel: ["vehicle_expense", "parking_tolls"],
   vehicle_expense: ["travel", "fuel", "parking_tolls"],
   gas_charging: ["fuel", "vehicle_expense"],
-  parking_tolls: ["vehicle_expense", "travel"],
+  parking_tolls: ["transportation", "vehicle_expense", "travel"],
   materials: ["tools"],
   supplies: ["office_supplies", "materials"],
   tools: ["materials"],
@@ -263,9 +263,9 @@ function scoreAccount(intentKey, keywords, acct) {
   return { score, reason };
 }
 
-function buildIntentCandidates(intentKey) {
+function buildIntentCandidates(intentKey, { allowRelatedForStrict = false } = {}) {
   const candidates = [{ key: intentKey, penalty: 0, source: "primary" }];
-  if (STRICT_PRIMARY_ONLY_INTENTS.has(intentKey)) return candidates;
+  if (STRICT_PRIMARY_ONLY_INTENTS.has(intentKey) && allowRelatedForStrict !== true) return candidates;
   const related = RELATED_INTENT_KEYS[intentKey] || [];
   related.forEach((key, index) => {
     if (!INTENT_KEYWORDS[key]) return;
@@ -278,7 +278,7 @@ function buildIntentCandidates(intentKey) {
   return candidates;
 }
 
-export function mapIntentToCoa({ businessId, intent, coaAccounts }) {
+export function mapIntentToCoa({ businessId, intent, coaAccounts, allowSemanticFallbackForCanonicalOnly = false }) {
   void businessId; // reserved for future business-specific weighting
   if (!intent || !coaAccounts?.length) return null;
   const rawKey = intent.toLowerCase();
@@ -310,10 +310,12 @@ export function mapIntentToCoa({ businessId, intent, coaAccounts }) {
     };
   }
 
-  if (CANONICAL_ONLY_INTENTS.has(intentKey)) return null;
+  if (CANONICAL_ONLY_INTENTS.has(intentKey) && allowSemanticFallbackForCanonicalOnly !== true) return null;
 
   for (const acct of normalized) {
-    for (const candidate of buildIntentCandidates(intentKey)) {
+    for (const candidate of buildIntentCandidates(intentKey, {
+      allowRelatedForStrict: allowSemanticFallbackForCanonicalOnly === true,
+    })) {
       const keywords = INTENT_KEYWORDS[candidate.key];
       if (!keywords?.length) continue;
       const { score, reason } = scoreAccount(candidate.key, keywords, acct);

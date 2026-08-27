@@ -399,7 +399,7 @@ test("old exact restaurant Select account row is reconsidered and auto-handled w
   assert.equal(row.post_after, null);
 });
 
-test("Transportation missing from canonical COA mapping becomes setup required without background account creation", async () => {
+test("strong universal merchant can resolve to an existing semantically compatible QBO account", async () => {
   const db = makeDb();
   const { qbo, state } = makeQbo([{ id: "rideshare", name: "Lyft/Uber", type: "Expense" }]);
   addRoutineRow(db, "txn-uber", {
@@ -421,12 +421,233 @@ test("Transportation missing from canonical COA mapping becomes setup required w
   const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
   const row = db.rows.transaction_categorizations[0];
 
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "rideshare");
+  assert.equal(row.final_qbo_account_name, "Lyft/Uber");
+  assert.equal(row.suggested_canonical_account_key, "transportation");
+  assert.equal(row.meta.semantic_coa_resolved, true);
+  assert.equal(state.createCount, 0);
+});
+
+test("ParkMobile can resolve to existing Transportation account when canonical Parking/Tolls is absent", async () => {
+  const db = makeDb();
+  const { qbo, state } = makeQbo([{ id: "transportation-current", name: "Transportation", type: "Expense", subType: "Travel" }]);
+  addRoutineRow(db, "txn-parkmobile-semantic", {
+    bankTxn: {
+      name: "PARK MOBILE CDOT PAY",
+      merchant_name: "Parkmobile",
+      merchant_entity_id: "ent-parkmobile",
+      amount: -3.12,
+      signed_amount: -3.12,
+    },
+    cat: {
+      suggested_qbo_account_id: null,
+      suggested_qbo_account_name: null,
+      suggested_canonical_account_key: null,
+      meta: { suggestion_source: "plaid_baseline" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.suggested_canonical_account_key, "parking_tolls");
+  assert.equal(row.final_canonical_account_key, null);
+  assert.equal(row.final_qbo_account_id, "transportation-current");
+  assert.equal(row.final_qbo_account_name, "Transportation");
+  assert.equal(row.meta.semantic_coa_resolved, true);
+  assert.equal(row.meta.semantic_coa_match.matched_intent, "transportation");
+  assert.equal(state.createCount, 0);
+});
+
+test("Plaid-only medium suggestion can remain visible while lifecycle stays Needs Review", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);
+  addMapping(db, {
+    canonical_account_key: "meals",
+    qbo_account_id: "meals-current",
+    qbo_account_name: "Meals",
+    qbo_account_subtype: "Meals",
+  });
+  addRoutineRow(db, "txn-medium-meals", {
+    bankTxn: {
+      name: "LOCAL CAFE",
+      merchant_name: "Local Cafe",
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: -14.95,
+      signed_amount: -14.95,
+    },
+    cat: {
+      suggested_qbo_account_id: "meals-current",
+      suggested_qbo_account_name: "Meals",
+      suggested_canonical_account_key: "meals",
+      confidence: "medium",
+      meta: { suggestion_source: "plaid_mapping" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
   assert.equal(result.promoted, 0);
   assert.equal(row.status, "needs_review");
-  assert.equal(row.suggested_qbo_account_id, null);
-  assert.equal(row.suggested_canonical_account_key, "transportation");
-  assert.equal(row.meta.canonical_setup_required, true);
-  assert.equal(state.createCount, 0);
+  assert.equal(row.suggested_qbo_account_name, "Meals");
+  assert.equal(row.final_qbo_account_id, null);
+  assert.equal(row.meta.auto_handle_decision.eligible, false);
+});
+
+test("suspense fallback accounts never become Handled during reconsideration", async () => {
+  for (const suspenseName of ["Uncategorized Expense", "Uncategorized Income", "Ask My Accountant"]) {
+    const db = makeDb();
+    const { qbo } = makeQbo([{ id: `suspense-${suspenseName}`, name: suspenseName, type: "Expense" }]);
+    addMapping(db, {
+      canonical_account_key: "software",
+      qbo_account_id: `suspense-${suspenseName}`,
+      qbo_account_name: suspenseName,
+    });
+    addRoutineRow(db, `txn-${suspenseName}`, {
+      bankTxn: {
+        name: "OPENAI CHATGPT SUBSCR",
+        merchant_name: "OpenAI",
+        merchant_entity_id: "ent-openai",
+        amount: -20,
+        signed_amount: -20,
+      },
+    });
+
+    const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+    const row = db.rows.transaction_categorizations[0];
+
+    assert.equal(result.promoted, 0, suspenseName);
+    assert.equal(row.status, "needs_review", suspenseName);
+    assert.equal(row.final_qbo_account_id, null, suspenseName);
+  }
+});
+
+test("pending and true credit-card payment rows remain protected", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "transportation-current", name: "Transportation", type: "Expense", subType: "Travel" }]);
+  addRoutineRow(db, "txn-pending", {
+    bankTxn: {
+      name: "PARK MOBILE CDOT PAY",
+      merchant_name: "Parkmobile",
+      merchant_entity_id: "ent-pending",
+      pending: true,
+      amount: -3.12,
+      signed_amount: -3.12,
+    },
+  });
+  addRoutineRow(db, "txn-card-payment", {
+    bankTxn: {
+      name: "EPAY CHASE CREDIT CRD",
+      merchant_name: "Chase",
+      merchant_entity_id: "ent-chase",
+      amount: -2196.7,
+      signed_amount: -2196.7,
+    },
+    cat: {
+      meta: { taxonomy_type: "cc_payment", suggestion_source: "vendor_rule" },
+    },
+  });
+  db.rows.vendor_rules.push({
+    id: "rule-card-payment",
+    business_id: BUSINESS_ID,
+    match_type: "merchant_entity_id",
+    match_value: "ent-chase",
+    counterparty_name: "Chase",
+    default_qbo_account_id: "transportation-current",
+    default_qbo_account_name: "Transportation",
+    direction_hint: "OUTFLOW",
+    confidence: "high",
+    rule_kind: "category_default",
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+
+  assert.equal(result.promoted, 0);
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-pending").status, "needs_review");
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-card-payment").status, "needs_review");
+});
+
+test("ordinary merchant purchase on a credit card remains eligible for normal categorization", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);
+  db.rows.vendor_rules.push({
+    id: "rule-cava",
+    business_id: BUSINESS_ID,
+    match_type: "merchant_entity_id",
+    match_value: "ent-cava",
+    counterparty_name: "Cava",
+    default_qbo_account_id: "meals-current",
+    default_qbo_account_name: "Meals",
+    direction_hint: "OUTFLOW",
+    confidence: "high",
+    rule_kind: "category_default",
+  });
+  addRoutineRow(db, "txn-credit-card-purchase", {
+    bankTxn: {
+      plaid_account_id: "credit-card-account",
+      name: "10093 CAVA SOUTHEND",
+      merchant_name: "Cava",
+      merchant_entity_id: "ent-cava",
+      amount: -12.62,
+      signed_amount: -12.62,
+    },
+    cat: {
+      suggested_qbo_account_id: null,
+      suggested_qbo_account_name: null,
+      suggested_canonical_account_key: null,
+      meta: { suggestion_source: "fallback" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_name, "Meals");
+});
+
+test("manual, already auto-approved, and posted categorizations are never overwritten", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "software-current", name: "Software", type: "Expense", subType: "DuesSubscriptions" }]);
+  addMapping(db);
+  addRoutineRow(db, "txn-manual", {
+    cat: {
+      status: "approved",
+      final_qbo_account_id: "manual-account",
+      final_qbo_account_name: "Manual Account",
+      decided_by: "accountant",
+    },
+  });
+  addRoutineRow(db, "txn-auto", {
+    cat: {
+      status: "auto_approved",
+      final_qbo_account_id: "auto-account",
+      final_qbo_account_name: "Auto Account",
+    },
+  });
+  addRoutineRow(db, "txn-posted", {
+    cat: {
+      status: "needs_review",
+      qbo_txn_id: "qbo-posted-1",
+      suggested_qbo_account_id: "old",
+      suggested_qbo_account_name: "Old",
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+
+  assert.equal(result.processed, 0);
+  assert.equal(result.promoted, 0);
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-manual").final_qbo_account_id, "manual-account");
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-auto").final_qbo_account_id, "auto-account");
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-posted").qbo_txn_id, "qbo-posted-1");
 });
 
 test("answered awaiting accountant review rows are protected during backlog reconsideration", async () => {
