@@ -262,8 +262,11 @@ test("suspense and uncategorized accounts remain Needs Review", () => {
 
 test("suggestion route uses central auto-handling policy and finalizes only handled rows", () => {
   const source = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.suggest.routes.js"), "utf8");
+  const decisionSource = readFileSync(join(root, "src/services/bookkeeping/bookkeepingCategorizationDecisionService.js"), "utf8");
 
-  assert.match(source, /canAutoHandle/);
+  assert.match(source, /decideBookkeepingCategorization/);
+  assert.match(decisionSource, /canAutoHandle/);
+  assert.match(decisionSource, /isReviewAccount/);
   assert.match(source, /resolveCanonicalVendorEvidenceForPromotion/);
   assert.match(source, /canonicalAccountResolved/);
   assert.match(source, /safe_to_auto_handle/);
@@ -280,7 +283,7 @@ test("backlog reconsideration endpoint and background worker use the shared poli
   const workerSource = readFileSync(join(root, "src/services/bookkeeping/backgroundBookkeepingProcessingService.js"), "utf8");
 
   assert.match(routeSource, /router\.post\("\/suggest\/reconsider"/);
-  assert.match(serviceSource, /canAutoHandle/);
+  assert.match(serviceSource, /decideBookkeepingCategorization/);
   assert.match(serviceSource, /resolveCanonicalVendorForTransaction/);
   assert.match(serviceSource, /validateCanonicalQboAccountForPromotion/);
   assert.doesNotMatch(serviceSource, /ensureCanonicalVendorMappedToQbo/);

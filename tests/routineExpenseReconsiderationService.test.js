@@ -45,6 +45,7 @@ function makeDb() {
     qbo_account_mapping_events: [],
     qbo_account_creation_intents: [],
     clarification_requests: [],
+    vendor_rules: [],
   };
   return {
     rows,
@@ -64,6 +65,7 @@ class Query {
     this.filters = [];
     this.inFilters = [];
     this.nullFilters = [];
+    this.notNullFilters = [];
     this.gtFilters = [];
     this.gteFilters = [];
     this.lteFilters = [];
@@ -91,6 +93,10 @@ class Query {
   }
   is(column, value) {
     this.nullFilters.push({ column, value });
+    return this;
+  }
+  not(column, op, value) {
+    if (op === "is" && value === null) this.notNullFilters.push({ column });
     return this;
   }
   gt(column, value) {
@@ -150,10 +156,11 @@ class Query {
       const eqOk = this.filters.every((filter) => row[filter.column] === filter.value);
       const inOk = this.inFilters.every((filter) => filter.values.includes(row[filter.column]));
       const nullOk = this.nullFilters.every((filter) => row[filter.column] === filter.value);
+      const notNullOk = this.notNullFilters.every((filter) => row[filter.column] !== null && row[filter.column] !== undefined);
       const gtOk = this.gtFilters.every((filter) => String(row[filter.column]) > String(filter.value));
       const gteOk = this.gteFilters.every((filter) => String(row[filter.column]) >= String(filter.value));
       const lteOk = this.lteFilters.every((filter) => String(row[filter.column]) <= String(filter.value));
-      return eqOk && inOk && nullOk && gtOk && gteOk && lteOk;
+      return eqOk && inOk && nullOk && notNullOk && gtOk && gteOk && lteOk;
     });
     if (this.orderBy) {
       const { column, ascending } = this.orderBy;
@@ -273,6 +280,52 @@ test("old stale suggestion is replaced by current canonical COA mapping before p
   assert.equal(row.final_qbo_account_name, "Software");
   assert.equal(row.suggested_qbo_account_name, "Software");
   assert.equal(row.post_after, null);
+});
+
+test("approval-backed same-business vendor rule promotes stale Needs Review row to auto-approved", async () => {
+  const db = makeDb();
+  const { qbo, state } = makeQbo([{ id: "transportation-current", name: "Transportation", type: "Expense", subType: "Travel" }]);
+  addRoutineRow(db, "txn-park", {
+    bankTxn: {
+      name: "PARK MOBILE CDOT PAY",
+      merchant_name: "Parkmobile",
+      merchant_entity_id: "ent-parkmobile",
+      amount: -3.12,
+      signed_amount: -3.12,
+    },
+    cat: {
+      suggested_qbo_account_id: null,
+      suggested_qbo_account_name: null,
+      suggested_canonical_account_key: null,
+      meta: { suggestion_source: "fallback" },
+    },
+  });
+  db.rows.vendor_rules.push({
+    id: "rule-parkmobile",
+    business_id: BUSINESS_ID,
+    match_type: "merchant_entity_id",
+    match_value: "ent-parkmobile",
+    counterparty_name: "Parkmobile",
+    default_qbo_account_id: "transportation-current",
+    default_qbo_account_name: "Transportation",
+    direction_hint: "OUTFLOW",
+    confidence: "high",
+    rule_kind: "category_default",
+    usage_count: 1,
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "transportation-current");
+  assert.equal(row.final_qbo_account_name, "Transportation");
+  assert.equal(row.meta.evidence_source, "approved_business_rule");
+  assert.equal(row.meta.confidence_tier, "very_high");
+  assert.equal(row.post_after, null);
+  assert.equal(row.qbo_txn_id || null, null);
+  assert.equal(state.createCount, 0);
 });
 
 test("old Needs Review ParkMobile Transportation row is reconsidered to Parking/Tolls", async () => {

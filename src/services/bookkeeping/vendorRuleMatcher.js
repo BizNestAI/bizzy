@@ -62,14 +62,14 @@ function shapeRule(rule, match_reason, match_score) {
   };
 }
 
-export async function getVendorRuleForTransaction({ businessId, bankTransaction }) {
+export async function getVendorRuleForTransaction({ businessId, bankTransaction, db = supabase } = {}) {
   if (!businessId || !bankTransaction) return null;
   const debug = { steps: [] };
 
   // 1) merchant_entity_id exact
   const merchantEntityId = bankTransaction.merchant_entity_id || null;
   if (merchantEntityId) {
-    const { data: meRules, error: meErr } = await supabase
+    const { data: meRules, error: meErr } = await db
       .from("vendor_rules")
       .select("*")
       .eq("business_id", businessId)
@@ -88,7 +88,7 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction 
   // 2) memo_prefix
   const { cleanedMemo } = computeMemoPrefix(bankTransaction);
   if (cleanedMemo) {
-    const { data: prefixRules, error: mpErr } = await supabase
+    const { data: prefixRules, error: mpErr } = await db
       .from("vendor_rules")
       .select("*")
       .eq("business_id", businessId)
@@ -118,7 +118,7 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction 
 
   // 3) regex
   const rawMemo = buildMemo(bankTransaction);
-  const { data: regexRules, error: rxErr } = await supabase
+  const { data: regexRules, error: rxErr } = await db
     .from("vendor_rules")
     .select("*")
     .eq("business_id", businessId)
@@ -146,7 +146,7 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction 
 
   // 4) QBO entity match
   if (bankTransaction.qbo_entity_type && bankTransaction.qbo_entity_id) {
-    const { data: entityRules, error: entErr } = await supabase
+    const { data: entityRules, error: entErr } = await db
       .from("vendor_rules")
       .select("*")
       .eq("business_id", businessId)

@@ -1,11 +1,14 @@
 import { isCheck } from "./checkDetector.js";
 import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "./autoPostControl.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
-import { canAutoHandle, isReviewAccount } from "./autoHandlingPolicy.js";
+import { isReviewAccount } from "./autoHandlingPolicy.js";
+import { decideBookkeepingCategorization } from "./bookkeepingCategorizationDecisionService.js";
 import { resolveCanonicalVendorForTransaction } from "./canonicalVendorService.js";
 import { resolveCanonicalQboAccount, validateCanonicalQboAccountForPromotion } from "./canonicalQboAccountResolver.js";
 import { resolveIntentToCanonicalKey } from "./canonicalCoaRegistry.js";
 import { getUniversalVendorHintForTransaction } from "./universalVendorHintMatcher.js";
+import { getVendorRuleForTransaction } from "./vendorRuleMatcher.js";
+import { canonicalTxnDirection, looksLikeTaxonomyLandmineMemo } from "./vendorRuleLearner.js";
 import {
   isStrongUniversalVendorEvidence,
   withCategorizationPolicyVersion,
@@ -68,6 +71,35 @@ function accountFromCategorization(cat = {}) {
   };
 }
 
+async function fetchActiveQboAccountById({ businessId, accountId, fallbackName = null, db, dependencies = {} }) {
+  if (!businessId || !accountId) return null;
+  const getQBOClient = dependencies.getQBOClient || (async (id) => {
+    const mod = await import("../../utils/qboClient.js");
+    return mod.getQBOClient(id);
+  });
+  try {
+    const qbo = await getQBOClient(businessId);
+    if (!qbo?.findAccounts) return { id: String(accountId), name: fallbackName || String(accountId), type: null, subType: null };
+    const result = await new Promise((resolve, reject) => {
+      qbo.findAccounts({ Active: true }, (err, data) => {
+        if (err) return reject(err);
+        return resolve(data);
+      });
+    });
+    const accounts = Array.isArray(result?.QueryResponse?.Account) ? result.QueryResponse.Account : [];
+    const hit = accounts.find((account) => String(account.Id || account.id) === String(accountId));
+    if (!hit || hit.Active === false) return null;
+    return {
+      id: String(hit.Id || hit.id),
+      name: hit.Name || hit.name || fallbackName || String(accountId),
+      type: hit.AccountType || hit.type || null,
+      subType: hit.AccountSubType || hit.subType || null,
+    };
+  } catch {
+    return { id: String(accountId), name: fallbackName || String(accountId), type: null, subType: null };
+  }
+}
+
 function canonicalAccountKey(cat = {}, meta = {}) {
   return (
     cat.suggested_canonical_account_key ||
@@ -114,6 +146,8 @@ async function resolveCanonicalAccountEvidence({ businessId, db, cat, meta, tran
     const account = {
       id: String(resolved.account.id),
       name: resolved.account.name || resolved.account.fullyQualifiedName || null,
+      type: resolved.account.type || resolved.account.AccountType || null,
+      subType: resolved.account.subType || resolved.account.AccountSubType || null,
     };
     const accountReview = isReviewAccount({ accountId: account.id, accountName: account.name });
     if (accountReview) {
@@ -286,6 +320,122 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     }
     const meta = cat.meta || {};
     const checkHit = isCheck(bankTxn);
+    const vendorRule = await getVendorRuleForTransaction({ businessId, bankTransaction: bankTxn, db });
+    const txnDir = canonicalTxnDirection(bankTxn);
+    const vendorRuleDirection = String(vendorRule?.direction_hint || "").toUpperCase();
+    const vendorRuleDirectionMatches =
+      !vendorRuleDirection ||
+      vendorRuleDirection === "UNKNOWN" ||
+      txnDir === "UNKNOWN" ||
+      vendorRuleDirection === txnDir;
+    if (
+      !checkHit.is_check &&
+      vendorRule?.default_qbo_account_id &&
+      vendorRuleDirectionMatches &&
+      !looksLikeTaxonomyLandmineMemo(bankTxn)
+    ) {
+      const account = await fetchActiveQboAccountById({
+        businessId,
+        accountId: vendorRule.default_qbo_account_id,
+        fallbackName: vendorRule.default_qbo_account_name,
+        db,
+        dependencies,
+      });
+      const confidenceTier = vendorRule.match_reason === "merchant_entity_id" ? "very_high" : "high";
+      const decision = decideBookkeepingCategorization({
+        transaction: bankTxn,
+        account: account || {
+          id: vendorRule.default_qbo_account_id,
+          name: vendorRule.default_qbo_account_name,
+        },
+        evidence: {
+          source: "approved_business_rule",
+          confidenceTier,
+          taxonomyType: meta.taxonomy_type || null,
+          isCheck: false,
+          meta,
+          canonicalAccountResolved: true,
+          canonicalVendorId: bankTxn.canonical_vendor_id || meta.canonical_vendor_id || null,
+          canonicalVendorReliable: true,
+          merchantEvidenceStrong: true,
+          inBookkeepingScope: true,
+          reconsiderationSource: options.source || "backlog_reconsideration",
+          reason: "approved_business_rule",
+        },
+        businessContext: {},
+      });
+      const decisionMeta = withCategorizationPolicyVersion({
+        ...meta,
+        suggestion_source: "vendor_rule",
+        evidence_source: "approved_business_rule",
+        confidence_tier: confidenceTier,
+        vendor_rule_id: vendorRule.id,
+        vendor_rule_match_reason: vendorRule.match_reason,
+        vendor_rule_match_score: vendorRule.match_score,
+        vendor_rule_counterparty_name: vendorRule.counterparty_name || null,
+        vendor_rule_coa_id: account?.id || vendorRule.default_qbo_account_id,
+        vendor_rule_coa_name: account?.name || vendorRule.default_qbo_account_name,
+        merchant_evidence_strong: true,
+        safe_to_auto_handle: decision.auto_handle === true,
+        safe_to_auto_post: decision.auto_handle === true,
+        auto_handle_decision: {
+          eligible: decision.auto_handle === true,
+          confidence: decision.confidence_tier,
+          source: decision.evidence_source,
+          reason: decision.block_reason || decision.reason,
+          reconsideration_source: options.source || "backlog_reconsideration",
+          at: nowIso,
+        },
+      });
+      if (decision.auto_handle === true && account?.id && account?.name) {
+        const postAfter = computePostAfterForAutoPost(autoPostEnabled, Number(process.env.BOOKS_POST_GRACE_HOURS || 24));
+        updates.push({
+          business_id: businessId,
+          transaction_id: cat.transaction_id,
+          suggested_qbo_account_id: account.id,
+          suggested_qbo_account_name: account.name,
+          suggested_canonical_account_key: cat.suggested_canonical_account_key || meta.canonical_account_key || null,
+          final_qbo_account_id: account.id,
+          final_qbo_account_name: account.name,
+          final_canonical_account_key: cat.suggested_canonical_account_key || meta.canonical_account_key || null,
+          confidence: "high",
+          status: "auto_approved",
+          post_after: postAfter,
+          decided_by: "bizzi",
+          decided_at: nowIso,
+          meta: {
+            ...decisionMeta,
+            auto_approve_reason: "approved_business_rule",
+            auto_handled_reason: decision.reason,
+          },
+          updated_at: nowIso,
+        });
+        promoted += 1;
+        rows.push({ transaction_id: cat.transaction_id, promoted: true, reason: decision.reason });
+        continue;
+      }
+      skipped += 1;
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: decision.block_reason || decision.reason });
+      updates.push({
+        business_id: businessId,
+        transaction_id: cat.transaction_id,
+        suggested_qbo_account_id: account?.id || cat.suggested_qbo_account_id || null,
+        suggested_qbo_account_name: account?.name || cat.suggested_qbo_account_name || null,
+        suggested_canonical_account_key: cat.suggested_canonical_account_key || meta.canonical_account_key || null,
+        final_qbo_account_id: null,
+        final_qbo_account_name: null,
+        final_canonical_account_key: null,
+        confidence: cat.confidence || "high",
+        status: cat.status || "needs_review",
+        post_after: null,
+        meta: {
+          ...decisionMeta,
+          auto_handled_reason: decision.block_reason || decision.reason,
+        },
+        updated_at: nowIso,
+      });
+      continue;
+    }
     const universalHint = await getUniversalVendorHintForTransaction({ bankTxn });
     if (!checkHit.is_check && isStrongUniversalVendorEvidence(universalHint)) {
       const canonicalKey = resolveIntentToCanonicalKey(universalHint.primary_intent);
@@ -305,6 +455,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           ? {
               id: String(canonicalResolution.account.id),
               name: canonicalResolution.account.name || canonicalResolution.account.fullyQualifiedName || null,
+              type: canonicalResolution.account.type || canonicalResolution.account.AccountType || null,
+              subType: canonicalResolution.account.subType || canonicalResolution.account.AccountSubType || null,
             }
           : { id: null, name: null };
       const vendorEvidence = await resolveVendorEvidence({
@@ -318,13 +470,12 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         },
       });
       const canonicalAccountResolved = Boolean(account.id && account.name);
-      const decision = canAutoHandle(
-        bankTxn,
-        {
+      const decision = decideBookkeepingCategorization({
+        transaction: bankTxn,
+        account,
+        evidence: {
           source: "universal_hint",
-          confidence: universalHint.confidence || "high",
-          accountId: account.id,
-          accountName: account.name,
+          confidenceTier: universalHint.confidence || "high",
           taxonomyType: meta.taxonomy_type || null,
           isCheck: false,
           meta,
@@ -340,8 +491,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           inBookkeepingScope: true,
           reconsiderationSource: options.source || "backlog_reconsideration",
         },
-        {}
-      );
+        businessContext: {},
+      });
       const decisionMeta = withCategorizationPolicyVersion({
         ...meta,
         suggestion_source: "universal_hint",
@@ -366,18 +517,20 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         canonical_vendor_id: vendorEvidence.canonicalVendorId || null,
         canonical_vendor_reliable: vendorEvidence.canonicalVendorReliable === true,
         merchant_evidence_strong: decision.evidence?.merchantEvidenceStrong === true,
-        safe_to_auto_handle: decision.eligible === true,
-        safe_to_auto_post: decision.eligible === true,
+        evidence_source: decision.evidence_source,
+        confidence_tier: decision.confidence_tier,
+        safe_to_auto_handle: decision.auto_handle === true,
+        safe_to_auto_post: decision.auto_handle === true,
         auto_handle_decision: {
-          eligible: decision.eligible === true,
-          confidence: decision.confidence,
-          source: decision.source,
-          reason: decision.reason,
+          eligible: decision.auto_handle === true,
+          confidence: decision.confidence_tier,
+          source: decision.evidence_source,
+          reason: decision.block_reason || decision.reason,
           reconsideration_source: options.source || "backlog_reconsideration",
           at: nowIso,
         },
       });
-      if (decision.eligible === true && account.id && account.name) {
+      if (decision.auto_handle === true && account.id && account.name) {
         const postAfter = computePostAfterForAutoPost(autoPostEnabled, Number(process.env.BOOKS_POST_GRACE_HOURS || 24));
         updates.push({
           business_id: businessId,
@@ -423,7 +576,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         updated_at: nowIso,
       });
       skipped += 1;
-      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: decision.reason || canonicalResolution?.reason || "canonical_setup_required" });
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: decision.block_reason || decision.reason || canonicalResolution?.reason || "canonical_setup_required" });
       continue;
     }
     const canonicalAccount = await resolveCanonicalAccountEvidence({
@@ -440,13 +593,12 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     const vendorEvidence = await resolveVendorEvidence({ db, businessId, bankTxn, meta });
     const canonicalAccountResolved = canonicalAccount.canonicalAccountResolved === true;
     const source = normalizeSource(meta.suggestion_source || cat.decided_by || "backlog_reconsideration");
-    const decision = canAutoHandle(
-      bankTxn,
-      {
+    const decision = decideBookkeepingCategorization({
+      transaction: bankTxn,
+      account,
+      evidence: {
         source,
-        confidence: cat.confidence || meta.confidence || "medium",
-        accountId: account.id,
-        accountName: account.name,
+        confidenceTier: cat.confidence || meta.confidence || "medium",
         taxonomyType: meta.taxonomy_type || null,
         isCheck: checkHit.is_check === true,
         meta,
@@ -465,12 +617,14 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         inBookkeepingScope: true,
         reconsiderationSource: options.source || "backlog_reconsideration",
       },
-      {}
-    );
+      businessContext: {},
+    });
 
     const decisionMeta = {
       ...meta,
-      safe_to_auto_handle: decision.eligible === true,
+      safe_to_auto_handle: decision.auto_handle === true,
+      evidence_source: decision.evidence_source,
+      confidence_tier: decision.confidence_tier,
       canonical_coa_resolved: canonicalAccountResolved,
       canonical_coa_revalidation_reason: canonicalAccount.reason || null,
       canonical_coa_revalidation_status: canonicalAccount.status || null,
@@ -479,18 +633,18 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       canonical_vendor_resolution_reason: vendorEvidence.reason || null,
       merchant_evidence_strong: decision.evidence?.merchantEvidenceStrong === true,
       auto_handle_decision: {
-        eligible: decision.eligible === true,
-        confidence: decision.confidence,
-        source: decision.source,
-        reason: decision.reason,
+        eligible: decision.auto_handle === true,
+        confidence: decision.confidence_tier,
+        source: decision.evidence_source,
+        reason: decision.block_reason || decision.reason,
         reconsideration_source: options.source || "backlog_reconsideration",
         at: nowIso,
       },
     };
 
-    if (decision.eligible !== true || !account.id || !account.name) {
+    if (decision.auto_handle !== true || !account.id || !account.name) {
       skipped += 1;
-      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: decision.reason });
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: decision.block_reason || decision.reason });
       updates.push({
         business_id: businessId,
         transaction_id: cat.transaction_id,
@@ -505,7 +659,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         post_after: null,
         meta: withCategorizationPolicyVersion({
           ...decisionMeta,
-          auto_handled_reason: decision.reason || canonicalAccount.reason || "review_required",
+          auto_handled_reason: decision.block_reason || decision.reason || canonicalAccount.reason || "review_required",
         }),
         updated_at: nowIso,
       });

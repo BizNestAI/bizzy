@@ -20,7 +20,7 @@ import { createOrUpdateClarificationRequest } from "../../../services/bookkeepin
 import { computeMemoPrefixForLearning } from "../../../services/bookkeeping/vendorRuleLearner.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
 import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "../../../services/bookkeeping/autoPostControl.js";
-import { canAutoHandle } from "../../../services/bookkeeping/autoHandlingPolicy.js";
+import { decideBookkeepingCategorization } from "../../../services/bookkeeping/bookkeepingCategorizationDecisionService.js";
 import { resolveCanonicalVendorForTransaction } from "../../../services/bookkeeping/canonicalVendorService.js";
 import { reconsiderNeedsReviewTransactions } from "../../../services/bookkeeping/routineExpenseReconsiderationService.js";
 import { createSafeCreditCardPaymentPairForRow } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
@@ -173,13 +173,17 @@ function applyAutoApproval({
   businessContext = {},
   evidence = {},
 }) {
-  const decision = canAutoHandle(
-    transaction || {},
-    {
+  const decision = decideBookkeepingCategorization({
+    transaction: transaction || {},
+    account: {
+      id: suggestedAcct?.id || evidence.accountId || null,
+      name: suggestedAcct?.name || evidence.accountName || null,
+      type: suggestedAcct?.type || evidence.accountType || null,
+      subType: suggestedAcct?.subType || evidence.accountSubType || null,
+    },
+    evidence: {
       source: evidence.source || meta.suggestion_source || reason || "unknown",
-      confidence,
-      accountId: suggestedAcct?.id || evidence.accountId || null,
-      accountName: suggestedAcct?.name || evidence.accountName || null,
+      confidenceTier: evidence.confidenceTier || confidence,
       taxonomyType,
       isCheck: checkHit?.is_check === true,
       meta,
@@ -190,20 +194,20 @@ function applyAutoApproval({
       allowTaxonomyAutoHandle: evidence.allowTaxonomyAutoHandle === true,
       weakRule: evidence.weakRule === true,
     },
-    businessContext || {}
-  );
+    businessContext: businessContext || {},
+  });
   const decisionMeta = {
     ...meta,
     safe_to_auto_handle: decision.eligible === true,
     auto_handle_decision: {
       eligible: decision.eligible === true,
-      confidence: decision.confidence,
-      source: decision.source,
-      reason: decision.reason,
+      confidence: decision.confidence_tier || decision.confidence,
+      source: decision.evidence_source || decision.source,
+      reason: decision.block_reason || decision.reason,
       at: nowIso,
     },
   };
-  if (autoApprove === true && decision.eligible === true && suggestedAcct?.id && suggestedAcct?.name) {
+  if (autoApprove === true && decision.auto_handle === true && suggestedAcct?.id && suggestedAcct?.name) {
     const finalAcctId = suggestedAcct?.id || null;
     const finalAcctName = suggestedAcct?.name || null;
     const postAfter = computePostAfterForAutoPost(autoPostEnabled, GRACE_HOURS);
@@ -337,12 +341,31 @@ function findCoaNameById(coa = [], id) {
   return hit?.name || hit?.Name || null;
 }
 
+function findCoaAccountById(coa = [], id) {
+  const target = String(id || "");
+  if (!target) return null;
+  return (coa || []).find((a) => String(a.id || a.Id) === target) || null;
+}
+
 function ensureAccountName({ acctId, acctName, coa }) {
-  if (!acctId) return { id: null, name: "" };
+  if (!acctId) return { id: null, name: "", type: null, subType: null };
+  const coaAccount = findCoaAccountById(coa, acctId);
   const trimmed = String(acctName || "").trim();
-  if (trimmed.length > 1) return { id: acctId, name: trimmed };
-  const resolved = findCoaNameById(coa, acctId);
-  return { id: acctId, name: resolved || "" };
+  if (trimmed.length > 1) {
+    return {
+      id: acctId,
+      name: trimmed,
+      type: coaAccount?.type || coaAccount?.AccountType || null,
+      subType: coaAccount?.subType || coaAccount?.AccountSubType || null,
+    };
+  }
+  const resolved = coaAccount?.name || coaAccount?.Name || findCoaNameById(coa, acctId);
+  return {
+    id: acctId,
+    name: resolved || "",
+    type: coaAccount?.type || coaAccount?.AccountType || null,
+    subType: coaAccount?.subType || coaAccount?.AccountSubType || null,
+  };
 }
 
 function isUnresolvedAccountName(name = "") {
@@ -1802,6 +1825,8 @@ export async function runBookkeepingSuggestionPass({
           ? {
               id: String(canonicalAccountValidation.account.id),
               name: canonicalAccountValidation.account.name || canonicalAccountValidation.account.fullyQualifiedName || "",
+              type: canonicalAccountValidation.account.type || canonicalAccountValidation.account.AccountType || null,
+              subType: canonicalAccountValidation.account.subType || canonicalAccountValidation.account.AccountSubType || null,
             }
           : null;
         const validatedSuspense = validatedAccount
@@ -2372,6 +2397,8 @@ export async function runBookkeepingSuggestionPass({
           const hintSuggested = {
             id: canonicalResolution.account.id,
             name: canonicalResolution.account.name,
+            type: canonicalResolution.account.type || canonicalResolution.account.AccountType || null,
+            subType: canonicalResolution.account.subType || canonicalResolution.account.AccountSubType || null,
           };
           const mappedConfidence = universalHint.confidence || "medium";
           const hintConfidenceHigh = (universalHint?.confidence || "").toLowerCase() === "high";
