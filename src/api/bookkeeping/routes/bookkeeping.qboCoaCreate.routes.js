@@ -2,6 +2,11 @@ import { Router } from "express";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { supabase } from "../../../services/supabaseAdmin.js";
+import { getManualQboAccountCatalog } from "../../../services/bookkeeping/qboAccountTypes.js";
+import {
+  createManualQboAccountForBusiness,
+  qboManualAccountCreationErrorResponse,
+} from "../../../services/bookkeeping/qboManualAccountCreationService.js";
 
 const router = Router();
 
@@ -32,6 +37,29 @@ router.post("/qbo/coa-create", requireAuth, async (req, res) => {
     error: "canonical_coa_internal_approval_required",
     message: "Canonical chart of accounts creation is reviewed during monthly close.",
   });
+});
+
+router.get("/qbo/account-types", requireAuth, async (_req, res) => {
+  return res.json({ ok: true, account_types: getManualQboAccountCatalog() });
+});
+
+router.post("/qbo/accounts", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await createManualQboAccountForBusiness({
+      businessId,
+      name: req.body?.name,
+      accountType: req.body?.accountType || req.body?.account_type,
+      accountSubType: req.body?.accountSubType || req.body?.account_subtype || req.body?.detailType,
+      description: req.body?.description,
+      actor: req.user?.id || "user",
+    });
+    return res.status(201).json(result);
+  } catch (err) {
+    const response = qboManualAccountCreationErrorResponse(err);
+    return res.status(response.status).json(response.body);
+  }
 });
 
 export default router;

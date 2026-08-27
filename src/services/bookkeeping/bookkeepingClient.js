@@ -145,6 +145,21 @@ export async function getQboCoa(businessId) {
   });
 }
 
+export async function getQboAccountTypes(businessId) {
+  return safeFetch(apiUrl("/api/bookkeeping/qbo/account-types"), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+}
+
+export async function createQboAccount(businessId, payload = {}) {
+  return safeFetch(apiUrl("/api/bookkeeping/qbo/accounts"), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId, ...payload }),
+  });
+}
+
 export async function approveTransactions(businessId, items = []) {
   const payload = { business_id: businessId, items };
   if (process.env.NODE_ENV !== "production") {

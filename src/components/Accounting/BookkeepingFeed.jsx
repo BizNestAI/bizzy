@@ -1,15 +1,38 @@
 import React from "react";
 import ReactDOM from "react-dom";
-import { RotateCcw, UploadCloud } from "lucide-react";
+import { Plus, RotateCcw, UploadCloud } from "lucide-react";
+import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
 const MIN_COL_WIDTHS = [36, 90, 160, 140, 150, 100, 230]; // px floors per column
 
-export function CoaDropdown({ value, suggestedId, suggestedName, accounts, onChange, status, disabled }) {
+function dropdownBucketType(value = "") {
+  const normalized = String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
+  if (normalized === "income" || normalized === "otherincome") return "income";
+  if (normalized === "expense" || normalized === "costofgoodssold" || normalized === "cogs") return "expense";
+  if (normalized === "equity") return "equity";
+  return "other";
+}
+
+export function CoaDropdown({
+  value,
+  suggestedId,
+  suggestedName,
+  accounts,
+  onChange,
+  onCreateAccount,
+  onCreatedAccountSelect,
+  accountTypes,
+  creationContext,
+  allowShowAllAccountTypes = false,
+  status,
+  disabled,
+}) {
   const [open, setOpen] = React.useState(false);
   const [renderMenu, setRenderMenu] = React.useState(false);
+  const [createOpen, setCreateOpen] = React.useState(false);
   const ref = React.useRef(null);
   const menuRef = React.useRef(null);
   const [menuPos, setMenuPos] = React.useState(null);
@@ -44,8 +67,7 @@ export function CoaDropdown({ value, suggestedId, suggestedName, accounts, onCha
       other: [],
     };
     filtered.forEach((a) => {
-      if (buckets[a.type]) buckets[a.type].push(a);
-      else buckets.other.push(a);
+      buckets[dropdownBucketType(a.type)].push(a);
     });
     return [
       { label: "Revenue", items: buckets.income },
@@ -152,6 +174,19 @@ export function CoaDropdown({ value, suggestedId, suggestedName, accounts, onCha
                 className="overflow-y-auto overscroll-contain scrollbar-thin scrollbar-thumb-[rgba(255,255,255,0.12)] scrollbar-track-transparent"
                 style={{ maxHeight: "inherit", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}
               >
+                {onCreateAccount ? (
+                  <button
+                    type="button"
+                    className="sticky top-0 z-10 flex w-full items-center gap-2 border-b border-emerald-400/25 bg-[rgba(13,24,21,0.98)] px-3.5 py-2 text-left text-[12px] font-semibold text-emerald-200 shadow-[0_8px_14px_rgba(0,0,0,0.25)] hover:bg-emerald-400/10"
+                    onClick={() => {
+                      setOpen(false);
+                      setCreateOpen(true);
+                    }}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add new account
+                  </button>
+                ) : null}
                 <div className="px-3.5 py-2 border-b border-[var(--accent-line)]/60 bg-white/5">
                   <input
                     autoFocus
@@ -208,6 +243,19 @@ export function CoaDropdown({ value, suggestedId, suggestedName, accounts, onCha
             document.body
           )
         : null}
+      <CreateQuickBooksAccountModal
+        open={createOpen}
+        onCreate={onCreateAccount}
+        accountTypes={accountTypes}
+        context={creationContext}
+        allowShowAll={allowShowAllAccountTypes}
+        onClose={(createdAccount) => {
+          setCreateOpen(false);
+          if (createdAccount?.id) {
+            onCreatedAccountSelect ? onCreatedAccountSelect(createdAccount) : onChange(createdAccount.id);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -263,6 +311,9 @@ export default function BookkeepingFeed({
   postingTransactionIds,
   accounts = [],
   onAccountChange,
+  onCreatedAccountSelect,
+  onCreateAccount,
+  accountTypes,
   panelBg,
   panelBorder,
   page = 1,
@@ -542,7 +593,7 @@ export default function BookkeepingFeed({
             })}
           </div>
 
-          {sortedTransactions.map((txn, idx) => {
+          {sortedTransactions.map((txn) => {
             const payeeConfidence = txn.payeeConfidence || txn.counterparty_confidence || txn.confidence || null;
             const showAddToQbo =
               ENABLE_QBO_ADD_STUB &&
@@ -721,6 +772,14 @@ export default function BookkeepingFeed({
                     suggestedId={txn.suggestedAccountId}
                     suggestedName={txn.suggestedAccountName || txn.glAccountName}
                     accounts={ccSelectableAccounts}
+                    onCreateAccount={!isCcPayment ? onCreateAccount : null}
+                    onCreatedAccountSelect={(account) => onCreatedAccountSelect?.(txn, account)}
+                    accountTypes={accountTypes}
+                    creationContext={{
+                      amount: txn.signed_amount ?? txn.signedAmount ?? txn.amount,
+                      direction: txn.direction,
+                      qboTxnType: txn.qbo_txn_type,
+                    }}
                     status={txn.status}
                     disabled={
                       isPosted ||

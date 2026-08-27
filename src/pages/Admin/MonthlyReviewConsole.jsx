@@ -131,6 +131,7 @@ export default function MonthlyReviewConsole() {
   const operatorResponseApprovalInFlightRef = useRef(new Set());
   const [customerViewError, setCustomerViewError] = useState("");
   const [accountSearch, setAccountSearch] = useState("");
+  const [qboAccountTypes, setQboAccountTypes] = useState([]);
   const [activeLock, setActiveLock] = useState(null);
   const [historyDrawer, setHistoryDrawer] = useState({ open: false, transaction: null, rows: [], loading: false });
   const [confirmFinalizeOpen, setConfirmFinalizeOpen] = useState(false);
@@ -154,6 +155,26 @@ export default function MonthlyReviewConsole() {
     () => (sourceLedger?.chart_accounts || []).map(normalizeAccountForBooksDropdown),
     [sourceLedger?.chart_accounts]
   );
+
+  const injectSourceLedgerAccount = useCallback((account) => {
+    if (!account?.id) return;
+    const nextAccount = {
+      id: String(account.id),
+      name: account.name || "Unnamed account",
+      type: account.type || account.accountType || account.account_type || null,
+      subType: account.subType || account.accountSubType || account.account_subtype || null,
+      active: account.active !== false,
+    };
+    setSourceLedger((current) => {
+      const existing = current || {};
+      const chartAccounts = Array.isArray(existing.chart_accounts) ? existing.chart_accounts : [];
+      return {
+        ...existing,
+        chart_accounts: [...chartAccounts.filter((item) => String(item.id) !== String(nextAccount.id)), nextAccount]
+          .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))),
+      };
+    });
+  }, []);
 
   const loadBusinesses = useCallback(async () => {
     setLoadingBusinesses(true);
@@ -215,6 +236,30 @@ export default function MonthlyReviewConsole() {
       setLoadingLedger(false);
     }
   }, [demoMode, month, selectedBusinessId]);
+
+  const loadQboAccountTypes = useCallback(async () => {
+    if (!selectedBusinessId) {
+      setQboAccountTypes([]);
+      return;
+    }
+    try {
+      const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/qbo/account-types`);
+      setQboAccountTypes(Array.isArray(data?.account_types) ? data.account_types : []);
+    } catch (e) {
+      setQboAccountTypes([]);
+      console.warn("[monthly-review] QBO account types unavailable", e?.message || e);
+    }
+  }, [selectedBusinessId]);
+
+  const createMonthlyReviewQboAccount = useCallback(async (payload) => {
+    if (!selectedBusinessId) throw new Error("missing_business_id");
+    const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/qbo/accounts`, {
+      method: "POST",
+      body: payload,
+    });
+    if (result?.account) injectSourceLedgerAccount(result.account);
+    return result;
+  }, [injectSourceLedgerAccount, selectedBusinessId]);
 
   const applyQboPnlSnapshot = useCallback((snapshot) => {
     const incomingSnapshotId = snapshot?.id || null;
@@ -448,6 +493,10 @@ export default function MonthlyReviewConsole() {
   useEffect(() => {
     loadSourceLedger();
   }, [loadSourceLedger]);
+
+  useEffect(() => {
+    loadQboAccountTypes();
+  }, [loadQboAccountTypes]);
 
   useEffect(() => {
     loadQboPnlSnapshot();
@@ -1307,6 +1356,9 @@ export default function MonthlyReviewConsole() {
                   onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
                   onPost={(row) => runBookkeepingFeedAction("post", row)}
                   onRetry={(row) => runBookkeepingFeedAction("retry", row)}
+                  onCreateAccount={createMonthlyReviewQboAccount}
+                  onCreatedAccountSelect={injectSourceLedgerAccount}
+                  accountTypes={qboAccountTypes}
                 />
 	
 	                {Array.isArray(detail?.changed_since_finalized) && detail.changed_since_finalized.length ? (
@@ -1338,6 +1390,9 @@ export default function MonthlyReviewConsole() {
                   onRefresh={() => refreshQboPnlSnapshot()}
                   onLoadAccountTransactions={loadQboPnlAccountTransactions}
                   onAccountChange={updateTransactionAccount}
+                  onCreateAccount={createMonthlyReviewQboAccount}
+                  onAccountCreated={injectSourceLedgerAccount}
+                  accountTypes={qboAccountTypes}
                 />
 
                 <ReconciliationTracePanel ledger={sourceLedger} loading={loadingLedger} />
@@ -1349,6 +1404,9 @@ export default function MonthlyReviewConsole() {
                   busyActions={busyOperatorResponseActions}
                   rowErrors={operatorResponseActionErrors}
                   onApprove={approveOperatorResponse}
+                  onCreateAccount={createMonthlyReviewQboAccount}
+                  onAccountCreated={injectSourceLedgerAccount}
+                  accountTypes={qboAccountTypes}
                 />
 
                 <CanonicalCoaReviewPanel
@@ -1398,6 +1456,9 @@ function BookkeepingFeedMirrorPanels({
   onReclassify,
   onPost,
   onRetry,
+  onCreateAccount,
+  onCreatedAccountSelect,
+  accountTypes,
 }) {
   return (
     <section className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
@@ -1439,6 +1500,9 @@ function BookkeepingFeedMirrorPanels({
             onReclassify={onReclassify}
             onPost={onPost}
             onRetry={onRetry}
+            onCreateAccount={onCreateAccount}
+            onCreatedAccountSelect={onCreatedAccountSelect}
+            accountTypes={accountTypes}
           />
         ))}
       </div>
@@ -1461,6 +1525,9 @@ function BookkeepingFeedMirrorSection({
   onReclassify,
   onPost,
   onRetry,
+  onCreateAccount,
+  onCreatedAccountSelect,
+  accountTypes,
 }) {
   const rows = Array.isArray(feed?.rows) ? feed.rows : [];
   const totalCount = feed?.totalCount ?? 0;
@@ -1509,6 +1576,9 @@ function BookkeepingFeedMirrorSection({
               onReclassify={onReclassify}
               onPost={onPost}
               onRetry={onRetry}
+              onCreateAccount={onCreateAccount}
+              onCreatedAccountSelect={onCreatedAccountSelect}
+              accountTypes={accountTypes}
               emptyMessage={`No selected-month ${config.label.toLowerCase()} transactions.`}
             />
           )}
@@ -1889,6 +1959,9 @@ function SourceLedgerPanel({
   onRefresh,
   onLoadAccountTransactions,
   onAccountChange,
+  onCreateAccount,
+  onAccountCreated,
+  accountTypes,
 }) {
   const snapshotAccounts = Array.isArray(snapshot?.accounts) ? snapshot.accounts : [];
   const accountDetailState = accountDetails || {};
@@ -2190,6 +2263,18 @@ function SourceLedgerPanel({
                                       suggestedId={currentAccountId}
                                       suggestedName={txn.qbo_account_name || ""}
                                       accounts={rowDropdownAccounts}
+                                      onCreateAccount={onCreateAccount}
+                                      onCreatedAccountSelect={(account) => {
+                                        onAccountCreated?.(account);
+                                        handlePnlAccountDraftChange(txn, String(account.id));
+                                      }}
+                                      accountTypes={accountTypes}
+                                      creationContext={{
+                                        amount: txn.amount,
+                                        qboTxnType: txn.qbo_txn_type,
+                                        allowedAccountTypes: allowedAccountTypesForPnlReclass(txn.qbo_txn_type),
+                                      }}
+                                      allowShowAllAccountTypes
                                       status="posted"
                                       onChange={(accountId) => handlePnlAccountDraftChange(txn, accountId)}
                                       disabled={busy || !rowDropdownAccounts.length}
@@ -2296,7 +2381,17 @@ function QboPnlPreview({ snapshot }) {
   );
 }
 
-function OperatorResponsesPanel({ data, accounts = [], busyAction, busyActions = {}, rowErrors = {}, onApprove }) {
+function OperatorResponsesPanel({
+  data,
+  accounts = [],
+  busyAction,
+  busyActions = {},
+  rowErrors = {},
+  onApprove,
+  onCreateAccount,
+  onAccountCreated,
+  accountTypes,
+}) {
   const rows = Array.isArray(data?.rows) ? data.rows : [];
   const dropdownAccounts = useMemo(() => accounts.map(normalizeAccountForBooksDropdown), [accounts]);
   const rowIdKey = rows.map((row) => row.request_id).join("|");
@@ -2367,6 +2462,18 @@ function OperatorResponsesPanel({ data, accounts = [], busyAction, busyActions =
                     suggestedId={row.suggested_qbo_account_id || ""}
                     suggestedName={row.suggested_qbo_account_name || ""}
                     accounts={dropdownAccounts}
+                    onCreateAccount={onCreateAccount}
+                    onCreatedAccountSelect={(account) => {
+                      onAccountCreated?.(account);
+                      setSelectedAccounts((current) => ({ ...current, [row.request_id]: String(account.id) }));
+                    }}
+                    accountTypes={accountTypes}
+                    creationContext={{
+                      amount: row.signed_amount ?? row.amount,
+                      direction: row.direction,
+                      qboTxnType: row.qbo_txn_type,
+                    }}
+                    allowShowAllAccountTypes
                     status="needs_review"
                     disabled={busy || !dropdownAccounts.length}
                     onChange={(accountId) => setSelectedAccounts((current) => ({ ...current, [row.request_id]: accountId }))}
@@ -3780,6 +3887,13 @@ function filterPnlReclassTargetAccounts(accounts = [], qboTxnType = "", currentA
     }
     return false;
   });
+}
+
+function allowedAccountTypesForPnlReclass(qboTxnType = "") {
+  const txnType = normalizeQboTxnTypeForUi(qboTxnType);
+  if (txnType === "Purchase" || txnType === "CreditCardCharge") return ["Expense", "Cost of Goods Sold"];
+  if (txnType === "Deposit") return ["Income", "Other Income"];
+  return ["Income", "Other Income", "Expense", "Cost of Goods Sold"];
 }
 
 function normalizeQboTxnTypeForUi(value = "") {

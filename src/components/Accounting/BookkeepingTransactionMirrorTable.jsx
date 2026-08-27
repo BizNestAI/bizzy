@@ -18,6 +18,9 @@ export default function BookkeepingTransactionMirrorTable({
   onReclassify,
   onPost,
   onRetry,
+  onCreateAccount,
+  onCreatedAccountSelect,
+  accountTypes,
   emptyMessage = "No transactions in this feed.",
 }) {
   if (!rows.length) {
@@ -52,6 +55,9 @@ export default function BookkeepingTransactionMirrorTable({
             onReclassify={onReclassify}
             onPost={onPost}
             onRetry={onRetry}
+            onCreateAccount={onCreateAccount}
+            onCreatedAccountSelect={onCreatedAccountSelect}
+            accountTypes={accountTypes}
           />
         ))}
       </div>
@@ -59,7 +65,21 @@ export default function BookkeepingTransactionMirrorTable({
   );
 }
 
-function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction, busyActions, rowError, onApprove, onReclassify, onPost, onRetry }) {
+function BookkeepingTransactionMirrorRow({
+  row,
+  feedStatus,
+  accounts,
+  busyAction,
+  busyActions,
+  rowError,
+  onApprove,
+  onReclassify,
+  onPost,
+  onRetry,
+  onCreateAccount,
+  onCreatedAccountSelect,
+  accountTypes,
+}) {
   const initialAccountId = row.final_qbo_account_id || row.glAccountId || row.suggestedAccountId || "";
   const [selectedAccountId, setSelectedAccountId] = React.useState(initialAccountId);
 
@@ -129,6 +149,18 @@ function BookkeepingTransactionMirrorRow({ row, feedStatus, accounts, busyAction
             suggestedId={row.suggestedAccountId || row.suggested_qbo_account_id || ""}
             suggestedName={row.suggestedAccountName || row.suggested_qbo_account_name || ""}
             accounts={accounts || []}
+            onCreateAccount={onCreateAccount}
+            onCreatedAccountSelect={(account) => {
+              onCreatedAccountSelect?.(account);
+              setSelectedAccountId(String(account.id));
+            }}
+            accountTypes={accountTypes}
+            creationContext={{
+              amount: row.signed_amount ?? row.signedAmount ?? row.amount,
+              direction: row.direction,
+              qboTxnType: row.qbo_txn_type,
+            }}
+            allowShowAllAccountTypes
             status={row.status}
             disabled={!hasAccounts || isActionBusy("approve") || isActionBusy("reclassify")}
             onChange={(accountId) => setSelectedAccountId(accountId)}

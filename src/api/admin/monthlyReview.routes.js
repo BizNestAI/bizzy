@@ -3,6 +3,11 @@ import crypto from "crypto";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { fetchChartOfAccounts, fetchQboAccountByIdForBusiness } from "../../services/bookkeeping/qboAccounts.js";
+import { getManualQboAccountCatalog } from "../../services/bookkeeping/qboAccountTypes.js";
+import {
+  createManualQboAccountForBusiness,
+  qboManualAccountCreationErrorResponse,
+} from "../../services/bookkeeping/qboManualAccountCreationService.js";
 import { postSingleBookkeepingTransactionNow } from "../../jobs/booksPost.cron.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
@@ -273,6 +278,28 @@ router.get("/businesses/:businessId/connected-accounts", async (req, res) => {
       error: "monthly_review_connected_accounts_failed",
       message: e?.message || "Could not load connected financial accounts.",
     });
+  }
+});
+
+router.get("/businesses/:businessId/qbo/account-types", async (_req, res) => {
+  return res.json({ ok: true, account_types: getManualQboAccountCatalog() });
+});
+
+router.post("/businesses/:businessId/qbo/accounts", async (req, res) => {
+  try {
+    const business = await assertMonthlyReviewBusinessExists(req.params.businessId);
+    const result = await createManualQboAccountForBusiness({
+      businessId: business.id,
+      name: req.body?.name,
+      accountType: req.body?.accountType || req.body?.account_type,
+      accountSubType: req.body?.accountSubType || req.body?.account_subtype || req.body?.detailType,
+      description: req.body?.description,
+      actor: req.user?.id || req.user?.email || "internal_admin",
+    });
+    return res.status(201).json(result);
+  } catch (err) {
+    const response = qboManualAccountCreationErrorResponse(err);
+    return res.status(response.status).json(response.body);
   }
 });
 

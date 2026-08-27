@@ -14,6 +14,8 @@ import {
   getTransactions as fetchTransactions,
   getTransactionCounts as fetchTransactionCounts,
   getQboCoa as fetchQboCoa,
+  getQboAccountTypes as fetchQboAccountTypes,
+  createQboAccount,
   approveTransactions,
   undoTransaction,
   rejectCreditCardPayment,
@@ -479,6 +481,7 @@ function BookkeepingCleanup() {
     });
     return [...byType.income, ...byType.expense, ...byType.equity, ...byType.other];
   });
+  const [qboAccountTypes, setQboAccountTypes] = useState([]);
   const rawTransactions = React.useMemo(() => (usingDemo ? TXN_DATA : []), [usingDemo]);
   const [transactions, setTransactions] = useState([]);
   const [totalCount, setTotalCount] = useState(null);
@@ -871,6 +874,21 @@ function BookkeepingCleanup() {
     });
     return [...byType.income, ...byType.expense, ...byType.equity, ...byType.other];
   }, [chartAccounts]);
+
+  const injectChartAccount = useCallback((account) => {
+    if (!account?.id) return;
+    const nextAccount = {
+      id: String(account.id),
+      name: account.name || "Unnamed account",
+      type: account.type || account.accountType || account.account_type || "other",
+      subType: account.subType || account.accountSubType || account.account_subtype || null,
+      active: account.active !== false,
+    };
+    setChartAccounts((current) => {
+      const next = [...(current || []).filter((item) => String(item.id) !== String(nextAccount.id)), nextAccount];
+      return next.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+    });
+  }, []);
 
   function Select({ value, onChange, options, className = "" }) {
     const [open, setOpen] = useState(false);
@@ -1461,6 +1479,39 @@ function BookkeepingCleanup() {
     }
   }, [adminView.active, businessId, usingDemo]);
 
+  const loadQboAccountTypes = useCallback(async () => {
+    if (usingDemo || !businessId || adminView.active) return;
+    try {
+      const res = await fetchQboAccountTypes(businessId);
+      setQboAccountTypes(Array.isArray(res?.account_types) ? res.account_types : []);
+    } catch (e) {
+      console.warn("[bookkeeping] QBO account types load failed", e?.message || e);
+    }
+  }, [adminView.active, businessId, usingDemo]);
+
+  const handleCreateQboAccount = useCallback(async (payload) => {
+    const result = await createQboAccount(businessId, payload);
+    if (result?.account) injectChartAccount(result.account);
+    return result;
+  }, [businessId, injectChartAccount]);
+
+  const handleCreatedAccountSelect = useCallback((txn, account) => {
+    if (!txn?.id || !account?.id) return;
+    injectChartAccount(account);
+    const accountId = String(account.id);
+    const accountName = account.name || accountId;
+    accountOverrides.current = new Map(accountOverrides.current).set(txn.id, { id: accountId, name: accountName });
+    setTransactions((prevState) =>
+      prevState.map((t) =>
+        t.id === txn.id ? { ...t, glAccountId: accountId, glAccountName: accountName } : t
+      )
+    );
+  }, [injectChartAccount]);
+
+  useEffect(() => {
+    loadQboAccountTypes();
+  }, [loadQboAccountTypes]);
+
   const reloadTransactions = useCallback(async () => {
     if (usingDemo || !businessId) return;
     if (!accountFilter) {
@@ -2021,6 +2072,12 @@ function BookkeepingCleanup() {
                 value={bulkAccountId}
                 accounts={groupedChartAccounts}
                 onChange={setBulkAccountId}
+                onCreateAccount={canRunAI && !usingDemo ? handleCreateQboAccount : null}
+                onCreatedAccountSelect={(account) => {
+                  injectChartAccount(account);
+                  setBulkAccountId(String(account.id));
+                }}
+                accountTypes={qboAccountTypes}
                 status="needs_review"
                 disabled={!canRunAI}
               />
@@ -2146,6 +2203,9 @@ function BookkeepingCleanup() {
               postingTransactionIds={postingTransactionIds}
               accounts={groupedChartAccounts}
               onAccountChange={handleAccountChange}
+              onCreateAccount={canRunAI && !usingDemo ? handleCreateQboAccount : null}
+              onCreatedAccountSelect={handleCreatedAccountSelect}
+              accountTypes={qboAccountTypes}
               page={page}
               pageCount={pageCount}
               pageSize={rowsPerPage}
