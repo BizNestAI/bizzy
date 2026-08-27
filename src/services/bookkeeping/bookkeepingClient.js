@@ -5,6 +5,7 @@ import {
   isClarificationAnswerPersisted,
   summarizeClarificationSubmitFailure,
 } from "./clarificationSubmitResult.js";
+import { normalizeExpectedQboAccountCreationResult } from "./qboAccountCreationErrors.js";
 
 export {
   getPersistedClarificationRequestIds,
@@ -153,11 +154,17 @@ export async function getQboAccountTypes(businessId) {
 }
 
 export async function createQboAccount(businessId, payload = {}) {
-  return safeFetch(apiUrl("/api/bookkeeping/qbo/accounts"), {
-    method: "POST",
-    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
-    body: JSON.stringify({ business_id: businessId, ...payload }),
-  });
+  try {
+    return await safeFetch(apiUrl("/api/bookkeeping/qbo/accounts"), {
+      method: "POST",
+      headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+      body: JSON.stringify({ business_id: businessId, ...payload }),
+    });
+  } catch (err) {
+    const expected = normalizeExpectedQboAccountCreationResult(err);
+    if (expected) return expected;
+    throw err;
+  }
 }
 
 export async function approveTransactions(businessId, items = []) {

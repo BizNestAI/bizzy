@@ -5,6 +5,7 @@ import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.j
 import { CoaDropdown } from "../../components/Accounting/BookkeepingFeed.jsx";
 import BookkeepingTransactionMirrorTable from "../../components/Accounting/BookkeepingTransactionMirrorTable.jsx";
 import { ADMIN_VIEW_RETURN_MESSAGE } from "../../services/adminViewReturn.js";
+import { normalizeExpectedQboAccountCreationResult } from "../../services/bookkeeping/qboAccountCreationErrors.js";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { deriveTraceReconciliationStatus } from "../../services/bookkeeping/postingTraceDisplay.js";
 import {
@@ -253,10 +254,17 @@ export default function MonthlyReviewConsole() {
 
   const createMonthlyReviewQboAccount = useCallback(async (payload) => {
     if (!selectedBusinessId) throw new Error("missing_business_id");
-    const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/qbo/accounts`, {
-      method: "POST",
-      body: payload,
-    });
+    let result;
+    try {
+      result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/qbo/accounts`, {
+        method: "POST",
+        body: payload,
+      });
+    } catch (err) {
+      const expected = normalizeExpectedQboAccountCreationResult(err);
+      if (expected) return expected;
+      throw err;
+    }
     if (result?.account) injectSourceLedgerAccount(result.account);
     return result;
   }, [injectSourceLedgerAccount, selectedBusinessId]);
@@ -2274,7 +2282,6 @@ function SourceLedgerPanel({
                                         qboTxnType: txn.qbo_txn_type,
                                         allowedAccountTypes: allowedAccountTypesForPnlReclass(txn.qbo_txn_type),
                                       }}
-                                      allowShowAllAccountTypes
                                       status="posted"
                                       onChange={(accountId) => handlePnlAccountDraftChange(txn, accountId)}
                                       disabled={busy || !rowDropdownAccounts.length}
@@ -2473,7 +2480,6 @@ function OperatorResponsesPanel({
                       direction: row.direction,
                       qboTxnType: row.qbo_txn_type,
                     }}
-                    allowShowAllAccountTypes
                     status="needs_review"
                     disabled={busy || !dropdownAccounts.length}
                     onChange={(accountId) => setSelectedAccounts((current) => ({ ...current, [row.request_id]: accountId }))}

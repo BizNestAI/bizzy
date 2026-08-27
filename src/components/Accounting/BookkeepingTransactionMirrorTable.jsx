@@ -160,7 +160,6 @@ function BookkeepingTransactionMirrorRow({
               direction: row.direction,
               qboTxnType: row.qbo_txn_type,
             }}
-            allowShowAllAccountTypes
             status={row.status}
             disabled={!hasAccounts || isActionBusy("approve") || isActionBusy("reclassify")}
             onChange={(accountId) => setSelectedAccountId(accountId)}

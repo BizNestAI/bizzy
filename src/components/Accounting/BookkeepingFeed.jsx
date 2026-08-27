@@ -16,6 +16,15 @@ function dropdownBucketType(value = "") {
   return "other";
 }
 
+function isEditableKeyboardTarget(target) {
+  if (!target || typeof target.closest !== "function") return false;
+  return Boolean(
+    target.closest(
+      'input, textarea, select, [contenteditable="true"], [role="textbox"], [role="combobox"], [data-qbo-account-modal="true"]'
+    )
+  );
+}
+
 export function CoaDropdown({
   value,
   suggestedId,
@@ -26,7 +35,6 @@ export function CoaDropdown({
   onCreatedAccountSelect,
   accountTypes,
   creationContext,
-  allowShowAllAccountTypes = false,
   status,
   disabled,
 }) {
@@ -34,6 +42,7 @@ export function CoaDropdown({
   const [renderMenu, setRenderMenu] = React.useState(false);
   const [createOpen, setCreateOpen] = React.useState(false);
   const ref = React.useRef(null);
+  const buttonRef = React.useRef(null);
   const menuRef = React.useRef(null);
   const [menuPos, setMenuPos] = React.useState(null);
   const [search, setSearch] = React.useState("");
@@ -132,6 +141,7 @@ export function CoaDropdown({
   return (
     <div className="relative w-full z-[60]" ref={ref}>
       <button
+        ref={buttonRef}
         type="button"
         disabled={disabled}
         onClick={(e) => {
@@ -248,7 +258,7 @@ export function CoaDropdown({
         onCreate={onCreateAccount}
         accountTypes={accountTypes}
         context={creationContext}
-        allowShowAll={allowShowAllAccountTypes}
+        returnFocusRef={buttonRef}
         onClose={(createdAccount) => {
           setCreateOpen(false);
           if (createdAccount?.id) {
@@ -683,6 +693,7 @@ export default function BookkeepingFeed({
                 aria-label={`Show full memo for ${txn.description || "transaction"}`}
                 onClick={() => toggleExpandedRow(txn.id)}
                 onKeyDown={(e) => {
+                  if (isEditableKeyboardTarget(e.target)) return;
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
                     toggleExpandedRow(txn.id);

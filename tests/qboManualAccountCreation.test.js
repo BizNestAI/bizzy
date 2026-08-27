@@ -6,6 +6,9 @@ import {
   QboManualAccountCreationError,
 } from "../src/services/bookkeeping/qboManualAccountCreationService.js";
 import {
+  normalizeExpectedQboAccountCreationResult,
+} from "../src/services/bookkeeping/qboAccountCreationErrors.js";
+import {
   getManualQboAccountCatalog,
   isValidManualQboAccountSubType,
 } from "../src/services/bookkeeping/qboAccountTypes.js";
@@ -196,4 +199,109 @@ test("shared dropdown source keeps add-account pinned and transaction actions ex
   assert.match(mirror, /onCreatedAccountSelect/);
   assert.match(monthly, /Confirm Reclass/);
   assert.match(monthly, /handlePnlAccountDraftChange\(txn, String\(account\.id\)\)/);
+});
+
+test("manual account creation modal removes show-all checkbox and native selects", () => {
+  const modal = fs.readFileSync(new URL("../src/components/Accounting/CreateQuickBooksAccountModal.jsx", import.meta.url), "utf8");
+  assert.doesNotMatch(modal, /Show all P&L account types/);
+  assert.doesNotMatch(modal, /type="checkbox"/);
+  assert.doesNotMatch(modal, /<select\b/);
+  assert.doesNotMatch(modal, /<option\b/);
+  assert.match(modal, /role="listbox"/);
+  assert.match(modal, /aria-haspopup="listbox"/);
+  assert.match(modal, /ArrowDown/);
+  assert.match(modal, /ArrowUp/);
+  assert.match(modal, /max-h-56 overflow-y-auto/);
+});
+
+test("manual account creation modal always exposes the four supported P&L account types", () => {
+  const modal = fs.readFileSync(new URL("../src/components/Accounting/CreateQuickBooksAccountModal.jsx", import.meta.url), "utf8");
+  const catalogTypes = getManualQboAccountCatalog().map((entry) => entry.accountType);
+  assert.deepEqual(catalogTypes, ["Income", "Other Income", "Expense", "Cost of Goods Sold"]);
+  assert.match(modal, /DEFAULT_ACCOUNT_TYPES\.map\(\(fallback\) =>/);
+  assert.match(modal, /fromCatalog \|\| fallback/);
+  assert.doesNotMatch(modal, /Bank/);
+  assert.doesNotMatch(modal, /Credit Card/);
+  assert.doesNotMatch(modal, /Accounts Receivable/);
+  assert.doesNotMatch(modal, /Accounts Payable/);
+  assert.doesNotMatch(modal, /Liabilities/);
+  assert.doesNotMatch(modal, /Equity/);
+});
+
+test("manual account creation modal uses safe transaction-aware defaults without filtering choices", () => {
+  const modal = fs.readFileSync(new URL("../src/components/Accounting/CreateQuickBooksAccountModal.jsx", import.meta.url), "utf8");
+  assert.match(modal, /function defaultTypeForContext/);
+  assert.match(modal, /return "Income";/);
+  assert.match(modal, /return "Expense";/);
+  assert.match(modal, /Expense: "OtherBusinessExpenses"/);
+  assert.match(modal, /"Cost of Goods Sold": "OtherCostsOfServiceCos"/);
+  assert.doesNotMatch(modal, /return "Cost of Goods Sold";/);
+});
+
+test("manual account creation modal updates detail type when account type changes and preserves success behavior", () => {
+  const modal = fs.readFileSync(new URL("../src/components/Accounting/CreateQuickBooksAccountModal.jsx", import.meta.url), "utf8");
+  const dropdown = fs.readFileSync(new URL("../src/components/Accounting/BookkeepingFeed.jsx", import.meta.url), "utf8");
+  assert.match(modal, /const selectedType = supportedTypes\.find/);
+  assert.match(modal, /const subTypes = React\.useMemo\(\(\) => selectedType\.subTypes \|\| \[\]/);
+  assert.match(modal, /setAccountSubType\(preferredSubTypeForAccountType\(selectedType\.accountType, subTypes\)\)/);
+  assert.match(modal, /onChange=\{setAccountType\}/);
+  assert.match(modal, /onChange=\{setAccountSubType\}/);
+  assert.match(dropdown, /onCreatedAccountSelect \? onCreatedAccountSelect\(createdAccount\) : onChange\(createdAccount\.id\)/);
+});
+
+test("expected duplicate account conflicts normalize to inline modal state", () => {
+  const result = normalizeExpectedQboAccountCreationResult({
+    status: 409,
+    body: {
+      error: "qbo_account_already_exists",
+      existing_account: {
+        id: "42",
+        name: "Charitable Contributions",
+        active: true,
+      },
+    },
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    expected: true,
+    code: "qbo_account_already_exists",
+    error: "qbo_account_already_exists",
+    existing_account_id: "42",
+    existing_account_name: "Charitable Contributions",
+    active: true,
+    existing_account: {
+      id: "42",
+      name: "Charitable Contributions",
+      active: true,
+    },
+  });
+  assert.equal(normalizeExpectedQboAccountCreationResult({ status: 500, body: { error: "qbo_account_create_failed" } }), null);
+});
+
+test("shared account creation modal is a body portal with global viewport layering and focus handling", () => {
+  const modal = fs.readFileSync(new URL("../src/components/Accounting/CreateQuickBooksAccountModal.jsx", import.meta.url), "utf8");
+  const dropdown = fs.readFileSync(new URL("../src/components/Accounting/BookkeepingFeed.jsx", import.meta.url), "utf8");
+  assert.match(modal, /ReactDOM\.createPortal/);
+  assert.match(modal, /document\.body/);
+  assert.match(modal, /fixed inset-0 z-\[2147483000\]/);
+  assert.match(modal, /role="dialog"/);
+  assert.match(modal, /aria-modal="true"/);
+  assert.match(modal, /nameInputRef\.current\?\.focus\(\)/);
+  assert.match(modal, /const returnFocusNode = returnFocusRef\?\.current \|\| null/);
+  assert.match(modal, /returnFocusNode\?\.focus\?\.\(\)/);
+  assert.match(modal, /event\.key === "Escape"/);
+  assert.match(modal, /event\.key !== "Tab"/);
+  assert.match(modal, /event\.stopPropagation\(\)/);
+  assert.match(dropdown, /setOpen\(false\);\s*setCreateOpen\(true\);/);
+  assert.match(dropdown, /returnFocusRef=\{buttonRef\}/);
+});
+
+test("Books Review row keyboard handler ignores editable and modal targets", () => {
+  const dropdown = fs.readFileSync(new URL("../src/components/Accounting/BookkeepingFeed.jsx", import.meta.url), "utf8");
+  assert.match(dropdown, /function isEditableKeyboardTarget/);
+  assert.match(dropdown, /input, textarea, select/);
+  assert.match(dropdown, /\[role="textbox"\]/);
+  assert.match(dropdown, /\[role="combobox"\]/);
+  assert.match(dropdown, /\[data-qbo-account-modal="true"\]/);
+  assert.match(dropdown, /if \(isEditableKeyboardTarget\(e\.target\)\) return;/);
 });
