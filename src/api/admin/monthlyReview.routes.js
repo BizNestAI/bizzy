@@ -12,6 +12,8 @@ import { postSingleBookkeepingTransactionNow } from "../../jobs/booksPost.cron.j
 import { runQboSync } from "../accounting/qbo-sync.js";
 import { ensurePnLPdf } from "../accounting/pnlPdfService.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
+import { enqueueUnresolvedBookkeepingBacklog } from "../../services/bookkeeping/backgroundBookkeepingProcessingService.js";
+import { reconsiderNeedsReviewTransactions } from "../../services/bookkeeping/routineExpenseReconsiderationService.js";
 import {
   countBookkeepingTransactions,
   fetchBookkeepingTransactions,
@@ -296,6 +298,18 @@ router.post("/businesses/:businessId/qbo/accounts", async (req, res) => {
       description: req.body?.description,
       actor: req.user?.id || req.user?.email || "internal_admin",
     });
+    try {
+      await enqueueUnresolvedBookkeepingBacklog({
+        businessId: business.id,
+        supabase,
+        limit: 100,
+        now: new Date(),
+      });
+    } catch (enqueueErr) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[monthly-review] post-account-create reconsideration enqueue skipped", enqueueErr?.message || enqueueErr);
+      }
+    }
     return res.status(201).json(result);
   } catch (err) {
     const response = qboManualAccountCreationErrorResponse(err);
@@ -573,6 +587,72 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
   } catch (e) {
     console.error("[monthly-review] bookkeeping feed failed", e?.message || e);
     sendMonthlyReviewError(res, "monthly_review_bookkeeping_feed_failed", "Could not load bookkeeping transactions.", e);
+  }
+});
+
+router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    const { data: business, error: bizErr } = await supabase
+      .from("business_profiles")
+      .select("id")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
+
+    const [rangeStart, rangeEnd] = monthBounds(month);
+    const inclusiveRangeEnd = previousDate(rangeEnd);
+    const limit = Math.min(Math.max(parseInt(req.body?.limit, 10) || 200, 1), 500);
+    const maxPages = Math.min(Math.max(parseInt(req.body?.max_pages, 10) || 10, 1), 25);
+    const source = req.body?.source || "monthly_review_reconsideration";
+    let cursor = req.body?.cursor ? String(req.body.cursor) : null;
+    let pageCount = 0;
+    const rows = [];
+    const totals = { processed: 0, promoted: 0, skipped: 0 };
+
+    while (pageCount < maxPages) {
+      const result = await reconsiderNeedsReviewTransactions(businessId, {
+        dateFrom: rangeStart,
+        dateTo: inclusiveRangeEnd,
+        cursor,
+        limit,
+        source,
+      });
+      totals.processed += Number(result?.processed || 0);
+      totals.promoted += Number(result?.promoted || 0);
+      totals.skipped += Number(result?.skipped || 0);
+      if (Array.isArray(result?.rows)) rows.push(...result.rows);
+      cursor = result?.next_cursor || null;
+      pageCount += 1;
+      if (!cursor) break;
+    }
+
+    return res.json({
+      ok: true,
+      business_id: businessId,
+      month,
+      range_start: rangeStart,
+      range_end: rangeEnd,
+      processed: totals.processed,
+      promoted: totals.promoted,
+      skipped: totals.skipped,
+      rows,
+      next_cursor: cursor,
+      partial: Boolean(cursor),
+      batches: pageCount,
+      source_contract: {
+        service: "routineExpenseReconsiderationService",
+        selected_month_bounds: "server-side [range_start, range_end)",
+        qbo_provider_writes: false,
+        qbo_transaction_writes: false,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] bookkeeping reconsideration failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_bookkeeping_reconsideration_failed", "Could not re-evaluate Needs Review transactions.", e);
   }
 });
 
@@ -3030,6 +3110,12 @@ function monthBounds(month) {
   const start = new Date(Date.UTC(year, monthNumber - 1, 1)).toISOString().slice(0, 10);
   const end = new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10);
   return [start, end];
+}
+
+function previousDate(date) {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
 }
 
 function previousMonthBounds(month) {

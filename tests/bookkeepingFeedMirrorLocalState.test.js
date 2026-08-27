@@ -5,6 +5,7 @@ import {
   buildBookkeepingRowFromOperatorResponse,
   buildLocallyPatchedBookkeepingRow,
   patchBookkeepingFeedsAfterApprovalState,
+  patchBookkeepingFeedsAfterReconsiderationState,
   patchOperatorResponseApprovalInDetail,
   patchBookkeepingFeedsAfterReclassificationState,
   patchSourceLedgerTransaction,
@@ -85,6 +86,46 @@ test("reclassification updates only the existing handled row and does not move s
   assert.equal(next.needs_review.totalCount, 90);
   assert.equal(next.handled.totalCount, 29);
   assert.equal(next.handled.rows[0].id, "txn-2");
+  assert.equal(next.handled.rows[0].final_qbo_account_name, "Meals");
+});
+
+test("reconsideration moves visible promoted Needs Review rows into Handled and patches counts", () => {
+  const feeds = {
+    needs_review: {
+      rows: [
+        { id: "txn-1", status: "needs_review", amount: -12.34, pending: false, glAccountName: "Uncategorized" },
+        { id: "txn-unknown", status: "needs_review", amount: -45, pending: false },
+      ],
+      totalCount: 10,
+      loaded: true,
+      expanded: true,
+    },
+    handled: { rows: [], totalCount: 2, loaded: true, expanded: true },
+  };
+
+  const next = patchBookkeepingFeedsAfterReconsiderationState(feeds, {
+    promoted: 1,
+    rows: [{
+      transaction_id: "txn-1",
+      promoted: true,
+      categorization: {
+        status: "auto_approved",
+        final_qbo_account_id: "42",
+        final_qbo_account_name: "Meals",
+        suggested_qbo_account_id: "42",
+        suggested_qbo_account_name: "Meals",
+        post_after: null,
+        qbo_txn_id: null,
+      },
+    }],
+  }, sourceLedger);
+
+  assert.deepEqual(next.needs_review.rows.map((item) => item.id), ["txn-unknown"]);
+  assert.equal(next.needs_review.totalCount, 9);
+  assert.equal(next.handled.totalCount, 3);
+  assert.equal(next.handled.rows[0].id, "txn-1");
+  assert.equal(next.handled.rows[0].status, "auto_approved");
+  assert.equal(next.handled.rows[0].pipeline_status_key, "handled_not_posted");
   assert.equal(next.handled.rows[0].final_qbo_account_name, "Meals");
 });
 

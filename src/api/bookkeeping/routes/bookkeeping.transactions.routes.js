@@ -4,6 +4,7 @@ import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { resolvePayee } from "../../../services/bookkeeping/payeeResolver.js";
 import { learnVendorRuleFromTransaction } from "../../../services/bookkeeping/vendorRuleLearner.js";
+import { enqueueUnresolvedBookkeepingBacklog } from "../../../services/bookkeeping/backgroundBookkeepingProcessingService.js";
 import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
 import {
@@ -134,6 +135,19 @@ router.patch("/transactions/:transactionId", requireAuth, async (req, res) => {
     } catch (e) {
       if (process.env.NODE_ENV !== "production") {
         console.warn("[bookkeeping][grace-edit] vendor rule learn skipped", e?.message || e);
+      }
+    }
+
+    try {
+      await enqueueUnresolvedBookkeepingBacklog({
+        businessId,
+        supabase,
+        limit: 100,
+        now: new Date(),
+      });
+    } catch (e) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[bookkeeping][grace-edit] unresolved backlog enqueue skipped", e?.message || e);
       }
     }
 

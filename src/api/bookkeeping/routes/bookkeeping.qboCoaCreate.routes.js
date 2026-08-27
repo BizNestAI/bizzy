@@ -7,6 +7,7 @@ import {
   createManualQboAccountForBusiness,
   qboManualAccountCreationErrorResponse,
 } from "../../../services/bookkeeping/qboManualAccountCreationService.js";
+import { enqueueUnresolvedBookkeepingBacklog } from "../../../services/bookkeeping/backgroundBookkeepingProcessingService.js";
 
 const router = Router();
 
@@ -55,6 +56,18 @@ router.post("/qbo/accounts", requireAuth, async (req, res) => {
       description: req.body?.description,
       actor: req.user?.id || "user",
     });
+    try {
+      await enqueueUnresolvedBookkeepingBacklog({
+        businessId,
+        supabase,
+        limit: 100,
+        now: new Date(),
+      });
+    } catch (enqueueErr) {
+      if (process.env.NODE_ENV !== "production") {
+        console.warn("[qbo][manual-account-create] reconsideration enqueue skipped", enqueueErr?.message || enqueueErr);
+      }
+    }
     return res.status(201).json(result);
   } catch (err) {
     const response = qboManualAccountCreationErrorResponse(err);

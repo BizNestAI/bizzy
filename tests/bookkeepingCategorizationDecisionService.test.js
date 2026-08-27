@@ -77,6 +77,20 @@ test("Plaid-only medium suggestion remains Needs Review even when a visible acco
   assert.equal(decision.block_reason, "medium_confidence_requires_review");
 });
 
+test("explicit conflicting evidence blocks auto-handle even with an otherwise valid account", () => {
+  const decision = decide({
+    account: { id: "acct-meals", name: "Meals", type: "Expense" },
+    evidence: {
+      source: "approved_business_rule",
+      confidenceTier: "very_high",
+      conflictingEvidence: true,
+    },
+  });
+
+  assert.equal(decision.auto_handle, false);
+  assert.equal(decision.block_reason, "conflicting_categorization_evidence");
+});
+
 test("suspense accounts never auto-handle even when they have QBO ids", () => {
   for (const name of ["Uncategorized Expense", "Uncategorized Income", "Ask My Accountant"]) {
     const decision = decide({

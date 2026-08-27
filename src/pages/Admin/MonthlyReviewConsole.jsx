@@ -19,6 +19,7 @@ import {
   findSourceLedgerAccount,
   patchBookkeepingFeedsAfterApprovalState,
   patchBookkeepingFeedsAfterReclassificationState,
+  patchBookkeepingFeedsAfterReconsiderationState,
   patchOperatorResponseApprovalInDetail,
   patchSourceLedgerTransaction,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
@@ -106,6 +107,7 @@ export default function MonthlyReviewConsole() {
   const [bookkeepingFeeds, setBookkeepingFeeds] = useState(() => buildInitialBookkeepingFeeds());
   const [loadingBookkeepingCounts, setLoadingBookkeepingCounts] = useState(false);
   const [bookkeepingCountsError, setBookkeepingCountsError] = useState("");
+  const [bookkeepingReconsideration, setBookkeepingReconsideration] = useState({ loading: false, message: "", error: "" });
   const [busyFeedActions, setBusyFeedActions] = useState({});
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
   const [loadingBusinesses, setLoadingBusinesses] = useState(false);
@@ -516,6 +518,7 @@ export default function MonthlyReviewConsole() {
 
   useEffect(() => {
     setBookkeepingFeeds(buildInitialBookkeepingFeeds());
+    setBookkeepingReconsideration({ loading: false, message: "", error: "" });
     loadBookkeepingFeedCounts();
   }, [loadBookkeepingFeedCounts]);
 
@@ -597,6 +600,61 @@ export default function MonthlyReviewConsole() {
       }
     });
   }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts]);
+
+  const runBookkeepingReconsideration = useCallback(async () => {
+    if (!selectedBusinessId) return;
+    setBookkeepingReconsideration({ loading: true, message: "", error: "" });
+    setBookkeepingCountsError("");
+    try {
+      const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/reconsider`, {
+        method: "POST",
+        body: {
+          month,
+          limit: 200,
+          max_pages: 10,
+          source: "monthly_review_reconsideration",
+        },
+      });
+      const processed = Number(result?.processed || 0);
+      const promoted = Number(result?.promoted || 0);
+      const skipped = Number(result?.skipped || 0);
+      setBookkeepingFeeds((current) => patchBookkeepingFeedsAfterReconsiderationState(current, result, sourceLedger));
+      const promotedRows = (Array.isArray(result?.rows) ? result.rows : []).filter((row) => row?.promoted === true && row?.categorization);
+      if (promotedRows.length) {
+        setSourceLedger((current) => promotedRows.reduce((nextLedger, row) => (
+          patchSourceLedgerTransaction(nextLedger, {
+            id: row.transaction_id,
+            transaction_id: row.transaction_id,
+            status: row.categorization.status || "auto_approved",
+            final_qbo_account_id: row.categorization.final_qbo_account_id || null,
+            final_qbo_account_name: row.categorization.final_qbo_account_name || null,
+            suggested_qbo_account_id: row.categorization.suggested_qbo_account_id || null,
+            suggested_qbo_account_name: row.categorization.suggested_qbo_account_name || null,
+            glAccountId: row.categorization.final_qbo_account_id || null,
+            glAccountName: row.categorization.final_qbo_account_name || null,
+            effective_account_id: row.categorization.final_qbo_account_id || null,
+            effective_account_name: row.categorization.final_qbo_account_name || null,
+            post_after: row.categorization.post_after ?? null,
+            qbo_txn_id: row.categorization.qbo_txn_id || null,
+            meta: row.categorization.meta || null,
+          })
+        ), current));
+      }
+      setBookkeepingReconsideration({
+        loading: false,
+        error: "",
+        message: result?.partial
+          ? `Re-evaluation paused after ${processed} reviewed; ${promoted} moved to Handled and ${skipped} still need review. Run it again to continue.`
+          : `Re-evaluation complete. ${processed} reviewed, ${promoted} moved to Handled, ${skipped} still need review.`,
+      });
+    } catch (e) {
+      setBookkeepingReconsideration({
+        loading: false,
+        message: "",
+        error: e?.body?.message || e?.message || "Could not re-evaluate Needs Review transactions.",
+      });
+    }
+  }, [month, selectedBusinessId, sourceLedger]);
 
   const refreshAfterFeedAction = useCallback(async () => {
     await Promise.all([
@@ -1353,9 +1411,11 @@ export default function MonthlyReviewConsole() {
                   feeds={bookkeepingFeeds}
                   loadingCounts={loadingBookkeepingCounts}
                   countsError={bookkeepingCountsError}
+                  reconsideration={bookkeepingReconsideration}
                   onToggle={toggleBookkeepingFeed}
                   onLoadMore={(status) => loadBookkeepingFeed(status)}
                   onRefresh={refreshBookkeepingFeeds}
+                  onReconsider={runBookkeepingReconsideration}
                   accounts={mirrorFeedAccounts}
                   busyAction={busyFeedAction}
                   busyActions={busyFeedActions}
@@ -1453,9 +1513,11 @@ function BookkeepingFeedMirrorPanels({
   feeds,
   loadingCounts,
   countsError,
+  reconsideration,
   onToggle,
   onLoadMore,
   onRefresh,
+  onReconsider,
   accounts,
   busyAction,
   busyActions,
@@ -1476,18 +1538,39 @@ function BookkeepingFeedMirrorPanels({
           <h2 className="mt-1 text-lg font-semibold text-white">Needs Review / Handled</h2>
           <p className="mt-1 text-xs text-white/45">Selected-month transactions from the same bounded Books Review source.</p>
         </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.06] px-3 py-2 text-sm text-white/70 hover:bg-white/[0.1]"
-        >
-          <RefreshCcw className={`h-4 w-4 ${loadingCounts ? "animate-spin" : ""}`} />
-          Refresh Feeds
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onReconsider}
+            disabled={reconsideration?.loading}
+            className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/20 bg-emerald-950/30 px-3 py-2 text-sm font-semibold text-emerald-50 hover:border-emerald-300/35 hover:bg-emerald-900/35 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {reconsideration?.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            Re-evaluate Needs Review
+          </button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="inline-flex items-center gap-2 rounded-xl border border-white/12 bg-white/[0.06] px-3 py-2 text-sm text-white/70 hover:bg-white/[0.1]"
+          >
+            <RefreshCcw className={`h-4 w-4 ${loadingCounts ? "animate-spin" : ""}`} />
+            Refresh Feeds
+          </button>
+        </div>
       </div>
       {countsError ? (
         <div className="mt-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-xs text-amber-100">
           {countsError}
+        </div>
+      ) : null}
+      {reconsideration?.message ? (
+        <div className="mt-3 rounded-xl border border-emerald-300/20 bg-emerald-300/[0.08] px-3 py-2 text-xs text-emerald-100">
+          {reconsideration.message}
+        </div>
+      ) : null}
+      {reconsideration?.error ? (
+        <div className="mt-3 rounded-xl border border-rose-300/20 bg-rose-300/[0.08] px-3 py-2 text-xs text-rose-100">
+          {reconsideration.error}
         </div>
       ) : null}
       <div className="mt-3 space-y-3">

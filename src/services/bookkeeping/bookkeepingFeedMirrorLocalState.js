@@ -91,6 +91,51 @@ export function patchBookkeepingFeedsAfterReclassificationState(feeds = {}, row 
   return patchBookkeepingRowInFeeds(feeds, nextRow);
 }
 
+export function patchBookkeepingFeedsAfterReconsiderationState(feeds = {}, result = {}, sourceLedger = {}) {
+  const promotedRows = (Array.isArray(result?.rows) ? result.rows : []).filter((row) => row?.promoted === true);
+  if (!promotedRows.length) return feeds;
+  const needsReview = feeds.needs_review || {};
+  const handled = feeds.handled || {};
+  const visibleNeedsRows = Array.isArray(needsReview.rows) ? needsReview.rows : [];
+  let handledRows = Array.isArray(handled.rows) ? handled.rows : [];
+  const promotedIds = new Set(promotedRows.map((row) => String(row.transaction_id)).filter(Boolean));
+
+  promotedRows.forEach((promotion) => {
+    const baseRow = visibleNeedsRows.find((row) => String(row.id) === String(promotion.transaction_id));
+    if (!baseRow) return;
+    const categorization = promotion.categorization || {};
+    const accountId = categorization.final_qbo_account_id || categorization.suggested_qbo_account_id || null;
+    const targetAccount = findSourceLedgerAccount(sourceLedger, accountId) || {
+      id: accountId,
+      name: categorization.final_qbo_account_name || categorization.suggested_qbo_account_name || null,
+    };
+    const nextRow = buildLocallyPatchedBookkeepingRow(baseRow, {
+      accountId,
+      targetAccount,
+      categorization,
+      status: categorization.status || "auto_approved",
+      pipelineStatusKey: "handled_not_posted",
+    });
+    if (handled.loaded || handled.expanded) {
+      handledRows = upsertBookkeepingRow(handledRows, nextRow, { prepend: true });
+    }
+  });
+
+  return {
+    ...feeds,
+    needs_review: {
+      ...needsReview,
+      rows: visibleNeedsRows.filter((row) => !promotedIds.has(String(row.id))),
+      totalCount: decrementCountBy(needsReview.totalCount, promotedRows.length),
+    },
+    handled: {
+      ...handled,
+      rows: handledRows,
+      totalCount: incrementCountBy(handled.totalCount, promotedRows.length),
+    },
+  };
+}
+
 export function removeBookkeepingRow(rows = [], transactionId = "") {
   return (Array.isArray(rows) ? rows : []).filter((row) => String(row.id) !== String(transactionId));
 }
@@ -135,6 +180,16 @@ export function decrementCount(value) {
 export function incrementCount(value) {
   if (value === null || value === undefined) return value;
   return Number(value || 0) + 1;
+}
+
+export function decrementCountBy(value, delta = 0) {
+  if (value === null || value === undefined) return value;
+  return Math.max(0, Number(value || 0) - Number(delta || 0));
+}
+
+export function incrementCountBy(value, delta = 0) {
+  if (value === null || value === undefined) return value;
+  return Number(value || 0) + Number(delta || 0);
 }
 
 export function patchSourceLedgerTransaction(sourceLedger = null, nextRow = {}) {

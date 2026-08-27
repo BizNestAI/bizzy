@@ -40,6 +40,28 @@ export function isStrongUniversalVendorEvidence(hint = null) {
   );
 }
 
+const SPECIFIC_MEDIUM_UNIVERSAL_INTENTS = new Set([
+  "software",
+  "insurance",
+  "internet_services",
+  "electric",
+  "security",
+  "cleaning",
+]);
+
+export function isSpecificUniversalVendorEvidence(hint = null) {
+  if (isStrongUniversalVendorEvidence(hint)) return true;
+  if (!hint?.primary_intent || hint.confidence !== "medium") return false;
+  if (!SPECIFIC_MEDIUM_UNIVERSAL_INTENTS.has(String(hint.primary_intent))) return false;
+  const candidate = hint.matched_value || hint.candidate || "";
+  const canonical = hint.canonical_vendor || hint.canonical_vendor_name || hint.label || "";
+  if (!candidate || !canonical) return false;
+  return Boolean(
+    normalizeVendorCandidate(candidate).startsWith(normalizeVendorCandidate(canonical)) ||
+      containsWordBoundary(candidate, canonical)
+  );
+}
+
 export function withCategorizationPolicyVersion(meta = {}) {
   return {
     ...(meta || {}),

@@ -12,6 +12,7 @@ import { getVendorRuleForTransaction } from "./vendorRuleMatcher.js";
 import { canonicalTxnDirection, looksLikeTaxonomyLandmineMemo } from "./vendorRuleLearner.js";
 import {
   isStrongUniversalVendorEvidence,
+  isSpecificUniversalVendorEvidence,
   withCategorizationPolicyVersion,
 } from "./categorizationEvidencePolicy.js";
 
@@ -451,7 +452,21 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           updated_at: nowIso,
         });
         promoted += 1;
-        rows.push({ transaction_id: cat.transaction_id, promoted: true, reason: decision.reason });
+        rows.push({
+          transaction_id: cat.transaction_id,
+          promoted: true,
+          reason: decision.reason,
+          categorization: {
+            status: "auto_approved",
+            final_qbo_account_id: account.id,
+            final_qbo_account_name: account.name,
+            suggested_qbo_account_id: account.id,
+            suggested_qbo_account_name: account.name,
+            post_after: postAfter,
+            qbo_txn_id: null,
+            meta: decisionMeta,
+          },
+        });
         continue;
       }
       skipped += 1;
@@ -477,7 +492,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       continue;
     }
     const universalHint = await getUniversalVendorHintForTransaction({ bankTxn });
-    if (!checkHit.is_check && isStrongUniversalVendorEvidence(universalHint)) {
+    if (!checkHit.is_check && isSpecificUniversalVendorEvidence(universalHint)) {
+      const specificMediumEvidence = universalHint?.confidence === "medium" && !isStrongUniversalVendorEvidence(universalHint);
+      const decisionConfidenceTier = specificMediumEvidence ? "high" : universalHint.confidence || "high";
       const canonicalKey = resolveIntentToCanonicalKey(universalHint.primary_intent);
       const canonicalResolution = await resolveCanonicalQboAccount({
         businessId,
@@ -490,7 +507,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           supabase: db,
         },
       });
-      let account =
+      const canonicalResolvedAccount =
         canonicalResolution?.ok && canonicalResolution?.account?.id && canonicalResolution?.review_required !== true
           ? {
               id: String(canonicalResolution.account.id),
@@ -499,6 +516,15 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
               subType: canonicalResolution.account.subType || canonicalResolution.account.AccountSubType || null,
             }
           : { id: null, name: null };
+      let account = canonicalResolvedAccount.id
+        ? await fetchActiveQboAccountById({
+            businessId,
+            accountId: canonicalResolvedAccount.id,
+            fallbackName: canonicalResolvedAccount.name,
+            db,
+            dependencies,
+          }) || { id: null, name: null }
+        : { id: null, name: null };
       let semanticResolution = null;
       if (!account.id) {
         semanticResolution = await resolveStrongSemanticCoaAccount({
@@ -525,20 +551,25 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
         },
       });
-      const canonicalAccountResolved = Boolean(account.id && account.name);
+      const exactCanonicalAccountResolved = Boolean(canonicalResolvedAccount.id && account?.id && !semanticResolution);
+      const resolvedAccount = Boolean(account.id && account.name);
       const semanticAccountResolved = Boolean(semanticResolution?.id && semanticResolution?.name);
       const decision = decideBookkeepingCategorization({
         transaction: bankTxn,
         account,
         evidence: {
-          source: semanticAccountResolved ? "universal_hint_semantic_coa" : "universal_hint",
-          confidenceTier: universalHint.confidence || "high",
+          source: specificMediumEvidence
+            ? "specific_universal_vendor"
+            : semanticAccountResolved
+            ? "universal_hint_semantic_coa"
+            : "universal_hint",
+          confidenceTier: decisionConfidenceTier,
           taxonomyType: meta.taxonomy_type || null,
           isCheck: false,
           meta,
-          canonicalAccountResolved: canonicalAccountResolved || semanticAccountResolved,
+          canonicalAccountResolved: resolvedAccount,
           canonicalAccountKey: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
-          canonicalAccountReviewRequired: canonicalAccountResolved !== true && semanticAccountResolved !== true,
+          canonicalAccountReviewRequired: resolvedAccount !== true,
           canonicalVendorId: vendorEvidence.canonicalVendorId || null,
           canonicalVendorReliable: vendorEvidence.canonicalVendorReliable === true,
           weakVendorEvidence: vendorEvidence.weakVendorEvidence === true,
@@ -560,6 +591,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           primary_intent: universalHint.primary_intent,
           intents: universalHint.intents,
           confidence: universalHint.confidence,
+          evidence_tier: specificMediumEvidence ? "specific_consistent" : universalHint.confidence || "high",
           match_type: universalHint.match_type || null,
           matched_value: universalHint.matched_value || null,
           canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
@@ -567,17 +599,18 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           canonical_resolution_status: canonicalResolution?.status || null,
         },
         canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
-        canonical_coa_resolved: canonicalResolution?.ok === true && Boolean(canonicalResolution?.account?.id),
+        canonical_coa_resolved: exactCanonicalAccountResolved,
         semantic_coa_resolved: semanticAccountResolved,
         semantic_coa_match: semanticResolution?.match || null,
-        canonical_account_review_required: canonicalAccountResolved !== true && semanticAccountResolved !== true,
-        canonical_setup_required: canonicalAccountResolved !== true && semanticAccountResolved !== true,
+        canonical_account_review_required: resolvedAccount !== true,
+        canonical_setup_required: resolvedAccount !== true,
         canonical_setup_required_reason: canonicalResolution?.reason || null,
         canonical_vendor_id: vendorEvidence.canonicalVendorId || null,
         canonical_vendor_reliable: vendorEvidence.canonicalVendorReliable === true,
         merchant_evidence_strong: decision.evidence?.merchantEvidenceStrong === true,
         evidence_source: decision.evidence_source,
         confidence_tier: decision.confidence_tier,
+        original_confidence: universalHint.confidence || null,
         safe_to_auto_handle: decision.auto_handle === true,
         safe_to_auto_post: decision.auto_handle === true,
         auto_handle_decision: {
@@ -613,7 +646,24 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           updated_at: nowIso,
         });
         promoted += 1;
-        rows.push({ transaction_id: cat.transaction_id, promoted: true, reason: decision.reason });
+        rows.push({
+          transaction_id: cat.transaction_id,
+          promoted: true,
+          reason: decision.reason,
+          categorization: {
+            status: "auto_approved",
+            final_qbo_account_id: account.id,
+            final_qbo_account_name: account.name,
+            final_canonical_account_key: semanticAccountResolved ? null : canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+            suggested_qbo_account_id: account.id,
+            suggested_qbo_account_name: account.name,
+            suggested_canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
+            confidence: universalHint.confidence || "high",
+            post_after: postAfter,
+            qbo_txn_id: null,
+            meta: decisionMeta,
+          },
+        });
         continue;
       }
       updates.push({
@@ -748,7 +798,28 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       updated_at: nowIso,
     });
     promoted += 1;
-    rows.push({ transaction_id: cat.transaction_id, promoted: true, reason: decision.reason });
+    rows.push({
+      transaction_id: cat.transaction_id,
+      promoted: true,
+      reason: decision.reason,
+      categorization: {
+        status: "auto_approved",
+        final_qbo_account_id: account.id,
+        final_qbo_account_name: account.name,
+        final_canonical_account_key: canonicalKey,
+        suggested_qbo_account_id: account.id,
+        suggested_qbo_account_name: account.name,
+        suggested_canonical_account_key: canonicalKey,
+        confidence: cat.confidence || meta.confidence || "medium",
+        post_after: postAfter,
+        qbo_txn_id: null,
+        meta: withCategorizationPolicyVersion({
+          ...decisionMeta,
+          auto_approve_reason: decisionMeta.auto_approve_reason || "routine_expense_fully_resolved",
+          auto_handled_reason: decision.reason,
+        }),
+      },
+    });
   }
 
   if (updates.length) {

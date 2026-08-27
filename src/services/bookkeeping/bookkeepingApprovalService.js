@@ -10,6 +10,7 @@ import {
 import { fetchChartOfAccounts, validateBusinessQboCreditCardAccount } from "./qboAccounts.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
+import { enqueueUnresolvedBookkeepingBacklog } from "./backgroundBookkeepingProcessingService.js";
 
 export class BookkeepingApprovalError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -481,6 +482,19 @@ export async function approveBookkeepingTransactions({
       if (process.env.NODE_ENV !== "production") {
         console.warn("[bookkeeping][approve] vendor rule learn skipped", e?.message || e);
       }
+    }
+  }
+
+  try {
+    await enqueueUnresolvedBookkeepingBacklog({
+      businessId,
+      supabase: db,
+      limit: 100,
+      now: new Date(),
+    });
+  } catch (e) {
+    if (process.env.NODE_ENV !== "production") {
+      console.warn("[bookkeeping][approve] unresolved backlog enqueue skipped", e?.message || e);
     }
   }
 

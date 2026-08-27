@@ -399,6 +399,40 @@ test("old exact restaurant Select account row is reconsidered and auto-handled w
   assert.equal(row.post_after, null);
 });
 
+test("specific SaaS universal merchant evidence can promote OpenAI to existing Software account", async () => {
+  const db = makeDb();
+  const { qbo, state } = makeQbo([{ id: "software-current", name: "Software", type: "Expense", subType: "DuesSubscriptions" }]);
+  addRoutineRow(db, "txn-openai", {
+    bankTxn: {
+      name: "OPENAI *CHATGPT SUBSCR",
+      merchant_name: "OpenAI",
+      merchant_entity_id: "ent-openai",
+      amount: -20,
+      signed_amount: -20,
+    },
+    cat: {
+      suggested_qbo_account_id: null,
+      suggested_qbo_account_name: null,
+      suggested_canonical_account_key: null,
+      confidence: "medium",
+      meta: { suggestion_source: "plaid_baseline" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "software-current");
+  assert.equal(row.final_qbo_account_name, "Software");
+  assert.equal(row.meta.evidence_source, "specific_universal_vendor");
+  assert.equal(row.meta.original_confidence, "medium");
+  assert.equal(row.post_after, null);
+  assert.equal(row.qbo_txn_id || null, null);
+  assert.equal(state.createCount, 0);
+});
+
 test("strong universal merchant can resolve to an existing semantically compatible QBO account", async () => {
   const db = makeDb();
   const { qbo, state } = makeQbo([{ id: "rideshare", name: "Lyft/Uber", type: "Expense" }]);

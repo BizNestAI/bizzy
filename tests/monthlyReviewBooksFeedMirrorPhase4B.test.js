@@ -171,6 +171,13 @@ test("admin Monthly Review exposes internal-only bounded mirror endpoints", () =
   assert.match(adminRoute, /router\.use\(requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)\)/);
   assert.match(adminRoute, /\/businesses\/:businessId\/bookkeeping\/transactions\/counts/);
   assert.match(adminRoute, /\/businesses\/:businessId\/bookkeeping\/transactions"/);
+  assert.match(adminRoute, /\/businesses\/:businessId\/bookkeeping\/transactions\/reconsider/);
+  assert.match(adminRoute, /reconsiderNeedsReviewTransactions/);
+  assert.match(adminRoute, /const inclusiveRangeEnd = previousDate\(rangeEnd\)/);
+  assert.match(adminRoute, /dateTo:\s*inclusiveRangeEnd/);
+  assert.match(adminRoute, /selected_month_bounds:\s*"server-side \[range_start, range_end\)"/);
+  assert.match(adminRoute, /qbo_provider_writes:\s*false/);
+  assert.match(adminRoute, /qbo_transaction_writes:\s*false/);
   assert.match(adminRoute, /MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES = new Set\(\["needs_review", "handled"\]\)/);
   assert.match(adminRoute, /const \[rangeStart, rangeEnd\] = monthBounds\(month\)/);
   assert.match(adminRoute, /statusFilter:\s*"needs_review"[\s\S]*rangeStart[\s\S]*rangeEnd/);
@@ -185,6 +192,9 @@ test("Monthly Review renders collapsible Needs Review and Handled mirrors with b
   assert.match(monthlyReviewUi, /needs_review:\s*\{[\s\S]*label:\s*"Needs Review"/);
   assert.match(monthlyReviewUi, /handled:\s*\{[\s\S]*label:\s*"Handled in Books Review"/);
   assert.match(monthlyReviewUi, /BookkeepingFeedMirrorPanels/);
+  assert.match(monthlyReviewUi, /Re-evaluate Needs Review/);
+  assert.match(monthlyReviewUi, /bookkeeping\/transactions\/reconsider/);
+  assert.match(monthlyReviewUi, /patchBookkeepingFeedsAfterReconsiderationState/);
   assert.match(monthlyReviewUi, /aria-expanded=\{expanded\}/);
   assert.match(monthlyReviewUi, /\/bookkeeping\/transactions\/counts\?month=/);
   assert.match(monthlyReviewUi, /\/bookkeeping\/transactions\?month=.*status=.*page=.*page_size=\$\{BOOKKEEPING_FEED_PAGE_SIZE\}/s);

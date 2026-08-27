@@ -140,6 +140,25 @@ test("Monthly Review mirror approve and reclassify patch local feed state instea
   assert.match(page, /patchSourceLedgerTransaction\(current,\s*nextRow\)/);
 });
 
+test("Monthly Review re-evaluate button patches mirror feeds without full workspace refresh", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const localState = read("src/services/bookkeeping/bookkeepingFeedMirrorLocalState.js");
+  const runStart = page.indexOf("const runBookkeepingReconsideration = useCallback");
+  assert.notEqual(runStart, -1, "runBookkeepingReconsideration missing");
+  const runEnd = page.indexOf("const refreshAfterFeedAction = useCallback", runStart);
+  assert.notEqual(runEnd, -1, "runBookkeepingReconsideration end missing");
+  const runBody = page.slice(runStart, runEnd);
+
+  assert.match(runBody, /bookkeeping\/transactions\/reconsider/);
+  assert.match(runBody, /patchBookkeepingFeedsAfterReconsiderationState\(current,\s*result,\s*sourceLedger\)/);
+  assert.match(runBody, /patchSourceLedgerTransaction/);
+  assert.doesNotMatch(runBody, /refreshAfterFeedAction|loadDetail\(|loadQboPnlSnapshot\(|window\.location\.reload/);
+  assert.match(page, /Re-evaluate Needs Review/);
+  assert.match(localState, /patchBookkeepingFeedsAfterReconsiderationState/);
+  assert.match(localState, /decrementCountBy\(needsReview\.totalCount,\s*promotedRows\.length\)/);
+  assert.match(localState, /incrementCountBy\(handled\.totalCount,\s*promotedRows\.length\)/);
+});
+
 test("Monthly Review feed actions preserve Phase 4B bounded mirror source", () => {
   const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   const service = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
