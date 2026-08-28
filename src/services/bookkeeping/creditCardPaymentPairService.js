@@ -131,7 +131,7 @@ function issuerMatchesCheckingToCard(checkingRow = {}, cardRow = {}, cardAcct = 
   return haystack.includes(checkingIssuer);
 }
 
-function buildPairRecord({ businessId, checkingRow, cardRow = null, checkingAcct, cardAcct = null, checkingMapping, cardMapping, confidence, evidence, status = "needs_review", qboRealmId = null, qboEnv = null }) {
+function buildPairRecord({ businessId, checkingRow, cardRow = null, checkingAcct, cardAcct = null, checkingMapping, cardMapping, confidence, evidence, status = "needs_review" }) {
   const amount = Math.abs(Number(checkingRow.signed_amount ?? checkingRow.amount ?? cardRow?.signed_amount ?? cardRow?.amount ?? 0));
   const request_id = stablePairRequestId({
     businessId,
@@ -149,8 +149,6 @@ function buildPairRecord({ businessId, checkingRow, cardRow = null, checkingAcct
     checking_qbo_account_name: checkingMapping.qbo_account_name || null,
     credit_card_qbo_account_id: String(cardMapping.qbo_account_id),
     credit_card_qbo_account_name: cardMapping.qbo_account_name || null,
-    qbo_realm_id: qboRealmId || null,
-    qbo_env: qboEnv || null,
     amount,
     payment_date: dateOnly(checkingRow.date),
     matched_date: dateOnly(cardRow?.date || checkingRow.date),
@@ -552,16 +550,12 @@ export async function createManualCreditCardPaymentPair({ db = defaultSupabase, 
     cardMapping,
     confidence: "manual",
     status: "confirmed",
-    qboRealmId: validatedTarget?.realmId || null,
-    qboEnv: validatedTarget?.qboEnv || null,
     evidence: {
       matcher: "manual_target_credit_card_v1",
       target_plaid_account_id: targetPlaidAccountId || null,
       target_qbo_account_id: cardMapping.qbo_account_id,
       target_qbo_account_validated_server_side: true,
       target_qbo_account_type: cardMapping.qbo_account_type,
-      qbo_realm_id: validatedTarget?.realmId || null,
-      qbo_env: validatedTarget?.qboEnv || null,
       explicit_user_target: true,
     },
   });

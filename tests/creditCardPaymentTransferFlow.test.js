@@ -83,7 +83,6 @@ test("one confirmation resolves the pair and manual target must be a CreditCard 
 test("manual target validation rejects manipulated or unusable QBO accounts before pair persistence", () => {
   const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
   const qboAccounts = read("src/services/bookkeeping/qboAccounts.js");
-  const migration = read("supabase/migrations/20260903_credit_card_payment_pairs.sql");
 
   assert.match(qboAccounts, /cc_payment_target_account_not_found/);
   assert.match(qboAccounts, /cc_payment_target_account_inactive/);
@@ -97,8 +96,10 @@ test("manual target validation rejects manipulated or unusable QBO accounts befo
   assert.match(service, /qbo_account_name: validatedTarget\.account\.name/);
   assert.match(service, /qbo_account_type: validatedTarget\.account\.type/);
   assert.match(service, /target_qbo_account_validated_server_side: true/);
-  assert.match(migration, /qbo_realm_id text/);
-  assert.match(migration, /qbo_env text/);
+  assert.doesNotMatch(service, /qbo_env/);
+  assert.doesNotMatch(service, /qbo_realm_id/);
+  assert.doesNotMatch(service, /qboEnv/);
+  assert.doesNotMatch(service, /qboRealmId/);
   const manualBody = service.slice(service.indexOf("export async function createManualCreditCardPaymentPair"), service.indexOf("export async function confirmCreditCardPaymentPairForTransaction"));
   assert.match(manualBody, /validateBusinessQboCreditCardAccount/);
   assert.match(manualBody, /\.insert\(pairRecord\)/);
@@ -112,12 +113,14 @@ test("posting either leg uses one pair-level Transfer with From checking and To 
   assert.match(cron, /handleCreditCardPaymentPairItem/);
   assert.match(cron, /findExistingCreditCardPaymentPairForTransaction/);
   assert.match(cron, /claimCreditCardPaymentPairPosting/);
+  assert.match(cron, /getQBOClient\(businessId\)/);
   assert.match(cron, /createQboTransfer/);
   assert.match(cron, /FromAccountRef: \{ value: String\(pair\.checking_qbo_account_id\) \}/);
   assert.match(cron, /ToAccountRef: \{ value: String\(pair\.credit_card_qbo_account_id\) \}/);
   assert.match(cron, /qboTxnType: "Transfer"/);
   assert.match(cron, /markCreditCardPaymentPairPosted/);
   const pairBody = cron.slice(cron.indexOf("async function handleCreditCardPaymentPairItem"), cron.indexOf("async function postBankOutflowPurchase"));
+  assert.doesNotMatch(pairBody, /pair\.qbo_env|pair\.qbo_realm_id|pair\.realm_id/);
   assert.doesNotMatch(pairBody, /cc_payment_post_not_supported/);
 });
 

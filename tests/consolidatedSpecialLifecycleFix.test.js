@@ -133,3 +133,32 @@ test("unpaired credit-card payments are made non-postable instead of failed by u
   assert.match(markFailedBody, /unsupportedUnpairedCcPayment/);
   assert.match(markFailedBody, /markTransactionNonPostable\(item, "cc_payment_pair_requires_confirmation"\)/);
 });
+
+test("credit-card payment pair persistence is compatible with pair tables that do not store QBO environment", () => {
+  const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
+  const cron = read("src/jobs/booksPost.cron.js");
+  const migration = read("supabase/migrations/20260903_credit_card_payment_pairs.sql");
+  const buildBody = service.slice(
+    service.indexOf("function buildPairRecord"),
+    service.indexOf("export async function linkCategorizationToCreditCardPair")
+  );
+  const manualBody = service.slice(
+    service.indexOf("export async function createManualCreditCardPaymentPair"),
+    service.indexOf("export async function confirmCreditCardPaymentPairForTransaction")
+  );
+  const postingBody = cron.slice(
+    cron.indexOf("async function handleCreditCardPaymentPairItem"),
+    cron.indexOf("async function postBankOutflowPurchase")
+  );
+
+  assert.match(buildBody, /checking_transaction_id: checkingRow\.id/);
+  assert.match(buildBody, /credit_card_transaction_id: cardRow\?\.id \|\| null/);
+  assert.match(buildBody, /request_id/);
+  assert.match(buildBody, /idempotency_key/);
+  assert.doesNotMatch(buildBody, /qbo_env|qboEnv|qbo_realm_id|qboRealmId/);
+  assert.doesNotMatch(manualBody, /qbo_env|qboEnv|qbo_realm_id|qboRealmId/);
+  assert.doesNotMatch(migration, /qbo_env|qbo_realm_id/);
+
+  assert.match(postingBody, /getQBOClient\(businessId\)/);
+  assert.doesNotMatch(postingBody, /pair\.qbo_env|pair\.qbo_realm_id|pair\.realm_id/);
+});

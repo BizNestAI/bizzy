@@ -12,8 +12,6 @@ create table if not exists public.credit_card_payment_pairs (
   checking_qbo_account_name text,
   credit_card_qbo_account_id text not null,
   credit_card_qbo_account_name text,
-  qbo_realm_id text,
-  qbo_env text,
   amount numeric(14,2) not null check (amount > 0),
   payment_date date,
   matched_date date,
