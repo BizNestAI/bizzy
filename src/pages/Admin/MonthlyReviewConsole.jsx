@@ -749,6 +749,79 @@ export default function MonthlyReviewConsole() {
     }
   }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, month, selectedBusinessId]);
 
+  const refreshExpandedBookkeepingFeeds = useCallback(async () => {
+    await loadBookkeepingFeedCounts();
+    await Promise.all(Object.keys(BOOKKEEPING_FEED_CONFIG).map((status) => (
+      bookkeepingFeeds[status]?.expanded ? loadBookkeepingFeed(status, { reset: true }) : Promise.resolve()
+    )));
+  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts]);
+
+  const handleMirrorMarkCreditCardPayment = useCallback(async (row) => {
+    if (!selectedBusinessId || !row?.id) return;
+    const key = `ccmark:${row.id}`;
+    setBusyFeedActions((current) => ({ ...current, [key]: true }));
+    setCcPaymentActionState((current) => ({ ...current, [row.id]: { loading: true, error: "" } }));
+    try {
+      await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(row.id)}/credit-card-payment/mark`, {
+        method: "POST",
+        body: { month },
+      });
+      setCcPaymentActionState((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      await refreshExpandedBookkeepingFeeds();
+    } catch (e) {
+      setCcPaymentActionState((current) => ({
+        ...current,
+        [row.id]: {
+          loading: false,
+          error: e?.body?.message || e?.message || "Could not switch this row to credit-card payment matching.",
+        },
+      }));
+    } finally {
+      setBusyFeedActions((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
+  }, [month, refreshExpandedBookkeepingFeeds, selectedBusinessId]);
+
+  const handleMirrorRejectCreditCardPayment = useCallback(async (row) => {
+    if (!selectedBusinessId || !row?.id) return;
+    const key = `ccreject:${row.id}`;
+    setBusyFeedActions((current) => ({ ...current, [key]: true }));
+    setCcPaymentActionState((current) => ({ ...current, [row.id]: { loading: true, error: "" } }));
+    try {
+      await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(row.id)}/credit-card-payment/reject`, {
+        method: "POST",
+        body: { month },
+      });
+      setCcPaymentActionState((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      await refreshExpandedBookkeepingFeeds();
+    } catch (e) {
+      setCcPaymentActionState((current) => ({
+        ...current,
+        [row.id]: {
+          loading: false,
+          error: e?.body?.message || e?.message || "Could not switch this row back to regular COA review.",
+        },
+      }));
+    } finally {
+      setBusyFeedActions((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
+  }, [month, refreshExpandedBookkeepingFeeds, selectedBusinessId]);
+
   const runBookkeepingFeedAction = useCallback(async (actionKey, row, accountId = null) => {
     if (!detail?.run?.id || !row?.id) return;
     const transactionId = row.id;
@@ -1476,6 +1549,8 @@ export default function MonthlyReviewConsole() {
                   onPost={(row) => runBookkeepingFeedAction("post", row)}
                   onRetry={(row) => runBookkeepingFeedAction("retry", row)}
                   onConfirmCcPaymentMatch={handleMirrorConfirmCreditCardPaymentMatch}
+                  onMarkCcPayment={handleMirrorMarkCreditCardPayment}
+                  onRejectCcPayment={handleMirrorRejectCreditCardPayment}
                   ccPaymentActionState={ccPaymentActionState}
                   onCreateAccount={createMonthlyReviewQboAccount}
                   onCreatedAccountSelect={injectSourceLedgerAccount}
@@ -1580,6 +1655,8 @@ function BookkeepingFeedMirrorPanels({
   onPost,
   onRetry,
   onConfirmCcPaymentMatch,
+  onMarkCcPayment,
+  onRejectCcPayment,
   ccPaymentActionState,
   onCreateAccount,
   onCreatedAccountSelect,
@@ -1647,6 +1724,8 @@ function BookkeepingFeedMirrorPanels({
             onPost={onPost}
             onRetry={onRetry}
             onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
+            onMarkCcPayment={onMarkCcPayment}
+            onRejectCcPayment={onRejectCcPayment}
             ccPaymentActionState={ccPaymentActionState}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
@@ -1674,6 +1753,8 @@ function BookkeepingFeedMirrorSection({
   onPost,
   onRetry,
   onConfirmCcPaymentMatch,
+  onMarkCcPayment,
+  onRejectCcPayment,
   ccPaymentActionState,
   onCreateAccount,
   onCreatedAccountSelect,
@@ -1727,6 +1808,8 @@ function BookkeepingFeedMirrorSection({
               onPost={onPost}
               onRetry={onRetry}
               onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
+              onMarkCcPayment={onMarkCcPayment}
+              onRejectCcPayment={onRejectCcPayment}
               ccPaymentActionState={ccPaymentActionState}
               onCreateAccount={onCreateAccount}
               onCreatedAccountSelect={onCreatedAccountSelect}

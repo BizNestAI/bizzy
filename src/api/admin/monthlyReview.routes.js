@@ -46,7 +46,11 @@ import {
   approveBookkeepingTransactions,
   BookkeepingApprovalError,
 } from "../../services/bookkeeping/bookkeepingApprovalService.js";
-import { confirmCreditCardPaymentMatchForTransaction } from "../../services/bookkeeping/creditCardPaymentPairService.js";
+import {
+  confirmCreditCardPaymentMatchForTransaction,
+  markTransactionAsCreditCardPayment,
+  rejectCreditCardPaymentSuggestion,
+} from "../../services/bookkeeping/creditCardPaymentPairService.js";
 import {
   BookkeepingReclassificationError,
   reclassifyBookkeepingTransaction,
@@ -633,6 +637,58 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/cre
   } catch (e) {
     console.error("[monthly-review] credit-card payment match failed", e?.message || e);
     sendMonthlyReviewError(res, "monthly_review_cc_payment_match_failed", "Could not match credit-card payment.", e);
+  }
+});
+
+router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/credit-card-payment/mark", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    const transactionId = req.params.transactionId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    if (!UUID_RE.test(String(transactionId))) return res.status(400).json({ ok: false, error: "invalid_transaction_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    await assertRunTransactionInSelectedMonth({ business_id: businessId, review_month: month }, transactionId);
+
+    const result = await markTransactionAsCreditCardPayment({
+      businessId,
+      transactionId,
+    });
+    return res.json({
+      ...result,
+      business_id: businessId,
+      month,
+      qbo_provider_writes: false,
+      qbo_transaction_writes: false,
+    });
+  } catch (e) {
+    console.error("[monthly-review] credit-card payment mark failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_cc_payment_mark_failed", "Could not mark transaction as credit-card payment.", e);
+  }
+});
+
+router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/credit-card-payment/reject", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    const transactionId = req.params.transactionId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    if (!UUID_RE.test(String(transactionId))) return res.status(400).json({ ok: false, error: "invalid_transaction_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    await assertRunTransactionInSelectedMonth({ business_id: businessId, review_month: month }, transactionId);
+
+    const result = await rejectCreditCardPaymentSuggestion({
+      businessId,
+      transactionId,
+    });
+    return res.json({
+      ...result,
+      business_id: businessId,
+      month,
+      qbo_provider_writes: false,
+      qbo_transaction_writes: false,
+    });
+  } catch (e) {
+    console.error("[monthly-review] credit-card payment reject failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_cc_payment_reject_failed", "Could not switch transaction back to regular COA review.", e);
   }
 });
 

@@ -19,6 +19,7 @@ import {
   approveTransactions,
   undoTransaction,
   rejectCreditCardPayment,
+  markCreditCardPayment,
   confirmCreditCardPaymentMatch,
   updateHandledTransaction,
   enrichCounterparties,
@@ -1250,6 +1251,48 @@ function BookkeepingCleanup() {
     }
   };
 
+  const handleMarkCreditCardPayment = async (id) => {
+    if (!canRunAI) return;
+    if (usingDemo) {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                status: t.status || "needs_review",
+                taxonomy_type: "cc_payment",
+                cc_payment_pair_id: null,
+                cc_payment_pair_status: null,
+                cc_payment_rejected: false,
+                glAccountId: null,
+                glAccountName: null,
+                suggestedAccountId: null,
+                suggestedAccountName: null,
+                meta: {
+                  ...(t.meta || {}),
+                  taxonomy_type: "cc_payment",
+                  taxonomy_override: "cc_payment",
+                  cc_payment_rejected: false,
+                },
+              }
+            : t
+        )
+      );
+      return;
+    }
+    if (!businessId) return;
+    try {
+      await markCreditCardPayment(businessId, id);
+      accountOverrides.current?.delete?.(id);
+      setCountsRefreshKey((value) => value + 1);
+      await reloadTransactions();
+      await loadMappingStatus();
+    } catch (e) {
+      console.warn("[bookkeeping] cc payment mark failed", e?.message || e);
+      window.alert(e?.message || "Could not mark this as a credit card payment.");
+    }
+  };
+
   const handleConfirmCreditCardPaymentMatch = async (id, targetQboAccountId) => {
     if (!canRunAI || !businessId || !id || !targetQboAccountId) return;
     try {
@@ -2228,6 +2271,7 @@ function BookkeepingCleanup() {
               onUndo={handleUndo}
               onManualPost={handleManualPostTransaction}
               onRejectCcPayment={handleRejectCreditCardPayment}
+              onMarkCcPayment={handleMarkCreditCardPayment}
               onConfirmCcPaymentMatch={handleConfirmCreditCardPaymentMatch}
               ccPaymentActionState={Object.fromEntries(
                 transactions

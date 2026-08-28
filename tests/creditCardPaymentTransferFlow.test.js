@@ -223,7 +223,32 @@ test("durable pair target preselects and weaker mapping cannot overwrite it", ()
   assert.match(suggest, /suggestedAcct = \{\s*id: ccPaymentPair\.targetQboAccountId/s);
   assert.match(txFeedService, /cc_payment_transfer_target_qbo_account_id/);
   assert.match(feed, /ccTargetId/);
-  assert.match(feed, /selectedAccountValue = accountSelections\.get\(txn\.id\).*ccTargetId/s);
+  assert.match(feed, /selectedCcTargetValue = accountSelections\.get\(txn\.id\).*ccTargetId/s);
+});
+
+test("credit-card payment selector uses dark custom menu and can switch back to regular COA", () => {
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  const mirror = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const customerRoute = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const adminRoute = read("src/api/admin/monthlyReview.routes.js");
+  const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
+
+  assert.match(feed, /export function CreditCardPaymentMatchControl/);
+  assert.match(feed, /ReactDOM\.createPortal/);
+  assert.match(feed, /bg-\[rgba\(15,17,20,0\.98\)\]/);
+  assert.match(feed, /Use regular COA dropdown/);
+  assert.match(feed, /Match as credit card payment/);
+  assert.match(feed, /onUseCreditCardPayment/);
+  assert.match(mirror, /CreditCardPaymentMatchControl/);
+  assert.match(client, /markCreditCardPayment/);
+  assert.match(customerRoute, /credit-card-payments\/mark/);
+  assert.match(adminRoute, /credit-card-payment\/mark/);
+  assert.match(adminRoute, /credit-card-payment\/reject/);
+  assert.match(service, /export async function markTransactionAsCreditCardPayment/);
+  assert.match(service, /taxonomy_override:\s*"cc_payment"/);
+  assert.doesNotMatch(feed, /<select[\s\S]*Match payment to/);
+  assert.doesNotMatch(mirror, /<select[\s\S]*Match payment to/);
 });
 
 test("customer-facing matched label is human-readable and never displays counterpart UUID text", () => {

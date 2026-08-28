@@ -105,10 +105,10 @@ test("dedicated credit-card payment match routes and UI do not use ordinary COA 
   assert.match(pairService, /targetQboAccountId/);
   assert.match(pairService, /createSafeCreditCardPaymentPairForRow/);
   assert.match(feed, /deriveCreditCardPaymentStatus/);
-  assert.match(feed, /Confirm Match/);
+  assert.match(feed, /CreditCardPaymentMatchControl/);
   assert.match(feed, /accounts\.filter\(isQboCreditCardAccount\)/);
   assert.doesNotMatch(feed, /onCreateAccount=\{!isCcPayment/);
-  assert.match(mirror, /Confirm Match/);
+  assert.match(mirror, /CreditCardPaymentMatchControl/);
   assert.match(mirror, /accounts \|\| \[\]\)\.filter\(isQboCreditCardAccount\)/);
 });
 

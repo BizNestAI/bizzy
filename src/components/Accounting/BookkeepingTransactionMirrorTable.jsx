@@ -1,5 +1,5 @@
 import React from "react";
-import { CoaDropdown } from "./BookkeepingFeed.jsx";
+import { CoaDropdown, CreditCardPaymentMatchControl } from "./BookkeepingFeed.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
@@ -20,6 +20,8 @@ export default function BookkeepingTransactionMirrorTable({
   onPost,
   onRetry,
   onConfirmCcPaymentMatch,
+  onMarkCcPayment,
+  onRejectCcPayment,
   ccPaymentActionState = {},
   onCreateAccount,
   onCreatedAccountSelect,
@@ -59,6 +61,8 @@ export default function BookkeepingTransactionMirrorTable({
             onPost={onPost}
             onRetry={onRetry}
             onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
+            onMarkCcPayment={onMarkCcPayment}
+            onRejectCcPayment={onRejectCcPayment}
             ccPaymentActionState={ccPaymentActionState}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
@@ -82,12 +86,22 @@ function BookkeepingTransactionMirrorRow({
   onPost,
   onRetry,
   onConfirmCcPaymentMatch,
+  onMarkCcPayment,
+  onRejectCcPayment,
   ccPaymentActionState,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
 }) {
-  const initialAccountId = row.final_qbo_account_id || row.glAccountId || row.suggestedAccountId || "";
+  const rowCcPairRole = row.cc_payment_pair_role || row.meta?.cc_payment_pair_role || null;
+  const rowCcTargetId =
+    row.cc_payment_transfer_target_qbo_account_id ||
+    row.meta?.cc_payment_transfer_target_qbo_account_id ||
+    (rowCcPairRole === "credit_card"
+      ? row.cc_payment_bank_qbo_account_id || row.meta?.cc_payment_bank_qbo_account_id
+      : row.cc_payment_cc_qbo_account_id || row.meta?.cc_payment_cc_qbo_account_id) ||
+    "";
+  const initialAccountId = rowCcTargetId || row.final_qbo_account_id || row.glAccountId || row.suggestedAccountId || "";
   const [selectedAccountId, setSelectedAccountId] = React.useState(initialAccountId);
 
   React.useEffect(() => {
@@ -107,7 +121,7 @@ function BookkeepingTransactionMirrorRow({
   const protectedReason = getProtectedWorkflowReason(row);
   const ccWorkflowStatus = deriveCreditCardPaymentStatus(row);
   const isPending = row.pending === true;
-  const genericActionsBlocked = Boolean(protectedReason);
+  const genericActionsBlocked = Boolean(protectedReason) && !ccWorkflowStatus;
   const bankAccountLabel = formatBankAccountLabel(row);
   const bankAccountMeta = formatBankAccountMeta(row);
   const glAccountLabel = ccWorkflowStatus
@@ -152,34 +166,18 @@ function BookkeepingTransactionMirrorRow({
 
       <div className="min-w-0">
         {ccWorkflowStatus ? (
-          <div className={`rounded-lg border px-2.5 py-2 ${
-            ccWorkflowStatus.matched
-              ? "border-emerald-300/25 bg-emerald-300/[0.08] text-emerald-100"
-              : "border-amber-300/25 bg-amber-300/[0.08] text-amber-100"
-          }`}>
-            <div className="truncate text-xs font-semibold">{ccWorkflowStatus.label}</div>
-            {row.cc_payment_pair_counterpart_account_name ? (
-              <div className="truncate text-[11px] text-white/45">
-                {formatMoney(row.cc_payment_pair_counterpart_amount)} · {row.cc_payment_pair_counterpart_account_name}
-              </div>
-            ) : null}
-            {!ccWorkflowStatus.matched ? (
-              <div className="mt-2 space-y-1.5">
-                <select
-                  value={selectedAccountId}
-                  onChange={(e) => setSelectedAccountId(e.target.value)}
-                  disabled={!ccAccounts.length}
-                  className="w-full rounded-md border border-white/12 bg-black/30 px-2 py-1 text-[11px] text-white outline-none focus:border-emerald-300/60 [color-scheme:dark]"
-                >
-                  <option value="">Match payment to...</option>
-                  {ccAccounts.map((acct) => (
-                    <option key={acct.id} value={acct.id}>{acct.name}</option>
-                  ))}
-                </select>
-                {ccAction.error ? <div className="text-[10px] text-amber-100/80">{ccAction.error}</div> : null}
-              </div>
-            ) : null}
-          </div>
+          <CreditCardPaymentMatchControl
+            value={selectedAccountId}
+            accounts={ccAccounts}
+            statusLabel={ccWorkflowStatus.label}
+            matched={ccWorkflowStatus.matched}
+            matchedLabel={row.cc_payment_pair_counterpart_account_name ? `${formatMoney(row.cc_payment_pair_counterpart_amount)} · ${row.cc_payment_pair_counterpart_account_name}` : ""}
+            error={ccAction.error}
+            loading={ccAction.loading || isActionBusy("ccmatch")}
+            onChange={(id) => setSelectedAccountId(id)}
+            onConfirm={() => onConfirmCcPaymentMatch?.(row, selectedAccountId)}
+            onUseCoa={!isPosted ? () => onRejectCcPayment?.(row) : null}
+          />
         ) : isPending || genericActionsBlocked ? (
           <>
             <div className="truncate text-white/75">{glAccountLabel}</div>
@@ -200,6 +198,7 @@ function BookkeepingTransactionMirrorRow({
               onCreatedAccountSelect?.(account);
               setSelectedAccountId(String(account.id));
             }}
+            onUseCreditCardPayment={!isPosted && !isPending ? () => onMarkCcPayment?.(row) : null}
             accountTypes={accountTypes}
             creationContext={{
               amount: row.signed_amount ?? row.signedAmount ?? row.amount,
@@ -225,15 +224,8 @@ function BookkeepingTransactionMirrorRow({
           </div>
         ) : null}
         <div className="flex flex-wrap gap-1.5">
-          {ccWorkflowStatus && !ccWorkflowStatus.matched ? (
-            <button
-              type="button"
-              onClick={() => onConfirmCcPaymentMatch?.(row, selectedAccountId)}
-              disabled={!selectedAccountId || isActionBusy("ccmatch") || ccAction.loading}
-              className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
-            >
-              {isActionBusy("ccmatch") || ccAction.loading ? "Matching..." : "Confirm Match"}
-            </button>
+          {ccWorkflowStatus ? (
+            <span className="text-[11px] text-white/45">{ccWorkflowStatus.matched ? "Matched" : "Needs match"}</span>
           ) : null}
           {isNeedsReviewFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus ? (
             <button

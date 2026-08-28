@@ -1,13 +1,13 @@
 import React from "react";
 import ReactDOM from "react-dom";
-import { Plus, RotateCcw, UploadCloud } from "lucide-react";
+import { CreditCard, Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
 import { deriveCreditCardPaymentStatus, isQboCreditCardAccount } from "../../services/bookkeeping/creditCardPaymentStatus.js";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
-const MIN_COL_WIDTHS = [36, 90, 160, 140, 150, 100, 230]; // px floors per column
+const MIN_COL_WIDTHS = [36, 90, 190, 160, 245, 105, 120]; // px floors per column
 
 function dropdownBucketType(value = "") {
   const normalized = String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
@@ -38,6 +38,7 @@ export function CoaDropdown({
   creationContext,
   status,
   disabled,
+  onUseCreditCardPayment,
 }) {
   const [open, setOpen] = React.useState(false);
   const [renderMenu, setRenderMenu] = React.useState(false);
@@ -198,6 +199,19 @@ export function CoaDropdown({
                     Add new account
                   </button>
                 ) : null}
+                {onUseCreditCardPayment ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 border-b border-cyan-300/20 bg-[rgba(10,22,28,0.98)] px-3.5 py-2 text-left text-[12px] font-semibold text-cyan-100 hover:bg-cyan-400/10"
+                    onClick={() => {
+                      setOpen(false);
+                      onUseCreditCardPayment();
+                    }}
+                  >
+                    <CreditCard className="h-3.5 w-3.5" />
+                    Match as credit card payment
+                  </button>
+                ) : null}
                 <div className="px-3.5 py-2 border-b border-[var(--accent-line)]/60 bg-white/5">
                   <input
                     autoFocus
@@ -271,6 +285,182 @@ export function CoaDropdown({
   );
 }
 
+export function CreditCardPaymentMatchControl({
+  value = "",
+  accounts = [],
+  statusLabel = "Credit Card Payment · Needs Match",
+  matched = false,
+  transferLabel = "",
+  matchedLabel = "",
+  error = "",
+  loading = false,
+  disabled = false,
+  onChange,
+  onConfirm,
+  onUseCoa,
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [menuPos, setMenuPos] = React.useState(null);
+  const ref = React.useRef(null);
+  const menuRef = React.useRef(null);
+  const currentAccount = accounts.find((acct) => String(acct.id) === String(value));
+  const buttonLabel = matched
+    ? statusLabel
+    : currentAccount?.name || "Match payment to...";
+
+  const syncMenuPosition = React.useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 800;
+    const padding = 10;
+    const maxHeight = Math.min(280, Math.max(180, viewportHeight - rect.bottom - padding));
+    setMenuPos({
+      top: Math.min(rect.bottom + 6 + window.scrollY, window.scrollY + viewportHeight - maxHeight - padding),
+      left: rect.left + window.scrollX,
+      width: Math.max(rect.width, 250),
+      maxHeight,
+    });
+  }, []);
+
+  React.useEffect(() => {
+    function onDocumentClick(e) {
+      if (ref.current?.contains(e.target)) return;
+      if (menuRef.current?.contains(e.target)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocumentClick);
+    return () => document.removeEventListener("mousedown", onDocumentClick);
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    syncMenuPosition();
+    const onScroll = () => syncMenuPosition();
+    const onResize = () => syncMenuPosition();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [open, syncMenuPosition]);
+
+  return (
+    <div className="w-full min-w-0" ref={ref}>
+      <div className={`min-w-0 rounded-lg border px-2 py-1 shadow-[0_8px_22px_rgba(0,0,0,0.22)] ${
+        matched
+          ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-100"
+          : "border-cyan-300/25 bg-[#101614] text-cyan-100"
+      }`}>
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <span className="min-w-0 truncate text-[10px] font-semibold leading-tight">{statusLabel}</span>
+          {!matched && onUseCoa ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onUseCoa();
+              }}
+              className="shrink-0 rounded-md border border-white/12 bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold text-white/70 hover:border-cyan-300/35 hover:text-cyan-100"
+            >
+              Use COA
+            </button>
+          ) : null}
+        </div>
+        {transferLabel ? <div className="mt-0.5 truncate text-[9px] text-white/58">{transferLabel}</div> : null}
+        {matchedLabel ? <div className="mt-0.5 truncate text-[9px] text-white/50">{matchedLabel}</div> : null}
+        {!matched ? (
+          <div className="mt-1 flex min-w-0 items-center gap-1.5">
+            <button
+              type="button"
+              disabled={disabled || loading}
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen((next) => {
+                  const openNext = !next;
+                  if (openNext) requestAnimationFrame(syncMenuPosition);
+                  return openNext;
+                });
+              }}
+              className="flex h-7 min-w-0 flex-1 items-center justify-between gap-2 rounded-md border border-[var(--accent-line)] bg-[var(--panel)] px-2 text-left text-[10px] font-medium text-white outline-none transition hover:border-emerald-300/35 focus:border-emerald-300/60 focus:ring-2 focus:ring-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <span className="truncate">{buttonLabel}</span>
+              <span className="shrink-0 text-white/45">▾</span>
+            </button>
+            {onConfirm ? (
+              <button
+                type="button"
+                disabled={!value || loading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onConfirm();
+                }}
+                className="h-7 shrink-0 rounded-md border border-emerald-300/35 bg-emerald-500/12 px-2 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {loading ? "..." : "Confirm"}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {error ? <div className="mt-1 whitespace-normal text-[9px] text-amber-100/80">{error}</div> : null}
+      </div>
+      {open && !matched && menuPos
+        ? ReactDOM.createPortal(
+            <div
+              ref={menuRef}
+              className="fixed z-[10000] overflow-hidden rounded-xl border border-[var(--accent-line)] bg-[rgba(15,17,20,0.98)] shadow-[0_22px_48px_rgba(0,0,0,0.72)] backdrop-blur"
+              style={{
+                top: menuPos.top,
+                left: menuPos.left,
+                minWidth: menuPos.width,
+                maxHeight: menuPos.maxHeight,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="max-h-[inherit] overflow-y-auto overscroll-contain py-1" style={{ scrollbarColor: "rgba(255,255,255,0.14) transparent" }}>
+                {accounts.length ? accounts.map((acct) => {
+                  const active = String(acct.id) === String(value);
+                  return (
+                    <button
+                      key={acct.id}
+                      type="button"
+                      className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-[12px] transition ${
+                        active ? "bg-emerald-400/10 text-emerald-200" : "text-slate-100 hover:bg-white/[0.06]"
+                      }`}
+                      onClick={() => {
+                        onChange?.(acct.id);
+                        setOpen(false);
+                      }}
+                    >
+                      <span className="min-w-0 truncate">{acct.name}</span>
+                      {active ? <span className="text-emerald-300">✓</span> : null}
+                    </button>
+                  );
+                }) : (
+                  <div className="px-3 py-2 text-[12px] text-white/48">No mapped credit-card accounts</div>
+                )}
+                {onUseCoa ? (
+                  <button
+                    type="button"
+                    className="mt-1 flex w-full items-center gap-2 border-t border-white/10 px-3 py-2 text-left text-[12px] font-semibold text-cyan-100 hover:bg-cyan-400/10"
+                    onClick={() => {
+                      setOpen(false);
+                      onUseCoa();
+                    }}
+                  >
+                    Use regular COA dropdown
+                  </button>
+                ) : null}
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </div>
+  );
+}
+
 function getTransactionMemo(txn = {}) {
   return (
     txn.description ||
@@ -319,6 +509,7 @@ export default function BookkeepingFeed({
   onUndo,
   onManualPost,
   onRejectCcPayment,
+  onMarkCcPayment,
   onConfirmCcPaymentMatch,
   ccPaymentActionState = {},
   postingTransactionIds,
@@ -664,7 +855,7 @@ export default function BookkeepingFeed({
               ? `Matched to ${ccMatchedParts.join(" · ")}`
               : null;
             const ccSelectableAccounts = accounts.filter(isQboCreditCardAccount);
-            const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? "";
+            const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (readOnly ? "" : txn.accountId) ?? "";
             const selectedCcTargetValue = accountSelections.get(txn.id) ?? ccTargetId ?? "";
             const readOnlyGlLabel =
               txn.glAccountName ||
@@ -779,41 +970,20 @@ export default function BookkeepingFeed({
                     ) : null}
                   </span>
                 ) : ccWorkflowStatus ? (
-                  <div className={`rounded-lg border px-2 py-1 ${
-                    ccWorkflowStatus.matched
-                      ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-100"
-                      : "border-amber-300/25 bg-amber-400/10 text-amber-100"
-                  }`}>
-                    <div className="text-[10px] font-semibold">{ccWorkflowStatus.label}</div>
-                    {ccTransferLabel ? <div className="truncate text-[9px] text-white/60">{ccTransferLabel}</div> : null}
-                    {ccMatchedLabel ? <div className="truncate text-[9px] text-white/55">{ccMatchedLabel}</div> : null}
-                    {!ccWorkflowStatus.matched && !readOnly ? (
-                      <div className="mt-1.5 space-y-1">
-                        <select
-                          value={selectedCcTargetValue}
-                          onChange={(e) => handleAccountSelect(txn.id, e.target.value)}
-                          className="w-full rounded-md border border-white/12 bg-black/30 px-2 py-1 text-[10px] text-white outline-none focus:border-emerald-300/60 [color-scheme:dark]"
-                        >
-                          <option value="">Match payment to...</option>
-                          {ccSelectableAccounts.map((acct) => (
-                            <option key={acct.id} value={acct.id}>{acct.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          disabled={!selectedCcTargetValue || ccConfirmBusy}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onConfirmCcPaymentMatch?.(txn.id, selectedCcTargetValue);
-                          }}
-                          className="inline-flex h-6 items-center rounded-full border border-emerald-300/45 bg-emerald-500/14 px-2 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/22 disabled:cursor-not-allowed disabled:opacity-45"
-                        >
-                          {ccConfirmBusy ? "Matching..." : "Confirm Match"}
-                        </button>
-                        {ccAction.error ? <div className="whitespace-normal text-[9px] text-amber-100/80">{ccAction.error}</div> : null}
-                      </div>
-                    ) : null}
-                  </div>
+                  <CreditCardPaymentMatchControl
+                    value={selectedCcTargetValue}
+                    accounts={ccSelectableAccounts}
+                    statusLabel={ccWorkflowStatus.label}
+                    matched={ccWorkflowStatus.matched}
+                    transferLabel={ccTransferLabel}
+                    matchedLabel={ccMatchedLabel}
+                    error={ccAction.error}
+                    loading={ccConfirmBusy}
+                    disabled={readOnly}
+                    onChange={(id) => handleAccountSelect(txn.id, id)}
+                    onConfirm={() => onConfirmCcPaymentMatch?.(txn.id, selectedCcTargetValue)}
+                    onUseCoa={canRejectCcPayment ? () => onRejectCcPayment?.(txn.id) : null}
+                  />
                 ) : ccTransferLabel ? (
                   <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100">
                     <span className="truncate">{ccTransferLabel}</span>
@@ -833,6 +1003,11 @@ export default function BookkeepingFeed({
                     accounts={accounts}
                     onCreateAccount={onCreateAccount}
                     onCreatedAccountSelect={(account) => onCreatedAccountSelect?.(txn, account)}
+                    onUseCreditCardPayment={
+                      !readOnly && !isPosted
+                        ? () => onMarkCcPayment?.(txn.id)
+                        : null
+                    }
                     accountTypes={accountTypes}
                     creationContext={{
                       amount: txn.signed_amount ?? txn.signedAmount ?? txn.amount,
@@ -874,21 +1049,6 @@ export default function BookkeepingFeed({
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
-                ) : canRejectCcPayment ? (
-                  <div className="flex items-center justify-center gap-1.5">
-                    <button
-                      className="inline-flex h-7 items-center justify-center rounded-full border border-slate-500/60 bg-white/5 px-2.5 text-[10px] font-semibold text-slate-100 transition hover:border-emerald-300/50 hover:text-emerald-100 disabled:cursor-not-allowed disabled:opacity-45"
-                      disabled={readOnly || isPosting}
-                      onClick={() => {
-                        if (readOnly || isPosting) return;
-                        onRejectCcPayment && onRejectCcPayment(txn.id);
-                      }}
-                      title="Categorize this transaction normally"
-                      aria-label="Not a credit card payment"
-                    >
-                      Not CC payment
-                    </button>
-                  </div>
                 ) : isCcPaymentWorkflow ? (
                   <span className="text-[10px] text-slate-400">{ccWorkflowStatus?.matched ? "Matched" : "Needs match"}</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (

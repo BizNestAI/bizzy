@@ -359,6 +359,74 @@ export async function rejectCreditCardPaymentSuggestion({ db = defaultSupabase, 
   return { ok: true, rejected: true, pair_id: pair?.id || null, transaction_ids: affectedIds };
 }
 
+export async function markTransactionAsCreditCardPayment({ db = defaultSupabase, businessId, transactionId }) {
+  if (!businessId || !transactionId) throw new Error("missing_cc_payment_mark_identity");
+  const { data: bankTxn, error: bankErr } = await db
+    .from("bank_transactions")
+    .select("id,business_id,pending,is_archived,accounting_review_required")
+    .eq("business_id", businessId)
+    .eq("id", transactionId)
+    .maybeSingle();
+  if (bankErr) throw bankErr;
+  if (!bankTxn || bankTxn.is_archived === true) throw new Error("cc_payment_transaction_not_found");
+  if (bankTxn.pending === true) throw new Error("cc_payment_pending_transaction_not_matchable");
+
+  const { data: existing, error: readErr } = await db
+    .from("transaction_categorizations")
+    .select("transaction_id,status,final_qbo_account_id,qbo_txn_id,qbo_txn_type,posted_at,meta")
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .maybeSingle();
+  if (readErr) throw readErr;
+  if (existing?.qbo_txn_id || existing?.posted_at || existing?.status === "posted") {
+    throw new Error("cc_payment_posted_transaction_not_switchable");
+  }
+  if (existing?.final_qbo_account_id && ["approved", "auto_approved"].includes(String(existing.status || "").toLowerCase())) {
+    throw new Error("cc_payment_final_transaction_not_switchable");
+  }
+
+  const nowIso = new Date().toISOString();
+  const meta = {
+    ...(existing?.meta || {}),
+    taxonomy_type: "cc_payment",
+    taxonomy_subtype: "credit_card_payment",
+    taxonomy_override: "cc_payment",
+    cc_payment_marked_by_user: true,
+    cc_payment_marked_at: nowIso,
+    cc_payment_rejected: false,
+    cc_payment_mapping_confidence: "manual_review",
+    cc_payment_mapping_notes: "user_requested_credit_card_payment_match",
+    post_block_reason: "cc_payment_pair_requires_confirmation",
+    safe_to_auto_handle: false,
+    safe_to_auto_post: false,
+  };
+  delete meta.cc_payment_rejected_at;
+  delete meta.cc_payment_rejected_pair_id;
+
+  const { error: upsertErr } = await db
+    .from("transaction_categorizations")
+    .upsert({
+      business_id: businessId,
+      transaction_id: transactionId,
+      status: "needs_review",
+      suggested_qbo_account_id: null,
+      suggested_qbo_account_name: null,
+      suggested_canonical_account_key: null,
+      final_qbo_account_id: null,
+      final_qbo_account_name: null,
+      final_canonical_account_key: null,
+      post_after: null,
+      post_error: "cc_payment_pair_requires_confirmation",
+      meta,
+      decided_by: "user",
+      decided_at: nowIso,
+      updated_at: nowIso,
+    }, { onConflict: "business_id,transaction_id" });
+  if (upsertErr) throw upsertErr;
+
+  return { ok: true, marked: true, transaction_id: transactionId, meta };
+}
+
 export async function findExistingCreditCardPaymentPairForTransaction({ db = defaultSupabase, businessId, transactionId }) {
   if (!businessId || !transactionId) return null;
   const { data, error } = await db

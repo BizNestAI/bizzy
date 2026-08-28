@@ -4,6 +4,7 @@ import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import {
   confirmCreditCardPaymentMatchForTransaction,
+  markTransactionAsCreditCardPayment,
   rejectCreditCardPaymentSuggestion,
 } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
 import {
@@ -143,6 +144,37 @@ router.post("/credit-card-payments/reject", requireAuth, async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "cc_payment_reject_failed",
+      message: err?.message || "failed",
+    });
+  }
+});
+
+router.post("/credit-card-payments/mark", requireAuth, async (req, res) => {
+  const raw = req.body || {};
+  const businessId = ensureBusinessId(req, res);
+  const txnId = raw.txnId || raw.transaction_id || raw.transactionId || raw.id || null;
+  if (!businessId) return;
+  if (!txnId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+
+  try {
+    const result = await markTransactionAsCreditCardPayment({
+      businessId,
+      transactionId: txnId,
+    });
+    await refreshOperatorRequestSummaryBestEffort({
+      businessId,
+      reason: "cc_payment_marked",
+    });
+    return res.json(result);
+  } catch (err) {
+    const code = String(err?.message || "cc_payment_mark_failed");
+    if (code.startsWith("cc_payment_") || code === "missing_cc_payment_mark_identity" || code === "pending_transaction_not_matchable") {
+      return res.status(err?.status || 400).json({ ok: false, error: code, message: code });
+    }
+    console.error("[bookkeeping][cc-payment-mark] failed", err?.message || err);
+    return res.status(500).json({
+      ok: false,
+      error: "cc_payment_mark_failed",
       message: err?.message || "failed",
     });
   }
