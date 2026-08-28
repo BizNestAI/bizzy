@@ -17,6 +17,8 @@ import {
 } from "./categorizationEvidencePolicy.js";
 
 const MAX_RECONSIDERATION_LIMIT = 500;
+const PNL_ACCOUNT_TYPES = new Set(["income", "other income", "expense", "cost of goods sold", "costofgoodssold"]);
+const PROTECTED_TAXONOMY_RE = /cc_payment|transfer|owner|loan|payroll|tax|refund|check/i;
 
 async function getDefaultDb() {
   const mod = await import("../supabaseAdmin.js");
@@ -75,6 +77,90 @@ function accountFromCategorization(cat = {}) {
     id: cat.suggested_qbo_account_id || cat.final_qbo_account_id || null,
     name: cat.suggested_qbo_account_name || cat.final_qbo_account_name || null,
   };
+}
+
+function normalizeText(value = "") {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function isPnlAccount(account = {}) {
+  const type = normalizeText(account.type || account.accountType || account.AccountType || "");
+  return PNL_ACCOUNT_TYPES.has(type);
+}
+
+function transactionText(txn = {}) {
+  return normalizeText([txn.name, txn.merchant_name, txn.counterparty_name].filter(Boolean).join(" "));
+}
+
+function suggestedIntentFromAccountName(accountName = "") {
+  const name = normalizeText(accountName);
+  if (/\bmeal|restaurant|dining|food|coffee\b/.test(name)) return "meals";
+  if (/\btransport|parking|toll|travel|lyft|uber\b/.test(name)) return "transportation";
+  if (/\bgas|fuel|charging\b/.test(name)) return "gas_charging";
+  if (/\bsoftware|subscription|dues\b/.test(name)) return "software";
+  if (/\binsurance\b/.test(name)) return "insurance";
+  if (/\bbank fee|bank charge|processing fee|transaction fee\b/.test(name)) return "bank_fees";
+  if (/\bsales|service income|revenue|income\b/.test(name)) return "sales";
+  if (/\bentertainment|movies|theater|theatre|event\b/.test(name)) return "entertainment";
+  if (/\bsupplies|materials\b/.test(name)) return "supplies";
+  return null;
+}
+
+function hasDeterministicMediumSuggestionEvidence({ bankTxn = {}, account = {}, meta = {}, universalHint = null }) {
+  if (!account?.id || !account?.name || !isPnlAccount(account)) return false;
+  if (PROTECTED_TAXONOMY_RE.test(String(meta.taxonomy_type || ""))) return false;
+  if (meta.conflicting_categorization_evidence === true) return false;
+  const source = normalizeSource(meta.evidence_source || meta.suggestion_source || "");
+  if (!["plaid_mapping", "plaid_baseline", "backlog_reconsideration"].includes(source)) return false;
+  const intent = suggestedIntentFromAccountName(account.name);
+  if (!intent) return false;
+  const text = transactionText(bankTxn);
+  if (!text) return false;
+  if (intent === "meals") {
+    return /\btst\b|\bcafe\b|\bcoffee\b|\bcocktail\b|\bbar\b|\bwhiskey\b|\brestaurant\b|\bgrill\b|\bchick\b|\bchipotle\b|\bcava\b|\bamelie\b|\byamazaru\b|\bsumaq\b|\bcarillon\b|\bexchange\b|\bbarcelona\b|\bsloan\b/.test(text);
+  }
+  if (intent === "transportation") {
+    return /\bparking\b|\bpark\b|\btoll\b|\bsurface lot\b|\bpps\b|\bquiktrip\b|\bqt\b|\buber\b|\blyft\b|\btaxi\b/.test(text) ||
+      ["parking_tolls", "transportation", "fuel", "gas_charging"].includes(String(universalHint?.primary_intent || ""));
+  }
+  if (intent === "gas_charging") {
+    return /\bgas\b|\bfuel\b|\bchargeonsite\b|\bcharging\b|\bquiktrip\b|\bqt\b|\bmobil\b|\bshell\b/.test(text) ||
+      ["fuel", "gas_charging"].includes(String(universalHint?.primary_intent || ""));
+  }
+  if (intent === "software" || intent === "insurance") {
+    return String(universalHint?.primary_intent || "") === intent;
+  }
+  return false;
+}
+
+function canUseUniversalIntentForResolution(hint = null) {
+  if (!hint?.primary_intent) return false;
+  if (hint.confidence === "high") return true;
+  return ["entertainment", "supplies", "software", "insurance"].includes(String(hint.primary_intent));
+}
+
+function emptyBuckets() {
+  return {
+    reviewed: 0,
+    moved_to_handled: 0,
+    still_needs_review: 0,
+    pending: 0,
+    protected_workflow: 0,
+    suspense_no_specific_gl: 0,
+    valid_gl_policy_blocked: 0,
+    other: 0,
+  };
+}
+
+function bucketForResult({ promoted = false, reason = "", bankTxn = {}, account = {}, meta = {} } = {}) {
+  if (promoted) return "moved_to_handled";
+  if (bankTxn.pending === true || reason === "pending_transaction_not_postable") return "pending";
+  if (PROTECTED_TAXONOMY_RE.test(String(meta.taxonomy_type || "")) || PROTECTED_TAXONOMY_RE.test(String(reason || ""))) return "protected_workflow";
+  if (!account?.id || !account?.name || isReviewAccount({ accountId: account.id, accountName: account.name })) return "suspense_no_specific_gl";
+  if (reason === "medium_confidence_requires_review" || reason === "low_confidence_requires_review" || reason === "canonical_account_not_resolved") {
+    return "valid_gl_policy_blocked";
+  }
+  return "other";
 }
 
 async function fetchActiveQboAccounts({ businessId, dependencies = {} }) {
@@ -343,6 +429,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
 
   const updates = [];
   const rows = [];
+  const bucketCounts = emptyBuckets();
   let processed = 0;
   let promoted = 0;
   let skipped = 0;
@@ -354,12 +441,15 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       continue;
     }
     processed += 1;
+    bucketCounts.reviewed += 1;
     if (!isTransactionInActiveBookkeepingScope(bankTxn, bookkeepingStartDate)) {
       skipped += 1;
+      bucketCounts.other += 1;
       continue;
     }
     if (answeredAwaitingReview.has(String(cat.transaction_id))) {
       skipped += 1;
+      bucketCounts.other += 1;
       rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: "answered_awaiting_accountant_review" });
       continue;
     }
@@ -403,6 +493,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           canonicalVendorId: bankTxn.canonical_vendor_id || meta.canonical_vendor_id || null,
           canonicalVendorReliable: true,
           merchantEvidenceStrong: true,
+          conflictingEvidence: meta.conflicting_categorization_evidence === true,
           inBookkeepingScope: true,
           reconsiderationSource: options.source || "backlog_reconsideration",
           reason: "approved_business_rule",
@@ -456,6 +547,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           updated_at: nowIso,
         });
         promoted += 1;
+        bucketCounts.moved_to_handled += 1;
         rows.push({
           transaction_id: cat.transaction_id,
           promoted: true,
@@ -474,7 +566,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         continue;
       }
       skipped += 1;
-      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: decision.block_reason || decision.reason });
+      const blockReason = decision.block_reason || decision.reason;
+      bucketCounts[bucketForResult({ reason: blockReason, bankTxn, account, meta })] += 1;
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: blockReason });
       updates.push({
         business_id: businessId,
         transaction_id: cat.transaction_id,
@@ -498,9 +592,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       continue;
     }
     const universalHint = await getUniversalVendorHintForTransaction({ bankTxn });
-    if (!checkHit.is_check && isSpecificUniversalVendorEvidence(universalHint)) {
+    if (!checkHit.is_check && canUseUniversalIntentForResolution(universalHint)) {
       const specificMediumEvidence = universalHint?.confidence === "medium" && !isStrongUniversalVendorEvidence(universalHint);
-      const decisionConfidenceTier = specificMediumEvidence ? "high" : universalHint.confidence || "high";
       const canonicalKey = resolveIntentToCanonicalKey(universalHint.primary_intent);
       const canonicalResolution = await resolveCanonicalQboAccount({
         businessId,
@@ -560,6 +653,10 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       const exactCanonicalAccountResolved = Boolean(canonicalResolvedAccount.id && account?.id && !semanticResolution);
       const resolvedAccount = Boolean(account.id && account.name);
       const semanticAccountResolved = Boolean(semanticResolution?.id && semanticResolution?.name);
+      const decisionConfidenceTier =
+        (specificMediumEvidence && isSpecificUniversalVendorEvidence(universalHint)) || semanticAccountResolved
+          ? "high"
+          : universalHint.confidence || "high";
       const decision = decideBookkeepingCategorization({
         transaction: bankTxn,
         account,
@@ -582,6 +679,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           merchantEvidenceStrong:
             vendorEvidence.merchantEvidenceStrong === true ||
             Boolean(bankTxn.merchant_entity_id || bankTxn.merchant_name || bankTxn.counterparty_name),
+          conflictingEvidence: meta.conflicting_categorization_evidence === true,
           inBookkeepingScope: true,
           reconsiderationSource: options.source || "backlog_reconsideration",
         },
@@ -652,6 +750,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           updated_at: nowIso,
         });
         promoted += 1;
+        bucketCounts.moved_to_handled += 1;
         rows.push({
           transaction_id: cat.transaction_id,
           promoted: true,
@@ -693,7 +792,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         updated_at: nowIso,
       });
       skipped += 1;
-      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: decision.block_reason || decision.reason || canonicalResolution?.reason || "canonical_setup_required" });
+      const blockReason = decision.block_reason || decision.reason || canonicalResolution?.reason || "canonical_setup_required";
+      bucketCounts[bucketForResult({ reason: blockReason, bankTxn, account, meta })] += 1;
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: blockReason });
       continue;
     }
     const canonicalAccount = await resolveCanonicalAccountEvidence({
@@ -705,10 +806,41 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       source: options.source || "backlog_reconsideration",
       dependencies,
     });
-    const account = canonicalAccount.account || accountFromCategorization(cat);
+    const categorizationAccount = accountFromCategorization(cat);
+    const activeSuggestedAccount = categorizationAccount.id
+      ? await fetchActiveQboAccountById({
+          businessId,
+          accountId: categorizationAccount.id,
+          fallbackName: categorizationAccount.name,
+          db,
+          dependencies,
+        })
+      : null;
+    let semanticResolution = null;
+    if ((!activeSuggestedAccount || isReviewAccount({ accountId: activeSuggestedAccount.id, accountName: activeSuggestedAccount.name })) && universalHint?.primary_intent) {
+      semanticResolution = await resolveStrongSemanticCoaAccount({
+        businessId,
+        intent: universalHint.primary_intent,
+        dependencies,
+      });
+    }
+    const canonicalResolvedAccount =
+      canonicalAccount.account?.id && canonicalAccount.account?.name
+        ? canonicalAccount.account
+        : null;
+    const account = canonicalResolvedAccount || semanticResolution || activeSuggestedAccount || categorizationAccount;
     const canonicalKey = canonicalAccount.canonicalAccountKey || canonicalAccountKey(cat, meta);
     const vendorEvidence = await resolveVendorEvidence({ db, businessId, bankTxn, meta });
-    const canonicalAccountResolved = canonicalAccount.canonicalAccountResolved === true;
+    const deterministicMediumEvidence = hasDeterministicMediumSuggestionEvidence({
+      bankTxn,
+      account,
+      meta,
+      universalHint,
+    });
+    const canonicalAccountResolved =
+      canonicalAccount.canonicalAccountResolved === true ||
+      Boolean(semanticResolution?.id) ||
+      deterministicMediumEvidence === true;
     const source = normalizeSource(meta.suggestion_source || cat.decided_by || "backlog_reconsideration");
     const decision = decideBookkeepingCategorization({
       transaction: bankTxn,
@@ -730,7 +862,11 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         weakVendorEvidence: vendorEvidence.weakVendorEvidence === true,
         merchantEvidenceStrong:
           vendorEvidence.merchantEvidenceStrong === true ||
+          deterministicMediumEvidence === true ||
           Boolean(bankTxn.merchant_name && meta.suggestion_source === "universal_hint"),
+        deterministicMediumEvidence,
+        conflictingEvidence: meta.conflicting_categorization_evidence === true,
+        reason: deterministicMediumEvidence ? "deterministic_medium_suggestion" : undefined,
         inBookkeepingScope: true,
         reconsiderationSource: options.source || "backlog_reconsideration",
       },
@@ -749,6 +885,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       canonical_vendor_reliable: vendorEvidence.canonicalVendorReliable === true,
       canonical_vendor_resolution_reason: vendorEvidence.reason || null,
       merchant_evidence_strong: decision.evidence?.merchantEvidenceStrong === true,
+      deterministic_medium_evidence: deterministicMediumEvidence,
+      semantic_coa_resolved: Boolean(semanticResolution?.id),
+      semantic_coa_match: semanticResolution?.match || null,
       auto_handle_decision: {
         eligible: decision.auto_handle === true,
         confidence: decision.confidence_tier,
@@ -761,12 +900,14 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
 
     if (decision.auto_handle !== true || !account.id || !account.name) {
       skipped += 1;
-      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: decision.block_reason || decision.reason });
+      const blockReason = decision.block_reason || decision.reason;
+      bucketCounts[bucketForResult({ reason: blockReason, bankTxn, account, meta })] += 1;
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: blockReason });
       updates.push({
         business_id: businessId,
         transaction_id: cat.transaction_id,
-        suggested_qbo_account_id: cat.suggested_qbo_account_id || null,
-        suggested_qbo_account_name: cat.suggested_qbo_account_name || null,
+        suggested_qbo_account_id: account?.id || cat.suggested_qbo_account_id || null,
+        suggested_qbo_account_name: account?.name || cat.suggested_qbo_account_name || null,
         suggested_canonical_account_key: cat.suggested_canonical_account_key || canonicalKey || null,
         final_qbo_account_id: null,
         final_qbo_account_name: null,
@@ -808,6 +949,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       updated_at: nowIso,
     });
     promoted += 1;
+    bucketCounts.moved_to_handled += 1;
     rows.push({
       transaction_id: cat.transaction_id,
       promoted: true,
@@ -845,6 +987,10 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     processed,
     promoted,
     skipped,
+    bucket_counts: {
+      ...bucketCounts,
+      still_needs_review: skipped,
+    },
     next_cursor: transactionIds.length ? null : catRows.length === limit ? last : null,
     rows,
   };

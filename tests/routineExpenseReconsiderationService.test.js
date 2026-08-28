@@ -324,6 +324,9 @@ test("approval-backed same-business vendor rule promotes stale Needs Review row 
   const row = db.rows.transaction_categorizations[0];
 
   assert.equal(result.promoted, 1);
+  assert.equal(result.bucket_counts.reviewed, 1);
+  assert.equal(result.bucket_counts.moved_to_handled, 1);
+  assert.equal(result.bucket_counts.still_needs_review, 0);
   assert.equal(row.status, "auto_approved");
   assert.equal(row.final_qbo_account_id, "transportation-current");
   assert.equal(row.final_qbo_account_name, "Transportation");
@@ -513,7 +516,145 @@ test("ParkMobile can resolve to existing Transportation account when canonical P
   assert.equal(state.createCount, 0);
 });
 
-test("Plaid-only medium suggestion can remain visible while lifecycle stays Needs Review", async () => {
+test("suspense intent can resolve to an active compatible QBO account before fallback", async () => {
+  const db = makeDb();
+  const { qbo, state } = makeQbo([{ id: "bank-fees-current", name: "Bank Fees", type: "Expense", subType: "BankCharges" }]);
+  addRoutineRow(db, "txn-intuit-fee", {
+    bankTxn: {
+      name: "TRAN FEE INTUIT 24557023 OPTIMIST BOOKKEEPING ACH CORP DEBIT",
+      merchant_name: null,
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: -13.3,
+      signed_amount: -13.3,
+    },
+    cat: {
+      suggested_qbo_account_id: "4",
+      suggested_qbo_account_name: "Uncategorized Expense",
+      suggested_canonical_account_key: null,
+      confidence: "low",
+      meta: { suggestion_source: "fallback" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "bank-fees-current");
+  assert.equal(row.final_qbo_account_name, "Bank Fees");
+  assert.equal(row.meta.semantic_coa_resolved, true);
+  assert.equal(row.decided_by, "bizzi");
+  assert.equal(state.createCount, 0);
+});
+
+test("Plaid medium Meals row with deterministic restaurant evidence auto-approves", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);
+  addMapping(db, {
+    canonical_account_key: "meals",
+    qbo_account_id: "meals-current",
+    qbo_account_name: "Meals",
+    qbo_account_subtype: "Meals",
+  });
+  addRoutineRow(db, "txn-medium-meals-promote", {
+    bankTxn: {
+      name: "TST* CANOPY COCKTAILS",
+      merchant_name: "Canopy Cocktails",
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: -79.52,
+      signed_amount: -79.52,
+    },
+    cat: {
+      suggested_qbo_account_id: "meals-current",
+      suggested_qbo_account_name: "Meals",
+      suggested_canonical_account_key: "meals",
+      confidence: "medium",
+      meta: { suggestion_source: "plaid_mapping" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "meals-current");
+  assert.equal(row.final_qbo_account_name, "Meals");
+  assert.equal(row.decided_by, "bizzi");
+  assert.equal(row.post_after, null);
+  assert.equal(row.qbo_txn_id || null, null);
+  assert.equal(row.meta.deterministic_medium_evidence, true);
+});
+
+test("medium deterministic suggestion with conflicting evidence remains Needs Review", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);
+  addRoutineRow(db, "txn-conflict", {
+    bankTxn: {
+      name: "TST* CANOPY COCKTAILS",
+      merchant_name: "Canopy Cocktails",
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: -79.52,
+      signed_amount: -79.52,
+    },
+    cat: {
+      suggested_qbo_account_id: "meals-current",
+      suggested_qbo_account_name: "Meals",
+      suggested_canonical_account_key: "meals",
+      confidence: "medium",
+      meta: {
+        suggestion_source: "plaid_mapping",
+        conflicting_categorization_evidence: true,
+      },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.promoted, 0);
+  assert.equal(row.status, "needs_review");
+  assert.equal(row.final_qbo_account_id, null);
+  assert.equal(row.meta.auto_handle_decision.reason, "conflicting_categorization_evidence");
+});
+
+test("Plaid medium Transportation row with deterministic parking evidence auto-approves", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "transportation-current", name: "Transportation", type: "Expense", subType: "Travel" }]);
+  addRoutineRow(db, "txn-medium-parking-promote", {
+    bankTxn: {
+      name: "PPS - SURFACE LOT",
+      merchant_name: "PPS",
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: -17,
+      signed_amount: -17,
+    },
+    cat: {
+      suggested_qbo_account_id: "transportation-current",
+      suggested_qbo_account_name: "Transportation",
+      suggested_canonical_account_key: "transportation",
+      confidence: "medium",
+      meta: { suggestion_source: "plaid_mapping" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "transportation-current");
+  assert.equal(row.final_qbo_account_name, "Transportation");
+  assert.equal(row.meta.semantic_coa_resolved, true);
+  assert.equal(row.meta.safe_to_auto_handle, true);
+});
+
+test("Plaid-only ambiguous medium suggestion can remain visible while lifecycle stays Needs Review", async () => {
   const db = makeDb();
   const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);
   addMapping(db, {
@@ -524,8 +665,8 @@ test("Plaid-only medium suggestion can remain visible while lifecycle stays Need
   });
   addRoutineRow(db, "txn-medium-meals", {
     bankTxn: {
-      name: "LOCAL CAFE",
-      merchant_name: "Local Cafe",
+      name: "LOCAL MARKET",
+      merchant_name: "Local Market",
       merchant_entity_id: null,
       canonical_vendor_id: null,
       amount: -14.95,
@@ -548,6 +689,7 @@ test("Plaid-only medium suggestion can remain visible while lifecycle stays Need
   assert.equal(row.suggested_qbo_account_name, "Meals");
   assert.equal(row.final_qbo_account_id, null);
   assert.equal(row.decided_by, "plaid_mapping");
+  assert.equal(row.meta.deterministic_medium_evidence, false);
   assert.equal(row.meta.auto_handle_decision.eligible, false);
 });
 
@@ -574,6 +716,7 @@ test("suspense fallback accounts never become Handled during reconsideration", a
     const row = db.rows.transaction_categorizations[0];
 
     assert.equal(result.promoted, 0, suspenseName);
+    assert.equal(result.bucket_counts.suspense_no_specific_gl, 1, suspenseName);
     assert.equal(row.status, "needs_review", suspenseName);
     assert.equal(row.final_qbo_account_id, null, suspenseName);
   }
@@ -620,6 +763,8 @@ test("pending and true credit-card payment rows remain protected", async () => {
   const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
 
   assert.equal(result.promoted, 0);
+  assert.equal(result.bucket_counts.pending, 1);
+  assert.equal(result.bucket_counts.protected_workflow, 1);
   assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-pending").status, "needs_review");
   assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-card-payment").status, "needs_review");
 });

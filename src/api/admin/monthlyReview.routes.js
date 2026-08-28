@@ -612,6 +612,16 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
     let pageCount = 0;
     const rows = [];
     const totals = { processed: 0, promoted: 0, skipped: 0 };
+    const bucketCounts = {
+      reviewed: 0,
+      moved_to_handled: 0,
+      still_needs_review: 0,
+      pending: 0,
+      protected_workflow: 0,
+      suspense_no_specific_gl: 0,
+      valid_gl_policy_blocked: 0,
+      other: 0,
+    };
 
     while (pageCount < maxPages) {
       const result = await reconsiderNeedsReviewTransactions(businessId, {
@@ -624,6 +634,9 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
       totals.processed += Number(result?.processed || 0);
       totals.promoted += Number(result?.promoted || 0);
       totals.skipped += Number(result?.skipped || 0);
+      Object.keys(bucketCounts).forEach((key) => {
+        bucketCounts[key] += Number(result?.bucket_counts?.[key] || 0);
+      });
       if (Array.isArray(result?.rows)) rows.push(...result.rows);
       cursor = result?.next_cursor || null;
       pageCount += 1;
@@ -639,6 +652,12 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
       processed: totals.processed,
       promoted: totals.promoted,
       skipped: totals.skipped,
+      bucket_counts: {
+        ...bucketCounts,
+        reviewed: totals.processed,
+        moved_to_handled: totals.promoted,
+        still_needs_review: totals.skipped,
+      },
       rows,
       next_cursor: cursor,
       partial: Boolean(cursor),

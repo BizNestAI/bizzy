@@ -227,6 +227,9 @@ export function canAutoHandle(transaction = {}, categorizationEvidence = {}, bus
   if (safeToAutoHandle && confidence === "high") {
     return allow(evidence.reason || "safe_high_confidence", { confidence, source, evidence });
   }
+  if (evidence.deterministicMediumEvidence === true && confidence === "medium") {
+    return allow(evidence.reason || "deterministic_medium_evidence", { confidence: "high", source, evidence });
+  }
 
   const deterministicSources = new Set([
     "vendor_rule",
