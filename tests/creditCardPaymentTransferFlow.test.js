@@ -3,12 +3,48 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { classifyTaxonomy } from "../src/services/bookkeeping/taxonomyClassifier.js";
+import {
+  deriveCreditCardPaymentOrientation,
+  isQboBankAccount,
+  isQboCreditCardAccount,
+} from "../src/services/bookkeeping/creditCardPaymentStatus.js";
 
 const root = process.cwd();
 
 function read(rel) {
   return readFileSync(join(root, rel), "utf8");
 }
+
+test("credit-card payment orientation is bidirectional and account-type aware", () => {
+  const bankSide = deriveCreditCardPaymentOrientation({
+    source_qbo_account_type: "Bank",
+    direction: "OUTFLOW",
+    signed_amount: -2196.7,
+  });
+  assert.deepEqual(bankSide, {
+    side: "bank",
+    counterpartAccountType: "CreditCard",
+    label: "Paid to",
+    placeholder: "Match payment to...",
+  });
+
+  const cardSide = deriveCreditCardPaymentOrientation({
+    source_qbo_account_type: "CreditCard",
+    direction: "INFLOW",
+    signed_amount: 2196.7,
+  });
+  assert.deepEqual(cardSide, {
+    side: "credit_card",
+    counterpartAccountType: "Bank",
+    label: "Paid from",
+    placeholder: "Paid from...",
+  });
+
+  assert.equal(isQboCreditCardAccount({ type: "CreditCard" }), true);
+  assert.equal(isQboCreditCardAccount({ type: "Bank" }), false);
+  assert.equal(isQboBankAccount({ type: "Bank" }), true);
+  assert.equal(isQboBankAccount({ type: "CreditCard" }), false);
+});
 
 test("credit-card-payment pairs are durable, tenant scoped, and one leg cannot belong to multiple active pairs", () => {
   const migration = read("supabase/migrations/20260903_credit_card_payment_pairs.sql");
@@ -57,7 +93,7 @@ test("suggestion creates canonical pairs and writes symmetric metadata to both l
   assert.match(service, /final_canonical_account_key: null/);
 });
 
-test("one confirmation resolves the pair and manual target must be a CreditCard account", () => {
+test("one confirmation resolves the pair and validates the payment target by source orientation", () => {
   const approvals = read("src/services/bookkeeping/bookkeepingApprovalService.js");
   const approvalsRoute = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
   const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
@@ -68,9 +104,13 @@ test("one confirmation resolves the pair and manual target must be a CreditCard 
   assert.match(approvals, /confirmCreditCardPaymentPairForTransaction/);
   assert.doesNotMatch(approvals, /isCreditCardQboType/);
   assert.doesNotMatch(approvals, /explicitFinalType/);
-  assert.match(service, /targetAccountName: pair\.credit_card_qbo_account_name/);
-  assert.match(service, /validateBusinessQboCreditCardAccount\(businessId, targetQboAccountId\)/);
-  assert.match(service, /throw new Error\(validatedTarget\?\.reason \|\| "cc_payment_target_credit_card_required"\)/);
+  assert.match(service, /derivePairSourceOrientation/);
+  assert.match(service, /sourceOrientation\.expectedTargetQboType/);
+  assert.match(service, /validateBusinessQboPaymentAccountType\(/);
+  assert.match(service, /sourceOrientation\.side === "bank"/);
+  assert.match(service, /sourceOrientation\.side === "credit_card"/);
+  assert.match(service, /const checkingRow = sourceIsChecking \? row : candidate/);
+  assert.match(service, /const cardRow = sourceIsChecking \? candidate : row/);
   assert.match(qboAccounts, /getLatestQuickBooksTokenRow\(businessId\)/);
   assert.match(qboAccounts, /getQBOClient\(businessId\)/);
   assert.match(qboAccounts, /normalizeQboPaymentAccountType\(resolved\.account\.type\) !== "CreditCard"/);
@@ -86,11 +126,12 @@ test("manual target validation rejects manipulated or unusable QBO accounts befo
 
   assert.match(qboAccounts, /cc_payment_target_account_not_found/);
   assert.match(qboAccounts, /cc_payment_target_account_inactive/);
+  assert.match(qboAccounts, /cc_payment_target_not_bank/);
   assert.match(qboAccounts, /cc_payment_target_not_credit_card/);
   assert.match(qboAccounts, /cc_payment_target_wrong_realm/);
   assert.match(qboAccounts, /account\.Active !== false && account\.active !== false/);
   assert.match(qboAccounts, /String\(account\.id\) !== String\(qboAccountId\)/);
-  assert.match(service, /validatedTarget = await validateBusinessQboCreditCardAccount/);
+  assert.match(service, /validatedTarget = await validateBusinessQboPaymentAccountType/);
   assert.match(service, /if \(!validatedTarget\?\.ok\)[\s\S]*throw new Error/);
   assert.match(service, /qbo_account_id: validatedTarget\.account\.id/);
   assert.match(service, /qbo_account_name: validatedTarget\.account\.name/);
@@ -101,9 +142,10 @@ test("manual target validation rejects manipulated or unusable QBO accounts befo
   assert.doesNotMatch(service, /qboEnv/);
   assert.doesNotMatch(service, /qboRealmId/);
   const manualBody = service.slice(service.indexOf("export async function createManualCreditCardPaymentPair"), service.indexOf("export async function confirmCreditCardPaymentPairForTransaction"));
-  assert.match(manualBody, /validateBusinessQboCreditCardAccount/);
+  assert.match(manualBody, /validateBusinessQboPaymentAccountType/);
+  assert.match(manualBody, /cc_payment_manual_pair_requires_bank_side_source/);
   assert.match(manualBody, /\.insert\(pairRecord\)/);
-  assert.ok(manualBody.indexOf("validateBusinessQboCreditCardAccount") < manualBody.indexOf(".insert(pairRecord)"));
+  assert.ok(manualBody.indexOf("validateBusinessQboPaymentAccountType") < manualBody.indexOf(".insert(pairRecord)"));
   assert.doesNotMatch(manualBody, /createQboTransfer|postCreditCardPaymentPairToQbo|claimCreditCardPaymentPairPosting/);
 });
 
@@ -162,6 +204,8 @@ test("credit-card-payment UI exposes transfer target state instead of only a gen
   assert.match(txFeedService, /cc_payment_transfer_target_qbo_account_name/);
   assert.match(feed, /Credit Card Payment/);
   assert.match(feed, /ccSelectableAccounts/);
+  assert.match(feed, /deriveCreditCardPaymentOrientation/);
+  assert.match(feed, /isQboBankAccount/);
   assert.match(feed, /isQboCreditCardAccount/);
   assert.match(page, /newAccountType/);
 });
@@ -237,7 +281,9 @@ test("credit-card payment selector uses dark custom menu and can switch back to 
   assert.match(feed, /export function CreditCardPaymentMatchControl/);
   assert.match(feed, /ReactDOM\.createPortal/);
   assert.match(feed, /bg-\[rgba\(15,17,20,0\.98\)\]/);
-  assert.match(feed, /Use regular COA dropdown/);
+  assert.match(feed, /Not a credit card payment/);
+  assert.doesNotMatch(feed, /Use regular COA dropdown/);
+  assert.doesNotMatch(feed, /Use COA/);
   assert.match(feed, /Match as credit card payment/);
   assert.match(feed, /onUseCreditCardPayment/);
   assert.match(mirror, /CreditCardPaymentMatchControl/);

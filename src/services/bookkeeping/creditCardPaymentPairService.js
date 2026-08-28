@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
-import { validateBusinessQboCreditCardAccount } from "./qboAccounts.js";
+import { validateBusinessQboPaymentAccountType } from "./qboAccounts.js";
 
 const DATE_WINDOW_DAYS = 3;
 const EPS = 0.01;
@@ -114,6 +114,32 @@ function qboMappingRail(mapping = {}) {
   if (type === "bank") return "bank";
   if (type === "creditcard" || type === "credit card" || type === "credit_card" || (type.includes("credit") && type.includes("card"))) return "credit_card";
   return "unknown";
+}
+
+function derivePairSourceOrientation({ row = {}, sourceAcct = {}, sourceMapping = {} } = {}) {
+  const sourceRail = plaidAccountRail(sourceAcct);
+  const sourceMappingRail = qboMappingRail(sourceMapping);
+  const sourceIsChecking = sourceRail === "bank" && sourceMappingRail === "bank" && isOutflow(row);
+  const sourceIsCard = sourceRail === "credit_card" && sourceMappingRail === "credit_card" && isInflow(row);
+  if (sourceIsChecking) {
+    return {
+      side: "bank",
+      expectedTargetQboType: "CreditCard",
+      targetMappingRail: "credit_card",
+    };
+  }
+  if (sourceIsCard) {
+    return {
+      side: "credit_card",
+      expectedTargetQboType: "Bank",
+      targetMappingRail: "bank",
+    };
+  }
+  return {
+    side: "unknown",
+    expectedTargetQboType: null,
+    targetMappingRail: null,
+  };
 }
 
 function issuerMatchesCheckingToCard(checkingRow = {}, cardRow = {}, cardAcct = {}) {
@@ -444,13 +470,6 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
   if (!businessId || !row?.id || !row.plaid_account_id) return { status: "no_match", reason: "missing_source" };
   const existing = await findExistingCreditCardPaymentPairForTransaction({ db, businessId, transactionId: row.id });
   if (existing) return { status: "paired", pair: existing, reason: "existing_pair" };
-  let validatedTarget = null;
-  if (targetQboAccountId) {
-    validatedTarget = await validateBusinessQboCreditCardAccount(businessId, targetQboAccountId);
-    if (!validatedTarget?.ok) {
-      return { status: "no_match", reason: validatedTarget?.reason || "cc_payment_target_credit_card_required" };
-    }
-  }
   const amount = Number(row.signed_amount ?? row.amount ?? 0);
   if (!Number.isFinite(amount) || amount === 0) return { status: "no_match", reason: "invalid_amount" };
   if (!hasCreditCardPaymentSignal(row)) return { status: "no_match", reason: "missing_payment_memo" };
@@ -501,9 +520,21 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
   const accountMap = await fetchPlaidAccounts(db, businessId, [row.plaid_account_id, ...candidates.map((c) => c.plaid_account_id)]);
   const mappingMap = await fetchMappings(db, businessId, [row.plaid_account_id, ...candidates.map((c) => c.plaid_account_id)]);
   const sourceAcct = accountMap.get(String(row.plaid_account_id));
-  const sourceRail = plaidAccountRail(sourceAcct);
   const sourceMapping = mappingMap.get(String(row.plaid_account_id));
-  const sourceMappingRail = qboMappingRail(sourceMapping);
+  const sourceOrientation = derivePairSourceOrientation({ row, sourceAcct, sourceMapping });
+  if (!sourceOrientation.expectedTargetQboType) {
+    return { status: "no_match", reason: "cc_payment_source_orientation_unknown" };
+  }
+  if (targetQboAccountId) {
+    const validatedTarget = await validateBusinessQboPaymentAccountType(
+      businessId,
+      targetQboAccountId,
+      sourceOrientation.expectedTargetQboType
+    );
+    if (!validatedTarget?.ok) {
+      return { status: "no_match", reason: validatedTarget?.reason || "cc_payment_target_account_type_mismatch" };
+    }
+  }
 
   const plausible = [];
   for (const candidate of candidates) {
@@ -512,8 +543,8 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
     const candidateRail = plaidAccountRail(candidateAcct);
     const candidateMapping = mappingMap.get(String(candidate.plaid_account_id));
     const candidateMappingRail = qboMappingRail(candidateMapping);
-    const sourceIsChecking = sourceRail === "bank" && sourceMappingRail === "bank" && isOutflow(row);
-    const sourceIsCard = sourceRail === "credit_card" && sourceMappingRail === "credit_card" && isInflow(row);
+    const sourceIsChecking = sourceOrientation.side === "bank";
+    const sourceIsCard = sourceOrientation.side === "credit_card";
     const candidateIsChecking = candidateRail === "bank" && candidateMappingRail === "bank" && isOutflow(candidate);
     const candidateIsCard = candidateRail === "credit_card" && candidateMappingRail === "credit_card" && isInflow(candidate);
     const oriented =
@@ -527,7 +558,8 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
     const checkingMapping = sourceIsChecking ? sourceMapping : candidateMapping;
     const cardMapping = sourceIsChecking ? candidateMapping : sourceMapping;
     if (!checkingMapping?.qbo_account_id || !cardMapping?.qbo_account_id) continue;
-    if (targetQboAccountId && String(cardMapping.qbo_account_id) !== String(targetQboAccountId)) continue;
+    const targetMapping = sourceIsChecking ? cardMapping : checkingMapping;
+    if (targetQboAccountId && String(targetMapping.qbo_account_id) !== String(targetQboAccountId)) continue;
     if (!issuerMatchesCheckingToCard(checkingRow, cardRow, cardAcct)) continue;
     if (!hasCreditCardPaymentSignal(checkingRow) && !hasCreditCardPaymentSignal(cardRow)) continue;
     const diff = dateDiffDays(checkingRow.date, cardRow.date);
@@ -558,6 +590,8 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
       card_memo_payment_signal: hasCreditCardPaymentSignal(hit.cardRow),
       issuer: detectCardIssuer([hit.checkingRow.name, hit.checkingRow.merchant_name, hit.checkingRow.counterparty_name].filter(Boolean).join(" ")),
       qbo_mappings_verified: true,
+      initiated_from_side: sourceOrientation.side,
+      selected_target_qbo_type: sourceOrientation.expectedTargetQboType,
     },
   });
   const { data: pair, error: pairErr } = await db
@@ -634,30 +668,33 @@ export async function createManualCreditCardPaymentPair({ db = defaultSupabase, 
   const accountMap = await fetchPlaidAccounts(db, businessId, accountIds);
   const mappingMap = await fetchMappings(db, businessId, accountIds);
   const sourceAcct = accountMap.get(String(row.plaid_account_id));
-  const sourceRail = plaidAccountRail(sourceAcct);
   const sourceMapping = mappingMap.get(String(row.plaid_account_id));
-  if (qboMappingRail(sourceMapping) !== "bank" || !isOutflow(row)) throw new Error("cc_payment_manual_source_must_be_checking_outflow");
+  const sourceOrientation = derivePairSourceOrientation({ row, sourceAcct, sourceMapping });
+  if (!sourceOrientation.expectedTargetQboType) throw new Error("cc_payment_source_orientation_unknown");
+  if (sourceOrientation.side !== "bank") {
+    throw new Error("cc_payment_manual_pair_requires_bank_side_source");
+  }
 
-  let cardMapping = null;
-  let cardAcct = null;
+  let targetMapping = null;
+  let targetAcct = null;
   let validatedTarget = null;
   if (targetPlaidAccountId) {
-    cardAcct = accountMap.get(String(targetPlaidAccountId));
-    cardMapping = mappingMap.get(String(targetPlaidAccountId));
+    targetAcct = accountMap.get(String(targetPlaidAccountId));
+    targetMapping = mappingMap.get(String(targetPlaidAccountId));
   } else if (targetQboAccountId) {
-    validatedTarget = await validateBusinessQboCreditCardAccount(businessId, targetQboAccountId);
+    validatedTarget = await validateBusinessQboPaymentAccountType(businessId, targetQboAccountId, sourceOrientation.expectedTargetQboType);
     if (!validatedTarget?.ok) {
-      throw new Error(validatedTarget?.reason || "cc_payment_target_credit_card_required");
+      throw new Error(validatedTarget?.reason || "cc_payment_target_account_type_mismatch");
     }
-    cardMapping = {
+    targetMapping = {
       qbo_account_id: validatedTarget.account.id,
       qbo_account_name: validatedTarget.account.name || null,
       qbo_account_type: validatedTarget.account.type,
       plaid_account_id: null,
     };
   }
-  if (sourceRail !== "bank" || qboMappingRail(cardMapping) !== "credit_card" || !cardMapping?.qbo_account_id) {
-    throw new Error("cc_payment_target_credit_card_required");
+  if (qboMappingRail(targetMapping) !== sourceOrientation.targetMappingRail || !targetMapping?.qbo_account_id) {
+    throw new Error(sourceOrientation.expectedTargetQboType === "Bank" ? "cc_payment_target_bank_required" : "cc_payment_target_credit_card_required");
   }
 
   const pairRecord = buildPairRecord({
@@ -665,17 +702,18 @@ export async function createManualCreditCardPaymentPair({ db = defaultSupabase, 
     checkingRow: row,
     cardRow: null,
     checkingAcct: sourceAcct,
-    cardAcct,
+    cardAcct: targetAcct,
     checkingMapping: sourceMapping,
-    cardMapping,
+    cardMapping: targetMapping,
     confidence: "manual",
     status: "confirmed",
     evidence: {
       matcher: "manual_target_credit_card_v1",
       target_plaid_account_id: targetPlaidAccountId || null,
-      target_qbo_account_id: cardMapping.qbo_account_id,
+      target_qbo_account_id: targetMapping.qbo_account_id,
       target_qbo_account_validated_server_side: true,
-      target_qbo_account_type: cardMapping.qbo_account_type,
+      target_qbo_account_type: targetMapping.qbo_account_type,
+      source_side: sourceOrientation.side,
       explicit_user_target: true,
     },
   });

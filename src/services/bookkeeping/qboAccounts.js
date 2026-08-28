@@ -159,6 +159,33 @@ export async function validateBusinessQboCreditCardAccount(businessId, qboAccoun
   };
 }
 
+export async function validateBusinessQboPaymentAccountType(businessId, qboAccountId, expectedType) {
+  const normalizedExpected = normalizeQboPaymentAccountType(expectedType);
+  if (!normalizedExpected) {
+    return { ok: false, reason: "cc_payment_target_account_type_unsupported", account: null };
+  }
+  const resolved = await fetchQboAccountByIdForBusiness(businessId, qboAccountId);
+  if (!resolved.ok) return resolved;
+  if (resolved.account.active === false) {
+    return { ...resolved, ok: false, reason: "cc_payment_target_account_inactive" };
+  }
+  const actual = normalizeQboPaymentAccountType(resolved.account.type);
+  if (actual !== normalizedExpected) {
+    return {
+      ...resolved,
+      ok: false,
+      reason: normalizedExpected === "Bank" ? "cc_payment_target_not_bank" : "cc_payment_target_not_credit_card",
+    };
+  }
+  return {
+    ...resolved,
+    account: {
+      ...resolved.account,
+      type: normalizedExpected,
+    },
+  };
+}
+
 export function findStrongPaymentAccountMatch(accounts = [], plaidName, mask) {
   const normPlaid = normalizeName(plaidName);
   const last4 = mask ? String(mask).slice(-4) : "";
@@ -317,4 +344,5 @@ export default {
   fetchQboAccountBalance,
   normalizeQboPaymentAccountType,
   validateBusinessQboCreditCardAccount,
+  validateBusinessQboPaymentAccountType,
 };

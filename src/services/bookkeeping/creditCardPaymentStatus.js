@@ -46,9 +46,98 @@ export function isQboCreditCardAccount(account = {}) {
   return normalizeQboAccountType(account.type || account.accountType || account.account_type) === "creditcard";
 }
 
+export function isQboBankAccount(account = {}) {
+  return normalizeQboAccountType(account.type || account.accountType || account.account_type) === "bank";
+}
+
+export function deriveCreditCardPaymentOrientation(row = {}) {
+  const meta = row.meta || {};
+  const explicitRole = String(row.cc_payment_pair_role || meta.cc_payment_pair_role || "").toLowerCase();
+  if (explicitRole === "checking" || explicitRole === "bank") {
+    return {
+      side: "bank",
+      counterpartAccountType: "CreditCard",
+      label: "Paid to",
+      placeholder: "Match payment to...",
+    };
+  }
+  if (explicitRole === "credit_card" || explicitRole === "creditcard") {
+    return {
+      side: "credit_card",
+      counterpartAccountType: "Bank",
+      label: "Paid from",
+      placeholder: "Paid from...",
+    };
+  }
+
+  const sourceType = normalizeQboAccountType(
+    row.source_qbo_account_type ||
+      row.qbo_account_type ||
+      row.qbo_source_account_type ||
+      row.current_qbo_account_type ||
+      meta.source_qbo_account_type ||
+      meta.qbo_source_account_type ||
+      row.account_type ||
+      row.type
+  );
+  const sourceSubtype = normalizeQboAccountType(row.account_subtype || row.subtype || meta.account_subtype || "");
+  const direction = String(row.direction || "").toUpperCase();
+  const amount = Number(row.signed_amount ?? row.signedAmount ?? row.amount ?? 0);
+  const isOutflow = direction === "OUTFLOW" || (!direction && amount < 0);
+  const isInflow = direction === "INFLOW" || (!direction && amount > 0);
+  const isBankRail =
+    sourceType === "bank" ||
+    sourceType === "depository" ||
+    sourceSubtype === "checking" ||
+    sourceSubtype === "savings" ||
+    sourceSubtype === "moneymarket";
+  const isCardRail = sourceType === "creditcard" || sourceType === "credit" || sourceSubtype.includes("credit");
+
+  if (isBankRail && isOutflow) {
+    return {
+      side: "bank",
+      counterpartAccountType: "CreditCard",
+      label: "Paid to",
+      placeholder: "Match payment to...",
+    };
+  }
+  if (isCardRail && isInflow) {
+    return {
+      side: "credit_card",
+      counterpartAccountType: "Bank",
+      label: "Paid from",
+      placeholder: "Paid from...",
+    };
+  }
+  if (isBankRail) {
+    return {
+      side: "bank",
+      counterpartAccountType: "CreditCard",
+      label: "Paid to",
+      placeholder: "Match payment to...",
+    };
+  }
+  if (isCardRail) {
+    return {
+      side: "credit_card",
+      counterpartAccountType: "Bank",
+      label: "Paid from",
+      placeholder: "Paid from...",
+    };
+  }
+  return {
+    side: "unknown",
+    counterpartAccountType: null,
+    label: "Match payment",
+    placeholder: "Select account...",
+  };
+}
+
 export default {
+  deriveCreditCardPaymentOrientation,
   deriveCreditCardPaymentStatus,
   isCreditCardPaymentWorkflow,
+  isQboBankAccount,
   isQboCreditCardAccount,
   normalizeQboAccountType,
 };

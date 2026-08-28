@@ -3,7 +3,12 @@ import { CoaDropdown, CreditCardPaymentMatchControl } from "./BookkeepingFeed.js
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
-import { deriveCreditCardPaymentStatus, isQboCreditCardAccount } from "../../services/bookkeeping/creditCardPaymentStatus.js";
+import {
+  deriveCreditCardPaymentOrientation,
+  deriveCreditCardPaymentStatus,
+  isQboBankAccount,
+  isQboCreditCardAccount,
+} from "../../services/bookkeeping/creditCardPaymentStatus.js";
 
 const BADGE_BASE = "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium";
 const MIRROR_TABLE_GRID = "grid grid-cols-[92px_minmax(260px,1.55fr)_minmax(170px,0.9fr)_minmax(240px,1fr)_minmax(150px,0.72fr)_minmax(220px,0.88fr)]";
@@ -120,6 +125,7 @@ function BookkeepingTransactionMirrorRow({
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const protectedReason = getProtectedWorkflowReason(row);
   const ccWorkflowStatus = deriveCreditCardPaymentStatus(row);
+  const ccOrientation = deriveCreditCardPaymentOrientation(row);
   const isPending = row.pending === true;
   const genericActionsBlocked = Boolean(protectedReason) && !ccWorkflowStatus;
   const bankAccountLabel = formatBankAccountLabel(row);
@@ -130,7 +136,15 @@ function BookkeepingTransactionMirrorRow({
     ? (row.suggestedAccountName || row.glAccountName ? `${row.suggestedAccountName || row.glAccountName} · Suggested` : "Pending")
     : row.final_qbo_account_name || row.glAccountName || row.suggestedAccountName || "Uncategorized";
   const flags = buildTransactionFlags(row);
-  const ccAccounts = (accounts || []).filter(isQboCreditCardAccount);
+  const ccAccounts = (accounts || []).filter((account) => {
+    if (ccOrientation.counterpartAccountType === "Bank") {
+      return isQboBankAccount(account) && String(account.id) !== String(row.source_qbo_account_id || "");
+    }
+    if (ccOrientation.counterpartAccountType === "CreditCard") {
+      return isQboCreditCardAccount(account) && String(account.id) !== String(row.source_qbo_account_id || "");
+    }
+    return false;
+  });
   const ccAction = ccPaymentActionState?.[row.id] || {};
 
   return (
@@ -170,6 +184,8 @@ function BookkeepingTransactionMirrorRow({
             value={selectedAccountId}
             accounts={ccAccounts}
             statusLabel={ccWorkflowStatus.label}
+            targetLabel={ccOrientation.label}
+            placeholder={ccOrientation.placeholder}
             matched={ccWorkflowStatus.matched}
             matchedLabel={row.cc_payment_pair_counterpart_account_name ? `${formatMoney(row.cc_payment_pair_counterpart_amount)} · ${row.cc_payment_pair_counterpart_account_name}` : ""}
             error={ccAction.error}

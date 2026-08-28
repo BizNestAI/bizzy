@@ -104,12 +104,18 @@ test("dedicated credit-card payment match routes and UI do not use ordinary COA 
   assert.match(pairService, /confirmCreditCardPaymentMatchForTransaction/);
   assert.match(pairService, /targetQboAccountId/);
   assert.match(pairService, /createSafeCreditCardPaymentPairForRow/);
+  assert.match(pairService, /derivePairSourceOrientation/);
   assert.match(feed, /deriveCreditCardPaymentStatus/);
+  assert.match(feed, /deriveCreditCardPaymentOrientation/);
   assert.match(feed, /CreditCardPaymentMatchControl/);
-  assert.match(feed, /accounts\.filter\(isQboCreditCardAccount\)/);
+  assert.match(feed, /counterpartAccountType === "Bank"/);
+  assert.match(feed, /counterpartAccountType === "CreditCard"/);
+  assert.match(feed, /isQboBankAccount/);
+  assert.match(feed, /isQboCreditCardAccount/);
   assert.doesNotMatch(feed, /onCreateAccount=\{!isCcPayment/);
   assert.match(mirror, /CreditCardPaymentMatchControl/);
-  assert.match(mirror, /accounts \|\| \[\]\)\.filter\(isQboCreditCardAccount\)/);
+  assert.match(mirror, /counterpartAccountType === "Bank"/);
+  assert.match(mirror, /counterpartAccountType === "CreditCard"/);
 });
 
 test("confirm-match creates/reuses a Plaid pair only and does not call QBO posting", () => {
@@ -119,7 +125,7 @@ test("confirm-match creates/reuses a Plaid pair only and does not call QBO posti
     pairService.indexOf("export async function createManualCreditCardPaymentPair")
   );
 
-  assert.match(pairService, /validateBusinessQboCreditCardAccount/);
+  assert.match(pairService, /validateBusinessQboPaymentAccountType/);
   assert.match(body, /targetQboAccountId/);
   assert.match(body, /linkCategorizationToCreditCardPair/);
   assert.doesNotMatch(body, /createQboTransfer|postSingleBookkeepingTransactionNow|claimCreditCardPaymentPairPosting|getQBOClient/);

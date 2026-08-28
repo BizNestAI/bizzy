@@ -230,26 +230,42 @@ async function fetchPlaidAccountDisplayMap({ db = supabase, businessId, plaidAcc
   const ids = Array.from(new Set((plaidAccountIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
   if (!ids.length || !businessId || typeof db?.from !== "function") return new Map();
 
-  const { data, error } = await db
-    .from("plaid_accounts")
-    .select("plaid_account_id,name,official_name,mask,type,subtype,institution_name,institution")
-    .eq("business_id", businessId)
-    .in("plaid_account_id", ids);
+  const [{ data, error }, { data: mappings, error: mappingError }] = await Promise.all([
+    db
+      .from("plaid_accounts")
+      .select("plaid_account_id,name,official_name,mask,type,subtype,institution_name,institution")
+      .eq("business_id", businessId)
+      .in("plaid_account_id", ids),
+    db
+      .from("plaid_qbo_account_mappings")
+      .select("plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type")
+      .eq("business_id", businessId)
+      .in("plaid_account_id", ids),
+  ]);
 
   if (error) return new Map();
+  const mappingByPlaidId = mappingError
+    ? new Map()
+    : new Map((mappings || []).map((row) => [String(row.plaid_account_id), row]));
 
   return new Map((data || []).map((account) => [
     String(account.plaid_account_id),
-    {
-      bank_account: formatPlaidAccountDisplayLabel(account),
-      currentAccount: formatPlaidAccountDisplayLabel(account),
-      account_name: account.name || null,
-      account_official_name: account.official_name || null,
-      account_mask: account.mask || null,
-      account_type: account.type || null,
-      account_subtype: account.subtype || null,
-      institution_name: account.institution_name || account.institution || null,
-    },
+    (() => {
+      const mapping = mappingByPlaidId.get(String(account.plaid_account_id));
+      return {
+        bank_account: formatPlaidAccountDisplayLabel(account),
+        currentAccount: formatPlaidAccountDisplayLabel(account),
+        account_name: account.name || null,
+        account_official_name: account.official_name || null,
+        account_mask: account.mask || null,
+        account_type: account.type || null,
+        account_subtype: account.subtype || null,
+        institution_name: account.institution_name || account.institution || null,
+        source_qbo_account_id: mapping?.qbo_account_id || null,
+        source_qbo_account_name: mapping?.qbo_account_name || null,
+        source_qbo_account_type: mapping?.qbo_account_type || null,
+      };
+    })(),
   ]));
 }
 

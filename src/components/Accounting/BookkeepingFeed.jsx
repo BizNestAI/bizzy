@@ -2,7 +2,12 @@ import React from "react";
 import ReactDOM from "react-dom";
 import { CreditCard, Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
-import { deriveCreditCardPaymentStatus, isQboCreditCardAccount } from "../../services/bookkeeping/creditCardPaymentStatus.js";
+import {
+  deriveCreditCardPaymentOrientation,
+  deriveCreditCardPaymentStatus,
+  isQboBankAccount,
+  isQboCreditCardAccount,
+} from "../../services/bookkeeping/creditCardPaymentStatus.js";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
@@ -289,6 +294,8 @@ export function CreditCardPaymentMatchControl({
   value = "",
   accounts = [],
   statusLabel = "Credit Card Payment · Needs Match",
+  targetLabel = "Match payment to",
+  placeholder = "Match payment to...",
   matched = false,
   transferLabel = "",
   matchedLabel = "",
@@ -306,7 +313,7 @@ export function CreditCardPaymentMatchControl({
   const currentAccount = accounts.find((acct) => String(acct.id) === String(value));
   const buttonLabel = matched
     ? statusLabel
-    : currentAccount?.name || "Match payment to...";
+    : currentAccount?.name || placeholder;
 
   const syncMenuPosition = React.useCallback(() => {
     const el = ref.current;
@@ -355,19 +362,8 @@ export function CreditCardPaymentMatchControl({
       }`}>
         <div className="flex min-w-0 items-center justify-between gap-2">
           <span className="min-w-0 truncate text-[10px] font-semibold leading-tight">{statusLabel}</span>
-          {!matched && onUseCoa ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onUseCoa();
-              }}
-              className="shrink-0 rounded-md border border-white/12 bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-semibold text-white/70 hover:border-cyan-300/35 hover:text-cyan-100"
-            >
-              Use COA
-            </button>
-          ) : null}
         </div>
+        {!matched ? <div className="mt-0.5 truncate text-[9px] font-medium text-white/52">{targetLabel}</div> : null}
         {transferLabel ? <div className="mt-0.5 truncate text-[9px] text-white/58">{transferLabel}</div> : null}
         {matchedLabel ? <div className="mt-0.5 truncate text-[9px] text-white/50">{matchedLabel}</div> : null}
         {!matched ? (
@@ -449,7 +445,7 @@ export function CreditCardPaymentMatchControl({
                       onUseCoa();
                     }}
                   >
-                    Use regular COA dropdown
+                    Not a credit card payment
                   </button>
                 ) : null}
               </div>
@@ -528,7 +524,7 @@ export default function BookkeepingFeed({
   readOnly = false,
 }) {
   // Column widths (px) — draggable like QuickBooks
-  const [colWidths, setColWidths] = React.useState([36, 90, 220, 160, 170, 100, 250]);
+  const [colWidths, setColWidths] = React.useState([36, 90, 220, 160, 245, 105, 120]);
   const containerRef = React.useRef(null);
   const scrollAreaRef = React.useRef(null);
   const [containerWidth, setContainerWidth] = React.useState(null);
@@ -819,6 +815,7 @@ export default function BookkeepingFeed({
             const isCcPayment = !ccRejected && hasCcPair;
             const ccWorkflowStatus = deriveCreditCardPaymentStatus(txn);
             const isCcPaymentWorkflow = Boolean(ccWorkflowStatus);
+            const ccOrientation = deriveCreditCardPaymentOrientation(txn);
             const ccPairRole = txn.cc_payment_pair_role || txn.meta?.cc_payment_pair_role || null;
             const ccTargetId =
               txn.cc_payment_transfer_target_qbo_account_id ||
@@ -854,7 +851,15 @@ export default function BookkeepingFeed({
             const ccMatchedLabel = isCcPayment && ccMatchedParts.length
               ? `Matched to ${ccMatchedParts.join(" · ")}`
               : null;
-            const ccSelectableAccounts = accounts.filter(isQboCreditCardAccount);
+            const ccSelectableAccounts = accounts.filter((account) => {
+              if (ccOrientation.counterpartAccountType === "Bank") {
+                return isQboBankAccount(account) && String(account.id) !== String(txn.source_qbo_account_id || "");
+              }
+              if (ccOrientation.counterpartAccountType === "CreditCard") {
+                return isQboCreditCardAccount(account) && String(account.id) !== String(txn.source_qbo_account_id || "");
+              }
+              return false;
+            });
             const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (readOnly ? "" : txn.accountId) ?? "";
             const selectedCcTargetValue = accountSelections.get(txn.id) ?? ccTargetId ?? "";
             const readOnlyGlLabel =
@@ -956,7 +961,7 @@ export default function BookkeepingFeed({
                   </button>
                 ) : null}
               </div>
-              <div className="flex flex-col items-stretch gap-1 text-slate-200 text-[11px] leading-tight whitespace-nowrap overflow-visible relative z-[120]">
+              <div className="relative z-[20] flex min-w-0 flex-col items-stretch gap-1 overflow-hidden text-slate-200 text-[11px] leading-tight whitespace-nowrap">
                 {isPosted ? (
                   <span className="inline-flex w-fit items-center rounded-full px-2 py-[2px] text-[10px] font-semibold bg-emerald-500/10 text-emerald-200 border border-emerald-500/40">
                     Posted to QuickBooks
@@ -974,6 +979,8 @@ export default function BookkeepingFeed({
                     value={selectedCcTargetValue}
                     accounts={ccSelectableAccounts}
                     statusLabel={ccWorkflowStatus.label}
+                    targetLabel={ccOrientation.label}
+                    placeholder={ccOrientation.placeholder}
                     matched={ccWorkflowStatus.matched}
                     transferLabel={ccTransferLabel}
                     matchedLabel={ccMatchedLabel}
