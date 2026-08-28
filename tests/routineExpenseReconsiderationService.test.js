@@ -122,6 +122,12 @@ class Query {
   }
   upsert(rows) {
     this.upsertRows = Array.isArray(rows) ? rows : [rows];
+    if (this.table === "transaction_categorizations") {
+      const missingProvenance = this.upsertRows.find((row) => row.decided_by === null || row.decided_by === undefined || row.decided_by === "");
+      if (missingProvenance) {
+        throw new Error("null value in column \"decided_by\" of relation \"transaction_categorizations\" violates not-null constraint");
+      }
+    }
     const keyFor = (row) => {
       if (this.table === "transaction_categorizations") return `${row.business_id}|${row.transaction_id}`;
       if (this.table === "business_canonical_qbo_account_mappings") return `${row.business_id}|${row.qbo_env}|${row.realm_id}|${row.canonical_account_key}`;
@@ -323,6 +329,8 @@ test("approval-backed same-business vendor rule promotes stale Needs Review row 
   assert.equal(row.final_qbo_account_name, "Transportation");
   assert.equal(row.meta.evidence_source, "approved_business_rule");
   assert.equal(row.meta.confidence_tier, "very_high");
+  assert.equal(row.decided_by, "bizzi");
+  assert.ok(row.decided_at);
   assert.equal(row.post_after, null);
   assert.equal(row.qbo_txn_id || null, null);
   assert.equal(state.createCount, 0);
@@ -361,6 +369,8 @@ test("old Needs Review ParkMobile Transportation row is reconsidered to Parking/
   assert.equal(row.suggested_canonical_account_key, "parking_tolls");
   assert.equal(row.final_qbo_account_name, "Parking/Tolls");
   assert.equal(row.final_qbo_account_name !== "Transportation", true);
+  assert.equal(row.decided_by, "bizzi");
+  assert.ok(row.decided_at);
   assert.equal(state.createCount, 0);
 });
 
@@ -428,6 +438,8 @@ test("specific SaaS universal merchant evidence can promote OpenAI to existing S
   assert.equal(row.final_qbo_account_name, "Software");
   assert.equal(row.meta.evidence_source, "specific_universal_vendor");
   assert.equal(row.meta.original_confidence, "medium");
+  assert.equal(row.decided_by, "bizzi");
+  assert.ok(row.decided_at);
   assert.equal(row.post_after, null);
   assert.equal(row.qbo_txn_id || null, null);
   assert.equal(state.createCount, 0);
@@ -461,6 +473,8 @@ test("strong universal merchant can resolve to an existing semantically compatib
   assert.equal(row.final_qbo_account_name, "Lyft/Uber");
   assert.equal(row.suggested_canonical_account_key, "transportation");
   assert.equal(row.meta.semantic_coa_resolved, true);
+  assert.equal(row.decided_by, "bizzi");
+  assert.ok(row.decided_at);
   assert.equal(state.createCount, 0);
 });
 
@@ -494,6 +508,8 @@ test("ParkMobile can resolve to existing Transportation account when canonical P
   assert.equal(row.final_qbo_account_name, "Transportation");
   assert.equal(row.meta.semantic_coa_resolved, true);
   assert.equal(row.meta.semantic_coa_match.matched_intent, "transportation");
+  assert.equal(row.decided_by, "bizzi");
+  assert.ok(row.decided_at);
   assert.equal(state.createCount, 0);
 });
 
@@ -531,6 +547,7 @@ test("Plaid-only medium suggestion can remain visible while lifecycle stays Need
   assert.equal(row.status, "needs_review");
   assert.equal(row.suggested_qbo_account_name, "Meals");
   assert.equal(row.final_qbo_account_id, null);
+  assert.equal(row.decided_by, "plaid_mapping");
   assert.equal(row.meta.auto_handle_decision.eligible, false);
 });
 

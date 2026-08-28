@@ -66,6 +66,10 @@ function normalizeSource(source = "") {
   return String(source || "backlog_reconsideration").toLowerCase();
 }
 
+function categorizationProvenance(cat = {}, fallback = "backlog_reconsideration") {
+  return String(cat.decided_by || fallback || "bizzi").trim() || "bizzi";
+}
+
 function accountFromCategorization(cat = {}) {
   return {
     id: cat.suggested_qbo_account_id || cat.final_qbo_account_id || null,
@@ -294,7 +298,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
 
   let catQuery = db
     .from("transaction_categorizations")
-    .select("transaction_id,business_id,status,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key,final_canonical_account_key,confidence,meta,final_qbo_account_id,final_qbo_account_name,decided_by,post_after,qbo_txn_id")
+    .select("transaction_id,business_id,status,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key,final_canonical_account_key,confidence,meta,final_qbo_account_id,final_qbo_account_name,decided_by,decided_at,post_after,qbo_txn_id")
     .eq("business_id", businessId)
     .in("status", ["needs_review", "uncategorized"])
     .is("qbo_txn_id", null)
@@ -483,6 +487,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         confidence: cat.confidence || "high",
         status: cat.status || "needs_review",
         post_after: null,
+        decided_by: categorizationProvenance(cat, "vendor_rule"),
+        decided_at: cat.decided_at || null,
         meta: {
           ...decisionMeta,
           auto_handled_reason: decision.block_reason || decision.reason,
@@ -678,6 +684,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         confidence: universalHint.confidence || "high",
         status: "needs_review",
         post_after: null,
+        decided_by: categorizationProvenance(cat, "universal_hint"),
+        decided_at: cat.decided_at || null,
         meta: {
           ...decisionMeta,
           auto_handled_reason: decision.reason || canonicalResolution?.reason || "canonical_setup_required",
@@ -766,6 +774,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         confidence: cat.confidence || meta.confidence || "medium",
         status: cat.status || "needs_review",
         post_after: null,
+        decided_by: categorizationProvenance(cat, source || "backlog_reconsideration"),
+        decided_at: cat.decided_at || null,
         meta: withCategorizationPolicyVersion({
           ...decisionMeta,
           auto_handled_reason: decision.block_reason || decision.reason || canonicalAccount.reason || "review_required",
