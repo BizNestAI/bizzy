@@ -162,7 +162,7 @@ test("credit-card-payment UI exposes transfer target state instead of only a gen
   assert.match(txFeedService, /cc_payment_transfer_target_qbo_account_name/);
   assert.match(feed, /Credit Card Payment/);
   assert.match(feed, /ccSelectableAccounts/);
-  assert.match(feed, /type === "creditcard"/);
+  assert.match(feed, /isQboCreditCardAccount/);
   assert.match(page, /newAccountType/);
 });
 

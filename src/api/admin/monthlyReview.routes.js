@@ -46,6 +46,7 @@ import {
   approveBookkeepingTransactions,
   BookkeepingApprovalError,
 } from "../../services/bookkeeping/bookkeepingApprovalService.js";
+import { confirmCreditCardPaymentMatchForTransaction } from "../../services/bookkeeping/creditCardPaymentPairService.js";
 import {
   BookkeepingReclassificationError,
   reclassifyBookkeepingTransaction,
@@ -78,7 +79,7 @@ const SECTION_DEFS = [
 ];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES = new Set(["needs_review", "handled"]);
+const MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES = new Set(["needs_review", "handled", "pending"]);
 const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_DEFAULT = 25;
 const MONTHLY_REVIEW_BOOKKEEPING_PAGE_SIZE_MAX = 100;
 const MONTHLY_REVIEW_QBO_PNL_DETAIL_PAGE_SIZE_DEFAULT = 100;
@@ -487,7 +488,7 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
     if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
 
     const [rangeStart, rangeEnd] = monthBounds(month);
-    const [needsReview, handled] = await Promise.all([
+    const [needsReview, handled, pending] = await Promise.all([
       countBookkeepingTransactions({
         businessId,
         statusFilter: "needs_review",
@@ -498,6 +499,13 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
       countBookkeepingTransactions({
         businessId,
         statusFilter: "handled",
+        accountId,
+        rangeStart,
+        rangeEnd,
+      }),
+      countBookkeepingTransactions({
+        businessId,
+        statusFilter: "pending",
         accountId,
         rangeStart,
         rangeEnd,
@@ -513,6 +521,7 @@ router.get("/businesses/:businessId/bookkeeping/transactions/counts", async (req
       counts: {
         needs_review: needsReview,
         handled,
+        pending,
       },
       source_contract: {
         service: "bookkeepingTransactionFeedService",
@@ -587,6 +596,43 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
   } catch (e) {
     console.error("[monthly-review] bookkeeping feed failed", e?.message || e);
     sendMonthlyReviewError(res, "monthly_review_bookkeeping_feed_failed", "Could not load bookkeeping transactions.", e);
+  }
+});
+
+router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/credit-card-payment/confirm-match", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    const transactionId = req.params.transactionId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    if (!UUID_RE.test(String(transactionId))) return res.status(400).json({ ok: false, error: "invalid_transaction_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    await assertRunTransactionInSelectedMonth({ business_id: businessId, review_month: month }, transactionId);
+    const targetQboAccountId = req.body?.target_qbo_account_id || req.body?.targetQboAccountId || null;
+    if (!targetQboAccountId) return res.status(400).json({ ok: false, error: "missing_target_qbo_account_id" });
+
+    const result = await confirmCreditCardPaymentMatchForTransaction({
+      businessId,
+      transactionId,
+      targetQboAccountId,
+    });
+    if (result?.matched !== true) {
+      return res.status(result?.code === "cc_payment_pair_ambiguous" ? 409 : 404).json({
+        ok: false,
+        error: result?.code || "cc_payment_no_matching_counterpart",
+        message: result?.message || "No matching opposite-side payment was found yet.",
+        candidates: result?.candidates || [],
+      });
+    }
+    return res.json({
+      ...result,
+      business_id: businessId,
+      month,
+      qbo_provider_writes: false,
+      qbo_transaction_writes: false,
+    });
+  } catch (e) {
+    console.error("[monthly-review] credit-card payment match failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_cc_payment_match_failed", "Could not match credit-card payment.", e);
   }
 });
 

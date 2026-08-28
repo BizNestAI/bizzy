@@ -3,6 +3,7 @@ import { CoaDropdown } from "./BookkeepingFeed.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
+import { deriveCreditCardPaymentStatus, isQboCreditCardAccount } from "../../services/bookkeeping/creditCardPaymentStatus.js";
 
 const BADGE_BASE = "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium";
 const MIRROR_TABLE_GRID = "grid grid-cols-[92px_minmax(260px,1.55fr)_minmax(170px,0.9fr)_minmax(240px,1fr)_minmax(150px,0.72fr)_minmax(220px,0.88fr)]";
@@ -18,6 +19,8 @@ export default function BookkeepingTransactionMirrorTable({
   onReclassify,
   onPost,
   onRetry,
+  onConfirmCcPaymentMatch,
+  ccPaymentActionState = {},
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -55,6 +58,8 @@ export default function BookkeepingTransactionMirrorTable({
             onReclassify={onReclassify}
             onPost={onPost}
             onRetry={onRetry}
+            onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
+            ccPaymentActionState={ccPaymentActionState}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
             accountTypes={accountTypes}
@@ -76,6 +81,8 @@ function BookkeepingTransactionMirrorRow({
   onReclassify,
   onPost,
   onRetry,
+  onConfirmCcPaymentMatch,
+  ccPaymentActionState,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -98,11 +105,19 @@ function BookkeepingTransactionMirrorRow({
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const protectedReason = getProtectedWorkflowReason(row);
+  const ccWorkflowStatus = deriveCreditCardPaymentStatus(row);
+  const isPending = row.pending === true;
   const genericActionsBlocked = Boolean(protectedReason);
   const bankAccountLabel = formatBankAccountLabel(row);
   const bankAccountMeta = formatBankAccountMeta(row);
-  const glAccountLabel = row.final_qbo_account_name || row.glAccountName || row.suggestedAccountName || "Uncategorized";
+  const glAccountLabel = ccWorkflowStatus
+    ? ccWorkflowStatus.label
+    : isPending
+    ? (row.suggestedAccountName || row.glAccountName ? `${row.suggestedAccountName || row.glAccountName} · Suggested` : "Pending")
+    : row.final_qbo_account_name || row.glAccountName || row.suggestedAccountName || "Uncategorized";
   const flags = buildTransactionFlags(row);
+  const ccAccounts = (accounts || []).filter(isQboCreditCardAccount);
+  const ccAction = ccPaymentActionState?.[row.id] || {};
 
   return (
     <div className={`${MIRROR_TABLE_GRID} items-center gap-3 px-4 py-3 text-sm text-white/75`}>
@@ -136,10 +151,41 @@ function BookkeepingTransactionMirrorRow({
       </div>
 
       <div className="min-w-0">
-        {genericActionsBlocked ? (
+        {ccWorkflowStatus ? (
+          <div className={`rounded-lg border px-2.5 py-2 ${
+            ccWorkflowStatus.matched
+              ? "border-emerald-300/25 bg-emerald-300/[0.08] text-emerald-100"
+              : "border-amber-300/25 bg-amber-300/[0.08] text-amber-100"
+          }`}>
+            <div className="truncate text-xs font-semibold">{ccWorkflowStatus.label}</div>
+            {row.cc_payment_pair_counterpart_account_name ? (
+              <div className="truncate text-[11px] text-white/45">
+                {formatMoney(row.cc_payment_pair_counterpart_amount)} · {row.cc_payment_pair_counterpart_account_name}
+              </div>
+            ) : null}
+            {!ccWorkflowStatus.matched ? (
+              <div className="mt-2 space-y-1.5">
+                <select
+                  value={selectedAccountId}
+                  onChange={(e) => setSelectedAccountId(e.target.value)}
+                  disabled={!ccAccounts.length}
+                  className="w-full rounded-md border border-white/12 bg-black/30 px-2 py-1 text-[11px] text-white outline-none focus:border-emerald-300/60 [color-scheme:dark]"
+                >
+                  <option value="">Match payment to...</option>
+                  {ccAccounts.map((acct) => (
+                    <option key={acct.id} value={acct.id}>{acct.name}</option>
+                  ))}
+                </select>
+                {ccAction.error ? <div className="text-[10px] text-amber-100/80">{ccAction.error}</div> : null}
+              </div>
+            ) : null}
+          </div>
+        ) : isPending || genericActionsBlocked ? (
           <>
             <div className="truncate text-white/75">{glAccountLabel}</div>
-            {row.suggestedAccountName && !row.final_qbo_account_name ? (
+            {isPending ? (
+              <div className="truncate text-xs text-amber-100/65">Pending bank transaction</div>
+            ) : row.suggestedAccountName && !row.final_qbo_account_name ? (
               <div className="truncate text-xs text-white/40">Suggested</div>
             ) : null}
           </>
@@ -179,7 +225,17 @@ function BookkeepingTransactionMirrorRow({
           </div>
         ) : null}
         <div className="flex flex-wrap gap-1.5">
-          {isNeedsReviewFeed && !genericActionsBlocked ? (
+          {ccWorkflowStatus && !ccWorkflowStatus.matched ? (
+            <button
+              type="button"
+              onClick={() => onConfirmCcPaymentMatch?.(row, selectedAccountId)}
+              disabled={!selectedAccountId || isActionBusy("ccmatch") || ccAction.loading}
+              className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
+            >
+              {isActionBusy("ccmatch") || ccAction.loading ? "Matching..." : "Confirm Match"}
+            </button>
+          ) : null}
+          {isNeedsReviewFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus ? (
             <button
               type="button"
               onClick={() => onApprove?.(row, selectedAccountId)}
@@ -189,7 +245,7 @@ function BookkeepingTransactionMirrorRow({
               {isActionBusy("approve") ? "Approving..." : "Approve"}
             </button>
           ) : null}
-          {isHandledFeed && !genericActionsBlocked ? (
+          {isHandledFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus ? (
             <button
               type="button"
               onClick={() => onReclassify?.(row, selectedAccountId)}
@@ -201,7 +257,7 @@ function BookkeepingTransactionMirrorRow({
           ) : null}
         </div>
         <div className="mt-1 flex flex-wrap gap-1.5">
-          {isHandledFeed && !genericActionsBlocked && !isPosted && !isFailed && !isQueued ? (
+          {isHandledFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus && !isPosted && !isFailed && !isQueued ? (
             <button
               type="button"
               onClick={() => onPost?.(row)}
@@ -211,7 +267,7 @@ function BookkeepingTransactionMirrorRow({
               {isActionBusy("post") ? "Posting..." : "Post to QBO"}
             </button>
           ) : null}
-          {isHandledFeed && !genericActionsBlocked && isFailed ? (
+          {isHandledFeed && !genericActionsBlocked && !ccWorkflowStatus && isFailed ? (
             <button
               type="button"
               onClick={() => onRetry?.(row)}

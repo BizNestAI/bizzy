@@ -72,6 +72,10 @@ const BOOKKEEPING_FEED_CONFIG = {
     label: "Handled in Books Review",
     description: "Exact selected-month Books Review Handled population.",
   },
+  pending: {
+    label: "Pending Bank Transactions",
+    description: "Plaid transactions waiting to settle before bookkeeping action.",
+  },
 };
 
 function buildInitialBookkeepingFeeds() {
@@ -110,6 +114,7 @@ export default function MonthlyReviewConsole() {
   const [bookkeepingReconsideration, setBookkeepingReconsideration] = useState({ loading: false, message: "", error: "" });
   const [busyFeedActions, setBusyFeedActions] = useState({});
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
+  const [ccPaymentActionState, setCcPaymentActionState] = useState({});
   const [loadingBusinesses, setLoadingBusinesses] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingLedger, setLoadingLedger] = useState(false);
@@ -701,6 +706,48 @@ export default function MonthlyReviewConsole() {
     setBookkeepingFeeds((current) => patchBookkeepingFeedsAfterReclassificationState(current, row, accountId, result, sourceLedger));
     setSourceLedger((current) => patchSourceLedgerTransaction(current, nextRow));
   }, [sourceLedger]);
+
+  const handleMirrorConfirmCreditCardPaymentMatch = useCallback(async (row, targetQboAccountId) => {
+    if (!selectedBusinessId || !row?.id || !targetQboAccountId) return;
+    const key = `ccmatch:${row.id}`;
+    setBusyFeedActions((current) => ({ ...current, [key]: true }));
+    setCcPaymentActionState((current) => ({ ...current, [row.id]: { loading: true, error: "" } }));
+    try {
+      const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(row.id)}/credit-card-payment/confirm-match`, {
+        method: "POST",
+        body: {
+          month,
+          target_qbo_account_id: targetQboAccountId,
+        },
+      });
+      setCcPaymentActionState((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+      await loadBookkeepingFeedCounts();
+      await Promise.all(Object.keys(BOOKKEEPING_FEED_CONFIG).map((status) => (
+        bookkeepingFeeds[status]?.expanded ? loadBookkeepingFeed(status, { reset: true }) : Promise.resolve()
+      )));
+      if (result?.pair?.id) {
+        setBookkeepingReconsideration({ loading: false, error: "", message: "Credit Card Payment matched. QBO Transfer posting remains separate." });
+      }
+    } catch (e) {
+      setCcPaymentActionState((current) => ({
+        ...current,
+        [row.id]: {
+          loading: false,
+          error: e?.body?.message || e?.message || "No matching opposite-side payment was found yet.",
+        },
+      }));
+    } finally {
+      setBusyFeedActions((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+    }
+  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, month, selectedBusinessId]);
 
   const runBookkeepingFeedAction = useCallback(async (actionKey, row, accountId = null) => {
     if (!detail?.run?.id || !row?.id) return;
@@ -1428,6 +1475,8 @@ export default function MonthlyReviewConsole() {
                   onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
                   onPost={(row) => runBookkeepingFeedAction("post", row)}
                   onRetry={(row) => runBookkeepingFeedAction("retry", row)}
+                  onConfirmCcPaymentMatch={handleMirrorConfirmCreditCardPaymentMatch}
+                  ccPaymentActionState={ccPaymentActionState}
                   onCreateAccount={createMonthlyReviewQboAccount}
                   onCreatedAccountSelect={injectSourceLedgerAccount}
                   accountTypes={qboAccountTypes}
@@ -1530,6 +1579,8 @@ function BookkeepingFeedMirrorPanels({
   onReclassify,
   onPost,
   onRetry,
+  onConfirmCcPaymentMatch,
+  ccPaymentActionState,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -1539,7 +1590,7 @@ function BookkeepingFeedMirrorPanels({
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 pb-3">
         <div>
           <div className="text-xs uppercase tracking-[0.18em] text-emerald-100/70">Books Review Mirror</div>
-          <h2 className="mt-1 text-lg font-semibold text-white">Needs Review / Handled</h2>
+          <h2 className="mt-1 text-lg font-semibold text-white">Needs Review / Handled / Pending</h2>
           <p className="mt-1 text-xs text-white/45">Selected-month transactions from the same bounded Books Review source.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -1595,6 +1646,8 @@ function BookkeepingFeedMirrorPanels({
             onReclassify={onReclassify}
             onPost={onPost}
             onRetry={onRetry}
+            onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
+            ccPaymentActionState={ccPaymentActionState}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
             accountTypes={accountTypes}
@@ -1620,6 +1673,8 @@ function BookkeepingFeedMirrorSection({
   onReclassify,
   onPost,
   onRetry,
+  onConfirmCcPaymentMatch,
+  ccPaymentActionState,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -1671,6 +1726,8 @@ function BookkeepingFeedMirrorSection({
               onReclassify={onReclassify}
               onPost={onPost}
               onRetry={onRetry}
+              onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
+              ccPaymentActionState={ccPaymentActionState}
               onCreateAccount={onCreateAccount}
               onCreatedAccountSelect={onCreatedAccountSelect}
               accountTypes={accountTypes}

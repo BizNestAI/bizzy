@@ -167,12 +167,13 @@ router.get("/transactions/counts", requireAuth, async (req, res) => {
   const rangeParam = (req.query?.range || "this_month").toLowerCase();
 
   try {
-    const [needsReview, handled, posted] = await Promise.all([
+    const [needsReview, handled, posted, pending] = await Promise.all([
       countBookkeepingTransactions({ businessId, statusFilter: "needs_review", accountId, rangeParam }),
       countBookkeepingTransactions({ businessId, statusFilter: "handled", accountId, rangeParam }),
       countBookkeepingTransactions({ businessId, statusFilter: "posted", accountId, rangeParam }),
+      countBookkeepingTransactions({ businessId, statusFilter: "pending", accountId, rangeParam }),
     ]);
-    const counts = { needs_review: needsReview, handled, posted };
+    const counts = { needs_review: needsReview, handled, posted, pending };
 
     return res.json({ ok: true, counts });
   } catch (err) {

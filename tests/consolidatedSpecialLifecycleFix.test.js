@@ -73,7 +73,7 @@ test("unsupported unpaired credit-card payment posting artifact is no longer sho
     },
   });
 
-  assert.equal(lifecycle.key, "needs_review");
+  assert.equal(lifecycle.key, "cc_payment_needs_match");
   assert.notEqual(lifecycle.key, "failed");
 });
 

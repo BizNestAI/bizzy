@@ -1,5 +1,6 @@
 import { supabase } from "../supabaseAdmin.js";
 import { formatPlaidAccountDisplayLabel } from "./postingTraceDisplay.js";
+import { deriveCreditCardPaymentStatus, isCreditCardPaymentWorkflow } from "./creditCardPaymentStatus.js";
 
 function firstDayOfMonth() {
   const now = new Date();
@@ -47,8 +48,13 @@ function resolveRangeStart({ rangeParam = "this_month", rangeStart } = {}) {
 export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   const status = cat?.status || "needs_review";
   const isCheckTxn = cat?.meta?.is_check === true;
+  const pending = cat?.pending === true || cat?.bank_pending === true || cat?.meta?.pending === true;
   const handledView = statusFilter === "approved" || statusFilter === "handled";
   const postedView = statusFilter === "posted";
+  const pendingView = statusFilter === "pending";
+
+  if (pendingView) return pending;
+  if (pending && !postedView) return false;
 
   if (postedView) {
     const hasQbo = Boolean(cat?.qbo_txn_id);
@@ -78,13 +84,19 @@ function normalizeOperatorRequest(row = null) {
 }
 
 function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, operatorRequest = null) {
-  const suggestedId = cat.suggested_qbo_account_id || null;
-  const suggestedName = cat.suggested_qbo_account_name || null;
-  const finalId = cat.final_qbo_account_id || null;
-  const finalName = cat.final_qbo_account_name || null;
+  const specialCcPayment = isCreditCardPaymentWorkflow({
+    taxonomy_type: cat.meta?.taxonomy_type || null,
+    cc_payment_rejected: cat.meta?.cc_payment_rejected,
+    cc_payment_pair_id: cat.meta?.cc_payment_pair_id,
+    meta: cat.meta || {},
+  });
+  const suggestedId = specialCcPayment ? null : cat.suggested_qbo_account_id || null;
+  const suggestedName = specialCcPayment ? null : cat.suggested_qbo_account_name || null;
+  const finalId = specialCcPayment ? null : cat.final_qbo_account_id || null;
+  const finalName = specialCcPayment ? null : cat.final_qbo_account_name || null;
   const amount = Number(row.amount || 0);
   const dir = row.direction || (amount < 0 ? "OUTFLOW" : amount > 0 ? "INFLOW" : "UNKNOWN");
-  return {
+  const normalized = {
     id: row.id,
     plaidTransactionId: row.plaid_transaction_id || null,
     plaidAccountId: row.plaid_account_id || null,
@@ -160,6 +172,19 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     customer_response: operatorRequest?.answer_text || null,
     customer_responded_at: operatorRequest?.answered_at || null,
   };
+  const ccStatus = deriveCreditCardPaymentStatus(normalized);
+  return ccStatus
+    ? {
+        ...normalized,
+        credit_card_payment_status: ccStatus,
+        glAccountId: null,
+        glAccountName: null,
+        suggestedAccountId: null,
+        suggestedAccountName: null,
+        final_qbo_account_id: null,
+        final_qbo_account_name: null,
+      }
+    : normalized;
 }
 
 export function normalizeBookkeepingRpcRow(row = {}) {

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom";
 import { Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
+import { deriveCreditCardPaymentStatus, isQboCreditCardAccount } from "../../services/bookkeeping/creditCardPaymentStatus.js";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
@@ -318,6 +319,8 @@ export default function BookkeepingFeed({
   onUndo,
   onManualPost,
   onRejectCcPayment,
+  onConfirmCcPaymentMatch,
+  ccPaymentActionState = {},
   postingTransactionIds,
   accounts = [],
   onAccountChange,
@@ -611,6 +614,7 @@ export default function BookkeepingFeed({
               !txn.qboEntityId &&
               payeeConfidence === "high";
             const isPosted = txn.status === "posted";
+            const isPending = txn.pending === true;
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
             const fullMemo = getTransactionMemo(txn) || "No bank memo available.";
@@ -622,6 +626,8 @@ export default function BookkeepingFeed({
             const hasCcPair = Boolean(txn.cc_payment_pair_id || txn.meta?.cc_payment_pair_id);
             const isCcPaymentSuspected = !ccRejected && !hasCcPair && (txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment");
             const isCcPayment = !ccRejected && hasCcPair;
+            const ccWorkflowStatus = deriveCreditCardPaymentStatus(txn);
+            const isCcPaymentWorkflow = Boolean(ccWorkflowStatus);
             const ccPairRole = txn.cc_payment_pair_role || txn.meta?.cc_payment_pair_role || null;
             const ccTargetId =
               txn.cc_payment_transfer_target_qbo_account_id ||
@@ -640,7 +646,7 @@ export default function BookkeepingFeed({
               txn.glAccountName ||
               null;
             const ccTransferLabel = isCcPayment
-              ? `Credit Card Payment ${ccPairRole === "credit_card" ? "←" : "→"} ${ccTargetName || "select card"}`
+              ? `Credit Card Payment ${ccPairRole === "credit_card" ? "←" : "→"} ${ccTargetName || "matched account"}`
               : null;
             const ccCounterpartAmount = txn.cc_payment_pair_counterpart_amount ?? txn.meta?.cc_payment_pair_counterpart_amount ?? null;
             const ccCounterpartAccount =
@@ -657,13 +663,9 @@ export default function BookkeepingFeed({
             const ccMatchedLabel = isCcPayment && ccMatchedParts.length
               ? `Matched to ${ccMatchedParts.join(" · ")}`
               : null;
-            const ccSelectableAccounts = isCcPayment
-              ? accounts.filter((acct) => {
-                  const type = String(acct?.type || "").replace(/[\s_-]+/g, "").toLowerCase();
-                  return ccPairRole === "credit_card" ? type === "bank" : type === "creditcard";
-                })
-              : accounts;
-            const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (hasCcPair ? ccTargetId : null) ?? (readOnly ? "" : txn.accountId) ?? "";
+            const ccSelectableAccounts = accounts.filter(isQboCreditCardAccount);
+            const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? "";
+            const selectedCcTargetValue = accountSelections.get(txn.id) ?? ccTargetId ?? "";
             const readOnlyGlLabel =
               txn.glAccountName ||
               txn.final_qbo_account_name ||
@@ -676,6 +678,9 @@ export default function BookkeepingFeed({
               !isPosted &&
               txn.status !== "posted" &&
               (isCcPaymentSuspected || (isCcPayment && !["confirmed", "posted"].includes(String(txn.cc_payment_pair_status || txn.meta?.cc_payment_pair_status || "").toLowerCase())));
+            const ccAction = ccPaymentActionState?.[txn.id] || {};
+            const ccConfirmBusy = ccAction.loading === true;
+            const rowSelectable = !isPosted && !isPending && !isCcPaymentWorkflow && !readOnly;
 
             return (
               <React.Fragment key={txn.id}>
@@ -705,14 +710,14 @@ export default function BookkeepingFeed({
               <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
                 <input
                   type="checkbox"
-                  disabled={isPosted || readOnly}
+                  disabled={!rowSelectable}
                   checked={selectedIds.has(txn.id)}
                   onChange={() => {
-                    if (isPosted || readOnly) return;
+                    if (!rowSelectable) return;
                     toggleRow(txn.id);
                   }}
-                  className={`${checkboxClasses} ${(isPosted || readOnly) ? "opacity-50 cursor-not-allowed" : ""}`}
-                  title={isPosted ? "Already posted to QuickBooks." : readOnly ? "Billing required to edit transactions." : undefined}
+                  className={`${checkboxClasses} ${!rowSelectable ? "opacity-50 cursor-not-allowed" : ""}`}
+                  title={isPending ? "Pending transactions are not actionable yet." : isCcPaymentWorkflow ? "Use the credit-card payment matching workflow." : isPosted ? "Already posted to QuickBooks." : readOnly ? "Billing required to edit transactions." : undefined}
                 />
               </div>
               <div className="text-slate-300 truncate">{fmtDate(txn.date)}</div>
@@ -766,24 +771,67 @@ export default function BookkeepingFeed({
                     Posted to QuickBooks
                   </span>
                 ) : null}
-                {ccTransferLabel ? (
+                {isPending ? (
+                  <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
+                    <span className="truncate">Pending</span>
+                    {(txn.suggestedAccountName || txn.glAccountName) ? (
+                      <span className="truncate text-[9px] font-medium text-amber-100/65">{txn.suggestedAccountName || txn.glAccountName} · Suggested</span>
+                    ) : null}
+                  </span>
+                ) : ccWorkflowStatus ? (
+                  <div className={`rounded-lg border px-2 py-1 ${
+                    ccWorkflowStatus.matched
+                      ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-100"
+                      : "border-amber-300/25 bg-amber-400/10 text-amber-100"
+                  }`}>
+                    <div className="text-[10px] font-semibold">{ccWorkflowStatus.label}</div>
+                    {ccTransferLabel ? <div className="truncate text-[9px] text-white/60">{ccTransferLabel}</div> : null}
+                    {ccMatchedLabel ? <div className="truncate text-[9px] text-white/55">{ccMatchedLabel}</div> : null}
+                    {!ccWorkflowStatus.matched && !readOnly ? (
+                      <div className="mt-1.5 space-y-1">
+                        <select
+                          value={selectedCcTargetValue}
+                          onChange={(e) => handleAccountSelect(txn.id, e.target.value)}
+                          className="w-full rounded-md border border-white/12 bg-black/30 px-2 py-1 text-[10px] text-white outline-none focus:border-emerald-300/60 [color-scheme:dark]"
+                        >
+                          <option value="">Match payment to...</option>
+                          {ccSelectableAccounts.map((acct) => (
+                            <option key={acct.id} value={acct.id}>{acct.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          disabled={!selectedCcTargetValue || ccConfirmBusy}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onConfirmCcPaymentMatch?.(txn.id, selectedCcTargetValue);
+                          }}
+                          className="inline-flex h-6 items-center rounded-full border border-emerald-300/45 bg-emerald-500/14 px-2 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/22 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {ccConfirmBusy ? "Matching..." : "Confirm Match"}
+                        </button>
+                        {ccAction.error ? <div className="whitespace-normal text-[9px] text-amber-100/80">{ccAction.error}</div> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : ccTransferLabel ? (
                   <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100">
                     <span className="truncate">{ccTransferLabel}</span>
                     {ccMatchedLabel ? <span className="truncate text-[9px] font-medium text-emerald-100/65">{ccMatchedLabel}</span> : null}
                   </span>
                 ) : null}
-                {isCcPaymentSuspected ? (
+                {isCcPaymentSuspected && !ccWorkflowStatus ? (
                   <span className="inline-flex w-fit max-w-full rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
                     Possible credit card payment
                   </span>
                 ) : null}
-                {accounts.length > 0 ? (
+                {!isPending && !isCcPaymentWorkflow && accounts.length > 0 ? (
                   <CoaDropdown
                     value={selectedAccountValue}
                     suggestedId={txn.suggestedAccountId}
                     suggestedName={txn.suggestedAccountName || txn.glAccountName}
-                    accounts={ccSelectableAccounts}
-                    onCreateAccount={!isCcPayment ? onCreateAccount : null}
+                    accounts={accounts}
+                    onCreateAccount={onCreateAccount}
                     onCreatedAccountSelect={(account) => onCreatedAccountSelect?.(txn, account)}
                     accountTypes={accountTypes}
                     creationContext={{
@@ -800,9 +848,9 @@ export default function BookkeepingFeed({
                     }
                     onChange={(id) => handleAccountSelect(txn.id, id)}
                   />
-                ) : (
+                ) : !isPending && !isCcPaymentWorkflow ? (
                   <span className="text-slate-400 text-[11px] truncate">{readOnlyGlLabel}</span>
-                )}
+                ) : null}
                 {txn.status === "auto_approved" ? (
                   <span className="inline-flex w-fit items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-wide text-emerald-200/90">
                     Auto-approved
@@ -824,6 +872,8 @@ export default function BookkeepingFeed({
               <div className="flex justify-center pl-4" onClick={(e) => e.stopPropagation()}>
                 {isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
+                ) : isPending ? (
+                  <span className="text-[10px] text-amber-100/80">Pending</span>
                 ) : canRejectCcPayment ? (
                   <div className="flex items-center justify-center gap-1.5">
                     <button
@@ -838,19 +888,9 @@ export default function BookkeepingFeed({
                     >
                       Not CC payment
                     </button>
-                    <button
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/14 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/24 hover:border-emerald-300/90 active:scale-[0.99] disabled:opacity-45 disabled:cursor-not-allowed shadow-[0_2px_6px_rgba(0,0,0,0.2)] transition-transform"
-                      disabled={readOnly || (txn.is_check && !selectedAccountValue)}
-                      title={txn.is_check && !selectedAccountValue ? "Select a category to approve this check." : "Approve"}
-                      onClick={() => {
-                        if (readOnly) return;
-                        onApprove && onApprove(txn.id, selectedAccountValue || null);
-                      }}
-                      aria-label="Approve transaction"
-                    >
-                      ✓
-                    </button>
                   </div>
+                ) : isCcPaymentWorkflow ? (
+                  <span className="text-[10px] text-slate-400">{ccWorkflowStatus?.matched ? "Matched" : "Needs match"}</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
                   <div className="flex items-center justify-center gap-1.5">
                     <button

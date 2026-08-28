@@ -218,6 +218,22 @@ export async function rejectCreditCardPayment(businessId, txnId) {
   return res;
 }
 
+export async function confirmCreditCardPaymentMatch(businessId, txnId, targetQboAccountId) {
+  const payload = { business_id: businessId, target_qbo_account_id: targetQboAccountId };
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/credit-card-payments/${encodeURIComponent(txnId)}/confirm-match`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  if (res && res.ok === false) {
+    const err = new Error(res.message || res.error || "cc_payment_confirm_match_failed");
+    err.code = res.error || null;
+    err.body = res;
+    throw err;
+  }
+  return res;
+}
+
 export async function updateHandledTransaction(businessId, transactionId, payload = {}) {
   const body = {
     ...payload,
@@ -662,6 +678,7 @@ export default {
   approveTransactions,
   undoTransaction,
   rejectCreditCardPayment,
+  confirmCreditCardPaymentMatch,
   updateHandledTransaction,
   suggestTransactions,
   getBookkeepingProcessingStatus,

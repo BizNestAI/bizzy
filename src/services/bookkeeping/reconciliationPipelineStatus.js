@@ -1,13 +1,26 @@
 const FAILURE_STATUSES = new Set(["failed", "failed_post", "post_failed", "blocked"]);
 const APPROVED_STATUSES = new Set(["approved", "auto_approved", "handled", "failed"]);
 const NEEDS_REVIEW_STATUSES = new Set(["", "needs_review", "uncategorized"]);
+const CC_PAYMENT_META_TYPE = "cc_payment";
 
 export const PIPELINE_STATUS = {
   pending_bank_transaction: {
     key: "pending_bank_transaction",
     label: "Pending bank transaction",
     tone: "neutral",
+    kpi_group: "pending",
+  },
+  credit_card_payment_needs_match: {
+    key: "credit_card_payment_needs_match",
+    label: "Credit Card Payment · Needs Match",
+    tone: "warning",
     kpi_group: "needs_review",
+  },
+  credit_card_payment_matched: {
+    key: "credit_card_payment_matched",
+    label: "Credit Card Payment · Matched",
+    tone: "good",
+    kpi_group: "handled_not_posted",
   },
   needs_review: {
     key: "needs_review",
@@ -91,6 +104,7 @@ export function hasProvenPostingFailure(row = {}) {
 export function isBooksReviewNeedsReview(row = {}) {
   const status = normalizeStatus(row.status || row.categorization_status);
   const meta = row.meta || row.details || {};
+  if (row.pending === true || meta.pending === true) return false;
   return NEEDS_REVIEW_STATUSES.has(status) || (status === "auto_approved" && meta.is_check === true);
 }
 
@@ -146,6 +160,9 @@ export function derivePipelineStatus({ bank = {}, cat = {}, reconciliationItem =
   const status = normalizeStatus(row.status);
   const pending = bank.pending === true || row.meta?.pending === true;
   const reconciliation = deriveReconciliationEvidence(reconciliationItem);
+  const isCcPayment = row.meta?.taxonomy_type === CC_PAYMENT_META_TYPE;
+  const ccPairStatus = normalizeStatus(row.meta?.cc_payment_pair_status);
+  const ccPairId = row.meta?.cc_payment_pair_id || null;
 
   if (reconciliation?.kind === "exception") {
     return withDetail(PIPELINE_STATUS.reconciliation_exception, reconciliation.reason, {
@@ -159,6 +176,13 @@ export function derivePipelineStatus({ bank = {}, cat = {}, reconciliationItem =
     return withDetail(PIPELINE_STATUS.posted_matched, `${row.qbo_txn_type || "QBO transaction"} ${row.qbo_txn_id}`, {
       source: reconciliation?.source || "qbo_posting",
       is_pending: pending,
+    });
+  }
+
+  if (pending) {
+    return withDetail(PIPELINE_STATUS.pending_bank_transaction, "Pending in Plaid; not ready for bookkeeping action.", {
+      source: "books_review",
+      is_pending: true,
     });
   }
 
@@ -188,11 +212,16 @@ export function derivePipelineStatus({ bank = {}, cat = {}, reconciliationItem =
     });
   }
 
-  if (pending) {
-    return withDetail(PIPELINE_STATUS.needs_review, "Pending bank transaction.", {
-      source: "books_review",
-      secondary_statuses: [PIPELINE_STATUS.pending_bank_transaction],
-      is_pending: true,
+  if (isCcPayment && !row.qbo_txn_id) {
+    if (ccPairId && ["confirmed", "matched", "posted", "auto_approved"].includes(ccPairStatus || "confirmed")) {
+      return withDetail(PIPELINE_STATUS.credit_card_payment_matched, "Matched as an internal balance-sheet movement.", {
+        source: "credit_card_payment_pairs",
+        is_pending: false,
+      });
+    }
+    return withDetail(PIPELINE_STATUS.credit_card_payment_needs_match, "Needs an opposite-side payment match.", {
+      source: "credit_card_payment_pairs",
+      is_pending: false,
     });
   }
 
@@ -218,6 +247,7 @@ export function summarizePipelineStatuses(rows = []) {
       acc.plaid_count += 1;
       acc.status_counts[key] = (acc.status_counts[key] || 0) + 1;
       if (group === "needs_review") acc.needs_review_count += 1;
+      if (group === "pending") acc.pending_count += 1;
       if (group === "handled_not_posted") acc.handled_not_posted_count += 1;
       if (group === "posted_matched") acc.posted_matched_count += 1;
       if (group === "exceptions") acc.exceptions_count += 1;
@@ -230,6 +260,7 @@ export function summarizePipelineStatuses(rows = []) {
       plaid_count: 0,
       plaid_transactions_count: 0,
       needs_review_count: 0,
+      pending_count: 0,
       handled_not_posted_count: 0,
       posted_matched_count: 0,
       exceptions_count: 0,
@@ -248,6 +279,7 @@ export function finalizePipelineTotals(totals = {}) {
     plaid_transactions_count: plaidCount,
     explained_count:
       Number(totals.needs_review_count || 0) +
+      Number(totals.pending_count || 0) +
       Number(totals.handled_not_posted_count || 0) +
       Number(totals.posted_matched_count || 0) +
       Number(totals.exceptions_count || 0),

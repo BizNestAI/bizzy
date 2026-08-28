@@ -372,10 +372,17 @@ export async function findExistingCreditCardPaymentPairForTransaction({ db = def
   return data || null;
 }
 
-export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupabase, businessId, row }) {
+export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupabase, businessId, row, targetQboAccountId = null }) {
   if (!businessId || !row?.id || !row.plaid_account_id) return { status: "no_match", reason: "missing_source" };
   const existing = await findExistingCreditCardPaymentPairForTransaction({ db, businessId, transactionId: row.id });
   if (existing) return { status: "paired", pair: existing, reason: "existing_pair" };
+  let validatedTarget = null;
+  if (targetQboAccountId) {
+    validatedTarget = await validateBusinessQboCreditCardAccount(businessId, targetQboAccountId);
+    if (!validatedTarget?.ok) {
+      return { status: "no_match", reason: validatedTarget?.reason || "cc_payment_target_credit_card_required" };
+    }
+  }
   const amount = Number(row.signed_amount ?? row.amount ?? 0);
   if (!Number.isFinite(amount) || amount === 0) return { status: "no_match", reason: "invalid_amount" };
   if (!hasCreditCardPaymentSignal(row)) return { status: "no_match", reason: "missing_payment_memo" };
@@ -452,6 +459,7 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
     const checkingMapping = sourceIsChecking ? sourceMapping : candidateMapping;
     const cardMapping = sourceIsChecking ? candidateMapping : sourceMapping;
     if (!checkingMapping?.qbo_account_id || !cardMapping?.qbo_account_id) continue;
+    if (targetQboAccountId && String(cardMapping.qbo_account_id) !== String(targetQboAccountId)) continue;
     if (!issuerMatchesCheckingToCard(checkingRow, cardRow, cardAcct)) continue;
     if (!hasCreditCardPaymentSignal(checkingRow) && !hasCreditCardPaymentSignal(cardRow)) continue;
     const diff = dateDiffDays(checkingRow.date, cardRow.date);
@@ -499,6 +507,50 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
   }
   await linkCategorizationToCreditCardPair({ db, businessId, pair });
   return { status: "paired", pair, reason: "safe_pair_created" };
+}
+
+export async function confirmCreditCardPaymentMatchForTransaction({ db = defaultSupabase, businessId, transactionId, targetQboAccountId }) {
+  if (!businessId || !transactionId || !targetQboAccountId) {
+    const err = new Error("missing_cc_payment_match_target");
+    err.status = 400;
+    throw err;
+  }
+  const { data: row, error } = await db
+    .from("bank_transactions")
+    .select("id,plaid_account_id,amount,signed_amount,direction,date,name,merchant_name,counterparty_name,is_archived,pending,accounting_review_required")
+    .eq("business_id", businessId)
+    .eq("id", transactionId)
+    .eq("is_archived", false)
+    .maybeSingle();
+  if (error) throw error;
+  if (!row) {
+    const err = new Error("cc_payment_source_not_found");
+    err.status = 404;
+    throw err;
+  }
+  if (row.pending === true) {
+    return { ok: false, matched: false, code: "pending_transaction_not_matchable", message: "This payment is still pending." };
+  }
+  const result = await createSafeCreditCardPaymentPairForRow({
+    db,
+    businessId,
+    row,
+    targetQboAccountId,
+  });
+  if (result.status === "paired" && result.pair?.id) {
+    await linkCategorizationToCreditCardPair({ db, businessId, pair: result.pair });
+    return { ok: true, matched: true, pair: result.pair, reason: result.reason };
+  }
+  const code = result.reason || "cc_payment_no_matching_counterpart";
+  return {
+    ok: false,
+    matched: false,
+    code,
+    message: code === "cc_payment_pair_ambiguous"
+      ? "More than one possible opposite-side payment was found."
+      : "No matching opposite-side payment was found yet.",
+    candidates: result.candidates || [],
+  };
 }
 
 export async function createManualCreditCardPaymentPair({ db = defaultSupabase, businessId, transactionId, targetPlaidAccountId = null, targetQboAccountId = null }) {

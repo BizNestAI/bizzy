@@ -182,7 +182,7 @@ test("admin Monthly Review exposes internal-only bounded mirror endpoints", () =
   assert.match(adminRoute, /selected_month_bounds:\s*"server-side \[range_start, range_end\)"/);
   assert.match(adminRoute, /qbo_provider_writes:\s*false/);
   assert.match(adminRoute, /qbo_transaction_writes:\s*false/);
-  assert.match(adminRoute, /MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES = new Set\(\["needs_review", "handled"\]\)/);
+  assert.match(adminRoute, /MONTHLY_REVIEW_BOOKKEEPING_FEED_STATUSES = new Set\(\["needs_review", "handled", "pending"\]\)/);
   assert.match(adminRoute, /const \[rangeStart, rangeEnd\] = monthBounds\(month\)/);
   assert.match(adminRoute, /statusFilter:\s*"needs_review"[\s\S]*rangeStart[\s\S]*rangeEnd/);
   assert.match(adminRoute, /statusFilter:\s*"handled"[\s\S]*rangeStart[\s\S]*rangeEnd/);

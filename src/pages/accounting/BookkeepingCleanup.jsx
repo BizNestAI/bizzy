@@ -19,6 +19,7 @@ import {
   approveTransactions,
   undoTransaction,
   rejectCreditCardPayment,
+  confirmCreditCardPaymentMatch,
   updateHandledTransaction,
   enrichCounterparties,
   getBookkeepingProcessingStatus,
@@ -160,6 +161,7 @@ const TABS = [
   { key: "needs_review", label: "Needs Review", icon: CircleAlert },
   { key: "handled", label: "Handled", icon: CheckCircle2 },
   { key: "posted", label: "Posted", icon: UploadCloud },
+  { key: "pending", label: "Pending", icon: CircleAlert },
 ];
 
 const DATE_RANGE_OPTIONS = [
@@ -430,6 +432,8 @@ function matchesBooksTab(txn = {}, tabKey = "needs_review") {
   const status = txn.status || "needs_review";
   const handledStatuses = ["approved", "auto_approved", "failed"];
   if (tabKey === "all") return true;
+  if (tabKey === "pending") return txn.pending === true;
+  if (txn.pending === true && tabKey !== "posted") return false;
   if (tabKey === "needs_review") {
     if (status === "needs_review" || status === "uncategorized" || !status) return true;
     return status === "auto_approved" && txn.is_check === true;
@@ -491,7 +495,7 @@ function BookkeepingCleanup() {
   const [backgroundRefreshingTxns, setBackgroundRefreshingTxns] = useState(false);
   const [categorizationStatus, setCategorizationStatus] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
-  const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null });
+  const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null, pending: null });
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
   const [postingNow, setPostingNow] = useState(false);
   const [postingRunSummary, setPostingRunSummary] = useState(null);
@@ -729,7 +733,7 @@ function BookkeepingCleanup() {
   const loadTabCounts = useCallback(async () => {
     if (usingDemo) return;
     if (!businessId || !accountFilter) {
-      setTabCounts({ needs_review: null, handled: null, posted: null });
+      setTabCounts({ needs_review: null, handled: null, posted: null, pending: null });
       return;
     }
     try {
@@ -741,10 +745,11 @@ function BookkeepingCleanup() {
         needs_review: Number(counts?.needs_review || 0),
         handled: Number(counts?.handled || 0),
         posted: Number(counts?.posted || 0),
+        pending: Number(counts?.pending || 0),
       });
     } catch (e) {
       console.warn("[bookkeeping] transaction counts fetch failed", e?.message || e);
-      setTabCounts({ needs_review: null, handled: null, posted: null });
+      setTabCounts({ needs_review: null, handled: null, posted: null, pending: null });
     }
   }, [accountFilter, businessId, dateRange, usingDemo]);
 
@@ -982,7 +987,7 @@ function BookkeepingCleanup() {
         if (matchesBooksTab(txn, "posted")) acc.posted += 1;
         return acc;
       },
-      { needs_review: 0, handled: 0, posted: 0 }
+      { needs_review: 0, handled: 0, posted: 0, pending: 0 }
     );
   }, [accountFilter, dateRange, tabCounts, transactions, usingDemo]);
 
@@ -1023,7 +1028,7 @@ function BookkeepingCleanup() {
       ? categorizedTransactions.slice(start, start + rowsPerPage)
       : categorizedTransactions
     : tableTransactions;
-  const selectableRows = feedRows.filter((t) => t?.status !== "posted");
+  const selectableRows = feedRows.filter((t) => t?.status !== "posted" && t?.pending !== true && t?.taxonomy_type !== "cc_payment" && t?.meta?.taxonomy_type !== "cc_payment");
   const selectableIds = selectableRows.map((t) => t.id);
   const allVisibleSelected = selectableRows.length > 0 && selectableRows.every((txn) => selectedIds.has(txn.id));
   const pageCount = Math.max(
@@ -1242,6 +1247,29 @@ function BookkeepingCleanup() {
     } catch (e) {
       console.warn("[bookkeeping] cc payment reject failed", e?.message || e);
       window.alert(e?.message || "Could not mark this as not a credit card payment.");
+    }
+  };
+
+  const handleConfirmCreditCardPaymentMatch = async (id, targetQboAccountId) => {
+    if (!canRunAI || !businessId || !id || !targetQboAccountId) return;
+    try {
+      await confirmCreditCardPaymentMatch(businessId, id, targetQboAccountId);
+      accountOverrides.current?.delete?.(id);
+      setCountsRefreshKey((value) => value + 1);
+      await reloadTransactions();
+      await loadMappingStatus();
+    } catch (e) {
+      const message = e?.body?.message || e?.message || "No matching opposite-side payment was found yet.";
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                cc_payment_match_error: message,
+              }
+            : t
+        )
+      );
     }
   };
 
@@ -1622,7 +1650,7 @@ function BookkeepingCleanup() {
         console.log("[Books] fetching txns", { accountFilter, activeTab, dateRange, page, rowsPerPage });
       }
       const res = await fetchTransactions(businessId, {
-        status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
+        status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : activeTab === "pending" ? "pending" : "needs_review",
         account_id: accountFilter,
         range: dateRange,
         page,
@@ -1677,7 +1705,7 @@ function BookkeepingCleanup() {
               account_id: accountFilter,
             });
             const res3 = await fetchTransactions(businessId, {
-              status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : "needs_review",
+              status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : activeTab === "pending" ? "pending" : "needs_review",
               account_id: accountFilter,
               range: dateRange,
               page,
@@ -2200,6 +2228,12 @@ function BookkeepingCleanup() {
               onUndo={handleUndo}
               onManualPost={handleManualPostTransaction}
               onRejectCcPayment={handleRejectCreditCardPayment}
+              onConfirmCcPaymentMatch={handleConfirmCreditCardPaymentMatch}
+              ccPaymentActionState={Object.fromEntries(
+                transactions
+                  .filter((txn) => txn.cc_payment_match_error)
+                  .map((txn) => [txn.id, { error: txn.cc_payment_match_error }])
+              )}
               postingTransactionIds={postingTransactionIds}
               accounts={groupedChartAccounts}
               onAccountChange={handleAccountChange}

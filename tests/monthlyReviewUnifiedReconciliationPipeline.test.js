@@ -27,7 +27,8 @@ test("unified reconciliation pipeline partitions canonical monthly Plaid transac
 
   const totals = finalizePipelineTotals(summarizePipelineStatuses(canonicalRows));
   assert.equal(totals.plaid_transactions_count, 6);
-  assert.equal(totals.needs_review_count, 2);
+  assert.equal(totals.needs_review_count, 1);
+  assert.equal(totals.pending_count, 1);
   assert.equal(totals.handled_not_posted_count, 2);
   assert.equal(totals.posted_matched_count, 1);
   assert.equal(totals.exceptions_count, 1);
@@ -41,7 +42,7 @@ test("posting failed requires durable QBO mutation-attempt evidence", () => {
   );
   assert.equal(
     derivePipelineStatus({ bank: { pending: true }, cat: { status: "needs_review", post_error: "pending not postable" } }).key,
-    "needs_review"
+    "pending_bank_transaction"
   );
   assert.equal(
     derivePipelineStatus({

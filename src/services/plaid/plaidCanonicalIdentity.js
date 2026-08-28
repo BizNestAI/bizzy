@@ -31,6 +31,16 @@ export function normalizeDate(value) {
   return parsed.toISOString().slice(0, 10);
 }
 
+function dateDiffDays(a, b) {
+  const da = normalizeDate(a);
+  const db = normalizeDate(b);
+  if (!da || !db) return null;
+  const at = Date.parse(`${da}T00:00:00Z`);
+  const bt = Date.parse(`${db}T00:00:00Z`);
+  if (!Number.isFinite(at) || !Number.isFinite(bt)) return null;
+  return Math.abs((at - bt) / 86_400_000);
+}
+
 export function buildPhysicalAccountIdentity({ account = {}, item = {}, plaidEnv = null } = {}) {
   const institutionId = item.institution_id || item.institutionId || null;
   const institutionName = item.institution_name || item.institutionName || null;
@@ -141,12 +151,25 @@ export function findPendingLifecycleCandidate(incoming = {}, candidates = []) {
   const matches = (candidates || []).filter((candidate) => {
     if (!candidate?.pending) return false;
     if (candidate.physical_account_id !== physicalAccountId) return false;
-    if (normalizeMoney(candidate.signed_amount ?? candidate.amount) !== incomingAmount) return false;
+    const candidateAmount = normalizeMoney(candidate.signed_amount ?? candidate.amount);
+    if (candidateAmount == null) return false;
     const candidateMemo = normalizeIdentityText(candidate.merchant_name || candidate.name || "");
     if (candidateMemo !== incomingMemo) return false;
-    const candidateDates = new Set([normalizeDate(candidate.date), normalizeDate(candidate.authorized_date)].filter(Boolean));
-    const incomingDates = [normalizeDate(incoming.date), normalizeDate(incoming.authorized_date)].filter(Boolean);
-    return incomingDates.some((date) => candidateDates.has(date));
+    const sameDirection = Number(candidateAmount) === 0 || Number(incomingAmount) === 0
+      ? true
+      : Math.sign(Number(candidateAmount)) === Math.sign(Number(incomingAmount));
+    if (!sameDirection) return false;
+    const exactAmount = candidateAmount === incomingAmount;
+    const candidateDates = [candidate.date, candidate.authorized_date].filter(Boolean);
+    const incomingDates = [incoming.date, incoming.authorized_date].filter(Boolean);
+    const minDiff = Math.min(...candidateDates.flatMap((candidateDate) =>
+      incomingDates.map((incomingDate) => dateDiffDays(candidateDate, incomingDate)).filter((diff) => diff != null)
+    ));
+    if (!Number.isFinite(minDiff)) return false;
+    if (exactAmount) return minDiff <= 2;
+    const merchantEntityMatches = Boolean(candidate.merchant_entity_id && incoming.merchant_entity_id && String(candidate.merchant_entity_id) === String(incoming.merchant_entity_id));
+    const strongNetworkEvidence = merchantEntityMatches || incomingMemo.length >= 8;
+    return strongNetworkEvidence && minDiff <= 5;
   });
 
   return matches.length === 1 ? matches[0] : null;

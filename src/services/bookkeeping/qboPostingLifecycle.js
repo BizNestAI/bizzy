@@ -1,4 +1,5 @@
 import { hasProvenPostingFailure } from "./reconciliationPipelineStatus.js";
+import { deriveCreditCardPaymentStatus } from "./creditCardPaymentStatus.js";
 
 function formatShortDateTime(value) {
   if (!value) return "";
@@ -11,6 +12,28 @@ export function deriveQboPostingLifecycle(row = {}) {
   const status = String(row.status || "").toLowerCase();
   const hasQboTxn = Boolean(row.qbo_txn_id);
   const meta = row.meta || {};
+  const ccStatus = deriveCreditCardPaymentStatus(row);
+
+  if (row.pending === true || meta.pending === true) {
+    return {
+      key: "pending",
+      label: "Pending",
+      tone: "warning",
+      detail: "Plaid transaction is pending and is not ready for approval or QBO posting.",
+    };
+  }
+
+  if (ccStatus && !hasQboTxn) {
+    return {
+      key: ccStatus.key,
+      label: ccStatus.label,
+      tone: ccStatus.tone,
+      detail: ccStatus.matched
+        ? "Matched as an internal credit-card payment; QBO Transfer posting is separate."
+        : "Needs an opposite-side payment match before QBO posting.",
+    };
+  }
+
   const unsupportedUnpairedCcPayment =
     meta.taxonomy_type === "cc_payment" &&
     !meta.cc_payment_pair_id &&
