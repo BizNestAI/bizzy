@@ -199,10 +199,18 @@ export function canAutoHandle(transaction = {}, categorizationEvidence = {}, bus
     return block("vendor_review_required", { confidence, source, evidence });
   }
   if (HIGH_RISK_TAXONOMY_TYPES.has(taxonomyType)) {
-    return block(`${taxonomyType}_requires_review`, { confidence, source, evidence });
+    const allowedTransferException =
+      taxonomyType === "transfer_internal" &&
+      evidence.allowTaxonomyAutoHandle === true &&
+      evidence.taxonomyAutoHandleReason === "statement_credit_rewards_income";
+    if (allowedTransferException) {
+      // Statement credits backed by a rewards-income account are income categorization, not payment posting.
+    } else {
+      return block(`${taxonomyType}_requires_review`, { confidence, source, evidence });
+    }
   }
   if (taxonomyType && !POSTABLE_SPECIAL_TAXONOMY_TYPES.has(taxonomyType) && !evidence.allowTaxonomyAutoHandle) {
-    return block("taxonomy_requires_review", { confidence, source, evidence });
+    return block(`${taxonomyType}_requires_review`, { confidence, source, evidence });
   }
   if (taxonomyType === "cc_payment") {
     const verifiedCcPayment =

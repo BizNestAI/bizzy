@@ -615,9 +615,13 @@ export default function MonthlyReviewConsole() {
           source: "monthly_review_reconsideration",
         },
       });
-      const processed = Number(result?.processed || 0);
-      const promoted = Number(result?.promoted || 0);
-      const skipped = Number(result?.skipped || 0);
+      const processed = Number(result?.reviewed_this_month ?? result?.processed ?? 0);
+      const promoted = Number(result?.moved_to_handled_this_month ?? result?.promoted ?? 0);
+      const remainingThisMonth = Number(result?.remaining_needs_review_this_month ?? result?.skipped ?? 0);
+      const allHistoryRemaining = Number(result?.remaining_needs_review_all_months ?? 0);
+      const backlogSuffix = allHistoryRemaining > remainingThisMonth
+        ? ` ${allHistoryRemaining} Needs Review across all imported months.`
+        : "";
       setBookkeepingFeeds((current) => patchBookkeepingFeedsAfterReconsiderationState(current, result, sourceLedger));
       const promotedRows = (Array.isArray(result?.rows) ? result.rows : []).filter((row) => row?.promoted === true && row?.categorization);
       if (promotedRows.length) {
@@ -644,8 +648,8 @@ export default function MonthlyReviewConsole() {
         loading: false,
         error: "",
         message: result?.partial
-          ? `Re-evaluation paused after ${processed} reviewed; ${promoted} moved to Handled and ${skipped} still need review. Run it again to continue.`
-          : `Re-evaluation complete. ${processed} reviewed, ${promoted} moved to Handled, ${skipped} still need review.`,
+          ? `Re-evaluation paused after ${processed} reviewed for ${formatMonth(month)}; ${promoted} moved to Handled and ${remainingThisMonth} still need review for ${formatMonthShort(month)}. Run it again to continue.${backlogSuffix}`
+          : `Re-evaluation complete. ${processed} reviewed, ${promoted} moved to Handled, ${remainingThisMonth} still need review for ${formatMonthShort(month)}.${backlogSuffix}`,
       });
     } catch (e) {
       setBookkeepingReconsideration({

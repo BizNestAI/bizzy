@@ -549,6 +549,144 @@ test("suspense intent can resolve to an active compatible QBO account before fal
   assert.equal(state.createCount, 0);
 });
 
+test("late fee suspense row can resolve to one compatible fee account before fallback", async () => {
+  const db = makeDb();
+  const { qbo, state } = makeQbo([{ id: "cc-fees-current", name: "CC Fees", type: "Expense", subType: "BankCharges" }]);
+  addRoutineRow(db, "txn-late-fee", {
+    bankTxn: {
+      name: "LATE FEE",
+      merchant_name: null,
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: -40,
+      signed_amount: -40,
+      category_primary: "BANK_FEES",
+      category_detailed: "BANK_FEES_LATE_PAYMENT",
+    },
+    cat: {
+      suggested_qbo_account_id: "4",
+      suggested_qbo_account_name: "Uncategorized Expense",
+      suggested_canonical_account_key: null,
+      confidence: "low",
+      meta: { suggestion_source: "fallback" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "cc-fees-current");
+  assert.equal(row.final_qbo_account_name, "CC Fees");
+  assert.equal(row.meta.evidence_source, "semantic_coa_fallback");
+  assert.equal(row.meta.semantic_intent, "bank_fees");
+  assert.equal(row.decided_by, "bizzi");
+  assert.equal(state.createCount, 0);
+});
+
+test("prior business final history bridges normalized merchant suffix variants", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);
+  addRoutineRow(db, "txn-prior-exchange", {
+    bankTxn: {
+      name: "THE EXCHANGE UPTOWN LLC",
+      merchant_name: "The Exchange Uptown LLC",
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: -24.5,
+      signed_amount: -24.5,
+    },
+    cat: {
+      status: "approved",
+      suggested_qbo_account_id: "meals-current",
+      suggested_qbo_account_name: "Meals",
+      final_qbo_account_id: "meals-current",
+      final_qbo_account_name: "Meals",
+      decided_by: "accountant",
+      decided_at: "2026-08-14T12:00:00.000Z",
+    },
+  });
+  addRoutineRow(db, "txn-stale-exchange", {
+    bankTxn: {
+      name: "THE EXCHANGE UPTOWN",
+      merchant_name: "The Exchange Uptown",
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: -4.32,
+      signed_amount: -4.32,
+    },
+    cat: {
+      suggested_qbo_account_id: "4",
+      suggested_qbo_account_name: "Uncategorized Expense",
+      suggested_canonical_account_key: null,
+      confidence: "low",
+      meta: { suggestion_source: "fallback" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations.find((item) => item.transaction_id === "txn-stale-exchange");
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "meals-current");
+  assert.equal(row.meta.evidence_source, "business_history");
+  assert.equal(row.meta.confidence_tier, "very_high");
+});
+
+test("statement credit can promote to Credit Card Rewards without opening transfer payments", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "rewards-current", name: "Credit Card Rewards", type: "Other Income", subType: "OtherMiscellaneousIncome" }]);
+  addRoutineRow(db, "txn-statement-credit", {
+    bankTxn: {
+      name: "AUTOMATIC STATEMENT CREDIT",
+      merchant_name: "Automatic Statement Credit",
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: 1.63,
+      signed_amount: 1.63,
+      direction: "INFLOW",
+    },
+    cat: {
+      suggested_qbo_account_id: "rewards-current",
+      suggested_qbo_account_name: "Credit Card Rewards",
+      suggested_canonical_account_key: "other_income",
+      confidence: "medium",
+      meta: { suggestion_source: "plaid_mapping", taxonomy_type: "transfer_internal" },
+    },
+  });
+  addRoutineRow(db, "txn-card-payment", {
+    bankTxn: {
+      name: "MOBILE PAYMENT - THANK YOU",
+      merchant_name: "Mobile Payment",
+      merchant_entity_id: null,
+      canonical_vendor_id: null,
+      amount: 322.57,
+      signed_amount: 322.57,
+      direction: "INFLOW",
+    },
+    cat: {
+      suggested_qbo_account_id: "rewards-current",
+      suggested_qbo_account_name: "Credit Card Rewards",
+      confidence: "medium",
+      meta: { suggestion_source: "plaid_mapping", taxonomy_type: "transfer_internal" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const credit = db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-statement-credit");
+  const payment = db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-card-payment");
+
+  assert.equal(result.promoted, 1);
+  assert.equal(credit.status, "auto_approved");
+  assert.equal(credit.final_qbo_account_name, "Credit Card Rewards");
+  assert.equal(credit.meta.taxonomy_auto_handle_reason, "statement_credit_rewards_income");
+  assert.equal(payment.status, "needs_review");
+  assert.equal(payment.final_qbo_account_id, null);
+  assert.match(payment.meta.auto_handle_decision.reason, /transfer_internal|review/);
+});
+
 test("Plaid medium Meals row with deterministic restaurant evidence auto-approves", async () => {
   const db = makeDb();
   const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);
@@ -935,6 +1073,42 @@ test("account/date/business filters are enforced across cursor batches", async (
   assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-02").status, "needs_review");
   assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-03").status, "needs_review");
   assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "other-01").status, "needs_review");
+});
+
+test("date-scoped reconsideration reads and paginates only selected-month transactions", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "software-current", name: "Software", type: "Expense", subType: "DuesSubscriptions" }]);
+  addMapping(db);
+  addRoutineRow(db, "aug-01", { bankTxn: { date: "2026-08-02" } });
+  addRoutineRow(db, "aug-02", { bankTxn: { date: "2026-08-03" } });
+  addRoutineRow(db, "jul-01", { bankTxn: { date: "2026-07-31" } });
+  addRoutineRow(db, "sep-01", { bankTxn: { date: "2026-09-01" } });
+
+  const first = await reconsiderNeedsReviewTransactions(BUSINESS_ID, {
+    db,
+    dateFrom: "2026-08-01",
+    dateTo: "2026-08-31",
+    limit: 1,
+    dependencies: deps(db, qbo),
+  });
+  const second = await reconsiderNeedsReviewTransactions(BUSINESS_ID, {
+    db,
+    dateFrom: "2026-08-01",
+    dateTo: "2026-08-31",
+    cursor: first.next_cursor,
+    limit: 1,
+    dependencies: deps(db, qbo),
+  });
+
+  assert.equal(first.processed, 1);
+  assert.equal(first.promoted, 1);
+  assert.ok(first.next_cursor);
+  assert.equal(second.processed, 1);
+  assert.equal(second.promoted, 1);
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "aug-01").status, "auto_approved");
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "aug-02").status, "auto_approved");
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "jul-01").status, "needs_review");
+  assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "sep-01").status, "needs_review");
 });
 
 test("transactionIds option scopes reconsideration to explicit worker requests", async () => {

@@ -642,6 +642,18 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
       pageCount += 1;
       if (!cursor) break;
     }
+    const [remainingNeedsReviewThisMonth, remainingNeedsReviewAllMonths] = await Promise.all([
+      countBookkeepingTransactions({
+        businessId,
+        statusFilter: "needs_review",
+        rangeStart,
+        rangeEnd,
+      }),
+      countBookkeepingTransactions({
+        businessId,
+        statusFilter: "needs_review",
+      }),
+    ]);
 
     return res.json({
       ok: true,
@@ -652,11 +664,15 @@ router.post("/businesses/:businessId/bookkeeping/transactions/reconsider", async
       processed: totals.processed,
       promoted: totals.promoted,
       skipped: totals.skipped,
+      reviewed_this_month: totals.processed,
+      moved_to_handled_this_month: totals.promoted,
+      remaining_needs_review_this_month: remainingNeedsReviewThisMonth,
+      remaining_needs_review_all_months: remainingNeedsReviewAllMonths,
       bucket_counts: {
         ...bucketCounts,
         reviewed: totals.processed,
         moved_to_handled: totals.promoted,
-        still_needs_review: totals.skipped,
+        still_needs_review: remainingNeedsReviewThisMonth,
       },
       rows,
       next_cursor: cursor,

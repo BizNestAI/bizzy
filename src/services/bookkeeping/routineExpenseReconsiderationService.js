@@ -19,6 +19,17 @@ import {
 const MAX_RECONSIDERATION_LIMIT = 500;
 const PNL_ACCOUNT_TYPES = new Set(["income", "other income", "expense", "cost of goods sold", "costofgoodssold"]);
 const PROTECTED_TAXONOMY_RE = /cc_payment|transfer|owner|loan|payroll|tax|refund|check/i;
+const SAFE_SEMANTIC_FALLBACK_INTENTS = new Set([
+  "bank_fees",
+  "payment_processing",
+  "parking_tolls",
+  "transportation",
+  "gas_charging",
+  "fuel",
+  "meals",
+  "sales",
+  "other_income",
+]);
 
 async function getDefaultDb() {
   const mod = await import("../supabaseAdmin.js");
@@ -83,13 +94,53 @@ function normalizeText(value = "") {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+function stripBusinessSuffix(value = "") {
+  return normalizeText(value)
+    .replace(/\b(?:llc|l l c|inc|incorporated|corp|corporation|co|company|ltd|limited)\b/g, " ")
+    .replace(/\bthe\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function merchantIdentityKeys(txn = {}) {
+  const raw = [txn.merchant_name, txn.counterparty_name, txn.name]
+    .filter(Boolean)
+    .flatMap((value) => {
+      const normalized = normalizeText(value);
+      const stripped = stripBusinessSuffix(value);
+      const compact = stripped.replace(/\s+/g, "");
+      const firstTokens = stripped.split(" ").slice(0, 3).join(" ");
+      return [normalized, stripped, compact.length >= 7 ? compact : null, firstTokens.length >= 7 ? firstTokens : null];
+    })
+    .filter(Boolean);
+  return [...new Set(raw)];
+}
+
 function isPnlAccount(account = {}) {
   const type = normalizeText(account.type || account.accountType || account.AccountType || "");
   return PNL_ACCOUNT_TYPES.has(type);
 }
 
 function transactionText(txn = {}) {
-  return normalizeText([txn.name, txn.merchant_name, txn.counterparty_name].filter(Boolean).join(" "));
+  return normalizeText([
+    txn.name,
+    txn.merchant_name,
+    txn.counterparty_name,
+    txn.category_primary,
+    txn.category_detailed,
+    typeof txn.personal_finance_category === "string" ? txn.personal_finance_category : null,
+    txn.personal_finance_category?.primary,
+    txn.personal_finance_category?.detailed,
+  ].filter(Boolean).join(" "));
+}
+
+function transactionDirection(txn = {}) {
+  const direction = String(txn.direction || "").toUpperCase();
+  if (direction === "INFLOW" || direction === "OUTFLOW") return direction;
+  const amount = Number(txn.signed_amount ?? txn.amount);
+  if (Number.isFinite(amount) && amount > 0) return "INFLOW";
+  if (Number.isFinite(amount) && amount < 0) return "OUTFLOW";
+  return "UNKNOWN";
 }
 
 function suggestedIntentFromAccountName(accountName = "") {
@@ -101,6 +152,7 @@ function suggestedIntentFromAccountName(accountName = "") {
   if (/\binsurance\b/.test(name)) return "insurance";
   if (/\bbank fee|bank charge|processing fee|transaction fee\b/.test(name)) return "bank_fees";
   if (/\bsales|service income|revenue|income\b/.test(name)) return "sales";
+  if (/\bcash back|cashback|rewards?|statement credit|credit card rewards?\b/.test(name)) return "other_income";
   if (/\bentertainment|movies|theater|theatre|event\b/.test(name)) return "entertainment";
   if (/\bsupplies|materials\b/.test(name)) return "supplies";
   return null;
@@ -117,7 +169,7 @@ function hasDeterministicMediumSuggestionEvidence({ bankTxn = {}, account = {}, 
   const text = transactionText(bankTxn);
   if (!text) return false;
   if (intent === "meals") {
-    return /\btst\b|\bcafe\b|\bcoffee\b|\bcocktail\b|\bbar\b|\bwhiskey\b|\brestaurant\b|\bgrill\b|\bchick\b|\bchipotle\b|\bcava\b|\bamelie\b|\byamazaru\b|\bsumaq\b|\bcarillon\b|\bexchange\b|\bbarcelona\b|\bsloan\b/.test(text);
+    return /\btst\b|\bcafe\b|\bcoffee\b|\bcocktail\b|\bbar\b|\bwhiskey\b|\brestaurant\b|\brestaurants\b|\bfood\b|\bdining\b|\bgrill\b|\bkitchen\b|\bchick\b|\bchipotle\b|\bcava\b|\bamelie\b|\byamazaru\b|\bsumaq\b|\bcarillon\b|\bexchange\b|\bbarcelona\b|\bsloan\b|\bpub\b|\bbistro\b|\btavern\b/.test(text);
   }
   if (intent === "transportation") {
     return /\bparking\b|\bpark\b|\btoll\b|\bsurface lot\b|\bpps\b|\bquiktrip\b|\bqt\b|\buber\b|\blyft\b|\btaxi\b/.test(text) ||
@@ -131,6 +183,123 @@ function hasDeterministicMediumSuggestionEvidence({ bankTxn = {}, account = {}, 
     return String(universalHint?.primary_intent || "") === intent;
   }
   return false;
+}
+
+function deriveIntentFromTransaction(bankTxn = {}, meta = {}) {
+  const text = transactionText(bankTxn);
+  if (!text) return null;
+  if (/\bstatement credit\b|\bautomatic statement credit\b|\bcash ?back\b|\brewards?\b/.test(text)) return "other_income";
+  if (/\btran fee\b|\btransaction fee\b|\bbank fee\b|\bbank fees\b|\blate fee\b|\bfinance charge\b|\bservice charge\b|\bprocessing fee\b|\bmerchant fee\b/.test(text)) return "bank_fees";
+  if (/\bparkmobile\b|\bpark mobile\b|\bparking\b|\bparking lot\b|\bsurface lot\b|\btoll\b|\btolls\b|\bcdot pay\b|\bpps\b/.test(text)) return "parking_tolls";
+  if (/\bchargeonsite\b|\bcharging\b|\bev charge\b|\bgas\b|\bfuel\b|\bquiktrip\b|\bquicktrip\b|\bqt\b/.test(text)) return "gas_charging";
+  if (/\bopenai\b|\bchatgpt\b|\bsoftware\b|\bsubscription\b|\bsubscriptions\b|\bsaas\b/.test(text)) return "software";
+  if (/\btst\b|\bcafe\b|\bcoffee\b|\bcocktail\b|\bbar\b|\bwhiskey\b|\brestaurant\b|\brestaurants\b|\bfood\b|\bdining\b|\bgrill\b|\bkitchen\b|\bchick\b|\bchipotle\b|\bcava\b|\bamelie\b|\byamazaru\b|\bsumaq\b|\bcarillon\b|\bexchange\b|\bbarcelona\b|\bsloan\b|\bpub\b|\bbistro\b|\btavern\b/.test(text)) return "meals";
+  if (/\bentertainment\b|\bmovie\b|\bmovies\b|\btheater\b|\btheatre\b|\bcinema\b|\bamc\b/.test(text)) return "entertainment";
+  if (/\bsupplies\b|\bsupply\b/.test(text)) return "supplies";
+  if (/\bsales\b|\brevenue\b|\bincome\b/.test(text) && transactionDirection(bankTxn) === "INFLOW") return "sales";
+  return meta?.suggested_intent || null;
+}
+
+function statementCreditRewardsEvidence({ bankTxn = {}, account = {}, meta = {}, universalHint = null }) {
+  const intent = suggestedIntentFromAccountName(account?.name);
+  const text = transactionText(bankTxn);
+  const direction = transactionDirection(bankTxn);
+  const type = normalizeText(account?.type || account?.accountType || account?.AccountType || "");
+  const rewardText = /\bstatement credit\b|\bautomatic statement credit\b|\bcash ?back\b|\brewards?\b|\bcredit card rewards?\b/.test(text);
+  const rewardHint = ["other_income", "interest_income"].includes(String(universalHint?.primary_intent || "")) ||
+    String(meta?.suggested_intent || "") === "other_income";
+  return (
+    direction === "INFLOW" &&
+    type.includes("income") &&
+    (intent === "other_income" || /\breward|cash back|statement credit\b/.test(normalizeText(account?.name || ""))) &&
+    (rewardText || rewardHint)
+  );
+}
+
+async function buildBusinessHistoryIndex({ db, businessId }) {
+  const { data: cats, error: catErr } = await db
+    .from("transaction_categorizations")
+    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,confidence,meta,decided_by")
+    .eq("business_id", businessId)
+    .in("status", ["approved", "auto_approved"])
+    .not("final_qbo_account_id", "is", null);
+  if (catErr) throw catErr;
+  const finalCats = (cats || []).filter((row) => row?.final_qbo_account_id && row?.final_qbo_account_name);
+  if (!finalCats.length) return new Map();
+  const ids = finalCats.map((row) => row.transaction_id).filter(Boolean);
+  const { data: txns, error: txnErr } = await db
+    .from("bank_transactions")
+    .select("id,business_id,date,name,merchant_name,merchant_entity_id,counterparty_name,amount,signed_amount,direction,pending,is_archived")
+    .eq("business_id", businessId)
+    .in("id", ids);
+  if (txnErr) throw txnErr;
+  const catByTxn = new Map(finalCats.map((row) => [String(row.transaction_id), row]));
+  const index = new Map();
+  for (const txn of txns || []) {
+    if (!txn?.id || txn.is_archived === true || txn.pending === true) continue;
+    const cat = catByTxn.get(String(txn.id));
+    if (!cat) continue;
+    const direction = transactionDirection(txn);
+    for (const key of merchantIdentityKeys(txn)) {
+      const entry = index.get(key) || { accounts: new Map(), directions: new Map(), transactionIds: new Set() };
+      const accountKey = String(cat.final_qbo_account_id);
+      const current = entry.accounts.get(accountKey) || {
+        id: accountKey,
+        name: cat.final_qbo_account_name,
+        count: 0,
+        sources: new Set(),
+      };
+      current.count += 1;
+      current.sources.add(cat.decided_by || cat.meta?.evidence_source || cat.meta?.suggestion_source || "history");
+      entry.accounts.set(accountKey, current);
+      entry.directions.set(accountKey, direction);
+      entry.transactionIds.add(String(txn.id));
+      index.set(key, entry);
+    }
+  }
+  return index;
+}
+
+function findBusinessHistoryAccount({ historyIndex, bankTxn = {} }) {
+  if (!historyIndex?.size) return null;
+  const matches = [];
+  for (const key of merchantIdentityKeys(bankTxn)) {
+    const entry = historyIndex.get(key);
+    if (!entry) continue;
+    for (const account of entry.accounts.values()) {
+      matches.push({
+        id: account.id,
+        name: account.name,
+        count: account.count,
+        sources: [...account.sources],
+        matched_key: key,
+        prior_transaction_count: entry.transactionIds.size,
+      });
+    }
+  }
+  if (!matches.length) return null;
+  const merged = new Map();
+  for (const match of matches) {
+    const existing = merged.get(match.id) || { ...match, count: 0, sources: new Set(), matched_keys: new Set() };
+    existing.count += match.count;
+    match.sources.forEach((source) => existing.sources.add(source));
+    existing.matched_keys.add(match.matched_key);
+    existing.prior_transaction_count = Math.max(existing.prior_transaction_count || 0, match.prior_transaction_count || 0);
+    merged.set(match.id, existing);
+  }
+  const unique = [...merged.values()];
+  if (unique.length !== 1) {
+    return { conflict: true, accounts: unique.map((item) => ({ id: item.id, name: item.name })) };
+  }
+  const only = unique[0];
+  return {
+    id: only.id,
+    name: only.name,
+    count: only.count,
+    sources: [...only.sources],
+    matched_keys: [...only.matched_keys],
+    prior_transaction_count: only.prior_transaction_count,
+  };
 }
 
 function canUseUniversalIntentForResolution(hint = null) {
@@ -378,9 +547,35 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
   const cursor = options.cursor ? String(options.cursor) : null;
   const nowIso = new Date().toISOString();
   const dependencies = options.dependencies || {};
-  const transactionIds = Array.isArray(options.transactionIds)
+  let transactionIds = Array.isArray(options.transactionIds)
     ? Array.from(new Set(options.transactionIds.map((id) => (id ? String(id) : null)).filter(Boolean)))
     : [];
+
+  if (!transactionIds.length && (rangeStart || dateTo || options.accountId)) {
+    let scopedTxnQuery = db
+      .from("bank_transactions")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("is_archived", false)
+      .order("id", { ascending: true });
+    if (options.accountId) scopedTxnQuery = scopedTxnQuery.eq("plaid_account_id", options.accountId);
+    if (rangeStart) scopedTxnQuery = scopedTxnQuery.gte("date", rangeStart);
+    if (dateTo) scopedTxnQuery = scopedTxnQuery.lte("date", dateTo);
+    const { data: scopedTxns, error: scopedTxnErr } = await scopedTxnQuery;
+    if (scopedTxnErr) throw scopedTxnErr;
+    transactionIds = (scopedTxns || []).map((row) => row.id).filter(Boolean).map(String);
+    if (!transactionIds.length) {
+      return {
+        ok: true,
+        processed: 0,
+        promoted: 0,
+        skipped: 0,
+        bucket_counts: emptyBuckets(),
+        next_cursor: null,
+        rows: [],
+      };
+    }
+  }
 
   let catQuery = db
     .from("transaction_categorizations")
@@ -391,7 +586,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     .order("transaction_id", { ascending: true })
     .limit(limit);
   if (transactionIds.length) catQuery = catQuery.in("transaction_id", transactionIds);
-  if (cursor && !transactionIds.length) catQuery = catQuery.gt("transaction_id", cursor);
+  if (cursor) catQuery = catQuery.gt("transaction_id", cursor);
 
   const { data: cats, error: catErr } = await catQuery;
   if (catErr) throw catErr;
@@ -426,6 +621,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
   const txnById = new Map((txns || []).map((txn) => [txn.id, txn]));
   const bookkeepingStartDate = await getBookkeepingStartDate(db, businessId);
   const autoPostEnabled = await getAutoPostToQuickBooks(db, businessId);
+  const businessHistoryIndex = await buildBusinessHistoryIndex({ db, businessId });
 
   const updates = [];
   const rows = [];
@@ -591,6 +787,141 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       });
       continue;
     }
+    const businessHistory = findBusinessHistoryAccount({ historyIndex: businessHistoryIndex, bankTxn });
+    if (businessHistory?.conflict === true) {
+      const reason = "conflicting_business_history";
+      skipped += 1;
+      bucketCounts.other += 1;
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason });
+      updates.push({
+        business_id: businessId,
+        transaction_id: cat.transaction_id,
+        suggested_qbo_account_id: cat.suggested_qbo_account_id || null,
+        suggested_qbo_account_name: cat.suggested_qbo_account_name || null,
+        suggested_canonical_account_key: cat.suggested_canonical_account_key || meta.canonical_account_key || null,
+        final_qbo_account_id: null,
+        final_qbo_account_name: null,
+        final_canonical_account_key: null,
+        confidence: cat.confidence || "medium",
+        status: cat.status || "needs_review",
+        post_after: null,
+        decided_by: categorizationProvenance(cat, "business_history"),
+        decided_at: cat.decided_at || null,
+        meta: withCategorizationPolicyVersion({
+          ...meta,
+          conflicting_categorization_evidence: true,
+          business_history_conflict: businessHistory.accounts,
+          auto_handle_decision: {
+            eligible: false,
+            confidence: cat.confidence || "medium",
+            source: "business_history",
+            reason,
+            reconsideration_source: options.source || "backlog_reconsideration",
+            at: nowIso,
+          },
+        }),
+        updated_at: nowIso,
+      });
+      continue;
+    }
+    if (businessHistory?.id) {
+      const account = await fetchActiveQboAccountById({
+        businessId,
+        accountId: businessHistory.id,
+        fallbackName: businessHistory.name,
+        db,
+        dependencies,
+      });
+      const decision = decideBookkeepingCategorization({
+        transaction: bankTxn,
+        account: account || { id: businessHistory.id, name: businessHistory.name },
+        evidence: {
+          source: "business_history",
+          confidenceTier: "very_high",
+          taxonomyType: meta.taxonomy_type || null,
+          isCheck: false,
+          meta,
+          canonicalAccountResolved: true,
+          canonicalVendorId: bankTxn.canonical_vendor_id || meta.canonical_vendor_id || null,
+          canonicalVendorReliable: true,
+          merchantEvidenceStrong: true,
+          conflictingEvidence: meta.conflicting_categorization_evidence === true,
+          inBookkeepingScope: true,
+          reconsiderationSource: options.source || "backlog_reconsideration",
+          reason: "prior_business_final_account_history",
+        },
+        businessContext: {},
+      });
+      const decisionMeta = withCategorizationPolicyVersion({
+        ...meta,
+        suggestion_source: "business_history",
+        evidence_source: "business_history",
+        confidence_tier: "very_high",
+        business_history_account_id: businessHistory.id,
+        business_history_account_name: businessHistory.name,
+        business_history_match_keys: businessHistory.matched_keys,
+        business_history_prior_transaction_count: businessHistory.prior_transaction_count,
+        business_history_sources: businessHistory.sources,
+        merchant_evidence_strong: true,
+        safe_to_auto_handle: decision.auto_handle === true,
+        safe_to_auto_post: decision.auto_handle === true,
+        auto_handle_decision: {
+          eligible: decision.auto_handle === true,
+          confidence: decision.confidence_tier,
+          source: decision.evidence_source,
+          reason: decision.block_reason || decision.reason,
+          reconsideration_source: options.source || "backlog_reconsideration",
+          at: nowIso,
+        },
+      });
+      if (decision.auto_handle === true && account?.id && account?.name) {
+        const postAfter = computePostAfterForAutoPost(autoPostEnabled, Number(process.env.BOOKS_POST_GRACE_HOURS || 24));
+        updates.push({
+          business_id: businessId,
+          transaction_id: cat.transaction_id,
+          suggested_qbo_account_id: account.id,
+          suggested_qbo_account_name: account.name,
+          suggested_canonical_account_key: cat.suggested_canonical_account_key || meta.canonical_account_key || null,
+          final_qbo_account_id: account.id,
+          final_qbo_account_name: account.name,
+          final_canonical_account_key: cat.suggested_canonical_account_key || meta.canonical_account_key || null,
+          confidence: "high",
+          status: "auto_approved",
+          post_after: postAfter,
+          decided_by: "bizzi",
+          decided_at: nowIso,
+          meta: {
+            ...decisionMeta,
+            auto_approve_reason: "prior_business_final_account_history",
+            auto_handled_reason: decision.reason,
+          },
+          updated_at: nowIso,
+        });
+        promoted += 1;
+        bucketCounts.moved_to_handled += 1;
+        rows.push({
+          transaction_id: cat.transaction_id,
+          promoted: true,
+          reason: decision.reason,
+          categorization: {
+            status: "auto_approved",
+            final_qbo_account_id: account.id,
+            final_qbo_account_name: account.name,
+            suggested_qbo_account_id: account.id,
+            suggested_qbo_account_name: account.name,
+            post_after: postAfter,
+            qbo_txn_id: null,
+            meta: decisionMeta,
+          },
+        });
+        continue;
+      }
+      skipped += 1;
+      const blockReason = decision.block_reason || decision.reason;
+      bucketCounts[bucketForResult({ reason: blockReason, bankTxn, account, meta })] += 1;
+      rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: blockReason });
+      continue;
+    }
     const universalHint = await getUniversalVendorHintForTransaction({ bankTxn });
     if (!checkHit.is_check && canUseUniversalIntentForResolution(universalHint)) {
       const specificMediumEvidence = universalHint?.confidence === "medium" && !isStrongUniversalVendorEvidence(universalHint);
@@ -650,6 +981,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           canonical_account_key: canonicalResolution?.canonical?.canonical_account_key || canonicalKey || null,
         },
       });
+      const allowStatementCredit = statementCreditRewardsEvidence({ bankTxn, account, meta, universalHint });
       const exactCanonicalAccountResolved = Boolean(canonicalResolvedAccount.id && account?.id && !semanticResolution);
       const resolvedAccount = Boolean(account.id && account.name);
       const semanticAccountResolved = Boolean(semanticResolution?.id && semanticResolution?.name);
@@ -679,6 +1011,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           merchantEvidenceStrong:
             vendorEvidence.merchantEvidenceStrong === true ||
             Boolean(bankTxn.merchant_entity_id || bankTxn.merchant_name || bankTxn.counterparty_name),
+          allowTaxonomyAutoHandle: allowStatementCredit,
+          taxonomyAutoHandleReason: allowStatementCredit ? "statement_credit_rewards_income" : null,
           conflictingEvidence: meta.conflicting_categorization_evidence === true,
           inBookkeepingScope: true,
           reconsiderationSource: options.source || "backlog_reconsideration",
@@ -712,6 +1046,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         canonical_vendor_id: vendorEvidence.canonicalVendorId || null,
         canonical_vendor_reliable: vendorEvidence.canonicalVendorReliable === true,
         merchant_evidence_strong: decision.evidence?.merchantEvidenceStrong === true,
+        taxonomy_auto_handle_reason: allowStatementCredit ? "statement_credit_rewards_income" : null,
         evidence_source: decision.evidence_source,
         confidence_tier: decision.confidence_tier,
         original_confidence: universalHint.confidence || null,
@@ -817,10 +1152,16 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         })
       : null;
     let semanticResolution = null;
-    if ((!activeSuggestedAccount || isReviewAccount({ accountId: activeSuggestedAccount.id, accountName: activeSuggestedAccount.name })) && universalHint?.primary_intent) {
+    const derivedIntent = deriveIntentFromTransaction(bankTxn, meta);
+    const semanticIntent = universalHint?.primary_intent || derivedIntent;
+    if (
+      (!activeSuggestedAccount || isReviewAccount({ accountId: activeSuggestedAccount.id, accountName: activeSuggestedAccount.name })) &&
+      semanticIntent &&
+      SAFE_SEMANTIC_FALLBACK_INTENTS.has(String(semanticIntent))
+    ) {
       semanticResolution = await resolveStrongSemanticCoaAccount({
         businessId,
-        intent: universalHint.primary_intent,
+        intent: semanticIntent,
         dependencies,
       });
     }
@@ -837,17 +1178,23 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       meta,
       universalHint,
     });
+    const allowStatementCredit = statementCreditRewardsEvidence({ bankTxn, account, meta, universalHint });
     const canonicalAccountResolved =
       canonicalAccount.canonicalAccountResolved === true ||
       Boolean(semanticResolution?.id) ||
-      deterministicMediumEvidence === true;
-    const source = normalizeSource(meta.suggestion_source || cat.decided_by || "backlog_reconsideration");
+      deterministicMediumEvidence === true ||
+      allowStatementCredit === true;
+    const semanticAccountResolved = Boolean(semanticResolution?.id);
+    const source = semanticAccountResolved
+      ? "semantic_coa_fallback"
+      : normalizeSource(meta.suggestion_source || cat.decided_by || "backlog_reconsideration");
+    const confidenceTier = semanticAccountResolved || allowStatementCredit ? "high" : cat.confidence || meta.confidence || "medium";
     const decision = decideBookkeepingCategorization({
       transaction: bankTxn,
       account,
       evidence: {
         source,
-        confidenceTier: cat.confidence || meta.confidence || "medium",
+        confidenceTier,
         taxonomyType: meta.taxonomy_type || null,
         isCheck: checkHit.is_check === true,
         meta,
@@ -858,15 +1205,25 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           meta.canonical_account_review_required === true ||
           meta.canonical_mapping_review_required === true,
         canonicalVendorId: vendorEvidence.canonicalVendorId || null,
-        canonicalVendorReliable: vendorEvidence.canonicalVendorReliable === true,
+        canonicalVendorReliable: vendorEvidence.canonicalVendorReliable === true || semanticAccountResolved === true,
         weakVendorEvidence: vendorEvidence.weakVendorEvidence === true,
         merchantEvidenceStrong:
           vendorEvidence.merchantEvidenceStrong === true ||
           deterministicMediumEvidence === true ||
+          semanticAccountResolved === true ||
+          allowStatementCredit === true ||
           Boolean(bankTxn.merchant_name && meta.suggestion_source === "universal_hint"),
         deterministicMediumEvidence,
+        allowTaxonomyAutoHandle: allowStatementCredit,
+        taxonomyAutoHandleReason: allowStatementCredit ? "statement_credit_rewards_income" : null,
         conflictingEvidence: meta.conflicting_categorization_evidence === true,
-        reason: deterministicMediumEvidence ? "deterministic_medium_suggestion" : undefined,
+        reason: allowStatementCredit
+          ? "statement_credit_rewards_income"
+          : semanticAccountResolved
+          ? "safe_semantic_coa_fallback"
+          : deterministicMediumEvidence
+          ? "deterministic_medium_suggestion"
+          : undefined,
         inBookkeepingScope: true,
         reconsiderationSource: options.source || "backlog_reconsideration",
       },
@@ -887,7 +1244,10 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       merchant_evidence_strong: decision.evidence?.merchantEvidenceStrong === true,
       deterministic_medium_evidence: deterministicMediumEvidence,
       semantic_coa_resolved: Boolean(semanticResolution?.id),
+      semantic_intent: semanticIntent || null,
+      semantic_intent_source: universalHint?.primary_intent ? "universal_hint" : derivedIntent ? "transaction_evidence" : null,
       semantic_coa_match: semanticResolution?.match || null,
+      taxonomy_auto_handle_reason: allowStatementCredit ? "statement_credit_rewards_income" : null,
       auto_handle_decision: {
         eligible: decision.auto_handle === true,
         confidence: decision.confidence_tier,
@@ -912,7 +1272,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         final_qbo_account_id: null,
         final_qbo_account_name: null,
         final_canonical_account_key: null,
-        confidence: cat.confidence || meta.confidence || "medium",
+        confidence: confidenceTier,
         status: cat.status || "needs_review",
         post_after: null,
         decided_by: categorizationProvenance(cat, source || "backlog_reconsideration"),
@@ -936,7 +1296,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       final_qbo_account_id: account.id,
       final_qbo_account_name: account.name,
       final_canonical_account_key: canonicalKey,
-      confidence: cat.confidence || meta.confidence || "medium",
+      confidence: confidenceTier,
       status: "auto_approved",
       post_after: postAfter,
       decided_by: "bizzi",
@@ -962,7 +1322,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         suggested_qbo_account_id: account.id,
         suggested_qbo_account_name: account.name,
         suggested_canonical_account_key: canonicalKey,
-        confidence: cat.confidence || meta.confidence || "medium",
+        confidence: confidenceTier,
         post_after: postAfter,
         qbo_txn_id: null,
         meta: withCategorizationPolicyVersion({
@@ -991,7 +1351,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       ...bucketCounts,
       still_needs_review: skipped,
     },
-    next_cursor: transactionIds.length ? null : catRows.length === limit ? last : null,
+    next_cursor: catRows.length === limit ? last : null,
     rows,
   };
 }

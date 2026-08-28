@@ -173,6 +173,10 @@ test("admin Monthly Review exposes internal-only bounded mirror endpoints", () =
   assert.match(adminRoute, /\/businesses\/:businessId\/bookkeeping\/transactions"/);
   assert.match(adminRoute, /\/businesses\/:businessId\/bookkeeping\/transactions\/reconsider/);
   assert.match(adminRoute, /reconsiderNeedsReviewTransactions/);
+  assert.match(adminRoute, /reviewed_this_month:\s*totals\.processed/);
+  assert.match(adminRoute, /moved_to_handled_this_month:\s*totals\.promoted/);
+  assert.match(adminRoute, /remaining_needs_review_this_month/);
+  assert.match(adminRoute, /remaining_needs_review_all_months/);
   assert.match(adminRoute, /const inclusiveRangeEnd = previousDate\(rangeEnd\)/);
   assert.match(adminRoute, /dateTo:\s*inclusiveRangeEnd/);
   assert.match(adminRoute, /selected_month_bounds:\s*"server-side \[range_start, range_end\)"/);
@@ -194,6 +198,9 @@ test("Monthly Review renders collapsible Needs Review and Handled mirrors with b
   assert.match(monthlyReviewUi, /BookkeepingFeedMirrorPanels/);
   assert.match(monthlyReviewUi, /Re-evaluate Needs Review/);
   assert.match(monthlyReviewUi, /bookkeeping\/transactions\/reconsider/);
+  assert.match(monthlyReviewUi, /reviewed_this_month/);
+  assert.match(monthlyReviewUi, /still need review for \$\{formatMonthShort\(month\)\}/);
+  assert.match(monthlyReviewUi, /Needs Review across all imported months/);
   assert.match(monthlyReviewUi, /patchBookkeepingFeedsAfterReconsiderationState/);
   assert.match(monthlyReviewUi, /aria-expanded=\{expanded\}/);
   assert.match(monthlyReviewUi, /\/bookkeeping\/transactions\/counts\?month=/);

@@ -67,7 +67,7 @@ const INTENT_KEYWORDS = {
   waste_disposal: ["waste disposal", "dump fees", "dump fee", "landfill", "disposal", "hauling", "trash", "debris removal"],
   uniforms_laundry: ["uniforms", "uniform", "laundry", "workwear", "work clothes"],
   safety_ppe: ["safety", "ppe", "personal protective equipment", "gloves", "hard hats", "respirators"],
-  bank_fees: ["bank fees", "bank charges", "bank charges and fees", "service charge", "service fee", "bank charge", "processing fees", "transaction fee", "tran fee"],
+  bank_fees: ["bank fees", "bank charges", "bank charges and fees", "service charge", "service fee", "bank charge", "processing fees", "transaction fee", "tran fee", "late fee", "finance charge", "cc fees", "credit card fees", "fees"],
   payment_processing: ["processing", "merchant fees", "payment processing", "stripe", "square", "paypal fees"],
   payroll: ["payroll", "wages"],
   utilities: ["utilities", "telecom", "internet"],
