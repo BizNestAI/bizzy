@@ -1635,6 +1635,74 @@ export async function runBookkeepingSuggestionPass({
           });
           metaBackfilled += 1;
         }
+        if (taxHit?.type === "cc_payment") {
+          const matched = Boolean(ccPaymentPair?.targetQboAccountId && ccPaymentPair?.pairConfidence === "high");
+          const ccMeta = withCategorizationPolicyVersion({
+            ...mergedMeta,
+            taxonomy_type: "cc_payment",
+            suggestion_source: "taxonomy",
+            cc_payment_pair_id: ccPaymentPair?.pairId || null,
+            cc_payment_pair_role: ccPaymentPair?.role || null,
+            cc_payment_pair_txn_id: ccPaymentPair?.txnId || null,
+            cc_payment_pair_plaid_account_id: ccPaymentPair?.pairedPlaidAccountId || null,
+            cc_payment_pair_status: ccPaymentPair?.pairStatus || null,
+            cc_payment_pair_confidence: ccPaymentPair?.pairConfidence || null,
+            cc_payment_pair_ambiguous: ccPaymentPairResult?.status === "ambiguous",
+            cc_payment_pair_candidates: ccPaymentPairResult?.candidates || null,
+            cc_payment_transfer_target_qbo_account_id: ccPaymentPair?.targetQboAccountId || null,
+            cc_payment_transfer_target_qbo_account_name: ccPaymentPair?.targetQboAccountName || null,
+            cc_payment_pair_counterpart_amount: ccPaymentPair?.counterpartAmount ?? null,
+            cc_payment_pair_counterpart_date: ccPaymentPair?.counterpartDate || null,
+            cc_payment_pair_counterpart_account_name: ccPaymentPair?.counterpartAccountName || null,
+            cc_payment_bank_qbo_account_id: ccPaymentPair?.checkingQboAccountId || null,
+            cc_payment_bank_qbo_account_name: ccPaymentPair?.checkingQboAccountName || null,
+            cc_payment_cc_qbo_account_id: ccPaymentPair?.creditCardQboAccountId || null,
+            cc_payment_cc_qbo_account_name: ccPaymentPair?.creditCardQboAccountName || null,
+            cc_payment_mapping_confidence: matched ? "high" : "low",
+            cc_payment_mapping_notes: matched ? "durable_pair_target" : ccPaymentPairResult?.reason || "cc_payment_needs_match",
+            safe_to_auto_handle: false,
+            safe_to_auto_post: false,
+            auto_handle_decision: {
+              eligible: matched,
+              confidence: matched ? "high" : taxHit.confidence || "medium",
+              source: "cc_payment_pairing",
+              reason: matched ? "cc_payment_pair_matched" : ccPaymentPairResult?.reason || "cc_payment_pair_requires_confirmation",
+              at: nowIso,
+            },
+          });
+          const targetId = matched ? ccPaymentPair.targetQboAccountId : null;
+          const targetName = matched ? ccPaymentPair.targetQboAccountName : null;
+          await pushRow({
+            txn: row,
+            payload: {
+              business_id: businessId,
+              transaction_id: row.id,
+              suggested_qbo_account_id: targetId,
+              suggested_qbo_account_name: targetName,
+              suggested_canonical_account_key: null,
+              final_qbo_account_id: null,
+              final_qbo_account_name: null,
+              final_canonical_account_key: null,
+              confidence: matched ? "high" : taxHit.confidence || "medium",
+              reason: matched ? "Credit card payment matched." : "Credit card payment needs matching before posting.",
+              status: matched ? "auto_approved" : "needs_review",
+              post_after: null,
+              post_error: matched ? null : ccPaymentPairResult?.reason || "cc_payment_pair_requires_confirmation",
+              meta: ccMeta,
+              updated_at: nowIso,
+              decided_by: matched ? "bizzi" : "taxonomy",
+              decided_at: nowIso,
+            },
+            meta: ccMeta,
+            checkHit,
+            taxonomyType: taxHit.type,
+            confidenceOverride: matched ? "high" : taxHit.confidence || "medium",
+            suggestionSource: "taxonomy",
+          });
+          if (matched) autoApproved += 1;
+          else skipped += 1;
+          continue;
+        }
         if (mergedMeta.safe_to_auto_handle !== true && mergedMeta.safe_to_auto_handle !== false) {
           const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution", "cc_payment"];
           const taxType = String(mergedMeta.taxonomy_type || "").toLowerCase();
@@ -2039,7 +2107,7 @@ export async function runBookkeepingSuggestionPass({
               name: ccPaymentPair.targetQboAccountName || ccPaymentPair.targetQboAccountId,
             };
           } else {
-            suggestedAcct = safeFallback;
+            suggestedAcct = null;
           }
           mergedMeta.cc_payment_mapping_confidence = ccMapping?.confidence || "low";
           mergedMeta.cc_payment_bank_qbo_account_id = ccPaymentPair?.checkingQboAccountId || ccMapping?.bankAccountRef?.id || null;
@@ -2057,6 +2125,51 @@ export async function runBookkeepingSuggestionPass({
             taxonomy_confidence: taxHit.confidence,
             cc_mapping_confidence: ccMapping?.confidence || "low",
           };
+          const matched = ccMapping?.confidence === "high" && ccPaymentPair?.pairConfidence === "high";
+          const ccMeta = withCategorizationPolicyVersion({
+            ...mergedMeta,
+            safe_to_auto_handle: false,
+            safe_to_auto_post: false,
+            auto_handle_decision: {
+              eligible: matched,
+              confidence: matched ? "high" : taxHit.confidence || "medium",
+              source: "cc_payment_pairing",
+              reason: matched ? "cc_payment_pair_matched" : ccPaymentPairResult?.reason || "cc_payment_pair_requires_confirmation",
+              at: nowIso,
+            },
+          });
+          await pushRow({
+            txn: row,
+            payload: {
+              business_id: businessId,
+              transaction_id: row.id,
+              suggested_qbo_account_id: suggestedAcct?.id || null,
+              suggested_qbo_account_name: suggestedAcct?.name || null,
+              suggested_canonical_account_key: null,
+              final_qbo_account_id: null,
+              final_qbo_account_name: null,
+              final_canonical_account_key: null,
+              confidence: matched ? "high" : taxHit.confidence || "medium",
+              reason: matched
+                ? `Credit card payment matched to ${ccPaymentPair.counterpartAccountName || "opposite account"}.`
+                : `Credit card payment needs matching before posting.`,
+              status: matched ? "auto_approved" : "needs_review",
+              post_after: null,
+              post_error: matched ? null : ccPaymentPairResult?.reason || "cc_payment_pair_requires_confirmation",
+              meta: ccMeta,
+              updated_at: nowIso,
+              decided_by: matched ? "bizzi" : "taxonomy",
+              decided_at: nowIso,
+            },
+            meta: ccMeta,
+            checkHit,
+            taxonomyType: taxHit.type,
+            confidenceOverride: matched ? "high" : taxHit.confidence || "medium",
+            suggestionSource: "taxonomy",
+          });
+          if (matched) autoApproved += 1;
+          else skipped += 1;
+          continue;
         } else if (taxHit.type === "owner_draw" || taxHit.type === "owner_contribution") {
           const equityAcct = taxHit.type === "owner_draw" ? ownerEquityAccounts?.drawAcct : ownerEquityAccounts?.contribAcct;
           suggestedAcct = equityAcct || fallbacks.ama || null;

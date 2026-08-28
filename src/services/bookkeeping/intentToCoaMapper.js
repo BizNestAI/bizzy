@@ -104,7 +104,6 @@ const RELATED_INTENT_KEYS = {
   fuel: ["vehicle_expense", "travel"],
   office_supplies: ["materials"],
   software: ["office_supplies"],
-  entertainment: ["meals"],
   clothing: ["uniforms_laundry", "supplies"],
   other_income: ["interest_income"],
   utilities: ["internet_services", "electric"],

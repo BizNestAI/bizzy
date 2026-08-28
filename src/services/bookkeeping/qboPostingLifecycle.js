@@ -10,6 +10,11 @@ function formatShortDateTime(value) {
 export function deriveQboPostingLifecycle(row = {}) {
   const status = String(row.status || "").toLowerCase();
   const hasQboTxn = Boolean(row.qbo_txn_id);
+  const meta = row.meta || {};
+  const unsupportedUnpairedCcPayment =
+    meta.taxonomy_type === "cc_payment" &&
+    !meta.cc_payment_pair_id &&
+    (row.post_error === "cc_payment_post_not_supported" || meta.post_block_reason === "cc_payment_post_not_supported");
 
   if (hasQboTxn) {
     return {
@@ -20,7 +25,7 @@ export function deriveQboPostingLifecycle(row = {}) {
     };
   }
 
-  if (hasProvenPostingFailure(row)) {
+  if (!unsupportedUnpairedCcPayment && hasProvenPostingFailure(row)) {
     return {
       key: "failed",
       label: "Failed",

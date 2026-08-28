@@ -32,6 +32,9 @@ export function getProtectedWorkflowReason(row = {}) {
   if (isProtectedCreditCardPaymentWorkflow(row)) {
     return { label: "Credit card payment", detail: "Credit card payment handling uses the protected transfer workflow." };
   }
+  if (taxonomy === "cc_payment") {
+    return { label: "Credit card payment · Needs match", detail: "Credit card payment handling uses the protected transfer workflow." };
+  }
   if (row.is_check && /check/.test(reason)) return { label: row.check_number ? `Check ${row.check_number}` : "Check", detail: "Checks use the protected check workflow." };
   if (["transfer_internal", "bank_transfer"].includes(taxonomy)) return { label: "Transfer", detail: "Transfers use the protected transfer workflow." };
   if (["owner_draw", "owner_contribution", "owner_distribution"].includes(taxonomy)) return { label: "Owner movement", detail: "Owner equity movements use a protected workflow." };

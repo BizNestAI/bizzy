@@ -1,4 +1,5 @@
 import { supabase } from "../supabaseAdmin.js";
+import { removeSupersededPendingPlaidRows as removeSharedSupersededPendingPlaidRows } from "./pendingPlaidSupersession.js";
 import { deriveQboPostingLifecycle } from "./qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "./postingTraceDisplay.js";
 import {
@@ -78,17 +79,7 @@ async function safeRows(factory, label = "Monthly reconciliation pipeline query"
 }
 
 export function removeSupersededPendingPlaidRows(rows = []) {
-  const activePostedPendingRefs = new Set(
-    (rows || [])
-      .filter((row) => row?.pending !== true && row?.pending_transaction_id)
-      .map((row) => String(row.pending_transaction_id))
-  );
-  return (rows || []).filter((row) => {
-    if (row?.pending === true && row?.plaid_transaction_id && activePostedPendingRefs.has(String(row.plaid_transaction_id))) {
-      return false;
-    }
-    return true;
-  });
+  return removeSharedSupersededPendingPlaidRows(rows);
 }
 
 export async function loadAuthoritativeMonthlyPlaidTransactions(businessId, start, end) {

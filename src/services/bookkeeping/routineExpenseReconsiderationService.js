@@ -11,6 +11,10 @@ import { getUniversalVendorHintForTransaction } from "./universalVendorHintMatch
 import { getVendorRuleForTransaction } from "./vendorRuleMatcher.js";
 import { canonicalTxnDirection, looksLikeTaxonomyLandmineMemo } from "./vendorRuleLearner.js";
 import {
+  createSafeCreditCardPaymentPairForRow,
+  hasCreditCardPaymentSignal,
+} from "./creditCardPaymentPairService.js";
+import {
   isStrongUniversalVendorEvidence,
   isSpecificUniversalVendorEvidence,
   withCategorizationPolicyVersion,
@@ -224,7 +228,19 @@ async function buildBusinessHistoryIndex({ db, businessId }) {
     .in("status", ["approved", "auto_approved"])
     .not("final_qbo_account_id", "is", null);
   if (catErr) throw catErr;
-  const finalCats = (cats || []).filter((row) => row?.final_qbo_account_id && row?.final_qbo_account_name);
+  const finalCats = (cats || []).filter((row) => {
+    const status = String(row?.status || "").toLowerCase();
+    const decidedBy = String(row?.decided_by || "").toLowerCase();
+    return (
+      row?.final_qbo_account_id &&
+      row?.final_qbo_account_name &&
+      (
+        status === "approved" ||
+        decidedBy === "user" ||
+        decidedBy === "user_clarification"
+      )
+    );
+  });
   if (!finalCats.length) return new Map();
   const ids = finalCats.map((row) => row.transaction_id).filter(Boolean);
   const { data: txns, error: txnErr } = await db
@@ -248,9 +264,11 @@ async function buildBusinessHistoryIndex({ db, businessId }) {
         name: cat.final_qbo_account_name,
         count: 0,
         sources: new Set(),
+        directions: new Set(),
       };
       current.count += 1;
       current.sources.add(cat.decided_by || cat.meta?.evidence_source || cat.meta?.suggestion_source || "history");
+      current.directions.add(direction);
       entry.accounts.set(accountKey, current);
       entry.directions.set(accountKey, direction);
       entry.transactionIds.add(String(txn.id));
@@ -272,6 +290,7 @@ function findBusinessHistoryAccount({ historyIndex, bankTxn = {} }) {
         name: account.name,
         count: account.count,
         sources: [...account.sources],
+        directions: [...account.directions],
         matched_key: key,
         prior_transaction_count: entry.transactionIds.size,
       });
@@ -280,9 +299,16 @@ function findBusinessHistoryAccount({ historyIndex, bankTxn = {} }) {
   if (!matches.length) return null;
   const merged = new Map();
   for (const match of matches) {
-    const existing = merged.get(match.id) || { ...match, count: 0, sources: new Set(), matched_keys: new Set() };
+    const existing = merged.get(match.id) || {
+      ...match,
+      count: 0,
+      sources: new Set(),
+      directions: new Set(match.directions || []),
+      matched_keys: new Set(),
+    };
     existing.count += match.count;
     match.sources.forEach((source) => existing.sources.add(source));
+    (match.directions || []).forEach((direction) => existing.directions.add(direction));
     existing.matched_keys.add(match.matched_key);
     existing.prior_transaction_count = Math.max(existing.prior_transaction_count || 0, match.prior_transaction_count || 0);
     merged.set(match.id, existing);
@@ -292,11 +318,17 @@ function findBusinessHistoryAccount({ historyIndex, bankTxn = {} }) {
     return { conflict: true, accounts: unique.map((item) => ({ id: item.id, name: item.name })) };
   }
   const only = unique[0];
+  const txnDirection = transactionDirection(bankTxn);
+  const priorDirections = [...(only.directions || [])].filter((direction) => direction && direction !== "UNKNOWN");
+  if (txnDirection !== "UNKNOWN" && priorDirections.length && !priorDirections.includes(txnDirection)) {
+    return { conflict: false, direction_mismatch: true, accounts: [{ id: only.id, name: only.name }] };
+  }
   return {
     id: only.id,
     name: only.name,
     count: only.count,
     sources: [...only.sources],
+    directions: priorDirections,
     matched_keys: [...only.matched_keys],
     prior_transaction_count: only.prior_transaction_count,
   };
@@ -305,7 +337,7 @@ function findBusinessHistoryAccount({ historyIndex, bankTxn = {} }) {
 function canUseUniversalIntentForResolution(hint = null) {
   if (!hint?.primary_intent) return false;
   if (hint.confidence === "high") return true;
-  return ["entertainment", "supplies", "software", "insurance"].includes(String(hint.primary_intent));
+  return ["supplies", "software", "insurance"].includes(String(hint.primary_intent));
 }
 
 function emptyBuckets() {
@@ -651,6 +683,112 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     }
     const meta = cat.meta || {};
     const checkHit = isCheck(bankTxn);
+    const existingTaxonomyType = String(meta.taxonomy_type || "").toLowerCase();
+    const ccPaymentPairResult =
+      existingTaxonomyType === "cc_payment" || hasCreditCardPaymentSignal(bankTxn)
+        ? await createSafeCreditCardPaymentPairForRow({ db, businessId, row: bankTxn })
+        : { status: "no_match", reason: "not_cc_payment" };
+    if (
+      existingTaxonomyType === "cc_payment" ||
+      ccPaymentPairResult?.status === "paired" ||
+      ccPaymentPairResult?.status === "ambiguous" ||
+      (ccPaymentPairResult?.reason && ccPaymentPairResult.reason !== "missing_payment_memo" && ccPaymentPairResult.reason !== "not_cc_payment")
+    ) {
+      const pair = ccPaymentPairResult?.pair || null;
+      const role = pair
+        ? String(pair.checking_transaction_id) === String(bankTxn.id)
+          ? "checking"
+          : "credit_card"
+        : null;
+      const targetAccountId = pair
+        ? role === "credit_card"
+          ? pair.checking_qbo_account_id
+          : pair.credit_card_qbo_account_id
+        : null;
+      const targetAccountName = pair
+        ? role === "credit_card"
+          ? pair.checking_qbo_account_name
+          : pair.credit_card_qbo_account_name
+        : null;
+      const matched = Boolean(pair?.id && pair.match_confidence === "high");
+      const nextMeta = withCategorizationPolicyVersion({
+        ...meta,
+        taxonomy_type: "cc_payment",
+        suggestion_source: "taxonomy",
+        evidence_source: "cc_payment_pairing",
+        confidence_tier: matched ? "high" : "medium",
+        cc_payment_pair_id: pair?.id || null,
+        cc_payment_pair_role: role,
+        cc_payment_pair_txn_id: pair
+          ? role === "credit_card"
+            ? pair.checking_transaction_id
+            : pair.credit_card_transaction_id
+          : null,
+        cc_payment_pair_status: pair?.status || null,
+        cc_payment_pair_confidence: pair?.match_confidence || null,
+        cc_payment_pair_ambiguous: ccPaymentPairResult?.status === "ambiguous",
+        cc_payment_pair_candidates: ccPaymentPairResult?.candidates || null,
+        cc_payment_bank_qbo_account_id: pair?.checking_qbo_account_id || null,
+        cc_payment_bank_qbo_account_name: pair?.checking_qbo_account_name || null,
+        cc_payment_cc_qbo_account_id: pair?.credit_card_qbo_account_id || null,
+        cc_payment_cc_qbo_account_name: pair?.credit_card_qbo_account_name || null,
+        cc_payment_transfer_target_qbo_account_id: targetAccountId,
+        cc_payment_transfer_target_qbo_account_name: targetAccountName,
+        cc_payment_mapping_confidence: matched ? "high" : "low",
+        cc_payment_mapping_notes: matched ? "durable_pair_target" : ccPaymentPairResult?.reason || "cc_payment_needs_match",
+        safe_to_auto_handle: false,
+        safe_to_auto_post: false,
+        auto_handle_decision: {
+          eligible: matched,
+          confidence: matched ? "high" : "medium",
+          source: "cc_payment_pairing",
+          reason: matched ? "cc_payment_pair_matched" : ccPaymentPairResult?.reason || "cc_payment_pair_requires_confirmation",
+          reconsideration_source: options.source || "backlog_reconsideration",
+          at: nowIso,
+        },
+      });
+      updates.push({
+        business_id: businessId,
+        transaction_id: cat.transaction_id,
+        suggested_qbo_account_id: targetAccountId,
+        suggested_qbo_account_name: targetAccountName,
+        suggested_canonical_account_key: null,
+        final_qbo_account_id: null,
+        final_qbo_account_name: null,
+        final_canonical_account_key: null,
+        confidence: matched ? "high" : "medium",
+        status: matched ? "auto_approved" : "needs_review",
+        post_after: null,
+        post_error: matched ? null : ccPaymentPairResult?.reason || "cc_payment_pair_requires_confirmation",
+        decided_by: matched ? "bizzi" : "taxonomy",
+        decided_at: matched ? nowIso : cat.decided_at || nowIso,
+        meta: nextMeta,
+        updated_at: nowIso,
+      });
+      if (matched) {
+        promoted += 1;
+        bucketCounts.moved_to_handled += 1;
+      } else {
+        skipped += 1;
+        bucketCounts.protected_workflow += 1;
+      }
+      rows.push({
+        transaction_id: cat.transaction_id,
+        promoted: matched,
+        reason: matched ? "cc_payment_pair_matched" : ccPaymentPairResult?.reason || "cc_payment_pair_requires_confirmation",
+        categorization: {
+          status: matched ? "auto_approved" : "needs_review",
+          suggested_qbo_account_id: targetAccountId,
+          suggested_qbo_account_name: targetAccountName,
+          final_qbo_account_id: null,
+          final_qbo_account_name: null,
+          post_after: null,
+          qbo_txn_id: null,
+          meta: nextMeta,
+        },
+      });
+      continue;
+    }
     const vendorRule = await getVendorRuleForTransaction({ businessId, bankTransaction: bankTxn, db });
     const txnDir = canonicalTxnDirection(bankTxn);
     const vendorRuleDirection = String(vendorRule?.direction_hint || "").toUpperCase();

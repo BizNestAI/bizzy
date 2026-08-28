@@ -1941,6 +1941,14 @@ async function markFailed(item, message) {
   const nowIso = getNowIso();
   const backoffMs = computeBackoffMs(nextRetries);
   const nextAttemptIso = nowIso ? new Date(Date.parse(nowIso) + backoffMs).toISOString() : null;
+  const unsupportedUnpairedCcPayment =
+    message === "cc_payment_post_not_supported" &&
+    item?.meta?.taxonomy_type === "cc_payment" &&
+    !item?.meta?.cc_payment_pair_id;
+  if (unsupportedUnpairedCcPayment) {
+    await markTransactionNonPostable(item, "cc_payment_pair_requires_confirmation");
+    return;
+  }
   const meta = {
     ...(item.meta || {}),
     post_retry_count: nextRetries,

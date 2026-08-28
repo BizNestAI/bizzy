@@ -684,7 +684,7 @@ test("statement credit can promote to Credit Card Rewards without opening transf
   assert.equal(credit.meta.taxonomy_auto_handle_reason, "statement_credit_rewards_income");
   assert.equal(payment.status, "needs_review");
   assert.equal(payment.final_qbo_account_id, null);
-  assert.match(payment.meta.auto_handle_decision.reason, /transfer_internal|review/);
+  assert.match(payment.meta.auto_handle_decision.reason, /transfer_internal|review|missing_source|cc_payment/);
 });
 
 test("Plaid medium Meals row with deterministic restaurant evidence auto-approves", async () => {

@@ -44,14 +44,14 @@ function isOutflow(row = {}) {
   const dir = String(row.direction || "").toUpperCase();
   if (dir === "OUTFLOW") return true;
   if (dir === "INFLOW") return false;
-  return Number(row.amount || 0) < 0;
+  return Number(row.signed_amount ?? row.amount ?? 0) < 0;
 }
 
 function isInflow(row = {}) {
   const dir = String(row.direction || "").toUpperCase();
   if (dir === "INFLOW") return true;
   if (dir === "OUTFLOW") return false;
-  return Number(row.amount || 0) > 0;
+  return Number(row.signed_amount ?? row.amount ?? 0) > 0;
 }
 
 function dateOnly(value) {
@@ -132,7 +132,7 @@ function issuerMatchesCheckingToCard(checkingRow = {}, cardRow = {}, cardAcct = 
 }
 
 function buildPairRecord({ businessId, checkingRow, cardRow = null, checkingAcct, cardAcct = null, checkingMapping, cardMapping, confidence, evidence, status = "needs_review", qboRealmId = null, qboEnv = null }) {
-  const amount = Math.abs(Number(checkingRow.amount || cardRow?.amount || 0));
+  const amount = Math.abs(Number(checkingRow.signed_amount ?? checkingRow.amount ?? cardRow?.signed_amount ?? cardRow?.amount ?? 0));
   const request_id = stablePairRequestId({
     businessId,
     checkingTransactionId: checkingRow.id,
@@ -225,12 +225,17 @@ export async function linkCategorizationToCreditCardPair({ db = defaultSupabase,
       safe_to_auto_handle: false,
       safe_to_auto_post: pair.status === "confirmed",
     };
+    const status = pair.match_confidence === "high"
+      ? "auto_approved"
+      : existing?.status && existing.status !== "uncategorized"
+      ? existing.status
+      : "needs_review";
     await db
       .from("transaction_categorizations")
       .upsert({
         business_id: businessId,
         transaction_id: item.id,
-        status: existing?.status && existing.status !== "uncategorized" ? existing.status : "needs_review",
+        status,
         suggested_qbo_account_id: item.targetAccountId || null,
         suggested_qbo_account_name: item.targetAccountName || null,
         suggested_canonical_account_key: null,
@@ -240,6 +245,8 @@ export async function linkCategorizationToCreditCardPair({ db = defaultSupabase,
         post_after: null,
         post_error: null,
         meta,
+        decided_by: pair.match_confidence === "high" ? "bizzi" : "taxonomy",
+        decided_at: nowIso,
         updated_at: nowIso,
       }, { onConflict: "business_id,transaction_id" });
   }
@@ -371,7 +378,7 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
   if (!businessId || !row?.id || !row.plaid_account_id) return { status: "no_match", reason: "missing_source" };
   const existing = await findExistingCreditCardPaymentPairForTransaction({ db, businessId, transactionId: row.id });
   if (existing) return { status: "paired", pair: existing, reason: "existing_pair" };
-  const amount = Number(row.amount || 0);
+  const amount = Number(row.signed_amount ?? row.amount ?? 0);
   if (!Number.isFinite(amount) || amount === 0) return { status: "no_match", reason: "invalid_amount" };
   if (!hasCreditCardPaymentSignal(row)) return { status: "no_match", reason: "missing_payment_memo" };
 
@@ -385,7 +392,7 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
 
   const { data: candidates, error } = await db
     .from("bank_transactions")
-    .select("id,plaid_account_id,amount,direction,date,name,merchant_name,counterparty_name,is_archived")
+    .select("id,plaid_account_id,amount,signed_amount,direction,date,name,merchant_name,counterparty_name,is_archived,pending,accounting_review_required")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .neq("plaid_account_id", row.plaid_account_id)
@@ -396,6 +403,27 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
     .limit(20);
   if (error) throw error;
   if (!candidates?.length) return { status: "no_match", reason: "no_counterpart" };
+  const candidateIds = [row.id, ...(candidates || []).map((candidate) => candidate.id)].filter(Boolean);
+  const { data: candidateCats, error: catErr } = await db
+    .from("transaction_categorizations")
+    .select("transaction_id,status,qbo_txn_id,final_qbo_account_id,is_archived")
+    .eq("business_id", businessId)
+    .in("transaction_id", candidateIds);
+  if (catErr) throw catErr;
+  const catByTxnId = new Map((candidateCats || []).map((cat) => [String(cat.transaction_id), cat]));
+  const hasFinalAccountingState = (txnId) => {
+    const cat = catByTxnId.get(String(txnId));
+    const status = String(cat?.status || "").toLowerCase();
+    return Boolean(
+      cat?.is_archived === true ||
+        cat?.qbo_txn_id ||
+        cat?.final_qbo_account_id ||
+        status === "approved" ||
+        status === "auto_approved" ||
+        status === "posted"
+    );
+  };
+  if (hasFinalAccountingState(row.id)) return { status: "no_match", reason: "source_already_final" };
 
   const accountMap = await fetchPlaidAccounts(db, businessId, [row.plaid_account_id, ...candidates.map((c) => c.plaid_account_id)]);
   const mappingMap = await fetchMappings(db, businessId, [row.plaid_account_id, ...candidates.map((c) => c.plaid_account_id)]);
@@ -406,6 +434,7 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
 
   const plausible = [];
   for (const candidate of candidates) {
+    if (candidate.pending === true || candidate.accounting_review_required === true || hasFinalAccountingState(candidate.id)) continue;
     const candidateAcct = accountMap.get(String(candidate.plaid_account_id));
     const candidateRail = plaidAccountRail(candidateAcct);
     const candidateMapping = mappingMap.get(String(candidate.plaid_account_id));
