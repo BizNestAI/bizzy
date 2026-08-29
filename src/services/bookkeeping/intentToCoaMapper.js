@@ -10,6 +10,7 @@ const INTENT_ALIASES = {
   subscription: "software",
   streaming: "software",
   productivity: "software",
+  software_subscription: "software",
   apparel: "clothing",
   ads: "advertising",
   leads: "advertising",
@@ -38,6 +39,8 @@ const INTENT_ALIASES = {
   cashback: "other_income",
   cash_back: "other_income",
   rewards: "other_income",
+  credit_card_rewards: "credit_card_rewards",
+  bank_deposit_receipt: "sales",
 };
 
 export function resolveIntentKey(intent = "") {
@@ -82,6 +85,7 @@ const INTENT_KEYWORDS = {
   interest_income: ["interest income", "interest"],
   sales: ["sales", "sales income", "revenue", "income", "service income"],
   other_income: ["other income", "cash back", "cashback", "statement credit", "automatic statement credit", "rewards", "reward income", "credit card rewards"],
+  credit_card_rewards: ["credit card rewards", "card rewards", "cash back", "cashback", "reward redemption", "statement credit", "rewards credit"],
 };
 
 const RELATED_INTENT_KEYS = {
@@ -106,6 +110,7 @@ const RELATED_INTENT_KEYS = {
   software: ["office_supplies"],
   clothing: ["uniforms_laundry", "supplies"],
   other_income: ["interest_income"],
+  credit_card_rewards: ["other_income"],
   utilities: ["internet_services", "electric"],
   internet_services: ["utilities"],
   electric: ["utilities"],
@@ -132,6 +137,7 @@ const STRICT_PRIMARY_ONLY_INTENTS = new Set([
   "entertainment",
   "clothing",
   "other_income",
+  "credit_card_rewards",
   "internet_services",
   "electric",
 ]);
@@ -157,6 +163,11 @@ function exactCanonicalAccountForIntent(intentKey, accounts = []) {
   if (intentKey === "parking_tolls") {
     return accounts.find((acct) =>
       ["parking and tolls", "parking tolls", "parking"].includes(acct._normName)
+    ) || null;
+  }
+  if (intentKey === "credit_card_rewards") {
+    return accounts.find((acct) =>
+      ["credit card rewards", "card rewards", "cash back rewards", "cashback rewards", "rewards income"].includes(acct._normName)
     ) || null;
   }
   return null;
@@ -251,7 +262,7 @@ function scoreAccount(intentKey, keywords, acct) {
   if (cogsIntents.has(intentKey)) {
     if (acctType.includes("cost of goods") || acctType.includes("cogs")) score += 20;
     if (acctType.includes("income")) score -= 50;
-  } else if (intentKey === "interest_income" || intentKey === "sales" || intentKey === "other_income") {
+  } else if (intentKey === "interest_income" || intentKey === "sales" || intentKey === "other_income" || intentKey === "credit_card_rewards") {
     if (acctType.includes("income")) score += 20;
     if (acctType.includes("expense") || acctType.includes("cost")) score -= 50;
   } else if (expenseIntents.has(intentKey)) {

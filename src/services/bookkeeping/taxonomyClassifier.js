@@ -4,6 +4,7 @@ export const TAXONOMY_TYPES = {
   OWNER_DRAW: "owner_draw",
   OWNER_CONTRIBUTION: "owner_contribution",
   REFUND: "refund",
+  PAYROLL: "payroll",
 };
 
 export function normalizeText(value = "") {
@@ -77,8 +78,19 @@ export function looksLikeCcPayment(tx = {}, context = {}) {
     currentAccountSubtype.includes("credit") ||
     currentAccountSubtype.includes("credit card");
   const hasCreditCardPair = context?.hasCreditCardPaymentPair === true;
+  const payrollLike =
+    /\b(?:payroll|payroll ach|direct deposit|salary|wages|paycheck|paychex payroll|adp payroll|gusto payroll|transtech)\b/.test(memo);
+  const p2pLike = /\b(?:zelle|venmo|cash app|cashapp)\b/.test(memo);
+  const paypalPersonToPerson =
+    /\bpaypal\b/.test(memo) &&
+    /\b(?:friends?|family|person|personal|p2p|transfer)\b/.test(memo) &&
+    !/\b(?:credit card|card payment|payment thank you|epay|epayment|e payment|e-payment|autopay)\b/.test(memo);
+  const personNamePayment =
+    /\b[a-z]{2,}\s+[a-z]{2,}\s+payment\b/.test(memo) &&
+    !/\b(?:credit|card|crd|amex|american express|discover|chase|visa|mastercard|master card|thank you|epay|epayment)\b/.test(memo);
   const issuerHit =
     /\b(?:amex|american express|discover|chase|visa|mastercard|master card|credit crd|credit card|cc)\b/.test(memo);
+  const hardNegative = payrollLike || p2pLike || paypalPersonToPerson || personNamePayment || /\bmobile deposit\b/.test(memo);
   const strongHigh = [
     "credit card payment",
     "card payment",
@@ -111,6 +123,10 @@ export function looksLikeCcPayment(tx = {}, context = {}) {
     (memoHasStrongHigh && memo.includes("ach") && (memo.includes("card") || memo.includes("credit"))) ||
     (issuerHit && /\b(?:payment|pmt|epay|epayment|e-payment|autopay|ach)\b/.test(memo));
 
+  if (hardNegative && !hasCreditCardPair) {
+    return null;
+  }
+
   if (hasCreditCardPair && (outflow || currentAccountIsCredit) && (hasHigh || memoHasMedium || issuerHit || memo.includes("payment"))) {
     return {
       confidence: "high",
@@ -139,6 +155,20 @@ export function looksLikeCcPayment(tx = {}, context = {}) {
     return { confidence: "medium", notes: "Outflow payment memo referencing card" };
   }
 
+  return null;
+}
+
+export function looksLikePayroll(tx = {}) {
+  const memo = getMemo(tx);
+  const primary = (tx.category_primary || "").toUpperCase();
+  const pfcPrimary = (tx.personal_finance_category?.primary || "").toUpperCase();
+  if (
+    /\b(?:payroll|payroll ach|direct deposit|salary|wages|paycheck|paychex payroll|adp payroll|gusto payroll|transtech)\b/.test(memo) ||
+    primary.includes("PAYROLL") ||
+    pfcPrimary.includes("PAYROLL")
+  ) {
+    return { confidence: "high", notes: "Payroll/direct deposit language" };
+  }
   return null;
 }
 
@@ -261,6 +291,7 @@ export function looksLikeOwnerMove(tx = {}, context = {}) {
 export function classifyTaxonomy(tx = {}, context = {}) {
   const suppressCcPayment = context?.suppressCcPayment === true || context?.taxonomyOverride === "not_cc_payment";
   const classifiers = [
+    { fn: looksLikePayroll, type: TAXONOMY_TYPES.PAYROLL },
     suppressCcPayment ? null : { fn: looksLikeCcPayment, type: TAXONOMY_TYPES.CC_PAYMENT },
     { fn: looksLikeRefund, type: TAXONOMY_TYPES.REFUND },
     { fn: looksLikeOwnerMove, type: null },

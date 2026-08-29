@@ -11,7 +11,6 @@ const hintsStartsWith = [];
 const hintsContains = [];
 const hintsRegex = [];
 const regexCompileErrors = new Set();
-const GAS_STATION_SMALL_MEAL_LIMIT = Number(process.env.BOOKS_GAS_STATION_SMALL_MEAL_LIMIT || 20);
 
 function indexHints() {
   UNIVERSAL_VENDOR_HINTS.forEach((hint) => {
@@ -86,10 +85,6 @@ function matchHint(candidates) {
   return null;
 }
 
-function isFuelHint(hint) {
-  return hint?.primary_intent === "fuel" || hint?.intents?.includes("fuel");
-}
-
 function isAmazonHint(hint) {
   return hint?.canonical === "Amazon" || hint?.canonical === "Amazon Marketplace";
 }
@@ -116,18 +111,7 @@ function applyAmountSensitiveHintAdjustments({ hint, bankTxn }) {
     }
   }
 
-  if (!isFuelHint(hint)) return hint;
-
-  const amount = absoluteTransactionAmount(bankTxn);
-  if (amount <= 0 || amount > GAS_STATION_SMALL_MEAL_LIMIT) return hint;
-
-  return {
-    ...hint,
-    intents: ["meals", "fuel"],
-    primary_intent: "meals",
-    confidence: "medium",
-    notes: "Small gas station purchase; likely snacks/food, review if it was fuel.",
-  };
+  return hint;
 }
 
 export function getUniversalVendorHintForTransaction({ bankTxn }) {

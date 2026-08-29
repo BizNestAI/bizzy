@@ -12,6 +12,7 @@ const root = process.cwd();
 const coa = [
   { id: "sales", name: "Sales", type: "Income" },
   { id: "other_income", name: "Other Income", type: "Income" },
+  { id: "rewards", name: "Credit Card Rewards", type: "Other Income" },
   { id: "fees", name: "Bank Charges & Fees", type: "Expense" },
   { id: "internet", name: "Internet Services", type: "Expense" },
   { id: "electric", name: "Electric", type: "Expense" },
@@ -139,6 +140,25 @@ test("credit card payment classifier recognizes issuer-specific and paired payme
   assert.equal(genericThankYou.type, "cc_payment");
 });
 
+test("generic payment, payroll, Zelle, and Venmo memos do not become credit-card payments", () => {
+  const nonCardPayments = [
+    "PAYROLL TRANSTECH, INC.",
+    "Paula Gebhard PAYMENT ID 12345",
+    "JOHNATHAN GUIMARAES PAYMENT",
+    "BRENT BLACK PAYMENT",
+    "ZELLE PAYMENT JOHN SMITH",
+    "VENMO PAYMENT JOHN SMITH",
+  ];
+
+  for (const name of nonCardPayments) {
+    const hit = classifyTaxonomy({ name, amount: -100, direction: "OUTFLOW" });
+    assert.notEqual(hit?.type, "cc_payment", name);
+  }
+
+  const payroll = classifyTaxonomy({ name: "PAYROLL TRANSTECH, INC.", amount: 638.88, direction: "INFLOW" });
+  assert.equal(payroll.type, "payroll");
+});
+
 test("parking vendors map to Parking/Tolls instead of broad transportation accounts", () => {
   const parkMobile = hintFor("PARK MOBILE CDOT PAY", { amount: -3.12 });
   assert.equal(parkMobile.primary_intent, "parking_tolls");
@@ -226,7 +246,7 @@ test("software and subscription vendors map to Software", () => {
   }
 });
 
-test("gas station vendors use Meals for small purchases and Gas for larger fuel-like purchases", () => {
+test("gas station vendors do not blindly become Meals based only on small amount", () => {
   const smallGasStationPurchases = [
     "QUIKTRIP 1234",
     "WAWA# 5321",
@@ -239,8 +259,8 @@ test("gas station vendors use Meals for small purchases and Gas for larger fuel-
 
   for (const name of smallGasStationPurchases) {
     const hint = hintFor(name, { amount: -6.73 });
-    assert.equal(hint.primary_intent, "meals", name);
-    assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Meals", name);
+    assert.equal(hint.primary_intent, "fuel", name);
+    assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Gas", name);
   }
 
   const largerFuel = hintFor("WAWA# 5321", { amount: -52.18 });
@@ -297,13 +317,18 @@ test("movie, gaming, charging, toll, cashback, and Amazon batch rules map correc
   const entertainmentNames = [
     "AMC 0685 PARK TERRACCHARLOTTE",
     "AMC 9640 ONLINE*9640LEAWOOD",
-    "PRIME VIDEO CHANNELS AMZN.COM/BILL",
     "PLAYSTATION NETWORK",
   ];
   for (const name of entertainmentNames) {
     const hint = hintFor(name);
     assert.equal(hint.primary_intent, "entertainment", name);
     assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Entertainment", name);
+  }
+
+  for (const name of ["PRIME VIDEO CHANNELS AMZN.COM/BILL", "AMAZON DIGITAL SVCS", "AMAZON DIGITAL SERVICES"]) {
+    const hint = hintFor(name);
+    assert.equal(hint.primary_intent, "software_subscription", name);
+    assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Software", name);
   }
 
   const chargeOnSite = hintFor("AplPay CHARGEONSITE.CHARLOTTE", { amount: -21.81 });
@@ -322,13 +347,13 @@ test("movie, gaming, charging, toll, cashback, and Amazon batch rules map correc
   assert.equal(carillonPark.primary_intent, "parking_tolls");
   assert.equal(mapIntentToCoa({ intent: carillonPark.primary_intent, coaAccounts: coa }).qbo_account_name, "Parking/Tolls");
 
-  const cashBack = hintFor("Cash Back Reward", { amount: 12.34, direction: "INFLOW" });
-  assert.equal(cashBack.primary_intent, "other_income");
-  assert.equal(mapIntentToCoa({ intent: cashBack.primary_intent, coaAccounts: coa }).qbo_account_name, "Other Income");
+  const cashBack = hintFor("Redeem Cash Back at Amazon.com", { amount: 12.34, direction: "INFLOW" });
+  assert.equal(cashBack.primary_intent, "credit_card_rewards");
+  assert.equal(mapIntentToCoa({ intent: cashBack.primary_intent, coaAccounts: coa }).qbo_account_name, "Credit Card Rewards");
 
   const statementCredit = hintFor("AUTOMATIC STATEMENT CREDIT", { amount: 1.63, direction: "INFLOW" });
-  assert.equal(statementCredit.primary_intent, "other_income");
-  assert.equal(mapIntentToCoa({ intent: statementCredit.primary_intent, coaAccounts: coa }).qbo_account_name, "Other Income");
+  assert.equal(statementCredit.primary_intent, "credit_card_rewards");
+  assert.equal(mapIntentToCoa({ intent: statementCredit.primary_intent, coaAccounts: coa }).qbo_account_name, "Credit Card Rewards");
 
   const amazonMaterials = hintFor("AMAZON MKTPLACE PMTS", { amount: -42.18 });
   assert.equal(amazonMaterials.primary_intent, "materials");
@@ -345,6 +370,17 @@ test("movie, gaming, charging, toll, cashback, and Amazon batch rules map correc
   const amazonSubscriptionEightNinetyNine = hintFor("AMAZON MKTPLACE PMTS", { amount: -8.99 });
   assert.equal(amazonSubscriptionEightNinetyNine.primary_intent, "software");
   assert.equal(mapIntentToCoa({ intent: amazonSubscriptionEightNinetyNine.primary_intent, coaAccounts: coa }).qbo_account_name, "Software");
+});
+
+test("mobile deposits and Resume.io use deterministic non-suspense intents", () => {
+  const mobileDeposit = hintFor("MOBILE DEPOSIT", { amount: 475, direction: "INFLOW" });
+  assert.equal(mobileDeposit.primary_intent, "bank_deposit_receipt");
+  assert.equal(mapIntentToCoa({ intent: mobileDeposit.primary_intent, coaAccounts: coa }).qbo_account_name, "Sales");
+  assert.notEqual(mapIntentToCoa({ intent: mobileDeposit.primary_intent, coaAccounts: coa }).qbo_account_name, "Lyft/Uber");
+
+  const resume = hintFor("RESUME.IO 1234", { amount: -24.95 });
+  assert.equal(resume.primary_intent, "software_subscription");
+  assert.equal(mapIntentToCoa({ intent: resume.primary_intent, coaAccounts: coa }).qbo_account_name, "Software");
 });
 
 test("Lime maps to Transportation", () => {

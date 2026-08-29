@@ -38,6 +38,99 @@ export function normalizeVendorString(input = "") {
 
 const UNIVERSAL_VENDOR_HINTS = [];
 
+UNIVERSAL_VENDOR_HINTS.push(
+  {
+    key: "mobile_deposit_receipt",
+    match: { type: "startsWith", value: "mobile deposit" },
+    canonical: "Mobile Deposit",
+    intents: ["bank_deposit_receipt", "sales"],
+    primary_intent: "bank_deposit_receipt",
+    confidence: "medium",
+    notes: "Mobile bank deposit; evaluate as receipt/transfer/owner funding, never transportation.",
+  },
+  {
+    key: "redeem_cash_back_rewards_income",
+    match: { type: "startsWith", value: "redeem cash back" },
+    canonical: "Credit Card Rewards",
+    intents: ["credit_card_rewards", "other_income"],
+    primary_intent: "credit_card_rewards",
+    confidence: "high",
+    notes: "Credit-card cash back or rewards income",
+  },
+  {
+    key: "cash_back_rewards_income_starts",
+    match: { type: "startsWith", value: "cash back" },
+    canonical: "Credit Card Rewards",
+    intents: ["credit_card_rewards", "other_income"],
+    primary_intent: "credit_card_rewards",
+    confidence: "high",
+    notes: "Credit-card cash back or rewards income",
+  },
+  {
+    key: "cash_back_rewards_income_specific",
+    match: { type: "regex", value: "\\b(?:redeem\\s+)?cash\\s*back\\b|\\bcashback\\b|\\breward\\s+redemption\\b|\\bcard\\s+rewards?\\b|\\bcredit\\s+card\\s+rewards?\\b|\\brewards?\\s+credit\\b|\\b(?:automatic\\s+)?statement\\s+credit\\b" },
+    canonical: "Credit Card Rewards",
+    intents: ["credit_card_rewards", "other_income"],
+    primary_intent: "credit_card_rewards",
+    confidence: "high",
+    notes: "Credit-card cash back or rewards income",
+  },
+  {
+    key: "amazon_digital_services_subscription",
+    match: { type: "startsWith", value: "amazon digital services" },
+    canonical: "Amazon Digital Subscription",
+    intents: ["software_subscription", "software"],
+    primary_intent: "software_subscription",
+    confidence: "high",
+    notes: "Amazon digital subscription",
+  },
+  {
+    key: "amazon_digital_svcs_subscription",
+    match: { type: "startsWith", value: "amazon digital svcs" },
+    canonical: "Amazon Digital Subscription",
+    intents: ["software_subscription", "software"],
+    primary_intent: "software_subscription",
+    confidence: "high",
+    notes: "Amazon digital subscription",
+  },
+  {
+    key: "amazon_prime_video_subscription_starts",
+    match: { type: "startsWith", value: "amazon prime video" },
+    canonical: "Amazon Digital Subscription",
+    intents: ["software_subscription", "software"],
+    primary_intent: "software_subscription",
+    confidence: "high",
+    notes: "Amazon Prime Video subscription",
+  },
+  {
+    key: "prime_video_subscription_starts",
+    match: { type: "startsWith", value: "prime video" },
+    canonical: "Amazon Digital Subscription",
+    intents: ["software_subscription", "software"],
+    primary_intent: "software_subscription",
+    confidence: "high",
+    notes: "Prime Video subscription",
+  },
+  {
+    key: "amazon_prime_video_subscription",
+    match: { type: "regex", value: "\\b(?:amazon\\s+)?prime\\s+video\\b|\\bamazon\\s+digital\\s+(?:svcs|services)\\b" },
+    canonical: "Amazon Digital Subscription",
+    intents: ["software_subscription", "software"],
+    primary_intent: "software_subscription",
+    confidence: "high",
+    notes: "Amazon digital or Prime Video subscription",
+  },
+  {
+    key: "resume_io_software_subscription",
+    match: { type: "regex", value: "\\bresume\\s*\\.\\s*io\\b|\\bresume\\s+io\\b" },
+    canonical: "Resume.io",
+    intents: ["software_subscription", "software"],
+    primary_intent: "software_subscription",
+    confidence: "high",
+    notes: "Business software subscription",
+  }
+);
+
 function addVendors(list, config) {
   const {
     primary,
@@ -582,7 +675,7 @@ addVendors(
 
 // Entertainment / tickets / recreation
 addVendors(
-  ["AMC", "AMC Theatres", "AMC Theaters", "Prime Video", "PlayStation", "Playstation Network", "Sony PlayStation", "Ticketmaster", "Fandango", "Gametime", "Rebill Gametime", "Monster Mini Golf"],
+  ["AMC", "AMC Theatres", "AMC Theaters", "PlayStation", "Playstation Network", "Sony PlayStation", "Ticketmaster", "Fandango", "Gametime", "Rebill Gametime", "Monster Mini Golf"],
   { intents: ["entertainment"], primary: "entertainment", confidence: "medium", notes: "Entertainment, tickets, or recreation" }
 );
 
