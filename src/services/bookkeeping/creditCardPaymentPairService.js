@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { validateBusinessQboPaymentAccountType } from "./qboAccounts.js";
+import { getMemo as getTaxonomyMemo, isDefinitelyNotCreditCardPayment } from "./taxonomyClassifier.js";
 
 const DATE_WINDOW_DAYS = 3;
 const EPS = 0.01;
@@ -20,11 +21,15 @@ export function detectCardIssuer(value = "") {
 }
 
 export function hasCreditCardPaymentSignal(row = {}) {
-  const memo = normalizeCcPaymentText([row.name, row.merchant_name, row.counterparty_name].filter(Boolean).join(" "));
+  if (isDefinitelyNotCreditCardPayment(row)) return false;
+  const memo = normalizeCcPaymentText(getTaxonomyMemo(row));
   const issuer = detectCardIssuer(memo);
-  const payment = /\b(?:payment|pmt|epay|epayment|e payment|e-payment|autopay|auto pay|ach|mobile payment|thank you)\b/.test(memo);
+  const payment = /\b(?:credit card payment|card payment|cc payment|payment|pmt|epay|epayment|e payment|e-payment|autopay|auto pay|mobile payment|internet payment|online payment|thank you)\b/.test(memo);
   const card = /\b(?:card|credit|cc|crd|amex|american express|discover|chase|visa|mastercard|master card)\b/.test(memo);
-  return payment && (card || issuer || memo.includes("thank you"));
+  const accountRailPaymentPhrase =
+    /\b(?:mobile payment|payment thank you|payment thank you mobile|payment thank you internet|internet payment thank you)\b/.test(memo) &&
+    memo.includes("thank you");
+  return payment && (card || issuer || accountRailPaymentPhrase);
 }
 
 export function plaidAccountRail(acct = {}) {
@@ -143,12 +148,10 @@ function derivePairSourceOrientation({ row = {}, sourceAcct = {}, sourceMapping 
 }
 
 function issuerMatchesCheckingToCard(checkingRow = {}, cardRow = {}, cardAcct = {}) {
-  const checkingIssuer = detectCardIssuer([checkingRow.name, checkingRow.merchant_name, checkingRow.counterparty_name].filter(Boolean).join(" "));
+  const checkingIssuer = detectCardIssuer(getTaxonomyMemo(checkingRow));
   if (!checkingIssuer) return true;
   const haystack = normalizeCcPaymentText([
-    cardRow.name,
-    cardRow.merchant_name,
-    cardRow.counterparty_name,
+    getTaxonomyMemo(cardRow),
     cardAcct.name,
     cardAcct.official_name,
   ].filter(Boolean).join(" "));

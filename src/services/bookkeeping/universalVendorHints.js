@@ -103,6 +103,15 @@ UNIVERSAL_VENDOR_HINTS.push(
     notes: "Amazon Prime Video subscription",
   },
   {
+    key: "amazon_prime_subscription_starts",
+    match: { type: "startsWith", value: "amazon prime" },
+    canonical: "Amazon Prime",
+    intents: ["software_subscription", "software"],
+    primary_intent: "software_subscription",
+    confidence: "high",
+    notes: "Amazon Prime subscription",
+  },
+  {
     key: "prime_video_subscription_starts",
     match: { type: "startsWith", value: "prime video" },
     canonical: "Amazon Digital Subscription",
@@ -113,12 +122,21 @@ UNIVERSAL_VENDOR_HINTS.push(
   },
   {
     key: "amazon_prime_video_subscription",
-    match: { type: "regex", value: "\\b(?:amazon\\s+)?prime\\s+video\\b|\\bamazon\\s+digital\\s+(?:svcs|services)\\b" },
+    match: { type: "regex", value: "\\b(?:amazon\\s+)?prime\\s+video\\b|\\bamazon\\s+digital\\s+(?:svcs|services)\\b|\\baws\\b|\\bamazon\\s+web\\s+services\\b" },
     canonical: "Amazon Digital Subscription",
     intents: ["software_subscription", "software"],
     primary_intent: "software_subscription",
     confidence: "high",
-    notes: "Amazon digital or Prime Video subscription",
+    notes: "Amazon digital, Prime Video, or AWS subscription",
+  },
+  {
+    key: "claude_anthropic_software_subscription",
+    match: { type: "regex", value: "\\bclaude(?:\\s*\\.\\s*ai)?\\b|\\banthropic\\b|\\bclaude\\s*ai\\s+subscription\\b" },
+    canonical: "Claude / Anthropic",
+    intents: ["software_subscription", "software"],
+    primary_intent: "software_subscription",
+    confidence: "high",
+    notes: "Claude / Anthropic software subscription",
   },
   {
     key: "resume_io_software_subscription",
@@ -300,17 +318,17 @@ addVendors(
 
 // Big box / retail / warehouse
 addVendors(
-  ["Amazon", "Amazon Marketplace", "Costco", "Costco Wholesale"],
-  { intents: ["materials"], primary: "materials", confidence: "medium", notes: "Warehouse supplies / materials; review if personal or grocery-only" }
+  ["Amazon Marketplace", "Amazon Mktplace", "AMZN Mktplace", "AMAZON MKTPLACE PMTS", "Costco", "Costco Wholesale"],
+  { intents: ["supplies_materials"], primary: "supplies_materials", confidence: "high", notes: "Warehouse supplies and business materials default" }
 );
 
 addVendors(
   ["Walmart", "Target", "Walgreens", "Walgreens Pharmacy"],
-  { intents: ["materials"], primary: "materials", confidence: "medium", notes: "Retail supplies / materials; review if personal-only" }
+  { intents: ["supplies_materials"], primary: "supplies_materials", confidence: "high", notes: "Retail supplies and business materials default" }
 );
 
 addVendors(
-  ["Costco", "Sam's Club", "BJ's Wholesale", "Kroger", "Safeway", "Albertsons", "Meijer", "H-E-B", "Aldi", "Lidl", "Trader Joe's"],
+  ["Sam's Club", "BJ's Wholesale", "Kroger", "Safeway", "Albertsons", "Meijer", "H-E-B", "Aldi", "Lidl", "Trader Joe's"],
   { intents: ["supplies"], primary: "supplies", confidence: "medium" }
 );
 

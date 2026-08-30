@@ -907,6 +907,162 @@ test("pending and true credit-card payment rows remain protected", async () => {
   assert.equal(db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-card-payment").status, "needs_review");
 });
 
+test("stale false cc-payment payroll and Zelle rows do not remain card-payment protected", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([
+    { id: "sales-current", name: "Sales", type: "Income", subType: "ServiceFeeIncome" },
+  ]);
+  addMapping(db, {
+    canonical_account_key: "sales",
+    qbo_account_id: "sales-current",
+    qbo_account_name: "Sales",
+    qbo_account_type: "Income",
+    qbo_account_subtype: "ServiceFeeIncome",
+  });
+  addRoutineRow(db, "txn-payroll", {
+    bankTxn: {
+      name: "PAYROLL TRANSTECH, INC.",
+      merchant_name: null,
+      merchant_entity_id: null,
+      raw: { original_description: "PAYROLL TRANSTECH, INC. slni Patrick Gebhard ACH CREDIT" },
+      amount: 638.88,
+      signed_amount: 638.88,
+      direction: "INFLOW",
+    },
+    cat: {
+      suggested_qbo_account_id: null,
+      suggested_qbo_account_name: null,
+      suggested_canonical_account_key: null,
+      meta: { taxonomy_type: "cc_payment", suggestion_source: "taxonomy" },
+    },
+  });
+  addRoutineRow(db, "txn-zelle", {
+    bankTxn: {
+      name: "Paula Gebhard PAYMENT ID BBT408971626",
+      merchant_name: null,
+      merchant_entity_id: null,
+      raw: { original_description: "Paula Gebhard PAYMENT ID BBT408971626 ZELLE PAYMENT TO" },
+      amount: -4.25,
+      signed_amount: -4.25,
+      direction: "OUTFLOW",
+    },
+    cat: {
+      suggested_qbo_account_id: null,
+      suggested_qbo_account_name: null,
+      suggested_canonical_account_key: null,
+      meta: { taxonomy_type: "cc_payment", suggestion_source: "taxonomy" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const payroll = db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-payroll");
+  const zelle = db.rows.transaction_categorizations.find((row) => row.transaction_id === "txn-zelle");
+
+  assert.equal(result.promoted, 0);
+  assert.notEqual(payroll.meta.taxonomy_type, "cc_payment");
+  assert.equal(payroll.meta.stale_taxonomy_type, "cc_payment");
+  assert.notEqual(zelle.meta.taxonomy_type, "cc_payment");
+  assert.equal(zelle.meta.stale_taxonomy_type, "cc_payment");
+});
+
+test("stale suspense retail and Claude rows reconsider to deterministic active QBO accounts", async () => {
+  const db = makeDb();
+  const { qbo, state } = makeQbo([
+    { id: "materials-current", name: "Supplies & Materials", type: "Expense", subType: "SuppliesMaterials" },
+    { id: "software-current", name: "Software", type: "Expense", subType: "DuesSubscriptions" },
+  ]);
+  addMapping(db, {
+    canonical_account_key: "materials_supplies",
+    qbo_account_id: "materials-current",
+    qbo_account_name: "Supplies & Materials",
+    qbo_account_type: "Expense",
+    qbo_account_subtype: "SuppliesMaterials",
+  });
+  addMapping(db, {
+    canonical_account_key: "software",
+    qbo_account_id: "software-current",
+    qbo_account_name: "Software",
+    qbo_account_type: "Expense",
+    qbo_account_subtype: "DuesSubscriptions",
+  });
+  for (const [id, name, merchant] of [
+    ["txn-target", "Target", "Target"],
+    ["txn-costco", "COSTCO WHSE 1234", "Costco"],
+    ["txn-walmart", "Walmart", "Walmart"],
+    ["txn-walgreens", "Walgreens", "Walgreens"],
+    ["txn-claude", "CLAUDE.AI SUBSCRIPTION", "Claude.ai"],
+  ]) {
+    addRoutineRow(db, id, {
+      bankTxn: {
+        name,
+        merchant_name: merchant,
+        merchant_entity_id: `ent-${id}`,
+        amount: -21.5,
+        signed_amount: -21.5,
+      },
+      cat: {
+        suggested_qbo_account_id: "uncat",
+        suggested_qbo_account_name: "Uncategorized Expense",
+        suggested_canonical_account_key: null,
+        confidence: "medium",
+        meta: { suggestion_source: "plaid_baseline" },
+      },
+    });
+  }
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+
+  assert.equal(result.promoted, 5);
+  assert.equal(state.createCount, 0);
+  for (const id of ["txn-target", "txn-costco", "txn-walmart", "txn-walgreens"]) {
+    const row = db.rows.transaction_categorizations.find((cat) => cat.transaction_id === id);
+    assert.equal(row.status, "auto_approved", id);
+    assert.equal(row.final_qbo_account_name, "Supplies & Materials", id);
+    assert.equal(row.decided_by, "bizzi", id);
+    assert.equal(row.post_after, null, id);
+  }
+  const claude = db.rows.transaction_categorizations.find((cat) => cat.transaction_id === "txn-claude");
+  assert.equal(claude.status, "auto_approved");
+  assert.equal(claude.final_qbo_account_name, "Software");
+  assert.equal(claude.decided_by, "bizzi");
+  assert.equal(claude.post_after, null);
+});
+
+test("approved final rows are not overwritten by reconsideration", async () => {
+  const db = makeDb();
+  const { qbo } = makeQbo([{ id: "materials-current", name: "Supplies & Materials", type: "Expense" }]);
+  addMapping(db, {
+    canonical_account_key: "materials_supplies",
+    qbo_account_id: "materials-current",
+    qbo_account_name: "Supplies & Materials",
+  });
+  addRoutineRow(db, "txn-approved-target", {
+    bankTxn: {
+      name: "Target",
+      merchant_name: "Target",
+      merchant_entity_id: "ent-approved-target",
+    },
+    cat: {
+      status: "approved",
+      suggested_qbo_account_id: "old-approved",
+      suggested_qbo_account_name: "Meals",
+      final_qbo_account_id: "old-approved",
+      final_qbo_account_name: "Meals",
+      confidence: "high",
+      decided_by: "user",
+      meta: { suggestion_source: "manual_user", auto_approve_reason: "manual_user" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations[0];
+
+  assert.equal(result.processed, 0);
+  assert.equal(row.status, "approved");
+  assert.equal(row.final_qbo_account_name, "Meals");
+  assert.equal(row.decided_by, "user");
+});
+
 test("ordinary merchant purchase on a credit card remains eligible for normal categorization", async () => {
   const db = makeDb();
   const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);

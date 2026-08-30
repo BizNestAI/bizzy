@@ -3,6 +3,7 @@ import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "./autoPost
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
 import { isReviewAccount } from "./autoHandlingPolicy.js";
 import { decideBookkeepingCategorization } from "./bookkeepingCategorizationDecisionService.js";
+import { classifyTaxonomy } from "./taxonomyClassifier.js";
 import { resolveCanonicalVendorForTransaction } from "./canonicalVendorService.js";
 import { resolveCanonicalQboAccount, validateCanonicalQboAccountForPromotion } from "./canonicalQboAccountResolver.js";
 import { resolveIntentToCanonicalKey } from "./canonicalCoaRegistry.js";
@@ -31,6 +32,10 @@ const SAFE_SEMANTIC_FALLBACK_INTENTS = new Set([
   "gas_charging",
   "fuel",
   "meals",
+  "software",
+  "supplies_materials",
+  "materials",
+  "supplies",
   "sales",
   "other_income",
 ]);
@@ -94,6 +99,38 @@ function accountFromCategorization(cat = {}) {
   };
 }
 
+function stripStaleCreditCardPaymentMeta(meta = {}, { reason = "current_taxonomy_recomputed_not_cc_payment" } = {}) {
+  const next = { ...(meta || {}) };
+  [
+    "taxonomy_type",
+    "taxonomy_subtype",
+    "taxonomy_confidence",
+    "cc_payment_pair_id",
+    "cc_payment_pair_role",
+    "cc_payment_pair_txn_id",
+    "cc_payment_pair_status",
+    "cc_payment_pair_confidence",
+    "cc_payment_pair_ambiguous",
+    "cc_payment_pair_candidates",
+    "cc_payment_bank_qbo_account_id",
+    "cc_payment_bank_qbo_account_name",
+    "cc_payment_cc_qbo_account_id",
+    "cc_payment_cc_qbo_account_name",
+    "cc_payment_transfer_target_qbo_account_id",
+    "cc_payment_transfer_target_qbo_account_name",
+    "cc_payment_mapping_confidence",
+    "cc_payment_mapping_notes",
+    "post_block_reason",
+  ].forEach((key) => {
+    delete next[key];
+  });
+  next.stale_taxonomy_type = "cc_payment";
+  next.stale_taxonomy_cleanup_reason = reason;
+  next.safe_to_auto_handle = false;
+  next.safe_to_auto_post = false;
+  return next;
+}
+
 function normalizeText(value = "") {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -130,6 +167,11 @@ function transactionText(txn = {}) {
     txn.name,
     txn.merchant_name,
     txn.counterparty_name,
+    txn.original_description,
+    txn.description,
+    txn.raw?.name,
+    txn.raw?.original_description,
+    txn.raw?.originalName,
     txn.category_primary,
     txn.category_detailed,
     typeof txn.personal_finance_category === "string" ? txn.personal_finance_category : null,
@@ -196,10 +238,10 @@ function deriveIntentFromTransaction(bankTxn = {}, meta = {}) {
   if (/\btran fee\b|\btransaction fee\b|\bbank fee\b|\bbank fees\b|\blate fee\b|\bfinance charge\b|\bservice charge\b|\bprocessing fee\b|\bmerchant fee\b/.test(text)) return "bank_fees";
   if (/\bparkmobile\b|\bpark mobile\b|\bparking\b|\bparking lot\b|\bsurface lot\b|\btoll\b|\btolls\b|\bcdot pay\b|\bpps\b/.test(text)) return "parking_tolls";
   if (/\bchargeonsite\b|\bcharging\b|\bev charge\b|\bgas\b|\bfuel\b|\bquiktrip\b|\bquicktrip\b|\bqt\b/.test(text)) return "gas_charging";
-  if (/\bopenai\b|\bchatgpt\b|\bsoftware\b|\bsubscription\b|\bsubscriptions\b|\bsaas\b/.test(text)) return "software";
+  if (/\bopenai\b|\bchatgpt\b|\bclaude\b|\banthropic\b|\bsoftware\b|\bsubscription\b|\bsubscriptions\b|\bsaas\b/.test(text)) return "software";
   if (/\btst\b|\bcafe\b|\bcoffee\b|\bcocktail\b|\bbar\b|\bwhiskey\b|\brestaurant\b|\brestaurants\b|\bfood\b|\bdining\b|\bgrill\b|\bkitchen\b|\bchick\b|\bchipotle\b|\bcava\b|\bamelie\b|\byamazaru\b|\bsumaq\b|\bcarillon\b|\bexchange\b|\bbarcelona\b|\bsloan\b|\bpub\b|\bbistro\b|\btavern\b/.test(text)) return "meals";
   if (/\bentertainment\b|\bmovie\b|\bmovies\b|\btheater\b|\btheatre\b|\bcinema\b|\bamc\b/.test(text)) return "entertainment";
-  if (/\bsupplies\b|\bsupply\b/.test(text)) return "supplies";
+  if (/\bcostco\b|\btarget\b|\bwalmart\b|\bwalgreens\b|\bsupplies\b|\bsupply\b|\bmaterials\b/.test(text)) return "supplies_materials";
   if (/\bsales\b|\brevenue\b|\bincome\b/.test(text) && transactionDirection(bankTxn) === "INFLOW") return "sales";
   return meta?.suggested_intent || null;
 }
@@ -337,7 +379,7 @@ function findBusinessHistoryAccount({ historyIndex, bankTxn = {} }) {
 function canUseUniversalIntentForResolution(hint = null) {
   if (!hint?.primary_intent) return false;
   if (hint.confidence === "high") return true;
-  return ["supplies", "software", "insurance"].includes(String(hint.primary_intent));
+  return ["supplies", "supplies_materials", "materials", "software", "software_subscription", "insurance"].includes(String(hint.primary_intent));
 }
 
 function emptyBuckets() {
@@ -640,7 +682,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
   );
   let txQuery = db
     .from("bank_transactions")
-    .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,signed_amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel,pending,accounting_review_required,accounting_review_reason,canonical_vendor_id,qbo_entity_type,qbo_entity_id,is_archived")
+    .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,signed_amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel,pending,accounting_review_required,accounting_review_reason,canonical_vendor_id,qbo_entity_type,qbo_entity_id,is_archived,raw")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .in("id", catTransactionIds);
@@ -681,15 +723,23 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       rows.push({ transaction_id: cat.transaction_id, promoted: false, reason: "answered_awaiting_accountant_review" });
       continue;
     }
-    const meta = cat.meta || {};
+    let meta = cat.meta || {};
     const checkHit = isCheck(bankTxn);
     const existingTaxonomyType = String(meta.taxonomy_type || "").toLowerCase();
+    const currentTaxHit = classifyTaxonomy(bankTxn, {
+      suppressCcPayment: meta?.cc_payment_rejected === true || meta?.taxonomy_override === "not_cc_payment",
+      taxonomyOverride: meta?.taxonomy_override || null,
+    });
+    const currentTaxonomyType = String(currentTaxHit?.type || "").toLowerCase();
+    if (existingTaxonomyType === "cc_payment" && currentTaxonomyType !== "cc_payment") {
+      meta = stripStaleCreditCardPaymentMeta(meta);
+    }
     const ccPaymentPairResult =
-      existingTaxonomyType === "cc_payment" || hasCreditCardPaymentSignal(bankTxn)
+      currentTaxonomyType === "cc_payment" || hasCreditCardPaymentSignal(bankTxn)
         ? await createSafeCreditCardPaymentPairForRow({ db, businessId, row: bankTxn })
         : { status: "no_match", reason: "not_cc_payment" };
     if (
-      existingTaxonomyType === "cc_payment" ||
+      currentTaxonomyType === "cc_payment" ||
       ccPaymentPairResult?.status === "paired" ||
       ccPaymentPairResult?.status === "ambiguous" ||
       (ccPaymentPairResult?.reason && ccPaymentPairResult.reason !== "missing_payment_memo" && ccPaymentPairResult.reason !== "not_cc_payment")

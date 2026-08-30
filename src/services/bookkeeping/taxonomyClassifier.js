@@ -13,7 +13,35 @@ export function normalizeText(value = "") {
 }
 
 export function getMemo(tx = {}) {
-  const parts = [tx.name, tx.merchant_name, tx.counterparty_name].filter(Boolean);
+  const raw = tx.raw || {};
+  const originalDescription =
+    tx.original_description ||
+    tx.originalDescription ||
+    tx.description ||
+    raw.original_description ||
+    raw.originalDescription ||
+    raw.original_name ||
+    raw.originalName ||
+    raw.name ||
+    null;
+  const plaidPaymentMeta =
+    typeof tx.personal_finance_category === "string"
+      ? tx.personal_finance_category
+      : [
+          tx.personal_finance_category?.primary,
+          tx.personal_finance_category?.detailed,
+          tx.payment_channel,
+          tx.transaction_type,
+          tx.category_primary,
+          tx.category_detailed,
+        ].filter(Boolean).join(" ");
+  const parts = [
+    tx.name,
+    tx.merchant_name,
+    tx.counterparty_name,
+    originalDescription,
+    plaidPaymentMeta,
+  ].filter(Boolean);
   return normalizeText(parts.join(" "));
 }
 
@@ -67,6 +95,39 @@ export function looksLikeTransfer(tx = {}) {
   return null;
 }
 
+export function isDefinitelyNotCreditCardPayment(tx = {}) {
+  const memo = getMemo(tx);
+  const pfcPrimary = String(tx.personal_finance_category?.primary || tx.category_primary || "").toUpperCase();
+  const pfcDetailed = String(tx.personal_finance_category?.detailed || tx.category_detailed || "").toUpperCase();
+  const payrollLike =
+    /\b(?:payroll|payroll ach|payroll credit|direct deposit payroll|direct deposit|salary|wages|paycheck|paychex payroll|adp payroll|gusto payroll|transtech)\b/.test(memo) ||
+    pfcPrimary.includes("PAYROLL") ||
+    pfcDetailed.includes("PAYROLL");
+  const p2pLike =
+    /\b(?:zelle|zelle payment|zelle payment to|zelle payment from|venmo|venmo payment|cash app|cashapp)\b/.test(memo);
+  const loanLike =
+    /\b(?:loan payment|loan principal|principal payment|mortgage payment|auto loan|student loan)\b/.test(memo);
+  const merchantPurchaseLike =
+    Boolean(normalizeText(tx.merchant_name)) &&
+    !/\b(?:amex|american express|discover|chase|visa|mastercard|master card|credit crd|credit card|cc)\b/.test(memo);
+  const paypalPersonToPerson =
+    /\bpaypal\b/.test(memo) &&
+    /\b(?:friends?|family|person|personal|p2p|transfer)\b/.test(memo) &&
+    !/\b(?:credit card|card payment|payment thank you|epay|epayment|e payment|e-payment|autopay)\b/.test(memo);
+  const personNamePayment =
+    /\b[a-z]{2,}\s+[a-z]{2,}\s+payment\b/.test(memo) &&
+    !/\b(?:credit|card|crd|amex|american express|discover|chase|visa|mastercard|master card|thank you|epay|epayment)\b/.test(memo);
+
+  if (payrollLike) return { reason: "payroll_evidence" };
+  if (p2pLike) return { reason: "peer_to_peer_rail" };
+  if (paypalPersonToPerson) return { reason: "paypal_peer_to_peer" };
+  if (personNamePayment) return { reason: "person_name_payment_without_card_evidence" };
+  if (loanLike) return { reason: "loan_payment_evidence" };
+  if (/\bmobile deposit\b/.test(memo)) return { reason: "mobile_deposit" };
+  if (merchantPurchaseLike) return { reason: "merchant_purchase_without_card_issuer_evidence" };
+  return null;
+}
+
 export function looksLikeCcPayment(tx = {}, context = {}) {
   const memo = getMemo(tx);
   const outflow = isOutflow(tx);
@@ -79,37 +140,13 @@ export function looksLikeCcPayment(tx = {}, context = {}) {
     currentAccountSubtype.includes("credit") ||
     currentAccountSubtype.includes("credit card");
   const hasCreditCardPair = context?.hasCreditCardPaymentPair === true;
-  const payrollLike =
-    /\b(?:payroll|payroll ach|direct deposit|salary|wages|paycheck|paychex payroll|adp payroll|gusto payroll|transtech)\b/.test(memo);
-  const p2pLike = /\b(?:zelle|venmo|cash app|cashapp)\b/.test(memo);
-  const paypalPersonToPerson =
-    /\bpaypal\b/.test(memo) &&
-    /\b(?:friends?|family|person|personal|p2p|transfer)\b/.test(memo) &&
-    !/\b(?:credit card|card payment|payment thank you|epay|epayment|e payment|e-payment|autopay)\b/.test(memo);
-  const personNamePayment =
-    /\b[a-z]{2,}\s+[a-z]{2,}\s+payment\b/.test(memo) &&
-    !/\b(?:credit|card|crd|amex|american express|discover|chase|visa|mastercard|master card|thank you|epay|epayment)\b/.test(memo);
   const issuerHit =
     /\b(?:amex|american express|discover|chase|visa|mastercard|master card|credit crd|credit card|cc)\b/.test(memo);
-  const hardNegative = payrollLike || p2pLike || paypalPersonToPerson || personNamePayment || /\bmobile deposit\b/.test(memo);
-  const strongHigh = [
-    "credit card payment",
-    "card payment",
-    "cc payment",
-    "cc pmt",
-    "payment received",
-    "online payment",
-    "automatic payment",
-    "autopay",
-    "auto pay",
-    "mobile payment",
-    "e payment",
-    "e-payment",
-    "epay",
-    "epayment",
-    "ach pmt",
-  ];
-  const memoHasStrongHigh = strongHigh.some((p) => memo.includes(p));
+  const hardNegative = isDefinitelyNotCreditCardPayment(tx);
+  const explicitCardPayment =
+    /\b(?:credit card payment|card payment|cc payment|cc pmt|chase credit card payment|epay chase credit crd|discover internet payment|american express payment|amex epayment|ach pmt amex epayment)\b/.test(memo);
+  const electronicPayment =
+    /\b(?:epay|epayment|e payment|e-payment|autopay|auto pay|ach pmt|online payment|internet payment|mobile payment)\b/.test(memo);
   const memoHasThankYou = memo.includes("thank you");
   const memoHasMedium =
     memo.includes("payment") &&
@@ -119,23 +156,23 @@ export function looksLikeCcPayment(tx = {}, context = {}) {
     : false;
 
   const hasHigh =
-    memoHasStrongHigh ||
-    (memoHasThankYou && memo.includes("payment")) ||
-    (memoHasStrongHigh && memo.includes("ach") && (memo.includes("card") || memo.includes("credit"))) ||
-    (issuerHit && /\b(?:payment|pmt|epay|epayment|e-payment|autopay|ach)\b/.test(memo));
+    explicitCardPayment ||
+    (issuerHit && electronicPayment) ||
+    (issuerHit && /\b(?:payment|pmt|epay|epayment|e-payment|autopay)\b/.test(memo)) ||
+    (currentAccountIsCredit && memoHasThankYou && memo.includes("payment"));
 
-  if (hardNegative && !hasCreditCardPair) {
+  if (hardNegative) {
     return null;
   }
 
-  if (hasCreditCardPair && (outflow || currentAccountIsCredit) && (hasHigh || memoHasMedium || issuerHit || memo.includes("payment"))) {
+  if (hasCreditCardPair && (outflow || currentAccountIsCredit) && (hasHigh || memoHasMedium || issuerHit)) {
     return {
       confidence: "high",
       notes: "Matched opposite-side credit card payment by amount/date and payment memo",
     };
   }
 
-  if (currentAccountIsCredit && inflow && (memoHasStrongHigh || memoHasThankYou || memoHasMedium)) {
+  if (currentAccountIsCredit && inflow && (explicitCardPayment || memoHasThankYou || memoHasMedium || electronicPayment)) {
     return {
       confidence: "high",
       notes: "Credit account inflow with payment language",
@@ -143,7 +180,7 @@ export function looksLikeCcPayment(tx = {}, context = {}) {
   }
 
   if (hasHigh && outflow) {
-    if (hasMerchantSignal && memoHasThankYou && !memoHasStrongHigh && !memo.includes("payment")) {
+    if (hasMerchantSignal && memoHasThankYou && !explicitCardPayment && !memo.includes("payment")) {
       return null;
     }
     return {
@@ -315,11 +352,11 @@ export function classifyTaxonomy(tx = {}, context = {}) {
   const suppressCcPayment = context?.suppressCcPayment === true || context?.taxonomyOverride === "not_cc_payment";
   const classifiers = [
     { fn: looksLikeTransfer, type: TAXONOMY_TYPES.TRANSFER_INTERNAL },
-    suppressCcPayment ? null : { fn: looksLikeCcPayment, type: TAXONOMY_TYPES.CC_PAYMENT },
     { fn: looksLikePayroll, type: TAXONOMY_TYPES.PAYROLL },
+    { fn: looksLikePeerToPeerTransfer, type: TAXONOMY_TYPES.PEER_TO_PEER_TRANSFER },
+    suppressCcPayment ? null : { fn: looksLikeCcPayment, type: TAXONOMY_TYPES.CC_PAYMENT },
     { fn: looksLikeRefund, type: TAXONOMY_TYPES.REFUND },
     { fn: looksLikeOwnerMove, type: null },
-    { fn: looksLikePeerToPeerTransfer, type: TAXONOMY_TYPES.PEER_TO_PEER_TRANSFER },
   ].filter(Boolean);
 
   for (const entry of classifiers) {

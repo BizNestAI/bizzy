@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { getUniversalVendorHintForTransaction } from "../src/services/bookkeeping/universalVendorHintMatcher.js";
 import { mapIntentToCoa } from "../src/services/bookkeeping/intentToCoaMapper.js";
-import { classifyTaxonomy } from "../src/services/bookkeeping/taxonomyClassifier.js";
+import { classifyTaxonomy, isDefinitelyNotCreditCardPayment } from "../src/services/bookkeeping/taxonomyClassifier.js";
 
 const root = process.cwd();
 
@@ -84,7 +84,7 @@ test("Tesla charging, Costco, and Secretary of State filings map to the intended
   assert.equal(mapIntentToCoa({ intent: tesla.primary_intent, coaAccounts: coa }).qbo_account_name, "Gas/Charging");
 
   const costco = hintFor("COSTCO WHSE 1234");
-  assert.equal(costco.primary_intent, "materials");
+  assert.equal(costco.primary_intent, "supplies_materials");
   assert.equal(mapIntentToCoa({ intent: costco.primary_intent, coaAccounts: coa }).qbo_account_name, "Supplies & Materials");
 
   const filing = hintFor("FILINGS NC SECRETARY OF STATE");
@@ -142,12 +142,13 @@ test("credit card payment classifier recognizes issuer-specific and paired payme
 
 test("generic payment, payroll, Zelle, and Venmo memos do not become credit-card payments", () => {
   const nonCardPayments = [
-    "PAYROLL TRANSTECH, INC.",
+    "PAYROLL TRANSTECH, INC. slni Patrick Gebhard ACH CREDIT",
     "Paula Gebhard PAYMENT ID 12345",
     "JOHNATHAN GUIMARAES PAYMENT",
     "BRENT BLACK PAYMENT",
     "ZELLE PAYMENT JOHN SMITH",
     "VENMO PAYMENT JOHN SMITH",
+    "PAYMENT ID BBT408971626",
     "PAYMENT FROM CUSTOMER 123",
   ];
 
@@ -158,6 +159,25 @@ test("generic payment, payroll, Zelle, and Venmo memos do not become credit-card
 
   const payroll = classifyTaxonomy({ name: "PAYROLL TRANSTECH, INC.", amount: 638.88, direction: "INFLOW" });
   assert.equal(payroll.type, "payroll");
+
+  const payrollMemo = {
+    name: "PAYMENT ID 444",
+    merchant_name: null,
+    raw: { original_description: "PAYROLL TRANSTECH, INC. slni Patrick Gebhard ACH CREDIT" },
+    amount: 638.88,
+    direction: "INFLOW",
+  };
+  assert.equal(isDefinitelyNotCreditCardPayment(payrollMemo).reason, "payroll_evidence");
+  assert.equal(classifyTaxonomy(payrollMemo).type, "payroll");
+
+  const zelleMemo = {
+    name: "Paula Gebhard PAYMENT ID BBT408971626",
+    raw: { original_description: "Paula Gebhard PAYMENT ID BBT408971626 ZELLE PAYMENT TO" },
+    amount: -4.25,
+    direction: "OUTFLOW",
+  };
+  assert.equal(isDefinitelyNotCreditCardPayment(zelleMemo).reason, "peer_to_peer_rail");
+  assert.equal(classifyTaxonomy(zelleMemo).type, "peer_to_peer_transfer");
 
   for (const name of [
     "Paula Gebhard PAYMENT ID 12345",
@@ -171,6 +191,13 @@ test("generic payment, payroll, Zelle, and Venmo memos do not become credit-card
   }
 
   assert.equal(classifyTaxonomy({ name: "PAYMENT FROM CUSTOMER 123", amount: 100, direction: "INFLOW" }), null);
+});
+
+test("generic payment strings are insufficient while issuer-specific card payments still match", () => {
+  assert.equal(classifyTaxonomy({ name: "PAYMENT ID BBT408971626", amount: -25, direction: "OUTFLOW" })?.type, "peer_to_peer_transfer");
+  assert.equal(classifyTaxonomy({ name: "ACH CREDIT", amount: 100, direction: "INFLOW" }), null);
+  assert.equal(classifyTaxonomy({ name: "EPAY CHASE CREDIT CRD", amount: -219, direction: "OUTFLOW" }).type, "cc_payment");
+  assert.equal(classifyTaxonomy({ name: "ACH PMT AMEX EPAYMENT M3358 INTERNET", amount: -32, direction: "OUTFLOW" }).type, "cc_payment");
 });
 
 test("parking vendors map to Parking/Tolls instead of broad transportation accounts", () => {
@@ -283,10 +310,10 @@ test("gas station vendors do not blindly become Meals based only on small amount
 });
 
 test("retail and grocery vendors map to the requested materials or meals accounts", () => {
-  const materialsNames = ["Walmart", "Target", "Walgreens"];
+  const materialsNames = ["Costco", "Costco Wholesale", "Walmart", "Target", "Walgreens"];
   for (const name of materialsNames) {
     const hint = hintFor(name);
-    assert.equal(hint.primary_intent, "materials", name);
+    assert.equal(hint.primary_intent, "supplies_materials", name);
     assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Supplies & Materials", name);
   }
 
@@ -370,20 +397,20 @@ test("movie, gaming, charging, toll, cashback, and Amazon batch rules map correc
   assert.equal(mapIntentToCoa({ intent: statementCredit.primary_intent, coaAccounts: coa }).qbo_account_name, "Credit Card Rewards");
 
   const amazonMaterials = hintFor("AMAZON MKTPLACE PMTS", { amount: -42.18 });
-  assert.equal(amazonMaterials.primary_intent, "materials");
+  assert.equal(amazonMaterials.primary_intent, "supplies_materials");
   assert.equal(mapIntentToCoa({ intent: amazonMaterials.primary_intent, coaAccounts: coa }).qbo_account_name, "Supplies & Materials");
 
   const amazonSubscriptionEight = hintFor("AMAZON MKTPLACE PMTS", { amount: -8 });
-  assert.equal(amazonSubscriptionEight.primary_intent, "software");
-  assert.equal(mapIntentToCoa({ intent: amazonSubscriptionEight.primary_intent, coaAccounts: coa }).qbo_account_name, "Software");
+  assert.equal(amazonSubscriptionEight.primary_intent, "supplies_materials");
+  assert.equal(mapIntentToCoa({ intent: amazonSubscriptionEight.primary_intent, coaAccounts: coa }).qbo_account_name, "Supplies & Materials");
 
   const amazonPrimeEight = hintFor("Amazon Prime", { amount: -8 });
-  assert.equal(amazonPrimeEight.primary_intent, "software");
+  assert.equal(amazonPrimeEight.primary_intent, "software_subscription");
   assert.equal(mapIntentToCoa({ intent: amazonPrimeEight.primary_intent, coaAccounts: coa }).qbo_account_name, "Software");
 
   const amazonSubscriptionEightNinetyNine = hintFor("AMAZON MKTPLACE PMTS", { amount: -8.99 });
-  assert.equal(amazonSubscriptionEightNinetyNine.primary_intent, "software");
-  assert.equal(mapIntentToCoa({ intent: amazonSubscriptionEightNinetyNine.primary_intent, coaAccounts: coa }).qbo_account_name, "Software");
+  assert.equal(amazonSubscriptionEightNinetyNine.primary_intent, "supplies_materials");
+  assert.equal(mapIntentToCoa({ intent: amazonSubscriptionEightNinetyNine.primary_intent, coaAccounts: coa }).qbo_account_name, "Supplies & Materials");
 });
 
 test("mobile deposits and Resume.io use deterministic non-suspense intents", () => {
@@ -395,6 +422,14 @@ test("mobile deposits and Resume.io use deterministic non-suspense intents", () 
   const resume = hintFor("RESUME.IO 1234", { amount: -24.95 });
   assert.equal(resume.primary_intent, "software_subscription");
   assert.equal(mapIntentToCoa({ intent: resume.primary_intent, coaAccounts: coa }).qbo_account_name, "Software");
+});
+
+test("Claude and Anthropic subscription vendors map to Software", () => {
+  for (const name of ["Claude", "Claude.ai", "ANTHROPIC", "CLAUDE.AI SUBSCRIPTION"]) {
+    const hint = hintFor(name);
+    assert.equal(hint.primary_intent, "software_subscription", name);
+    assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Software", name);
+  }
 });
 
 test("Lime maps to Transportation", () => {

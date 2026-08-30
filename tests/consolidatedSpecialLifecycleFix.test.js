@@ -96,6 +96,7 @@ test("entertainment intent cannot automatically fall back to Meals", () => {
 test("payment hard-stop paths clear stale P&L suggestions during customer and reconsideration processing", () => {
   const suggestRoute = read("src/api/bookkeeping/routes/bookkeeping.suggest.routes.js");
   const reconsideration = read("src/services/bookkeeping/routineExpenseReconsiderationService.js");
+  const pairService = read("src/services/bookkeeping/creditCardPaymentPairService.js");
 
   assert.match(suggestRoute, /taxHit\?\.type === "cc_payment"/);
   assert.match(suggestRoute, /const targetId = matched \? ccPaymentPair\.targetQboAccountId : null/);
@@ -103,10 +104,13 @@ test("payment hard-stop paths clear stale P&L suggestions during customer and re
   assert.match(suggestRoute, /final_qbo_account_id: null/);
   assert.match(suggestRoute, /continue;/);
 
-  assert.match(reconsideration, /existingTaxonomyType === "cc_payment" \|\| hasCreditCardPaymentSignal\(bankTxn\)/);
+  assert.match(reconsideration, /currentTaxonomyType === "cc_payment" \|\| hasCreditCardPaymentSignal\(bankTxn\)/);
+  assert.match(reconsideration, /stripStaleCreditCardPaymentMeta/);
   assert.match(reconsideration, /suggested_qbo_account_id: targetAccountId/);
   assert.match(reconsideration, /final_qbo_account_id: null/);
   assert.match(reconsideration, /status: matched \? "auto_approved" : "needs_review"/);
+  assert.match(pairService, /isDefinitelyNotCreditCardPayment\(row\)/);
+  assert.match(pairService, /accountRailPaymentPhrase/);
 });
 
 test("business-history learning only uses human-approved final categorizations and checks direction", () => {

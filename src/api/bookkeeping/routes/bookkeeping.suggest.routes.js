@@ -23,7 +23,10 @@ import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "../../../s
 import { decideBookkeepingCategorization } from "../../../services/bookkeeping/bookkeepingCategorizationDecisionService.js";
 import { resolveCanonicalVendorForTransaction } from "../../../services/bookkeeping/canonicalVendorService.js";
 import { reconsiderNeedsReviewTransactions } from "../../../services/bookkeeping/routineExpenseReconsiderationService.js";
-import { createSafeCreditCardPaymentPairForRow } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
+import {
+  createSafeCreditCardPaymentPairForRow,
+  hasCreditCardPaymentSignal,
+} from "../../../services/bookkeeping/creditCardPaymentPairService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
 import { resolveIntentToCanonicalKey } from "../../../services/bookkeeping/canonicalCoaRegistry.js";
 import {
@@ -65,6 +68,7 @@ const UNIVERSAL_COA_ALLOWLIST = new Set([
   "internet_services",
   "electric",
   "office_supplies",
+  "supplies_materials",
   "supplies",
   "cleaning",
   "parking_tolls",
@@ -99,6 +103,7 @@ const UNIVERSAL_AUTO_APPROVE_ALLOWLIST = new Set([
   "internet_services",
   "electric",
   "office_supplies",
+  "supplies_materials",
   "supplies",
   "cleaning",
   "parking_tolls",
@@ -135,6 +140,7 @@ function intentToStandardAccountName(intent = "") {
     internet_services: "Internet Services",
     electric: "Electric",
     office_supplies: "Office Supplies",
+    supplies_materials: "Supplies & Materials",
     cleaning: "Cleaning",
     parking_tolls: "Parking & Tolls",
     shipping: "Shipping",
@@ -719,10 +725,7 @@ function plaidAccountLooksCredit(acct = {}) {
 }
 
 function hasCreditCardPaymentMemoSignal(row = {}) {
-  const memo = normalizeName([row.name, row.merchant_name, row.counterparty_name].filter(Boolean).join(" "));
-  const issuer = /\b(?:amex|american express|discover|chase|visa|mastercard|master card|credit crd|credit card|cc)\b/.test(memo);
-  const payment = /\b(?:payment|pmt|epay|epayment|e payment|e-payment|autopay|auto pay|ach|mobile payment|thank you)\b/.test(memo);
-  return issuer && payment;
+  return hasCreditCardPaymentSignal(row);
 }
 
 async function findCreditCardPaymentPairTxnId(businessId, row, { bookkeepingStartDate = null, allowHistoricalContext = false } = {}) {
@@ -1132,7 +1135,7 @@ export async function runBookkeepingSuggestionPass({
     // Step A: base transactions to consider
     let txQuery = supabase
       .from("bank_transactions")
-      .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel,pending,accounting_review_required,accounting_review_reason,canonical_vendor_id,qbo_entity_type,qbo_entity_id")
+      .select("id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,merchant_entity_id,counterparty_name,counterparties,amount,direction,category_primary,category_detailed,personal_finance_category,transaction_type,check_number,payment_channel,pending,accounting_review_required,accounting_review_reason,canonical_vendor_id,qbo_entity_type,qbo_entity_id,raw")
       .eq("business_id", businessId)
       .eq("is_archived", false);
     if (txnIds && txnIds.length) {
@@ -1517,6 +1520,16 @@ export async function runBookkeepingSuggestionPass({
         freshUniversalHint &&
         isUniversalIntentAllowlisted(freshUniversalHint.primary_intent) &&
         isStrongUniversalVendorEvidence(freshUniversalHint);
+      const existingSuggested = ensureAccountName({
+        acctId: existingCat?.suggested_qbo_account_id || null,
+        acctName: existingCat?.suggested_qbo_account_name || null,
+        coa,
+      });
+      const existingSuggestedSuspense = isSuspenseAccount({
+        acctId: existingSuggested.id,
+        acctName: existingSuggested.name,
+        suspenseIds,
+      });
       const existingCanonicalKey = existingCat?.suggested_canonical_account_key || metaBase?.canonical_account_key || null;
       const freshIntentKey = freshUniversalHint?.primary_intent ? resolveIntentKey(freshUniversalHint.primary_intent) : null;
       const bypassExistingForFreshEvidence =
@@ -1527,6 +1540,7 @@ export async function runBookkeepingSuggestionPass({
           (
             strongFreshUniversalEvidence &&
             (
+              existingSuggestedSuspense ||
               !existingCanonicalKey ||
               String(existingCanonicalKey).toLowerCase() !== String(freshIntentKey || "").toLowerCase() ||
               String(metaBase?.suggestion_source || "") !== "universal_hint"

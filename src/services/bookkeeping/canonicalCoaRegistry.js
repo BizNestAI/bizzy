@@ -64,6 +64,7 @@ const intentMappings = {
   electric: "electric",
   electricity: "electric",
   electric_utility: "electric",
+  supplies_materials: "materials_supplies",
   materials: "materials_supplies",
   supplies: "materials_supplies",
   general_supplies: "materials_supplies",
