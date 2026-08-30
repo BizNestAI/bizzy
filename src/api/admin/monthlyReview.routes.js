@@ -19,6 +19,7 @@ import {
   fetchBookkeepingTransactions,
   matchesTransactionStatusFilter,
 } from "../../services/bookkeeping/bookkeepingTransactionFeedService.js";
+import { getAvailableMonthlyReviewPeriods } from "../../services/bookkeeping/monthlyReviewAvailablePeriodsService.js";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import {
   deriveTraceReconciliationStatus,
@@ -179,6 +180,24 @@ router.get("/businesses", async (req, res) => {
   }
 });
 
+router.get("/businesses/:businessId/available-periods", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    await assertMonthlyReviewBusinessExists(businessId);
+    const periods = await getAvailableMonthlyReviewPeriods({ businessId, db: supabase });
+    res.json({
+      ok: true,
+      business_id: businessId,
+      periods,
+      books_start_date: periods.find((period) => period.booksStartDate)?.booksStartDate || null,
+    });
+  } catch (e) {
+    console.error("[monthly-review] available periods failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_available_periods_failed", "Could not load available review periods.", e);
+  }
+});
+
 router.get("/businesses/:businessId", async (req, res) => {
   try {
     const businessId = req.params.businessId;
@@ -193,6 +212,7 @@ router.get("/businesses/:businessId", async (req, res) => {
     if (bizErr) throw bizErr;
     if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
 
+    await assertMonthlyReviewPeriodAvailable(businessId, month);
     const run = await ensureRun(businessId, month, req.user.id);
     const sections = await ensureSections(run.id);
     const summaries = await buildSummaries(businessId, month);
@@ -1966,6 +1986,18 @@ async function assertMonthlyReviewBusinessExists(businessId) {
     throw err;
   }
   return business;
+}
+
+async function assertMonthlyReviewPeriodAvailable(businessId, month) {
+  const monthKey = String(month || "").slice(0, 7);
+  const periods = await getAvailableMonthlyReviewPeriods({ businessId, db: supabase });
+  if (periods.some((period) => String(period.month || period.value || "").slice(0, 7) === monthKey)) {
+    return true;
+  }
+  const err = new Error("monthly review period is not available for this business");
+  err.status = 404;
+  err.error = "monthly_review_period_not_available";
+  throw err;
 }
 
 async function fetchRunMap(businessIds, month) {

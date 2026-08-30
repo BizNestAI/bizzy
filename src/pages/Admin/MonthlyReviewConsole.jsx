@@ -98,6 +98,8 @@ export default function MonthlyReviewConsole() {
   const [month, setMonth] = useState(() => initialMonthValue());
   const [businesses, setBusinesses] = useState([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState(() => initialBusinessIdValue());
+  const [availablePeriods, setAvailablePeriods] = useState([]);
+  const [loadingAvailablePeriods, setLoadingAvailablePeriods] = useState(false);
   const [detail, setDetail] = useState(null);
   const [sourceLedger, setSourceLedger] = useState(null);
   const [connectedAccounts, setConnectedAccounts] = useState(null);
@@ -150,7 +152,11 @@ export default function MonthlyReviewConsole() {
     [displayBusinesses, selectedBusinessId]
   );
   const demoMode = useMemo(() => shouldUseDemoData(selectedBusiness), [selectedBusiness]);
-  const monthOptions = useMemo(() => buildMonthOptions(month), [month]);
+  const monthOptions = useMemo(() => buildMonthOptions(month, availablePeriods), [availablePeriods, month]);
+  const selectedPeriod = useMemo(
+    () => monthOptions.find((option) => option.value === month) || null,
+    [month, monthOptions]
+  );
 
   const reviewedCount = useMemo(() => {
     const sections = detail?.sections || [];
@@ -228,6 +234,33 @@ export default function MonthlyReviewConsole() {
       setLoadingDetail(false);
     }
   }, [demoMode, month, selectedBusinessId]);
+
+  const loadAvailablePeriods = useCallback(async () => {
+    if (!selectedBusinessId) {
+      setAvailablePeriods([]);
+      return;
+    }
+    setLoadingAvailablePeriods(true);
+    try {
+      const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/available-periods`);
+      const periods = Array.isArray(data?.periods) ? data.periods : [];
+      setAvailablePeriods(periods);
+      if (periods.length) {
+        setMonth((current) => {
+          if (periods.some((period) => period.value === current || period.month === current)) return current;
+          const currentMonth = currentMonthValue();
+          const fallback = periods.find((period) => period.value === currentMonth || period.month === currentMonth) || periods[periods.length - 1];
+          const nextMonth = fallback?.value || fallback?.month || current;
+          updateReviewUrl({ businessId: selectedBusinessId, month: nextMonth });
+          return nextMonth;
+        });
+      }
+    } catch (e) {
+      setError(e?.body?.message || e?.message || "Could not load available review periods.");
+    } finally {
+      setLoadingAvailablePeriods(false);
+    }
+  }, [selectedBusinessId]);
 
   const loadSourceLedger = useCallback(async () => {
     if (!selectedBusinessId) {
@@ -506,6 +539,10 @@ export default function MonthlyReviewConsole() {
   }, [loadDetail]);
 
   useEffect(() => {
+    loadAvailablePeriods();
+  }, [loadAvailablePeriods]);
+
+  useEffect(() => {
     loadSourceLedger();
   }, [loadSourceLedger]);
 
@@ -548,6 +585,7 @@ export default function MonthlyReviewConsole() {
   const selectBusiness = useCallback((businessId) => {
     if (!businessId || String(businessId) === String(selectedBusinessId)) return;
     setSelectedBusinessId(businessId);
+    setAvailablePeriods([]);
     setDetail(null);
     setSourceLedger(null);
     applyQboPnlSnapshot(null);
@@ -1336,6 +1374,7 @@ export default function MonthlyReviewConsole() {
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={month}
+              disabled={loadingAvailablePeriods && monthOptions.length === 0}
               onChange={(event) => {
                 selectMonth(event.target.value);
               }}
@@ -1343,7 +1382,7 @@ export default function MonthlyReviewConsole() {
             >
               {monthOptions.map((option) => (
                 <option key={option.value} value={option.value} className="bg-[#101216] text-white">
-                  {option.label}
+                  {option.label}{option.isPartialStartMonth ? " - Partial" : ""}
                 </option>
               ))}
             </select>
@@ -1375,6 +1414,7 @@ export default function MonthlyReviewConsole() {
 	              type="button"
 	              onClick={() => {
 	                loadBusinesses();
+                  loadAvailablePeriods();
 	                loadDetail();
 	                loadQboPnlSnapshot();
 	                loadConnectedAccounts();
@@ -1465,6 +1505,11 @@ export default function MonthlyReviewConsole() {
                       <span className="h-1 w-1 rounded-full bg-white/35" />
                       <StatusPill status={selectedReviewStatus.key} label={selectedReviewStatus.label} />
                     </div>
+                    {selectedPeriod?.isPartialStartMonth && selectedPeriod?.booksStartDate ? (
+                      <p className="mt-1 text-xs font-medium text-amber-100/80">
+                        Partial month · Books begin {formatDate(selectedPeriod.booksStartDate)}
+                      </p>
+                    ) : null}
                     {detail?.stamp ? <ReviewedStamp stamp={detail.stamp} month={month} /> : null}
                     {detail?.run?.assigned_reviewer_email ? (
                       <p className="mt-1 text-xs text-white/45">Assigned to {detail.run.assigned_reviewer_email}</p>
@@ -3302,21 +3347,23 @@ function formatStampDateTime(value) {
   return date.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function buildMonthOptions(currentValue) {
-  const now = new Date();
-  const months = [];
-  for (let offset = 2; offset >= -15; offset -= 1) {
-    const date = new Date(now.getFullYear(), now.getMonth() - offset, 1);
-    const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-    months.push({ value, label: formatMonth(value) });
-  }
-  if (currentValue && !months.some((item) => item.value === currentValue)) {
-    months.unshift({ value: currentValue, label: formatMonth(currentValue) });
-  }
-  if (!months.some((item) => item.value === "2026-05")) {
-    months.push({ value: "2026-05", label: "May 2026" });
-  }
-  return months;
+function buildMonthOptions(currentValue, availablePeriods = []) {
+  const periods = (Array.isArray(availablePeriods) ? availablePeriods : [])
+    .map((period) => {
+      const value = String(period?.value || period?.month || "").slice(0, 7);
+      if (!/^\d{4}-\d{2}$/.test(value)) return null;
+      return {
+        ...period,
+        value,
+        label: period?.label || formatMonth(value),
+        isPartialStartMonth: period?.isPartialStartMonth === true || period?.isPartialStart === true,
+      };
+    })
+    .filter(Boolean);
+  if (periods.length) return periods;
+  if (currentValue) return [{ value: currentValue, label: formatMonth(currentValue) }];
+  const value = currentMonthValue();
+  return [{ value, label: formatMonth(value) }];
 }
 
 function buildDemoReviewDetail(data, month) {
@@ -3890,6 +3937,15 @@ function formatMonthShort(value) {
   if (!match) return "Month";
   return new Date(Number(match[1]), Number(match[2]) - 1, 1).toLocaleDateString(undefined, {
     month: "long",
+  });
+}
+
+function formatDate(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return "the first imported transaction";
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
   });
 }
 
