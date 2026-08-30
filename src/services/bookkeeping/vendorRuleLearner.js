@@ -1,6 +1,6 @@
 import { supabase } from "../supabaseAdmin.js";
 
-const LANDMINE_TYPES = new Set(["transfer_internal", "cc_payment", "owner_draw", "owner_contribution", "refund"]);
+const LANDMINE_TYPES = new Set(["transfer_internal", "cc_payment", "owner_draw", "owner_contribution", "refund", "payroll", "peer_to_peer_transfer"]);
 
 export function normalizeText(str = "") {
   return String(str || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -64,6 +64,18 @@ export function looksLikeTaxonomyLandmineMemo(tx = {}) {
     memo.includes("reversal") ||
     memo.includes("credit reversal") ||
     memo.includes("returned");
+  const payrollHit =
+    memo.includes("payroll") ||
+    memo.includes("direct deposit") ||
+    memo.includes("salary") ||
+    memo.includes("wages") ||
+    memo.includes("transtech");
+  const p2pHit =
+    memo.includes("zelle") ||
+    memo.includes("venmo") ||
+    memo.includes("cash app") ||
+    memo.includes("cashapp") ||
+    memo.includes("payment id");
   const ownerHit =
     memo.includes("owner draw") ||
     memo.includes("owner distribution") ||
@@ -74,7 +86,7 @@ export function looksLikeTaxonomyLandmineMemo(tx = {}) {
     memo.includes("to myself") ||
     memo.includes("venmo cashout") ||
     memo.includes("paypal transfer");
-  return transferHit || ccHit || refundHit || ownerHit;
+  return transferHit || ccHit || refundHit || ownerHit || payrollHit || p2pHit;
 }
 
 export async function learnVendorRuleFromTransaction({ businessId, bankTxn, finalAccountId, finalAccountName, taxonomyType, options = {} }) {

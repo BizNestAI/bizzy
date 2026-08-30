@@ -5,6 +5,7 @@ export const TAXONOMY_TYPES = {
   OWNER_CONTRIBUTION: "owner_contribution",
   REFUND: "refund",
   PAYROLL: "payroll",
+  PEER_TO_PEER_TRANSFER: "peer_to_peer_transfer",
 };
 
 export function normalizeText(value = "") {
@@ -172,6 +173,28 @@ export function looksLikePayroll(tx = {}) {
   return null;
 }
 
+export function looksLikePeerToPeerTransfer(tx = {}) {
+  const memo = getMemo(tx);
+  const issuerOrCardPayment =
+    /\b(?:credit card|credit crd|card payment|payment thank you|mobile payment - thank you|internet payment - thank you|amex|american express|discover|chase|visa|mastercard|master card|epay|epayment|e-payment|autopay)\b/.test(memo);
+
+  if (issuerOrCardPayment) return null;
+
+  if (/\b(?:zelle|venmo|cash app|cashapp)\b/.test(memo)) {
+    return { confidence: "high", notes: "Peer-to-peer payment rail language" };
+  }
+
+  if (/\bpayment id\b/.test(memo)) {
+    return { confidence: "high", notes: "Payment ID transfer language without card issuer evidence" };
+  }
+
+  if (/\b[a-z]{2,}\s+[a-z]{2,}\s+payment\b/.test(memo)) {
+    return { confidence: "high", notes: "Person-name payment language without card issuer evidence" };
+  }
+
+  return null;
+}
+
 export function looksLikeRefund(tx = {}) {
   const memo = getMemo(tx);
   const inflow = isInflow(tx);
@@ -291,11 +314,12 @@ export function looksLikeOwnerMove(tx = {}, context = {}) {
 export function classifyTaxonomy(tx = {}, context = {}) {
   const suppressCcPayment = context?.suppressCcPayment === true || context?.taxonomyOverride === "not_cc_payment";
   const classifiers = [
-    { fn: looksLikePayroll, type: TAXONOMY_TYPES.PAYROLL },
+    { fn: looksLikeTransfer, type: TAXONOMY_TYPES.TRANSFER_INTERNAL },
     suppressCcPayment ? null : { fn: looksLikeCcPayment, type: TAXONOMY_TYPES.CC_PAYMENT },
+    { fn: looksLikePayroll, type: TAXONOMY_TYPES.PAYROLL },
     { fn: looksLikeRefund, type: TAXONOMY_TYPES.REFUND },
     { fn: looksLikeOwnerMove, type: null },
-    { fn: looksLikeTransfer, type: TAXONOMY_TYPES.TRANSFER_INTERNAL },
+    { fn: looksLikePeerToPeerTransfer, type: TAXONOMY_TYPES.PEER_TO_PEER_TRANSFER },
   ].filter(Boolean);
 
   for (const entry of classifiers) {

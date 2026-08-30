@@ -3,6 +3,7 @@ const HIGH_RISK_TAXONOMY_TYPES = new Set([
   "refund",
   "owner_draw",
   "owner_contribution",
+  "peer_to_peer_transfer",
 ]);
 
 const POSTABLE_SPECIAL_TAXONOMY_TYPES = new Set(["cc_payment"]);
@@ -14,9 +15,10 @@ const ROUTINE_EXPENSE_BLOCKED_TAXONOMY_TYPES = new Set([
   "loan_payment",
   "loan_principal",
   "payroll",
+  "peer_to_peer_transfer",
 ]);
 const ROUTINE_EXPENSE_LANDMINE_RE =
-  /\b(?:payroll|salary|wages|paychex|adp payroll|owner draw|owner contribution|loan principal|principal payment|credit card payment|cc payment|autopay payment)\b/i;
+  /\b(?:payroll|salary|wages|paychex|adp payroll|owner draw|owner contribution|loan principal|principal payment|credit card payment|cc payment|autopay payment|zelle|venmo|cash app|cashapp|payment id)\b/i;
 
 export function isReviewAccount({ accountId, accountName, suspenseIds = [] } = {}) {
   if (!accountId) return true;

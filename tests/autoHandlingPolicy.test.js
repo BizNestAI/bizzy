@@ -159,6 +159,7 @@ test("routine path does not auto-handle weak merchant evidence or risky classes"
   assert.equal(routineDecision({ evidence: { isCheck: true } }).reason, "check_requires_review");
   assert.equal(routineDecision({ evidence: { taxonomyType: "transfer_internal" } }).reason, "transfer_internal_requires_review");
   assert.equal(routineDecision({ evidence: { taxonomyType: "owner_draw" } }).reason, "owner_draw_requires_review");
+  assert.equal(routineDecision({ evidence: { taxonomyType: "peer_to_peer_transfer" } }).reason, "peer_to_peer_transfer_requires_review");
   assert.equal(routineDecision({ evidence: { taxonomyType: "cc_payment" } }).reason, "cc_payment_mapping_not_safe");
   assert.equal(routineDecision({
     evidence: {

@@ -42,6 +42,7 @@ export function getProtectedWorkflowReason(row = {}) {
   if (taxonomy === "loan_movement") return { label: "Loan movement", detail: "Loan movements use a protected workflow." };
   if (taxonomy === "tax_payment") return { label: "Tax payment", detail: "Tax payments use a protected workflow." };
   if (taxonomy === "payroll") return { label: "Payroll", detail: "Payroll uses a protected workflow." };
+  if (taxonomy === "peer_to_peer_transfer") return { label: "Peer-to-peer payment", detail: "Peer-to-peer payments need review before accounting treatment is applied." };
   if (row.accounting_review_required && reason && !/uncategorized|needs review|review required/.test(reason)) {
     return { label: "Other protected workflow", detail: row.accounting_review_reason };
   }

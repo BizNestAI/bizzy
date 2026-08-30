@@ -22,7 +22,7 @@ import {
 
 const MAX_RECONSIDERATION_LIMIT = 500;
 const PNL_ACCOUNT_TYPES = new Set(["income", "other income", "expense", "cost of goods sold", "costofgoodssold"]);
-const PROTECTED_TAXONOMY_RE = /cc_payment|transfer|owner|loan|payroll|tax|refund|check/i;
+const PROTECTED_TAXONOMY_RE = /cc_payment|transfer|owner|loan|payroll|tax|refund|check|peer_to_peer/i;
 const SAFE_SEMANTIC_FALLBACK_INTENTS = new Set([
   "bank_fees",
   "payment_processing",

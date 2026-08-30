@@ -148,6 +148,7 @@ test("generic payment, payroll, Zelle, and Venmo memos do not become credit-card
     "BRENT BLACK PAYMENT",
     "ZELLE PAYMENT JOHN SMITH",
     "VENMO PAYMENT JOHN SMITH",
+    "PAYMENT FROM CUSTOMER 123",
   ];
 
   for (const name of nonCardPayments) {
@@ -157,6 +158,19 @@ test("generic payment, payroll, Zelle, and Venmo memos do not become credit-card
 
   const payroll = classifyTaxonomy({ name: "PAYROLL TRANSTECH, INC.", amount: 638.88, direction: "INFLOW" });
   assert.equal(payroll.type, "payroll");
+
+  for (const name of [
+    "Paula Gebhard PAYMENT ID 12345",
+    "JOHNATHAN GUIMARAES PAYMENT",
+    "BRENT BLACK PAYMENT",
+    "ZELLE PAYMENT JOHN SMITH",
+    "VENMO PAYMENT JOHN SMITH",
+  ]) {
+    const hit = classifyTaxonomy({ name, amount: -100, direction: "OUTFLOW" });
+    assert.equal(hit?.type, "peer_to_peer_transfer", name);
+  }
+
+  assert.equal(classifyTaxonomy({ name: "PAYMENT FROM CUSTOMER 123", amount: 100, direction: "INFLOW" }), null);
 });
 
 test("parking vendors map to Parking/Tolls instead of broad transportation accounts", () => {
