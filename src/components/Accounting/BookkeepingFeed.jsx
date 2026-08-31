@@ -8,11 +8,22 @@ import {
   isQboBankAccount,
   isQboCreditCardAccount,
 } from "../../services/bookkeeping/creditCardPaymentStatus.js";
+import { formatQboPostingSchedule } from "../../services/bookkeeping/qboPostingLifecycle.js";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
-const MIN_COL_WIDTHS = [36, 90, 190, 160, 245, 105, 120]; // px floors per column
+const BASE_COL_WIDTHS = [36, 90, 220, 160, 245, 105, 120];
+const BASE_MIN_COL_WIDTHS = [36, 90, 190, 160, 245, 105, 120];
+const QBO_COL_WIDTH = 120;
+const QBO_MIN_COL_WIDTH = 105;
+
+const QBO_SCHEDULE_TONE_CLASSES = {
+  good: "border-emerald-400/25 bg-emerald-500/10 text-emerald-100",
+  danger: "border-rose-400/30 bg-rose-500/10 text-rose-100",
+  warning: "border-amber-300/30 bg-amber-400/10 text-amber-100",
+  neutral: "border-slate-500/35 bg-white/[0.04] text-slate-200",
+};
 
 function dropdownBucketType(value = "") {
   const normalized = String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
@@ -522,9 +533,18 @@ export default function BookkeepingFeed({
   pageSize,
   totalCount,
   readOnly = false,
+  showQboSchedule = false,
 }) {
   // Column widths (px) — draggable like QuickBooks
-  const [colWidths, setColWidths] = React.useState([36, 90, 220, 160, 245, 105, 120]);
+  const initialColWidths = React.useMemo(
+    () => (showQboSchedule ? [...BASE_COL_WIDTHS.slice(0, -1), QBO_COL_WIDTH, BASE_COL_WIDTHS[BASE_COL_WIDTHS.length - 1]] : BASE_COL_WIDTHS),
+    [showQboSchedule]
+  );
+  const minColWidths = React.useMemo(
+    () => (showQboSchedule ? [...BASE_MIN_COL_WIDTHS.slice(0, -1), QBO_MIN_COL_WIDTH, BASE_MIN_COL_WIDTHS[BASE_MIN_COL_WIDTHS.length - 1]] : BASE_MIN_COL_WIDTHS),
+    [showQboSchedule]
+  );
+  const [colWidths, setColWidths] = React.useState(initialColWidths);
   const containerRef = React.useRef(null);
   const scrollAreaRef = React.useRef(null);
   const [containerWidth, setContainerWidth] = React.useState(null);
@@ -534,6 +554,10 @@ export default function BookkeepingFeed({
   const dragRef = React.useRef(null); // { index, startX, start }
   const gridTemplate = React.useMemo(() => colWidths.map((w) => `${w}px`).join(" "), [colWidths]);
   const totalGridWidth = React.useMemo(() => colWidths.reduce((sum, width) => sum + width, 0), [colWidths]);
+
+  React.useEffect(() => {
+    setColWidths(initialColWidths);
+  }, [initialColWidths]);
 
   const beginDrag = (index, clientX) => {
     dragRef.current = { index, startX: clientX, start: [...colWidths] };
@@ -546,7 +570,7 @@ export default function BookkeepingFeed({
     if (!dragRef.current) return;
     const { index, startX, start } = dragRef.current;
     const delta = e.clientX - startX;
-    const min = MIN_COL_WIDTHS[index] || 60;
+    const min = minColWidths[index] || 60;
     const next = [...start];
     next[index] = Math.max(min, start[index] + delta);
     setColWidths(next);
@@ -758,8 +782,11 @@ export default function BookkeepingFeed({
                 className={`${checkboxClasses} ${readOnly ? "opacity-50 cursor-not-allowed" : ""}`}
               />
             </div>
-            {["date", "description", "payee", "account", "total", "action"].map((key, idx) => {
-              const labelMap = { date: "Date", description: "Description", payee: "Payee/Customer", account: "Account", total: "Total", action: "Action" };
+            {(showQboSchedule
+              ? ["date", "description", "payee", "account", "total", "posts", "action"]
+              : ["date", "description", "payee", "account", "total", "action"]
+            ).map((key, idx) => {
+              const labelMap = { date: "Date", description: "Description", payee: "Payee/Customer", account: "Account", total: "Total", posts: "QBO", action: "Action" };
               const align =
                 key === "total"
                   ? "text-right"
@@ -862,6 +889,7 @@ export default function BookkeepingFeed({
             });
             const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (readOnly ? "" : txn.accountId) ?? "";
             const selectedCcTargetValue = accountSelections.get(txn.id) ?? ccTargetId ?? "";
+            const qboSchedule = showQboSchedule ? formatQboPostingSchedule(txn) : null;
             const readOnlyGlLabel =
               txn.glAccountName ||
               txn.final_qbo_account_name ||
@@ -1051,6 +1079,17 @@ export default function BookkeepingFeed({
                   return `${isOutflow ? "-" : "+"}$${abs.toFixed(2)}`;
                 })()}
               </div>
+              {showQboSchedule && qboSchedule ? (
+                <div className="flex min-w-0 items-center justify-center px-2 text-center" title={qboSchedule.detail}>
+                  <span
+                    className={`inline-flex max-w-full items-center justify-center rounded-full border px-2 py-[3px] text-[10px] font-semibold leading-tight ${
+                      QBO_SCHEDULE_TONE_CLASSES[qboSchedule.tone] || QBO_SCHEDULE_TONE_CLASSES.neutral
+                    }`}
+                  >
+                    <span className="truncate">{qboSchedule.label}</span>
+                  </span>
+                </div>
+              ) : null}
               <div className="flex justify-center pl-4" onClick={(e) => e.stopPropagation()}>
                 {isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>

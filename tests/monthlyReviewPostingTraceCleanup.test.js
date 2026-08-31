@@ -49,7 +49,7 @@ test("shared QBO lifecycle gives qbo_txn_id highest posted authority", () => {
   assert.equal(deriveQboPostingLifecycle({ status: "needs_review" }).key, "needs_review");
   assert.notEqual(deriveQboPostingLifecycle({ status: "needs_review" }).key, "failed");
   assert.equal(deriveQboPostingLifecycle({ status: "approved" }).key, "handled_not_posted");
-  assert.equal(deriveQboPostingLifecycle({ status: "auto_approved", post_after: "2026-08-24T17:00:00Z" }).key, "queued");
+  assert.equal(deriveQboPostingLifecycle({ status: "auto_approved", post_after: "2999-08-24T17:00:00Z" }).key, "queued");
   assert.equal(deriveQboPostingLifecycle({ status: "approved", post_error: "stale legacy error" }).key, "handled_not_posted");
   assert.equal(deriveQboPostingLifecycle({
     status: "approved",

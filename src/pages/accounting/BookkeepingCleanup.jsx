@@ -501,7 +501,7 @@ function BookkeepingCleanup() {
   const [postingNow, setPostingNow] = useState(false);
   const [postingRunSummary, setPostingRunSummary] = useState(null);
   const enrichRanRef = useRef(null);
-  const lastNonEmptyTransactionsRef = useRef([]);
+  const lastSuccessfulTransactionPagesRef = useRef(new Map());
   const accountOverrides = useRef(new Map());
   const accountScrollRef = useRef(null);
   const [showAccountScrollLeft, setShowAccountScrollLeft] = useState(false);
@@ -1604,14 +1604,16 @@ function BookkeepingCleanup() {
       return;
     }
     const cacheKey = buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage });
-    const cachedPage = readTransactionPageCache(cacheKey);
+    const previousPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
+    const cachedPage = readTransactionPageCache(cacheKey) || previousPage;
     if (cachedPage && Array.isArray(cachedPage.rows)) {
       setTransactions(cachedPage.rows);
-      if (cachedPage.rows.length) lastNonEmptyTransactionsRef.current = cachedPage.rows;
       setTotalCount(typeof cachedPage.totalCount === "number" ? cachedPage.totalCount : cachedPage.rows.length);
       setLoadingTxns(false);
       setBackgroundRefreshingTxns(true);
     } else {
+      setTransactions([]);
+      setTotalCount(null);
       setLoadingTxns(true);
       setBackgroundRefreshingTxns(false);
     }
@@ -1683,16 +1685,20 @@ function BookkeepingCleanup() {
       const incomplete = isInconsistentEmptyTransactionPage({ rows: normalizedList, totalCount: nextTotalValue });
       setTotalCount(nextTotalValue);
       if (incomplete) {
-        const fallbackRows = lastNonEmptyTransactionsRef.current || [];
-        if (fallbackRows.length) {
-          setTransactions(fallbackRows);
+        const fallbackPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
+        if (fallbackPage?.rows?.length) {
+          setTransactions(fallbackPage.rows);
+          setTotalCount(typeof fallbackPage.totalCount === "number" ? fallbackPage.totalCount : fallbackPage.rows.length);
         }
         setBackgroundRefreshingTxns(true);
         return false;
       }
       setTransactions(normalizedList);
-      if (normalizedList.length) {
-        lastNonEmptyTransactionsRef.current = normalizedList;
+      if (cacheKey) {
+        lastSuccessfulTransactionPagesRef.current.set(cacheKey, {
+          rows: normalizedList,
+          totalCount: nextTotalValue,
+        });
       }
       if (cache) {
         writeTransactionPageCache(cacheKey, { rows: normalizedList, totalCount: nextTotalValue });
@@ -1784,6 +1790,20 @@ function BookkeepingCleanup() {
         await loadProcessingStatus();
     } catch (e) {
       console.warn("[bookkeeping] transactions load failed", e?.message || e);
+      const fallbackPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
+      if (fallbackPage?.rows?.length) {
+        setTransactions(fallbackPage.rows);
+        setTotalCount(typeof fallbackPage.totalCount === "number" ? fallbackPage.totalCount : fallbackPage.rows.length);
+      }
+      if (fallbackPage?.rows?.length || cachedPage?.rows?.length) {
+        window.dispatchEvent(new CustomEvent("bizzy:toast", {
+          detail: {
+            severity: "error",
+            title: "Transactions couldn't refresh",
+            body: "Showing the last loaded transactions for this view.",
+          },
+        }));
+      }
     } finally {
       setLoadingTxns(false);
       setBackgroundRefreshingTxns(false);
@@ -2304,6 +2324,7 @@ function BookkeepingCleanup() {
               panelBg={PANEL_BG}
               panelBorder={PANEL_BORDER}
               readOnly={adminView.active || !canRunAI}
+              showQboSchedule={isHandledTab}
             />
           )}
         </motion.div>

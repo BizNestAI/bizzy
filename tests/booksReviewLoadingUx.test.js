@@ -20,6 +20,9 @@ test("Books Review caches the current transaction page across quick re-entry", (
   assert.match(source, /BOOKS_TXN_CACHE_PREFIX/);
   assert.match(source, /window\.sessionStorage\.getItem\(cacheKey\)/);
   assert.match(source, /window\.sessionStorage\.setItem\(cacheKey/);
+  assert.match(source, /lastSuccessfulTransactionPagesRef/);
+  assert.match(source, /lastSuccessfulTransactionPagesRef\.current\.get\(cacheKey\)/);
+  assert.match(source, /lastSuccessfulTransactionPagesRef\.current\.set\(cacheKey/);
   assert.match(source, /setBackgroundRefreshingTxns\(true\)/);
   assert.match(source, /Updating this feed in the background without hiding your current rows/);
 });
@@ -29,9 +32,24 @@ test("Books Review does not render a blank table for empty rows with a positive 
   assert.match(source, /rows\.length === 0 && Number\(total \|\| 0\) > 0/);
   assert.match(source, /window\.sessionStorage\.removeItem\(cacheKey\)/);
   assert.match(source, /if \(isInconsistentEmptyTransactionPage\(payload\)\) return/);
-  assert.match(source, /lastNonEmptyTransactionsRef/);
+  assert.match(source, /const fallbackPage = cacheKey \? lastSuccessfulTransactionPagesRef\.current\.get\(cacheKey\) : null/);
+  assert.doesNotMatch(source, /lastNonEmptyTransactionsRef/);
   assert.match(source, /hasInconsistentEmptyPage/);
   assert.match(source, /loadingTxns \|\| isPreparingCategories \|\| hasInconsistentEmptyPage/);
+});
+
+test("Books Review refresh cache is scoped by business, account, status, range, page, and page size", () => {
+  assert.match(source, /function buildTransactionCacheKey\(\{ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage \}\)/);
+  assert.match(source, /\[businessId, accountFilter, activeTab, dateRange, page, rowsPerPage\]/);
+  assert.match(source, /setTransactions\(\[\]\);[\s\S]*?setTotalCount\(null\);[\s\S]*?setLoadingTxns\(true\)/);
+  assert.doesNotMatch(source, /lastSuccessfulTransactionPagesRef\.current\.values\(\)/);
+});
+
+test("Books Review failed background refresh preserves the last good view and uses toast treatment", () => {
+  assert.match(source, /Showing the last loaded transactions for this view/);
+  assert.match(source, /setTransactions\(fallbackPage\.rows\)/);
+  assert.match(source, /title: "Transactions couldn't refresh"/);
+  assert.match(source, /setBackgroundRefreshingTxns\(false\)/);
 });
 
 test("Books Review bulk approval uses live COA accounts and selected vendors instead of mock placeholders", () => {
