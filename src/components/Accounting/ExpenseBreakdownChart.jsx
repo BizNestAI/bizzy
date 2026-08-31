@@ -3,7 +3,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
-import { supabase } from "../../services/supabaseClient";
 import CardHeader from "../UI/CardHeader"; // ⬅️ use the shared header
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { apiFetch } from "../../utils/apiBase.js";
@@ -95,6 +94,7 @@ export default function ExpenseBreakdownChart({
   height = 260,
   compact = false,
   className = "",
+  refreshVersion = 0,
 }) {
   const { year, month } = useFinancialPeriod(businessIdProp || localStorage.getItem("currentBusinessId"));
   const userId = userIdProp || localStorage.getItem("user_id");
@@ -136,7 +136,7 @@ export default function ExpenseBreakdownChart({
           (userId ? `&user_id=${encodeURIComponent(userId)}` : "") +
           `&year=${encodeURIComponent(year)}` +
           `&month=${encodeURIComponent(month)}` +
-          `&data_mode=live&live_only=true`;
+          `&data_mode=live`;
         if (process.env.NODE_ENV !== "production") {
           // eslint-disable-next-line no-console
           console.log("[ExpenseBreakdown] fetch monthly totals", { year, month, url });
@@ -159,32 +159,13 @@ export default function ExpenseBreakdownChart({
       } catch {}
 
       try {
-        const { data: rows, error } = await supabase
-          .from("expense_totals_monthly")
-          .select("category,amount,month,source")
-          .eq("business_id", businessId)
-          .eq("month", monthKeySelected);
-        if (error) throw error;
-
-        const chartRows = toChartRows(rows);
-        const sum = (chartRows || []).reduce((s, r) => s + Number(r.value || 0), 0);
-        if (!cancelled && sum > 0) {
-          setData(chartRows);
-          setSource(rows?.[0]?.source || "expense_totals_monthly");
-          setStatus("success");
-          return;
-        }
-        if (!cancelled) setStatus("empty");
-      } catch {}
-
-      try {
         const url =
           `/api/accounting/metrics` +
           `?business_id=${encodeURIComponent(businessId)}` +
           (userId ? `&user_id=${encodeURIComponent(userId)}` : "") +
           `&year=${encodeURIComponent(year)}` +
           `&month=${encodeURIComponent(month)}` +
-          `&data_mode=live&live_only=true`;
+          `&data_mode=live&persisted_only=true`;
         if (process.env.NODE_ENV !== "production") {
           // eslint-disable-next-line no-console
           console.log("[ExpenseBreakdown] fetch fallback metrics", { year, month, url });
@@ -217,7 +198,7 @@ export default function ExpenseBreakdownChart({
 
     load();
     return () => { cancelled = true; };
-  }, [businessId, userId, monthKeySelected, year, month, demoData, forceLive]);
+  }, [businessId, userId, monthKeySelected, year, month, demoData, forceLive, refreshVersion]);
 
   const total = useMemo(() => (data || []).reduce((s, d) => s + Number(d.value || 0), 0), [data]);
   // measure (for legend sizing)

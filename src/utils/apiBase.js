@@ -1,3 +1,5 @@
+import { supabase } from "../services/supabaseClient.js";
+
 // Centralized API base resolver to keep frontend calls pointed at the backend host.
 const env =
   (typeof import.meta !== "undefined" && import.meta.env) ||
@@ -43,7 +45,7 @@ export async function apiFetch(path, options = {}) {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 7000);
-  const headers = mergeApiFetchHeaders(options.headers);
+  const headers = await mergeApiFetchHeaders(options.headers);
   try {
     const res = await fetch(full, {
       credentials: options.credentials ?? "include",
@@ -63,8 +65,15 @@ export async function apiFetch(path, options = {}) {
 export const apiBaseUrl = getApiBase();
 export default apiBaseUrl;
 
-function mergeApiFetchHeaders(provided = {}) {
+async function mergeApiFetchHeaders(provided = {}) {
   const headers = new Headers(provided || {});
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token || "";
+    if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+  } catch {
+    /* leave auth to server-side route validation */
+  }
   if (typeof window === "undefined") return headers;
   try {
     const token = window.sessionStorage?.getItem("bizzi:admin_view_session") || "";

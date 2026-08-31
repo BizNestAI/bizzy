@@ -13,7 +13,6 @@ import {
   ReferenceDot,
 } from "recharts";
 import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
-import { supabase } from "../../services/supabaseClient";
 import CardHeader from "../UI/CardHeader"; // shared header (Pulse style)
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { apiFetch } from "../../utils/apiBase.js";
@@ -134,6 +133,7 @@ export default function RevenueChart({
   height = 260,
   className = "",
   showGrid = true,
+  refreshVersion = 0,
 }) {
   const { year, month } = useFinancialPeriod(businessIdProp || localStorage.getItem("currentBusinessId"));
   const userId = userIdProp || localStorage.getItem("user_id");
@@ -188,7 +188,7 @@ export default function RevenueChart({
           `&end_year=${encodeURIComponent(year)}` +
           `&end_month=${encodeURIComponent(month)}` +
           `&window=12` +
-          `&data_mode=live&live_only=true`;
+          `&data_mode=live`;
         const resp = await apiFetch(url, {
           headers: {
             "Content-Type": "application/json",
@@ -214,35 +214,7 @@ export default function RevenueChart({
         }
       } catch { /* try next */ }
 
-      // Strategy 2: Supabase direct
-      try {
-        const keys = windowMonths.map(({ year, month }) => monthKey(year, month));
-        const { data, error } = await supabase
-          .from("financial_metrics")
-          .select("month,total_revenue")
-          .eq("business_id", businessId)
-          .in("month", keys);
-
-        if (error) throw error;
-
-        const map = new Map();
-        (data || []).forEach((row) => map.set(row.month, Number(row.total_revenue ?? 0)));
-
-        const rows = windowMonths.map(({ year, month }) => ({
-          year, month, revenue: map.get(monthKey(year, month)) ?? 0,
-        }));
-
-        const values = rows.map((r) => r.revenue);
-        const anyPositive = values.some((v) => Number(v) > 0);
-        if (!cancelled && anyPositive) {
-          setSeries(toChartData(rows));
-          setSource("quickbooks");
-          setStatus("success");
-          return;
-        }
-      } catch { /* try next */ }
-
-      // Strategy 3: per-month fallback
+      // Strategy 2: per-month persisted fallback
       try {
         const rows = await Promise.all(
           windowMonths.map(async ({ year, month }) => {
@@ -252,7 +224,7 @@ export default function RevenueChart({
               `&user_id=${encodeURIComponent(userId)}` +
               `&year=${encodeURIComponent(year)}` +
               `&month=${encodeURIComponent(month)}` +
-              `&data_mode=live&live_only=true`;
+              `&data_mode=live&persisted_only=true`;
             try {
               const r = await apiFetch(url, {
                 headers: {
@@ -294,7 +266,7 @@ export default function RevenueChart({
 
     fetchSeries();
     return () => { cancelled = true; };
-  }, [userId, businessId, year, month, windowMonths, demoData, forceLive]);
+  }, [userId, businessId, year, month, windowMonths, demoData, forceLive, refreshVersion]);
 
   // Measure container to tune margins/ticks/dots responsively
   const [measureRef, { width: w }] = useMeasure();

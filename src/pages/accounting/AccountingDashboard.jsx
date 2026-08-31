@@ -119,6 +119,7 @@ export default function AccountingDashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
+  const [financialRefreshVersion, setFinancialRefreshVersion] = useState(0);
   const [kpiLoading, setKpiLoading] = useState(true);
   const [emptyMonth, setEmptyMonth] = useState(false);
   const [fallbackTag, setFallbackTag] = useState(false);
@@ -218,7 +219,7 @@ export default function AccountingDashboard() {
       }
       try {
         const resp = await safeFetch(
-          `/api/accounting/metrics?business_id=${encodeURIComponent(businessId)}&user_id=${encodeURIComponent(userId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}&data_mode=live&live_only=true`,
+          `/api/accounting/metrics?business_id=${encodeURIComponent(businessId)}&user_id=${encodeURIComponent(userId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}&data_mode=live&persisted_only=true`,
           { method: "GET" }
         );
         const m = resp?.metrics || {};
@@ -289,17 +290,16 @@ export default function AccountingDashboard() {
     }
     setRefreshing(true);
     try {
-      const qs = `business_id=${encodeURIComponent(businessId)}&data_mode=live&live_only=true`;
-      await Promise.all([
-        safeFetch(`/api/accounting/revenue-series?${qs}`),
-        safeFetch(`/api/accounting/profit-series?${qs}`),
-        safeFetch(`/api/accounting/metrics?${qs}`),
-      ]);
+      await safeFetch(
+        `/api/qbo/sync?business_id=${encodeURIComponent(businessId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
+        { method: "POST" }
+      );
       const now = Date.now();
       setLastRefreshed(now);
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem('bizzy:lastFinancialRefresh', String(now));
       }
+      setFinancialRefreshVersion((version) => version + 1);
     } catch (e) {
       console.warn("[AccountingDashboard] refresh failed", e?.message || e);
     } finally {
@@ -316,17 +316,20 @@ export default function AccountingDashboard() {
     setSyncing(true);
     setSyncError("");
     try {
-      await safeFetch(`/api/qbo/backfill/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: { business_id: businessId, months: 12, mode: "cash" },
-      });
-      setBackfillStatus((prev) => ({
-        ...(prev || {}),
-        status: "running",
-        months_done: prev?.months_done || 0,
-        months_total: prev?.months_total || 12,
-      }));
+      await safeFetch(
+        `/api/qbo/sync?business_id=${encodeURIComponent(businessId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: { business_id: businessId },
+        }
+      );
+      const now = Date.now();
+      setLastRefreshed(now);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('bizzy:lastFinancialRefresh', String(now));
+      }
+      setFinancialRefreshVersion((version) => version + 1);
     } catch (e) {
       setSyncError(e?.message || "Sync failed");
     } finally {
@@ -501,7 +504,7 @@ export default function AccountingDashboard() {
 
         {showSyncCta ? (
           <div className="rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(0,0,0,0.35)] px-4 py-3 flex flex-col gap-2">
-            <div className="text-sm text-white/90">Connected — no data for this period.</div>
+            <div className="text-sm text-white/90">Connected — no persisted QuickBooks data for this period.</div>
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -510,7 +513,7 @@ export default function AccountingDashboard() {
                 className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm text-white/90 transition disabled:opacity-60"
                 style={{ borderColor: "rgba(255,255,255,0.18)", background: "rgba(0,0,0,0.45)" }}
               >
-                {syncing ? "Syncing…" : "Sync now"}
+                {syncing ? "Refreshing…" : "Refresh from QuickBooks"}
               </button>
               {syncError ? <span className="text-xs text-rose-300">{syncError}</span> : null}
             </div>
@@ -524,6 +527,7 @@ export default function AccountingDashboard() {
               onLiveData={handleLiveData}
               onEmptyData={handleEmptyData}
               onLoadingChange={setKpiLoading}
+              refreshVersion={financialRefreshVersion}
             />
           </div>
         </CardFrame>
@@ -532,7 +536,7 @@ export default function AccountingDashboard() {
         <CardFrame variant="emerald-dark">
           <Suspense fallback={<CardSkeleton h={`h-[${H_REVENUE}px]`} />}>
             <div className="rounded-[inherit] overflow-hidden" style={{ height: H_REVENUE }}>
-              <RevenueChart height={H_REVENUE} />
+              <RevenueChart height={H_REVENUE} refreshVersion={financialRefreshVersion} />
             </div>
           </Suspense>
         </CardFrame>
@@ -542,7 +546,7 @@ export default function AccountingDashboard() {
           <CardFrame variant="emerald-dark">
             <Suspense fallback={<CardSkeleton h={`h-[${H_EXPENSE}px]`} />}>
               <div className="rounded-[inherit]" style={{ height: H_EXPENSE }}>
-                <ExpenseBreakdownChart height={H_EXPENSE} className="rounded-xl" />
+                <ExpenseBreakdownChart height={H_EXPENSE} className="rounded-xl" refreshVersion={financialRefreshVersion} />
               </div>
             </Suspense>
           </CardFrame>
@@ -550,7 +554,7 @@ export default function AccountingDashboard() {
           <CardFrame variant="emerald-dark">
             <Suspense fallback={<CardSkeleton h={`h-[${H_PROFIT}px]`} />}>
               <div className="rounded-[inherit]" style={{ height: H_PROFIT }}>
-                <NetProfitChart height={H_PROFIT} compact className="rounded-xl" />
+                <NetProfitChart height={H_PROFIT} compact className="rounded-xl" refreshVersion={financialRefreshVersion} />
               </div>
             </Suspense>
           </CardFrame>

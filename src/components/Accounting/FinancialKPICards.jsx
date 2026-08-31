@@ -50,6 +50,7 @@ export default function FinancialKPICards({
   onLiveData,
   onEmptyData,
   onLoadingChange,
+  refreshVersion = 0,
 }) {
   const [kpis, setKpis] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -159,7 +160,7 @@ export default function FinancialKPICards({
           `&business_id=${encodeURIComponent(businessId)}` +
           `&year=${encodeURIComponent(year)}` +
           `&month=${encodeURIComponent(month)}` +
-          `&data_mode=live&live_only=true`;
+          `&data_mode=live&persisted_only=true`;
 
         const res = await apiFetch(url, {
           headers: {
@@ -284,7 +285,7 @@ export default function FinancialKPICards({
       cancelled = true;
       ac.abort();
     };
-  }, [userId, businessId, year, month, usingDemo, populateDemoKpis]);
+  }, [userId, businessId, year, month, usingDemo, populateDemoKpis, refreshVersion]);
 
   if (loading) {
     return (

@@ -493,6 +493,7 @@ router.get("/", async (req, res) => {
     return res.status(400).json({ error: "Missing userId or businessId" });
   }
   const liveOnly = String(req.query?.live_only || req.query?.liveOnly || "").toLowerCase() === "true";
+  const persistedOnly = String(req.query?.persisted_only || req.query?.persistedOnly || "").toLowerCase() === "true";
   const forceRaw = req.query?.force_refresh ?? req.query?.force ?? "";
   const forceParam = String(forceRaw).toLowerCase();
   const forceRefresh = forceParam === "true" || forceParam === "1";
@@ -605,6 +606,39 @@ router.get("/", async (req, res) => {
   };
 
   const cached = await getCachedMetrics({ business_id, monthText });
+
+  if (persistedOnly) {
+    if (cached) {
+      const prior = await getPrevMonthMetrics({
+        business_id,
+        fetchReport: null,
+        prevStart,
+        prevEnd,
+      });
+      const priorMonth = formatPrior(prior);
+      return res.status(200).json({
+        metrics: cached.metrics,
+        deltas: {
+          revenue_mom_pct: pctDelta(cached.metrics.totalRevenue, prior?.total_revenue),
+          expenses_mom_pct: pctDelta(cached.metrics.totalExpenses, prior?.total_expenses),
+          profit_mom_pct: pctDelta(cached.metrics.netProfit, prior?.net_profit),
+          margin_mom_pct: pctDelta(cached.metrics.profitMargin, prior?.profit_margin),
+        },
+        accountBreakdown: cached.accountBreakdown || [],
+        priorMonth,
+        source: cached.source || "cache",
+        stale: !isFresh(cached.meta, { current: isCurrent }),
+        last_refreshed_at: cached.meta?.updated_at || cached.meta?.created_at || null,
+        persisted_only: true,
+      });
+    }
+    return res.status(200).json({
+      ...zeroMetricsPayload,
+      source: "cache_miss",
+      empty: true,
+      persisted_only: true,
+    });
+  }
 
   if (cached && !forceRefresh && isFresh(cached.meta, { current: isCurrent })) {
     const prior = await getPrevMonthMetrics({

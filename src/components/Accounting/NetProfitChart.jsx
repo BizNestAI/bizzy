@@ -4,7 +4,6 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
-import { supabase } from "../../services/supabaseClient";
 import CardHeader from "../UI/CardHeader"; // ⬅️ shared header
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { apiFetch } from "../../utils/apiBase.js";
@@ -69,6 +68,7 @@ export default function NetProfitChart({
   compact = false,
   className = "",
   showGrid = false,        // off by default to remove dotted lines
+  refreshVersion = 0,
 }) {
   const { year, month } = useFinancialPeriod(businessIdProp || localStorage.getItem("currentBusinessId"));
   const userId = userIdProp || localStorage.getItem("user_id");
@@ -117,7 +117,7 @@ export default function NetProfitChart({
           `&end_year=${encodeURIComponent(year)}` +
           `&end_month=${encodeURIComponent(month)}` +
           `&window=12` +
-          `&data_mode=live&live_only=true`;
+          `&data_mode=live`;
         const r = await apiFetch(url, {
           headers: {"Content-Type":"application/json","x-user-id":userId,"x-business-id":businessId,"x-data-mode":"live"}
         });
@@ -135,36 +135,7 @@ export default function NetProfitChart({
         }
       }catch{/* ignore */}
 
-      // 2) Direct Supabase query
-      try{
-        const keys = windowMonths.map(({year,month})=>monthKey(year,month));
-        const { data, error } = await supabase
-          .from("financial_metrics")
-          .select("month,total_revenue,total_expenses,net_profit")
-          .eq("business_id", businessId)
-          .in("month", keys);
-        if(error) throw error;
-
-        const map = new Map();
-        (data||[]).forEach(row=>{
-          const profit = row.net_profit != null
-            ? Number(row.net_profit)
-            : Number(row.total_revenue ?? 0) - Number(row.total_expenses ?? 0);
-          map.set(row.month, profit);
-        });
-        const rows = windowMonths.map(({year,month})=>({
-          year, month, profit: map.get(monthKey(year,month)) ?? 0
-        }));
-        const anyPositive = rows.some(r=>Number(r.profit)>0);
-        if(!cancelled && anyPositive){
-          setSeries(toChartData(rows));
-          setSource("supabase");
-          setStatus("success");
-          return;
-        }
-      }catch{/* swallow and try next */}
-
-      // 3) Per-month fallback
+      // 2) Per-month persisted fallback
       try{
         const rows = await Promise.all(windowMonths.map(async ({year,month})=>{
           const url =
@@ -173,7 +144,7 @@ export default function NetProfitChart({
             `&user_id=${encodeURIComponent(userId)}` +
             `&year=${encodeURIComponent(year)}` +
             `&month=${encodeURIComponent(month)}` +
-            `&data_mode=live&live_only=true`;
+            `&data_mode=live&persisted_only=true`;
           try{
             const r = await apiFetch(url, { headers:{"Content-Type":"application/json","x-user-id":userId,"x-business-id":businessId,"x-data-mode":"live"} });
             if(!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -206,7 +177,7 @@ export default function NetProfitChart({
 
     fetchSeries();
     return ()=>{ cancelled=true; };
-  }, [userId, businessId, year, month, windowMonths, demoData, forceLive]);
+  }, [userId, businessId, year, month, windowMonths, demoData, forceLive, refreshVersion]);
 
   // Measure container to tune margins / bar size responsively
   const [measureRef, { width: w }] = useMeasure();  // keep above returns
