@@ -664,18 +664,33 @@ export async function getBookkeepingProcessingStatus({
 } = {}) {
   if (!businessId) throw new Error("missing_business_id");
   const db = supabase || await getDefaultSupabase();
-  const queuedStatuses = [
-    BOOKKEEPING_PROCESSING_STATUSES.PENDING,
-    BOOKKEEPING_PROCESSING_STATUSES.PROCESSING,
-    BOOKKEEPING_PROCESSING_STATUSES.FAILED,
-  ];
+  const now = new Date();
+  const nowText = nowIso(now);
+  const staleBefore = new Date(now.getTime() - STALE_PROCESSING_MINUTES * 60 * 1000).toISOString();
   const { data: queued, error: queueErr } = await db
     .from("bookkeeping_processing_requests")
-    .select("id,status")
+    .select("id,status,locked_at,process_after")
     .eq("business_id", businessId)
-    .in("status", queuedStatuses)
+    .in("status", [BOOKKEEPING_PROCESSING_STATUSES.PENDING, BOOKKEEPING_PROCESSING_STATUSES.PROCESSING])
     .limit(1000);
   if (queueErr) throw queueErr;
+  const active = (queued || []).filter((row) => {
+    const status = String(row?.status || "").toLowerCase();
+    if (status === BOOKKEEPING_PROCESSING_STATUSES.PENDING) {
+      return !row.process_after || String(row.process_after) <= nowText;
+    }
+    if (status === BOOKKEEPING_PROCESSING_STATUSES.PROCESSING) {
+      return row.locked_at && String(row.locked_at) >= staleBefore;
+    }
+    return false;
+  });
+  const { data: retryRows, error: retryErr } = await db
+    .from("bookkeeping_processing_requests")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("status", BOOKKEEPING_PROCESSING_STATUSES.FAILED)
+    .limit(1000);
+  if (retryErr) throw retryErr;
   const { data: unresolved, error: unresolvedErr } = await db
     .from("transaction_categorizations")
     .select("transaction_id")
@@ -686,9 +701,11 @@ export async function getBookkeepingProcessingStatus({
   if (unresolvedErr) throw unresolvedErr;
   return {
     ok: true,
-    active_count: queued?.length || 0,
+    active_count: active.length,
+    queued_count: queued?.length || 0,
+    retry_count: retryRows?.length || 0,
     unresolved_count: unresolved?.length || 0,
-    up_to_date: !(queued?.length) && !(unresolved?.length),
+    up_to_date: !(active.length) && !(unresolved?.length),
   };
 }
 

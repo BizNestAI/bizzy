@@ -11,8 +11,8 @@ const feedServiceSource = readFileSync(join(root, "src/services/bookkeeping/book
 test("Books Review keeps loaded rows visible while categorization continues", () => {
   assert.match(source, /const hasVisibleRows = feedRows\.length > 0/);
   assert.match(source, /!hasVisibleRows[\s\S]*?\(loadingTxns \|\| isPreparingCategories/);
-  assert.match(source, /setLoadingTxns\(false\);[\s\S]*?const key = `\$\{dateRange\}\|\$\{accountFilter \|\| "all"\}`/);
-  assert.match(source, /Preparing category suggestions/);
+  assert.match(source, /const processingMessage = useMemo/);
+  assert.match(source, /Categorizing \$\{serverProcessingCount\} new transactions/);
   assert.match(source, /You can keep working while this finishes/);
 });
 
@@ -50,6 +50,28 @@ test("Books Review failed background refresh preserves the last good view and us
   assert.match(source, /setTransactions\(fallbackPage\.rows\)/);
   assert.match(source, /title: "Transactions couldn't refresh"/);
   assert.match(source, /setBackgroundRefreshingTxns\(false\)/);
+});
+
+test("Books Review account navigation does not trigger foreground enrichment or categorization work", () => {
+  assert.doesNotMatch(source, /import[\s\S]*enrichCounterparties/);
+  assert.doesNotMatch(source, /await enrichCounterparties\(/);
+  assert.doesNotMatch(source, /setCategorizationStatus\(\{ phase: "enriching" \}\)/);
+  assert.doesNotMatch(source, /Identifying payees before Bizzi prepares category suggestions/);
+  assert.match(routeSource, /router\.post\("\/enrich-counterparties"/);
+});
+
+test("Books Review processing polling is read-only and only stays active while backend work is active", () => {
+  assert.match(source, /loadProcessingStatus\(\);[\s\S]*?if \(Number\(processingStatus\?\.active_count \|\| 0\) <= 0\) return undefined;[\s\S]*?window\.setInterval/);
+  assert.match(source, /processingStatus\?\.active_count/);
+  assert.doesNotMatch(source, /retryBookkeepingProcessing\(businessId/);
+  assert.doesNotMatch(source, /reconsiderSuggestions\(businessId/);
+});
+
+test("Books Review full loading state is reserved for true first load without renderable rows", () => {
+  assert.match(source, /const showLoadingState =[\s\S]*?!hasVisibleRows[\s\S]*?\(loadingTxns \|\| isPreparingCategories/);
+  assert.match(source, /setTransactions\(\[\]\);[\s\S]*?setTotalCount\(null\);[\s\S]*?setLoadingTxns\(true\)/);
+  assert.match(source, /const cachedPage = readTransactionPageCache\(cacheKey\) \|\| previousPage/);
+  assert.match(source, /if \(cachedPage && Array\.isArray\(cachedPage\.rows\)\) \{[\s\S]*?setTransactions\(cachedPage\.rows\)[\s\S]*?setBackgroundRefreshingTxns\(true\)/);
 });
 
 test("Books Review bulk approval uses live COA accounts and selected vendors instead of mock placeholders", () => {

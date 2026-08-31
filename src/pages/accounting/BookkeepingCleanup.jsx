@@ -22,7 +22,6 @@ import {
   markCreditCardPayment,
   confirmCreditCardPaymentMatch,
   updateHandledTransaction,
-  enrichCounterparties,
   getBookkeepingProcessingStatus,
   getMappingStatus,
   getClarificationRequests,
@@ -500,7 +499,6 @@ function BookkeepingCleanup() {
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
   const [postingNow, setPostingNow] = useState(false);
   const [postingRunSummary, setPostingRunSummary] = useState(null);
-  const enrichRanRef = useRef(null);
   const lastSuccessfulTransactionPagesRef = useRef(new Map());
   const accountOverrides = useRef(new Map());
   const accountScrollRef = useRef(null);
@@ -793,11 +791,12 @@ function BookkeepingCleanup() {
   useEffect(() => {
     if (usingDemo || !businessId) return undefined;
     loadProcessingStatus();
+    if (Number(processingStatus?.active_count || 0) <= 0) return undefined;
     const timer = window.setInterval(() => {
       loadProcessingStatus();
     }, 15000);
     return () => window.clearInterval(timer);
-  }, [businessId, loadProcessingStatus, usingDemo]);
+  }, [businessId, loadProcessingStatus, processingStatus?.active_count, usingDemo]);
 
   const accountCards = useMemo(() => {
     if (!usingDemo) {
@@ -1059,7 +1058,8 @@ function BookkeepingCleanup() {
   const isHandledTab = activeTab === "handled";
   const hasVisibleRows = feedRows.length > 0;
   const serverProcessingCount = Number(processingStatus?.active_count || 0);
-  const isPreparingCategories = Boolean(categorizationStatus) || serverProcessingCount > 0;
+  const hasRelevantProcessing = serverProcessingCount > 0;
+  const isPreparingCategories = Boolean(categorizationStatus);
   const hasInconsistentEmptyPage =
     !usingDemo &&
     !hasVisibleRows &&
@@ -1071,12 +1071,9 @@ function BookkeepingCleanup() {
     !hasVisibleRows &&
     (loadingTxns || isPreparingCategories || hasInconsistentEmptyPage || (!accountFilter && !usingDemo));
   const categorizationMessage = useMemo(() => {
-    if (serverProcessingCount > 0) {
-      return `Bizzi is reviewing ${serverProcessingCount} transaction${serverProcessingCount === 1 ? "" : "s"}.`;
-    }
     if (!categorizationStatus) return null;
     if (categorizationStatus.phase === "enriching") {
-      return "Identifying payees before Bizzi prepares category suggestions.";
+      return "Updating payee details for current transactions.";
     }
     if (categorizationStatus.phase === "suggesting") {
       if (categorizationStatus.initial) {
@@ -1085,7 +1082,13 @@ function BookkeepingCleanup() {
       return "Checking for new category suggestions in the background.";
     }
     return null;
-  }, [categorizationStatus, serverProcessingCount]);
+  }, [categorizationStatus]);
+  const processingMessage = useMemo(() => {
+    if (!hasRelevantProcessing) return null;
+    return serverProcessingCount === 1
+      ? "Categorizing 1 new transaction."
+      : `Categorizing ${serverProcessingCount} new transactions.`;
+  }, [hasRelevantProcessing, serverProcessingCount]);
   const manualPostSummary = manualPostTxn ? getManualPostSummary(manualPostTxn) : null;
   const pendingCount = useMemo(() => {
     return transactions.filter(
@@ -1747,47 +1750,8 @@ function BookkeepingCleanup() {
         return;
       }
 
-      const key = `${dateRange}|${accountFilter || "all"}`;
-      if (canRunAI) {
-        let latestNormalized = normalized;
-        const needsEnrichment =
-          (!enrichRanRef.current || enrichRanRef.current !== key) &&
-          latestNormalized.some(
-            (t) =>
-              t.direction &&
-              !t.vendor &&
-              (t.merchant_name || t.merchantName || (Array.isArray(t.counterparties) && t.counterparties.length) || (t.description && t.description.length > 4))
-          );
-        if (needsEnrichment) {
-          try {
-            setCategorizationStatus({ phase: "enriching" });
-            await enrichCounterparties(businessId, {
-              range: dateRange,
-              account_id: accountFilter,
-            });
-            const res3 = await fetchTransactions(businessId, {
-              status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : activeTab === "pending" ? "pending" : "needs_review",
-              account_id: accountFilter,
-              range: dateRange,
-              page,
-              page_size: rowsPerPage,
-            });
-            const txns3 = extractTxns(res3);
-            const normalized3 = normalizeTxns(txns3);
-            const nextTotal3 = computeTotal(res3, normalized3);
-            if (commitTransactionPage(normalized3, nextTotal3)) {
-              latestNormalized = normalized3;
-            }
-            enrichRanRef.current = key;
-          } catch (errEnrich) {
-            console.warn("[bookkeeping] enrich-counterparties failed", errEnrich?.message || errEnrich);
-            enrichRanRef.current = null;
-          }
-        }
-
-        }
-        await loadMappingStatus();
-        await loadProcessingStatus();
+      await loadMappingStatus();
+      await loadProcessingStatus();
     } catch (e) {
       console.warn("[bookkeeping] transactions load failed", e?.message || e);
       const fallbackPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
@@ -1810,7 +1774,7 @@ function BookkeepingCleanup() {
       setCategorizationStatus(null);
       setCountsRefreshKey((value) => value + 1);
     }
-  }, [activeTab, accountFilter, businessId, canRunAI, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus, loadProcessingStatus]);
+  }, [activeTab, accountFilter, businessId, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus, loadProcessingStatus]);
 
   useEffect(() => {
     if (usingDemo) return;
@@ -2202,7 +2166,7 @@ function BookkeepingCleanup() {
         </div>
       )}
 
-      {!usingDemo && hasVisibleRows && (categorizationMessage || backgroundRefreshingTxns) ? (
+      {!usingDemo && hasVisibleRows && (categorizationMessage || processingMessage || backgroundRefreshingTxns) ? (
         <div
           className="mb-2 flex items-center gap-3 rounded-xl border px-3 py-2 text-xs text-slate-300"
           style={{
@@ -2219,10 +2183,10 @@ function BookkeepingCleanup() {
           </div>
           <div>
             <p className="font-semibold text-slate-100">
-              {categorizationMessage ? "Preparing category suggestions" : "Refreshing transactions"}
+              {categorizationMessage ? "Updating transactions" : processingMessage ? "Categorizing new transactions" : "Refreshing transactions"}
             </p>
             <p className="text-slate-400">
-              {categorizationMessage || "Updating this feed in the background without hiding your current rows."}
+              {categorizationMessage || processingMessage || "Updating this feed in the background without hiding your current rows."}
             </p>
           </div>
         </div>
