@@ -31,11 +31,14 @@ test("Operator Response approval handles categorization without immediate QBO po
 test("Auto-post policy remains explicit and approval grace uses the configured 24-hour period", () => {
   const approvalService = read("src/services/bookkeeping/bookkeepingApprovalService.js");
   const autoPostRoute = read("src/api/bookkeeping/routes/bookkeeping.posting.routes.js");
+  const autoPostService = read("src/services/bookkeeping/autoPostControl.js");
 
   assert.match(approvalService, /const autoPostEnabled = await getAutoPostToQuickBooks\(db,\s*businessId\)/);
   assert.match(approvalService, /computePostAfterForAutoPost\(autoPostEnabled,\s*24\)/);
-  assert.match(autoPostRoute, /posting_grace_hours:\s*POSTING_GRACE_HOURS/);
-  assert.match(autoPostRoute, /post_after:\s*enabled \? postAfter : null/);
+  assert.match(autoPostRoute, /getAutoPostSettings\(\{ db: supabase, businessId, graceHours: POSTING_GRACE_HOURS \}\)/);
+  assert.match(autoPostRoute, /setAutoPostEnabled\(\{[\s\S]*graceHours: POSTING_GRACE_HOURS/);
+  assert.match(autoPostService, /posting_grace_hours:\s*normalizedGraceHours/);
+  assert.match(autoPostService, /post_after:\s*nextEnabled \? postAfter : null/);
 });
 
 test("Monthly Review QBO labels distinguish Handled from Posted and scheduled queue state", () => {

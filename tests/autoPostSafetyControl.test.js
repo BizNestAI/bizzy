@@ -5,7 +5,9 @@ import { join } from "node:path";
 
 import {
   computePostAfterForAutoPost,
+  getAutoPostSettings,
   getAutoPostToQuickBooks,
+  setAutoPostEnabled,
 } from "../src/services/bookkeeping/autoPostControl.js";
 
 const root = process.cwd();
@@ -48,23 +50,25 @@ test("background cron and forced posting cannot bypass auto-post off", () => {
 
 test("turning on requires confirmation for handled backlog and starts a fresh grace period", () => {
   const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+  const service = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
 
-  assert.match(route, /auto_post_backlog_confirmation_required/);
-  assert.match(route, /auto_post_confirmation_required/);
+  assert.match(service, /auto_post_backlog_confirmation_required/);
+  assert.match(service, /auto_post_confirmation_required/);
   assert.match(route, /confirm_backlog/);
   assert.match(route, /handled_backlog_count/);
-  assert.match(route, /computePostAfterForAutoPost\(enabled, POSTING_GRACE_HOURS\)/);
-  assert.match(route, /post_after:\s*postAfter/);
-  assert.match(route, /\.in\("transaction_id", backlogIds\)/);
+  assert.match(route, /setAutoPostEnabled/);
+  assert.match(service, /computePostAfterForAutoPost\(nextEnabled, normalizedGraceHours, nowMs\)/);
+  assert.match(service, /post_after:\s*postAfter/);
+  assert.match(service, /\.in\("transaction_id", ids\)/);
 });
 
 test("turning off clears unposted grace timestamps and off to on cannot reuse old expired grace", () => {
-  const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+  const service = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
 
-  assert.match(route, /if \(!enabled && backlogIds\.length\)/);
-  assert.match(route, /post_after:\s*null/);
-  assert.match(route, /post_after:\s*postAfter/);
-  assert.doesNotMatch(route, /post_after:\s*current|oldPostAfter|existingPostAfter/);
+  assert.match(service, /clearBacklogPostAfter/);
+  assert.match(service, /post_after:\s*null/);
+  assert.match(service, /post_after:\s*postAfter/);
+  assert.doesNotMatch(service, /post_after:\s*current|oldPostAfter|existingPostAfter/);
 });
 
 test("successful QBO write remains required before Posted state", () => {
@@ -177,27 +181,181 @@ test("auto-post setting route is business scoped and protected by tenant authori
 
   assert.match(route, /requireAuth/);
   assert.match(route, /assertTaxBusinessAccess\(\{ req, businessId, supabase \}\)/);
-  assert.match(route, /\.eq\("id", businessId\)/);
+  assert.match(route, /getAutoPostSettings\(\{ db: supabase, businessId/);
+  assert.match(route, /setAutoPostEnabled\(\{[\s\S]*db: supabase,[\s\S]*businessId/);
+});
+
+test("auto-post settings service reads, updates, and persists business-scoped state", async () => {
+  const nowMs = Date.parse("2026-08-01T00:00:00Z");
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", user_id: "user-1", bookkeeping_start_date: "2026-01-01", auto_post_to_quickbooks: false }],
+    bank_transactions: [
+      { id: "txn-1", business_id: "biz-1", is_archived: false, date: "2026-08-01", pending: false },
+      { id: "txn-2", business_id: "biz-1", is_archived: false, date: "2026-08-02", pending: true },
+      { id: "txn-3", business_id: "biz-1", is_archived: false, date: "2025-12-31", pending: false },
+      { id: "txn-other", business_id: "biz-2", is_archived: false, date: "2026-08-01", pending: false },
+    ],
+    transaction_categorizations: [
+      { business_id: "biz-1", transaction_id: "txn-1", status: "auto_approved", qbo_txn_id: null, post_after: null, meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "txn-2", status: "auto_approved", qbo_txn_id: null, post_after: null, meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "txn-3", status: "auto_approved", qbo_txn_id: null, post_after: null, meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "needs-1", status: "needs_review", qbo_txn_id: null, post_after: null },
+      { business_id: "biz-1", transaction_id: "cc-1", status: "needs_review", qbo_txn_id: null, post_after: null, meta: { taxonomy_type: "cc_payment" } },
+      { business_id: "biz-2", transaction_id: "txn-other", status: "auto_approved", qbo_txn_id: null, post_after: null },
+    ],
+  });
+
+  assert.deepEqual(await getAutoPostSettings({ db, businessId: "biz-1", graceHours: 24 }), {
+    enabled: false,
+    auto_post_to_quickbooks: false,
+    handled_backlog_count: 2,
+    posting_grace_hours: 24,
+  });
+
+  await assert.rejects(
+    setAutoPostEnabled({ db, businessId: "biz-1", enabled: true, graceHours: 24, nowMs }),
+    (err) => err.status === 409 && err.code === "auto_post_backlog_confirmation_required"
+  );
+
+  const on = await setAutoPostEnabled({ db, businessId: "biz-1", enabled: true, confirmBacklog: true, graceHours: 24, nowMs });
+  assert.equal(on.auto_post_to_quickbooks, true);
+  assert.equal(on.handled_backlog_count, 2);
+  assert.equal(db.table("business_profiles").find((row) => row.id === "biz-1").auto_post_to_quickbooks, true);
+  assert.equal(db.table("business_profiles").find((row) => row.id === "biz-2"), undefined);
+
+  const expectedPostAfter = "2026-08-02T00:00:00.000Z";
+  assert.equal(db.cat("biz-1", "txn-1").post_after, expectedPostAfter);
+  assert.equal(db.cat("biz-1", "txn-2").post_after, expectedPostAfter);
+  assert.equal(db.cat("biz-1", "txn-3").post_after, null);
+  assert.equal(db.cat("biz-1", "needs-1").post_after, null);
+  assert.equal(db.cat("biz-1", "cc-1").post_after, null);
+
+  assert.equal((await getAutoPostSettings({ db, businessId: "biz-1" })).auto_post_to_quickbooks, true);
+  await setAutoPostEnabled({ db, businessId: "biz-1", enabled: true, confirmBacklog: true, graceHours: 24, nowMs });
+  assert.equal(db.cat("biz-1", "txn-1").post_after, expectedPostAfter);
+
+  const off = await setAutoPostEnabled({ db, businessId: "biz-1", enabled: false, graceHours: 24, nowMs });
+  assert.equal(off.auto_post_to_quickbooks, false);
+  assert.equal(db.cat("biz-1", "txn-1").post_after, null);
+  assert.equal(db.cat("biz-1", "txn-2").post_after, null);
+  await setAutoPostEnabled({ db, businessId: "biz-1", enabled: false, graceHours: 24, nowMs });
+  assert.equal((await getAutoPostSettings({ db, businessId: "biz-1" })).auto_post_to_quickbooks, false);
+});
+
+test("auto-post settings service batches Supabase IN requests and performs no external posting fetch", async () => {
+  const txns = Array.from({ length: 125 }, (_, i) => `txn-${i + 1}`);
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", bookkeeping_start_date: "2026-01-01", auto_post_to_quickbooks: false }],
+    bank_transactions: txns.map((id) => ({ id, business_id: "biz-1", is_archived: false, date: "2026-08-01" })),
+    transaction_categorizations: txns.map((id) => ({ business_id: "biz-1", transaction_id: id, status: "auto_approved", qbo_txn_id: null, post_after: null })),
+  });
+
+  await setAutoPostEnabled({
+    db,
+    businessId: "biz-1",
+    enabled: true,
+    confirmBacklog: true,
+    nowMs: Date.parse("2026-08-01T00:00:00Z"),
+  });
+
+  assert.ok(db.calls.some((call) => call.table === "bank_transactions" && call.op === "in" && call.valuesLength <= 50));
+  assert.ok(db.calls.every((call) => call.op !== "fetch" && call.table !== "quickbooks"));
+});
+
+test("auto-post GET and PATCH share one backend settings authority", () => {
+  const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+  const qboPostingRoutePrefix = route.slice(route.indexOf('router.get("/posting/auto-post"'), route.indexOf('router.post("/posting/run"'));
+
+  assert.match(qboPostingRoutePrefix, /getAutoPostSettings/);
+  assert.match(qboPostingRoutePrefix, /setAutoPostEnabled/);
+  assert.doesNotMatch(qboPostingRoutePrefix, /getQBOClient|fetch\(|axios|runBooksPostOnce|postSingleBookkeepingTransactionNow/);
+});
+
+test("Books Review auto-post failures use toast UI and do not alert raw fetch errors", () => {
+  const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+  const updateAutoPostBlock = page.slice(page.indexOf("const updateAutoPost = useCallback"), page.indexOf("const handleToggleAutoPost"));
+  const loadAutoPostBlock = page.slice(page.indexOf("const loadAutoPostStatus = useCallback"), page.indexOf("const updateAutoPost = useCallback"));
+
+  assert.match(updateAutoPostBlock, /bizzy:toast/);
+  assert.match(updateAutoPostBlock, /Auto-post couldn't be updated/);
+  assert.doesNotMatch(updateAutoPostBlock, /window\.alert/);
+  assert.match(loadAutoPostBlock, /bizzy:toast/);
+  const loadCatchBlock = loadAutoPostBlock.slice(loadAutoPostBlock.indexOf("catch (e)"));
+  assert.doesNotMatch(loadCatchBlock, /setAutoPostStatus/);
 });
 
 function makeSupabase(tables = {}) {
+  const state = Object.fromEntries(Object.entries(tables).map(([table, rows]) => [table, rows.map((row) => ({ ...row }))]));
+  const calls = [];
   return {
+    calls,
+    table(name) {
+      return state[name] || [];
+    },
+    cat(businessId, transactionId) {
+      return (state.transaction_categorizations || []).find((row) => row.business_id === businessId && row.transaction_id === transactionId);
+    },
     from(table) {
-      return new Query(tables[table] || []);
+      return new Query(state, table, calls);
     },
   };
 }
 
 class Query {
-  constructor(rows) {
-    this.rows = [...rows];
+  constructor(state, table, calls) {
+    this.state = state;
+    this.table = table;
+    this.calls = calls;
+    this.rows = [...(state[table] || [])];
+    this.patch = null;
   }
-  select() { return this; }
+  select() {
+    this.calls.push({ table: this.table, op: "select" });
+    return this;
+  }
+  update(patch) {
+    this.patch = { ...(patch || {}) };
+    this.calls.push({ table: this.table, op: "update" });
+    return this;
+  }
   eq(field, value) {
     this.rows = this.rows.filter((row) => row[field] === value);
     return this;
   }
+  gte(field, value) {
+    this.rows = this.rows.filter((row) => String(row[field] || "") >= String(value || ""));
+    return this;
+  }
+  is(field, value) {
+    this.rows = this.rows.filter((row) => row[field] === value);
+    return this;
+  }
+  in(field, values) {
+    const set = new Set(values || []);
+    this.calls.push({ table: this.table, op: "in", field, valuesLength: values?.length || 0 });
+    this.rows = this.rows.filter((row) => set.has(row[field]));
+    return this;
+  }
   maybeSingle() {
+    if (this.patch) {
+      this.applyPatch();
+    }
     return Promise.resolve({ data: this.rows[0] || null, error: null });
+  }
+  then(resolve) {
+    if (this.patch) {
+      this.applyPatch();
+    }
+    return Promise.resolve({ data: this.rows, error: null }).then(resolve);
+  }
+  applyPatch() {
+    const matches = new Set(this.rows);
+    this.state[this.table] = (this.state[this.table] || []).map((row) => {
+      if (!matches.has(row)) return row;
+      Object.assign(row, this.patch);
+      return row;
+    });
+    this.rows = [...matches].map((row) => Object.assign(row, this.patch));
+    this.patch = null;
   }
 }

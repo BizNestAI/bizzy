@@ -650,7 +650,13 @@ function BookkeepingCleanup() {
       setAutoPostStatus(res || { auto_post_to_quickbooks: false, handled_backlog_count: 0 });
     } catch (e) {
       console.warn("[bookkeeping] auto-post status fetch failed", e?.message || e);
-      setAutoPostStatus((prev) => ({ ...(prev || {}), auto_post_to_quickbooks: false }));
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: {
+          severity: "error",
+          title: "Auto-post status unavailable",
+          body: "Auto-post status couldn't be loaded. Please try again.",
+        },
+      }));
     } finally {
       setLoadingAutoPost(false);
     }
@@ -680,7 +686,13 @@ function BookkeepingCleanup() {
       setCountsRefreshKey((v) => v + 1);
     } catch (e) {
       console.warn("[bookkeeping] auto-post update failed", e?.message || e);
-      window.alert(e?.message || "Could not update Auto-post.");
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: {
+          severity: "error",
+          title: "Auto-post couldn't be updated",
+          body: "Please try again.",
+        },
+      }));
     } finally {
       setSavingAutoPost(false);
     }

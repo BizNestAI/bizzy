@@ -34,11 +34,6 @@ export function deriveQboPostingLifecycle(row = {}) {
     };
   }
 
-  const unsupportedUnpairedCcPayment =
-    meta.taxonomy_type === "cc_payment" &&
-    !meta.cc_payment_pair_id &&
-    (row.post_error === "cc_payment_post_not_supported" || meta.post_block_reason === "cc_payment_post_not_supported");
-
   if (hasQboTxn) {
     return {
       key: "posted",
@@ -47,6 +42,11 @@ export function deriveQboPostingLifecycle(row = {}) {
       detail: `${row.qbo_txn_type || "QBO transaction"} ${row.qbo_txn_id}`,
     };
   }
+
+  const unsupportedUnpairedCcPayment =
+    meta.taxonomy_type === "cc_payment" &&
+    !meta.cc_payment_pair_id &&
+    (row.post_error === "cc_payment_post_not_supported" || meta.post_block_reason === "cc_payment_post_not_supported");
 
   if (!unsupportedUnpairedCcPayment && hasProvenPostingFailure(row)) {
     return {
