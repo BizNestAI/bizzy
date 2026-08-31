@@ -32,6 +32,9 @@ function buildSlidingDemoRows(windowMonths, sourceRows = [], valueKey = "profit"
     profit: seriesValues[index % seriesValues.length] ?? 0,
   }));
 }
+
+const NET_PROFIT_SERIES_CACHE = new Map();
+
 function coalesceProfit(payload){
   const obj = payload?.metrics ?? payload ?? {};
   const net = obj.netProfit ?? obj.net_profit;
@@ -106,7 +109,15 @@ export default function NetProfitChart({
         if(!cancelled){ setSeries(toChartData(rows)); setSource(forceLive ? "empty" : "mock"); setStatus("success"); }
         return;
       }
-      setStatus("loading");
+      const cacheKey = `${businessId}:${year}:${month}:12`;
+      const cached = NET_PROFIT_SERIES_CACHE.get(cacheKey);
+      if (cached) {
+        setSeries(cached.series);
+        setSource(cached.source);
+        setStatus("success");
+      } else {
+        setStatus("loading");
+      }
 
       // 1) Try consolidated API
       try{
@@ -127,8 +138,11 @@ export default function NetProfitChart({
             year:Number(v.year), month:Number(v.month), profit:Number(v.profit ?? 0)
           })) || [];
           if(!cancelled && rows.length){
-            setSeries(toChartData(rows));
-            setSource(json?.source || "quickbooks");
+            const nextSeries = toChartData(rows);
+            const nextSource = json?.source || "quickbooks";
+            setSeries(nextSeries);
+            setSource(nextSource);
+            NET_PROFIT_SERIES_CACHE.set(cacheKey, { series: nextSeries, source: nextSource });
             setStatus("success");
             return;
           }
@@ -160,16 +174,21 @@ export default function NetProfitChart({
         const shouldMock = !forceLive && allSame(values);
         const rowsFinal = shouldMock ? buildMock(windowMonths) : rows;
         if(!cancelled){
-          setSeries(toChartData(rowsFinal));
-          setSource(shouldMock ? "mock" : "quickbooks");
+          const nextSeries = toChartData(rowsFinal);
+          const nextSource = shouldMock ? "mock" : "quickbooks";
+          setSeries(nextSeries);
+          setSource(nextSource);
+          NET_PROFIT_SERIES_CACHE.set(cacheKey, { series: nextSeries, source: nextSource });
           setStatus("success");
         }
       }catch(e){
         console.error("[NetProfitChart] fetch failed:", e);
         if(!cancelled){
-          const rows = forceLive ? [] : buildMock(windowMonths);
-          setSeries(toChartData(rows));
-          setSource(forceLive ? "error" : "mock");
+          if (!cached) {
+            const rows = forceLive ? [] : buildMock(windowMonths);
+            setSeries(toChartData(rows));
+            setSource(forceLive ? "error" : "mock");
+          }
           setStatus("success");
         }
       }

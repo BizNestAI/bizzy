@@ -48,6 +48,8 @@ function toChartRows(rows) {
   return [...top4, { name: "Other", value: otherSum }];
 }
 
+const EXPENSE_BREAKDOWN_CACHE = new Map();
+
 // Tooltip (unchanged)
 const CustomTooltip = ({ active, payload }) => {
   if (!active || !payload || !payload.length) return null;
@@ -128,7 +130,15 @@ export default function ExpenseBreakdownChart({
         setStatus(fallback?.length ? "success" : "empty");
         return;
       }
-      setStatus("loading");
+      const cacheKey = `${businessId}:${monthKeySelected}`;
+      const cached = EXPENSE_BREAKDOWN_CACHE.get(cacheKey);
+      if (cached) {
+        setData(cached.data);
+        setSource(cached.source);
+        setStatus("success");
+      } else {
+        setStatus("loading");
+      }
       try {
         const url =
           `/api/accounting/expense-breakdown` +
@@ -152,6 +162,10 @@ export default function ExpenseBreakdownChart({
           if (!cancelled && sum > 0) {
             setData(chartRows);
             setSource(payload?.source || "expense_totals_monthly");
+            EXPENSE_BREAKDOWN_CACHE.set(cacheKey, {
+              data: chartRows,
+              source: payload?.source || "expense_totals_monthly",
+            });
             setStatus("success");
             return;
           }
@@ -181,18 +195,24 @@ export default function ExpenseBreakdownChart({
           if (!cancelled && sum > 0) {
             setData(chartRows);
             setSource(payload?.source === "mock" && !forceLive ? "mock" : "quickbooks");
+            EXPENSE_BREAKDOWN_CACHE.set(cacheKey, {
+              data: chartRows,
+              source: payload?.source === "mock" && !forceLive ? "mock" : "quickbooks",
+            });
             setStatus("success");
             return;
           }
-          if (!cancelled) setStatus("empty");
+          if (!cancelled && !cached) setStatus("empty");
         }
       } catch {}
 
       if (!cancelled) {
-        const fallback = forceLive ? [] : demoData?.financials?.expenseBreakdown || MOCK;
-        setData(fallback);
-        setSource(forceLive ? null : demoData ? "demo" : "mock");
-        setStatus(fallback?.length ? "success" : "empty");
+        if (!cached) {
+          const fallback = forceLive ? [] : demoData?.financials?.expenseBreakdown || MOCK;
+          setData(fallback);
+          setSource(forceLive ? null : demoData ? "demo" : "mock");
+          setStatus(fallback?.length ? "success" : "empty");
+        }
       }
     }
 

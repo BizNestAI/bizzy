@@ -44,11 +44,14 @@ function fmtMargin(value) {
   return `${rounded.toFixed(1)}%`;
 }
 
+const KPI_CACHE = new Map();
+
 export default function FinancialKPICards({
   userId: userIdProp,
   businessId: businessIdProp,
   onLiveData,
   onEmptyData,
+  onError,
   onLoadingChange,
   refreshVersion = 0,
 }) {
@@ -66,6 +69,7 @@ export default function FinancialKPICards({
   );
   const onLiveDataRef = useRef(onLiveData);
   const onEmptyDataRef = useRef(onEmptyData);
+  const onErrorRef = useRef(onError);
   const onLoadingChangeRef = useRef(onLoadingChange);
 
   useEffect(() => {
@@ -75,6 +79,10 @@ export default function FinancialKPICards({
   useEffect(() => {
     onEmptyDataRef.current = onEmptyData;
   }, [onEmptyData]);
+
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
   useEffect(() => {
     onLoadingChangeRef.current = onLoadingChange;
@@ -152,7 +160,15 @@ export default function FinancialKPICards({
         return;
       }
 
-      setLoading(true);
+      const cacheKey = `${businessId}:${year}:${month}`;
+      const cached = KPI_CACHE.get(cacheKey);
+      if (cached) {
+        setKpis(cached);
+        setLoading(false);
+        onLiveDataRef.current?.();
+      } else {
+        setLoading(true);
+      }
       try {
         const url =
           `/api/accounting/metrics` +
@@ -174,7 +190,11 @@ export default function FinancialKPICards({
         const ct = res.headers.get("content-type") || "";
         const raw = await res.text();
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${raw.slice(0, 200)}`);
+        if (!res.ok) {
+          const error = new Error(`HTTP ${res.status}: ${raw.slice(0, 200)}`);
+          error.status = res.status;
+          throw error;
+        }
         if (!ct.includes("application/json"))
           throw new Error(`Non-JSON response (${ct}): ${raw.slice(0, 200)}`);
 
@@ -203,7 +223,8 @@ export default function FinancialKPICards({
           netProfit == null &&
           profitMarginPct == null &&
           !topSpendingCategory;
-        if (allNull) {
+        const isEmptyPayload = parsed.empty === true || parsed.source === "cache_miss";
+        if (isEmptyPayload || allNull) {
           setKpis([]);
           onEmptyDataRef.current?.();
           return;
@@ -267,16 +288,17 @@ export default function FinancialKPICards({
 
         if (!cancelled) {
           setKpis(formatted);
+          KPI_CACHE.set(cacheKey, formatted);
           onLiveDataRef.current?.();
         }
       } catch (error) {
         if (error?.name === "AbortError") return;
         if (!cancelled) {
-          setKpis([]);
-          onEmptyDataRef.current?.();
+          if (!cached) setKpis([]);
+          onErrorRef.current?.(error);
         }
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && !cached) setLoading(false);
       }
     }
 

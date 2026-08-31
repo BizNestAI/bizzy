@@ -120,6 +120,9 @@ export default function AccountingDashboard() {
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [financialRefreshVersion, setFinancialRefreshVersion] = useState(0);
+  const [dataLoadError, setDataLoadError] = useState("");
+  const [availableMonths, setAvailableMonths] = useState([]);
+  const [monthAvailabilityError, setMonthAvailabilityError] = useState("");
   const [kpiLoading, setKpiLoading] = useState(true);
   const [emptyMonth, setEmptyMonth] = useState(false);
   const [fallbackTag, setFallbackTag] = useState(false);
@@ -127,11 +130,9 @@ export default function AccountingDashboard() {
   const [hasMetrics, setHasMetrics] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState(null);
   const [backfillWarning, setBackfillWarning] = useState("");
-  const [lastRefreshed, setLastRefreshed] = useState(() => {
-    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('bizzy:lastFinancialRefresh') : null;
-    return stored ? Number(stored) : null;
-  });
+  const [lastRefreshed, setLastRefreshed] = useState(null);
   const [periodOpen, setPeriodOpen] = useState(false);
+  const periodMenuRef = useRef(null);
   const formatElapsed = useCallback((ts) => {
     if (!ts) return "";
     const diff = Date.now() - ts;
@@ -168,13 +169,25 @@ export default function AccountingDashboard() {
     const now = new Date();
     return year === now.getFullYear() && month === now.getMonth() + 1;
   }, [year, month]);
+  const showingLatestAvailable = useMemo(() => {
+    if (!availableMonths.length || !periodValue) return fallbackTag;
+    const now = new Date();
+    const currentValue = `${now.getFullYear()}-${padMonth(now.getMonth() + 1)}`;
+    const currentHasData = availableMonths.some((entry) => entry.value === currentValue && entry.hasActivity);
+    return !currentHasData && periodValue === availableMonths[0]?.value && periodValue !== currentValue;
+  }, [availableMonths, fallbackTag, periodValue]);
   const prevMonth = useCallback(() => {
     if (!year || !month) return;
     const d = new Date(year, month - 2, 1);
     setYearMonth(d.getFullYear(), d.getMonth() + 1);
   }, [year, month, setYearMonth]);
 
+  const selectedMonthMeta = useMemo(
+    () => availableMonths.find((entry) => entry.value === periodValue) || null,
+    [availableMonths, periodValue]
+  );
   const monthOptions = useMemo(() => {
+    if (availableMonths.length) return availableMonths;
     const now = new Date();
     const opts = Array.from({ length: 15 }).map((_, idx) => {
       const d = new Date(now.getFullYear(), now.getMonth() - idx, 1);
@@ -194,7 +207,69 @@ export default function AccountingDashboard() {
       });
     }
     return opts;
-  }, [year, month, periodValue]);
+  }, [availableMonths, year, month, periodValue]);
+
+  useEffect(() => {
+    if (!selectedMonthMeta?.lastRefreshedAt) return;
+    const parsed = Date.parse(selectedMonthMeta.lastRefreshedAt);
+    if (Number.isFinite(parsed)) setLastRefreshed(parsed);
+  }, [selectedMonthMeta?.lastRefreshedAt]);
+
+  useEffect(() => {
+    if (!periodOpen) return undefined;
+    const closeOnOutside = (event) => {
+      if (periodMenuRef.current && !periodMenuRef.current.contains(event.target)) {
+        setPeriodOpen(false);
+      }
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setPeriodOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [periodOpen]);
+
+  useEffect(() => {
+    let alive = true;
+    async function loadAvailableMonths() {
+      if (!businessId || (!userId && !adminView.active)) return;
+      try {
+        const res = await safeFetch(`/api/accounting/metrics/available-months?business_id=${encodeURIComponent(businessId)}`);
+        if (!alive) return;
+        const months = (res?.months || []).map((row) => {
+          const [y, m] = String(row.month || "").split("-");
+          const value = `${y}-${m}`;
+          return {
+            value,
+            label: new Date(Number(y), Number(m) - 1, 1).toLocaleString(undefined, { month: "short", year: "numeric" }),
+            hasActivity: row.has_activity === true,
+            lastRefreshedAt: row.last_refreshed_at || null,
+          };
+        }).filter((row) => /^\d{4}-\d{2}$/.test(row.value));
+        setAvailableMonths(months);
+        setMonthAvailabilityError("");
+
+        const now = new Date();
+        const currentValue = `${now.getFullYear()}-${padMonth(now.getMonth() + 1)}`;
+        const currentHasData = months.some((entry) => entry.value === currentValue && entry.hasActivity);
+        const latest = months[0] || null;
+        if (latest && !currentHasData && periodValue === currentValue) {
+          const [y, m] = latest.value.split("-");
+          setFallbackTag(true);
+          setYearMonth(Number(y), Number(m));
+        }
+      } catch (e) {
+        if (!alive) return;
+        setMonthAvailabilityError(e?.message || "Unable to load available financial months.");
+      }
+    }
+    loadAvailableMonths();
+    return () => { alive = false; };
+  }, [adminView.active, businessId, userId, periodValue, setYearMonth, financialRefreshVersion]);
 
   // 🧠 Publish AgendaWidget to the right rail
   useEffect(() => {
@@ -294,11 +369,6 @@ export default function AccountingDashboard() {
         `/api/qbo/sync?business_id=${encodeURIComponent(businessId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
         { method: "POST" }
       );
-      const now = Date.now();
-      setLastRefreshed(now);
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('bizzy:lastFinancialRefresh', String(now));
-      }
       setFinancialRefreshVersion((version) => version + 1);
     } catch (e) {
       console.warn("[AccountingDashboard] refresh failed", e?.message || e);
@@ -324,11 +394,6 @@ export default function AccountingDashboard() {
           body: { business_id: businessId },
         }
       );
-      const now = Date.now();
-      setLastRefreshed(now);
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem('bizzy:lastFinancialRefresh', String(now));
-      }
       setFinancialRefreshVersion((version) => version + 1);
     } catch (e) {
       setSyncError(e?.message || "Sync failed");
@@ -338,6 +403,7 @@ export default function AccountingDashboard() {
   };
 
   const handleEmptyData = () => {
+    setDataLoadError("");
     if (import.meta.env.MODE !== 'production' && isCurrentMonth && !autoFallbackRef.current) {
       autoFallbackRef.current = true;
       setFallbackTag(true);
@@ -351,7 +417,22 @@ export default function AccountingDashboard() {
   const handleLiveData = () => {
     setEmptyMonth(false);
     setFallbackTag(false);
+    setDataLoadError("");
     autoFallbackRef.current = false;
+  };
+
+  const handleDataError = (error) => {
+    setEmptyMonth(false);
+    const status = Number(error?.status || 0);
+    if (status === 401) {
+      setDataLoadError("Your session needs attention. Please sign in again.");
+      return;
+    }
+    if (String(error?.message || "").toLowerCase().includes("quickbooks")) {
+      setDataLoadError("QuickBooks connection needs attention.");
+      return;
+    }
+    setDataLoadError("Unable to load financial data.");
   };
 
   const handleViewPrevMonth = () => {
@@ -380,12 +461,14 @@ export default function AccountingDashboard() {
             <div className="flex items-center gap-3 flex-wrap justify-end">
               <div className="flex items-center gap-2 text-xs text-white/70">
                 <div
+                  ref={periodMenuRef}
                   className="relative inline-flex"
-                  onMouseEnter={() => setPeriodOpen(true)}
-                  onMouseLeave={() => setPeriodOpen(false)}
                 >
                   <button
                     type="button"
+                    onClick={() => setPeriodOpen((open) => !open)}
+                    aria-haspopup="listbox"
+                    aria-expanded={periodOpen}
                     className="appearance-none bg-[rgba(18,18,20,0.92)] border border-white/18 rounded-md pl-3 pr-7 py-[6px] text-xs text-white/90 cursor-pointer shadow-[0_8px_18px_rgba(0,0,0,0.32)] backdrop-blur-md transition-all duration-150 ease-out hover:bg-[rgba(28,28,32,0.98)] hover:border-white/30 focus:outline-none focus:ring-2 focus:ring-white/14"
                     style={{ minWidth: '110px', lineHeight: 1.05 }}
                   >
@@ -393,6 +476,7 @@ export default function AccountingDashboard() {
                   </button>
                   {periodOpen && (
                     <div
+                      role="listbox"
                       className="absolute left-0 mt-1 w-full max-h-64 overflow-y-auto rounded-md border border-white/14 bg-[#0b0c10] shadow-[0_18px_42px_rgba(0,0,0,0.55)] z-30 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
                       style={{ top: '100%' }}
                     >
@@ -400,9 +484,14 @@ export default function AccountingDashboard() {
                         <button
                           key={opt.value}
                           type="button"
+                          role="option"
+                          aria-selected={opt.value === periodValue}
                           onClick={() => {
                             const [y, m] = opt.value.split("-");
                             setYearMonth(Number(y), Number(m));
+                            setFallbackTag(false);
+                            setEmptyMonth(false);
+                            setDataLoadError("");
                             setPeriodOpen(false);
                           }}
                           className={`w-full text-left px-3 py-2 text-xs transition ${
@@ -417,10 +506,13 @@ export default function AccountingDashboard() {
                     </div>
                   )}
                 </div>
-                {fallbackTag ? (
+                {showingLatestAvailable ? (
                   <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/10 text-white/80">
                     Showing latest available month
                   </span>
+                ) : null}
+                {monthAvailabilityError ? (
+                  <span className="text-[11px] text-amber-200">Months unavailable</span>
                 ) : null}
               </div>
               <div className="flex items-center gap-3">
@@ -438,7 +530,7 @@ export default function AccountingDashboard() {
                 {lastRefreshed ? (
                   <div className="relative group">
                     <span className="text-xs text-white/70">
-                      Live · Updated {formatElapsed(lastRefreshed)}
+                      {refreshing || syncing ? "Refreshing..." : `Last refreshed ${formatElapsed(lastRefreshed)}`}
                     </span>
                     <div
                       className="absolute left-1/2 -translate-x-1/2 mt-1 px-2 py-[6px] rounded bg-black/80 text-[11px] text-white/85 opacity-0 group-hover:opacity-100 pointer-events-none shadow-lg border border-white/10"
@@ -455,7 +547,7 @@ export default function AccountingDashboard() {
                     </div>
                   </div>
                 ) : (
-                  <span className="text-xs text-white/50">No refresh yet</span>
+                  <span className="text-xs text-white/50">{refreshing || syncing ? "Refreshing..." : "No refresh yet"}</span>
                 )}
               </div>
             </div>
@@ -467,7 +559,7 @@ export default function AccountingDashboard() {
         {emptyMonth ? (
           <div className="rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(0,0,0,0.35)] px-4 py-3 flex flex-col gap-2">
             <div className="text-sm text-white/80">
-              No activity yet for this month. Try last month.
+              No financial activity for {periodLabel()}.
             </div>
             <div className="flex items-center gap-3">
               <button
@@ -485,6 +577,20 @@ export default function AccountingDashboard() {
           </div>
         ) : null}
 
+        {dataLoadError ? (
+          <div className="rounded-2xl border border-rose-500/35 bg-[rgba(255,90,120,0.08)] px-4 py-3 flex items-center justify-between gap-3">
+            <div className="text-sm text-rose-100">{dataLoadError}</div>
+            <button
+              type="button"
+              onClick={() => setFinancialRefreshVersion((version) => version + 1)}
+              className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm text-white/90 transition"
+              style={{ borderColor: "rgba(255,255,255,0.18)", background: "rgba(0,0,0,0.45)" }}
+            >
+              Retry
+            </button>
+          </div>
+        ) : null}
+
         {backfillWarning ? (
           <div className="rounded-2xl border border-amber-500/40 bg-[rgba(255,209,143,0.08)] px-4 py-3 text-amber-100 text-sm">
             {backfillWarning}
@@ -494,7 +600,7 @@ export default function AccountingDashboard() {
         {backfillRunning ? (
           <div className="rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(0,0,0,0.35)] px-4 py-3 flex flex-col gap-2">
             <div className="text-sm text-white/90">
-              Syncing last 12 months… ({backfillStatus?.months_done || 0}/{backfillStatus?.months_total || 12}){backfillStatus?.current_month ? ` • ${backfillStatus.current_month}` : ""}
+              Preparing your financial history... ({backfillStatus?.months_done || 0}/{backfillStatus?.months_total || 12}){backfillStatus?.current_month ? ` • ${backfillStatus.current_month}` : ""}
             </div>
             <div className="text-xs text-white/60">
               This runs in the background. You can keep browsing.
@@ -526,6 +632,7 @@ export default function AccountingDashboard() {
             <FinancialKPICards
               onLiveData={handleLiveData}
               onEmptyData={handleEmptyData}
+              onError={handleDataError}
               onLoadingChange={setKpiLoading}
               refreshVersion={financialRefreshVersion}
             />

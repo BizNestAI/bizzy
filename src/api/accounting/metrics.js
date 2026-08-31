@@ -28,6 +28,50 @@ const MOCK_GEN = String(process.env.MOCK_GENERATE_MOVES || "").toLowerCase() ===
 const EMBED_ACCOUNTS = String(process.env.EMBED_ACCOUNTS || "").toLowerCase() === "true";
 
 // Latest available month helper for initializing period selection
+router.get("/available-months", async (req, res) => {
+  try {
+    const business_id =
+      req.business?.id ||
+      req.auth?.businessId ||
+      req.query?.business_id ||
+      req.query?.businessId ||
+      req.headers["x-business-id"] ||
+      null;
+    if (!business_id) return res.status(400).json({ error: "missing_business_id" });
+
+    const { data, error } = await supabase
+      .from("financial_metrics")
+      .select("month,total_revenue,total_expenses,net_profit,updated_at,created_at")
+      .eq("business_id", business_id)
+      .order("month", { ascending: false });
+    if (error) return res.status(500).json({ error: error.message || "query_failed" });
+
+    const seen = new Set();
+    const months = [];
+    for (const row of data || []) {
+      const month = /^\d{4}-\d{2}$/.test(String(row.month || "")) ? `${row.month}-01` : row.month;
+      if (!month || seen.has(month)) continue;
+      seen.add(month);
+      months.push({
+        month,
+        has_activity:
+          Number(row.total_revenue || 0) !== 0 ||
+          Number(row.total_expenses || 0) !== 0 ||
+          Number(row.net_profit || 0) !== 0,
+        last_refreshed_at: row.updated_at || row.created_at || null,
+      });
+    }
+
+    return res.status(200).json({
+      months,
+      latest_month: months[0]?.month || null,
+      source: "financial_metrics",
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || "available_months_failed" });
+  }
+});
+
 router.get("/latest-month", async (req, res) => {
   try {
     const business_id =

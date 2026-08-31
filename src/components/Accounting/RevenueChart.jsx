@@ -81,6 +81,8 @@ function buildSlidingDemoRows(windowMonths, sourceRows = [], valueKey = "revenue
   }));
 }
 
+const REVENUE_SERIES_CACHE = new Map();
+
 function niceRevenueCeiling(value) {
   const padded = Math.max(60000, Number(value || 0) * 1.12);
   if (padded <= 60000) return 60000;
@@ -177,7 +179,15 @@ export default function RevenueChart({
         return;
       }
 
-      setStatus("loading");
+      const cacheKey = `${businessId}:${year}:${month}:12`;
+      const cached = REVENUE_SERIES_CACHE.get(cacheKey);
+      if (cached) {
+        setSeries(cached.series);
+        setSource(cached.source);
+        setStatus("success");
+      } else {
+        setStatus("loading");
+      }
 
       // Strategy 1: consolidated API (if present)
       try {
@@ -206,8 +216,10 @@ export default function RevenueChart({
               revenue: Number(r.revenue ?? r.totalRevenue ?? r.total_revenue ?? 0),
             })) || [];
           if (!cancelled && rows.length) {
-            setSeries(toChartData(rows));
+            const nextSeries = toChartData(rows);
+            setSeries(nextSeries);
             setSource("quickbooks");
+            REVENUE_SERIES_CACHE.set(cacheKey, { series: nextSeries, source: "quickbooks" });
             setStatus("success");
             return;
           }
@@ -249,16 +261,21 @@ export default function RevenueChart({
         const rowsFinal = shouldMock ? buildMock(windowMonths) : rows;
 
         if (!cancelled) {
-          setSeries(toChartData(rowsFinal));
-          setSource(shouldMock ? "mock" : "quickbooks");
+          const nextSeries = toChartData(rowsFinal);
+          const nextSource = shouldMock ? "mock" : "quickbooks";
+          setSeries(nextSeries);
+          setSource(nextSource);
+          REVENUE_SERIES_CACHE.set(cacheKey, { series: nextSeries, source: nextSource });
           setStatus("success");
         }
       } catch (e) {
         console.error("[RevenueChart] series fetch failed:", e);
         if (!cancelled) {
-          const rows = forceLive ? [] : buildMock(windowMonths);
-          setSeries(toChartData(rows));
-          setSource(forceLive ? "error" : "mock");
+          if (!cached) {
+            const rows = forceLive ? [] : buildMock(windowMonths);
+            setSeries(toChartData(rows));
+            setSource(forceLive ? "error" : "mock");
+          }
           setStatus("success");
         }
       }
