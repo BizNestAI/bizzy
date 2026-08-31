@@ -9,6 +9,11 @@ import {
 import { generateSuggestedMoves } from "../gpt/suggestedMovesEngine.js";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { upsertExpenseTotalsMonthly } from "../../services/expenseTotalsMonthly.js";
+import {
+  getLatestAvailableHealthMonth,
+  getMonthlyHealthSummary,
+  listAvailableHealthMonths,
+} from "../../services/accounting/healthMonthlySnapshotService.js";
 import { getQBOClient } from "../../utils/qboClient.js";
 import { getQuickBooksAccessToken } from "../../services/quickbooksTokenService.js";
 import fetch from "node-fetch";
@@ -38,6 +43,15 @@ router.get("/available-months", async (req, res) => {
       req.headers["x-business-id"] ||
       null;
     if (!business_id) return res.status(400).json({ error: "missing_business_id" });
+
+    const snapshotMonths = await listAvailableHealthMonths({ businessId: business_id });
+    if (snapshotMonths.length > 0) {
+      return res.status(200).json({
+        months: snapshotMonths,
+        latest_month: snapshotMonths.find((row) => row.has_activity)?.month || snapshotMonths[0]?.month || null,
+        source: "monthly_review_qbo_pnl_snapshots",
+      });
+    }
 
     const { data, error } = await supabase
       .from("financial_metrics")
@@ -82,6 +96,10 @@ router.get("/latest-month", async (req, res) => {
       req.headers["x-business-id"] ||
       null;
     if (!business_id) return res.status(400).json({ error: "missing_business_id" });
+    const latestSnapshotMonth = await getLatestAvailableHealthMonth({ businessId: business_id });
+    if (latestSnapshotMonth?.month) {
+      return res.status(200).json({ month: latestSnapshotMonth.month, source: "monthly_review_qbo_pnl_snapshots" });
+    }
     const { data, error } = await supabase
       .from("financial_metrics")
       .select("month")
@@ -652,6 +670,41 @@ router.get("/", async (req, res) => {
   const cached = await getCachedMetrics({ business_id, monthText });
 
   if (persistedOnly) {
+    const snapshotSummary = await getMonthlyHealthSummary({
+      businessId: business_id,
+      year: requestedYear,
+      month: requestedMonth,
+    });
+    if (snapshotSummary?.snapshot?.snapshot_complete) {
+      const priorSnapshot = await getMonthlyHealthSummary({
+        businessId: business_id,
+        year: prevStart.getFullYear(),
+        month: prevStart.getMonth() + 1,
+      });
+      const priorMetrics = priorSnapshot?.snapshot?.snapshot_complete ? {
+        total_revenue: priorSnapshot.metrics.totalRevenue,
+        total_expenses: priorSnapshot.metrics.totalExpenses,
+        net_profit: priorSnapshot.metrics.netProfit,
+        profit_margin: priorSnapshot.metrics.profitMargin,
+      } : null;
+      return res.status(200).json({
+        metrics: snapshotSummary.metrics,
+        deltas: {
+          revenue_mom_pct: pctDelta(snapshotSummary.metrics.totalRevenue, priorMetrics?.total_revenue),
+          expenses_mom_pct: pctDelta(snapshotSummary.metrics.totalExpenses, priorMetrics?.total_expenses),
+          profit_mom_pct: pctDelta(snapshotSummary.metrics.netProfit, priorMetrics?.net_profit),
+          margin_mom_pct: pctDelta(snapshotSummary.metrics.profitMargin, priorMetrics?.profit_margin),
+        },
+        accountBreakdown: snapshotSummary.account_breakdown || [],
+        expenseBreakdown: snapshotSummary.expense_breakdown || [],
+        priorMonth: formatPrior(priorMetrics),
+        source: "monthly_review_qbo_pnl_snapshots",
+        stale: false,
+        last_refreshed_at: snapshotSummary.snapshot.last_successful_refresh_at || null,
+        accounting_method: snapshotSummary.snapshot.accounting_method || null,
+        persisted_only: true,
+      });
+    }
     if (cached) {
       const prior = await getPrevMonthMetrics({
         business_id,

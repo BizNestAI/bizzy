@@ -1,6 +1,7 @@
 import express from "express";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
+import { getHealthSeries } from "../../services/accounting/healthMonthlySnapshotService.js";
 
 const router = express.Router();
 
@@ -55,6 +56,14 @@ router.get("/", async (req, res) => {
 
     if (!business_id) {
       return res.status(400).json({ error: "Missing business_id" });
+    }
+
+    const snapshotSeries = await getHealthSeries({ businessId: business_id, year: end_year, month: end_month, window });
+    if ((snapshotSeries.revenue || []).some((row) => row.found)) {
+      return res.json({
+        rows: snapshotSeries.revenue.map(({ year, month, revenue }) => ({ year, month, revenue })),
+        source: "monthly_review_qbo_pnl_snapshots",
+      });
     }
 
     let windowMonths = seqLastNMonths({ year: end_year, month: end_month, n: window });

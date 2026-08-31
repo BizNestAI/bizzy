@@ -1,6 +1,7 @@
 import express from "express";
 import { supabase } from "../../services/supabaseAdmin.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
+import { getHealthSeries } from "../../services/accounting/healthMonthlySnapshotService.js";
 
 const router = express.Router();
 const ENV_MOCK = String(process.env.USE_MOCK_ACCOUNTING || "").toLowerCase() === "true";
@@ -43,6 +44,14 @@ router.get("/", async (req, res) => {
     const window = Math.max(1, Math.min(24, Number(q.window || 12)));
 
     if (!business_id) return res.status(400).json({ error: "Missing business_id" });
+
+    const snapshotSeries = await getHealthSeries({ businessId: business_id, year: end_year, month: end_month, window });
+    if ((snapshotSeries.profit || []).some((row) => row.found)) {
+      return res.json({
+        rows: snapshotSeries.profit.map(({ year, month, profit }) => ({ year, month, profit })),
+        source: "monthly_review_qbo_pnl_snapshots",
+      });
+    }
 
     let windowMonths = seqLastNMonths({ year: end_year, month: end_month, n: window });
 

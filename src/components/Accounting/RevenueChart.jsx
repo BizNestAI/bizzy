@@ -192,13 +192,12 @@ export default function RevenueChart({
       // Strategy 1: consolidated API (if present)
       try {
         const url =
-          `/api/accounting/revenue-series` +
+          `/api/accounting/health/series` +
           `?business_id=${encodeURIComponent(businessId)}` +
           `&user_id=${encodeURIComponent(userId)}` +
           `&end_year=${encodeURIComponent(year)}` +
           `&end_month=${encodeURIComponent(month)}` +
-          `&window=12` +
-          `&data_mode=live`;
+          `&window=12`;
         const resp = await apiFetch(url, {
           headers: {
             "Content-Type": "application/json",
@@ -210,7 +209,7 @@ export default function RevenueChart({
         if (resp.ok) {
           const json = await resp.json();
           const rows =
-            (Array.isArray(json?.rows) ? json.rows : json)?.map((r) => ({
+            (Array.isArray(json?.revenue) ? json.revenue : (Array.isArray(json?.rows) ? json.rows : json))?.map((r) => ({
               year: Number(r.year),
               month: Number(r.month),
               revenue: Number(r.revenue ?? r.totalRevenue ?? r.total_revenue ?? 0),

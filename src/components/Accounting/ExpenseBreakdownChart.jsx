@@ -141,12 +141,11 @@ export default function ExpenseBreakdownChart({
       }
       try {
         const url =
-          `/api/accounting/expense-breakdown` +
+          `/api/accounting/health/monthly-summary` +
           `?business_id=${encodeURIComponent(businessId)}` +
           (userId ? `&user_id=${encodeURIComponent(userId)}` : "") +
           `&year=${encodeURIComponent(year)}` +
-          `&month=${encodeURIComponent(month)}` +
-          `&data_mode=live`;
+          `&month=${encodeURIComponent(month)}`;
         if (process.env.NODE_ENV !== "production") {
           // eslint-disable-next-line no-console
           console.log("[ExpenseBreakdown] fetch monthly totals", { year, month, url });
@@ -156,7 +155,7 @@ export default function ExpenseBreakdownChart({
         });
         if (resp.ok) {
           const payload = await resp.json();
-          const rows = payload?.rows || [];
+          const rows = payload?.expense_breakdown || payload?.rows || [];
           const chartRows = toChartRows(rows);
           const sum = (chartRows || []).reduce((s, r) => s + Number(r.value || 0), 0);
           if (!cancelled && sum > 0) {

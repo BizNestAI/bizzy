@@ -55,7 +55,7 @@ export function useFinancialPeriod(businessId) {
         setYearMonth(current.year, current.month);
       }
       try {
-        const res = await safeFetch(`/api/accounting/metrics/latest-month?business_id=${encodeURIComponent(businessId)}`);
+        const res = await safeFetch(`/api/accounting/health/latest-month?business_id=${encodeURIComponent(businessId)}`);
         const parsed = parseMonth(res?.month);
         if (!cancelled && parsed) {
           const isCurrent = parsed.year === current.year && parsed.month === current.month;

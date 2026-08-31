@@ -8,6 +8,7 @@ const read = (path) => readFileSync(join(root, path), "utf8");
 
 const dashboard = read("src/pages/accounting/AccountingDashboard.jsx");
 const metricsRoute = read("src/api/accounting/metrics.js");
+const healthRoute = read("src/api/accounting/health.routes.js");
 const kpis = read("src/components/Accounting/FinancialKPICards.jsx");
 const revenue = read("src/components/Accounting/RevenueChart.jsx");
 const profit = read("src/components/Accounting/NetProfitChart.jsx");
@@ -30,11 +31,10 @@ test("Health month dropdown closes on outside click and Escape", () => {
 });
 
 test("available Health months are loaded from backend financial authority", () => {
-  assert.match(metricsRoute, /router\.get\("\/available-months"/);
-  assert.match(metricsRoute, /\.from\("financial_metrics"\)/);
-  assert.match(metricsRoute, /order\("month", \{ ascending: false \}\)/);
-  assert.match(metricsRoute, /last_refreshed_at/);
-  assert.match(dashboard, /\/api\/accounting\/metrics\/available-months/);
+  assert.match(healthRoute, /router\.get\("\/available-months"/);
+  assert.match(healthRoute, /listAvailableHealthMonths/);
+  assert.match(metricsRoute, /monthly_review_qbo_pnl_snapshots/);
+  assert.match(dashboard, /\/api\/accounting\/health\/available-months/);
   assert.match(dashboard, /if \(availableMonths\.length\) return availableMonths/);
 });
 
@@ -73,7 +73,7 @@ test("Health widgets cache rendered persisted data for stale-while-revalidate", 
 
 test("Refresh from QuickBooks remains bounded to selected month", () => {
   assert.match(dashboard, /Refresh from QuickBooks/);
-  assert.match(dashboard, /\/api\/qbo\/sync\?business_id=\$\{encodeURIComponent\(businessId\)\}&year=\$\{encodeURIComponent\(year\)\}&month=\$\{encodeURIComponent\(month\)\}/);
+  assert.match(dashboard, /\/api\/accounting\/health\/refresh\?business_id=\$\{encodeURIComponent\(businessId\)\}&year=\$\{encodeURIComponent\(year\)\}&month=\$\{encodeURIComponent\(month\)\}/);
   assert.doesNotMatch(dashboard, /\/api\/qbo\/backfill\/start/);
   assert.doesNotMatch(dashboard, /months:\s*12/);
 });

@@ -122,19 +122,18 @@ export default function NetProfitChart({
       // 1) Try consolidated API
       try{
         const url =
-          `/api/accounting/profit-series` +
+          `/api/accounting/health/series` +
           `?business_id=${encodeURIComponent(businessId)}` +
           `&user_id=${encodeURIComponent(userId)}` +
           `&end_year=${encodeURIComponent(year)}` +
           `&end_month=${encodeURIComponent(month)}` +
-          `&window=12` +
-          `&data_mode=live`;
+          `&window=12`;
         const r = await apiFetch(url, {
           headers: {"Content-Type":"application/json","x-user-id":userId,"x-business-id":businessId,"x-data-mode":"live"}
         });
         if(r.ok){
           const json = await r.json();
-          const rows = (Array.isArray(json?.rows)? json.rows : json)?.map(v=>({
+          const rows = (Array.isArray(json?.profit) ? json.profit : (Array.isArray(json?.rows)? json.rows : json))?.map(v=>({
             year:Number(v.year), month:Number(v.month), profit:Number(v.profit ?? 0)
           })) || [];
           if(!cancelled && rows.length){

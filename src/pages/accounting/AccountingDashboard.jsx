@@ -238,7 +238,7 @@ export default function AccountingDashboard() {
     async function loadAvailableMonths() {
       if (!businessId || (!userId && !adminView.active)) return;
       try {
-        const res = await safeFetch(`/api/accounting/metrics/available-months?business_id=${encodeURIComponent(businessId)}`);
+        const res = await safeFetch(`/api/accounting/health/available-months?business_id=${encodeURIComponent(businessId)}`);
         if (!alive) return;
         const months = (res?.months || []).map((row) => {
           const [y, m] = String(row.month || "").split("-");
@@ -294,7 +294,7 @@ export default function AccountingDashboard() {
       }
       try {
         const resp = await safeFetch(
-          `/api/accounting/metrics?business_id=${encodeURIComponent(businessId)}&user_id=${encodeURIComponent(userId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}&data_mode=live&persisted_only=true`,
+          `/api/accounting/health/monthly-summary?business_id=${encodeURIComponent(businessId)}&user_id=${encodeURIComponent(userId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
           { method: "GET" }
         );
         const m = resp?.metrics || {};
@@ -366,7 +366,7 @@ export default function AccountingDashboard() {
     setRefreshing(true);
     try {
       await safeFetch(
-        `/api/qbo/sync?business_id=${encodeURIComponent(businessId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
+        `/api/accounting/health/refresh?business_id=${encodeURIComponent(businessId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
         { method: "POST" }
       );
       setFinancialRefreshVersion((version) => version + 1);
@@ -387,7 +387,7 @@ export default function AccountingDashboard() {
     setSyncError("");
     try {
       await safeFetch(
-        `/api/qbo/sync?business_id=${encodeURIComponent(businessId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
+        `/api/accounting/health/refresh?business_id=${encodeURIComponent(businessId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

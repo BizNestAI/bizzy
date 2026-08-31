@@ -2,6 +2,7 @@
 import express from "express";
 import { fetchExpenseTotalsMonthly } from "../../services/expenseTotalsMonthly.js";
 import { monthKeyFromParts } from "../../utils/monthKey.js";
+import { getMonthlyHealthSummary } from "../../services/accounting/healthMonthlySnapshotService.js";
 
 const router = express.Router();
 
@@ -41,6 +42,17 @@ router.get("/", async (req, res) => {
 
     const monthText = readMonthText(req);
     if (!monthText) return res.status(400).json({ error: "invalid_month" });
+
+    const [year, month] = monthText.split("-").map(Number);
+    const summary = await getMonthlyHealthSummary({ businessId: business_id, year, month });
+    if (summary?.snapshot?.snapshot_complete) {
+      return res.status(200).json({
+        month: monthText,
+        rows: summary.expense_breakdown || [],
+        source: "monthly_review_qbo_pnl_snapshots",
+        accounting_method: summary.snapshot.accounting_method || null,
+      });
+    }
 
     const { rows } = await fetchExpenseTotalsMonthly({ business_id, monthText });
 

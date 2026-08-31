@@ -171,12 +171,11 @@ export default function FinancialKPICards({
       }
       try {
         const url =
-          `/api/accounting/metrics` +
+          `/api/accounting/health/monthly-summary` +
           `?user_id=${encodeURIComponent(userId)}` +
           `&business_id=${encodeURIComponent(businessId)}` +
           `&year=${encodeURIComponent(year)}` +
-          `&month=${encodeURIComponent(month)}` +
-          `&data_mode=live&persisted_only=true`;
+          `&month=${encodeURIComponent(month)}`;
 
         const res = await apiFetch(url, {
           headers: {
@@ -223,7 +222,7 @@ export default function FinancialKPICards({
           netProfit == null &&
           profitMarginPct == null &&
           !topSpendingCategory;
-        const isEmptyPayload = parsed.empty === true || parsed.source === "cache_miss";
+        const isEmptyPayload = parsed.empty === true || parsed.source === "cache_miss" || parsed.data_status === "missing";
         if (isEmptyPayload || allNull) {
           setKpis([]);
           onEmptyDataRef.current?.();

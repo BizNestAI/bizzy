@@ -8,6 +8,7 @@ import {
   updateJob,
 } from "../../services/qboBackfillJobsService.js";
 import { runQboBackfill } from "../../services/qboBackfillRunner.js";
+import { HEALTH_ACCOUNTING_METHOD } from "../../services/accounting/healthMonthlySnapshotService.js";
 
 const router = express.Router();
 const activeRuns = new Set();
@@ -70,8 +71,7 @@ router.post("/start", async (req, res) => {
     if (!business_id) return res.status(400).json({ error: "missing_business_id" });
 
     const months = Number(req.body?.months || 12) || 12;
-    const mode = String(req.body?.mode || "cash").toLowerCase();
-    const accounting_method = mode === "accrual" ? "Accrual" : "Cash";
+    const accounting_method = HEALTH_ACCOUNTING_METHOD;
     const startYear = req.body?.start_year || req.body?.startYear || null;
     const startMonth = req.body?.start_month || req.body?.startMonth || null;
 

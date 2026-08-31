@@ -1,6 +1,7 @@
 import { supabase } from "../services/supabaseAdmin.js";
-import { runQboSync } from "../api/accounting/qbo-sync.js";
+import { refreshMonthlyQboFinancialSnapshot } from "../services/accounting/healthMonthlySnapshotService.js";
 import { qboEnvName } from "../utils/qboEnv.js";
+import { prevMonthParts } from "../utils/monthKey.js";
 
 const DAILY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -35,7 +36,11 @@ export async function runQboFinancialHealthRefreshOnce() {
     if (!businessId || seen.has(businessId)) continue;
     seen.add(businessId);
     try {
-      await runQboSync({ businessId });
+      const now = new Date();
+      const current = { year: now.getFullYear(), month: now.getMonth() + 1 };
+      const prior = prevMonthParts(current);
+      await refreshMonthlyQboFinancialSnapshot({ businessId, ...current, source: "daily_cron_current_month" });
+      await refreshMonthlyQboFinancialSnapshot({ businessId, ...prior, source: "daily_cron_prior_month" });
       refreshed += 1;
     } catch (err) {
       failed += 1;

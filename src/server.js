@@ -23,6 +23,7 @@ import reportsSyncRouter from "./api/accounting/reports-sync.js";
 import pnlPdfRouter from "./api/accounting/pnlPdf.routes.js";
 import bookkeepingRouter from "./api/accounting/bookkeeping.routes.js";
 import expenseBreakdownRouter from "./api/accounting/expense-breakdown.js";
+import healthAccountingRouter from "./api/accounting/health.routes.js";
 import qboSyncRouter from "./api/accounting/qbo-sync.js";
 import qboBackfillRouter from "./api/accounting/qbo-backfill.routes.js";
 import qboJobCostingWebhooksRouter from "./api/qbo/qboJobCostingWebhooks.routes.js";
@@ -240,6 +241,7 @@ app.use("/api/accounting/metrics", ...requireCustomerOrAdminView, financialMetri
 app.use("/api/accounting/pulse", ...requireCustomerOrAdminView, pulseRoute);
 app.use("/api/accounting/moves", ...requireCustomerOrAdminView, movesRoute);
 app.use("/api/accounting/expense-breakdown", ...requireCustomerOrAdminView, expenseBreakdownRouter);
+app.use("/api/accounting/health", ...requireCustomerOrAdminView, healthAccountingRouter);
 app.use("/api/accounting/revenue-series", ...requireCustomerOrAdminView, revenueSeriesRouter);
 app.use("/api/accounting/profit-series", ...requireCustomerOrAdminView, profitSeriesRouter);
 app.use("/api/accounting/reports-sync", ...requireCustomerOrAdminView, reportsSyncRouter);

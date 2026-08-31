@@ -13,8 +13,7 @@ import {
   qbSandboxClientId,
 } from "../../utils/qboEnv.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
-import { backfillLast12Months } from "../../services/qboBackfillRunner.js";
-import { lastFullMonthParts } from "../../utils/monthKey.js";
+import { bootstrapMissingHealthHistory } from "../../services/accounting/healthMonthlySnapshotService.js";
 import { buildQuickBooksOAuthScopes } from "../../services/jobCosting/qboProjectsService.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { requireAuthOrAdminView, requireBusinessAccess } from "../_shared/tenantAuth.js";
@@ -454,28 +453,14 @@ router.get("/callback", async (req, res) => {
     });
 
     const forceBackfill = oauthState.metadata?.forceBackfill === true;
-    const lastFull = lastFullMonthParts();
-    const startWindow = new Date(lastFull.year, lastFull.month - 12, 1);
-    const startIso = `${startWindow.getFullYear()}-${pad2(startWindow.getMonth() + 1)}-01`;
-    const { count: fmCount, error: fmError } = await supabase
-      .from("financial_metrics")
-      .select("id", { count: "exact", head: true })
-      .eq("business_id", business_id)
-      .gte("month", startIso);
-    const shouldSkipBackfill = !forceBackfill && fmError == null && (fmCount || 0) > 0;
-    if (shouldSkipBackfill) {
-      console.info("[BACKFILL] skip kickoff (existing metrics within 12m)", { business_id, count: fmCount });
-    } else {
-      console.info("[BACKFILL] kickoff from oauth callback", { business: business_id, env: qboEnvName });
-      setImmediate(() => {
-        backfillLast12Months({
-          business_id,
-          realmId,
-          accessToken: access_token,
-          qboEnv: qboEnvName,
-        }).catch((err) => console.warn("[BACKFILL] kickoff failed", redactQboSecrets(err?.message || err)));
-      });
-    }
+    console.info("[HEALTH SNAPSHOT] bootstrap missing history from oauth callback", { business: business_id, env: qboEnvName, forceBackfill });
+    setImmediate(() => {
+      bootstrapMissingHealthHistory({
+        businessId: business_id,
+        months: 12,
+        source: forceBackfill ? "qbo_connection_force_bootstrap" : "qbo_connection_bootstrap",
+      }).catch((err) => console.warn("[HEALTH SNAPSHOT] bootstrap failed", redactQboSecrets(err?.message || err)));
+    });
 
     try {
       const syncResult = await runQboSync({ businessId: business_id });
