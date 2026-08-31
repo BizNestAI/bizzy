@@ -132,14 +132,18 @@ function RevenueTooltip({ active, payload, label }) {
 export default function RevenueChart({
   userId: userIdProp,
   businessId: businessIdProp,
+  year: yearProp,
+  month: monthProp,
   height = 260,
   className = "",
   showGrid = true,
   refreshVersion = 0,
 }) {
-  const { year, month } = useFinancialPeriod(businessIdProp || localStorage.getItem("currentBusinessId"));
-  const userId = userIdProp || localStorage.getItem("user_id");
   const businessId = businessIdProp || localStorage.getItem("currentBusinessId");
+  const period = useFinancialPeriod(businessId);
+  const year = yearProp || period.year;
+  const month = monthProp || period.month;
+  const userId = userIdProp || localStorage.getItem("user_id");
   const forceLive = shouldForceLiveData();
   const usingDemo = !forceLive && shouldUseDemoData();
   const demoData = useMemo(() => (usingDemo ? getDemoData() : null), [usingDemo]);

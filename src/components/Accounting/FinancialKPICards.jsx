@@ -49,6 +49,8 @@ const KPI_CACHE = new Map();
 export default function FinancialKPICards({
   userId: userIdProp,
   businessId: businessIdProp,
+  year: yearProp,
+  month: monthProp,
   onLiveData,
   onEmptyData,
   onError,
@@ -61,7 +63,9 @@ export default function FinancialKPICards({
 
   const userId = userIdProp || localStorage.getItem("user_id");
   const businessId = businessIdProp || localStorage.getItem("currentBusinessId");
-  const { year, month } = useFinancialPeriod(businessId);
+  const period = useFinancialPeriod(businessId);
+  const year = yearProp || period.year;
+  const month = monthProp || period.month;
   const forceLive = shouldForceLiveData();
   const usingDemo = useMemo(
     () => !forceLive && shouldUseDemoData(currentBusiness),

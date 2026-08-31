@@ -299,10 +299,22 @@ export default function AccountingDashboard() {
         );
         const m = resp?.metrics || {};
         const has =
+          resp?.data_status === "available" ||
           Number(m.totalRevenue ?? m.total_revenue ?? 0) !== 0 ||
           Number(m.totalExpenses ?? m.total_expenses ?? 0) !== 0 ||
           Number(m.netProfit ?? m.net_profit ?? 0) !== 0;
-        if (alive) setHasMetrics(!!has);
+        if (alive) {
+          setHasMetrics(!!has);
+          if (has) {
+            setEmptyMonth(false);
+            setDataLoadError("");
+            const refreshedAt = resp?.snapshot?.last_successful_refresh_at || resp?.last_refreshed_at || null;
+            const parsed = refreshedAt ? Date.parse(refreshedAt) : NaN;
+            if (Number.isFinite(parsed)) setLastRefreshed(parsed);
+          } else if (resp?.data_status === "empty") {
+            setEmptyMonth(true);
+          }
+        }
       } catch {
         if (alive) setHasMetrics(false);
       }
@@ -403,6 +415,10 @@ export default function AccountingDashboard() {
   };
 
   const handleEmptyData = () => {
+    if (hasMetrics) {
+      setEmptyMonth(false);
+      return;
+    }
     setDataLoadError("");
     if (import.meta.env.MODE !== 'production' && isCurrentMonth && !autoFallbackRef.current) {
       autoFallbackRef.current = true;
@@ -630,6 +646,10 @@ export default function AccountingDashboard() {
         <CardFrame padded={false} variant="emerald-dark">
           <div className="rounded-[inherit] p-3">
             <FinancialKPICards
+              userId={userId}
+              businessId={businessId}
+              year={year}
+              month={month}
               onLiveData={handleLiveData}
               onEmptyData={handleEmptyData}
               onError={handleDataError}
@@ -643,7 +663,14 @@ export default function AccountingDashboard() {
         <CardFrame variant="emerald-dark">
           <Suspense fallback={<CardSkeleton h={`h-[${H_REVENUE}px]`} />}>
             <div className="rounded-[inherit] overflow-hidden" style={{ height: H_REVENUE }}>
-              <RevenueChart height={H_REVENUE} refreshVersion={financialRefreshVersion} />
+              <RevenueChart
+                userId={userId}
+                businessId={businessId}
+                year={year}
+                month={month}
+                height={H_REVENUE}
+                refreshVersion={financialRefreshVersion}
+              />
             </div>
           </Suspense>
         </CardFrame>
@@ -653,7 +680,15 @@ export default function AccountingDashboard() {
           <CardFrame variant="emerald-dark">
             <Suspense fallback={<CardSkeleton h={`h-[${H_EXPENSE}px]`} />}>
               <div className="rounded-[inherit]" style={{ height: H_EXPENSE }}>
-                <ExpenseBreakdownChart height={H_EXPENSE} className="rounded-xl" refreshVersion={financialRefreshVersion} />
+                <ExpenseBreakdownChart
+                  userId={userId}
+                  businessId={businessId}
+                  year={year}
+                  month={month}
+                  height={H_EXPENSE}
+                  className="rounded-xl"
+                  refreshVersion={financialRefreshVersion}
+                />
               </div>
             </Suspense>
           </CardFrame>
@@ -661,7 +696,16 @@ export default function AccountingDashboard() {
           <CardFrame variant="emerald-dark">
             <Suspense fallback={<CardSkeleton h={`h-[${H_PROFIT}px]`} />}>
               <div className="rounded-[inherit]" style={{ height: H_PROFIT }}>
-                <NetProfitChart height={H_PROFIT} compact className="rounded-xl" refreshVersion={financialRefreshVersion} />
+                <NetProfitChart
+                  userId={userId}
+                  businessId={businessId}
+                  year={year}
+                  month={month}
+                  height={H_PROFIT}
+                  compact
+                  className="rounded-xl"
+                  refreshVersion={financialRefreshVersion}
+                />
               </div>
             </Suspense>
           </CardFrame>

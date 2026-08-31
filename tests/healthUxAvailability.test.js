@@ -71,6 +71,24 @@ test("Health widgets cache rendered persisted data for stale-while-revalidate", 
   assert.match(expenses, /if \(cached\) \{/);
 });
 
+test("Health widgets use the dashboard-selected business and month", () => {
+  assert.match(dashboard, /<FinancialKPICards[\s\S]*businessId=\{businessId\}[\s\S]*year=\{year\}[\s\S]*month=\{month\}/);
+  assert.match(dashboard, /<RevenueChart[\s\S]*businessId=\{businessId\}[\s\S]*year=\{year\}[\s\S]*month=\{month\}/);
+  assert.match(dashboard, /<ExpenseBreakdownChart[\s\S]*businessId=\{businessId\}[\s\S]*year=\{year\}[\s\S]*month=\{month\}/);
+  assert.match(dashboard, /<NetProfitChart[\s\S]*businessId=\{businessId\}[\s\S]*year=\{year\}[\s\S]*month=\{month\}/);
+  assert.match(kpis, /year: yearProp/);
+  assert.match(revenue, /year: yearProp/);
+  assert.match(profit, /year: yearProp/);
+  assert.match(expenses, /year: yearProp/);
+});
+
+test("monthly-summary available status clears the Health empty gate", () => {
+  assert.match(dashboard, /resp\?\.data_status === "available"/);
+  assert.match(dashboard, /setEmptyMonth\(false\)/);
+  assert.match(dashboard, /snapshot\?\.last_successful_refresh_at/);
+  assert.match(dashboard, /if \(hasMetrics\) \{/);
+});
+
 test("Refresh from QuickBooks remains bounded to selected month", () => {
   assert.match(dashboard, /Refresh from QuickBooks/);
   assert.match(dashboard, /\/api\/accounting\/health\/refresh\?business_id=\$\{encodeURIComponent\(businessId\)\}&year=\$\{encodeURIComponent\(year\)\}&month=\$\{encodeURIComponent\(month\)\}/);
