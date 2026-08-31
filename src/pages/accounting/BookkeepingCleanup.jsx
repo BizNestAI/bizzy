@@ -25,7 +25,6 @@ import {
   getBookkeepingProcessingStatus,
   getMappingStatus,
   getClarificationRequests,
-  runPostingNow,
   postTransactionToQuickBooks,
   getAutoPostStatus,
   updateAutoPostStatus,
@@ -497,8 +496,6 @@ function BookkeepingCleanup() {
   const [processingStatus, setProcessingStatus] = useState(null);
   const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null, pending: null });
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
-  const [postingNow, setPostingNow] = useState(false);
-  const [postingRunSummary, setPostingRunSummary] = useState(null);
   const lastSuccessfulTransactionPagesRef = useRef(new Map());
   const accountOverrides = useRef(new Map());
   const accountScrollRef = useRef(null);
@@ -1392,24 +1389,6 @@ function BookkeepingCleanup() {
     }
   };
 
-  const handleRunPostingNow = async () => {
-    if (!businessId || usingDemo || postingNow) return;
-    setPostingNow(true);
-    setPostingRunSummary(null);
-    try {
-      const res = await runPostingNow(businessId, { force: true });
-      setPostingRunSummary(res?.summary || null);
-      await reloadTransactions();
-      setCountsRefreshKey((value) => value + 1);
-      await loadMappingStatus();
-    } catch (err) {
-      console.warn("[bookkeeping] posting run failed", err?.message || err);
-      setPostingRunSummary({ ok: false, error: err?.message || "posting_run_failed" });
-    } finally {
-      setPostingNow(false);
-    }
-  };
-
   const handleManualPostTransaction = (txnId) => {
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
     const txn = transactions.find((t) => t.id === txnId);
@@ -1964,27 +1943,10 @@ function BookkeepingCleanup() {
       ) : null}
 
       {activeTab === "handled" ? (
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+        <div className="mt-2 text-xs text-slate-400">
           <span>
             Bizzi automatically posts handled transactions to QuickBooks. You can edit here during the grace window if needed.
           </span>
-          {!usingDemo ? (
-            <button
-              type="button"
-              onClick={handleRunPostingNow}
-              disabled={postingNow}
-              className="rounded-full border border-white/10 px-3 py-1.5 text-slate-200 transition hover:border-[var(--accent-line)] hover:bg-[var(--panel)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {postingNow ? "Posting..." : "Run posting now"}
-            </button>
-          ) : null}
-          {postingRunSummary ? (
-            <span className={postingRunSummary.ok === false ? "text-rose-300" : "text-emerald-300"}>
-              {postingRunSummary.ok === false
-                ? `Posting run failed: ${postingRunSummary.error || "unknown error"}`
-                : `Posting run checked ${postingRunSummary.forced ? postingRunSummary.pending || 0 : postingRunSummary.due || 0} handled and attempted ${postingRunSummary.attempted || 0}.`}
-            </span>
-          ) : null}
         </div>
       ) : null}
       {activeTab === "posted" ? (

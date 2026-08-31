@@ -41,6 +41,16 @@ test("Auto-post policy remains explicit and approval grace uses the configured 2
   assert.match(autoPostService, /post_after:\s*nextEnabled \? postAfter : null/);
 });
 
+test("Books Review no longer exposes page-level Run posting now control", () => {
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+
+  assert.doesNotMatch(page, /Run posting now/);
+  assert.doesNotMatch(page, /handleRunPostingNow/);
+  assert.doesNotMatch(page, /runPostingNow/);
+  assert.match(page, /onManualPost=\{handleManualPostTransaction\}/);
+  assert.match(page, /postTransactionToQuickBooks\(businessId, txnId\)/);
+});
+
 test("Monthly Review QBO labels distinguish Handled from Posted and scheduled queue state", () => {
   const monthly = read("src/api/admin/monthlyReview.routes.js");
   const mirror = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
