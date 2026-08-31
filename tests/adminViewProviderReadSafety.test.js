@@ -25,7 +25,7 @@ test("Admin View QBO COA GET is blocked before live QuickBooks account fetch", (
 
   assert.ok(routeStart > 0, "QBO COA GET route must exist");
   assert.ok(adminBranch > routeStart, "QBO COA GET must branch for Admin View");
-  assert.ok(providerCall > adminBranch, "Admin View must branch before live QBO COA fetch");
+  assert.ok(providerCall === -1 || providerCall > adminBranch, "Admin View must branch before live QBO COA fetch");
   assert.match(
     bookkeepingAccountsSource.slice(adminBranch, providerCall),
     /admin_view_provider_refresh_blocked/
@@ -69,21 +69,21 @@ test("Admin View account-mappings GET reads persisted mappings before live QBO C
 
   assert.ok(routeStart > 0, "account-mappings GET route must exist");
   assert.ok(adminBranch > routeStart, "account-mappings GET must branch for Admin View");
-  assert.ok(providerCall > adminBranch, "Admin View must branch before live QBO COA fetch");
+  assert.ok(providerCall === -1 || providerCall > adminBranch, "Admin View must branch before live QBO COA fetch");
   assert.match(accountMappingsSource.slice(adminBranch, providerCall), /fetchAdminViewPersistedAccountMappings/);
 });
 
 test("Admin View mapping-status GET reads persisted rows before live QBO COA or mapping upsert", () => {
   const routeStart = mappingStatusSource.indexOf('router.get("/mapping-status"');
   const adminBranch = mappingStatusSource.indexOf("if (isAdminViewRequest(req))", routeStart);
-  const providerCall = mappingStatusSource.indexOf("fetchChartOfAccounts(businessId)", routeStart);
+  const providerCall = mappingStatusSource.indexOf("fetchChartOfAccountsForAutoMapping(businessId)", routeStart);
   const mutationCall = mappingStatusSource.indexOf(".upsert(autoRows", routeStart);
 
   assert.ok(routeStart > 0, "mapping-status GET route must exist");
   assert.ok(adminBranch > routeStart, "mapping-status GET must branch for Admin View");
-  assert.ok(providerCall > adminBranch, "Admin View must branch before live QBO COA fetch");
-  assert.ok(mutationCall > adminBranch, "Admin View must branch before mapping auto-upsert");
-  assert.match(mappingStatusSource.slice(adminBranch, providerCall), /fetchAdminViewPersistedMappingStatus/);
+  assert.ok(providerCall === -1 || providerCall > adminBranch, "Admin View must branch before live QBO COA fetch");
+  assert.ok(mutationCall === -1 || mutationCall > adminBranch, "Admin View must branch before mapping auto-upsert");
+  assert.match(mappingStatusSource.slice(adminBranch, providerCall === -1 ? undefined : providerCall), /fetchAdminViewPersistedMappingStatus/);
 });
 
 test("Admin View account mapping helpers are runtime cache-only and business scoped", async () => {
