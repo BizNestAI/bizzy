@@ -51,6 +51,20 @@ test("Health QBO authority is Cash basis only", () => {
   assert.match(healthService, /accountingMethod: HEALTH_ACCOUNTING_METHOD/);
 });
 
+test("Health accounting validation uses signed account rows while expense display is positive-only", () => {
+  const signedSumBody = healthService.match(/function sumSignedAccountAmounts\(rows = \[\], type\) \{[\s\S]*?\n\}/)?.[0] || "";
+
+  assert.match(healthService, /function sumSignedAccountAmounts/);
+  assert.match(healthService, /expenses: sumSignedAccountAmounts\(summary\.account_rows, "Expense"\)/);
+  assert.doesNotMatch(healthService, /function sumAccounts\(rows = \[\], type\)/);
+  assert.doesNotMatch(signedSumBody, /Math\.abs/);
+  assert.match(healthService, /function buildExpenseBreakdown/);
+  assert.match(healthService, /const amount = Number\(account\.total_amount \?\? account\.balance \?\? 0\)/);
+  assert.match(healthService, /if \(!\(amount > 0\)\) continue/);
+  assert.match(healthService, /function buildExpenseAdjustments/);
+  assert.match(healthService, /if \(!\(amount < 0\)\) continue/);
+});
+
 test("Health widgets no longer read QBO financial tables directly from the browser", () => {
   for (const source of [revenueChart, profitChart, expenseChart]) {
     assert.doesNotMatch(source, /services\/supabaseClient/);

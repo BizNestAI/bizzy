@@ -189,6 +189,7 @@ export async function getMonthlyHealthSummary({
   );
   const metrics = metricsFromSnapshot(current);
   const expenseBreakdown = buildExpenseBreakdown(accountRows);
+  const expenseAdjustments = buildExpenseAdjustments(accountRows);
   const topExpense = expenseBreakdown[0] || null;
   const responseMetrics = {
     ...metrics,
@@ -215,6 +216,12 @@ export async function getMonthlyHealthSummary({
     metrics: responseMetrics,
     prior_month: priorMonth,
     expense_breakdown: expenseBreakdown,
+    expense_adjustments: expenseAdjustments,
+    expense_display_totals: {
+      gross_positive_expenses: roundMoney(expenseBreakdown.reduce((sum, row) => sum + Number(row.amount || 0), 0)),
+      refunds_and_credits: roundMoney(expenseAdjustments.reduce((sum, row) => sum + Number(row.amount || 0), 0)),
+      net_expenses: metrics.totalExpenses,
+    },
     account_breakdown: accountRows.map((row) => toLegacyAccountBreakdownRow(row, monthText)),
     series: await getHealthSeries({ db, businessId, year: reviewYear, month: reviewMonth, window }),
     source: "monthly_review_qbo_pnl_snapshots",
@@ -396,11 +403,11 @@ async function replaceTableRows({ db, table, businessId, monthText, rows }) {
 
 function validateParsedHealthSummary(summary) {
   const accountTotals = {
-    revenue: sumAccounts(summary.account_rows, "Income"),
-    cogs: sumAccounts(summary.account_rows, "Cost of Goods Sold"),
-    expenses: sumAccounts(summary.account_rows, "Expense"),
-    otherIncome: sumAccounts(summary.account_rows, "Other Income"),
-    otherExpense: sumAccounts(summary.account_rows, "Other Expense"),
+    revenue: sumSignedAccountAmounts(summary.account_rows, "Income"),
+    cogs: sumSignedAccountAmounts(summary.account_rows, "Cost of Goods Sold"),
+    expenses: sumSignedAccountAmounts(summary.account_rows, "Expense"),
+    otherIncome: sumSignedAccountAmounts(summary.account_rows, "Other Income"),
+    otherExpense: sumSignedAccountAmounts(summary.account_rows, "Other Expense"),
   };
   assertClose("revenue", summary.revenue, accountTotals.revenue);
   assertClose("cogs", summary.cogs, accountTotals.cogs);
@@ -472,7 +479,7 @@ function buildExpenseBreakdown(accounts = []) {
   const map = new Map();
   for (const account of accounts || []) {
     if (account?.account_type !== "Expense") continue;
-    const amount = Math.abs(Number(account.total_amount || account.balance || 0));
+    const amount = Number(account.total_amount ?? account.balance ?? 0);
     if (!(amount > 0)) continue;
     const category = account.account_name || account.account_path || "Other";
     map.set(category, roundMoney((map.get(category) || 0) + amount));
@@ -480,6 +487,20 @@ function buildExpenseBreakdown(accounts = []) {
   return Array.from(map.entries())
     .map(([category, amount]) => ({ category, amount }))
     .sort((a, b) => b.amount - a.amount);
+}
+
+function buildExpenseAdjustments(accounts = []) {
+  const map = new Map();
+  for (const account of accounts || []) {
+    if (account?.account_type !== "Expense") continue;
+    const amount = Number(account.total_amount ?? account.balance ?? 0);
+    if (!(amount < 0)) continue;
+    const category = account.account_name || account.account_path || "Refunds and credits";
+    map.set(category, roundMoney((map.get(category) || 0) + amount));
+  }
+  return Array.from(map.entries())
+    .map(([category, amount]) => ({ category, amount }))
+    .sort((a, b) => a.amount - b.amount);
 }
 
 function toLegacyAccountBreakdownRow(account, monthText = null) {
@@ -500,8 +521,8 @@ function hasFinancialActivity(metrics) {
   );
 }
 
-function sumAccounts(rows = [], type) {
-  return roundMoney(rows.filter((row) => row.account_type === type).reduce((sum, row) => sum + Math.abs(Number(row.total_amount || 0)), 0));
+function sumSignedAccountAmounts(rows = [], type) {
+  return roundMoney(rows.filter((row) => row.account_type === type).reduce((sum, row) => sum + Number(row.total_amount || 0), 0));
 }
 
 function assertClose(name, expected, actual) {

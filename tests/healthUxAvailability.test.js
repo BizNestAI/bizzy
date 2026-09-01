@@ -182,6 +182,14 @@ test("Health widgets use the dashboard-selected business and month", () => {
   assert.match(expenses, /year: yearProp/);
 });
 
+test("Expense Breakdown discloses negative expense adjustments separately from donut slices", () => {
+  assert.match(expenses, /expense_adjustments/);
+  assert.match(expenses, /expense_display_totals/);
+  assert.match(expenses, /Less: refunds and credits/);
+  assert.match(expenses, /Net expenses/);
+  assert.match(expenses, /Math\.max\(0, Number\(r\.amount \?\? r\.balance \?\? 0\)\)/);
+});
+
 test("monthly-summary available status clears the Health empty gate", () => {
   assert.match(dashboard, /resp\?\.data_status === "available"/);
   assert.match(dashboard, /setEmptyMonth\(false\)/);

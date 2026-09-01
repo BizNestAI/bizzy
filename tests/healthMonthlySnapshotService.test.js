@@ -52,6 +52,59 @@ function augustCashPnlFixture(overrides = {}) {
   };
 }
 
+function decemberCashPnlFixture() {
+  const expenseRows = [
+    ["Alcohol/Nightlife", "15.75"],
+    ["Apple Pay", "25.15"],
+    ["Business Expenses", "14.00"],
+    ["Coffee", "5.00"],
+    ["Entertainment", "33.31"],
+    ["Groceries", "24.65"],
+    ["Meals", "325.36"],
+    ["Payment Processing Fees", "32.20"],
+    ["Prime Video", "114.58"],
+    ["Rent", "1781.52"],
+    ["Utilities", "98.02"],
+    ["Venmo", "-553.00"],
+  ];
+  return {
+    Header: {
+      ReportName: "ProfitAndLoss",
+      StartPeriod: "2025-12-01",
+      EndPeriod: "2025-12-31",
+      Option: [{ Name: "ReportBasis", Value: "Cash" }],
+    },
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Income" }] },
+          Rows: { Row: [{ type: "Data", ColData: [{ value: "Services", id: "income-services" }, { value: "1150.00" }] }] },
+          Summary: { ColData: [{ value: "Total Income" }, { value: "1150.00" }] },
+        },
+        { Summary: { ColData: [{ value: "Gross Profit" }, { value: "1150.00" }] } },
+        {
+          Header: { ColData: [{ value: "Expenses" }] },
+          Rows: {
+            Row: expenseRows.map(([name, amount], index) => ({
+              type: "Data",
+              ColData: [{ value: name, id: `expense-${index}` }, { value: amount }],
+            })),
+          },
+          Summary: { ColData: [{ value: "Total Expenses" }, { value: "1916.54" }] },
+        },
+        { Summary: { ColData: [{ value: "Net Operating Income" }, { value: "-766.54" }] } },
+        {
+          Header: { ColData: [{ value: "Other Income" }] },
+          Rows: { Row: [{ type: "Data", ColData: [{ value: "Credit Card Rewards", id: "other-income-rewards" }, { value: "0.83" }] }] },
+          Summary: { ColData: [{ value: "Total Other Income" }, { value: "0.83" }] },
+        },
+        { Summary: { ColData: [{ value: "Net Other Income" }, { value: "0.83" }] } },
+        { Summary: { ColData: [{ value: "Net Income" }, { value: "-765.71" }] } },
+      ],
+    },
+  };
+}
+
 function makeDb(initial = {}) {
   const tables = {
     monthly_review_qbo_pnl_snapshots: [],
@@ -374,4 +427,46 @@ test("Health snapshot promotes zero-revenue Cash month with Other Income and nul
   assert.equal(summary.metrics.profitMargin, null);
   assert.equal(summary.snapshot.accounting_method, "Cash");
   assert.equal(db.tables.monthly_review_qbo_pnl_snapshots[0].metadata.pnl_components.other_income, 6.97);
+});
+
+test("Health snapshot reconciliation preserves signed contra-expense rows", async () => {
+  const db = makeDb();
+  const summary = await refreshMonthlyQboFinancialSnapshot({
+    db,
+    businessId: BUSINESS_ID,
+    year: 2025,
+    month: 12,
+    loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
+    fetchReport: async (args) => ({
+      report: decemberCashPnlFixture(),
+      reportName: args.reportName,
+      realmId: args.realmId,
+    }),
+  });
+
+  const accountRows = db.tables.monthly_review_qbo_pnl_accounts;
+  const venmo = accountRows.find((row) => row.account_name === "Venmo");
+  const signedExpenseTotal = accountRows
+    .filter((row) => row.account_type === "Expense")
+    .reduce((sum, row) => Math.round((sum + Number(row.total_amount || 0)) * 100) / 100, 0);
+  const absoluteExpenseTotal = accountRows
+    .filter((row) => row.account_type === "Expense")
+    .reduce((sum, row) => Math.round((sum + Math.abs(Number(row.total_amount || 0))) * 100) / 100, 0);
+
+  assert.equal(summary.data_status, "available");
+  assert.equal(summary.metrics.totalRevenue, 1150);
+  assert.equal(summary.metrics.totalExpenses, 1916.54);
+  assert.equal(summary.metrics.netProfit, -765.71);
+  assert.equal(summary.metrics.profitMargin, -66.58);
+  assert.equal(summary.snapshot.accounting_method, "Cash");
+  assert.equal(summary.snapshot.snapshot_complete, true);
+  assert.equal(venmo.total_amount, -553);
+  assert.equal(signedExpenseTotal, 1916.54);
+  assert.equal(absoluteExpenseTotal, 3022.54);
+  assert.equal(summary.expense_display_totals.gross_positive_expenses, 2469.54);
+  assert.equal(summary.expense_display_totals.refunds_and_credits, -553);
+  assert.equal(summary.expense_display_totals.net_expenses, 1916.54);
+  assert.deepEqual(summary.expense_adjustments, [{ category: "Venmo", amount: -553 }]);
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots[0].metadata.reconciliation.account_totals.expenses, 1916.54);
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots[0].metadata.reconciliation.components.qbo_net_income, -765.71);
 });

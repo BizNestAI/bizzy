@@ -110,6 +110,8 @@ export default function ExpenseBreakdownChart({
   const demoData = useMemo(() => (usingDemo ? getDemoData() : null), [usingDemo]);
 
   const [data, setData] = useState(null);
+  const [adjustments, setAdjustments] = useState([]);
+  const [displayTotals, setDisplayTotals] = useState(null);
   const [status, setStatus] = useState("idle"); // idle | loading | success | empty
   const [source, setSource] = useState(null);
 
@@ -123,6 +125,8 @@ export default function ExpenseBreakdownChart({
     async function load() {
       if (demoData?.financials?.expenseBreakdown) {
         setData(demoData.financials.expenseBreakdown);
+        setAdjustments([]);
+        setDisplayTotals(null);
         setSource("demo");
         setStatus("success");
         return;
@@ -130,6 +134,8 @@ export default function ExpenseBreakdownChart({
       if (!businessId || !monthKeySelected) {
         const fallback = forceLive ? [] : demoData?.financials?.expenseBreakdown || MOCK;
         setData(fallback);
+        setAdjustments([]);
+        setDisplayTotals(null);
         setSource(forceLive ? null : "mock");
         setStatus(fallback?.length ? "success" : "empty");
         return;
@@ -138,6 +144,8 @@ export default function ExpenseBreakdownChart({
       const cached = EXPENSE_BREAKDOWN_CACHE.get(cacheKey);
       if (cached) {
         setData(cached.data);
+        setAdjustments(cached.adjustments || []);
+        setDisplayTotals(cached.displayTotals || null);
         setSource(cached.source);
         setStatus("success");
       } else {
@@ -157,13 +165,18 @@ export default function ExpenseBreakdownChart({
         if (resp.ok) {
           const payload = await resp.json();
           const rows = payload?.expense_breakdown || payload?.rows || [];
+          const adjustmentRows = payload?.expense_adjustments || [];
           const chartRows = toChartRows(rows);
           const sum = (chartRows || []).reduce((s, r) => s + Number(r.value || 0), 0);
           if (!cancelled && sum > 0) {
             setData(chartRows);
+            setAdjustments(adjustmentRows);
+            setDisplayTotals(payload?.expense_display_totals || null);
             setSource(payload?.source || "expense_totals_monthly");
             EXPENSE_BREAKDOWN_CACHE.set(cacheKey, {
               data: chartRows,
+              adjustments: adjustmentRows,
+              displayTotals: payload?.expense_display_totals || null,
               source: payload?.source || "expense_totals_monthly",
             });
             setStatus("success");
@@ -193,9 +206,13 @@ export default function ExpenseBreakdownChart({
           const sum = (chartRows || []).reduce((s, r) => s + Number(r.value || 0), 0);
           if (!cancelled && sum > 0) {
             setData(chartRows);
+            setAdjustments([]);
+            setDisplayTotals(null);
             setSource(payload?.source === "mock" && !forceLive ? "mock" : "quickbooks");
             EXPENSE_BREAKDOWN_CACHE.set(cacheKey, {
               data: chartRows,
+              adjustments: [],
+              displayTotals: null,
               source: payload?.source === "mock" && !forceLive ? "mock" : "quickbooks",
             });
             setStatus("success");
@@ -211,6 +228,8 @@ export default function ExpenseBreakdownChart({
         if (!cached) {
           const fallback = forceLive ? [] : demoData?.financials?.expenseBreakdown || MOCK;
           setData(fallback);
+          setAdjustments([]);
+          setDisplayTotals(null);
           setSource(forceLive ? null : demoData ? "demo" : "mock");
           setStatus(fallback?.length ? "success" : "empty");
         }
@@ -222,6 +241,11 @@ export default function ExpenseBreakdownChart({
   }, [businessId, userId, monthKeySelected, year, month, demoData, forceLive, refreshVersion]);
 
   const total = useMemo(() => (data || []).reduce((s, d) => s + Number(d.value || 0), 0), [data]);
+  const adjustmentTotal = useMemo(
+    () => (adjustments || []).reduce((s, d) => s + Number(d.amount || 0), 0),
+    [adjustments]
+  );
+  const netExpenses = displayTotals?.net_expenses ?? displayTotals?.netExpenses ?? null;
   // measure (for legend sizing)
   const [measureRef, { width: w }] = useMeasure();
 
@@ -342,6 +366,22 @@ export default function ExpenseBreakdownChart({
             );
           })}
           </div>
+          {adjustmentTotal < 0 ? (
+            <div className="mt-2 rounded-md border border-white/10 bg-black/20 px-2.5 py-2 text-[11px] text-white/70">
+              <div className="flex items-center justify-between gap-2">
+                <span>Less: refunds and credits</span>
+                <span className="tabular-nums text-white/80">
+                  -${Math.abs(adjustmentTotal).toLocaleString()}
+                </span>
+              </div>
+              {netExpenses !== null ? (
+                <div className="mt-1 flex items-center justify-between gap-2 text-white/50">
+                  <span>Net expenses</span>
+                  <span className="tabular-nums">${Number(netExpenses).toLocaleString()}</span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           </div>
         </div>
       </div>
