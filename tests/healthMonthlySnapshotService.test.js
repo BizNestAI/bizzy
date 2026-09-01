@@ -247,6 +247,28 @@ test("available/latest Health months are derived from completed current snapshot
   assert.equal(summary.data_status, "available");
   assert.equal(summary.metrics.totalRevenue, 1175);
   assert.equal(summary.metrics.top_spending_category, null);
+  assert.equal(summary.prior_month.period, "2026-07-01");
+  assert.equal(summary.prior_month.data_status, "missing");
+  assert.equal(summary.series.revenue.at(-1).revenue, 1175);
+  assert.equal(summary.series.revenue.at(-2).revenue, null);
+});
+
+test("Health summary compares only to the immediate prior calendar month", async () => {
+  const db = makeDb({
+    monthly_review_qbo_pnl_snapshots: [
+      { id: "dec", business_id: BUSINESS_ID, review_year: 2025, review_month: 12, is_current: true, status: "current", accounting_method: "Cash", revenue: 800, expenses: 200, net_profit: 600 },
+      { id: "jan", business_id: BUSINESS_ID, review_year: 2026, review_month: 1, is_current: true, status: "current", accounting_method: "Cash", revenue: 1000, expenses: 300, net_profit: 700 },
+      { id: "nov", business_id: BUSINESS_ID, review_year: 2025, review_month: 11, is_current: true, status: "current", accounting_method: "Cash", revenue: 9999, expenses: 1, net_profit: 9998 },
+    ],
+  });
+
+  const summary = await getMonthlyHealthSummary({ db, businessId: BUSINESS_ID, year: 2026, month: 1 });
+
+  assert.equal(summary.data_status, "available");
+  assert.equal(summary.prior_month.period, "2025-12-01");
+  assert.equal(summary.prior_month.data_status, "available");
+  assert.equal(summary.prior_month.metrics.totalRevenue, 800);
+  assert.notEqual(summary.prior_month.metrics.totalRevenue, 9999);
 });
 
 test("Health reads ignore current Accrual snapshots and require a current Cash snapshot", async () => {

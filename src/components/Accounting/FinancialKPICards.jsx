@@ -34,6 +34,17 @@ function fmtPoints(n) {
   const rounded = Math.round(v * 10) / 10;
   return `${rounded > 0 ? "+" : ""}${rounded.toFixed(Math.abs(rounded) % 1 === 0 ? 0 : 1)} pts`;
 }
+function pctDelta(current, prior) {
+  const currentNum = Number(current);
+  const priorNum = Number(prior);
+  if (!Number.isFinite(currentNum) || !Number.isFinite(priorNum) || priorNum === 0) return null;
+  return ((currentNum - priorNum) / Math.abs(priorNum)) * 100;
+}
+function metricTrend(change, { lowerIsBetter = false } = {}) {
+  if (change === null || change === undefined || !Number.isFinite(Number(change))) return null;
+  if (Number(change) === 0) return null;
+  return lowerIsBetter ? (Number(change) > 0 ? "down" : "up") : (Number(change) > 0 ? "up" : "down");
+}
 function fmtMargin(value) {
   if (value === null || value === undefined || value === "") return "0.0%";
   const num = Number(value);
@@ -205,7 +216,6 @@ export default function FinancialKPICards({
 
         const parsed = JSON.parse(raw) || {};
         const m = parsed.metrics || parsed;
-        const deltas = parsed.deltas || null;
 
         const totalRevenue = m.total_revenue ?? m.totalRevenue ?? null;
         const totalExpenses = m.total_expenses ?? m.totalExpenses ?? null;
@@ -217,7 +227,9 @@ export default function FinancialKPICards({
           ? rawTopSpendingCategory.name ?? rawTopSpendingCategory.category ?? null
           : rawTopSpendingCategory;
 
-        const prior = m.priorMonth ?? m.prior_month ?? {};
+        const priorEnvelope = parsed.prior_month ?? parsed.priorMonth ?? null;
+        const prior = priorEnvelope?.metrics || m.priorMonth || m.prior_month || {};
+        const priorAvailable = priorEnvelope?.data_status === "available";
         const priorRevenue = prior.total_revenue ?? prior.totalRevenue ?? null;
         const priorExpenses = prior.total_expenses ?? prior.totalExpenses ?? null;
         const priorNet = prior.net_profit ?? prior.netProfit ?? null;
@@ -237,56 +249,23 @@ export default function FinancialKPICards({
         const isEmptyPayload = parsed.empty === true || parsed.source === "cache_miss" || parsed.data_status === "missing" || parsed.data_status === "empty";
         if (isEmptyPayload || allNull) {
           setKpis([]);
-          onEmptyDataRef.current?.();
+          onEmptyDataRef.current?.(parsed.data_status || (allNull ? "missing" : "empty"));
           return;
         }
 
-        const revChange =
-          deltas?.revenue_mom_pct ??
-          (Number(priorRevenue) > 0
-            ? ((Number(totalRevenue) - Number(priorRevenue)) / Number(priorRevenue)) * 100
-            : null);
-
-        const expChange =
-          deltas?.expenses_mom_pct ??
-          (Number(priorExpenses) > 0
-            ? ((Number(totalExpenses) - Number(priorExpenses)) / Number(priorExpenses)) * 100
-            : null);
-
-        const profitChange =
-          deltas?.profit_mom_pct ??
-          (Number(priorNet) !== 0 && Number.isFinite(Number(priorNet))
-            ? ((Number(netProfit) - Number(priorNet)) / Number(priorNet)) * 100
-            : null);
-
-        const marginChange =
-          deltas?.margin_mom_pct ??
-          (Number.isFinite(Number(profitMarginPct)) && Number.isFinite(Number(priorMarginPct))
-            ? Number(profitMarginPct) - Number(priorMarginPct)
-            : null);
-
-        const derivePriorFromChange = (current, pctChange) => {
-          const currNum = Number(current);
-          const pctNum = Number(pctChange);
-          if (!Number.isFinite(currNum) || !Number.isFinite(pctNum)) return null;
-          // pctChange is MoM %, so curr = prev * (1 + pct/100) -> prev = curr / (1 + pct/100)
-          const denom = 1 + pctNum / 100;
-          if (Math.abs(denom) < 1e-6) return null;
-          return currNum / denom;
-        };
-
-        const fallbackPriorRevenue  = priorRevenue  == null ? derivePriorFromChange(totalRevenue, revChange)   : priorRevenue;
-        const fallbackPriorExpenses = priorExpenses == null ? derivePriorFromChange(totalExpenses, expChange) : priorExpenses;
-        const fallbackPriorNet      = priorNet      == null ? derivePriorFromChange(netProfit, profitChange)  : priorNet;
-        const fallbackPriorMargin   = priorMarginPct == null && Number.isFinite(Number(marginChange)) && Number.isFinite(Number(profitMarginPct))
-          ? Number(profitMarginPct) - Number(marginChange)
-          : priorMarginPct;
+        const revChange = priorAvailable ? pctDelta(totalRevenue, priorRevenue) : null;
+        const expChange = priorAvailable ? pctDelta(totalExpenses, priorExpenses) : null;
+        const profitChange = priorAvailable ? pctDelta(netProfit, priorNet) : null;
+        const marginChange = priorAvailable && Number.isFinite(Number(profitMarginPct)) && Number.isFinite(Number(priorMarginPct))
+          ? Number(profitMarginPct) - Number(priorMarginPct)
+          : null;
+        const unavailable = "Prior month unavailable";
 
         const formatted = [
-          { label: "Current Revenue", value: fmtCurrency(totalRevenue), detail: fallbackPriorRevenue != null ? `Prior month ${fmtCompactCurrency(fallbackPriorRevenue)}` : "This month's revenue", trend: Number(revChange) >= 0 ? "up" : "down", change: fmtPct(revChange), tint: "emerald" },
-          { label: "Current Expenses", value: fmtCurrency(totalExpenses), detail: fallbackPriorExpenses != null ? `Prior month ${fmtCompactCurrency(fallbackPriorExpenses)}` : "This month's spend", trend: Number(expChange) >= 0 ? "up" : "down", change: fmtPct(expChange), tint: "amber" },
-          { label: "Net Profit", value: fmtCurrency(netProfit), detail: fallbackPriorNet != null ? `Prior month ${fmtCompactCurrency(fallbackPriorNet)}` : "Revenue after expenses", trend: Number(profitChange) >= 0 ? "up" : "down", change: fmtPct(profitChange), tint: "emerald" },
-          { label: "Profit Margin", value: fmtMargin(profitMarginPct ?? 0), detail: fallbackPriorMargin == null ? "Net profit as % of revenue" : `Prior month ${fmtMargin(fallbackPriorMargin)}`, trend: Number(marginChange) >= 0 ? "up" : "down", change: fmtPoints(marginChange), tint: "rose" },
+          { label: "Current Revenue", value: fmtCurrency(totalRevenue), detail: priorAvailable ? `Prior month ${fmtCompactCurrency(priorRevenue)}` : unavailable, trend: metricTrend(revChange), change: fmtPct(revChange), tint: "emerald" },
+          { label: "Current Expenses", value: fmtCurrency(totalExpenses), detail: priorAvailable ? `Prior month ${fmtCompactCurrency(priorExpenses)}` : unavailable, trend: metricTrend(expChange, { lowerIsBetter: true }), change: fmtPct(expChange), tint: "amber" },
+          { label: "Net Profit", value: fmtCurrency(netProfit), detail: priorAvailable ? `Prior month ${fmtCompactCurrency(priorNet)}` : unavailable, trend: metricTrend(profitChange), change: fmtPct(profitChange), tint: "emerald" },
+          { label: "Profit Margin", value: fmtMargin(profitMarginPct ?? 0), detail: priorAvailable ? `Prior month ${fmtMargin(priorMarginPct)}` : unavailable, trend: metricTrend(marginChange), change: fmtPoints(marginChange), tint: "rose" },
           {
             label: "Top Spending Category",
             value: topSpendingCategory || "N/A",

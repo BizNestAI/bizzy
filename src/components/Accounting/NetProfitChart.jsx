@@ -7,12 +7,13 @@ import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import CardHeader from "../UI/CardHeader"; // ⬅️ shared header
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { apiFetch } from "../../utils/apiBase.js";
+import { buildCurrencyAxis, formatCurrencyTick } from "../../utils/currencyAxis.js";
 
 /* ---------- helpers ---------- */
 function monthShortLabel(y,m){ return new Date(y, m-1, 1).toLocaleString(undefined,{month:"short"});}
 function seqLastNMonths({year,month,n=12}){ const out=[]; let y=year,m=month; for(let i=0;i<n;i++){out.unshift({year:y,month:m}); if(--m<1){m=12;y--;}} return out;}
 function allSame(values){ if(!values.length) return true; return values.every(v=>Number(v)===Number(values[0])); }
-function toChartData(rows){ return rows.map(r=>({ month: monthShortLabel(r.year,r.month), profit: Number(r.profit ?? 0) })); }
+function toChartData(rows){ return rows.map(r=>({ month: monthShortLabel(r.year,r.month), profit: r.found === false || r.profit === null || r.profit === undefined ? null : Number(r.profit) })); }
 function buildMock(windowMonths){
   const base=[7200,8200,10400,9300,8700,11600,12300,9900,13800,14200,15500,15700];
   const months = windowMonths.length ? windowMonths : seqLastNMonths({year:new Date().getFullYear(), month:new Date().getMonth()+1, n:12});
@@ -137,9 +138,12 @@ export default function NetProfitChart({
         if(r.ok){
           const json = await r.json();
           const rows = (Array.isArray(json?.profit) ? json.profit : (Array.isArray(json?.rows)? json.rows : json))?.map(v=>({
-            year:Number(v.year), month:Number(v.month), profit:Number(v.profit ?? 0)
+            year:Number(v.year),
+            month:Number(v.month),
+            profit:v.found === false ? null : Number(v.profit ?? 0),
+            found:v.found !== false && v.profit !== null && v.profit !== undefined,
           })) || [];
-          if(!cancelled && rows.length){
+          if(!cancelled && rows.some((row) => row.found)){
             const nextSeries = toChartData(rows);
             const nextSource = json?.source || "quickbooks";
             setSeries(nextSeries);
@@ -176,7 +180,7 @@ export default function NetProfitChart({
           }
         }));
 
-        const values = rows.map(r=>r.profit);
+        const values = rows.map(r=>r.profit).filter((value) => value !== null && value !== undefined);
         const shouldMock = !forceLive && allSame(values);
         const rowsFinal = shouldMock ? buildMock(windowMonths) : rows;
         if(!cancelled){
@@ -234,6 +238,8 @@ export default function NetProfitChart({
   const bottomMargin= angledLabels ? 26 : 24;      // month labels
 
   const xTickStyle  = { fill: "rgba(255,255,255,0.66)", fontSize: small ? 10 : 11, fontWeight: 700 };
+  const importedValues = series.map((row) => row.profit).filter((value) => Number.isFinite(Number(value)));
+  const axis = buildCurrencyAxis(importedValues, { includeZero: true, minAtZero: importedValues.every((value) => Number(value) >= 0), tickCount: 5, headroom: 0.15 });
 
   // Compute a reasonable barSize from width (12 months)
   const paddingPerBar = small ? 1 : 1;
@@ -286,7 +292,9 @@ export default function NetProfitChart({
               tickLine={false}
               axisLine={false}
               width={leftMargin + 2}
-              tickFormatter={(v)=>`$${(v/1000).toFixed(0)}k`}
+              domain={axis.domain}
+              ticks={axis.ticks}
+              tickFormatter={formatCurrencyTick}
             />
             <Tooltip
               contentStyle={{ backgroundColor: "#111", border: "1px solid #333" }}

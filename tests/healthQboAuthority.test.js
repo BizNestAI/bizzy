@@ -20,6 +20,7 @@ const server = read("src/server.js");
 const qboAuth = read("src/api/auth/quickbooksAuth.js");
 const qboSync = read("src/api/accounting/qbo-sync.js");
 const financialCron = read("src/cron/qboFinancialHealth.cron.js");
+const qboBackfillRunner = read("src/services/qboBackfillRunner.js");
 
 test("apiFetch attaches Supabase bearer auth for protected accounting endpoints", () => {
   assert.match(apiBase, /supabase\.auth\.getSession\(\)/);
@@ -63,7 +64,7 @@ test("manual Health refresh is bounded to the selected month QBO sync", () => {
   assert.match(dashboard, /body: \{ business_id: businessId, year, month \}/);
   assert.doesNotMatch(dashboard, /\/api\/qbo\/backfill\/start/);
   assert.doesNotMatch(dashboard, /months:\s*12/);
-  assert.match(dashboard, /Refresh from QuickBooks/);
+  assert.match(dashboard, /Import from QuickBooks|Refresh/);
 });
 
 test("QuickBooks connection bootstraps initial persisted Health history idempotently", () => {
@@ -80,6 +81,15 @@ test("QBO financial Health refresh runs in background without user session", () 
   assert.match(server, /startQboFinancialHealthCron\(\)/);
   assert.match(qboSync, /refreshMonthlyQboFinancialSnapshot/);
   assert.doesNotMatch(financialCron, /requireAuth|req\.auth|user_id/);
+});
+
+test("Health trailing-12 backfill is Cash basis and current-month anchored by default", () => {
+  assert.match(qboBackfillRunner, /accounting_method = HEALTH_ACCOUNTING_METHOD/);
+  assert.match(qboBackfillRunner, /accountingMethod: accounting_method/);
+  assert.match(qboBackfillRunner, /const now = new Date\(\)/);
+  assert.match(qboBackfillRunner, /month: now\.getMonth\(\) \+ 1/);
+  assert.match(qboBackfillRunner, /rangeLastNMonths\(\{ year: anchorParts\.year, month: anchorParts\.month, n: months_total \}\)/);
+  assert.doesNotMatch(qboBackfillRunner, /lastFullMonthParts/);
 });
 
 test("existing Books Review private mounts remain unchanged", () => {

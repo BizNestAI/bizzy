@@ -1,3 +1,4 @@
+/* global process */
 // src/services/qboBackfillRunner.js
 // Executes a bounded multi-month QBO Health snapshot backfill and updates job progress.
 
@@ -10,7 +11,6 @@ import {
 import { qboEnvName } from "../utils/qboEnv.js";
 import {
   rangeLastNMonths,
-  lastFullMonthParts,
 } from "../utils/monthKey.js";
 import {
   HEALTH_ACCOUNTING_METHOD,
@@ -41,12 +41,15 @@ export async function runQboBackfill({
   realmId: _realmIdOverride = null,
   accessToken: _accessTokenOverride = null,
 }) {
+  void _realmIdOverride;
+  void _accessTokenOverride;
   if (!jobId) throw new Error("jobId required");
   if (!business_id) throw new Error("business_id required");
 
+  const now = new Date();
   const anchorParts = (Number(startYear) && Number(startMonth))
     ? { year: Number(startYear), month: Number(startMonth) }
-    : lastFullMonthParts();
+    : { year: now.getFullYear(), month: now.getMonth() + 1 };
   const months = rangeLastNMonths({ year: anchorParts.year, month: anchorParts.month, n: months_total });
   const job = await getJobById(jobId);
   const alreadyDone = Number(job?.months_done || 0);

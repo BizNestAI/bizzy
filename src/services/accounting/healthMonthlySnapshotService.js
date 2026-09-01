@@ -184,6 +184,7 @@ export async function getMonthlyHealthSummary({
     topSpendingCategory: topExpense ? { name: topExpense.category, amount: topExpense.amount } : null,
   };
   const monthText = monthKeyFromParts(reviewYear, reviewMonth);
+  const priorMonth = await getPriorMonthSummary({ db, businessId, year: reviewYear, month: reviewMonth });
   return {
     data_status: hasFinancialActivity(responseMetrics) ? "available" : "empty",
     selected_month: monthText,
@@ -200,6 +201,7 @@ export async function getMonthlyHealthSummary({
       review_month: current.review_month,
     },
     metrics: responseMetrics,
+    prior_month: priorMonth,
     expense_breakdown: expenseBreakdown,
     account_breakdown: accountRows.map((row) => toLegacyAccountBreakdownRow(row, monthText)),
     series: await getHealthSeries({ db, businessId, year: reviewYear, month: reviewMonth, window }),
@@ -250,12 +252,37 @@ export async function getHealthSeries({ db = defaultSupabase, businessId, year, 
   return {
     revenue: months.map((entry) => {
       const row = byMonth.get(entry.monthKey);
-      return { year: entry.year, month: entry.month, revenue: Number(row?.revenue || 0), found: Boolean(row) };
+      return { year: entry.year, month: entry.month, revenue: row ? Number(row.revenue || 0) : null, found: Boolean(row) };
     }),
     profit: months.map((entry) => {
       const row = byMonth.get(entry.monthKey);
-      return { year: entry.year, month: entry.month, profit: Number(row?.net_profit || 0), found: Boolean(row) };
+      return { year: entry.year, month: entry.month, profit: row ? Number(row.net_profit || 0) : null, found: Boolean(row) };
     }),
+  };
+}
+
+async function getPriorMonthSummary({ db, businessId, year, month }) {
+  const prior = new Date(Date.UTC(Number(year), Number(month) - 2, 1));
+  const priorYear = prior.getUTCFullYear();
+  const priorMonth = prior.getUTCMonth() + 1;
+  const period = monthKeyFromParts(priorYear, priorMonth);
+  const row = await getLatestMonthlyPnlSnapshot({
+    db,
+    businessId,
+    reviewYear: priorYear,
+    reviewMonth: priorMonth,
+    accountingMethod: HEALTH_ACCOUNTING_METHOD,
+    includeAccounts: false,
+    includeTransactions: false,
+  });
+  if (!row || row.status !== "current" || row.is_current !== true) {
+    return { period, data_status: "missing", metrics: null };
+  }
+  const metrics = metricsFromSnapshot(row);
+  return {
+    period,
+    data_status: hasFinancialActivity(metrics) ? "available" : "empty",
+    metrics,
   };
 }
 

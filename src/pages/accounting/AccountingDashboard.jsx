@@ -58,6 +58,57 @@ const CardSkeleton = ({ h = "h-56", lines = 3 }) => (
 /* ------------------ Helpers ------------------ */
 const RowGap = ({ children }) => <div className="flex flex-col gap-6 md:gap-7">{children}</div>;
 const padMonth = (m) => String(m).padStart(2, '0');
+const DEFAULT_HEALTH_HISTORY_YEARS = 3;
+
+function buildCalendarMonthOptions({
+  availableMonths = [],
+  selectedYear,
+  selectedMonth,
+  now = new Date(),
+  historyYears = DEFAULT_HEALTH_HISTORY_YEARS,
+} = {}) {
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const availableByValue = new Map(availableMonths.map((entry) => [entry.value, entry]));
+  const startYear = currentYear - Math.max(0, Number(historyYears || DEFAULT_HEALTH_HISTORY_YEARS) - 1);
+  const options = [];
+
+  for (let year = currentYear; year >= startYear; year -= 1) {
+    const lastMonth = year === currentYear ? currentMonth : 12;
+    for (let month = lastMonth; month >= 1; month -= 1) {
+      const value = `${year}-${padMonth(month)}`;
+      const imported = availableByValue.get(value) || null;
+      const isCurrent = year === currentYear && month === currentMonth;
+      const baseLabel = new Date(year, month - 1, 1).toLocaleString(undefined, { month: 'short', year: 'numeric' });
+      options.push({
+        value,
+        label: isCurrent ? `${baseLabel} · Month to date` : baseLabel,
+        statusLabel: imported ? "Imported" : "Import required",
+        selectable: true,
+        hasActivity: imported?.hasActivity === true,
+        imported: Boolean(imported),
+        lastRefreshedAt: imported?.lastRefreshedAt || null,
+      });
+    }
+  }
+
+  const selectedValue = selectedYear && selectedMonth ? `${selectedYear}-${padMonth(selectedMonth)}` : null;
+  if (selectedValue && !options.some((option) => option.value === selectedValue)) {
+    const imported = availableByValue.get(selectedValue) || null;
+    const label = new Date(Number(selectedYear), Number(selectedMonth) - 1, 1).toLocaleString(undefined, { month: 'short', year: 'numeric' });
+    options.push({
+      value: selectedValue,
+      label,
+      statusLabel: imported ? "Imported" : "Outside supported range",
+      selectable: Boolean(imported),
+      hasActivity: imported?.hasActivity === true,
+      imported: Boolean(imported),
+      lastRefreshedAt: imported?.lastRefreshedAt || null,
+    });
+  }
+
+  return options;
+}
 
 /** Card container with switchable frame variant */
 function CardFrame({
@@ -126,7 +177,7 @@ export default function AccountingDashboard() {
   const [kpiLoading, setKpiLoading] = useState(true);
   const [emptyMonth, setEmptyMonth] = useState(false);
   const [fallbackTag, setFallbackTag] = useState(false);
-  const autoFallbackRef = useRef(false);
+  const userSelectedPeriodRef = useRef(false);
   const refreshInFlightRef = useRef(false);
   const [hasMetrics, setHasMetrics] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState(null);
@@ -166,10 +217,6 @@ export default function AccountingDashboard() {
     },
     [year, month]
   );
-  const isCurrentMonth = useMemo(() => {
-    const now = new Date();
-    return year === now.getFullYear() && month === now.getMonth() + 1;
-  }, [year, month]);
   const showingLatestAvailable = useMemo(() => {
     if (!availableMonths.length || !periodValue) return fallbackTag;
     const now = new Date();
@@ -188,27 +235,12 @@ export default function AccountingDashboard() {
     [availableMonths, periodValue]
   );
   const monthOptions = useMemo(() => {
-    if (availableMonths.length) return availableMonths;
-    const now = new Date();
-    const opts = Array.from({ length: 15 }).map((_, idx) => {
-      const d = new Date(now.getFullYear(), now.getMonth() - idx, 1);
-      const y = d.getFullYear();
-      const m = d.getMonth() + 1;
-      return {
-        value: `${y}-${padMonth(m)}`,
-        label: d.toLocaleString(undefined, { month: 'short', year: 'numeric' }),
-      };
+    return buildCalendarMonthOptions({
+      availableMonths,
+      selectedYear: year,
+      selectedMonth: month,
     });
-    const exists = opts.some((o) => o.value === periodValue);
-    if (!exists && year && month) {
-      const d = new Date(year, month - 1, 1);
-      opts.unshift({
-        value: periodValue,
-        label: d.toLocaleString(undefined, { month: 'short', year: 'numeric' }),
-      });
-    }
-    return opts;
-  }, [availableMonths, year, month, periodValue]);
+  }, [availableMonths, year, month]);
 
   useEffect(() => {
     if (!selectedMonthMeta?.lastRefreshedAt) return;
@@ -260,7 +292,7 @@ export default function AccountingDashboard() {
         const currentValue = `${now.getFullYear()}-${padMonth(now.getMonth() + 1)}`;
         const currentHasData = months.some((entry) => entry.value === currentValue && entry.hasActivity);
         const latest = months[0] || null;
-        if (latest && !currentHasData && periodValue === currentValue) {
+        if (latest && !currentHasData && periodValue === currentValue && !userSelectedPeriodRef.current) {
           const [y, m] = latest.value.split("-");
           setFallbackTag(true);
           setYearMonth(Number(y), Number(m));
@@ -451,27 +483,19 @@ export default function AccountingDashboard() {
     }
   };
 
-  const handleEmptyData = () => {
+  const handleEmptyData = (status = "empty") => {
     if (hasMetrics) {
       setEmptyMonth(false);
       return;
     }
     setDataLoadError("");
-    if (import.meta.env.MODE !== 'production' && isCurrentMonth && !autoFallbackRef.current) {
-      autoFallbackRef.current = true;
-      setFallbackTag(true);
-      setEmptyMonth(false);
-      prevMonth();
-      return;
-    }
-    setEmptyMonth(true);
+    setEmptyMonth(status === "empty");
   };
 
   const handleLiveData = () => {
     setEmptyMonth(false);
     setFallbackTag(false);
     setDataLoadError("");
-    autoFallbackRef.current = false;
   };
 
   function handleDataError(error) {
@@ -530,7 +554,7 @@ export default function AccountingDashboard() {
                   {periodOpen && (
                     <div
                       role="listbox"
-                      className="absolute left-0 mt-1 w-full max-h-64 overflow-y-auto rounded-md border border-white/14 bg-[#0b0c10] shadow-[0_18px_42px_rgba(0,0,0,0.55)] z-30 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
+                      className="absolute left-0 mt-1 w-56 max-h-72 overflow-y-auto rounded-md border border-white/14 bg-[#0b0c10] shadow-[0_18px_42px_rgba(0,0,0,0.55)] z-30 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
                       style={{ top: '100%' }}
                     >
                       {monthOptions.map((opt) => (
@@ -539,21 +563,27 @@ export default function AccountingDashboard() {
                           type="button"
                           role="option"
                           aria-selected={opt.value === periodValue}
+                          disabled={!opt.selectable}
                           onClick={() => {
+                            if (!opt.selectable) return;
                             const [y, m] = opt.value.split("-");
+                            userSelectedPeriodRef.current = true;
                             setYearMonth(Number(y), Number(m));
                             setFallbackTag(false);
                             setEmptyMonth(false);
                             setDataLoadError("");
                             setPeriodOpen(false);
                           }}
-                          className={`w-full text-left px-3 py-2 text-xs transition ${
+                          className={`w-full text-left px-3 py-2 text-xs transition disabled:cursor-not-allowed disabled:opacity-45 ${
                             opt.value === periodValue
                               ? "bg-white/10 text-white"
                               : "text-white/85 hover:bg-white/12"
                           }`}
                         >
-                          {opt.label}
+                          <span className="block">{opt.label}</span>
+                          <span className={`block text-[10px] ${opt.imported ? "text-emerald-300/80" : "text-white/45"}`}>
+                            {opt.statusLabel}
+                          </span>
                         </button>
                       ))}
                     </div>
@@ -670,7 +700,7 @@ export default function AccountingDashboard() {
 
         {showSyncCta ? (
           <div className="rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(0,0,0,0.35)] px-4 py-3 flex flex-col gap-2">
-            <div className="text-sm text-white/90">Connected — no persisted QuickBooks data for this period.</div>
+            <div className="text-sm text-white/90">No QuickBooks snapshot has been imported for {periodLabel()}.</div>
             <div className="flex items-center gap-3">
               <button
                 type="button"
@@ -679,7 +709,7 @@ export default function AccountingDashboard() {
                 className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm text-white/90 transition disabled:opacity-60"
                 style={{ borderColor: "rgba(255,255,255,0.18)", background: "rgba(0,0,0,0.45)" }}
               >
-                {refreshing ? "Refreshing…" : "Refresh from QuickBooks"}
+                {refreshing ? "Importing…" : "Import from QuickBooks"}
               </button>
               {syncError ? <span className="text-xs text-rose-300">{syncError}</span> : null}
             </div>

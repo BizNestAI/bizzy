@@ -16,6 +16,7 @@ import useFinancialPeriod from "../../hooks/useFinancialPeriod.js";
 import CardHeader from "../UI/CardHeader"; // shared header (Pulse style)
 import { getDemoData, shouldForceLiveData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { apiFetch } from "../../utils/apiBase.js";
+import { buildCurrencyAxis, formatCurrencyTick } from "../../utils/currencyAxis.js";
 
 /* ---------------- helpers ---------------- */
 function monthShortLabel(y, m) {
@@ -39,7 +40,7 @@ function coalesceRevenue(payload) {
 function toChartData(rows) {
   return rows.map((r, idx) => ({
     month: monthShortLabel(r.year, r.month),
-    revenue: Number(r.revenue ?? 0),
+    revenue: r.found === false || r.revenue === null || r.revenue === undefined ? null : Number(r.revenue),
     isCurrent: idx === rows.length - 1,
   }));
 }
@@ -80,20 +81,6 @@ function buildSlidingDemoRows(windowMonths, sourceRows = [], valueKey = "revenue
 }
 
 const REVENUE_SERIES_CACHE = new Map();
-
-function niceRevenueCeiling(value) {
-  const padded = Math.max(60000, Number(value || 0) * 1.12);
-  if (padded <= 60000) return 60000;
-  const magnitude = Math.pow(10, Math.floor(Math.log10(padded)));
-  const normalized = padded / magnitude;
-  const niceNormalized =
-    normalized <= 1.5 ? 1.5 :
-    normalized <= 2 ? 2 :
-    normalized <= 2.5 ? 2.5 :
-    normalized <= 5 ? 5 :
-    10;
-  return niceNormalized * magnitude;
-}
 
 /* ——— tiny measure hook (ResizeObserver) ——— */
 function useMeasure() {
@@ -215,9 +202,10 @@ export default function RevenueChart({
             (Array.isArray(json?.revenue) ? json.revenue : (Array.isArray(json?.rows) ? json.rows : json))?.map((r) => ({
               year: Number(r.year),
               month: Number(r.month),
-              revenue: Number(r.revenue ?? r.totalRevenue ?? r.total_revenue ?? 0),
+              revenue: r.found === false ? null : Number(r.revenue ?? r.totalRevenue ?? r.total_revenue ?? 0),
+              found: r.found !== false && (r.revenue ?? r.totalRevenue ?? r.total_revenue) !== null,
             })) || [];
-          if (!cancelled && rows.length) {
+          if (!cancelled && rows.some((row) => row.found)) {
             const nextSeries = toChartData(rows);
             setSeries(nextSeries);
             setSource("quickbooks");
@@ -260,7 +248,7 @@ export default function RevenueChart({
           })
         );
 
-        const values = rows.map((r) => r.revenue);
+        const values = rows.map((r) => r.revenue).filter((value) => value !== null && value !== undefined);
         const shouldMock = !forceLive && allSame(values);
         const rowsFinal = shouldMock ? buildMock(windowMonths) : rows;
 
@@ -326,8 +314,12 @@ export default function RevenueChart({
   const strokeW = small ? 2 : 2.6;
 
   const xTickStyle = { fill: tickColor, fontSize: small ? 10 : 11, fontWeight: 600, dy: 6 };
-  const currentPoint = series[series.length - 1];
-  const yAxisMax = niceRevenueCeiling(Math.max(...series.map((row) => Number(row.revenue) || 0)));
+  const importedValues = series.map((row) => row.revenue).filter((value) => Number.isFinite(Number(value)));
+  const importedCount = importedValues.length;
+  const selectedPoint = series[series.length - 1] || null;
+  const currentPoint = Number.isFinite(Number(selectedPoint?.revenue)) ? selectedPoint : null;
+  const onlyImportedPoint = importedCount === 1 ? series.find((row) => Number.isFinite(Number(row.revenue))) : null;
+  const axis = buildCurrencyAxis(importedValues, { includeZero: true, minAtZero: true, tickCount: 5, headroom: 0.15 });
 
   return (
     <div className={`relative flex h-full flex-col overflow-hidden rounded-xl border border-white/10 bg-[var(--panel)] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.42)] ${className}`}>
@@ -384,9 +376,9 @@ export default function RevenueChart({
               stroke={axisColor}
               tickLine={false}
               axisLine={false}
-              domain={[0, yAxisMax]}
-              tickCount={5}
-              tickFormatter={(val) => `$${(val / 1000).toFixed(0)}k`}
+              domain={axis.domain}
+              ticks={axis.ticks}
+              tickFormatter={formatCurrencyTick}
               width={leftMargin + 4}
               tick={{ fill: tickColor, fontSize: small ? 10 : 11, fontWeight: 600 }}
             />
@@ -418,6 +410,7 @@ export default function RevenueChart({
             <Line
               type="monotone"
               dataKey="revenue"
+              connectNulls={false}
               stroke={lineColor}
               strokeWidth={strokeW}
               filter={`url(#${gradientId}-lineGlow)`}
@@ -425,6 +418,15 @@ export default function RevenueChart({
               activeDot={{ r: activeDotR, stroke: lineColor, fill: lineColor }}
               isAnimationActive={false}
             />
+            {onlyImportedPoint ? (
+              <ReferenceDot
+                x={onlyImportedPoint.month}
+                y={onlyImportedPoint.revenue}
+                r={activeDotR}
+                stroke={lineColor}
+                fill={lineColor}
+              />
+            ) : null}
             {currentPoint ? (
               <ReferenceDot
                 x={currentPoint.month}

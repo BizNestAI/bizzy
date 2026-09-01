@@ -37,7 +37,18 @@ test("available Health months are loaded from backend financial authority", () =
   assert.match(healthRoute, /listAvailableHealthMonths/);
   assert.match(metricsRoute, /monthly_review_qbo_pnl_snapshots/);
   assert.match(dashboard, /\/api\/accounting\/health\/available-months/);
-  assert.match(dashboard, /if \(availableMonths\.length\) return availableMonths/);
+  assert.match(dashboard, /buildCalendarMonthOptions/);
+  assert.match(dashboard, /availableByValue/);
+  assert.match(dashboard, /Imported/);
+  assert.match(dashboard, /Import required/);
+});
+
+test("Health period selector is calendar-selectable and prevents future months", () => {
+  assert.match(dashboard, /const DEFAULT_HEALTH_HISTORY_YEARS = 3/);
+  assert.match(dashboard, /const lastMonth = year === currentYear \? currentMonth : 12/);
+  assert.match(dashboard, /for \(let month = lastMonth; month >= 1; month -= 1\)/);
+  assert.match(dashboard, /Month to date/);
+  assert.doesNotMatch(dashboard, /October|November|December/);
 });
 
 test("latest available month fallback uses real persisted activity", () => {
@@ -70,6 +81,13 @@ test("Health refresh controls share one canonical selected-month handler", () =>
   assert.match(dashboard, /onClick=\{\(\) => runHealthRefresh\(\{ source: "empty_state" \}\)\}/);
 });
 
+test("missing selected Health month shows explicit QuickBooks import action", () => {
+  assert.match(dashboard, /No QuickBooks snapshot has been imported for \{periodLabel\(\)\}/);
+  assert.match(dashboard, /Import from QuickBooks/);
+  assert.match(dashboard, /Importing…/);
+  assert.doesNotMatch(dashboard, /Connected — no persisted QuickBooks data for this period/);
+});
+
 test("Health refresh sends the correct business and one-based month to the backend", () => {
   assert.match(dashboard, /new URLSearchParams\(\{\s*business_id: businessId,\s*year: String\(year\),\s*month: String\(month\),\s*\}\)/);
   assert.match(dashboard, /\/api\/accounting\/health\/refresh\?\$\{params\.toString\(\)\}/);
@@ -85,7 +103,7 @@ test("Health refresh loading disables both controls and prevents duplicate reque
   assert.match(dashboard, /refreshInFlightRef\.current = true/);
   assert.match(dashboard, /refreshInFlightRef\.current = false/);
   assert.match(dashboard, /disabled=\{refreshing \|\| adminView\.active\}/);
-  assert.match(dashboard, /\{refreshing \? "Refreshing…" : "Refresh from QuickBooks"\}/);
+  assert.match(dashboard, /\{refreshing \? "Importing…" : "Import from QuickBooks"\}/);
 });
 
 test("Health refresh failure is visible and never becomes no activity", () => {
@@ -171,8 +189,14 @@ test("monthly-summary available status clears the Health empty gate", () => {
   assert.match(dashboard, /if \(hasMetrics\) \{/);
 });
 
-test("Refresh from QuickBooks remains bounded to selected month", () => {
-  assert.match(dashboard, /Refresh from QuickBooks/);
+test("missing monthly-summary does not render as no financial activity", () => {
+  assert.match(dashboard, /const handleEmptyData = \(status = "empty"\) =>/);
+  assert.match(dashboard, /setEmptyMonth\(status === "empty"\)/);
+  assert.match(kpis, /onEmptyDataRef\.current\?\.\(parsed\.data_status \|\| \(allNull \? "missing" : "empty"\)\)/);
+});
+
+test("Import from QuickBooks remains bounded to selected month", () => {
+  assert.match(dashboard, /Import from QuickBooks/);
   assert.match(dashboard, /\/api\/accounting\/health\/refresh\?\$\{params\.toString\(\)\}/);
   assert.doesNotMatch(dashboard, /\/api\/qbo\/backfill\/start/);
   assert.doesNotMatch(dashboard, /months:\s*12/);
