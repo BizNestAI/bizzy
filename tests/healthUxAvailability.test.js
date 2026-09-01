@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -13,6 +14,7 @@ const kpis = read("src/components/Accounting/FinancialKPICards.jsx");
 const revenue = read("src/components/Accounting/RevenueChart.jsx");
 const profit = read("src/components/Accounting/NetProfitChart.jsx");
 const expenses = read("src/components/Accounting/ExpenseBreakdownChart.jsx");
+const refreshHandler = dashboard.match(/const runHealthRefresh = async[\s\S]*?const handleEmptyData =/)?.[0] || "";
 
 test("Health month dropdown is click-based and not hover-only", () => {
   assert.match(dashboard, /onClick=\{\(\) => setPeriodOpen\(\(open\) => !open\)\}/);
@@ -60,6 +62,48 @@ test("Health refresh is non-blocking and uses backend refresh metadata", () => {
   assert.match(dashboard, /setFinancialRefreshVersion\(\(version\) => version \+ 1\)/);
 });
 
+test("Health refresh controls share one canonical selected-month handler", () => {
+  assert.match(dashboard, /const runHealthRefresh = async \(\{ source = "toolbar" \} = \{\}\) =>/);
+  assert.doesNotMatch(dashboard, /const handleSyncNow = async/);
+  assert.doesNotMatch(dashboard, /const handleRefresh = async/);
+  assert.match(dashboard, /onClick=\{\(\) => runHealthRefresh\(\{ source: "toolbar" \}\)\}/);
+  assert.match(dashboard, /onClick=\{\(\) => runHealthRefresh\(\{ source: "empty_state" \}\)\}/);
+});
+
+test("Health refresh sends the correct business and one-based month to the backend", () => {
+  assert.match(dashboard, /new URLSearchParams\(\{\s*business_id: businessId,\s*year: String\(year\),\s*month: String\(month\),\s*\}\)/);
+  assert.match(dashboard, /\/api\/accounting\/health\/refresh\?\$\{params\.toString\(\)\}/);
+  assert.match(dashboard, /body: \{ business_id: businessId, year, month \}/);
+  assert.doesNotMatch(refreshHandler, /month:\s*String\(month\s*-\s*1\)/);
+  assert.doesNotMatch(refreshHandler, /body:\s*\{ business_id: businessId, year, month:\s*month\s*-\s*1 \}/);
+  assert.doesNotMatch(refreshHandler, /accounting_method|accountingMethod/);
+});
+
+test("Health refresh loading disables both controls and prevents duplicate requests", () => {
+  assert.match(dashboard, /const refreshInFlightRef = useRef\(false\)/);
+  assert.match(dashboard, /if \(refreshInFlightRef\.current\) return/);
+  assert.match(dashboard, /refreshInFlightRef\.current = true/);
+  assert.match(dashboard, /refreshInFlightRef\.current = false/);
+  assert.match(dashboard, /disabled=\{refreshing \|\| adminView\.active\}/);
+  assert.match(dashboard, /\{refreshing \? "Refreshing…" : "Refresh from QuickBooks"\}/);
+});
+
+test("Health refresh failure is visible and never becomes no activity", () => {
+  assert.match(dashboard, /setEmptyMonth\(false\);\s*handleDataError\(e\);\s*setSyncError\("QuickBooks refresh failed\. Please try again\."\)/);
+  assert.match(dashboard, /onClick=\{\(\) => runHealthRefresh\(\{ source: "retry" \}\)\}/);
+  assert.doesNotMatch(dashboard, /catch \(e\) \{\s*console\.warn\("\[AccountingDashboard\] refresh failed"/);
+});
+
+test("Health refresh success invalidates all dashboard financial reads", () => {
+  assert.match(dashboard, /setFinancialRefreshVersion\(\(version\) => version \+ 1\)/);
+  assert.match(dashboard, /\[adminView\.active, businessId, userId, periodValue, setYearMonth, financialRefreshVersion\]/);
+  assert.match(dashboard, /\[adminView\.active, businessId, userId, year, month, financialRefreshVersion\]/);
+  assert.match(dashboard, /<FinancialKPICards[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
+  assert.match(dashboard, /<RevenueChart[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
+  assert.match(dashboard, /<ExpenseBreakdownChart[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
+  assert.match(dashboard, /<NetProfitChart[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
+});
+
 test("Health widgets cache rendered persisted data for stale-while-revalidate", () => {
   assert.match(kpis, /const KPI_CACHE = new Map\(\)/);
   assert.match(revenue, /const REVENUE_SERIES_CACHE = new Map\(\)/);
@@ -91,7 +135,7 @@ test("monthly-summary available status clears the Health empty gate", () => {
 
 test("Refresh from QuickBooks remains bounded to selected month", () => {
   assert.match(dashboard, /Refresh from QuickBooks/);
-  assert.match(dashboard, /\/api\/accounting\/health\/refresh\?business_id=\$\{encodeURIComponent\(businessId\)\}&year=\$\{encodeURIComponent\(year\)\}&month=\$\{encodeURIComponent\(month\)\}/);
+  assert.match(dashboard, /\/api\/accounting\/health\/refresh\?\$\{params\.toString\(\)\}/);
   assert.doesNotMatch(dashboard, /\/api\/qbo\/backfill\/start/);
   assert.doesNotMatch(dashboard, /months:\s*12/);
 });

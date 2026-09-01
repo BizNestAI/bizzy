@@ -117,8 +117,8 @@ export default function AccountingDashboard() {
   const { year, month, setYearMonth } = useFinancialPeriod(businessId);
 
   const [refreshing, setRefreshing] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState("");
+  const [refreshNotice, setRefreshNotice] = useState("");
   const [financialRefreshVersion, setFinancialRefreshVersion] = useState(0);
   const [dataLoadError, setDataLoadError] = useState("");
   const [availableMonths, setAvailableMonths] = useState([]);
@@ -127,6 +127,7 @@ export default function AccountingDashboard() {
   const [emptyMonth, setEmptyMonth] = useState(false);
   const [fallbackTag, setFallbackTag] = useState(false);
   const autoFallbackRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
   const [hasMetrics, setHasMetrics] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState(null);
   const [backfillWarning, setBackfillWarning] = useState("");
@@ -328,7 +329,7 @@ export default function AccountingDashboard() {
     }
     checkMetrics();
     return () => { alive = false; };
-  }, [adminView.active, businessId, userId, year, month]);
+  }, [adminView.active, businessId, userId, year, month, financialRefreshVersion]);
 
   // Poll backfill job status when connected (lightweight)
   useEffect(() => {
@@ -376,48 +377,74 @@ export default function AccountingDashboard() {
 
   const showSyncCta = needsSync && !kpiLoading;
 
-  const handleRefresh = async () => {
-    if (!businessId) return;
-    if (adminView.active) {
-      setBackfillWarning("Live refresh is unavailable in read-only Admin View.");
+  const runHealthRefresh = async ({ source = "toolbar" } = {}) => {
+    if (refreshInFlightRef.current) return;
+    if (!businessId || !year || !month) {
+      setSyncError("Choose a business and month before refreshing QuickBooks.");
       return;
     }
-    setRefreshing(true);
-    try {
-      await safeFetch(
-        `/api/accounting/health/refresh?business_id=${encodeURIComponent(businessId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
-        { method: "POST" }
-      );
-      setFinancialRefreshVersion((version) => version + 1);
-    } catch (e) {
-      console.warn("[AccountingDashboard] refresh failed", e?.message || e);
-    } finally {
-      setRefreshing(false);
+    if (adminView.active) {
+      const message = "Live refresh is unavailable in read-only Admin View.";
+      setBackfillWarning(message);
+      setSyncError(message);
+      return;
     }
-  };
 
-  const handleSyncNow = async () => {
-    if (!businessId) return;
-    if (adminView.active) {
-      setSyncError("Sync is unavailable in read-only Admin View.");
-      return;
-    }
-    setSyncing(true);
+    refreshInFlightRef.current = true;
+    setRefreshing(true);
     setSyncError("");
+    setRefreshNotice("");
+    setDataLoadError("");
+    if (import.meta.env.MODE !== "production") {
+      console.info("[AccountingDashboard] Health refresh requested", {
+        source,
+        businessId,
+        year,
+        month,
+      });
+    }
+
+    const params = new URLSearchParams({
+      business_id: businessId,
+      year: String(year),
+      month: String(month),
+    });
+
     try {
-      await safeFetch(
-        `/api/accounting/health/refresh?business_id=${encodeURIComponent(businessId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: { business_id: businessId },
-        }
-      );
+      const response = await safeFetch(`/api/accounting/health/refresh?${params.toString()}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: { business_id: businessId, year, month },
+      });
+      if (import.meta.env.MODE !== "production") {
+        console.info("[AccountingDashboard] Health refresh completed", {
+          source,
+          status: response?.data_status,
+        });
+      }
+      const m = response?.metrics || {};
+      const has =
+        response?.data_status === "available" ||
+        Number(m.totalRevenue ?? m.total_revenue ?? 0) !== 0 ||
+        Number(m.totalExpenses ?? m.total_expenses ?? 0) !== 0 ||
+        Number(m.netProfit ?? m.net_profit ?? 0) !== 0;
+      setHasMetrics(!!has);
+      setEmptyMonth(response?.data_status === "empty" && !has);
+      const refreshedAt = response?.snapshot?.last_successful_refresh_at || response?.last_refreshed_at || null;
+      const parsed = refreshedAt ? Date.parse(refreshedAt) : NaN;
+      if (Number.isFinite(parsed)) setLastRefreshed(parsed);
+      setRefreshNotice("QuickBooks data refreshed.");
       setFinancialRefreshVersion((version) => version + 1);
     } catch (e) {
-      setSyncError(e?.message || "Sync failed");
+      if (import.meta.env.MODE !== "production") {
+        console.warn("[AccountingDashboard] Health refresh failed", e?.message || e);
+      }
+      setEmptyMonth(false);
+      handleDataError(e);
+      setSyncError("QuickBooks refresh failed. Please try again.");
     } finally {
-      setSyncing(false);
+      refreshInFlightRef.current = false;
+      setRefreshing(false);
     }
   };
 
@@ -444,7 +471,7 @@ export default function AccountingDashboard() {
     autoFallbackRef.current = false;
   };
 
-  const handleDataError = (error) => {
+  function handleDataError(error) {
     setEmptyMonth(false);
     const status = Number(error?.status || 0);
     if (status === 401) {
@@ -456,7 +483,7 @@ export default function AccountingDashboard() {
       return;
     }
     setDataLoadError("Unable to load financial data.");
-  };
+  }
 
   const handleViewPrevMonth = () => {
     setFallbackTag(true);
@@ -541,7 +568,7 @@ export default function AccountingDashboard() {
               <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  onClick={handleRefresh}
+                  onClick={() => runHealthRefresh({ source: "toolbar" })}
                   disabled={refreshing || adminView.active}
                   className="inline-flex items-center justify-center rounded-full border w-8 h-8 text-white/85 transition disabled:opacity-60 hover:bg-white/14 hover:border-white/50 focus:outline-none focus:ring-2 focus:ring-white/14"
                   style={{ borderColor: "rgba(255,255,255,0.22)", background: "rgba(18,18,20,0.86)" }}
@@ -553,7 +580,7 @@ export default function AccountingDashboard() {
                 {lastRefreshed ? (
                   <div className="relative group">
                     <span className="text-xs text-white/70">
-                      {refreshing || syncing ? "Refreshing..." : `Last refreshed ${formatElapsed(lastRefreshed)}`}
+                      {refreshing ? "Refreshing..." : `Last refreshed ${formatElapsed(lastRefreshed)}`}
                     </span>
                     <div
                       className="absolute left-1/2 -translate-x-1/2 mt-1 px-2 py-[6px] rounded bg-black/80 text-[11px] text-white/85 opacity-0 group-hover:opacity-100 pointer-events-none shadow-lg border border-white/10"
@@ -570,7 +597,7 @@ export default function AccountingDashboard() {
                     </div>
                   </div>
                 ) : (
-                  <span className="text-xs text-white/50">{refreshing || syncing ? "Refreshing..." : "No refresh yet"}</span>
+                  <span className="text-xs text-white/50">{refreshing ? "Refreshing..." : "No refresh yet"}</span>
                 )}
               </div>
             </div>
@@ -605,12 +632,19 @@ export default function AccountingDashboard() {
             <div className="text-sm text-rose-100">{dataLoadError}</div>
             <button
               type="button"
-              onClick={() => setFinancialRefreshVersion((version) => version + 1)}
-              className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm text-white/90 transition"
+              onClick={() => runHealthRefresh({ source: "retry" })}
+              disabled={refreshing}
+              className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm text-white/90 transition disabled:opacity-60"
               style={{ borderColor: "rgba(255,255,255,0.18)", background: "rgba(0,0,0,0.45)" }}
             >
-              Retry
+              {refreshing ? "Refreshing…" : "Retry"}
             </button>
+          </div>
+        ) : null}
+
+        {refreshNotice && !dataLoadError ? (
+          <div className="rounded-2xl border border-emerald-400/30 bg-[rgba(49,211,159,0.08)] px-4 py-3 text-emerald-100 text-sm">
+            {refreshNotice}
           </div>
         ) : null}
 
@@ -637,12 +671,12 @@ export default function AccountingDashboard() {
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={handleSyncNow}
-                disabled={syncing}
+                onClick={() => runHealthRefresh({ source: "empty_state" })}
+                disabled={refreshing || adminView.active}
                 className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm text-white/90 transition disabled:opacity-60"
                 style={{ borderColor: "rgba(255,255,255,0.18)", background: "rgba(0,0,0,0.45)" }}
               >
-                {syncing ? "Refreshing…" : "Refresh from QuickBooks"}
+                {refreshing ? "Refreshing…" : "Refresh from QuickBooks"}
               </button>
               {syncError ? <span className="text-xs text-rose-300">{syncError}</span> : null}
             </div>
