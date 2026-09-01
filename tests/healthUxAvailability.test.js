@@ -96,12 +96,50 @@ test("Health refresh failure is visible and never becomes no activity", () => {
 
 test("Health refresh success invalidates all dashboard financial reads", () => {
   assert.match(dashboard, /setFinancialRefreshVersion\(\(version\) => version \+ 1\)/);
-  assert.match(dashboard, /\[adminView\.active, businessId, userId, periodValue, setYearMonth, financialRefreshVersion\]/);
-  assert.match(dashboard, /\[adminView\.active, businessId, userId, year, month, financialRefreshVersion\]/);
+  assert.match(dashboard, /\[businessId, periodValue, setYearMonth, financialRefreshVersion\]/);
+  assert.match(dashboard, /\[businessId, userId, year, month, financialRefreshVersion\]/);
   assert.match(dashboard, /<FinancialKPICards[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
   assert.match(dashboard, /<RevenueChart[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
   assert.match(dashboard, /<ExpenseBreakdownChart[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
   assert.match(dashboard, /<NetProfitChart[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
+});
+
+test("Health Live Mode does not require legacy localStorage user_id to fetch persisted data", () => {
+  assert.doesNotMatch(dashboard, /if \(!businessId \|\| \(!userId && !adminView\.active\)/);
+  assert.doesNotMatch(dashboard, /if \(!businessId \|\| \(!userId && !adminView\.active\) \|\| !year \|\| !month\)/);
+  assert.match(dashboard, /const userParam = userId \? `&user_id=\$\{encodeURIComponent\(userId\)\}` : ""/);
+  assert.match(kpis, /if \(!businessId \|\| !year \|\| !month\)/);
+  assert.match(revenue, /if \(!businessId \|\| windowMonths\.length === 0\)/);
+  assert.match(profit, /if\(!businessId \|\| windowMonths\.length===0\)/);
+  assert.doesNotMatch(kpis, /if \(!userId \|\| !businessId/);
+  assert.doesNotMatch(revenue, /if \(!userId \|\| !businessId/);
+  assert.doesNotMatch(profit, /if\(!userId \|\| !businessId/);
+});
+
+test("Health Live Mode keeps user_id as optional compatibility metadata only", () => {
+  assert.match(kpis, /const userId = userIdProp \|\| localStorage\.getItem\("user_id"\) \|\| ""/);
+  assert.match(revenue, /const userId = userIdProp \|\| localStorage\.getItem\("user_id"\) \|\| ""/);
+  assert.match(profit, /const userId = userIdProp \|\| localStorage\.getItem\("user_id"\) \|\| ""/);
+  assert.match(kpis, /"x-user-id": userId \|\| ""/);
+  assert.match(revenue, /"x-user-id": userId \|\| ""/);
+  assert.match(profit, /"x-user-id":userId \|\| ""/);
+  assert.doesNotMatch(`${dashboard}\n${kpis}\n${revenue}\n${profit}`, /setItem\(["']user_id["']/);
+  assert.doesNotMatch(`${dashboard}\n${kpis}\n${revenue}\n${profit}`, /admin_view_user|fake_user|patrick/i);
+});
+
+test("Health persisted reads bypass browser 304 caching", () => {
+  assert.match(dashboard, /available-months[\s\S]*cache: "no-store"/);
+  assert.match(dashboard, /monthly-summary[\s\S]*cache: "no-store"/);
+  assert.match(kpis, /monthly-summary[\s\S]*cache: "no-store"/);
+  assert.match(revenue, /\/api\/accounting\/health\/series[\s\S]*cache: "no-store"/);
+  assert.match(profit, /\/api\/accounting\/health\/series[\s\S]*cache: "no-store"/);
+  assert.match(expenses, /monthly-summary[\s\S]*cache: "no-store"/);
+});
+
+test("monthly-summary top spending category comes from QBO snapshot expense rows", () => {
+  assert.match(kpis, /m\.top_spending_category \?\? m\.topSpendingCategory/);
+  assert.match(kpis, /rawTopSpendingCategory\.name \?\? rawTopSpendingCategory\.category/);
+  assert.match(kpis, /label: "Top Spending Category"/);
 });
 
 test("Health widgets cache rendered persisted data for stale-while-revalidate", () => {

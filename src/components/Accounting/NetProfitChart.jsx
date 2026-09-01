@@ -10,8 +10,6 @@ import { apiFetch } from "../../utils/apiBase.js";
 
 /* ---------- helpers ---------- */
 function monthShortLabel(y,m){ return new Date(y, m-1, 1).toLocaleString(undefined,{month:"short"});}
-function pad2(n){ return String(n).padStart(2,"0"); }
-function monthKey(y,m){ return `${y}-${pad2(m)}-01`; }
 function seqLastNMonths({year,month,n=12}){ const out=[]; let y=year,m=month; for(let i=0;i<n;i++){out.unshift({year:y,month:m}); if(--m<1){m=12;y--;}} return out;}
 function allSame(values){ if(!values.length) return true; return values.every(v=>Number(v)===Number(values[0])); }
 function toChartData(rows){ return rows.map(r=>({ month: monthShortLabel(r.year,r.month), profit: Number(r.profit ?? 0) })); }
@@ -69,7 +67,6 @@ export default function NetProfitChart({
   year: yearProp,
   month: monthProp,
   /** Parent-controlled sizing */
-  height = 260,
   compact = false,
   className = "",
   showGrid = false,        // off by default to remove dotted lines
@@ -79,7 +76,7 @@ export default function NetProfitChart({
   const period = useFinancialPeriod(businessId);
   const year = yearProp || period.year;
   const month = monthProp || period.month;
-  const userId = userIdProp || localStorage.getItem("user_id");
+  const userId = userIdProp || localStorage.getItem("user_id") || "";
   const forceLive = shouldForceLiveData();
   const usingDemo = !forceLive && shouldUseDemoData();
   const demoData = useMemo(() => (usingDemo ? getDemoData() : null), [usingDemo]);
@@ -108,7 +105,7 @@ export default function NetProfitChart({
         }
         return;
       }
-      if(!userId || !businessId || windowMonths.length===0){
+      if(!businessId || windowMonths.length===0){
         const rows = forceLive ? [] : buildMock(windowMonths);
         if(!cancelled){ setSeries(toChartData(rows)); setSource(forceLive ? "empty" : "mock"); setStatus("success"); }
         return;
@@ -125,15 +122,17 @@ export default function NetProfitChart({
 
       // 1) Try consolidated API
       try{
+        const userParam = userId ? `&user_id=${encodeURIComponent(userId)}` : "";
         const url =
           `/api/accounting/health/series` +
           `?business_id=${encodeURIComponent(businessId)}` +
-          `&user_id=${encodeURIComponent(userId)}` +
+          userParam +
           `&end_year=${encodeURIComponent(year)}` +
           `&end_month=${encodeURIComponent(month)}` +
           `&window=12`;
         const r = await apiFetch(url, {
-          headers: {"Content-Type":"application/json","x-user-id":userId,"x-business-id":businessId,"x-data-mode":"live"}
+          headers: {"Content-Type":"application/json","x-user-id":userId || "","x-business-id":businessId,"x-data-mode":"live"},
+          cache: "no-store",
         });
         if(r.ok){
           const json = await r.json();
@@ -155,15 +154,19 @@ export default function NetProfitChart({
       // 2) Per-month persisted fallback
       try{
         const rows = await Promise.all(windowMonths.map(async ({year,month})=>{
+          const userParam = userId ? `&user_id=${encodeURIComponent(userId)}` : "";
           const url =
             `/api/accounting/metrics` +
             `?business_id=${encodeURIComponent(businessId)}` +
-            `&user_id=${encodeURIComponent(userId)}` +
+            userParam +
             `&year=${encodeURIComponent(year)}` +
             `&month=${encodeURIComponent(month)}` +
             `&data_mode=live&persisted_only=true`;
           try{
-            const r = await apiFetch(url, { headers:{"Content-Type":"application/json","x-user-id":userId,"x-business-id":businessId,"x-data-mode":"live"} });
+            const r = await apiFetch(url, {
+              headers:{"Content-Type":"application/json","x-user-id":userId || "","x-business-id":businessId,"x-data-mode":"live"},
+              cache: "no-store",
+            });
             if(!r.ok) throw new Error(`HTTP ${r.status}`);
             const payload = await r.json();
             const profit = coalesceProfit(payload);

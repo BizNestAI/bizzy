@@ -182,6 +182,8 @@ test("Health monthly snapshot uses one Cash QBO P&L source and replaces stale ca
   assert.equal(summary.metrics.totalExpenses, 192.9);
   assert.equal(summary.metrics.netProfit, 982.1);
   assert.equal(summary.metrics.profitMargin, 83.58);
+  assert.equal(summary.metrics.top_spending_category, "Software");
+  assert.deepEqual(summary.metrics.topSpendingCategory, { name: "Software", amount: 160 });
   assert.deepEqual(summary.expense_breakdown, [
     { category: "Software", amount: 160 },
     { category: "Payment Processing Fees", amount: 32.9 },
@@ -244,6 +246,7 @@ test("available/latest Health months are derived from completed current snapshot
   assert.equal(latest.month, "2026-08-01");
   assert.equal(summary.data_status, "available");
   assert.equal(summary.metrics.totalRevenue, 1175);
+  assert.equal(summary.metrics.top_spending_category, null);
 });
 
 test("Health reads ignore current Accrual snapshots and require a current Cash snapshot", async () => {

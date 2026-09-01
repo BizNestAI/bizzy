@@ -21,8 +21,6 @@ import { apiFetch } from "../../utils/apiBase.js";
 function monthShortLabel(y, m) {
   return new Date(y, m - 1, 1).toLocaleString(undefined, { month: "short" });
 }
-function pad2(n) { return String(n).padStart(2, "0"); }
-function monthKey(y, m) { return `${y}-${pad2(m)}-01`; }
 function seqLastNMonths({ year, month, n = 12 }) {
   const out = [];
   let y = year;
@@ -134,7 +132,6 @@ export default function RevenueChart({
   businessId: businessIdProp,
   year: yearProp,
   month: monthProp,
-  height = 260,
   className = "",
   showGrid = true,
   refreshVersion = 0,
@@ -143,7 +140,7 @@ export default function RevenueChart({
   const period = useFinancialPeriod(businessId);
   const year = yearProp || period.year;
   const month = monthProp || period.month;
-  const userId = userIdProp || localStorage.getItem("user_id");
+  const userId = userIdProp || localStorage.getItem("user_id") || "";
   const forceLive = shouldForceLiveData();
   const usingDemo = !forceLive && shouldUseDemoData();
   const demoData = useMemo(() => (usingDemo ? getDemoData() : null), [usingDemo]);
@@ -173,7 +170,7 @@ export default function RevenueChart({
         }
         return;
       }
-      if (!userId || !businessId || windowMonths.length === 0) {
+      if (!businessId || windowMonths.length === 0) {
         const rows = forceLive ? [] : buildMock(windowMonths);
         if (!cancelled) {
           setSeries(toChartData(rows));
@@ -195,20 +192,22 @@ export default function RevenueChart({
 
       // Strategy 1: consolidated API (if present)
       try {
+        const userParam = userId ? `&user_id=${encodeURIComponent(userId)}` : "";
         const url =
           `/api/accounting/health/series` +
           `?business_id=${encodeURIComponent(businessId)}` +
-          `&user_id=${encodeURIComponent(userId)}` +
+          userParam +
           `&end_year=${encodeURIComponent(year)}` +
           `&end_month=${encodeURIComponent(month)}` +
           `&window=12`;
         const resp = await apiFetch(url, {
           headers: {
             "Content-Type": "application/json",
-            "x-user-id": userId,
+            "x-user-id": userId || "",
             "x-business-id": businessId,
             "x-data-mode": "live",
           },
+          cache: "no-store",
         });
         if (resp.ok) {
           const json = await resp.json();
@@ -233,10 +232,11 @@ export default function RevenueChart({
       try {
         const rows = await Promise.all(
           windowMonths.map(async ({ year, month }) => {
+            const userParam = userId ? `&user_id=${encodeURIComponent(userId)}` : "";
             const url =
               `/api/accounting/metrics` +
               `?business_id=${encodeURIComponent(businessId)}` +
-              `&user_id=${encodeURIComponent(userId)}` +
+              userParam +
               `&year=${encodeURIComponent(year)}` +
               `&month=${encodeURIComponent(month)}` +
               `&data_mode=live&persisted_only=true`;
@@ -244,10 +244,11 @@ export default function RevenueChart({
               const r = await apiFetch(url, {
                 headers: {
                   "Content-Type": "application/json",
-                  "x-user-id": userId,
+                  "x-user-id": userId || "",
                   "x-business-id": businessId,
                   "x-data-mode": "live",
                 },
+                cache: "no-store",
               });
               if (!r.ok) throw new Error(`HTTP ${r.status}`);
               const payload = await r.json();

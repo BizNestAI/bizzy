@@ -150,12 +150,9 @@ export default function ExpenseBreakdownChart({
           (userId ? `&user_id=${encodeURIComponent(userId)}` : "") +
           `&year=${encodeURIComponent(year)}` +
           `&month=${encodeURIComponent(month)}`;
-        if (process.env.NODE_ENV !== "production") {
-          // eslint-disable-next-line no-console
-          console.log("[ExpenseBreakdown] fetch monthly totals", { year, month, url });
-        }
         const resp = await apiFetch(url, {
           headers: { "Content-Type": "application/json", "x-user-id": userId || "", "x-business-id": businessId },
+          cache: "no-store",
         });
         if (resp.ok) {
           const payload = await resp.json();
@@ -173,7 +170,9 @@ export default function ExpenseBreakdownChart({
             return;
           }
         }
-      } catch {}
+      } catch {
+        // Fall through to the legacy persisted metrics endpoint.
+      }
 
       try {
         const url =
@@ -183,12 +182,9 @@ export default function ExpenseBreakdownChart({
           `&year=${encodeURIComponent(year)}` +
           `&month=${encodeURIComponent(month)}` +
           `&data_mode=live&persisted_only=true`;
-        if (process.env.NODE_ENV !== "production") {
-          // eslint-disable-next-line no-console
-          console.log("[ExpenseBreakdown] fetch fallback metrics", { year, month, url });
-        }
         const resp = await apiFetch(url, {
           headers: { "Content-Type": "application/json", "x-user-id": userId || "", "x-business-id": businessId },
+          cache: "no-store",
         });
         if (resp.ok) {
           const payload = await resp.json();
@@ -207,7 +203,9 @@ export default function ExpenseBreakdownChart({
           }
           if (!cancelled && !cached) setStatus("empty");
         }
-      } catch {}
+      } catch {
+        // Preserve cached data or the normal empty fallback below.
+      }
 
       if (!cancelled) {
         if (!cached) {

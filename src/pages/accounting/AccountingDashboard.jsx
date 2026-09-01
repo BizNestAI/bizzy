@@ -237,9 +237,11 @@ export default function AccountingDashboard() {
   useEffect(() => {
     let alive = true;
     async function loadAvailableMonths() {
-      if (!businessId || (!userId && !adminView.active)) return;
+      if (!businessId) return;
       try {
-        const res = await safeFetch(`/api/accounting/health/available-months?business_id=${encodeURIComponent(businessId)}`);
+        const res = await safeFetch(`/api/accounting/health/available-months?business_id=${encodeURIComponent(businessId)}`, {
+          cache: "no-store",
+        });
         if (!alive) return;
         const months = (res?.months || []).map((row) => {
           const [y, m] = String(row.month || "").split("-");
@@ -270,7 +272,7 @@ export default function AccountingDashboard() {
     }
     loadAvailableMonths();
     return () => { alive = false; };
-  }, [adminView.active, businessId, userId, periodValue, setYearMonth, financialRefreshVersion]);
+  }, [businessId, periodValue, setYearMonth, financialRefreshVersion]);
 
   // 🧠 Publish AgendaWidget to the right rail
   useEffect(() => {
@@ -289,14 +291,15 @@ export default function AccountingDashboard() {
   useEffect(() => {
     let alive = true;
     async function checkMetrics() {
-      if (!businessId || (!userId && !adminView.active) || !year || !month) {
+      if (!businessId || !year || !month) {
         if (alive) setHasMetrics(false);
         return;
       }
       try {
+        const userParam = userId ? `&user_id=${encodeURIComponent(userId)}` : "";
         const resp = await safeFetch(
-          `/api/accounting/health/monthly-summary?business_id=${encodeURIComponent(businessId)}&user_id=${encodeURIComponent(userId)}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
-          { method: "GET" }
+          `/api/accounting/health/monthly-summary?business_id=${encodeURIComponent(businessId)}${userParam}&year=${encodeURIComponent(year)}&month=${encodeURIComponent(month)}`,
+          { method: "GET", cache: "no-store" }
         );
         const m = resp?.metrics || {};
         const has =
@@ -329,7 +332,7 @@ export default function AccountingDashboard() {
     }
     checkMetrics();
     return () => { alive = false; };
-  }, [adminView.active, businessId, userId, year, month, financialRefreshVersion]);
+  }, [businessId, userId, year, month, financialRefreshVersion]);
 
   // Poll backfill job status when connected (lightweight)
   useEffect(() => {

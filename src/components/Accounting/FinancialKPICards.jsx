@@ -61,7 +61,7 @@ export default function FinancialKPICards({
   const [loading, setLoading] = useState(true);
   const { currentBusiness } = useBusiness?.() || {};
 
-  const userId = userIdProp || localStorage.getItem("user_id");
+  const userId = userIdProp || localStorage.getItem("user_id") || "";
   const businessId = businessIdProp || localStorage.getItem("currentBusinessId");
   const period = useFinancialPeriod(businessId);
   const year = yearProp || period.year;
@@ -156,7 +156,7 @@ export default function FinancialKPICards({
         onLiveDataRef.current?.();
         return;
       }
-      if (!userId || !businessId || !year || !month) {
+      if (!businessId || !year || !month) {
         if (cancelled) return;
         setLoading(false);
         setKpis([]);
@@ -174,20 +174,22 @@ export default function FinancialKPICards({
         setLoading(true);
       }
       try {
+        const userParam = userId ? `&user_id=${encodeURIComponent(userId)}` : "";
         const url =
           `/api/accounting/health/monthly-summary` +
-          `?user_id=${encodeURIComponent(userId)}` +
-          `&business_id=${encodeURIComponent(businessId)}` +
+          `?business_id=${encodeURIComponent(businessId)}` +
+          userParam +
           `&year=${encodeURIComponent(year)}` +
           `&month=${encodeURIComponent(month)}`;
 
         const res = await apiFetch(url, {
           headers: {
             "Content-Type": "application/json",
-            "x-user-id": userId,
+            "x-user-id": userId || "",
             "x-business-id": businessId,
           },
           signal: ac.signal,
+          cache: "no-store",
         });
 
         const ct = res.headers.get("content-type") || "";
@@ -210,7 +212,10 @@ export default function FinancialKPICards({
         const netProfit = m.net_profit ?? m.netProfit ?? null;
         const rawMargin = m.profit_margin ?? m.profitMargin ?? null;
         const profitMarginPct = rawMargin == null ? null : (Math.abs(Number(rawMargin)) <= 1 ? Number(rawMargin) * 100 : Number(rawMargin));
-        const topSpendingCategory = m.top_spending_category ?? m.topSpendingCategory ?? null;
+        const rawTopSpendingCategory = m.top_spending_category ?? m.topSpendingCategory ?? null;
+        const topSpendingCategory = typeof rawTopSpendingCategory === "object" && rawTopSpendingCategory !== null
+          ? rawTopSpendingCategory.name ?? rawTopSpendingCategory.category ?? null
+          : rawTopSpendingCategory;
 
         const prior = m.priorMonth ?? m.prior_month ?? {};
         const priorRevenue = prior.total_revenue ?? prior.totalRevenue ?? null;
@@ -218,7 +223,10 @@ export default function FinancialKPICards({
         const priorNet = prior.net_profit ?? prior.netProfit ?? null;
         const rawPriorMargin = prior.profit_margin ?? prior.profitMargin ?? null;
         const priorMarginPct = rawPriorMargin == null ? null : (Math.abs(Number(rawPriorMargin)) <= 1 ? Number(rawPriorMargin) * 100 : Number(rawPriorMargin));
-        const priorTopCategory = prior.top_spending_category ?? prior.topSpendingCategory ?? null;
+        const rawPriorTopCategory = prior.top_spending_category ?? prior.topSpendingCategory ?? null;
+        const priorTopCategory = typeof rawPriorTopCategory === "object" && rawPriorTopCategory !== null
+          ? rawPriorTopCategory.name ?? rawPriorTopCategory.category ?? null
+          : rawPriorTopCategory;
 
         const allNull =
           totalRevenue == null &&
@@ -226,7 +234,7 @@ export default function FinancialKPICards({
           netProfit == null &&
           profitMarginPct == null &&
           !topSpendingCategory;
-        const isEmptyPayload = parsed.empty === true || parsed.source === "cache_miss" || parsed.data_status === "missing";
+        const isEmptyPayload = parsed.empty === true || parsed.source === "cache_miss" || parsed.data_status === "missing" || parsed.data_status === "empty";
         if (isEmptyPayload || allNull) {
           setKpis([]);
           onEmptyDataRef.current?.();

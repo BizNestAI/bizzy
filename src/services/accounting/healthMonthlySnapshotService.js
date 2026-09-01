@@ -177,9 +177,15 @@ export async function getMonthlyHealthSummary({
   );
   const metrics = metricsFromSnapshot(current);
   const expenseBreakdown = buildExpenseBreakdown(accountRows);
+  const topExpense = expenseBreakdown[0] || null;
+  const responseMetrics = {
+    ...metrics,
+    top_spending_category: topExpense?.category || null,
+    topSpendingCategory: topExpense ? { name: topExpense.category, amount: topExpense.amount } : null,
+  };
   const monthText = monthKeyFromParts(reviewYear, reviewMonth);
   return {
-    data_status: hasFinancialActivity(metrics) ? "available" : "empty",
+    data_status: hasFinancialActivity(responseMetrics) ? "available" : "empty",
     selected_month: monthText,
     qbo_connection_status: "connected",
     snapshot: {
@@ -193,7 +199,7 @@ export async function getMonthlyHealthSummary({
       review_year: current.review_year,
       review_month: current.review_month,
     },
-    metrics,
+    metrics: responseMetrics,
     expense_breakdown: expenseBreakdown,
     account_breakdown: accountRows.map((row) => toLegacyAccountBreakdownRow(row, monthText)),
     series: await getHealthSeries({ db, businessId, year: reviewYear, month: reviewMonth, window }),
