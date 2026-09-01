@@ -474,6 +474,14 @@ export function parseProfitAndLossSummary(report, {
   const actualStart = header?.StartPeriod || sourceStartDate;
   const actualEnd = header?.EndPeriod || sourceEndDate;
   const reportBasis = findHeaderOption(header, "reportbasis") || accountingMethod;
+  const reportName = header?.ReportName || header?.ReportTitle || report?.ReportName || "";
+  const rootRows = report?.Rows?.Row;
+  if (!Array.isArray(rootRows) || !/profit\s*and\s*loss/i.test(String(reportName || "ProfitAndLoss"))) {
+    throw new QboMonthlyPnlIngestionError("qbo_summary_report_malformed", 409, {
+      report_name: reportName || null,
+      has_rows: Array.isArray(rootRows),
+    });
+  }
   if (actualStart !== sourceStartDate || actualEnd !== sourceEndDate) {
     throw new QboMonthlyPnlIngestionError("qbo_summary_date_mismatch", 409, {
       expected_start_date: sourceStartDate,
@@ -492,14 +500,23 @@ export function parseProfitAndLossSummary(report, {
     gross_profit: null,
     net_operating_income: null,
     net_other_income: null,
-    net_profit: null,
+      net_profit: null,
+  };
+  const sectionState = {
+    income: { seen: false, accountCount: 0 },
+    cogs: { seen: false, accountCount: 0 },
+    expenses: { seen: false, accountCount: 0 },
+    other_income: { seen: false, accountCount: 0 },
+    other_expense: { seen: false, accountCount: 0 },
   };
   const accountRows = [];
   let displayOrder = 0;
-  walkReportRows(report?.Rows?.Row || [], [], (row, ancestors) => {
+  walkReportRows(rootRows, [], (row, ancestors) => {
     const label = rowLabel(row);
     const amount = amountFromColData(row?.Summary?.ColData || row?.ColData);
     const norm = normalizeLabel(rowTotalLabel(row) || label);
+    const sectionKey = classifySummarySectionKey(row, ancestors);
+    if (sectionKey) sectionState[sectionKey].seen = true;
     if (amount !== null) {
       if (/^total (?:for )?income$|^total (?:for )?revenue$/.test(norm)) totals.revenue = amount;
       else if (/^total cost of goods sold$|^total cogs$/.test(norm)) totals.cogs = amount;
@@ -514,6 +531,8 @@ export function parseProfitAndLossSummary(report, {
     if (isLeafAccountRow(row) && amount !== null) {
       const section = classifyAccountSection(ancestors);
       if (section) {
+        const key = sectionKeyForAccountType(section);
+        if (key) sectionState[key].accountCount += 1;
         const firstCol = firstColData(row);
         accountRows.push({
           qbo_account_id: firstCol?.id ? String(firstCol.id) : null,
@@ -533,6 +552,21 @@ export function parseProfitAndLossSummary(report, {
       }
     }
   });
+
+  if (totals.revenue === null && canInferZeroSection(sectionState.income, accountRows, "Income", totals.net_profit, true)) totals.revenue = 0;
+  if (totals.cogs === null && canInferZeroSection(sectionState.cogs, accountRows, "Cost of Goods Sold", totals.net_profit, false)) totals.cogs = 0;
+  if (totals.expenses === null && canInferZeroSection(sectionState.expenses, accountRows, "Expense", totals.net_profit, false)) totals.expenses = 0;
+  if (totals.other_income === null || totals.other_income === undefined) totals.other_income = 0;
+  if (totals.other_expense === null || totals.other_expense === undefined) totals.other_expense = 0;
+  if (totals.net_other_income === null && (sectionState.other_income.seen || sectionState.other_expense.seen)) {
+    totals.net_other_income = roundMoney(Number(totals.other_income || 0) - Number(totals.other_expense || 0));
+  }
+  if (totals.gross_profit === null && totals.revenue !== null && totals.cogs !== null) {
+    totals.gross_profit = roundMoney(Number(totals.revenue || 0) - Number(totals.cogs || 0));
+  }
+  if (totals.net_operating_income === null && totals.gross_profit !== null && totals.expenses !== null) {
+    totals.net_operating_income = roundMoney(Number(totals.gross_profit || 0) - Number(totals.expenses || 0));
+  }
 
   const missing = [];
   if (totals.revenue === null) missing.push("revenue");
@@ -557,6 +591,8 @@ export function parseProfitAndLossSummary(report, {
     gross_profit: totals.gross_profit,
     net_operating_income: totals.net_operating_income,
     net_other_income: totals.net_other_income,
+    reconciliation: buildSummaryReconciliation(totals),
+    section_state: sectionState,
     accounting_method: reportBasis,
     source_start_date: sourceStartDate,
     source_end_date: sourceEndDate,
@@ -932,6 +968,68 @@ function classifyAccountSection(ancestors = []) {
   if (/income|revenue/.test(joined)) return "Income";
   if (/expense/.test(joined)) return "Expense";
   return null;
+}
+
+function classifySummarySectionKey(row, ancestors = []) {
+  const own = normalizeLabel(rowLabel(row));
+  if (!row?.Header && /^(net income|net profit|net operating income|gross profit|net other income|total .*)$/.test(own)) {
+    return null;
+  }
+  const labels = [...ancestors.map(rowLabel), rowLabel(row)].map(normalizeLabel).filter(Boolean);
+  const joined = labels.join(" > ");
+  if (/cost of goods sold|cogs/.test(joined)) return "cogs";
+  if (/other income/.test(joined)) return "other_income";
+  if (/other expense/.test(joined)) return "other_expense";
+  if (/income|revenue/.test(joined)) return "income";
+  if (/expense/.test(joined)) return "expenses";
+  return null;
+}
+
+function sectionKeyForAccountType(type) {
+  const canonical = canonicalPnlType(type);
+  if (canonical === "Income") return "income";
+  if (canonical === "Cost of Goods Sold") return "cogs";
+  if (canonical === "Expense") return "expenses";
+  if (canonical === "Other Income") return "other_income";
+  if (canonical === "Other Expense") return "other_expense";
+  return null;
+}
+
+function canInferZeroSection(section, accountRows, accountType, netProfit, requireSectionForNonzeroNet = false) {
+  if (!section?.seen) {
+    if (requireSectionForNonzeroNet && roundMoney(netProfit || 0) !== 0) return false;
+    return !accountRows.some((row) => row.account_type === accountType);
+  }
+  return Number(section.accountCount || 0) === 0;
+}
+
+function buildSummaryReconciliation(totals) {
+  const revenue = roundMoney(totals.revenue || 0);
+  const cogs = roundMoney(totals.cogs || 0);
+  const expenses = roundMoney(totals.expenses || 0);
+  const otherIncome = roundMoney(totals.other_income || 0);
+  const otherExpense = roundMoney(totals.other_expense || 0);
+  const grossProfit = roundMoney(revenue - cogs);
+  const netOperatingIncome = roundMoney(grossProfit - expenses);
+  const netOtherIncome = roundMoney(otherIncome - otherExpense);
+  const computedNetIncome = roundMoney(netOperatingIncome + netOtherIncome);
+  const qboNetIncome = roundMoney(totals.net_profit || 0);
+  return {
+    revenue,
+    cogs,
+    expenses,
+    other_income: otherIncome,
+    other_expense: otherExpense,
+    gross_profit: totals.gross_profit,
+    computed_gross_profit: grossProfit,
+    net_operating_income: totals.net_operating_income,
+    computed_net_operating_income: netOperatingIncome,
+    net_other_income: totals.net_other_income,
+    computed_net_other_income: netOtherIncome,
+    qbo_net_income: qboNetIncome,
+    computed_net_income: computedNetIncome,
+    delta: roundMoney(computedNetIncome - qboNetIncome),
+  };
 }
 
 function isTransactionDataRow(row) {

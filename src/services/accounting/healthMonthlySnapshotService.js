@@ -97,6 +97,18 @@ export async function refreshMonthlyQboFinancialSnapshot({
         compatibility_tables_written: false,
       },
       reconciliation: parsed.reconciliation,
+      pnl_components: {
+        revenue: parsed.revenue,
+        cogs: parsed.cogs,
+        gross_profit: parsed.gross_profit,
+        expenses: parsed.expenses,
+        net_operating_income: parsed.net_operating_income,
+        other_income: parsed.other_income || 0,
+        other_expense: parsed.other_expense || 0,
+        net_other_income: parsed.net_other_income,
+        qbo_net_income: parsed.net_profit,
+        profit_margin: parsed.revenue > 0 ? roundMoney((parsed.net_profit / parsed.revenue) * 100) : null,
+      },
     },
     accounts,
     transactions: [],
@@ -393,11 +405,35 @@ function validateParsedHealthSummary(summary) {
   assertClose("revenue", summary.revenue, accountTotals.revenue);
   assertClose("cogs", summary.cogs, accountTotals.cogs);
   assertClose("expenses", summary.expenses, accountTotals.expenses);
-  const formula = roundMoney(summary.revenue - summary.cogs - summary.expenses + accountTotals.otherIncome - accountTotals.otherExpense);
+  assertClose("other_income", summary.other_income || 0, accountTotals.otherIncome);
+  assertClose("other_expense", summary.other_expense || 0, accountTotals.otherExpense);
+  const grossProfit = roundMoney(summary.revenue - summary.cogs);
+  if (summary.gross_profit !== null && summary.gross_profit !== undefined) assertClose("gross_profit", summary.gross_profit, grossProfit);
+  const netOperatingIncome = roundMoney(grossProfit - summary.expenses);
+  if (summary.net_operating_income !== null && summary.net_operating_income !== undefined) assertClose("net_operating_income", summary.net_operating_income, netOperatingIncome);
+  const netOtherIncome = roundMoney((summary.other_income || 0) - (summary.other_expense || 0));
+  if (summary.net_other_income !== null && summary.net_other_income !== undefined) assertClose("net_other_income", summary.net_other_income, netOtherIncome);
+  const formula = roundMoney(netOperatingIncome + netOtherIncome);
   assertClose("net_profit", summary.net_profit, formula);
   summary.reconciliation = {
     status: "valid",
     account_totals: accountTotals,
+    components: {
+      revenue: roundMoney(summary.revenue),
+      cogs: roundMoney(summary.cogs),
+      expenses: roundMoney(summary.expenses),
+      other_income: roundMoney(summary.other_income || 0),
+      other_expense: roundMoney(summary.other_expense || 0),
+      computed_gross_profit: grossProfit,
+      qbo_gross_profit: summary.gross_profit ?? null,
+      computed_net_operating_income: netOperatingIncome,
+      qbo_net_operating_income: summary.net_operating_income ?? null,
+      computed_net_other_income: netOtherIncome,
+      qbo_net_other_income: summary.net_other_income ?? null,
+      computed_net_income: formula,
+      qbo_net_income: roundMoney(summary.net_profit),
+      delta: roundMoney(formula - summary.net_profit),
+    },
     formula_net_profit: formula,
   };
 }
@@ -428,7 +464,7 @@ function metricsFromSnapshot(snapshot) {
     totalExpenses: expenses,
     cogs,
     netProfit,
-    profitMargin: revenue > 0 ? roundMoney((netProfit / revenue) * 100) : 0,
+    profitMargin: revenue > 0 ? roundMoney((netProfit / revenue) * 100) : null,
   };
 }
 
@@ -474,6 +510,7 @@ function assertClose(name, expected, actual) {
       check: name,
       expected: roundMoney(expected),
       actual: roundMoney(actual),
+      delta: roundMoney(roundMoney(actual) - roundMoney(expected)),
     });
   }
 }

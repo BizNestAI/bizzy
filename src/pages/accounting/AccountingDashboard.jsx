@@ -182,6 +182,7 @@ export default function AccountingDashboard() {
   const [hasMetrics, setHasMetrics] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState(null);
   const [backfillWarning, setBackfillWarning] = useState("");
+  const [historyImportLoading, setHistoryImportLoading] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState(null);
   const [periodOpen, setPeriodOpen] = useState(false);
   const periodMenuRef = useRef(null);
@@ -484,6 +485,44 @@ export default function AccountingDashboard() {
     }
   };
 
+  const startSelectedWindowImport = async () => {
+    if (historyImportLoading) return;
+    if (!businessId || !year || !month) {
+      setBackfillWarning("Choose a business and month before importing QuickBooks history.");
+      return;
+    }
+    if (adminView.active) {
+      setBackfillWarning("Historical import is unavailable in read-only Admin View.");
+      return;
+    }
+    setHistoryImportLoading(true);
+    setBackfillWarning("");
+    try {
+      const res = await safeFetch("/api/qbo/backfill/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: {
+          business_id: businessId,
+          months: 12,
+          anchor_year: year,
+          anchor_month: month,
+          source: "health_selected_window_import",
+          force: false,
+        },
+      });
+      setBackfillStatus(res || { status: "queued", months_done: 0, months_total: 12 });
+      setRefreshNotice(`Importing missing QuickBooks history for the 12-month window ending ${periodLabel()}.`);
+      setFinancialRefreshVersion((version) => version + 1);
+    } catch (error) {
+      setBackfillWarning("Unable to start historical import. Please try again.");
+      if (import.meta.env.MODE !== "production") {
+        console.warn("[AccountingDashboard] selected-window import failed", error?.message || error);
+      }
+    } finally {
+      setHistoryImportLoading(false);
+    }
+  };
+
   const handleEmptyData = (status = "empty") => {
     if (hasMetrics) {
       setEmptyMonth(false);
@@ -696,6 +735,24 @@ export default function AccountingDashboard() {
             <div className="text-xs text-white/60">
               This runs in the background. You can keep browsing.
             </div>
+          </div>
+        ) : null}
+
+        {qbConnected && !usingDemo && !adminView.active ? (
+          <div className="rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[rgba(0,0,0,0.28)] px-4 py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm text-white/88">Need more chart history for {periodLabel()}?</div>
+              <div className="text-xs text-white/55">Imports missing Cash-basis QuickBooks reports for the selected 12-month window.</div>
+            </div>
+            <button
+              type="button"
+              onClick={startSelectedWindowImport}
+              disabled={historyImportLoading || backfillRunning}
+              className="inline-flex items-center justify-center rounded-full border px-3 py-1.5 text-sm text-white/90 transition disabled:opacity-60"
+              style={{ borderColor: "rgba(255,255,255,0.18)", background: "rgba(0,0,0,0.45)" }}
+            >
+              {historyImportLoading ? "Starting…" : "Import missing history"}
+            </button>
           </div>
         ) : null}
 

@@ -326,3 +326,52 @@ test("QBO summary parser accepts Total for Income and Total for Expenses labels"
   assert.equal(summary.metrics.totalExpenses, 192.9);
   assert.equal(summary.metrics.netProfit, 982.1);
 });
+
+test("Health snapshot promotes zero-revenue Cash month with Other Income and null margin", async () => {
+  const db = makeDb();
+  const summary = await refreshMonthlyQboFinancialSnapshot({
+    db,
+    businessId: BUSINESS_ID,
+    year: 2025,
+    month: 11,
+    loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
+    fetchReport: async () => ({
+      report: {
+        Header: {
+          ReportName: "ProfitAndLoss",
+          StartPeriod: "2025-11-01",
+          EndPeriod: "2025-11-30",
+          Option: [{ Name: "ReportBasis", Value: "Cash" }],
+        },
+        Rows: {
+          Row: [
+            { Header: { ColData: [{ value: "Income" }] }, Rows: { Row: [] } },
+            {
+              Header: { ColData: [{ value: "Expenses" }] },
+              Rows: { Row: [{ type: "Data", ColData: [{ value: "Rent", id: "rent" }, { value: "2664.31" }] }] },
+              Summary: { ColData: [{ value: "Total Expenses" }, { value: "2664.31" }] },
+            },
+            { Summary: { ColData: [{ value: "Net Operating Income" }, { value: "-2664.31" }] } },
+            {
+              Header: { ColData: [{ value: "Other Income" }] },
+              Rows: { Row: [{ type: "Data", ColData: [{ value: "Credit Card Rewards", id: "rewards" }, { value: "6.97" }] }] },
+              Summary: { ColData: [{ value: "Total Other Income" }, { value: "6.97" }] },
+            },
+            { Summary: { ColData: [{ value: "Net Other Income" }, { value: "6.97" }] } },
+            { Summary: { ColData: [{ value: "Net Income" }, { value: "-2657.34" }] } },
+          ],
+        },
+      },
+      reportName: "ProfitAndLoss",
+      realmId: "realm-1",
+    }),
+  });
+
+  assert.equal(summary.data_status, "available");
+  assert.equal(summary.metrics.totalRevenue, 0);
+  assert.equal(summary.metrics.totalExpenses, 2664.31);
+  assert.equal(summary.metrics.netProfit, -2657.34);
+  assert.equal(summary.metrics.profitMargin, null);
+  assert.equal(summary.snapshot.accounting_method, "Cash");
+  assert.equal(db.tables.monthly_review_qbo_pnl_snapshots[0].metadata.pnl_components.other_income, 6.97);
+});

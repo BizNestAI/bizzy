@@ -62,8 +62,11 @@ test("Health widgets no longer read QBO financial tables directly from the brows
 test("manual Health refresh is bounded to the selected month QBO sync", () => {
   assert.match(dashboard, /\/api\/accounting\/health\/refresh\?\$\{params\.toString\(\)\}/);
   assert.match(dashboard, /body: \{ business_id: businessId, year, month \}/);
-  assert.doesNotMatch(dashboard, /\/api\/qbo\/backfill\/start/);
-  assert.doesNotMatch(dashboard, /months:\s*12/);
+  assert.match(dashboard, /const startSelectedWindowImport = async \(\) =>/);
+  assert.match(dashboard, /\/api\/qbo\/backfill\/start/);
+  assert.match(dashboard, /anchor_year: year/);
+  assert.match(dashboard, /anchor_month: month/);
+  assert.match(dashboard, /force: false/);
   assert.match(dashboard, /Import from QuickBooks|Refresh/);
 });
 

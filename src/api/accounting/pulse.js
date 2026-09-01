@@ -7,6 +7,8 @@ import {
 } from "./monthlyFinancialPulse.js";
 import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 
+/* global process */
+
 const router = express.Router();
 const ENV_MOCK = String(process.env.USE_MOCK_ACCOUNTING || "").toLowerCase() === "true";
 
@@ -48,6 +50,12 @@ function normalizePulse(row, monthText = null) {
     businessInsights: isMock ? row.businessInsights : row.business_insights,
     motivationalMessage: isMock ? row.motivationalMessage : row.motivational_message,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+    generatedAt: row.generated_at || row.generatedAt || row.created_at || row.createdAt || null,
+    cadence: row.cadence || null,
+    status: row.status || (row.revenue_summary ? "available" : null),
+    accountingMethod: row.accounting_method || null,
+    sourceSnapshotId: row.source_snapshot_id || null,
+    dataThroughDate: row.data_through_date || null,
   };
 }
 
@@ -64,6 +72,7 @@ router.get("/", async (req, res) => {
     const year = Number(q.year || 0);
     const month = Number(q.month || 0);
     const monthText = year && month ? monthKey(year, month) : null;
+    const cadence = q.cadence ? String(q.cadence) : null;
     const shouldGenerate = String(q.generate || "0") === "1";
     const mockRaw = String(q.mock ?? "");
     const wantMock = mockRaw === "1" || mockRaw.toLowerCase() === "true";
@@ -75,11 +84,15 @@ router.get("/", async (req, res) => {
 
     if (isAdminViewRequest(req)) {
       if (monthText) {
-        const { data, error, status } = await supabase
+        let pulseQuery = supabase
           .from("monthly_financial_pulse")
           .select("*")
           .eq("business_id", business_id)
-          .eq("month", monthText)
+          .eq("month", monthText);
+        if (cadence) pulseQuery = pulseQuery.eq("cadence", cadence);
+        const { data, error, status } = await pulseQuery
+          .order("created_at", { ascending: false })
+          .limit(1)
           .maybeSingle();
 
         if (error && status !== 406) {
@@ -139,11 +152,15 @@ router.get("/", async (req, res) => {
 
     // If we have a target month, try that first
     if (monthText) {
-      const { data, error, status } = await supabase
+      let pulseQuery = supabase
         .from("monthly_financial_pulse")
         .select("*")
         .eq("business_id", business_id)
-        .eq("month", monthText)
+        .eq("month", monthText);
+      if (cadence) pulseQuery = pulseQuery.eq("cadence", cadence);
+      const { data, error, status } = await pulseQuery
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
       if (error && status !== 406) {
@@ -161,22 +178,27 @@ router.get("/", async (req, res) => {
             message: "Monthly Brief generation only runs on the 15th for the current month and on the 1st for the previous month.",
           });
         }
-        const out = await generateFinancialPulseSnapshot({
+	        const out = await generateFinancialPulseSnapshot({
           monthlyMetrics: {}, // let the generator self-hydrate
           forecastData: {},
           priorMonthMetrics: {},
           user_id,
-          business_id,
-          month: monthText,
-        });
+	          business_id,
+	          month: monthText,
+	          cadence: cadence || "manual",
+	        });
 
         // Re-read to return the saved row (keeps client shape consistent)
-        const { data: after } = await supabase
-          .from("monthly_financial_pulse")
-          .select("*")
-          .eq("business_id", business_id)
-          .eq("month", monthText)
-          .maybeSingle();
+	        let afterQuery = supabase
+	          .from("monthly_financial_pulse")
+	          .select("*")
+	          .eq("business_id", business_id)
+	          .eq("month", monthText);
+	        if (cadence) afterQuery = afterQuery.eq("cadence", cadence);
+	        const { data: after } = await afterQuery
+	          .order("created_at", { ascending: false })
+	          .limit(1)
+	          .maybeSingle();
 
         return res.status(200).json({ pulse: normalizePulse(after || out || null, monthText), generated: true, draft: out });
       }
@@ -226,6 +248,7 @@ router.post("/generate", async (req, res) => {
     const year = Number(b.year || q.year || 0);
     const month = Number(b.month || q.month || 0);
     const monthText = year && month ? monthKey(year, month) : null;
+    const cadence = b.cadence || q.cadence || "manual";
 
     if (!user_id || !business_id || !monthText) {
       return res.status(400).json({ error: "Missing user_id, business_id, year or month" });
@@ -245,6 +268,7 @@ router.post("/generate", async (req, res) => {
       user_id,
       business_id,
       month: monthText,
+      cadence,
     });
 
     return res.status(200).json({ ok: true, pulse: out });

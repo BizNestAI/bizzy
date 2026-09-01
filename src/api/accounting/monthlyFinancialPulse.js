@@ -1,6 +1,9 @@
 // File: /src/api/accounting/monthlyFinancialPulse.js
 import OpenAI from "openai";
 import { supabase } from "../../services/supabaseAdmin.js";
+import { getMonthlyHealthSummary, HEALTH_ACCOUNTING_METHOD } from "../../services/accounting/healthMonthlySnapshotService.js";
+
+/* global process */
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -61,66 +64,60 @@ async function loadPulseContext({ business_id, monthText }) {
   const prevY = m === 1 ? y - 1 : y;
   const prevText = monthKey(prevY, prevM);
 
-  // Current + prior metrics
-  const { data: cur } = await supabase
-    .from("financial_metrics")
-    .select("total_revenue,total_expenses,net_profit,profit_margin,top_spending_category,month")
-    .eq("business_id", business_id)
-    .eq("month", monthText)
-    .maybeSingle();
-
-  const { data: prev } = await supabase
-    .from("financial_metrics")
-    .select("total_revenue,total_expenses,net_profit,profit_margin,top_spending_category,month")
-    .eq("business_id", business_id)
-    .eq("month", prevText)
-    .maybeSingle();
+  const current = await getMonthlyHealthSummary({ businessId: business_id, year: y, month: m });
+  if (!["available", "empty"].includes(current?.data_status)) {
+    throw new Error("monthly_brief_cash_snapshot_required");
+  }
+  const previous = await getMonthlyHealthSummary({ businessId: business_id, year: prevY, month: prevM });
+  const cur = current.metrics || {};
+  const prev = previous?.metrics || {};
 
   // MoM deltas
   const deltas = {
-    revenue_mom_pct: prev?.total_revenue
-      ? ((num(cur?.total_revenue) - num(prev.total_revenue)) / num(prev.total_revenue)) * 100
-      : null,
-    expenses_mom_pct: prev?.total_expenses
-      ? ((num(cur?.total_expenses) - num(prev.total_expenses)) / num(prev.total_expenses)) * 100
-      : null,
-    profit_mom_pct: prev?.net_profit
-      ? ((num(cur?.net_profit) - num(prev.net_profit)) / num(prev.net_profit)) * 100
-      : null,
-    margin_mom_pct:
-      prev?.profit_margin != null && cur?.profit_margin != null
-        ? num(cur.profit_margin) - num(prev.profit_margin)
-        : null,
-  };
+	    revenue_mom_pct: prev?.totalRevenue
+	      ? ((num(cur?.totalRevenue) - num(prev.totalRevenue)) / num(prev.totalRevenue)) * 100
+	      : null,
+	    expenses_mom_pct: prev?.totalExpenses
+	      ? ((num(cur?.totalExpenses) - num(prev.totalExpenses)) / num(prev.totalExpenses)) * 100
+	      : null,
+	    profit_mom_pct: prev?.netProfit
+	      ? ((num(cur?.netProfit) - num(prev.netProfit)) / num(prev.netProfit)) * 100
+	      : null,
+	    margin_mom_pct:
+	      prev?.profitMargin != null && cur?.profitMargin != null
+	        ? num(cur.profitMargin) - num(prev.profitMargin)
+	        : null,
+	  };
+	  const top_expense_categories = (current.expense_breakdown || [])
+	    .map(r => ({ name: r.category, amount: num(r.amount) }))
+	    .sort((a, b) => b.amount - a.amount)
+	    .slice(0, 5);
 
-  // KPIs (TEXT month "YYYY-MM")
-  const { data: kpi } = await supabase
-    .from("kpi_metrics")
-    .select("labor_pct,overhead_pct,avg_job_size,client_concentration_pct,top_clients,jobs_completed")
-    .eq("business_id", business_id)
-    .eq("month", monthText.slice(0, 7))
-    .maybeSingle();
-
-  // Top expenses
-  const { data: breakdown } = await supabase
-    .from("account_breakdown")
-    .select("account_name,account_type,balance")
-    .eq("business_id", business_id)
-    .eq("month", monthText);
-
-  const top_expense_categories = (breakdown || [])
-    .filter(r => (r.account_type || "").toLowerCase() === "expense")
-    .map(r => ({ name: r.account_name, amount: num(r.balance) }))
-    .sort((a, b) => b.amount - a.amount)
-    .slice(0, 5);
-
-  return {
-    monthlyMetrics: cur || {},
-    priorMonthMetrics: prev || {},
-    deltas,
-    kpis: kpi || {},
-    top_expense_categories,
-  };
+	  return {
+	    monthlyMetrics: {
+	      total_revenue: cur.totalRevenue,
+	      total_expenses: cur.totalExpenses,
+	      net_profit: cur.netProfit,
+	      profit_margin: cur.profitMargin,
+	      top_spending_category: cur.top_spending_category || cur.topSpendingCategory?.name || null,
+	      month: monthText,
+	      accounting_method: HEALTH_ACCOUNTING_METHOD,
+	      source_snapshot_id: current.snapshot?.id || null,
+	    },
+	    priorMonthMetrics: previous?.data_status === "available" ? {
+	      total_revenue: prev.totalRevenue,
+	      total_expenses: prev.totalExpenses,
+	      net_profit: prev.netProfit,
+	      profit_margin: prev.profitMargin,
+	      month: prevText,
+	      accounting_method: HEALTH_ACCOUNTING_METHOD,
+	      source_snapshot_id: previous.snapshot?.id || null,
+	    } : {},
+	    deltas,
+	    kpis: {},
+	    top_expense_categories,
+	    sourceSnapshotId: current.snapshot?.id || null,
+	  };
 }
 
 /**
@@ -134,6 +131,8 @@ export async function generateFinancialPulseSnapshot({
   user_id,
   business_id,
   month, // "YYYY-MM-01" or "YYYY-MM"
+  cadence = "manual",
+  sourceSnapshotId = null,
   embed = true,
 }) {
   if (!business_id || !month) {
@@ -145,14 +144,15 @@ export async function generateFinancialPulseSnapshot({
   let ctx = { monthlyMetrics, priorMonthMetrics, forecastData, deltas: {}, kpis: {}, top_expense_categories: [] };
   try {
     const loaded = await loadPulseContext({ business_id, monthText });
-    ctx = {
+	    ctx = {
       monthlyMetrics: monthlyMetrics && Object.keys(monthlyMetrics).length ? monthlyMetrics : loaded.monthlyMetrics,
       priorMonthMetrics: Object.keys(priorMonthMetrics || {}).length ? priorMonthMetrics : loaded.priorMonthMetrics,
       forecastData,
       deltas: loaded.deltas,
       kpis: loaded.kpis,
-      top_expense_categories: loaded.top_expense_categories,
-    };
+	      top_expense_categories: loaded.top_expense_categories,
+	      sourceSnapshotId: sourceSnapshotId || loaded.sourceSnapshotId || null,
+	    };
   } catch (e) {
     console.warn("[pulse] context load failed:", e?.message || e);
   }
@@ -230,13 +230,19 @@ forecastData: ${JSON.stringify(forecastData)}
       embedding = emb.data[0].embedding;
     }
 
-    const { error } = await supabase.from("monthly_financial_pulse").upsert(
-      {
-        user_id,
-        business_id,
-        month: monthText, // DATE column cast
-        created_at: new Date().toISOString(),
-        revenue_summary: parsed.revenueSummary,
+	    const { error } = await supabase.from("monthly_financial_pulse").upsert(
+	      {
+	        user_id,
+	        business_id,
+	        month: monthText, // DATE column cast
+	        created_at: new Date().toISOString(),
+	        generated_at: new Date().toISOString(),
+	        cadence,
+	        status: "available",
+	        accounting_method: HEALTH_ACCOUNTING_METHOD,
+	        source_snapshot_id: ctx.sourceSnapshotId || sourceSnapshotId || null,
+	        data_through_date: monthText,
+	        revenue_summary: parsed.revenueSummary,
         spending_trend: parsed.spendingTrend,
         variance_from_forecast: parsed.varianceFromForecast,
         business_insights: parsed.businessInsights || [],
@@ -244,8 +250,8 @@ forecastData: ${JSON.stringify(forecastData)}
         embedding_text: embeddingInput,
         embedding,
       },
-      { onConflict: "business_id,month" }
-    );
+	      { onConflict: "business_id,month,cadence" }
+	    );
     if (error) console.error("❌ Pulse upsert error:", error.message || error);
   } catch (e) {
     console.error("❌ Pulse save/embedding error:", e?.message || e);

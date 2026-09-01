@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
+/* global process */
+
 process.env.SUPABASE_URL ||= "https://example.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 
@@ -286,6 +288,115 @@ test("ProfitAndLoss summary supports zero COGS and Other Income/Other Expense wi
   assert.equal(parsed.other_income, 25);
   assert.equal(parsed.other_expense, 5);
   assert.equal(parsed.net_profit, 3194.95);
+});
+
+test("ProfitAndLoss summary accepts empty Income section and reconciles Other Income", () => {
+  const parsed = parseProfitAndLossSummary({
+    Header: {
+      ReportName: "ProfitAndLoss",
+      StartPeriod: "2025-11-01",
+      EndPeriod: "2025-11-30",
+      Option: [{ Name: "ReportBasis", Value: "Cash" }],
+    },
+    Rows: {
+      Row: [
+        {
+          Header: { ColData: [{ value: "Income" }] },
+          Rows: { Row: [] },
+        },
+        {
+          Header: { ColData: [{ value: "Expenses" }] },
+          Rows: {
+            Row: [
+              { type: "Data", ColData: [{ value: "Rent", id: "rent" }, { value: "1780.34" }] },
+              { type: "Data", ColData: [{ value: "Prime Video", id: "prime" }, { value: "261.86" }] },
+              { type: "Data", ColData: [{ value: "Venmo", id: "venmo" }, { value: "175.00" }] },
+              { type: "Data", ColData: [{ value: "Utilities", id: "util" }, { value: "113.85" }] },
+              { type: "Data", ColData: [{ value: "Phone Bill", id: "phone" }, { value: "86.00" }] },
+              { type: "Data", ColData: [{ value: "Meals", id: "meals" }, { value: "60.79" }] },
+              { type: "Data", ColData: [{ value: "Groceries", id: "grocery" }, { value: "42.34" }] },
+              { type: "Data", ColData: [{ value: "Transportation", id: "transport" }, { value: "40.00" }] },
+              { type: "Data", ColData: [{ value: "Running", id: "running" }, { value: "89.99" }] },
+              { type: "Data", ColData: [{ value: "Business Expenses", id: "biz" }, { value: "8.14" }] },
+              { type: "Data", ColData: [{ value: "Auto", id: "auto" }, { value: "6.00" }] },
+            ],
+          },
+          Summary: { ColData: [{ value: "Total Expenses" }, { value: "2664.31" }] },
+        },
+        { Summary: { ColData: [{ value: "Net Operating Income" }, { value: "-2664.31" }] } },
+        {
+          Header: { ColData: [{ value: "Other Income" }] },
+          Rows: { Row: [{ type: "Data", ColData: [{ value: "Credit Card Rewards", id: "rewards" }, { value: "6.97" }] }] },
+          Summary: { ColData: [{ value: "Total Other Income" }, { value: "6.97" }] },
+        },
+        { Summary: { ColData: [{ value: "Net Other Income" }, { value: "6.97" }] } },
+        { Summary: { ColData: [{ value: "Net Income" }, { value: "-2657.34" }] } },
+      ],
+    },
+  }, {
+    reviewYear: 2025,
+    reviewMonth: 11,
+    sourceStartDate: "2025-11-01",
+    sourceEndDate: "2025-11-30",
+  });
+
+  assert.equal(parsed.revenue, 0);
+  assert.equal(parsed.expenses, 2664.31);
+  assert.equal(parsed.other_income, 6.97);
+  assert.equal(parsed.net_profit, -2657.34);
+  assert.equal(parsed.reconciliation.computed_net_income, -2657.34);
+  assert.equal(parsed.account_rows.some((row) => row.account_name === "Credit Card Rewards" && row.account_type === "Other Income"), true);
+});
+
+test("ProfitAndLoss summary reconciles December Other Income into Net Income", () => {
+  const parsed = parseProfitAndLossSummary(pnlSummaryFixture({
+    sales: 1150,
+    cogs: 0,
+    expenses: 1916.54,
+    otherIncome: 0.83,
+    net: -765.71,
+    Header: { StartPeriod: "2025-12-01", EndPeriod: "2025-12-31" },
+  }), {
+    reviewYear: 2025,
+    reviewMonth: 12,
+    sourceStartDate: "2025-12-01",
+    sourceEndDate: "2025-12-31",
+  });
+
+  assert.equal(parsed.revenue, 1150);
+  assert.equal(parsed.expenses, 1916.54);
+  assert.equal(parsed.other_income, 0.83);
+  assert.equal(parsed.net_profit, -765.71);
+  assert.equal(parsed.reconciliation.computed_net_income, -765.71);
+  assert.equal(parsed.reconciliation.delta, 0);
+});
+
+test("ProfitAndLoss summary accepts a structurally valid all-zero Cash report", () => {
+  const parsed = parseProfitAndLossSummary({
+    Header: {
+      ReportName: "ProfitAndLoss",
+      StartPeriod: "2026-09-01",
+      EndPeriod: "2026-09-30",
+      Option: [{ Name: "ReportBasis", Value: "Cash" }],
+    },
+    Rows: {
+      Row: [
+        { Header: { ColData: [{ value: "Income" }] }, Rows: { Row: [] } },
+        { Header: { ColData: [{ value: "Expenses" }] }, Rows: { Row: [] } },
+        { Summary: { ColData: [{ value: "Net Income" }, { value: "0.00" }] } },
+      ],
+    },
+  }, {
+    reviewYear: 2026,
+    reviewMonth: 9,
+    sourceStartDate: "2026-09-01",
+    sourceEndDate: "2026-09-30",
+  });
+
+  assert.equal(parsed.revenue, 0);
+  assert.equal(parsed.expenses, 0);
+  assert.equal(parsed.net_profit, 0);
+  assert.equal(parsed.account_rows.length, 0);
 });
 
 test("ProfitAndLoss summary fails closed when authoritative QBO totals are missing", () => {

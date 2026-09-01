@@ -60,10 +60,15 @@ function normalizePulse(pulse) {
                                 ? pulse.business_insights
                                 : [],
     motivationalMessage:   pulse.motivationalMessage ?? pulse.motivational_message ?? "",
-    forecast:              pulse.forecast ?? pulse.forecast_summary ?? null,
-    month:                 pulse.month ?? null,
-    createdAt:             pulse.created_at ?? pulse.createdAt ?? null,
-  };
+	    forecast:              pulse.forecast ?? pulse.forecast_summary ?? null,
+	    month:                 pulse.month ?? null,
+	    createdAt:             pulse.created_at ?? pulse.createdAt ?? null,
+	    generatedAt:           pulse.generated_at ?? pulse.generatedAt ?? pulse.created_at ?? pulse.createdAt ?? null,
+	    cadence:               pulse.cadence ?? null,
+	    status:                pulse.status ?? null,
+	    accountingMethod:      pulse.accountingMethod ?? pulse.accounting_method ?? null,
+	    dataThroughDate:       pulse.dataThroughDate ?? pulse.data_through_date ?? null,
+	  };
 }
 
 function adaptDemoPulseToPeriod(pulse, year, month) {
@@ -172,11 +177,11 @@ export default function MonthlyBriefCard({ userId, businessId }) {
   const rightControls = (
     <div className="flex flex-wrap items-center justify-end gap-2">
       {monthPill}
-      {pulse?.createdAt && (
-        <span className="rounded-full bg-white/[0.045] px-2.5 py-1 text-[11px] font-medium text-white/55" title={`Generated ${timeAgo(pulse.createdAt)}`}>
-          Generated {generatedDateLabel(pulse.createdAt)}
-        </span>
-      )}
+	      {pulse?.generatedAt && (
+	        <span className="rounded-full bg-white/[0.045] px-2.5 py-1 text-[11px] font-medium text-white/55" title={`Generated ${timeAgo(pulse.generatedAt)}`}>
+	          Generated {generatedDateLabel(pulse.generatedAt)}
+	        </span>
+	      )}
     </div>
   );
 
@@ -239,16 +244,22 @@ export default function MonthlyBriefCard({ userId, businessId }) {
               </div>
             ))}
           </div>
-        ) : (
-          <p className="text-sm text-white/60">No data recorded for this period.</p>
-        )}
+	        ) : pulse?.status === "waiting_for_snapshot" ? (
+	          <p className="text-sm text-white/60">Waiting for the Cash-basis QuickBooks snapshot for this period.</p>
+	        ) : pulse?.status === "generating" ? (
+	          <p className="text-sm text-white/60">Generating monthly brief...</p>
+	        ) : pulse?.status === "failed" ? (
+	          <p className="text-sm text-amber-100">Monthly brief generation needs retry.</p>
+	        ) : (
+	          <p className="text-sm text-white/60">No monthly brief has been generated for this period.</p>
+	        )}
       </div>
       </div>
 
       <div className="border-t border-white/[0.06] bg-black/12 px-5 py-2.5">
         <p className="text-[11px] font-medium text-white/45">
-          Calculated on the 15th and 1st of every month.
-        </p>
+	          Calculated on the 15th and 1st of every month from Cash-basis QuickBooks snapshots.
+	        </p>
       </div>
     </div>
   );

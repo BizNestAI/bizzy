@@ -198,6 +198,9 @@ test("missing monthly-summary does not render as no financial activity", () => {
 test("Import from QuickBooks remains bounded to selected month", () => {
   assert.match(dashboard, /Import from QuickBooks/);
   assert.match(dashboard, /\/api\/accounting\/health\/refresh\?\$\{params\.toString\(\)\}/);
-  assert.doesNotMatch(dashboard, /\/api\/qbo\/backfill\/start/);
-  assert.doesNotMatch(dashboard, /months:\s*12/);
+  assert.match(dashboard, /Need more chart history/);
+  assert.match(dashboard, /\/api\/qbo\/backfill\/start/);
+  assert.match(dashboard, /anchor_year: year/);
+  assert.match(dashboard, /anchor_month: month/);
+  assert.match(dashboard, /force: false/);
 });

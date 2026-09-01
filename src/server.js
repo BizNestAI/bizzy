@@ -36,6 +36,7 @@ import { startOperatorRequestSummaryCron } from "./cron/operatorRequestSummary.c
 import { startReconciliationCron } from "./cron/reconciliation.cron.js";
 import { startQboJobCostingSyncCron } from "./cron/qboJobCostingSync.cron.js";
 import { startQboFinancialHealthCron } from "./cron/qboFinancialHealth.cron.js";
+import { startMonthlyFinancialPulseCron } from "./cron/monthlyFinancialPulse.cron.js";
 import { startContractorCfoInsightsCron } from "./services/insights/contractorCfoTriggerService.js";
 
 // Marketing
@@ -349,6 +350,7 @@ startTaxRecalculationWorker();
 startTaxScheduler();
 startQboJobCostingSyncCron();
 startQboFinancialHealthCron();
+startMonthlyFinancialPulseCron();
 if (String(process.env.DISABLE_RECON_CRON || "").toLowerCase() !== "true") {
   startReconciliationCron();
 } else {
