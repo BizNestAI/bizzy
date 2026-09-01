@@ -116,10 +116,30 @@ test("Health refresh success invalidates all dashboard financial reads", () => {
   assert.match(dashboard, /setFinancialRefreshVersion\(\(version\) => version \+ 1\)/);
   assert.match(dashboard, /\[businessId, periodValue, setYearMonth, financialRefreshVersion\]/);
   assert.match(dashboard, /\[businessId, userId, year, month, financialRefreshVersion\]/);
+  assert.match(dashboard, /\/api\/accounting\/health\/window-coverage\?\$\{params\.toString\(\)\}/);
+  assert.match(dashboard, /\[adminView\.active, businessId, qbStatus, year, month, financialRefreshVersion, backfillStatus\?\.status\]/);
   assert.match(dashboard, /<FinancialKPICards[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
   assert.match(dashboard, /<RevenueChart[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
   assert.match(dashboard, /<ExpenseBreakdownChart[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
   assert.match(dashboard, /<NetProfitChart[\s\S]*refreshVersion=\{financialRefreshVersion\}/);
+});
+
+test("Health chart-history alert is driven by selected-window coverage, not latest Settings job status", () => {
+  assert.match(dashboard, /const \[windowCoverage, setWindowCoverage\] = useState\(null\)/);
+  assert.match(healthRoute, /getSelectedHealthWindowCoverage/);
+  assert.match(dashboard, /selectedWindowComplete = windowCoverage\?\.complete === true/);
+  assert.match(dashboard, /showHistoryImportCta =[\s\S]*windowCoverage[\s\S]*selectedWindowComplete === false/);
+  assert.doesNotMatch(dashboard, /qbConnected && !usingDemo && !adminView\.active \? \(\s*<div[\s\S]*Need more chart history/);
+  assert.match(dashboard, /selectedWindowCoverageCount\} of \{selectedWindowTotal\} months imported/);
+  assert.match(dashboard, /selectedWindowMissingMonths\.map\(formatCoverageMonth\)\.join\(", "\)/);
+});
+
+test("Health separates selected-window import anchor from Settings backfill anchor", () => {
+  assert.match(dashboard, /Number\(backfillStatus\?\.anchor\?\.year\) === Number\(year\)/);
+  assert.match(dashboard, /Number\(backfillStatus\?\.anchor\?\.month\) === Number\(month\)/);
+  assert.match(dashboard, /const backfillRunning = qbConnected && selectedBackfillMatches/);
+  assert.match(dashboard, /anchor_year: year/);
+  assert.match(dashboard, /anchor_month: month/);
 });
 
 test("Health Live Mode does not require legacy localStorage user_id to fetch persisted data", () => {

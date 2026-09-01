@@ -182,6 +182,8 @@ export default function AccountingDashboard() {
   const [hasMetrics, setHasMetrics] = useState(false);
   const [backfillStatus, setBackfillStatus] = useState(null);
   const [backfillWarning, setBackfillWarning] = useState("");
+  const [windowCoverage, setWindowCoverage] = useState(null);
+  const [windowCoverageError, setWindowCoverageError] = useState("");
   const [historyImportLoading, setHistoryImportLoading] = useState(false);
   const [lastRefreshed, setLastRefreshed] = useState(null);
   const [periodOpen, setPeriodOpen] = useState(false);
@@ -235,6 +237,11 @@ export default function AccountingDashboard() {
     () => availableMonths.find((entry) => entry.value === periodValue) || null,
     [availableMonths, periodValue]
   );
+  const formatCoverageMonth = useCallback((monthKey) => {
+    const [y, m] = String(monthKey || "").split("-");
+    if (!y || !m) return monthKey;
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleString(undefined, { month: "short", year: "numeric" });
+  }, []);
   const monthOptions = useMemo(() => {
     return buildCalendarMonthOptions({
       availableMonths,
@@ -389,6 +396,39 @@ export default function AccountingDashboard() {
     return () => { alive = false; clearInterval(id); };
   }, [adminView.active, businessId, qbStatus, backfillStatus?.status]);
 
+  useEffect(() => {
+    let alive = true;
+    async function loadWindowCoverage() {
+      if (!businessId || !year || !month || adminView.active || qbStatus !== "connected") {
+        if (alive) {
+          setWindowCoverage(null);
+          setWindowCoverageError("");
+        }
+        return;
+      }
+      try {
+        const params = new URLSearchParams({
+          business_id: businessId,
+          year: String(year),
+          month: String(month),
+          window: "12",
+        });
+        const res = await safeFetch(`/api/accounting/health/window-coverage?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!alive) return;
+        setWindowCoverage(res || null);
+        setWindowCoverageError("");
+      } catch {
+        if (!alive) return;
+        setWindowCoverage((prev) => prev || null);
+        setWindowCoverageError("Unable to read chart history coverage right now.");
+      }
+    }
+    loadWindowCoverage();
+    return () => { alive = false; };
+  }, [adminView.active, businessId, qbStatus, year, month, financialRefreshVersion, backfillStatus?.status]);
+
   if (loading) return null;
   if (!businessId) return <div className="text-rose-400 p-4">Select a business to view financials.</div>;
   if (qbStatusLoading) {
@@ -405,7 +445,21 @@ export default function AccountingDashboard() {
     );
   }
   const qbConnected = qbStatus === 'connected';
-  const backfillRunning = qbConnected && ["queued", "running"].includes(backfillStatus?.status);
+  const selectedBackfillMatches = Boolean(
+    Number(backfillStatus?.anchor?.year) === Number(year) &&
+    Number(backfillStatus?.anchor?.month) === Number(month)
+  );
+  const backfillRunning = qbConnected && selectedBackfillMatches && ["queued", "running"].includes(backfillStatus?.status);
+  const selectedWindowComplete = windowCoverage?.complete === true;
+  const selectedWindowMissingMonths = Array.isArray(windowCoverage?.missing_months) ? windowCoverage.missing_months : [];
+  const selectedWindowCoverageCount = Number(windowCoverage?.covered_count ?? windowCoverage?.snapshot_coverage_count ?? 0);
+  const selectedWindowTotal = Number(windowCoverage?.months_total || 12);
+  const showHistoryImportCta =
+    qbConnected &&
+    !usingDemo &&
+    !adminView.active &&
+    windowCoverage &&
+    selectedWindowComplete === false;
   const needsSync = qbConnected && !usingDemo && !adminView.active && !backfillRunning && !hasMetrics;
   const canView = usingDemo || qbConnected;
   if (!canView) {
@@ -727,6 +781,12 @@ export default function AccountingDashboard() {
           </div>
         ) : null}
 
+        {windowCoverageError && !windowCoverage ? (
+          <div className="rounded-2xl border border-amber-500/40 bg-[rgba(255,209,143,0.08)] px-4 py-3 text-amber-100 text-sm">
+            {windowCoverageError}
+          </div>
+        ) : null}
+
         {backfillRunning ? (
           <div className="rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(0,0,0,0.35)] px-4 py-3 flex flex-col gap-2">
             <div className="text-sm text-white/90">
@@ -738,11 +798,16 @@ export default function AccountingDashboard() {
           </div>
         ) : null}
 
-        {qbConnected && !usingDemo && !adminView.active ? (
+        {showHistoryImportCta ? (
           <div className="rounded-2xl border border-[rgba(255,255,255,0.12)] bg-[rgba(0,0,0,0.28)] px-4 py-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="text-sm text-white/88">Need more chart history for {periodLabel()}?</div>
-              <div className="text-xs text-white/55">Imports missing Cash-basis QuickBooks reports for the selected 12-month window.</div>
+              <div className="text-xs text-white/55">
+                {selectedWindowCoverageCount} of {selectedWindowTotal} months imported
+                {selectedWindowMissingMonths.length
+                  ? ` • Missing ${selectedWindowMissingMonths.map(formatCoverageMonth).join(", ")}`
+                  : ""}
+              </div>
             </div>
             <button
               type="button"

@@ -1,6 +1,6 @@
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { qboEnvName } from "../../utils/qboEnv.js";
-import { monthKeyFromParts, rangeLastNMonths } from "../../utils/monthKey.js";
+import { monthKeyFromParts, rangeLastNMonths, trailingMonthWindow } from "../../utils/monthKey.js";
 import { getLatestQuickBooksTokenRow } from "../quickbooksTokenService.js";
 import {
   createOrReplaceMonthlyPnlSnapshot,
@@ -280,6 +280,51 @@ export async function getHealthSeries({ db = defaultSupabase, businessId, year, 
   };
 }
 
+export async function getSelectedHealthWindowCoverage({
+  db = defaultSupabase,
+  businessId,
+  year,
+  month,
+  window = 12,
+} = {}) {
+  assertMonthIdentity({ businessId, year, month });
+  const count = Math.max(1, Math.min(24, Number(window || 12)));
+  const months = trailingMonthWindow({ anchorYear: Number(year), anchorMonth: Number(month), count });
+  const rows = await selectRows(
+    db
+      .from("monthly_review_qbo_pnl_snapshots")
+      .select("id,review_year,review_month,accounting_method,status,is_current,metadata")
+      .eq("business_id", businessId)
+      .eq("accounting_method", HEALTH_ACCOUNTING_METHOD)
+      .eq("is_current", true)
+      .eq("status", "current")
+  );
+  const covered = new Map(
+    rows
+      .filter((row) => isEligibleCurrentHealthSnapshot(row))
+      .map((row) => [monthKeyFromParts(row.review_year, row.review_month).slice(0, 7), row])
+  );
+  const expected_months = months.map((entry) => entry.monthKey.slice(0, 7));
+  const covered_months = expected_months.filter((monthKey) => covered.has(monthKey));
+  const missing_months = expected_months.filter((monthKey) => !covered.has(monthKey));
+  return {
+    accounting_method: HEALTH_ACCOUNTING_METHOD,
+    anchor: { year: Number(year), month: Number(month) },
+    window: {
+      start_month: expected_months[0] || null,
+      end_month: expected_months.at(-1) || null,
+      expected_months,
+    },
+    months_total: expected_months.length,
+    covered_count: covered_months.length,
+    missing_count: missing_months.length,
+    covered_months,
+    missing_months,
+    complete: missing_months.length === 0,
+    source: "monthly_review_qbo_pnl_snapshots",
+  };
+}
+
 async function getPriorMonthSummary({ db, businessId, year, month }) {
   const prior = new Date(Date.UTC(Number(year), Number(month) - 2, 1));
   const priorYear = prior.getUTCFullYear();
@@ -518,6 +563,17 @@ function hasFinancialActivity(metrics) {
     Number(metrics?.totalRevenue || 0) !== 0 ||
     Number(metrics?.totalExpenses || 0) !== 0 ||
     Number(metrics?.netProfit || 0) !== 0
+  );
+}
+
+function isEligibleCurrentHealthSnapshot(row) {
+  return Boolean(
+    row &&
+    row.accounting_method === HEALTH_ACCOUNTING_METHOD &&
+    row.status === "current" &&
+    row.is_current === true &&
+    row.review_year &&
+    row.review_month
   );
 }
 

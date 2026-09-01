@@ -3,6 +3,7 @@ import {
   getHealthSeries,
   getLatestAvailableHealthMonth,
   getMonthlyHealthSummary,
+  getSelectedHealthWindowCoverage,
   listAvailableHealthMonths,
   refreshMonthlyQboFinancialSnapshot,
 } from "../../services/accounting/healthMonthlySnapshotService.js";
@@ -86,6 +87,20 @@ router.get("/series", async (req, res) => {
     return res.status(200).json({ ...series, source: "monthly_review_qbo_pnl_snapshots" });
   } catch (err) {
     return res.status(err?.status || 500).json({ error: err?.error || err?.message || "health_series_failed" });
+  }
+});
+
+router.get("/window-coverage", async (req, res) => {
+  try {
+    const businessId = readBusinessId(req);
+    const year = Number(req.query?.end_year || req.query?.year);
+    const month = Number(req.query?.end_month || req.query?.month);
+    const window = Number(req.query?.window || 12);
+    if (!businessId) return res.status(400).json({ error: "missing_business_id" });
+    const coverage = await getSelectedHealthWindowCoverage({ businessId, year, month, window });
+    return res.status(200).json(coverage);
+  } catch (err) {
+    return res.status(err?.status || 500).json({ error: err?.error || err?.message || "health_window_coverage_failed" });
   }
 });
 

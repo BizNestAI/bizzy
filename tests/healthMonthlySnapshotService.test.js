@@ -9,6 +9,7 @@ const {
   HEALTH_ACCOUNTING_METHOD,
   getLatestAvailableHealthMonth,
   getMonthlyHealthSummary,
+  getSelectedHealthWindowCoverage,
   refreshMonthlyQboFinancialSnapshot,
 } = await import("../src/services/accounting/healthMonthlySnapshotService.js");
 
@@ -322,6 +323,60 @@ test("Health summary compares only to the immediate prior calendar month", async
   assert.equal(summary.prior_month.data_status, "available");
   assert.equal(summary.prior_month.metrics.totalRevenue, 800);
   assert.notEqual(summary.prior_month.metrics.totalRevenue, 9999);
+});
+
+test("selected Health window coverage uses current Cash snapshots and counts zero-value months", async () => {
+  const expectedMonths = [
+    "2025-09", "2025-10", "2025-11", "2025-12",
+    "2026-01", "2026-02", "2026-03", "2026-04",
+    "2026-05", "2026-06", "2026-07", "2026-08",
+  ];
+  const db = makeDb({
+    monthly_review_qbo_pnl_snapshots: [
+      ...expectedMonths.map((monthKey, index) => {
+        const [yearPart, monthPart] = monthKey.split("-");
+        return {
+          id: `cash-${monthKey}`,
+          business_id: BUSINESS_ID,
+          review_year: Number(yearPart),
+          review_month: Number(monthPart),
+          accounting_method: "Cash",
+          status: "current",
+          is_current: true,
+          revenue: index === 2 ? 0 : 100,
+          expenses: index === 2 ? 0 : 20,
+          net_profit: index === 2 ? 0 : 80,
+        };
+      }),
+      { id: "accrual-sep", business_id: BUSINESS_ID, review_year: 2026, review_month: 9, accounting_method: "Accrual", status: "current", is_current: true },
+      { id: "legacy-only-marker", business_id: BUSINESS_ID, review_year: 2026, review_month: 9, accounting_method: "Cash", status: "failed", is_current: false },
+      { id: "other-business", business_id: OTHER_BUSINESS_ID, review_year: 2026, review_month: 9, accounting_method: "Cash", status: "current", is_current: true },
+    ],
+    financial_metrics: [
+      { business_id: BUSINESS_ID, month: "2026-09-01", total_revenue: 5000 },
+    ],
+    expense_totals_monthly: [
+      { business_id: BUSINESS_ID, month: "2026-09-01", category: "Software", amount: 50 },
+    ],
+  });
+
+  const augustCoverage = await getSelectedHealthWindowCoverage({ db, businessId: BUSINESS_ID, year: 2026, month: 8 });
+  const septemberCoverage = await getSelectedHealthWindowCoverage({ db, businessId: BUSINESS_ID, year: 2026, month: 9 });
+
+  assert.equal(augustCoverage.complete, true);
+  assert.equal(augustCoverage.covered_count, 12);
+  assert.deepEqual(augustCoverage.window.expected_months, expectedMonths);
+  assert.deepEqual(augustCoverage.missing_months, []);
+  assert.ok(augustCoverage.covered_months.includes("2025-11"));
+
+  assert.equal(septemberCoverage.complete, false);
+  assert.equal(septemberCoverage.covered_count, 11);
+  assert.deepEqual(septemberCoverage.window.expected_months, [
+    "2025-10", "2025-11", "2025-12",
+    "2026-01", "2026-02", "2026-03", "2026-04",
+    "2026-05", "2026-06", "2026-07", "2026-08", "2026-09",
+  ]);
+  assert.deepEqual(septemberCoverage.missing_months, ["2026-09"]);
 });
 
 test("Health reads ignore current Accrual snapshots and require a current Cash snapshot", async () => {
