@@ -6,8 +6,10 @@ import {
   fetchOperatorRequests,
   processClarificationAnswers,
 } from "../../../services/bookkeeping/clarificationService.js";
-import { getOperatorRequestSummary } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
+import { reconcileOperatorRequestSummary } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
 import { supabase } from "../../../services/supabaseAdmin.js";
+
+/* global process */
 
 const router = Router();
 
@@ -61,7 +63,10 @@ router.get("/operator-requests/summary", requireAuth, async (req, res) => {
   if (!businessId) return;
 
   try {
-    const result = await getOperatorRequestSummary({ businessId });
+    const result = await reconcileOperatorRequestSummary({
+      businessId,
+      reason: "operator_summary_endpoint",
+    });
     if (!result.ok) {
       return res.status(500).json({ ok: false, error: result.error || "operator_summary_fetch_failed" });
     }

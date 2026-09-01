@@ -124,6 +124,16 @@ function lifecycleMetrics(run) {
   };
 }
 
+function MetricHeader({ children, className = "" }) {
+  return (
+    <th className={`px-3 py-3 text-right align-middle ${className}`}>
+      <span className="block whitespace-normal break-words leading-[1.35] tracking-[0.16em]">
+        {children}
+      </span>
+    </th>
+  );
+}
+
 export default function ReconciliationRunHistory({
   runs = [],
   selectedRunId,
@@ -153,25 +163,25 @@ export default function ReconciliationRunHistory({
 
       <div className="overflow-hidden rounded-2xl border border-white/6 bg-[#111313]">
         <div className="overflow-x-auto">
-          <table className={`${selectedRunAudit ? "min-w-[1320px]" : "min-w-[980px]"} w-full table-fixed text-sm text-slate-100`}>
+          <table className={`${selectedRunAudit ? "min-w-[1440px]" : "min-w-[1120px]"} w-full table-fixed text-sm text-slate-100`}>
             <colgroup>
-              <col className="w-[19%]" />
-              <col className="w-[35%]" />
+              <col className="w-[17%]" />
+              <col className="w-[30%]" />
               <col className="w-[10%]" />
-              <col className="w-[11%]" />
               <col className="w-[10%]" />
               <col className="w-[8%]" />
-              <col className="w-[7%]" />
+              <col className="w-[13%]" />
+              <col className="w-[12%]" />
             </colgroup>
-            <thead className="bg-white/[0.03] text-[11px] uppercase tracking-[0.18em] text-slate-400">
+            <thead className="bg-white/[0.03] text-[11px] uppercase text-slate-400">
               <tr className="border-b border-white/6">
-                <th className="px-3 py-3 text-left">Month</th>
-                <th className="px-3 py-3 text-left">Notes</th>
-                <th className="px-3 py-3 text-right">Plaid total</th>
-                <th className="px-3 py-3 text-right">Categorized</th>
-                <th className="px-3 py-3 text-right">Posted</th>
-                <th className="px-3 py-3 text-right">Fully reconciled</th>
-                <th className="px-3 py-3 text-right">Failed posting</th>
+                <th className="px-3 py-3 text-left tracking-[0.18em]">Month</th>
+                <th className="px-3 py-3 text-left tracking-[0.18em]">Notes</th>
+                <MetricHeader>Plaid total</MetricHeader>
+                <MetricHeader>Categorized</MetricHeader>
+                <MetricHeader>Posted</MetricHeader>
+                <MetricHeader>Fully reconciled</MetricHeader>
+                <MetricHeader>Failed posting</MetricHeader>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/6">

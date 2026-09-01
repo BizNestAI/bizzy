@@ -1,0 +1,192 @@
+create or replace function public.get_operator_request_counts_bounded(p_business_id uuid)
+returns table (
+  outstanding_count bigint,
+  answered_awaiting_review_count bigint,
+  accounting_needs_review_count bigint
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with needs_review as (
+    select bt.id
+    from public.bank_transactions bt
+    left join public.business_profiles bp
+      on bp.id = bt.business_id
+    left join public.transaction_categorizations tc
+      on tc.business_id = bt.business_id
+     and tc.transaction_id = bt.id
+    where bt.business_id = p_business_id
+      and bt.is_archived is false
+      and bt.pending is not true
+      and (bp.bookkeeping_start_date is null or bt.date >= bp.bookkeeping_start_date)
+      and public.bookkeeping_transaction_matches_status('needs_review', tc.status, tc.meta, tc.qbo_txn_id)
+  ),
+  answered as (
+    select distinct cr.transaction_id
+    from public.clarification_requests cr
+    join needs_review nr
+      on nr.id = cr.transaction_id
+    where cr.business_id = p_business_id
+      and cr.status = 'answered'
+      and cr.resolved_at is null
+  )
+  select
+    (select count(*) from needs_review nr where not exists (select 1 from answered a where a.transaction_id = nr.id)) as outstanding_count,
+    (select count(*) from answered) as answered_awaiting_review_count,
+    (select count(*) from needs_review) as accounting_needs_review_count;
+$$;
+
+create or replace function public.get_operator_requests_bounded(
+  p_business_id uuid,
+  p_limit integer default 25,
+  p_offset integer default 0
+)
+returns table (
+  id uuid,
+  plaid_account_id text,
+  plaid_transaction_id text,
+  date date,
+  name text,
+  merchant_name text,
+  merchant_entity_id text,
+  counterparties jsonb,
+  counterparty_name text,
+  counterparty_source text,
+  counterparty_confidence text,
+  canonical_vendor_id uuid,
+  qbo_entity_type text,
+  qbo_entity_id text,
+  amount numeric,
+  signed_amount numeric,
+  direction text,
+  pending boolean,
+  category_primary text,
+  category_detailed text,
+  personal_finance_category jsonb,
+  account_name text,
+  account_official_name text,
+  cat_status text,
+  suggested_qbo_account_id text,
+  suggested_qbo_account_name text,
+  suggested_canonical_account_key text,
+  total_count bigint
+)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with needs_review as (
+    select
+      bt.*,
+      pa.name as account_name,
+      pa.official_name as account_official_name,
+      tc.status as cat_status,
+      tc.suggested_qbo_account_id,
+      tc.suggested_qbo_account_name,
+      coalesce(tc.suggested_canonical_account_key, tc.meta ->> 'suggested_canonical_account_key') as suggested_canonical_account_key
+    from public.bank_transactions bt
+    left join public.business_profiles bp
+      on bp.id = bt.business_id
+    left join public.transaction_categorizations tc
+      on tc.business_id = bt.business_id
+     and tc.transaction_id = bt.id
+    left join public.plaid_accounts pa
+      on pa.business_id = bt.business_id
+     and pa.plaid_account_id = bt.plaid_account_id
+    where bt.business_id = p_business_id
+      and bt.is_archived is false
+      and bt.pending is not true
+      and (bp.bookkeeping_start_date is null or bt.date >= bp.bookkeeping_start_date)
+      and public.bookkeeping_transaction_matches_status('needs_review', tc.status, tc.meta, tc.qbo_txn_id)
+      and not exists (
+        select 1
+        from public.clarification_requests cr
+        where cr.business_id = p_business_id
+          and cr.transaction_id = bt.id
+          and cr.status = 'answered'
+          and cr.resolved_at is null
+      )
+  )
+  select
+    needs_review.id,
+    needs_review.plaid_account_id,
+    needs_review.plaid_transaction_id,
+    needs_review.date,
+    needs_review.name,
+    needs_review.merchant_name,
+    needs_review.merchant_entity_id,
+    to_jsonb(needs_review.counterparties) as counterparties,
+    needs_review.counterparty_name,
+    needs_review.counterparty_source,
+    needs_review.counterparty_confidence::text,
+    needs_review.canonical_vendor_id,
+    needs_review.qbo_entity_type,
+    needs_review.qbo_entity_id,
+    needs_review.amount,
+    needs_review.signed_amount,
+    needs_review.direction,
+    needs_review.pending,
+    needs_review.category_primary,
+    needs_review.category_detailed,
+    to_jsonb(needs_review.personal_finance_category) as personal_finance_category,
+    needs_review.account_name,
+    needs_review.account_official_name,
+    needs_review.cat_status,
+    needs_review.suggested_qbo_account_id,
+    needs_review.suggested_qbo_account_name,
+    needs_review.suggested_canonical_account_key,
+    count(*) over () as total_count
+  from needs_review
+  order by needs_review.date desc nulls last, needs_review.id desc
+  limit greatest(least(coalesce(p_limit, 25), 100), 1)
+  offset greatest(coalesce(p_offset, 0), 0);
+$$;
+
+create or replace function public.expire_stale_operator_requests(p_business_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_updated integer := 0;
+begin
+  update public.clarification_requests cr
+  set
+    status = 'expired',
+    resolved_at = now(),
+    resolved_reason = 'transaction_no_longer_needs_review',
+    updated_at = now()
+  where cr.business_id = p_business_id
+    and cr.status = 'pending'
+    and not exists (
+      select 1
+      from public.bank_transactions bt
+      left join public.business_profiles bp
+        on bp.id = bt.business_id
+      left join public.transaction_categorizations tc
+        on tc.business_id = bt.business_id
+       and tc.transaction_id = bt.id
+      where bt.business_id = cr.business_id
+        and bt.id = cr.transaction_id
+        and bt.is_archived is false
+        and bt.pending is not true
+        and (bp.bookkeeping_start_date is null or bt.date >= bp.bookkeeping_start_date)
+        and public.bookkeeping_transaction_matches_status('needs_review', tc.status, tc.meta, tc.qbo_txn_id)
+    );
+
+  get diagnostics v_updated = row_count;
+  return v_updated;
+end;
+$$;
+
+revoke all on function public.get_operator_request_counts_bounded(uuid) from public, anon, authenticated;
+revoke all on function public.get_operator_requests_bounded(uuid, integer, integer) from public, anon, authenticated;
+revoke all on function public.expire_stale_operator_requests(uuid) from public, anon, authenticated;
+
+grant execute on function public.get_operator_request_counts_bounded(uuid) to service_role;
+grant execute on function public.get_operator_requests_bounded(uuid, integer, integer) to service_role;
+grant execute on function public.expire_stale_operator_requests(uuid) to service_role;

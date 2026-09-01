@@ -8,6 +8,8 @@ import { deriveCreditCardPaymentStatus } from "../src/services/bookkeeping/credi
 import { deriveQboPostingLifecycle } from "../src/services/bookkeeping/qboPostingLifecycle.js";
 import { derivePipelineStatus } from "../src/services/bookkeeping/reconciliationPipelineStatus.js";
 
+/* global process */
+
 const root = process.cwd();
 const read = (path) => readFileSync(join(root, path), "utf8");
 
@@ -24,6 +26,26 @@ test("pending rows have their own Books Review population and are excluded from 
   assert.match(customerPage, /if \(tabKey === "pending"\) return txn\.pending === true/);
   assert.match(adminRoute, /new Set\(\["needs_review", "handled", "pending"\]\)/);
   assert.match(adminRoute, /pending,/);
+});
+
+test("account cards and Operator Requests use non-pending Books Review counts", () => {
+  const accountRoute = read("src/api/bookkeeping/routes/bookkeeping.accounts.routes.js");
+  const clarificationRoute = read("src/api/bookkeeping/routes/bookkeeping.clarifications.routes.js");
+  const operatorMigration = read("supabase/migrations/20260917_operator_requests_exclude_pending.sql");
+
+  assert.match(accountRoute, /countBookkeepingTransactions/);
+  assert.match(accountRoute, /statusFilter:\s*"needs_review"/);
+  assert.match(accountRoute, /rangeParam:\s*"all"/);
+  assert.doesNotMatch(accountRoute, /transaction_categorizations\(status\)/);
+
+  assert.match(clarificationRoute, /reconcileOperatorRequestSummary/);
+  assert.match(clarificationRoute, /operator_summary_endpoint/);
+
+  assert.match(operatorMigration, /create or replace function public\.get_operator_request_counts_bounded/);
+  assert.match(operatorMigration, /create or replace function public\.get_operator_requests_bounded/);
+  assert.match(operatorMigration, /create or replace function public\.expire_stale_operator_requests/);
+  assert.match(operatorMigration, /bt\.pending is not true/g);
+  assert.doesNotMatch(operatorMigration, /bt\.pending is true/);
 });
 
 test("pending lifecycle and reconciliation labels are non-actionable", () => {
