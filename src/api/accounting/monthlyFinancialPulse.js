@@ -58,66 +58,66 @@ function cleanJsonString(s = "") {
  * Lightweight context loader so the pulse can self-hydrate when upstream
  * services don’t pass everything. Safe to call even if inputs were provided.
  */
-async function loadPulseContext({ business_id, monthText }) {
+async function loadPulseContext({ db = supabase, business_id, monthText }) {
   const [y, m] = monthText.split("-").map(Number);
   const prevM = m === 1 ? 12 : m - 1;
   const prevY = m === 1 ? y - 1 : y;
   const prevText = monthKey(prevY, prevM);
 
-  const current = await getMonthlyHealthSummary({ businessId: business_id, year: y, month: m });
+  const current = await getMonthlyHealthSummary({ db, businessId: business_id, year: y, month: m });
   if (!["available", "empty"].includes(current?.data_status)) {
     throw new Error("monthly_brief_cash_snapshot_required");
   }
-  const previous = await getMonthlyHealthSummary({ businessId: business_id, year: prevY, month: prevM });
+  const previous = await getMonthlyHealthSummary({ db, businessId: business_id, year: prevY, month: prevM });
   const cur = current.metrics || {};
   const prev = previous?.metrics || {};
 
   // MoM deltas
   const deltas = {
-	    revenue_mom_pct: prev?.totalRevenue
-	      ? ((num(cur?.totalRevenue) - num(prev.totalRevenue)) / num(prev.totalRevenue)) * 100
-	      : null,
-	    expenses_mom_pct: prev?.totalExpenses
-	      ? ((num(cur?.totalExpenses) - num(prev.totalExpenses)) / num(prev.totalExpenses)) * 100
-	      : null,
-	    profit_mom_pct: prev?.netProfit
-	      ? ((num(cur?.netProfit) - num(prev.netProfit)) / num(prev.netProfit)) * 100
-	      : null,
-	    margin_mom_pct:
-	      prev?.profitMargin != null && cur?.profitMargin != null
-	        ? num(cur.profitMargin) - num(prev.profitMargin)
-	        : null,
-	  };
-	  const top_expense_categories = (current.expense_breakdown || [])
-	    .map(r => ({ name: r.category, amount: num(r.amount) }))
-	    .sort((a, b) => b.amount - a.amount)
-	    .slice(0, 5);
+    revenue_mom_pct: prev?.totalRevenue
+      ? ((num(cur?.totalRevenue) - num(prev.totalRevenue)) / num(prev.totalRevenue)) * 100
+      : null,
+    expenses_mom_pct: prev?.totalExpenses
+      ? ((num(cur?.totalExpenses) - num(prev.totalExpenses)) / num(prev.totalExpenses)) * 100
+      : null,
+    profit_mom_pct: prev?.netProfit
+      ? ((num(cur?.netProfit) - num(prev.netProfit)) / num(prev.netProfit)) * 100
+      : null,
+    margin_mom_pct:
+      prev?.profitMargin != null && cur?.profitMargin != null
+        ? num(cur.profitMargin) - num(prev.profitMargin)
+        : null,
+  };
+  const top_expense_categories = (current.expense_breakdown || [])
+    .map((r) => ({ name: r.category, amount: num(r.amount) }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 5);
 
-	  return {
-	    monthlyMetrics: {
-	      total_revenue: cur.totalRevenue,
-	      total_expenses: cur.totalExpenses,
-	      net_profit: cur.netProfit,
-	      profit_margin: cur.profitMargin,
-	      top_spending_category: cur.top_spending_category || cur.topSpendingCategory?.name || null,
-	      month: monthText,
-	      accounting_method: HEALTH_ACCOUNTING_METHOD,
-	      source_snapshot_id: current.snapshot?.id || null,
-	    },
-	    priorMonthMetrics: previous?.data_status === "available" ? {
-	      total_revenue: prev.totalRevenue,
-	      total_expenses: prev.totalExpenses,
-	      net_profit: prev.netProfit,
-	      profit_margin: prev.profitMargin,
-	      month: prevText,
-	      accounting_method: HEALTH_ACCOUNTING_METHOD,
-	      source_snapshot_id: previous.snapshot?.id || null,
-	    } : {},
-	    deltas,
-	    kpis: {},
-	    top_expense_categories,
-	    sourceSnapshotId: current.snapshot?.id || null,
-	  };
+  return {
+    monthlyMetrics: {
+      total_revenue: cur.totalRevenue,
+      total_expenses: cur.totalExpenses,
+      net_profit: cur.netProfit,
+      profit_margin: cur.profitMargin,
+      top_spending_category: cur.top_spending_category || cur.topSpendingCategory?.name || null,
+      month: monthText,
+      accounting_method: HEALTH_ACCOUNTING_METHOD,
+      source_snapshot_id: current.snapshot?.id || null,
+    },
+    priorMonthMetrics: previous?.data_status === "available" ? {
+      total_revenue: prev.totalRevenue,
+      total_expenses: prev.totalExpenses,
+      net_profit: prev.netProfit,
+      profit_margin: prev.profitMargin,
+      month: prevText,
+      accounting_method: HEALTH_ACCOUNTING_METHOD,
+      source_snapshot_id: previous.snapshot?.id || null,
+    } : {},
+    deltas,
+    kpis: {},
+    top_expense_categories,
+    sourceSnapshotId: current.snapshot?.id || null,
+  };
 }
 
 /**
@@ -125,6 +125,7 @@ async function loadPulseContext({ business_id, monthText }) {
  * - Accepts partial inputs; will self-hydrate remaining context from DB
  */
 export async function generateFinancialPulseSnapshot({
+  db = supabase,
   monthlyMetrics,
   forecastData = {},
   priorMonthMetrics = {},
@@ -143,16 +144,16 @@ export async function generateFinancialPulseSnapshot({
   // Enrich context if fields missing
   let ctx = { monthlyMetrics, priorMonthMetrics, forecastData, deltas: {}, kpis: {}, top_expense_categories: [] };
   try {
-    const loaded = await loadPulseContext({ business_id, monthText });
-	    ctx = {
+    const loaded = await loadPulseContext({ db, business_id, monthText });
+    ctx = {
       monthlyMetrics: monthlyMetrics && Object.keys(monthlyMetrics).length ? monthlyMetrics : loaded.monthlyMetrics,
       priorMonthMetrics: Object.keys(priorMonthMetrics || {}).length ? priorMonthMetrics : loaded.priorMonthMetrics,
       forecastData,
       deltas: loaded.deltas,
       kpis: loaded.kpis,
-	      top_expense_categories: loaded.top_expense_categories,
-	      sourceSnapshotId: sourceSnapshotId || loaded.sourceSnapshotId || null,
-	    };
+      top_expense_categories: loaded.top_expense_categories,
+      sourceSnapshotId: sourceSnapshotId || loaded.sourceSnapshotId || null,
+    };
   } catch (e) {
     console.warn("[pulse] context load failed:", e?.message || e);
   }
@@ -219,43 +220,64 @@ forecastData: ${JSON.stringify(forecastData)}
     `Insights: ${(parsed.businessInsights || []).join(" | ")}\n` +
     `Motivation: ${parsed.motivationalMessage}`;
 
-  // Save
-  try {
-    let embedding = null;
-    if (embed) {
+  let embedding = null;
+  const generationMetadata = {
+    source: "monthly_financial_pulse",
+    accounting_method: HEALTH_ACCOUNTING_METHOD,
+    source_snapshot_id: ctx.sourceSnapshotId || sourceSnapshotId || null,
+    embedding_status: embed ? "pending" : "disabled",
+  };
+  if (embed) {
+    try {
       const emb = await openai.embeddings.create({
         model: "text-embedding-3-small",
         input: embeddingInput,
       });
       embedding = emb.data[0].embedding;
+      generationMetadata.embedding_status = "available";
+    } catch (e) {
+      generationMetadata.embedding_status = "failed";
+      generationMetadata.embedding_error = e?.message || String(e);
+      console.warn("[pulse] embedding failed; saving brief without embedding:", e?.message || e);
     }
-
-	    const { error } = await supabase.from("monthly_financial_pulse").upsert(
-	      {
-	        user_id,
-	        business_id,
-	        month: monthText, // DATE column cast
-	        created_at: new Date().toISOString(),
-	        generated_at: new Date().toISOString(),
-	        cadence,
-	        status: "available",
-	        accounting_method: HEALTH_ACCOUNTING_METHOD,
-	        source_snapshot_id: ctx.sourceSnapshotId || sourceSnapshotId || null,
-	        data_through_date: monthText,
-	        revenue_summary: parsed.revenueSummary,
-        spending_trend: parsed.spendingTrend,
-        variance_from_forecast: parsed.varianceFromForecast,
-        business_insights: parsed.businessInsights || [],
-        motivational_message: parsed.motivationalMessage,
-        embedding_text: embeddingInput,
-        embedding,
-      },
-	      { onConflict: "business_id,month,cadence" }
-	    );
-    if (error) console.error("❌ Pulse upsert error:", error.message || error);
-  } catch (e) {
-    console.error("❌ Pulse save/embedding error:", e?.message || e);
   }
 
-  return parsed;
+  const generatedAt = new Date().toISOString();
+  const { data: saved, error } = await db.from("monthly_financial_pulse").upsert(
+    {
+      user_id,
+      business_id,
+      month: monthText, // DATE column cast
+      created_at: generatedAt,
+      generated_at: generatedAt,
+      cadence,
+      status: "available",
+      accounting_method: HEALTH_ACCOUNTING_METHOD,
+      source_snapshot_id: ctx.sourceSnapshotId || sourceSnapshotId || null,
+      data_through_date: monthText,
+      generation_metadata: generationMetadata,
+      revenue_summary: parsed.revenueSummary,
+      spending_trend: parsed.spendingTrend,
+      variance_from_forecast: parsed.varianceFromForecast,
+      business_insights: parsed.businessInsights || [],
+      motivational_message: parsed.motivationalMessage,
+      embedding_text: embeddingInput,
+      embedding,
+    },
+    { onConflict: "business_id,month,cadence" }
+  ).select("*").maybeSingle();
+  if (error) {
+    throw new Error(`monthly_brief_pulse_upsert_failed: ${error.message || error}`);
+  }
+  if (!saved?.id) {
+    throw new Error("monthly_brief_pulse_upsert_returned_no_row");
+  }
+
+  return {
+    ...parsed,
+    pulse_id: saved.id,
+    persisted: true,
+    embedding_status: generationMetadata.embedding_status,
+    source_snapshot_id: saved.source_snapshot_id || null,
+  };
 }
