@@ -68,20 +68,23 @@ export async function getLatestMonthlyPnlSnapshot({
   businessId,
   reviewYear,
   reviewMonth,
+  accountingMethod = null,
   db = defaultSupabase,
   includeAccounts = false,
   includeTransactions = false,
 } = {}) {
   assertSnapshotIdentity({ businessId, reviewYear, reviewMonth });
 
+  let query = db
+    .from(SNAPSHOTS_TABLE)
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("review_year", Number(reviewYear))
+    .eq("review_month", Number(reviewMonth))
+    .eq("is_current", true);
+  if (accountingMethod) query = query.eq("accounting_method", accountingMethod);
   const snapshot = await selectSingleSnapshot(
-    db
-      .from(SNAPSHOTS_TABLE)
-      .select("*")
-      .eq("business_id", businessId)
-      .eq("review_year", Number(reviewYear))
-      .eq("review_month", Number(reviewMonth))
-      .eq("is_current", true)
+    query
       .order("snapshot_version", { ascending: false })
       .limit(1)
   );

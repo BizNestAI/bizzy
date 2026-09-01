@@ -313,10 +313,17 @@ export default function AccountingDashboard() {
             if (Number.isFinite(parsed)) setLastRefreshed(parsed);
           } else if (resp?.data_status === "empty") {
             setEmptyMonth(true);
+            setDataLoadError("");
+          } else if (resp?.data_status === "missing") {
+            setEmptyMonth(false);
+            setDataLoadError("");
           }
         }
-      } catch {
-        if (alive) setHasMetrics(false);
+      } catch (error) {
+        if (!alive) return;
+        setHasMetrics(false);
+        setEmptyMonth(false);
+        handleDataError(error);
       }
     }
     checkMetrics();

@@ -501,10 +501,10 @@ export function parseProfitAndLossSummary(report, {
     const amount = amountFromColData(row?.Summary?.ColData || row?.ColData);
     const norm = normalizeLabel(rowTotalLabel(row) || label);
     if (amount !== null) {
-      if (/^total income$|^total revenue$/.test(norm)) totals.revenue = amount;
+      if (/^total (?:for )?income$|^total (?:for )?revenue$/.test(norm)) totals.revenue = amount;
       else if (/^total cost of goods sold$|^total cogs$/.test(norm)) totals.cogs = amount;
       else if (/^gross profit$/.test(norm)) totals.gross_profit = amount;
-      else if (/^total expenses$/.test(norm)) totals.expenses = amount;
+      else if (/^total (?:for )?expenses$/.test(norm)) totals.expenses = amount;
       else if (/^net operating income$/.test(norm)) totals.net_operating_income = amount;
       else if (/^total other income$/.test(norm)) totals.other_income = amount;
       else if (/^total other expenses?$/.test(norm)) totals.other_expense = amount;

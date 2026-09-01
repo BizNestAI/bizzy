@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -39,6 +40,14 @@ test("Health normal reads use persisted financial state instead of live-only QBO
   assert.match(metricsRoute, /const persistedOnly = String\(req\.query\?\.persisted_only/);
   assert.match(metricsRoute, /persisted_only: true/);
   assert.match(metricsRoute, /source: "cache_miss"/);
+});
+
+test("Health QBO authority is Cash basis only", () => {
+  assert.match(healthService, /export const HEALTH_ACCOUNTING_METHOD = "Cash"/);
+  assert.doesNotMatch(healthService, /export const HEALTH_ACCOUNTING_METHOD = "Accrual"/);
+  assert.match(healthService, /assertHealthCashBasis\(accountingMethod\)/);
+  assert.match(healthService, /\.eq\("accounting_method", HEALTH_ACCOUNTING_METHOD\)/);
+  assert.match(healthService, /accountingMethod: HEALTH_ACCOUNTING_METHOD/);
 });
 
 test("Health widgets no longer read QBO financial tables directly from the browser", () => {

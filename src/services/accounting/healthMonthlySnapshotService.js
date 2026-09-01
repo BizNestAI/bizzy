@@ -13,7 +13,7 @@ import {
   QboMonthlyPnlIngestionError,
 } from "../bookkeeping/qboMonthlyPnlIngestionService.js";
 
-export const HEALTH_ACCOUNTING_METHOD = "Accrual";
+export const HEALTH_ACCOUNTING_METHOD = "Cash";
 const TOLERANCE = 0.01;
 
 export class HealthMonthlySnapshotError extends Error {
@@ -39,6 +39,7 @@ export async function refreshMonthlyQboFinancialSnapshot({
   promoteSnapshot = promoteMonthlyPnlSnapshotCurrent,
 } = {}) {
   assertMonthIdentity({ businessId, year, month });
+  assertHealthCashBasis(accountingMethod);
   const reviewYear = Number(year);
   const reviewMonth = Number(month);
   const sourceStartDate = monthKeyFromParts(reviewYear, reviewMonth);
@@ -59,6 +60,7 @@ export async function refreshMonthlyQboFinancialSnapshot({
     sourceEndDate,
     accountingMethod,
   });
+  assertHealthCashBasis(parsed.accounting_method || accountingMethod);
   validateParsedHealthSummary(parsed);
   const accounts = parsed.account_rows.map((row, index) => ({
     ...row,
@@ -147,6 +149,7 @@ export async function getMonthlyHealthSummary({
     businessId,
     reviewYear,
     reviewMonth,
+    accountingMethod: HEALTH_ACCOUNTING_METHOD,
     includeAccounts: true,
     includeTransactions: false,
   });
@@ -205,6 +208,7 @@ export async function listAvailableHealthMonths({ db = defaultSupabase, business
       .from("monthly_review_qbo_pnl_snapshots")
       .select("id,review_year,review_month,revenue,expenses,net_profit,pulled_at,updated_at,created_at,accounting_method,status,is_current")
       .eq("business_id", businessId)
+      .eq("accounting_method", HEALTH_ACCOUNTING_METHOD)
       .eq("is_current", true)
       .eq("status", "current")
       .order("review_year", { ascending: false })
@@ -232,6 +236,7 @@ export async function getHealthSeries({ db = defaultSupabase, businessId, year, 
       .from("monthly_review_qbo_pnl_snapshots")
       .select("review_year,review_month,revenue,expenses,net_profit,status,is_current")
       .eq("business_id", businessId)
+      .eq("accounting_method", HEALTH_ACCOUNTING_METHOD)
       .eq("is_current", true)
       .eq("status", "current")
   );
@@ -362,6 +367,16 @@ function validateParsedHealthSummary(summary) {
     account_totals: accountTotals,
     formula_net_profit: formula,
   };
+}
+
+function assertHealthCashBasis(accountingMethod) {
+  const normalized = String(accountingMethod || "").trim().toLowerCase();
+  if (normalized !== "cash") {
+    throw new HealthMonthlySnapshotError("health_cash_basis_required", 400, {
+      accounting_method: accountingMethod || null,
+      expected_accounting_method: HEALTH_ACCOUNTING_METHOD,
+    });
+  }
 }
 
 async function loadQboContext({ businessId }) {

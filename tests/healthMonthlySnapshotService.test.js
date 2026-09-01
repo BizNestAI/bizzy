@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -14,20 +15,20 @@ const {
 const BUSINESS_ID = "00000000-0000-4000-8000-000000000001";
 const OTHER_BUSINESS_ID = "00000000-0000-4000-8000-000000000002";
 
-function augustAccrualPnlFixture() {
+function augustCashPnlFixture(overrides = {}) {
   return {
     Header: {
       ReportName: "ProfitAndLoss",
       StartPeriod: "2026-08-01",
       EndPeriod: "2026-08-31",
-      Option: [{ Name: "ReportBasis", Value: "Accrual" }],
+      Option: [{ Name: "ReportBasis", Value: overrides.basis || "Cash" }],
     },
     Rows: {
       Row: [
         {
           Header: { ColData: [{ value: "Income" }] },
-          Rows: { Row: [{ type: "Data", ColData: [{ value: "Services", id: "income-services" }, { value: "975.00" }] }] },
-          Summary: { ColData: [{ value: "Total Income" }, { value: "975.00" }] },
+          Rows: { Row: [{ type: "Data", ColData: [{ value: "Services", id: "income-services" }, { value: "1175.00" }] }] },
+          Summary: { ColData: [{ value: overrides.totalIncomeLabel || "Total Income" }, { value: "1175.00" }] },
         },
         {
           Header: { ColData: [{ value: "Cost of Goods Sold" }] },
@@ -42,10 +43,10 @@ function augustAccrualPnlFixture() {
               { type: "Data", ColData: [{ value: "Software", id: "expense-software" }, { value: "160.00" }] },
             ],
           },
-          Summary: { ColData: [{ value: "Total Expenses" }, { value: "192.90" }] },
+          Summary: { ColData: [{ value: overrides.totalExpensesLabel || "Total Expenses" }, { value: "192.90" }] },
         },
-        { Summary: { ColData: [{ value: "Net Operating Income" }, { value: "782.10" }] } },
-        { Summary: { ColData: [{ value: "Net Income" }, { value: "782.10" }] } },
+        { Summary: { ColData: [{ value: "Net Operating Income" }, { value: "982.10" }] } },
+        { Summary: { ColData: [{ value: "Net Income" }, { value: "982.10" }] } },
       ],
     },
   };
@@ -152,7 +153,7 @@ function nextId(table, offset) {
   return `${prefixes[table] || "90000000"}-0000-4000-8000-${String(offset).padStart(12, "0")}`;
 }
 
-test("Health monthly snapshot uses one Accrual QBO P&L source and replaces stale category rows", async () => {
+test("Health monthly snapshot uses one Cash QBO P&L source and replaces stale category rows", async () => {
   const db = makeDb({
     expense_totals_monthly: [
       { business_id: BUSINESS_ID, month: "2026-08-01", category: "Payment Processing Fees", amount: 14, source: "stale" },
@@ -169,22 +170,23 @@ test("Health monthly snapshot uses one Accrual QBO P&L source and replaces stale
     loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
     fetchReport: async (args) => {
       calls.push(args);
-      return { report: augustAccrualPnlFixture(), reportName: args.reportName, realmId: args.realmId };
+      return { report: augustCashPnlFixture(), reportName: args.reportName, realmId: args.realmId };
     },
   });
 
   assert.equal(calls.length, 1);
   assert.equal(calls[0].reportName, "ProfitAndLoss");
   assert.equal(calls[0].accountingMethod, HEALTH_ACCOUNTING_METHOD);
-  assert.equal(summary.metrics.totalRevenue, 975);
+  assert.equal(calls[0].accountingMethod, "Cash");
+  assert.equal(summary.metrics.totalRevenue, 1175);
   assert.equal(summary.metrics.totalExpenses, 192.9);
-  assert.equal(summary.metrics.netProfit, 782.1);
-  assert.equal(summary.metrics.profitMargin, 80.22);
+  assert.equal(summary.metrics.netProfit, 982.1);
+  assert.equal(summary.metrics.profitMargin, 83.58);
   assert.deepEqual(summary.expense_breakdown, [
     { category: "Software", amount: 160 },
     { category: "Payment Processing Fees", amount: 32.9 },
   ]);
-  assert.equal(summary.snapshot.accounting_method, "Accrual");
+  assert.equal(summary.snapshot.accounting_method, "Cash");
   assert.equal(summary.snapshot.snapshot_complete, true);
 
   const rows = db.tables.expense_totals_monthly.filter((row) => row.business_id === BUSINESS_ID && row.month === "2026-08-01");
@@ -212,7 +214,7 @@ test("failed compatibility persistence does not promote a new current snapshot",
       year: 2026,
       month: 8,
       loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
-      fetchReport: async (args) => ({ report: augustAccrualPnlFixture(), reportName: args.reportName, realmId: args.realmId }),
+      fetchReport: async (args) => ({ report: augustCashPnlFixture(), reportName: args.reportName, realmId: args.realmId }),
     }),
     /expense_totals_monthly_delete_failed/
   );
@@ -231,7 +233,7 @@ test("available/latest Health months are derived from completed current snapshot
   const db = makeDb({
     monthly_review_qbo_pnl_snapshots: [
       { id: "old", business_id: BUSINESS_ID, review_year: 2026, review_month: 9, is_current: true, status: "current", revenue: 0, expenses: 0, net_profit: 0, pulled_at: "2026-09-01T00:00:00Z" },
-      { id: "aug", business_id: BUSINESS_ID, review_year: 2026, review_month: 8, is_current: true, status: "current", revenue: 975, expenses: 192.9, net_profit: 782.1, pulled_at: "2026-08-31T00:00:00Z" },
+      { id: "aug", business_id: BUSINESS_ID, review_year: 2026, review_month: 8, is_current: true, status: "current", accounting_method: "Cash", revenue: 1175, expenses: 192.9, net_profit: 982.1, pulled_at: "2026-08-31T00:00:00Z" },
       { id: "bad", business_id: BUSINESS_ID, review_year: 2026, review_month: 7, is_current: false, status: "failed", revenue: 5, expenses: 0, net_profit: 5 },
     ],
   });
@@ -241,5 +243,61 @@ test("available/latest Health months are derived from completed current snapshot
 
   assert.equal(latest.month, "2026-08-01");
   assert.equal(summary.data_status, "available");
-  assert.equal(summary.metrics.totalRevenue, 975);
+  assert.equal(summary.metrics.totalRevenue, 1175);
+});
+
+test("Health reads ignore current Accrual snapshots and require a current Cash snapshot", async () => {
+  const db = makeDb({
+    monthly_review_qbo_pnl_snapshots: [
+      { id: "accrual-current", business_id: BUSINESS_ID, review_year: 2026, review_month: 8, is_current: true, status: "current", accounting_method: "Accrual", revenue: 975, expenses: 192.9, net_profit: 782.1 },
+      { id: "cash-old", business_id: BUSINESS_ID, review_year: 2026, review_month: 8, is_current: false, status: "superseded", accounting_method: "Cash", revenue: 1175, expenses: 192.9, net_profit: 982.1 },
+    ],
+  });
+
+  const summary = await getMonthlyHealthSummary({ db, businessId: BUSINESS_ID, year: 2026, month: 8 });
+  const latest = await getLatestAvailableHealthMonth({ db, businessId: BUSINESS_ID });
+
+  assert.equal(summary.data_status, "missing");
+  assert.equal(summary.snapshot, null);
+  assert.equal(latest, null);
+});
+
+test("Health refresh rejects non-Cash report basis", async () => {
+  const db = makeDb();
+
+  await assert.rejects(
+    refreshMonthlyQboFinancialSnapshot({
+      db,
+      businessId: BUSINESS_ID,
+      year: 2026,
+      month: 8,
+      accountingMethod: "Cash",
+      loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
+      fetchReport: async (args) => ({ report: augustCashPnlFixture({ basis: "Accrual" }), reportName: args.reportName, realmId: args.realmId }),
+    }),
+    /health_cash_basis_required/
+  );
+});
+
+test("QBO summary parser accepts Total for Income and Total for Expenses labels", async () => {
+  const db = makeDb();
+  const summary = await refreshMonthlyQboFinancialSnapshot({
+    db,
+    businessId: BUSINESS_ID,
+    year: 2026,
+    month: 8,
+    loadContext: async () => ({ realmId: "realm-1", qboEnvironment: "production" }),
+    fetchReport: async (args) => ({
+      report: augustCashPnlFixture({
+        totalIncomeLabel: "Total for Income",
+        totalExpensesLabel: "Total for Expenses",
+      }),
+      reportName: args.reportName,
+      realmId: args.realmId,
+    }),
+  });
+
+  assert.equal(summary.metrics.totalRevenue, 1175);
+  assert.equal(summary.metrics.totalExpenses, 192.9);
+  assert.equal(summary.metrics.netProfit, 982.1);
 });
