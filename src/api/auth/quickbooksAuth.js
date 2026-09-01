@@ -13,7 +13,10 @@ import {
   qbSandboxClientId,
 } from "../../utils/qboEnv.js";
 import { runQboSync } from "../accounting/qbo-sync.js";
-import { bootstrapMissingHealthHistory } from "../../services/accounting/healthMonthlySnapshotService.js";
+import {
+  createTrackedQboHealthBackfill,
+  runQboBackfill,
+} from "../../services/qboBackfillRunner.js";
 import { buildQuickBooksOAuthScopes } from "../../services/jobCosting/qboProjectsService.js";
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { requireAuthOrAdminView, requireBusinessAccess } from "../_shared/tenantAuth.js";
@@ -453,14 +456,29 @@ router.get("/callback", async (req, res) => {
     });
 
     const forceBackfill = oauthState.metadata?.forceBackfill === true;
-    console.info("[HEALTH SNAPSHOT] bootstrap missing history from oauth callback", { business: business_id, env: qboEnvName, forceBackfill });
-    setImmediate(() => {
-      bootstrapMissingHealthHistory({
-        businessId: business_id,
+    console.info("[HEALTH SNAPSHOT] queue tracked bootstrap from oauth callback", { business: business_id, env: qboEnvName, forceBackfill });
+    try {
+      const { job, reused } = await createTrackedQboHealthBackfill({
+        business_id,
         months: 12,
         source: forceBackfill ? "qbo_connection_force_bootstrap" : "qbo_connection_bootstrap",
-      }).catch((err) => console.warn("[HEALTH SNAPSHOT] bootstrap failed", redactQboSecrets(err?.message || err)));
-    });
+        force: forceBackfill,
+        started_by: user_id,
+      });
+      setImmediate(() => {
+        runQboBackfill({
+          jobId: job.id,
+          business_id,
+          months_total: job.months_total || 12,
+          startYear: job.anchor_year,
+          startMonth: job.anchor_month,
+          force: Boolean(job.force),
+        }).catch((err) => console.warn("[HEALTH SNAPSHOT] tracked bootstrap failed", redactQboSecrets(err?.message || err)));
+      });
+      console.info("[HEALTH SNAPSHOT] bootstrap job ready", { business: business_id, job_id: job.id, reused });
+    } catch (bootstrapErr) {
+      console.warn("[HEALTH SNAPSHOT] bootstrap job enqueue failed", redactQboSecrets(bootstrapErr?.message || bootstrapErr));
+    }
 
     try {
       const syncResult = await runQboSync({ businessId: business_id });

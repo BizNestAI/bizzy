@@ -68,7 +68,8 @@ test("manual Health refresh is bounded to the selected month QBO sync", () => {
 });
 
 test("QuickBooks connection bootstraps initial persisted Health history idempotently", () => {
-  assert.match(qboAuth, /bootstrapMissingHealthHistory/);
+  assert.match(qboAuth, /createTrackedQboHealthBackfill/);
+  assert.match(qboAuth, /runQboBackfill/);
   assert.doesNotMatch(qboAuth, /shouldSkipBackfill/);
   assert.doesNotMatch(qboAuth, /backfillLast12Months/);
   assert.match(qboAuth, /setImmediate\(\(\) =>/);
@@ -88,7 +89,7 @@ test("Health trailing-12 backfill is Cash basis and current-month anchored by de
   assert.match(qboBackfillRunner, /accountingMethod: accounting_method/);
   assert.match(qboBackfillRunner, /const now = new Date\(\)/);
   assert.match(qboBackfillRunner, /month: now\.getMonth\(\) \+ 1/);
-  assert.match(qboBackfillRunner, /rangeLastNMonths\(\{ year: anchorParts\.year, month: anchorParts\.month, n: months_total \}\)/);
+  assert.match(qboBackfillRunner, /trailingMonthWindow\(\{ anchorYear: anchorParts\.year, anchorMonth: anchorParts\.month, count: months_total \}\)/);
   assert.doesNotMatch(qboBackfillRunner, /lastFullMonthParts/);
 });
 

@@ -63,7 +63,7 @@ test("Health distinguishes empty, auth, QBO, and backend load failure states", (
   assert.match(dashboard, /Your session needs attention\. Please sign in again\./);
   assert.match(dashboard, /QuickBooks connection needs attention\./);
   assert.match(dashboard, /Unable to load financial data\./);
-  assert.match(dashboard, /Preparing your financial history\.\.\./);
+  assert.match(dashboard, /Importing QuickBooks history\.\.\./);
 });
 
 test("Health refresh is non-blocking and uses backend refresh metadata", () => {

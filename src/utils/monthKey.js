@@ -45,3 +45,20 @@ export function rangeLastNMonths({ year, month, n }) {
   }
   return out;
 }
+
+// Chronological trailing window ending with a one-based anchor month.
+export function trailingMonthWindow({ anchorYear, anchorMonth, count = 12 }) {
+  const year = Number(anchorYear);
+  const month = Number(anchorMonth);
+  const n = Number(count);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    throw new Error("invalid_anchor_year");
+  }
+  if (!Number.isInteger(month) || month < 1 || month > 12) {
+    throw new Error("invalid_anchor_month");
+  }
+  if (!Number.isInteger(n) || n < 1 || n > 36) {
+    throw new Error("invalid_month_count");
+  }
+  return rangeLastNMonths({ year, month, n });
+}

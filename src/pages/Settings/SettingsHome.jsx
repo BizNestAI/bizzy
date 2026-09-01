@@ -1707,6 +1707,31 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
     () => (backfillTimestamp ? formatRelative(backfillTimestamp) : null),
     [backfillTimestamp]
   );
+  const backfillAnchorLabel = useMemo(() => {
+    const anchorYear = Number(backfillStatus?.anchor?.year || backfillStatus?.anchor_year || new Date().getFullYear());
+    const anchorMonth = Number(backfillStatus?.anchor?.month || backfillStatus?.anchor_month || new Date().getMonth() + 1);
+    if (!Number.isInteger(anchorYear) || !Number.isInteger(anchorMonth)) return "the selected month";
+    return new Date(anchorYear, anchorMonth - 1, 1).toLocaleString(undefined, { month: "short", year: "numeric" });
+  }, [backfillStatus]);
+  const backfillSummary = useMemo(() => {
+    if (!backfillStatus || backfillStatus.status === "idle") return "";
+    const total = Number(backfillStatus.months_total || 12);
+    const coverage = Number(backfillStatus.snapshot_coverage_count ?? (Number(backfillStatus.months_succeeded || 0) + Number(backfillStatus.months_skipped || 0)));
+    const failed = Number(backfillStatus.months_failed || 0);
+    if (["queued", "running"].includes(backfillStatus.status)) {
+      return `Importing ${coverage} of ${total} months${backfillStatus.current_month ? ` • ${backfillStatus.current_month}` : ""}`;
+    }
+    if (backfillStatus.status === "completed") {
+      return `Imported ${coverage} of ${total} months through ${backfillAnchorLabel}`;
+    }
+    if (backfillStatus.status === "partial") {
+      return `Imported ${coverage} of ${total} months · ${failed} need retry`;
+    }
+    if (backfillStatus.status === "failed") {
+      return "Historical import failed · Retry";
+    }
+    return "";
+  }, [backfillAnchorLabel, backfillStatus]);
 
   const handleConnect = () => {
     if (readOnly) return;
@@ -1770,7 +1795,7 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
     fetchBackfillStatus();
     let id = null;
     const status = backfillStatus?.status;
-    if (status === "running") {
+    if (["queued", "running"].includes(status)) {
       id = setInterval(fetchBackfillStatus, 4000);
     }
     return () => {
@@ -1781,14 +1806,30 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
   const startBackfill = useCallback(async (force = false) => {
     if (readOnly) return;
     if (!businessId) return;
+    const anchor = new Date();
+    const anchorYear = anchor.getFullYear();
+    const anchorMonth = anchor.getMonth() + 1;
+    if (force) {
+      const confirmed = globalThis.confirm?.(
+        `Re-import 12 months from QuickBooks ending ${new Date(anchorYear, anchorMonth - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}? This re-fetches reports but preserves snapshot history.`
+      );
+      if (confirmed === false) return;
+    }
     setBackfillLoading(true);
     try {
-      await safeFetch(apiUrl("/api/qbo/backfill/start"), {
+      const res = await safeFetch(apiUrl("/api/qbo/backfill/start"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: { business_id: businessId, months: 12, mode: "cash", force },
+        body: {
+          business_id: businessId,
+          months: 12,
+          anchor_year: anchorYear,
+          anchor_month: anchorMonth,
+          source: force ? "settings_force_reimport" : "settings_import_missing_history",
+          force,
+        },
       });
-      setBackfillStatus({ status: "running", months_done: 0, months_total: 12 });
+      setBackfillStatus(res || { status: "queued", months_done: 0, months_total: 12 });
     } catch (e) {
       console.warn("[backfill] start failed", e?.message || e);
     } finally {
@@ -1857,25 +1898,27 @@ function IntegrationRow({ provider, manager, name, description, companyName = ""
           <div className="flex flex-col gap-2 mt-2">
             <div className="flex gap-2 flex-wrap">
               <AccentButton onClick={() => startBackfill(false)} disabled={readOnly || backfillLoading}>
-                {backfillLoading ? "Starting..." : "Backfill last 12 months"}
+                {backfillLoading ? "Starting..." : "Import missing history"}
               </AccentButton>
               <GhostButton
                 onClick={() => startBackfill(true)}
                 disabled={readOnly || backfillLoading}
                 className="border-rose-500/50 text-rose-200 hover:border-rose-400/80"
               >
-                Force re-sync
+                Re-import 12 months
               </GhostButton>
             </div>
-            {backfillStatus?.status === "running" ? (
+            <span className="text-[11px] text-white/50">
+              Imports missing monthly reports from QuickBooks for the 12-month period ending {backfillAnchorLabel}.
+            </span>
+            {backfillSummary ? (
               <span className="text-[11px] text-white/70">
-                Backfill running… ({backfillStatus?.months_done || 0}/{backfillStatus?.months_total || 12}
-                {backfillStatus?.current_month ? ` • ${backfillStatus.current_month}` : ""})
+                {backfillSummary}
               </span>
             ) : null}
-            {backfillAgo ? (
+            {backfillAgo && backfillStatus?.status === "completed" ? (
               <span className="text-[11px] text-white/50">
-                {backfillStatus?.status === "running" ? "Backfill started" : "Backfilled"} {backfillAgo}
+                Full history imported {backfillAgo}
               </span>
             ) : null}
           </div>

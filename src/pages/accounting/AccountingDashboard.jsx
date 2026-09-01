@@ -383,9 +383,10 @@ export default function AccountingDashboard() {
       }
     }
     loadBackfill();
-    const id = setInterval(loadBackfill, 5000);
+    const shouldPoll = ["queued", "running"].includes(backfillStatus?.status);
+    const id = shouldPoll ? setInterval(loadBackfill, 5000) : null;
     return () => { alive = false; clearInterval(id); };
-  }, [adminView.active, businessId, qbStatus]);
+  }, [adminView.active, businessId, qbStatus, backfillStatus?.status]);
 
   if (loading) return null;
   if (!businessId) return <div className="text-rose-400 p-4">Select a business to view financials.</div>;
@@ -403,7 +404,7 @@ export default function AccountingDashboard() {
     );
   }
   const qbConnected = qbStatus === 'connected';
-  const backfillRunning = qbConnected && backfillStatus?.status === "running";
+  const backfillRunning = qbConnected && ["queued", "running"].includes(backfillStatus?.status);
   const needsSync = qbConnected && !usingDemo && !adminView.active && !backfillRunning && !hasMetrics;
   const canView = usingDemo || qbConnected;
   if (!canView) {
@@ -690,7 +691,7 @@ export default function AccountingDashboard() {
         {backfillRunning ? (
           <div className="rounded-2xl border border-[rgba(255,255,255,0.14)] bg-[rgba(0,0,0,0.35)] px-4 py-3 flex flex-col gap-2">
             <div className="text-sm text-white/90">
-              Preparing your financial history... ({backfillStatus?.months_done || 0}/{backfillStatus?.months_total || 12}){backfillStatus?.current_month ? ` • ${backfillStatus.current_month}` : ""}
+              Importing QuickBooks history... ({backfillStatus?.snapshot_coverage_count ?? backfillStatus?.months_done ?? 0}/{backfillStatus?.months_total || 12} months available){backfillStatus?.current_month ? ` • ${backfillStatus.current_month}` : ""}
             </div>
             <div className="text-xs text-white/60">
               This runs in the background. You can keep browsing.
