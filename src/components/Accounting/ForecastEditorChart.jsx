@@ -37,6 +37,7 @@ const MONTH_ABBREVIATIONS = {
   nov: 11,
   dec: 12,
 };
+const CANONICAL_FORECAST_MONTHS = 12;
 
 const formatNumericMonthLabel = (value) => {
   if (!value) return '';
@@ -76,7 +77,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
   const mounted = useRef(false);
   const isDemo = useDemoData || shouldUseDemoData();
   const demoFinancials = useMemo(() => (isDemo ? getDemoData()?.financials || null : null), [isDemo]);
-  const demoForecast = useMemo(() => buildDemoForecastFromFinancials(demoFinancials, months), [demoFinancials, months]);
+  const demoForecast = useMemo(() => buildDemoForecastFromFinancials(demoFinancials, CANONICAL_FORECAST_MONTHS), [demoFinancials]);
 
   const missingLiveBusiness = !isDemo && !businessId;
 
@@ -84,8 +85,8 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
     async () => {
       if (isDemo) {
         const fallback = alignForecastHorizon(
-          demoForecast && demoForecast.length ? demoForecast : buildMockForecast(months),
-          months
+          demoForecast && demoForecast.length ? demoForecast : buildMockForecast(CANONICAL_FORECAST_MONTHS),
+          CANONICAL_FORECAST_MONTHS
         );
         setRows(fallback);
         setDraft(fallback);
@@ -118,7 +119,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
       try {
         const params = new URLSearchParams({
           businessId,
-          months: String(Math.max(2, Math.min(12, Number(months) || 12))),
+          months: String(CANONICAL_FORECAST_MONTHS),
         });
         if (userId) params.set('userId', userId);
         if (readOnly) params.set('admin_view_optional', '1');
@@ -127,7 +128,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
           setStatusMessage('Generating an operating forecast from Cash-basis QuickBooks history...');
           resp = await safeFetch('/api/accounting/forecast/generate', {
             method: 'POST',
-            body: { businessId, months: Math.max(2, Math.min(12, Number(months) || 12)) },
+            body: { businessId, months: CANONICAL_FORECAST_MONTHS },
           });
         }
         const data = Array.isArray(resp?.forecast?.months)
@@ -169,7 +170,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
           }
           return;
         }
-        const normalized = alignForecastHorizon(data, months);
+        const normalized = alignForecastHorizon(data, CANONICAL_FORECAST_MONTHS);
         setRows(normalized);
         setDraft(normalized);
         setPreviousRows(null);
@@ -206,7 +207,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
         setLoading(false);
       }
     },
-    [userId, businessId, months, isDemo, demoForecast, readOnly]
+    [userId, businessId, isDemo, demoForecast, readOnly]
   );
 
   useEffect(() => {
@@ -224,14 +225,17 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
     return () => clearInterval(id);
   }, []);
 
+  const displayMonths = clampMonthCount(months);
+  const visibleDraft = useMemo(() => draft.slice(0, displayMonths), [draft, displayMonths]);
+
   const headerStats = useMemo(() => {
-    if (!draft.length) return null;
-    const first = draft[0];
-    const last = draft[draft.length - 1];
-    const avgRevenue = Math.round(draft.reduce((s, r) => s + (r.revenue || 0), 0) / draft.length);
-    const avgExpenses = Math.round(draft.reduce((s, r) => s + (r.expenses || 0), 0) / draft.length);
-    const monthlyNet = Math.round(draft.reduce((s, r) => s + (r.net_cash || r.operating_net_cash_flow || 0), 0) / draft.length);
-    const hasEndingCash = cashBalanceStatus === 'available' && draft.some((r) => r.ending_cash !== null && r.ending_cash !== undefined);
+    if (!visibleDraft.length) return null;
+    const first = visibleDraft[0];
+    const last = visibleDraft[visibleDraft.length - 1];
+    const avgRevenue = Math.round(visibleDraft.reduce((s, r) => s + (r.revenue || 0), 0) / visibleDraft.length);
+    const avgExpenses = Math.round(visibleDraft.reduce((s, r) => s + (r.expenses || 0), 0) / visibleDraft.length);
+    const monthlyNet = Math.round(visibleDraft.reduce((s, r) => s + (r.net_cash || r.operating_net_cash_flow || 0), 0) / visibleDraft.length);
+    const hasEndingCash = cashBalanceStatus === 'available' && visibleDraft.some((r) => r.ending_cash !== null && r.ending_cash !== undefined);
     return {
       avgRevenue,
       avgExpenses,
@@ -242,10 +246,10 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
       lastRevenue: last?.revenue ?? 0,
       firstExpenses: first?.expenses ?? 0,
       lastExpenses: last?.expenses ?? 0,
-      lowCash: hasEndingCash ? Math.min(...draft.map((r) => Number(r.ending_cash) || 0)) : null,
+      lowCash: hasEndingCash ? Math.min(...visibleDraft.map((r) => Number(r.ending_cash) || 0)) : null,
       hasEndingCash,
     };
-  }, [draft, cashBalanceStatus]);
+  }, [visibleDraft, cashBalanceStatus]);
 
   const recalc = (row) => {
     const revenue = clampNonNegative(row.revenue);
@@ -303,7 +307,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
         const data = Array.isArray(resp?.forecast?.months)
           ? resp.forecast.months
           : (Array.isArray(resp?.forecast_rows) ? resp.forecast_rows : []);
-        const normalized = alignForecastHorizon(data, months);
+        const normalized = alignForecastHorizon(data, CANONICAL_FORECAST_MONTHS);
         setRows(normalized);
         setDraft(normalized);
         setPreviousRows(null);
@@ -383,14 +387,14 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
 
   const chartData = useMemo(
     () =>
-      draft.map((r) => ({
+      visibleDraft.map((r) => ({
         month_label: r.month_label || r.month,
         revenue: r.revenue,
         expenses: r.expenses,
         net_cash: r.net_cash,
         ending_cash: r.ending_cash,
       })),
-    [draft]
+    [visibleDraft]
   );
 
   const lastSavedLabel = useMemo(() => (lastSavedAt ? formatTimeAgo(lastSavedAt) : null), [lastSavedAt]);
@@ -427,13 +431,13 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
           <ForecastMetric
             label="Avg monthly revenue"
             value={currency(headerStats.avgRevenue)}
-            note={`${currency(headerStats.firstRevenue)} now → ${currency(headerStats.lastRevenue)} by month ${months}`}
+            note={`${currency(headerStats.firstRevenue)} now → ${currency(headerStats.lastRevenue)} by month ${displayMonths}`}
             tone="emerald"
           />
           <ForecastMetric
             label="Avg monthly expenses"
             value={currency(headerStats.avgExpenses)}
-            note={`${currency(headerStats.firstExpenses)} now → ${currency(headerStats.lastExpenses)} by month ${months}`}
+            note={`${currency(headerStats.firstExpenses)} now → ${currency(headerStats.lastExpenses)} by month ${displayMonths}`}
             tone="amber"
           />
           <ForecastMetric
@@ -444,7 +448,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
           />
           {headerStats.hasEndingCash ? (
             <ForecastMetric
-              label={`Ending cash (${months} mo)`}
+              label={`Ending cash (${displayMonths} mo)`}
               value={currency(headerStats.endingCash)}
               note={`Starts ${currency(headerStats.startingCash)}; low point ${currency(headerStats.lowCash)}`}
               tone={headerStats.endingCash >= 0 ? 'emerald' : 'rose'}
@@ -581,7 +585,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
               </tr>
             </thead>
             <tbody>
-              {draft.map((r, idx) => {
+              {visibleDraft.map((r, idx) => {
                 const isEdited = edited.has(idx);
                 return (
                   <tr
@@ -830,13 +834,11 @@ function buildForecastStatusMessage(resp) {
   if (!resp || resp.data_status !== 'available') return '';
   const historyStart = formatMonthLabel(resp?.history?.start);
   const historyEnd = formatMonthLabel(resp?.history?.end);
-  const version = resp?.model_version || 'forecast_v1';
   const generated = resp?.generated_at ? ` Generated ${formatTimeAgo(resp.generated_at)}.` : '';
-  const confidence = resp?.confidence?.explanation ? ` ${resp.confidence.explanation}` : '';
   const cash = resp?.cash_balance?.status === 'available'
     ? ''
-    : ' Ending cash stays unavailable until a QBO cash-balance source is connected.';
-  return `Uses ${historyStart}-${historyEnd} Cash-basis QuickBooks results to project operating revenue, expenses, and net cash flow. ${version}.${generated}${confidence}${cash}`;
+    : ' Ending cash is unavailable until a QBO cash balance is connected.';
+  return `Based on ${historyStart}-${historyEnd} Cash-basis QuickBooks results.${generated}${cash}`;
 }
 
 function formatMonthLabel(value) {

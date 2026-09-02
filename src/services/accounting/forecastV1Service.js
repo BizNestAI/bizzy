@@ -32,11 +32,10 @@ export class ForecastV1Error extends Error {
 export async function getForecastV1Status({
   db = defaultSupabase,
   businessId,
-  horizonMonths = FORECAST_DEFAULT_HORIZON_MONTHS,
   now = new Date(),
 } = {}) {
   if (!businessId) throw new ForecastV1Error("missing_business_id", 400);
-  const horizon = clampHorizon(horizonMonths);
+  const horizon = FORECAST_DEFAULT_HORIZON_MONTHS;
   const cutoff = lastFullMonthParts(now);
   const history = await loadContiguousCashHistory({ db, businessId, cutoffYear: cutoff.year, cutoffMonth: cutoff.month });
   if (!history.complete) {
@@ -96,11 +95,10 @@ export async function ensureForecastV1Run({
   db = defaultSupabase,
   businessId,
   createdBy = null,
-  horizonMonths = FORECAST_DEFAULT_HORIZON_MONTHS,
   now = new Date(),
 } = {}) {
   if (!businessId) throw new ForecastV1Error("missing_business_id", 400);
-  const horizon = clampHorizon(horizonMonths);
+  const horizon = FORECAST_DEFAULT_HORIZON_MONTHS;
   const cutoff = lastFullMonthParts(now);
   const history = await loadContiguousCashHistory({ db, businessId, cutoffYear: cutoff.year, cutoffMonth: cutoff.month });
   if (!history.complete) {
@@ -232,15 +230,18 @@ export async function ensureForecastV1Run({
       rows: rowsPayload,
     });
   } catch (error) {
+    const code = error?.error || "forecast_finalization_failed";
+    const cause = error?.details?.cause || error?.message;
     await markForecastRunFailed({
       db,
       businessId,
       forecastRunId: insertedRun.id,
-      code: error?.error || "forecast_finalization_failed",
-      cause: error?.details?.cause || error?.message,
+      code,
+      cause,
+      stage: "finalizer_rpc",
     });
     if (error instanceof ForecastV1Error) throw error;
-    throw new ForecastV1Error("forecast_finalization_failed", 500, { cause: error?.message });
+    throw new ForecastV1Error("forecast_finalization_failed", 500, { stage: "finalizer_rpc", cause: error?.message });
   }
 
   const finalizedRun = await getForecastRunById({ db, businessId, forecastRunId: insertedRun.id });
@@ -479,7 +480,13 @@ async function finalizeForecastV1Run({ db, businessId, forecastRunId, expectedMo
       p_expected_months: expectedMonths,
       p_months: rows,
     });
-    if (error) throw new ForecastV1Error("forecast_finalization_failed", 500, { cause: error.message });
+    if (error) {
+      throw new ForecastV1Error("forecast_finalization_failed", 500, {
+        stage: "finalizer_rpc",
+        cause: error.message,
+        code: error.code || null,
+      });
+    }
     return;
   }
 
@@ -498,13 +505,17 @@ async function finalizeForecastV1Run({ db, businessId, forecastRunId, expectedMo
   if (runError) throw new ForecastV1Error("forecast_run_completion_failed", 500, { cause: runError.message });
 }
 
-async function markForecastRunFailed({ db, businessId, forecastRunId, code, cause }) {
+async function markForecastRunFailed({ db, businessId, forecastRunId, code, cause, stage = "generation" }) {
   if (!forecastRunId) return;
   await db
     .from("forecast_runs")
     .update({
       status: "failed",
-      error_metadata: { code, cause: String(cause || code || "forecast_generation_failed").slice(0, 500) },
+      error_metadata: {
+        code,
+        stage,
+        cause: String(cause || code || "forecast_generation_failed").slice(0, 500),
+      },
       generation_lease_expires_at: null,
       updated_at: new Date().toISOString(),
     })

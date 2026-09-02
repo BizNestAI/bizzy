@@ -317,6 +317,24 @@ test("Forecasts V1 generation is deterministic and idempotent for identical sour
   assert.equal(db.tables.forecast_months.length, 12);
 });
 
+test("Forecasts V1 treats 6/9/12 horizons as presentation windows over one canonical run", async () => {
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows() });
+  const first = await ensureForecastV1Run({ db, businessId: BUSINESS_ID, horizonMonths: 6, now: NOW });
+  const second = await ensureForecastV1Run({ db, businessId: BUSINESS_ID, horizonMonths: 9, now: NOW });
+  const third = await getForecastV1Status({ db, businessId: BUSINESS_ID, horizonMonths: 12, now: NOW });
+
+  assert.equal(first.run_id, second.run_id);
+  assert.equal(second.run_id, third.run_id);
+  assert.equal(db.tables.forecast_runs.length, 1);
+  assert.equal(db.tables.forecast_months.length, 12);
+  assert.equal(first.forecast.months.length, 12);
+  assert.equal(second.forecast.months.length, 12);
+  assert.equal(third.forecast.months.length, 12);
+  assert.equal(first.forecast.start, "2026-09-01");
+  assert.equal(first.forecast.end, "2027-08-01");
+  assert.equal(db.tables.forecast_runs[0].forecast_end, "2027-08-01");
+});
+
 test("Forecasts V1 never exposes generating or incomplete completed runs as available", async () => {
   const db = makeDb({
     monthly_review_qbo_pnl_snapshots: historyRows(),
@@ -493,6 +511,11 @@ test("Forecasts Live frontend and routes do not silently persist sample data", (
   assert.match(editor, /No sample data is shown in Live Mode/);
   assert.match(editor, /forecast_run_id: forecastRunId/);
   assert.match(editor, /forecastMeta\?\.is_sample/);
+  assert.match(editor, /CANONICAL_FORECAST_MONTHS = 12/);
+  assert.match(editor, /body: \{ businessId, months: CANONICAL_FORECAST_MONTHS \}/);
+  assert.match(editor, /visibleDraft = useMemo\(\(\) => draft\.slice\(0, displayMonths\)/);
+  assert.match(editor, /visibleDraft\.map/);
+  assert.doesNotMatch(editor, /body: \{ businessId, months: Math\.max/);
   assert.match(editor, /hasSavedOverrides/);
   assert.match(editor, /\/api\/accounting\/forecast\/override\/reset/);
   assert.match(editor, /Revert failed\. Please try again\./);

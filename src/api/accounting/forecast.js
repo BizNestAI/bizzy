@@ -19,10 +19,6 @@ function readUserId(req) {
   return req.auth?.userId || req.user?.id || req.query.userId || req.query.user_id || req.body?.userId || req.body?.user_id || null;
 }
 
-function readMonths(value, fallback = 12) {
-  return Math.max(2, Math.min(12, Number(value) || fallback));
-}
-
 function sendForecastError(res, err) {
   const status = err?.status || err?.statusCode || 500;
   return res.status(status).json({
@@ -41,7 +37,6 @@ function sendForecastError(res, err) {
  */
 router.get("/", async (req, res) => {
   const businessId = readBusinessId(req);
-  const months = readMonths(req.query.months);
   const adminViewOptional = req.query.admin_view_optional === "1" || req.query.admin_view_optional === "true";
 
   if (!businessId) {
@@ -49,7 +44,7 @@ router.get("/", async (req, res) => {
   }
 
   try {
-    const forecast = await getForecastV1Status({ businessId, horizonMonths: months });
+    const forecast = await getForecastV1Status({ businessId });
     if (isAdminViewRequest(req) && forecast.data_status !== "available" && !adminViewOptional) {
       return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_read_only_data_unavailable" });
     }
@@ -72,7 +67,6 @@ router.get("/", async (req, res) => {
 router.post("/generate", async (req, res) => {
   const businessId = readBusinessId(req);
   const userId = readUserId(req);
-  const months = readMonths(req.body?.months || req.query?.months);
 
   if (isAdminViewRequest(req)) {
     return res.status(403).json({ data_status: "generation_failed", error: "admin_view_read_only", is_sample: false });
@@ -82,7 +76,7 @@ router.post("/generate", async (req, res) => {
   }
 
   try {
-    const forecast = await ensureForecastV1Run({ businessId, createdBy: userId || null, horizonMonths: months });
+    const forecast = await ensureForecastV1Run({ businessId, createdBy: userId || null });
     res.set("Cache-Control", "no-store");
     const status = forecast.data_status === "available"
       ? 201
