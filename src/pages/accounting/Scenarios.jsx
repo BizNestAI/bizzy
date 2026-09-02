@@ -5,6 +5,7 @@ import { ArrowRight, Loader2, ShieldAlert, RefreshCw } from "lucide-react";
 import ScenarioModeler from "../../components/Accounting/ScenarioModeler.jsx";
 import AgendaWidget from '../Calendar/AgendaWidget.jsx';
 import { useRightExtras } from '../../insights/RightExtrasContext';
+import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 
 /* ---------------------------- helpers ---------------------------- */
 const MOCK_BASELINE = Array.from({ length: 12 }, (_, i) => {
@@ -14,19 +15,37 @@ const MOCK_BASELINE = Array.from({ length: 12 }, (_, i) => {
   return { month_label: label, net_cash: net, ending_cash: 30000 + (i + 1) * net };
 });
 
-async function fetchBaselineForecast({ userId, businessId, months = 12 }) {
-  const url = `/api/accounting/forecast?userId=${encodeURIComponent(
-    userId
-  )}&businessId=${encodeURIComponent(businessId)}&months=${months}`;
-  try {
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    const rows = Array.isArray(json.forecast) ? json.forecast : [];
-    return rows.length ? rows : MOCK_BASELINE;
-  } catch {
-    return MOCK_BASELINE;
+async function fetchBaselineForecast({ userId, businessId, months = 12, isDemo = false }) {
+  if (isDemo) {
+    return { rows: MOCK_BASELINE, status: "available", isSample: true, message: "Using sample scenario baseline." };
   }
+  const params = new URLSearchParams({
+    businessId,
+    months: String(months),
+  });
+  if (userId) params.set("userId", userId);
+  const url = `/api/accounting/forecast?${params.toString()}`;
+  const res = await fetch(url, { cache: "no-store" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+  const rows = Array.isArray(json?.forecast?.months)
+    ? json.forecast.months
+    : (Array.isArray(json?.forecast_rows) ? json.forecast_rows : []);
+  return {
+    rows: json?.data_status === "available" ? rows : [],
+    status: json?.data_status || "generation_failed",
+    isSample: json?.is_sample === true,
+    message: forecastStatusMessage(json),
+  };
+}
+
+function forecastStatusMessage(payload) {
+  if (payload?.data_status === "generation_required") return "Generate an operating forecast before modeling scenarios.";
+  if (payload?.data_status === "generation_in_progress") return "Bizzi is generating the operating forecast.";
+  if (payload?.data_status === "insufficient_history") return "Scenario modeling needs 12 contiguous Cash-basis QuickBooks months.";
+  if (payload?.data_status === "qbo_disconnected") return "Connect QuickBooks to use Live Mode scenario modeling.";
+  if (payload?.data_status === "generation_failed") return "Live forecast generation failed. No sample baseline is used in Live Mode.";
+  return "No live operating forecast is available yet.";
 }
 
 /* ------------------------------ page ------------------------------ */
@@ -36,6 +55,9 @@ export default function Scenarios({ businessId: propBusinessId, userId: propUser
   const [businessId, setBusinessId] = useState(propBusinessId || null);
 
   const [baseline, setBaseline] = useState([]);
+  const [baselineStatus, setBaselineStatus] = useState("loading");
+  const [baselineMessage, setBaselineMessage] = useState("");
+  const [baselineIsSample, setBaselineIsSample] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingNote, setLoadingNote] = useState("");
   const [error, setError] = useState("");
@@ -66,12 +88,16 @@ export default function Scenarios({ businessId: propBusinessId, userId: propUser
       return () => setRightExtras(null); // cleanup when leaving page
     }, [businessId, navigate, setRightExtras]);
 
-  const noBusiness = !userId || !businessId;
+  const isDemo = shouldUseDemoData();
+  const noBusiness = !businessId && !isDemo;
 
   // Load baseline forecast
   const loadBaseline = async () => {
     if (noBusiness) {
       setBaseline([]);
+      setBaselineStatus("missing_context");
+      setBaselineMessage("");
+      setBaselineIsSample(false);
       setLoading(false);
       return;
     }
@@ -79,11 +105,17 @@ export default function Scenarios({ businessId: propBusinessId, userId: propUser
     setError("");
     setLoadingNote("Loading baseline forecast…");
     try {
-      const rows = await fetchBaselineForecast({ userId, businessId, months: 12 });
-      setBaseline(rows);
-    } catch (e) {
-      setError("Could not load baseline forecast.");
-      setBaseline(MOCK_BASELINE);
+      const result = await fetchBaselineForecast({ userId, businessId, months: 12, isDemo });
+      setBaseline(result.rows);
+      setBaselineStatus(result.status);
+      setBaselineMessage(result.message || "");
+      setBaselineIsSample(result.isSample);
+    } catch (err) {
+      setError(err?.message || "Could not load baseline forecast.");
+      setBaseline([]);
+      setBaselineStatus("generation_failed");
+      setBaselineMessage("Live forecast unavailable. No sample baseline is used in Live Mode.");
+      setBaselineIsSample(false);
     } finally {
       setLoading(false);
       setLoadingNote("");
@@ -92,7 +124,7 @@ export default function Scenarios({ businessId: propBusinessId, userId: propUser
 
   useEffect(() => {
     if (!noBusiness) loadBaseline();
-  }, [noBusiness, userId, businessId]);
+  }, [noBusiness, userId, businessId, isDemo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="space-y-8 p-6 text-white">
@@ -148,9 +180,19 @@ export default function Scenarios({ businessId: propBusinessId, userId: propUser
           {error}
         </div>
       )}
+      {!noBusiness && !loading && !baseline.length && (baselineMessage || baselineStatus !== "available") && (
+        <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/70">
+          {baselineMessage || "No live operating forecast is available yet."}
+        </div>
+      )}
+      {baselineIsSample && (
+        <div className="rounded-xl border border-amber-300/25 bg-amber-500/10 p-3 text-sm text-amber-100">
+          Mock Mode sample scenario baseline.
+        </div>
+      )}
 
       {/* Modeler (includes the comparison chart internally) */}
-      {!noBusiness && !loading && (
+      {!noBusiness && !loading && baseline.length > 0 && (
         <ScenarioModeler
           baselineForecast={baseline}
           userId={userId}

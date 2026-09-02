@@ -8,6 +8,7 @@ import AffordabilityInputForm from "../../components/Accounting/AffordabilityInp
 import AffordabilityInsightCard from "../../components/Accounting/AffordabilityInsightCard.jsx"; 
 import { useRightExtras } from "../../insights/RightExtrasContext";
 import AgendaWidget from "../../pages/Calendar/AgendaWidget.jsx";
+import { shouldUseDemoData } from "../../services/demo/demoClient.js";
 
 /* ---------------------------- helpers ---------------------------- */
 
@@ -33,7 +34,7 @@ function monthlyImpact(amount, frequency) {
   }
 }
 
-/** Very small deterministic fallback model if API is unavailable */
+/** Very small deterministic fallback model for the local affordability helper if API is unavailable */
 const MOCK_FORECAST = Array.from({ length: 12 }, (_, i) => {
   const baseRev = 20000 + i * 500;
   const baseExp = 15000 + i * 400;
@@ -50,26 +51,46 @@ const MOCK_FORECAST = Array.from({ length: 12 }, (_, i) => {
   };
 });
 
-/** Pull forecast from your API for fallback logic */
-async function fetchForecast({ userId, businessId, months = 12 }) {
-  const url = `/api/accounting/forecast?userId=${encodeURIComponent(
-    userId
-  )}&businessId=${encodeURIComponent(businessId)}&months=${months}`;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    const rows = Array.isArray(json.forecast) ? json.forecast : [];
-    if (!rows.length) return MOCK_FORECAST;
-    // normalize to what we need locally
-    return rows.map((r) => ({
-      month_label: r.month_label || r.month,
-      net_cash: Number(r.net_cash || 0),
-      ending_cash: Number(r.ending_cash || 0),
-    }));
-  } catch {
-    return MOCK_FORECAST;
+/** Pull forecast from your API for local operating-only affordability logic. */
+async function fetchForecast({ userId, businessId, months = 12, isDemo = false }) {
+  if (isDemo) {
+    return {
+      rows: MOCK_FORECAST,
+      status: "available",
+      isSample: true,
+      cashBalanceStatus: "available",
+    };
   }
+  const params = new URLSearchParams({
+    businessId,
+    months: String(months),
+  });
+  if (userId) params.set("userId", userId);
+  const url = `/api/accounting/forecast?${params.toString()}`;
+  const res = await fetch(url, { cache: "no-store" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
+  const rows = Array.isArray(json?.forecast?.months)
+    ? json.forecast.months
+    : (Array.isArray(json?.forecast_rows) ? json.forecast_rows : []);
+  if (json?.data_status !== "available" || !rows.length) {
+    return {
+      rows: [],
+      status: json?.data_status || "generation_failed",
+      isSample: false,
+      cashBalanceStatus: json?.cash_balance?.status || "unavailable",
+    };
+  }
+  return {
+    rows: rows.map((r) => ({
+      month_label: r.month_label || r.month,
+      net_cash: Number(r.operating_net_cash_flow ?? r.net_cash ?? 0),
+      ending_cash: r.ending_cash == null ? null : Number(r.ending_cash),
+    })),
+    status: "available",
+    isSample: json?.is_sample === true,
+    cashBalanceStatus: json?.cash_balance?.status || "unavailable",
+  };
 }
 
 /** Local affordability calculator used only when backend check fails */
@@ -81,30 +102,44 @@ function localAffordability({ forecastRows, amount, frequency }) {
   // One-time impact: subtract from first month only
   const oneTime = (frequency || "").toLowerCase() === "one-time" ? Number(amount) || 0 : 0;
 
+  if (!horizon.length) {
+    throw new Error("live_forecast_unavailable");
+  }
+
+  const hasAuthoritativeEndingCash = horizon.every((m) => m.ending_cash !== null && m.ending_cash !== undefined);
   let okayMonths = 0;
-  let projectedEnding = 0;
+  let projectedEnding = hasAuthoritativeEndingCash ? 0 : null;
 
   horizon.forEach((m, i) => {
     const impact = (i === 0 ? oneTime : 0) + monthly;
     const postNet = m.net_cash - impact;
-    const postEnd = (i === 0 ? m.ending_cash : projectedEnding) + (i === 0 ? -oneTime : 0) - monthly;
     if (postNet >= 0) okayMonths += 1;
-    projectedEnding = postEnd;
+    if (hasAuthoritativeEndingCash) {
+      projectedEnding = (i === 0 ? Number(m.ending_cash) : projectedEnding) + (i === 0 ? -oneTime : 0) - monthly;
+    }
   });
 
   let verdict = "Depends";
-  if (okayMonths >= horizon.length - 1 && projectedEnding > 0) verdict = "Yes";
+  if (!hasAuthoritativeEndingCash) verdict = "Unavailable";
+  else if (okayMonths >= horizon.length - 1 && projectedEnding > 0) verdict = "Yes";
   else if (okayMonths <= Math.floor(horizon.length / 2) || projectedEnding < 0) verdict = "No";
 
   const rationale =
-    verdict === "Yes"
+    verdict === "Unavailable"
+      ? "Operating forecast is available, but affordability needs an authoritative starting and ending cash balance."
+      : verdict === "Yes"
       ? "Projected cash stays positive across the near-term horizon."
       : verdict === "No"
       ? "The expense pushes monthly cash flow negative or depletes ending cash below zero."
       : "Cash is tight in some months; timing or splitting the expense would reduce risk.";
 
   const recommendations = [];
-  if (verdict !== "Yes") {
+  if (verdict === "Unavailable") {
+    recommendations.push(
+      "Connect an authoritative QBO cash-balance source before using this as a cash-buffer decision.",
+      "Review the operating net impact separately from cash reserves."
+    );
+  } else if (verdict !== "Yes") {
     recommendations.push(
       "Delay the start date by 30–60 days to align with stronger cash months.",
       "Reduce scope or break the expense into installments if possible.",
@@ -121,11 +156,13 @@ function localAffordability({ forecastRows, amount, frequency }) {
       monthlyExpenseImpact: monthly,
       oneTimeImpact: oneTime,
       monthsReviewed: horizon.length,
-      endCashAfterHorizon: Math.round(projectedEnding),
+      endCashAfterHorizon: hasAuthoritativeEndingCash ? Math.round(projectedEnding) : null,
     },
     recommendations,
     caveats: [
-      "This quick check uses forecasted cash flow only; it does not include credit lines or reserves outside the forecast.",
+      hasAuthoritativeEndingCash
+        ? "This quick check uses forecasted cash flow only; it does not include credit lines or reserves outside the forecast."
+        : "Ending cash is unavailable because Bizzi does not yet have an authoritative QBO cash-balance source.",
     ],
   };
 }
@@ -167,11 +204,13 @@ export default function Affordability({ businessId: propBusinessId, userId: prop
     }
   }, [propUserId, propBusinessId]);
 
-  const noBusiness = !userId || !businessId;
+  const isDemo = shouldUseDemoData();
+  const noBusiness = !businessId && !isDemo;
 
   const headerNote = useMemo(() => {
     if (backendUsed) return "Calculated using server model";
-    if (result) return "Calculated using local model (mock)";
+    if (result?.engine === "demo") return "Calculated using Mock Mode sample data";
+    if (result) return "Calculated from the live operating forecast";
     return "";
   }, [backendUsed, result]);
 
@@ -181,51 +220,29 @@ export default function Affordability({ businessId: propBusinessId, userId: prop
     setBackendUsed(false);
     setResult(null);
 
-    // 1) First try the backend engine
+    // Use Forecasts V1 as the sole Live Mode authority. Mock Mode may use the
+    // local sample fixture, but Live Mode never falls back to sample values.
     try {
-      const res = await fetch("/api/accounting/affordabilityCheck", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId,
-          businessId,
-          ...formData, // { expenseName, amount, frequency, startDate, notes }
-        }),
-      });
-
-      if (res.ok) {
-        const json = await res.json();
-        if (json?.result) {
-          setResult(json.result);
-          setBackendUsed(true);
-          setIsLoading(false);
-          return;
-        }
+      const forecast = await fetchForecast({ userId, businessId, months: 12, isDemo });
+      if (!forecast.rows.length) {
+        throw new Error(forecast.status || "live_forecast_unavailable");
       }
-      // If backend returns non-OK or no result, fall through to local calc
-    } catch (e) {
-      // ignore and fall back
-    }
-
-    // 2) Local fallback (uses forecast endpoint or mock)
-    try {
-      const horizon = await fetchForecast({ userId, businessId, months: 12 });
       const local = localAffordability({
-        forecastRows: horizon,
+        forecastRows: forecast.rows,
         amount: formData.amount,
         frequency: formData.frequency,
         startDate: formData.startDate,
       });
       setResult({
         ...local,
-        engine: "fallback",
+        engine: forecast.isSample ? "demo" : "forecast_v1_operating",
         expenseName: formData.expenseName,
         amount: Number(formData.amount) || 0,
         frequency: formData.frequency,
         startDate: formData.startDate,
         notes: formData.notes || "",
       });
-    } catch (e) {
+    } catch {
       setError("Could not evaluate affordability. Please try again.");
     } finally {
       setIsLoading(false);

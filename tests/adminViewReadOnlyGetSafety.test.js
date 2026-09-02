@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -45,11 +46,13 @@ test("Admin View pulse GET never honors generate=1 and returns persisted data on
 
 test("Admin View forecast GET reads persisted rows only and cannot upsert generated forecasts", () => {
   const adminBranch = forecastSource.indexOf("if (isAdminViewRequest(req))");
-  assert.ok(adminBranch > 0, "forecast route must branch for Admin View");
-  assert.ok(adminBranch < forecastSource.indexOf("generateCashFlowForecast", adminBranch), "Admin View must branch before forecast generation");
-  assert.match(forecastSource, /\.from\('cashflow_forecast'\)/);
-  assert.match(forecastSource, /admin_view_cache_only: true/);
-  assert.match(forecastSource, /sendAdminViewReadOnlyUnavailable\(res, \{ error: 'admin_view_read_only_data_unavailable' \}\)/);
+  assert.ok(adminBranch > 0, "forecast route must preserve Admin View unavailable handling");
+  assert.doesNotMatch(forecastSource, /generateCashFlowForecast/);
+  assert.doesNotMatch(forecastSource, /\.from\('cashflow_forecast'\)/);
+  assert.match(forecastSource, /getForecastV1Status/);
+  assert.match(forecastSource, /router\.post\("\/generate"/);
+  assert.match(forecastSource, /admin_view_cache_only: isAdminViewRequest\(req\) \? true : undefined/);
+  assert.match(forecastSource, /sendAdminViewReadOnlyUnavailable\(res, \{ error: "admin_view_read_only_data_unavailable" \}\)/);
 });
 
 test("Admin View legacy uncategorized GET is denied before QBO reads or health writes", () => {

@@ -32,7 +32,7 @@ export default function Forecasts() {
   // Page controls
   const [editorMonths, setEditorMonths] = useState(12);  // horizon for forecast editor
   const [compareMonths, setCompareMonths] = useState(6); // window for vs-actual chart
-  const demoMode = useDemoMode();
+  useDemoMode();
 
   // ✅ right-rail publisher + router
   const { setRightExtras } = useRightExtras();
@@ -60,7 +60,7 @@ export default function Forecasts() {
     return () => setRightExtras(null); // cleanup when leaving page
   }, [businessId, navigate, setRightExtras]);
 
-  const usingDemo = useMemo(() => shouldUseDemoData(currentBusiness), [currentBusiness, demoMode]);
+  const usingDemo = useMemo(() => shouldUseDemoData(currentBusiness), [currentBusiness]);
   const canView = usingDemo || qbStatus === "connected";
   const horizonOptions = useMemo(
     () => [

@@ -1,157 +1,116 @@
 // File: /src/api/accounting/forecastAccuracy.js
-import express from 'express';
-import { supabase } from '../../services/supabaseAdmin.js';
+import express from "express";
+import { supabase } from "../../services/supabaseAdmin.js";
+import { HEALTH_ACCOUNTING_METHOD } from "../../services/accounting/healthMonthlySnapshotService.js";
+import { FORECAST_MODEL_VERSION } from "../../services/accounting/forecastV1Service.js";
+import { lastFullMonthParts, monthKeyFromParts } from "../../utils/monthKey.js";
 
 const router = express.Router();
 
-const MOCK = [
-  { month: '2024-08', month_label: 'Aug 2024', forecastRevenue: 20000, actualRevenue: 18500, forecastExpenses: 15000, actualExpenses: 14800 },
-  { month: '2024-09', month_label: 'Sep 2024', forecastRevenue: 21000, actualRevenue: 20800, forecastExpenses: 16000, actualExpenses: 15800 },
-  { month: '2024-10', month_label: 'Oct 2024', forecastRevenue: 21500, actualRevenue: 21200, forecastExpenses: 16500, actualExpenses: 16700 },
-  { month: '2024-11', month_label: 'Nov 2024', forecastRevenue: 22000, actualRevenue: 21800, forecastExpenses: 17000, actualExpenses: 17500 },
-  { month: '2024-12', month_label: 'Dec 2024', forecastRevenue: 22500, actualRevenue: 22500, forecastExpenses: 17500, actualExpenses: 17000 },
-  { month: '2025-01', month_label: 'Jan 2025', forecastRevenue: 23000, actualRevenue: 24000, forecastExpenses: 18000, actualExpenses: 18500 },
-].map(r => ({ ...r, forecastProfit: r.forecastRevenue - r.forecastExpenses, actualProfit: r.actualRevenue - r.actualExpenses, source: 'mock' }));
+function readBusinessId(req) {
+  return req.business?.id || req.auth?.businessId || req.query.businessId || req.query.business_id || req.headers["x-business-id"] || null;
+}
 
-/** Safe Supabase query: never throws, returns [] on table missing/permission errors */
-async function safeQ(run, label) {
+function labelFor(month) {
+  return new Date(month).toLocaleString("default", { month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+router.get("/", async (req, res) => {
+  const businessId = readBusinessId(req);
+  const months = Math.max(3, Math.min(12, parseInt(req.query.months || "6", 10)));
+  if (!businessId) {
+    return res.status(400).json({ data_status: "missing_context", error: "Missing businessId", rows: [], is_sample: false });
+  }
+
   try {
-    const { data, error } = await run();
-    if (error) {
-      if (error.code === '42P01' || error.code === '42501') {
-        console.warn(`[fvA] ${label}: ${error.message} — using mock.`);
-        return [];
-      }
-      console.warn(`[fvA] ${label} error:`, error.message);
-      return [];
+    const cutoff = lastFullMonthParts();
+    const cutoffMonth = monthKeyFromParts(cutoff.year, cutoff.month);
+    const { data: forecastRows, error: forecastError } = await supabase
+      .from("forecast_months")
+      .select("month,effective_revenue,effective_expenses,effective_operating_net_cash_flow,forecast_runs!inner(id,business_id,status,model_version,accounting_method)")
+      .eq("business_id", businessId)
+      .eq("forecast_runs.business_id", businessId)
+      .eq("forecast_runs.status", "completed")
+      .eq("forecast_runs.model_version", FORECAST_MODEL_VERSION)
+      .eq("forecast_runs.accounting_method", HEALTH_ACCOUNTING_METHOD)
+      .lte("month", cutoffMonth)
+      .order("month", { ascending: false })
+      .limit(months);
+    if (forecastError) throw forecastError;
+
+    if (!Array.isArray(forecastRows) || forecastRows.length === 0) {
+      return res.status(200).json({
+        data_status: "unavailable",
+        rows: [],
+        is_sample: false,
+        source: "forecast_v1",
+        message: "Forecast accuracy will appear after forecasted months have completed.",
+      });
     }
-    return Array.isArray(data) ? data : [];
-  } catch (e) {
-    console.warn(`[fvA] ${label} exception:`, e?.message || e);
-    return [];
-  }
-}
 
-/** Format to 'YYYY-MM' key and 'Mon YYYY' label */
-function ymKey(d) {
-  const dt = new Date(d);
-  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}`;
-}
-function labelFor(d) {
-  return new Date(d).toLocaleString('default', { month: 'short', year: 'numeric' });
-}
+    const monthsToRead = forecastRows.map((row) => row.month);
+    const parts = monthsToRead.map((month) => {
+      const [year, m] = String(month).split("-").map(Number);
+      return { year, month: m };
+    });
+    const { data: actuals, error: actualError } = await supabase
+      .from("monthly_review_qbo_pnl_snapshots")
+      .select("review_year,review_month,revenue,expenses,net_profit")
+      .eq("business_id", businessId)
+      .eq("accounting_method", HEALTH_ACCOUNTING_METHOD)
+      .eq("status", "current")
+      .eq("is_current", true);
+    if (actualError) throw actualError;
 
-function buildCompletedMonthWindow(count) {
-  const result = [];
-  const anchor = new Date();
-  anchor.setDate(1);
-  anchor.setHours(12, 0, 0, 0);
-  anchor.setMonth(anchor.getMonth() - 1);
-  for (let i = count - 1; i >= 0; i--) {
-    const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1, 12);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    result.push({ key, label: d.toLocaleString('default', { month: 'short', year: 'numeric' }) });
-  }
-  return result;
-}
-
-function reanchorMockRows(rows, months) {
-  const source = rows.slice(-months);
-  return buildCompletedMonthWindow(months).map(({ key, label }, index) => {
-    const row = source[index] || source[source.length - 1] || {};
-    return {
-      ...row,
-      month: `${key}-01`,
-      month_label: label,
-      source: 'mock',
-    };
-  });
-}
-
-/**
- * GET /api/accounting/forecast-accuracy
- * Query: userId, businessId, months=6
- * Returns rows with: month, month_label, forecastRevenue/Expenses/Profit, actualRevenue/Expenses/Profit
- */
-router.get('/', async (req, res) => {
-  const { userId, businessId } = req.query;
-  const months = Math.max(3, Math.min(12, parseInt(req.query.months || '6', 10)));
-
-  if (!userId || !businessId) {
-    return res.status(400).json({ error: 'Missing userId or businessId' });
-  }
-
-  // Pull last ~12 months of actuals and forecasts, then merge in JS
-  const [actuals, forecasts] = await Promise.all([
-    safeQ(
-      () =>
-        supabase
-          .from('financial_metrics')
-          .select('month, total_revenue, total_expenses, net_profit')
-          .eq('business_id', businessId)
-          .order('month', { ascending: true })
-          .limit(14),
-      'financial_metrics'
-    ),
-    // Prefer cashflow_forecast (our canonical), but we’ll also try monthly_forecast if needed
-    safeQ(
-      () =>
-        supabase
-          .from('cashflow_forecast')
-          .select('month, revenue, expenses')
-          .eq('business_id', businessId)
-          .order('month', { ascending: true })
-          .limit(14),
-      'cashflow_forecast'
-    ),
-  ]);
-
-  let result = [];
-  if (actuals.length && forecasts.length) {
-    const window = buildCompletedMonthWindow(months);
-    const windowKeys = new Set(window.map((row) => row.key));
-    const windowLabels = new Map(window.map((row) => [row.key, row.label]));
-    const fMap = new Map(
-      forecasts.map((f) => [ymKey(f.month), f])
+    const wanted = new Set(parts.map((entry) => monthKeyFromParts(entry.year, entry.month)));
+    const actualMap = new Map(
+      (actuals || [])
+        .filter((row) => wanted.has(monthKeyFromParts(row.review_year, row.review_month)))
+        .map((row) => [monthKeyFromParts(row.review_year, row.review_month), row])
     );
-
-    result = actuals
-      .map((a) => {
-        const key = ymKey(a.month);
-        if (!windowKeys.has(key)) return null;
-        const f = fMap.get(key);
-        if (!f) return null;
-
-        const fr = Number(f.revenue || 0);
-        const fe = Number(f.expenses || 0);
-        const fp = fr - fe;
-
-        const ar = Number(a.total_revenue || 0);
-        const ae = Number(a.total_expenses || 0);
-        const ap = Number(a.net_profit ?? (ar - ae));
-
+    const rows = forecastRows
+      .slice()
+      .reverse()
+      .map((forecast) => {
+        const month = String(forecast.month).slice(0, 10);
+        const actual = actualMap.get(month);
+        if (!actual) return null;
+        const fr = Number(forecast.effective_revenue || 0);
+        const fe = Number(forecast.effective_expenses || 0);
+        const fp = Number(forecast.effective_operating_net_cash_flow ?? fr - fe);
+        const ar = Number(actual.revenue || 0);
+        const ae = Number(actual.expenses || 0);
+        const ap = Number(actual.net_profit ?? ar - ae);
         return {
-          month: `${key}-01`,
-          month_label: windowLabels.get(key) || labelFor(a.month),
+          month,
+          month_label: labelFor(month),
           forecastRevenue: fr,
           forecastExpenses: fe,
           forecastProfit: fp,
           actualRevenue: ar,
           actualExpenses: ae,
           actualProfit: ap,
-          source: 'live',
+          source: "qbo_cash_health_snapshots",
         };
       })
       .filter(Boolean);
 
-    result.sort((a, b) => a.month.localeCompare(b.month));
+    return res.status(200).json({
+      data_status: rows.length ? "available" : "unavailable",
+      usingMock: false,
+      is_sample: false,
+      rows,
+      source: "qbo_cash_health_snapshots",
+    });
+  } catch (err) {
+    console.error("[Forecast Accuracy Error]", err?.message || err);
+    return res.status(500).json({
+      data_status: "generation_failed",
+      error: "Failed to load forecast accuracy.",
+      rows: [],
+      is_sample: false,
+    });
   }
-
-  if (!result.length) {
-    return res.status(200).json({ usingMock: true, rows: reanchorMockRows(MOCK, months) });
-  }
-
-  return res.status(200).json({ usingMock: false, rows: result });
 });
 
 export default router;

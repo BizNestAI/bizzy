@@ -1,16 +1,15 @@
+/* global process */
 import { supabase } from '../services/supabaseAdmin.js';
-import { generateCashFlowForecast } from '../api/accounting/generateCashFlowForecast.js';
+import { ensureForecastV1Run } from '../services/accounting/forecastV1Service.js';
 import { log } from '../utils/reviews/logger.js';
 import { qboEnvName } from '../utils/qboEnv.js';
-
-const DEMO_USER = process.env.DEMO_USER_UUID || '00000000-0000-0000-0000-000000000000';
 
 async function runOnce() {
   log.info('[cron] forecast refresh start');
 
   const { data, error } = await supabase
     .from('quickbooks_tokens')
-    .select('business_id, user_id')
+    .select('business_id')
     .eq('qbo_env', qboEnvName)
     .eq('is_active', true)
     .eq('status', 'active')
@@ -27,9 +26,8 @@ async function runOnce() {
     if (!businessId || seen.has(businessId)) continue;
     seen.add(businessId);
 
-    const userId = token.user_id || DEMO_USER;
     try {
-      await generateCashFlowForecast({ userId, businessId, months: 12, forceMock: false });
+      await ensureForecastV1Run({ businessId, horizonMonths: 12 });
       log.info('[cron] forecast refreshed', businessId);
     } catch (err) {
       log.error('[cron] forecast refresh failed', businessId, err?.message || err);

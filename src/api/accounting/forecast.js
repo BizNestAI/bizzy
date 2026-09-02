@@ -1,156 +1,154 @@
 // File: /src/api/accounting/forecast.js
-import express from 'express';
+import express from "express";
+import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
 import {
-  generateCashFlowForecast,
-  upsertForecastRows,
-} from './generateCashFlowForecast.js';
-import { supabase } from '../../services/supabaseAdmin.js';
-import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from '../_shared/tenantAuth.js';
+  ForecastV1Error,
+  getForecastV1Status,
+  ensureForecastV1Run,
+  upsertForecastV1Overrides,
+  resetForecastV1Overrides,
+} from "../../services/accounting/forecastV1Service.js";
 
 const router = express.Router();
 
+function readBusinessId(req) {
+  return req.business?.id || req.auth?.businessId || req.query.businessId || req.query.business_id || req.body?.businessId || req.body?.business_id || null;
+}
+
+function readUserId(req) {
+  return req.auth?.userId || req.user?.id || req.query.userId || req.query.user_id || req.body?.userId || req.body?.user_id || null;
+}
+
+function readMonths(value, fallback = 12) {
+  return Math.max(2, Math.min(12, Number(value) || fallback));
+}
+
+function sendForecastError(res, err) {
+  const status = err?.status || err?.statusCode || 500;
+  return res.status(status).json({
+    data_status: status >= 500 ? "generation_failed" : err?.error || "forecast_error",
+    error: err?.error || err?.message || "forecast_error",
+    details: err instanceof ForecastV1Error ? err.details : undefined,
+    is_sample: false,
+  });
+}
+
 /**
  * GET /api/accounting/forecast
- * Returns (and upserts) a 2–12 month cash-flow forecast.
- * Query:
- *  - userId (required)
- *  - businessId (required)
- *  - months (optional, default 12; clamped 2–12)
- *  - mockOnly=true|false (optional; forces mock generation)
+ * Read-only Forecasts V1 endpoint. Returns the latest persisted V1 run or an
+ * explicit availability status. It never calls QuickBooks and never generates
+ * or persists a forecast as a side effect of page load.
  */
-router.get('/', async (req, res) => {
-  const businessId = req.business?.id || req.auth?.businessId || req.query.businessId || req.query.business_id;
-  const userId = req.auth?.userId || req.user?.id || req.query.userId || req.query.user_id;
-  let { months = '12', mockOnly } = req.query;
-  const adminViewOptional = req.query.admin_view_optional === '1' || req.query.admin_view_optional === 'true';
+router.get("/", async (req, res) => {
+  const businessId = readBusinessId(req);
+  const months = readMonths(req.query.months);
+  const adminViewOptional = req.query.admin_view_optional === "1" || req.query.admin_view_optional === "true";
 
-  if ((!userId && !isAdminViewRequest(req)) || !businessId) {
-    return res.status(400).json({ error: 'Missing userId or businessId' });
+  if (!businessId) {
+    return res.status(400).json({ data_status: "missing_context", error: "Missing businessId", is_sample: false });
   }
 
-  // Normalize inputs
-  months = Math.max(2, Math.min(12, parseInt(months, 10) || 12));
-  const forceMock = String(mockOnly).toLowerCase() === 'true';
+  try {
+    const forecast = await getForecastV1Status({ businessId, horizonMonths: months });
+    if (isAdminViewRequest(req) && forecast.data_status !== "available" && !adminViewOptional) {
+      return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_read_only_data_unavailable" });
+    }
+    res.set("Cache-Control", "no-store");
+    return res.status(200).json({
+      ...forecast,
+      admin_view_cache_only: isAdminViewRequest(req) ? true : undefined,
+      admin_view_unavailable: isAdminViewRequest(req) && forecast.data_status !== "available" ? true : undefined,
+    });
+  } catch (err) {
+    console.error("[Forecast Read Error]", err?.message || err);
+    return sendForecastError(res, err);
+  }
+});
+
+/**
+ * POST /api/accounting/forecast/generate
+ * Explicit, tenant-authorized generation from completed Cash Health snapshots.
+ */
+router.post("/generate", async (req, res) => {
+  const businessId = readBusinessId(req);
+  const userId = readUserId(req);
+  const months = readMonths(req.body?.months || req.query?.months);
+
+  if (isAdminViewRequest(req)) {
+    return res.status(403).json({ data_status: "generation_failed", error: "admin_view_read_only", is_sample: false });
+  }
+  if (!businessId) {
+    return res.status(400).json({ data_status: "missing_context", error: "Missing businessId", is_sample: false });
+  }
 
   try {
-    if (isAdminViewRequest(req)) {
-      const { data, error } = await supabase
-        .from('cashflow_forecast')
-        .select('*')
-        .eq('business_id', businessId)
-        .order('month', { ascending: true })
-        .limit(months);
-
-      if (error) {
-        console.error('[Forecast Cache Fetch Error]', error?.message || error);
-        return res.status(500).json({ error: 'Failed to fetch cash flow forecast.' });
-      }
-      if (!Array.isArray(data) || data.length === 0) {
-        if (adminViewOptional) {
-          return res.status(200).json({
-            forecast: [],
-            admin_view_cache_only: true,
-            admin_view_unavailable: true,
-            message: 'No persisted forecast is available for this business.',
-          });
-        }
-        return sendAdminViewReadOnlyUnavailable(res, { error: 'admin_view_read_only_data_unavailable' });
-      }
-      res.set('Cache-Control', 'private, max-age=30');
-      return res.status(200).json({
-        forecast: data,
-        admin_view_cache_only: true,
-      });
-    }
-
-    const forecast = await generateCashFlowForecast({
-      userId,
-      businessId,
-      months,
-      forceMock,
-    });
-
-    // Light caching of identical queries during a session
-    res.set('Cache-Control', 'private, max-age=30');
-    return res.status(200).json({ forecast });
+    const forecast = await ensureForecastV1Run({ businessId, createdBy: userId || null, horizonMonths: months });
+    res.set("Cache-Control", "no-store");
+    const status = forecast.data_status === "available"
+      ? 201
+      : forecast.data_status === "generation_in_progress"
+        ? 202
+        : 409;
+    return res.status(status).json(forecast);
   } catch (err) {
-    console.error('[Forecast Error]', err);
-    return res.status(500).json({ error: 'Failed to generate cash flow forecast.' });
+    console.error("[Forecast Generate Error]", err?.message || err);
+    return sendForecastError(res, err);
   }
 });
 
 /**
  * POST /api/accounting/forecast/override
- * Persist user overrides coming from the Forecast Editor table.
- * Body: {
- *   userId: string,
- *   businessId: string,
- *   rows: [{
- *     month: 'YYYY-MM' | 'YYYY-MM-DD',
- *     revenue, expenses, cash_in?, cash_out?, net_cash?, ending_cash?
- *   }]
- * }
+ * Saves user overrides over an immutable Forecasts V1 baseline. It rejects
+ * sample/demo rows by requiring a real forecast_run_id.
  */
-router.post('/override', async (req, res) => {
-  const { userId, businessId, rows } = req.body || {};
-  if (!userId || !businessId || !Array.isArray(rows) || rows.length === 0) {
-    return res.status(400).json({ error: 'Missing userId, businessId, or rows' });
+router.post("/override", async (req, res) => {
+  const businessId = readBusinessId(req);
+  const userId = readUserId(req);
+  const forecastRunId = req.body?.forecast_run_id || req.body?.forecastRunId || req.body?.run_id || req.body?.runId;
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
+  if (isAdminViewRequest(req)) {
+    return res.status(403).json({ error: "admin_view_read_only", is_sample: false });
+  }
+  if (!businessId || !forecastRunId || rows.length === 0) {
+    return res.status(400).json({ error: "Missing businessId, forecastRunId, or rows", is_sample: false });
   }
 
   try {
-    const normalized = rows.map(normalizeRow);
-    await upsertForecastRows({ userId, businessId, rows: normalized, source: 'manual' });
-    return res.status(200).json({ ok: true });
+    const forecast = await upsertForecastV1Overrides({
+      businessId,
+      forecastRunId,
+      createdBy: userId || null,
+      rows,
+    });
+    return res.status(200).json(forecast);
   } catch (err) {
-    console.error('[Forecast Override Error]', err);
-    return res.status(500).json({ error: 'Failed to save overrides.' });
+    console.error("[Forecast Override Error]", err?.message || err);
+    return sendForecastError(res, err);
   }
 });
 
-/* ----------------------- helpers ----------------------- */
-
-function toNum(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-// Accepts 'YYYY-MM' or 'YYYY-MM-DD' or Date; returns 'YYYY-MM-01'
-function toMonthDate(v) {
-  if (typeof v === 'string') {
-    // 'YYYY-MM'
-    if (/^\d{4}-\d{2}$/.test(v)) return `${v}-01`;
-    // 'YYYY-MM-DD'
-    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v.slice(0, 7) + '-01';
+router.post("/override/reset", async (req, res) => {
+  const businessId = readBusinessId(req);
+  const forecastRunId = req.body?.forecast_run_id || req.body?.forecastRunId || req.body?.run_id || req.body?.runId;
+  if (isAdminViewRequest(req)) {
+    return res.status(403).json({ error: "admin_view_read_only", is_sample: false });
   }
-  const d = new Date(v || Date.now());
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  return `${y}-${m}-01`;
-}
+  if (!businessId || !forecastRunId) {
+    return res.status(400).json({ error: "Missing businessId or forecastRunId", is_sample: false });
+  }
 
-function normalizeRow(r) {
-  const month = toMonthDate(r.month);
-  const revenue = toNum(r.revenue ?? r.forecasted_revenue);
-  const expenses = toNum(r.expenses ?? r.forecasted_expenses);
-
-  // Keep AR/AP/loan portions that were already baked into cash_in/out if present
-  const cash_in = toNum(r.cash_in ?? revenue);
-  const cash_out = toNum(r.cash_out ?? expenses);
-  const net_cash = toNum(r.net_cash ?? cash_in - cash_out);
-  const ending_cash = toNum(r.ending_cash ?? 0);
-
-  return {
-    // required by your schema (userId/businessId are attached in upsert helper)
-    month,
-    revenue,
-    expenses,
-    cash_in,
-    cash_out,
-    net_cash,
-    ending_cash,
-    source: 'manual',
-    updated_at: new Date().toISOString(),
-  };
-}
+  try {
+    const forecast = await resetForecastV1Overrides({
+      businessId,
+      forecastRunId,
+      month: req.body?.month || null,
+    });
+    return res.status(200).json(forecast);
+  } catch (err) {
+    console.error("[Forecast Override Reset Error]", err?.message || err);
+    return sendForecastError(res, err);
+  }
+});
 
 export default router;

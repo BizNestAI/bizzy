@@ -67,16 +67,20 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
   const [lastSavedAt, setLastSavedAt] = useState(null);
   const [asOfLabel, setAsOfLabel] = useState(formatAsOfDate(new Date()));
   const [error, setError] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
+  const [forecastRunId, setForecastRunId] = useState(null);
+  const [forecastMeta, setForecastMeta] = useState(null);
+  const [cashBalanceStatus, setCashBalanceStatus] = useState('unavailable');
   const [edited, setEdited] = useState(new Set());
   const mounted = useRef(false);
-  const isDemo = useDemoData || !businessId || shouldUseDemoData();
+  const isDemo = useDemoData || shouldUseDemoData();
   const demoFinancials = useMemo(() => (isDemo ? getDemoData()?.financials || null : null), [isDemo]);
   const demoForecast = useMemo(() => buildDemoForecastFromFinancials(demoFinancials, months), [demoFinancials, months]);
 
-  const missingLiveBusiness = !isDemo && (!userId || !businessId);
+  const missingLiveBusiness = !isDemo && !businessId;
 
   const fetchForecast = useCallback(
-    async (opts = { forceModel: false }) => {
+    async () => {
       if (isDemo) {
         const fallback = alignForecastHorizon(
           demoForecast && demoForecast.length ? demoForecast : buildMockForecast(months),
@@ -92,44 +96,84 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
         return;
       }
 
-      if (!userId || !businessId) {
+      if (!businessId) {
         setRows([]);
         setDraft([]);
         setPreviousRows(null);
         setLastSavedAt(null);
         setEdited(new Set());
+        setForecastRunId(null);
+        setForecastMeta(null);
+        setStatusMessage('Choose a business to view the live operating forecast.');
         setLoading(false);
         return;
       }
 
       setLoading(true);
       setError('');
+      setStatusMessage('');
       try {
         const params = new URLSearchParams({
-          userId,
           businessId,
           months: String(Math.max(2, Math.min(12, Number(months) || 12))),
-          mockOnly: opts.forceModel ? 'false' : undefined,
         });
+        if (userId) params.set('userId', userId);
         if (readOnly) params.set('admin_view_optional', '1');
-        const resp = await safeFetch(`/api/accounting/forecast?${params.toString()}`);
-        const data = Array.isArray(resp?.forecast) ? resp.forecast : [];
+        let resp = await safeFetch(`/api/accounting/forecast?${params.toString()}`);
+        if (resp?.data_status === 'generation_required' && !readOnly) {
+          setStatusMessage('Generating an operating forecast from Cash-basis QuickBooks history...');
+          resp = await safeFetch('/api/accounting/forecast/generate', {
+            method: 'POST',
+            body: { businessId, months: Math.max(2, Math.min(12, Number(months) || 12)) },
+          });
+        }
+        const data = Array.isArray(resp?.forecast?.months)
+          ? resp.forecast.months
+          : (Array.isArray(resp?.forecast_rows) ? resp.forecast_rows : []);
         if (readOnly && (!data.length || resp?.admin_view_unavailable)) {
           setRows([]);
           setDraft([]);
           setPreviousRows(null);
           setLastSavedAt(null);
           setEdited(new Set());
+          setForecastRunId(null);
+          setForecastMeta(resp || null);
           setError(resp?.message || 'No persisted forecast is available for this business.');
           return;
         }
-        if (!data.length) throw new Error('no-data');
+        if (!data.length) {
+          setRows([]);
+          setDraft([]);
+          setPreviousRows(null);
+          setLastSavedAt(null);
+          setEdited(new Set());
+          setForecastRunId(null);
+          setForecastMeta(resp || null);
+          setCashBalanceStatus(resp?.cash_balance?.status || 'unavailable');
+          if (resp?.data_status === 'insufficient_history') {
+            const missing = resp?.history?.missing_months?.join(', ');
+            setStatusMessage(`Forecast needs ${resp?.history?.months_required || 12} contiguous Cash-basis QuickBooks months. Missing: ${missing || 'history'}.`);
+          } else if (resp?.data_status === 'generation_in_progress') {
+            setStatusMessage('Generating an operating forecast from Cash-basis QuickBooks history...');
+          } else if (resp?.data_status === 'qbo_disconnected') {
+            setError('Connect QuickBooks to generate a live operating forecast.');
+          } else if (resp?.data_status === 'starting_cash_unavailable') {
+            setStatusMessage('Operating forecast is available, but ending cash needs a QBO cash-balance source.');
+          } else {
+            setError('No live forecast is available yet.');
+          }
+          return;
+        }
         const normalized = alignForecastHorizon(data, months);
         setRows(normalized);
         setDraft(normalized);
         setPreviousRows(null);
         setLastSavedAt(null);
         setEdited(new Set());
+        setForecastRunId(resp?.run_id || null);
+        setForecastMeta(resp || null);
+        setCashBalanceStatus(resp?.cash_balance?.status || 'unavailable');
+        setStatusMessage(buildForecastStatusMessage(resp));
       } catch (err) {
         if (readOnly) {
           setRows([]);
@@ -137,17 +181,20 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
           setPreviousRows(null);
           setLastSavedAt(null);
           setEdited(new Set());
+          setForecastRunId(null);
+          setForecastMeta(null);
           setError('No persisted forecast is available for this business.');
           return;
         }
-        const fallback = alignForecastHorizon(buildMockForecast(months), months);
-        setRows(fallback);
-        setDraft(fallback);
+        setRows([]);
+        setDraft([]);
         setPreviousRows(null);
         setLastSavedAt(null);
         setEdited(new Set());
-        setError('Live forecast unavailable. Showing Bizzi sample data.');
-        console.warn('[ForecastEditorChart] falling back to mock data:', err?.message);
+        setForecastRunId(null);
+        setForecastMeta(null);
+        setError('Unable to load the live operating forecast. No sample data is shown in Live Mode.');
+        console.warn('[ForecastEditorChart] live forecast error:', err?.message);
       } finally {
         setLoading(false);
       }
@@ -176,33 +223,38 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
     const last = draft[draft.length - 1];
     const avgRevenue = Math.round(draft.reduce((s, r) => s + (r.revenue || 0), 0) / draft.length);
     const avgExpenses = Math.round(draft.reduce((s, r) => s + (r.expenses || 0), 0) / draft.length);
-    const monthlyNet = Math.round(draft.reduce((s, r) => s + (r.net_cash || 0), 0) / draft.length);
+    const monthlyNet = Math.round(draft.reduce((s, r) => s + (r.net_cash || r.operating_net_cash_flow || 0), 0) / draft.length);
+    const hasEndingCash = cashBalanceStatus === 'available' && draft.some((r) => r.ending_cash !== null && r.ending_cash !== undefined);
     return {
       avgRevenue,
       avgExpenses,
-      endingCash: last?.ending_cash ?? 0,
+      endingCash: hasEndingCash ? last?.ending_cash : null,
       monthlyNet,
       startingCash: Math.round((first?.ending_cash ?? 0) - (first?.net_cash ?? 0)),
       firstRevenue: first?.revenue ?? 0,
       lastRevenue: last?.revenue ?? 0,
       firstExpenses: first?.expenses ?? 0,
       lastExpenses: last?.expenses ?? 0,
-      lowCash: Math.min(...draft.map((r) => Number(r.ending_cash) || 0)),
+      lowCash: hasEndingCash ? Math.min(...draft.map((r) => Number(r.ending_cash) || 0)) : null,
+      hasEndingCash,
     };
-  }, [draft]);
+  }, [draft, cashBalanceStatus]);
 
   const recalc = (row) => {
-    const cash_in = clampNonNegative(row.revenue) + clampNonNegative(row.cash_in - row.revenue);
-    const baseOut = clampNonNegative(row.cash_out - row.expenses);
-    const cash_out = clampNonNegative(row.expenses) + clampNonNegative(baseOut);
-    const net_cash = cash_in - cash_out;
+    const revenue = clampNonNegative(row.revenue);
+    const expenses = clampNonNegative(row.expenses);
+    const cash_in = cashBalanceStatus === 'available' ? revenue + clampNonNegative(row.cash_in - row.revenue) : null;
+    const baseOut = cashBalanceStatus === 'available' ? clampNonNegative(row.cash_out - row.expenses) : null;
+    const cash_out = cashBalanceStatus === 'available' ? expenses + clampNonNegative(baseOut) : null;
+    const net_cash = revenue - expenses;
     return {
       ...row,
-      revenue: clampNonNegative(row.revenue),
-      expenses: clampNonNegative(row.expenses),
+      revenue,
+      expenses,
       cash_in,
       cash_out,
       net_cash,
+      operating_net_cash_flow: net_cash,
     };
   };
 
@@ -215,11 +267,11 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
       for (let i = 0; i < next.length; i++) {
         if (i === idx) {
           rolling = (i === 0 ? (rows[0]?.ending_cash ?? recalced.net_cash) - recalced.net_cash : next[i - 1].ending_cash) + recalced.net_cash;
-          next[i] = { ...recalced, ending_cash: rolling };
+          next[i] = { ...recalced, ending_cash: cashBalanceStatus === 'available' ? rolling : null };
         } else if (i > idx) {
           const r = next[i];
           rolling = (next[i - 1]?.ending_cash ?? 0) + r.net_cash;
-          next[i] = { ...r, ending_cash: rolling };
+          next[i] = { ...r, ending_cash: cashBalanceStatus === 'available' ? rolling : null };
         }
       }
       return next;
@@ -251,22 +303,18 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
       setEdited(new Set());
       return;
     }
-    if (readOnly || !hasEdits || !userId || !businessId) return;
+    if (readOnly || !hasEdits || !businessId || !forecastRunId || forecastMeta?.is_sample) return;
     setSaving(true);
     setError('');
     try {
       const payload = draft.map((r) => ({
         month: r.month,
-        revenue: r.revenue,
-        expenses: r.expenses,
-        cash_in: r.cash_in,
-        cash_out: r.cash_out,
-        net_cash: r.net_cash,
-        ending_cash: r.ending_cash,
+        revenue_override: r.revenue,
+        expense_override: r.expenses,
       }));
       await safeFetch('/api/accounting/forecast/override', {
         method: 'POST',
-        body: { userId, businessId, rows: payload },
+        body: { userId, businessId, forecast_run_id: forecastRunId, rows: payload },
       });
       setPreviousRows(rows);
       setRows(draft);
@@ -317,7 +365,10 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <p className="text-xs uppercase tracking-[0.4em] text-white/60">Projection editor</p>
-          <h2 className="mt-2 text-2xl font-semibold text-white">Monthly Cash Flow</h2>
+          <h2 className="mt-2 text-2xl font-semibold text-white">Operating Forecast</h2>
+          {statusMessage && (
+            <p className="mt-2 max-w-2xl text-xs font-medium leading-relaxed text-white/56">{statusMessage}</p>
+          )}
         </div>
         <div className="flex flex-col items-start gap-2 lg:items-end lg:text-right">
           <div className="flex flex-wrap items-center gap-2 lg:justify-end">
@@ -351,15 +402,24 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
           <ForecastMetric
             label="Avg monthly net"
             value={currency(headerStats.monthlyNet)}
-            note={headerStats.monthlyNet >= 0 ? 'Average monthly cash surplus' : 'Average monthly cash shortfall'}
+            note={headerStats.monthlyNet >= 0 ? 'Average operating surplus' : 'Average operating shortfall'}
             tone={headerStats.monthlyNet >= 0 ? 'emerald' : 'rose'}
           />
-          <ForecastMetric
-            label={`Ending cash (${months} mo)`}
-            value={currency(headerStats.endingCash)}
-            note={`Starts ${currency(headerStats.startingCash)}; low point ${currency(headerStats.lowCash)}`}
-            tone={headerStats.endingCash >= 0 ? 'emerald' : 'rose'}
-          />
+          {headerStats.hasEndingCash ? (
+            <ForecastMetric
+              label={`Ending cash (${months} mo)`}
+              value={currency(headerStats.endingCash)}
+              note={`Starts ${currency(headerStats.startingCash)}; low point ${currency(headerStats.lowCash)}`}
+              tone={headerStats.endingCash >= 0 ? 'emerald' : 'rose'}
+            />
+          ) : (
+            <ForecastMetric
+              label="Ending cash"
+              value="Unavailable"
+              note="Needs an authoritative QBO cash-balance source"
+              tone="neutral"
+            />
+          )}
         </div>
       )}
 
@@ -369,7 +429,11 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
             <Loader2 className="mr-2 animate-spin" /> Loading forecast…
           </div>
         ) : missingLiveBusiness ? (
-          <div className="flex h-64 items-center justify-center text-white/60">Choose a business to view forecasts.</div>
+          <div className="flex h-64 items-center justify-center px-6 text-center text-white/60">Choose a business to view forecasts.</div>
+        ) : !draft.length ? (
+          <div className="flex h-64 items-center justify-center px-6 text-center text-white/60">
+            {error || statusMessage || 'No operating forecast is available yet.'}
+          </div>
         ) : (
           <ResponsiveContainer width="100%" height={320}>
                       <ComposedChart data={chartData} margin={{ top: 14, right: 18, left: 0, bottom: 14 }}>
@@ -401,19 +465,21 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
                 tickFormatter={(v) => (v >= 1000 ? `$${Math.round(v / 1000)}k` : `$${v}`)}
               />
               <Tooltip content={<TooltipContent />} />
-              <Area
-                type="monotone"
-                dataKey="ending_cash"
-                name="Ending Cash"
-                stroke="none"
-                fill={`url(#endingCashArea-${gradientId})`}
-                activeDot={false}
-              />
+              {cashBalanceStatus === 'available' && (
+                <Area
+                  type="monotone"
+                  dataKey="ending_cash"
+                  name="Ending Cash"
+                  stroke="none"
+                  fill={`url(#endingCashArea-${gradientId})`}
+                  activeDot={false}
+                />
+              )}
               <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#2dd4bf" strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#0f172a', fill: '#5eead4' }} />
               <Line type="monotone" dataKey="expenses" name="Expenses" stroke="#fbbf24" strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#0f172a', fill: '#fde68a' }} />
-              <Line type="monotone" dataKey="net_cash" name="Net Cash" stroke={netLineColor} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#0f172a', fill: netLineColor }} />
-              <Line type="monotone" dataKey="ending_cash" name="Ending Cash" stroke="#86efac" strokeWidth={2.25} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#0f172a', fill: '#bbf7d0' }} />
-              {latestPoint ? (
+              <Line type="monotone" dataKey="net_cash" name="Operating Net" stroke={netLineColor} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#0f172a', fill: netLineColor }} />
+              {cashBalanceStatus === 'available' && <Line type="monotone" dataKey="ending_cash" name="Ending Cash" stroke="#86efac" strokeWidth={2.25} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#0f172a', fill: '#bbf7d0' }} />}
+              {latestPoint && cashBalanceStatus === 'available' ? (
                 <ReferenceDot
                   x={latestPoint.month_label}
                   y={latestPoint.ending_cash}
@@ -444,7 +510,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
                 size="sm"
                 label="Save all"
                 onClick={saveAll}
-                disabled={readOnly || !hasEdits || saving || missingLiveBusiness}
+                disabled={readOnly || !hasEdits || saving || missingLiveBusiness || !forecastRunId || forecastMeta?.is_sample}
                 variant="primary"
               />
               {hasEdits && (
@@ -473,7 +539,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
                 <Th>Expenses</Th>
                 <Th>Cash In</Th>
                 <Th>Cash Out</Th>
-                <Th>Net Cash</Th>
+                <Th>Operating Net</Th>
                 <Th>Ending Cash</Th>
               </tr>
             </thead>
@@ -492,10 +558,10 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
                     <Td>
                       <NumberInput value={r.expenses} onChange={(v) => handleCellChange(idx, 'expenses', v)} ariaLabel="Expenses" name={`forecast-expenses-${idx}`} disabled={readOnly} />
                     </Td>
-                    <Td className="tabular-nums text-white/78">{currency(r.cash_in)}</Td>
-                    <Td className="tabular-nums text-white/78">{currency(r.cash_out)}</Td>
+                    <Td className="tabular-nums text-white/45">Unavailable</Td>
+                    <Td className="tabular-nums text-white/45">Unavailable</Td>
                     <Td className={`font-semibold tabular-nums ${r.net_cash >= 0 ? 'text-emerald-100' : 'text-rose-100'}`}>{currency(r.net_cash)}</Td>
-                    <Td className="font-semibold tabular-nums text-white/88">{currency(r.ending_cash)}</Td>
+                    <Td className="font-semibold tabular-nums text-white/55">{r.ending_cash == null ? 'Unavailable' : currency(r.ending_cash)}</Td>
                   </tr>
                 );
               })}
@@ -645,6 +711,7 @@ function alignForecastHorizon(rows = [], months = 12) {
     };
   });
   const map = new Map(normalizedRows.map((row) => [monthKey(row.month, row.month_label), row]));
+  const hasEndingCash = normalizedRows.some((row) => row.ending_cash !== null && row.ending_cash !== undefined);
   let last = normalizedRows[0] || {
     revenue: 20000,
     expenses: 14000,
@@ -664,10 +731,12 @@ function alignForecastHorizon(rows = [], months = 12) {
     const source = existing || last;
     const revenue = clampNonNegative(source.revenue);
     const expenses = clampNonNegative(source.expenses);
-    const cashIn = clampNonNegative(source.cash_in ?? revenue);
-    const cashOut = clampNonNegative(source.cash_out ?? expenses);
-    const netCash = cashIn - cashOut;
-    rolling += netCash;
+    const cashIn = source.cash_in === null ? null : clampNonNegative(source.cash_in ?? revenue);
+    const cashOut = source.cash_out === null ? null : clampNonNegative(source.cash_out ?? expenses);
+    const netCash = Number.isFinite(Number(source.net_cash ?? source.operating_net_cash_flow))
+      ? Number(source.net_cash ?? source.operating_net_cash_flow)
+      : revenue - expenses;
+    if (hasEndingCash) rolling += netCash;
     const clone = {
       ...source,
       month: `${key}-01`,
@@ -677,7 +746,7 @@ function alignForecastHorizon(rows = [], months = 12) {
       cash_in: cashIn,
       cash_out: cashOut,
       net_cash: netCash,
-      ending_cash: rolling,
+      ending_cash: hasEndingCash ? rolling : null,
       source: source.source || 'generated',
     };
     return clone;
@@ -718,6 +787,24 @@ function labelFromKey(key) {
   const [y, m] = key.split('-');
   const d = new Date(Date.UTC(Number(y), Number(m) - 1, 1));
   return d.toLocaleString('default', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
+function buildForecastStatusMessage(resp) {
+  if (!resp || resp.data_status !== 'available') return '';
+  const historyStart = formatMonthLabel(resp?.history?.start);
+  const historyEnd = formatMonthLabel(resp?.history?.end);
+  const version = resp?.model_version || 'forecast_v1';
+  const generated = resp?.generated_at ? ` · Generated ${formatTimeAgo(resp.generated_at)}` : '';
+  const confidence = resp?.confidence?.explanation ? ` ${resp.confidence.explanation}` : '';
+  const cash = resp?.cash_balance?.status === 'available'
+    ? ''
+    : ' Ending cash is unavailable until a QBO cash-balance source is connected.';
+  return `Based on ${historyStart}-${historyEnd} Cash-basis QuickBooks data · ${version}${generated}.${confidence}${cash}`;
+}
+
+function formatMonthLabel(value) {
+  const key = monthKey(value);
+  return labelFromKey(key);
 }
 
 function buildMockForecast(months = 12) {

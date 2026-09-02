@@ -53,21 +53,25 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
         setLoading(false);
         return;
       }
-      if (!userId || !businessId) {
+      if (!businessId) {
         setRows([]);
         setLoading(false);
         return;
       }
       try {
         const params = new URLSearchParams({
-          userId,
           businessId,
           months: String(Math.max(3, Math.min(12, Number(months) || 6))),
         });
+        if (userId) params.set('userId', userId);
         const resp = await safeFetch(`/api/accounting/forecast-accuracy?${params.toString()}`);
         const data = Array.isArray(resp?.rows) ? resp.rows : [];
-        if (!data.length) throw new Error('no-data');
         if (ignore) return;
+        if (!data.length) {
+          setRows([]);
+          setError(resp?.message || 'Forecast accuracy will appear after forecasted months have completed.');
+          return;
+        }
         setRows(alignToRollingWindow(data, months));
       } catch (err) {
         if (ignore) return;
@@ -76,9 +80,9 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
           setError('No persisted forecast accuracy is available for this business.');
           return;
         }
-        setRows(buildMockAccuracy(months));
-        setError('Unable to load live accuracy. Showing sample comparison.');
-        console.warn('[ForecastVsActualChart] falling back to mock data:', err?.message);
+        setRows([]);
+        setError('Unable to load live forecast accuracy.');
+        console.warn('[ForecastVsActualChart] live accuracy error:', err?.message);
       } finally {
         if (!ignore) setLoading(false);
       }
@@ -239,28 +243,6 @@ function formatDelta(actual = 0, forecast = 0) {
   if (!delta) return '+0';
   const k = Math.abs(delta) >= 1000 ? `${(Math.abs(delta) / 1000).toFixed(1)}k` : `${Math.abs(delta)}`;
   return `${delta >= 0 ? '+' : '-'}${k}`;
-}
-
-function buildMockAccuracy(months = 6) {
-  return buildTrailingMonths(months).map(({ key, label }, index) => {
-    const seasonalLift = Math.round(Math.sin(index / 2) * 900);
-    const actualRevenue = 18500 + index * 950 + seasonalLift;
-    const forecastRevenue = actualRevenue + ((index % 3) - 1) * 600;
-    const actualExpenses = 12200 + index * 620 + Math.round(Math.cos(index / 2) * 500);
-    const forecastExpenses = actualExpenses - ((index % 3) - 1) * 350;
-    const actualProfit = actualRevenue - actualExpenses;
-    const forecastProfit = forecastRevenue - forecastExpenses;
-    return {
-      month: `${key}-01`,
-      month_label: label,
-      actualRevenue,
-      forecastRevenue,
-      actualExpenses,
-      forecastExpenses,
-      actualProfit,
-      forecastProfit,
-    };
-  });
 }
 
 function alignToRollingWindow(rows, months = 6) {

@@ -1,6 +1,5 @@
 // File: /src/components/Accounting/AffordabilityInsightCard.jsx
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
 import {
   CheckCircle2,
   XCircle,
@@ -58,6 +57,11 @@ const verdictStyles = {
     chip: 'bg-amber-500/15 text-amber-300 border-amber-300/20',
     icon: <AlertTriangle size={18} className="text-amber-300" />,
   },
+  Unavailable: {
+    text: 'text-white/80',
+    chip: 'bg-white/10 text-white/70 border-white/15',
+    icon: <AlertTriangle size={18} className="text-white/65" />,
+  },
 };
 
 const currency = (n) =>
@@ -75,8 +79,6 @@ function Stat({ label, value }) {
 }
 
 export default function AffordabilityInsightCard({ result, metaLabel }) {
-  if (!result) return null;
-
   const {
     verdict = 'Depends',
     rationale = '',
@@ -115,11 +117,10 @@ export default function AffordabilityInsightCard({ result, metaLabel }) {
     Array.isArray(risk_flags) && risk_flags.length ? risk_flags[0] : null
   );
 
+  if (!result) return null;
+
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.25 }}
+    <div
       className="rounded-2xl border border-white/10 bg-zinc-900 p-5 text-white shadow-lg"
     >
       {/* Header */}
@@ -157,10 +158,10 @@ export default function AffordabilityInsightCard({ result, metaLabel }) {
           monthsReviewed != null ||
           endCashAfterHorizon != null) && (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Stat label="Monthly impact" value={currency(Number(monthlyExpenseImpact || 0))} />
-            <Stat label="One-time" value={currency(Number(oneTimeImpact || 0))} />
+            <Stat label="Monthly impact" value={currency(monthlyExpenseImpact == null ? null : Number(monthlyExpenseImpact))} />
+            <Stat label="One-time" value={currency(oneTimeImpact == null ? null : Number(oneTimeImpact))} />
             <Stat label="Months reviewed" value={Number(monthsReviewed || 0)} />
-            <Stat label="Ending cash (after)" value={currency(Number(endCashAfterHorizon || 0))} />
+            <Stat label="Ending cash (after)" value={currency(endCashAfterHorizon == null ? null : Number(endCashAfterHorizon))} />
           </div>
         )}
 
@@ -242,6 +243,6 @@ export default function AffordabilityInsightCard({ result, metaLabel }) {
           </div>
         )}
       </div>
-    </motion.div>
+    </div>
   );
 }
