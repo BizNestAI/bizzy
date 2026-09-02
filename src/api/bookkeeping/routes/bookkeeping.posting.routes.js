@@ -1,9 +1,15 @@
+/* global process */
 import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { postSingleBookkeepingTransactionNow, runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
-import { getAutoPostSettings, setAutoPostEnabled } from "../../../services/bookkeeping/autoPostControl.js";
+import {
+  getAutoPostSettings,
+  previewAutoPostBacklog,
+  releaseAutoPostBacklogScope,
+  setAutoPostEnabled,
+} from "../../../services/bookkeeping/autoPostControl.js";
 import { assertTaxBusinessAccess } from "../../tax/taxRouteUtils.js";
 import { getQBOClient } from "../../../utils/qboClient.js";
 import { getLatestQuickBooksTokenRow } from "../../../services/quickbooksTokenService.js";
@@ -105,6 +111,63 @@ router.patch("/posting/auto-post", requireAuth, async (req, res) => {
     }
     console.error("[bookkeeping][auto-post-toggle] failed", err?.message || err);
     return res.status(err?.status || 500).json({ ok: false, error: err?.code || "auto_post_toggle_failed", message: err?.message || "failed" });
+  }
+});
+
+router.get("/posting/backlog/preview", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const preview = await previewAutoPostBacklog({
+      db: supabase,
+      businessId,
+      rangeStart: req.query?.range_start || null,
+      rangeEnd: req.query?.range_end || null,
+      transactionIds: Array.isArray(req.query?.transaction_id)
+        ? req.query.transaction_id
+        : req.query?.transaction_id
+          ? [req.query.transaction_id]
+          : [],
+    });
+    return res.json(preview);
+  } catch (err) {
+    console.error("[bookkeeping][backlog-preview] failed", err?.message || err);
+    return res.status(err?.status || 500).json({
+      ok: false,
+      error: err?.code || "auto_post_backlog_preview_failed",
+      message: err?.message || "failed",
+    });
+  }
+});
+
+router.post("/posting/backlog/release", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const result = await releaseAutoPostBacklogScope({
+      db: supabase,
+      businessId,
+      requestedBy: req.user?.id || req.user?.sub || null,
+      rangeStart: req.body?.range_start || null,
+      rangeEnd: req.body?.range_end || null,
+      transactionIds: Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids : [],
+      metadata: {
+        source: "bookkeeping_backlog_release",
+        preview_acknowledged: req.body?.preview_acknowledged === true,
+      },
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error("[bookkeeping][backlog-release] failed", err?.message || err);
+    return res.status(err?.status || 500).json({
+      ok: false,
+      error: err?.code || "auto_post_backlog_release_failed",
+      message: err?.message || "failed",
+    });
   }
 });
 

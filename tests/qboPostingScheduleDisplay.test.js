@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -14,6 +15,8 @@ const nowMs = Date.parse("2026-08-31T16:00:00.000Z");
 test("QBO posting schedule formatter renders authoritative lifecycle states", () => {
   const future = formatQboPostingSchedule({
     status: "auto_approved",
+    final_qbo_account_id: "qbo-meals",
+    meta: { safe_to_auto_post: true },
     post_after: "2026-09-01T18:14:00.000Z",
   }, { nowMs });
   assert.equal(future.key, "scheduled");
@@ -22,6 +25,8 @@ test("QBO posting schedule formatter renders authoritative lifecycle states", ()
 
   const due = formatQboPostingSchedule({
     status: "approved",
+    final_qbo_account_id: "qbo-meals",
+    meta: { safe_to_auto_post: true },
     post_after: "2026-08-31T15:59:00.000Z",
   }, { nowMs });
   assert.equal(due.key, "ready_to_post");
@@ -36,7 +41,12 @@ test("QBO posting schedule formatter renders authoritative lifecycle states", ()
   assert.equal(posted.key, "posted");
   assert.equal(posted.label, "Posted");
 
-  const unscheduled = formatQboPostingSchedule({ status: "auto_approved", post_after: null }, { nowMs });
+  const unscheduled = formatQboPostingSchedule({
+    status: "auto_approved",
+    final_qbo_account_id: "qbo-meals",
+    meta: { safe_to_auto_post: true },
+    post_after: null,
+  }, { nowMs });
   assert.equal(unscheduled.key, "not_scheduled");
   assert.equal(unscheduled.label, "Not scheduled");
 });
@@ -45,6 +55,7 @@ test("QBO posting schedule only shows Posting from authoritative posting metadat
   assert.equal(
     formatQboPostingSchedule({
       status: "approved",
+      meta: { safe_to_auto_post: true },
       post_after: "2026-08-31T15:00:00.000Z",
     }, { nowMs }).key,
     "ready_to_post"
@@ -53,7 +64,7 @@ test("QBO posting schedule only shows Posting from authoritative posting metadat
     formatQboPostingSchedule({
       status: "approved",
       post_after: "2026-08-31T15:00:00.000Z",
-      meta: { posting_in_progress: true },
+      meta: { safe_to_auto_post: true, posting_in_progress: true },
     }, { nowMs }).key,
     "posting"
   );
@@ -72,6 +83,50 @@ test("QBO posting schedule exposes failures and protects non-handled rows", () =
   assert.equal(formatQboPostingSchedule({ status: "uncategorized", post_after: "2026-09-01T18:14:00.000Z" }, { nowMs }).key, "not_eligible");
   assert.equal(formatQboPostingSchedule({ status: "approved", pending: true, post_after: "2026-09-01T18:14:00.000Z" }, { nowMs }).key, "not_eligible");
   assert.notEqual(deriveQboPostingLifecycle({ status: "approved", post_after: "2026-08-31T15:00:00.000Z" }, { nowMs }).key, "posting");
+});
+
+test("QBO posting schedule renders backlog and blocker lifecycle states without saying Ready", () => {
+  const held = formatQboPostingSchedule({
+    status: "auto_approved",
+    post_after: "2026-08-31T15:00:00.000Z",
+    qbo_posting_lifecycle: {
+      key: "held_historical_backlog",
+      label: "Held: historical backlog review",
+      tone: "warning",
+      detail: "Needs release.",
+    },
+  }, { nowMs });
+  assert.equal(held.key, "held_historical_backlog");
+  assert.equal(held.label, "Held: historical backlog review");
+
+  const unsafe = formatQboPostingSchedule({
+    status: "auto_approved",
+    final_qbo_account_id: "qbo-meals",
+    post_after: "2026-08-31T15:00:00.000Z",
+    meta: { safe_to_auto_post: false },
+  }, { nowMs });
+  assert.equal(unsafe.key, "blocked_unsafe_auto_post");
+  assert.equal(unsafe.label, "Blocked: not safe for auto-post");
+
+  const missing = formatQboPostingSchedule({
+    status: "auto_approved",
+    post_after: "2026-08-31T15:00:00.000Z",
+    meta: { post_block_reason: "missing_final_qbo_account" },
+  }, { nowMs });
+  assert.equal(missing.key, "blocked_missing_final_account");
+  assert.notEqual(missing.label, "Ready to post");
+});
+
+test("Books Review feed attaches server-side posting lifecycle from auto-post policy", () => {
+  const feedService = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
+
+  assert.match(feedService, /getAutoPostPolicy/);
+  assert.match(feedService, /classifyAutoPostOperationalScope/);
+  assert.match(feedService, /buildPostingLifecycleForFeed/);
+  assert.match(feedService, /held_historical_backlog/);
+  assert.match(feedService, /blocked_unsafe_auto_post/);
+  assert.match(feedService, /blocked_missing_final_account/);
+  assert.match(feedService, /qbo_posting_lifecycle/);
 });
 
 test("Books Review feed renders backend QBO schedule fields without deriving post_after in React", () => {

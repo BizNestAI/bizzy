@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -38,7 +39,8 @@ test("Auto-post policy remains explicit and approval grace uses the configured 2
   assert.match(autoPostRoute, /getAutoPostSettings\(\{ db: supabase, businessId, graceHours: POSTING_GRACE_HOURS \}\)/);
   assert.match(autoPostRoute, /setAutoPostEnabled\(\{[\s\S]*graceHours: POSTING_GRACE_HOURS/);
   assert.match(autoPostService, /posting_grace_hours:\s*normalizedGraceHours/);
-  assert.match(autoPostService, /post_after:\s*nextEnabled \? postAfter : null/);
+  assert.match(autoPostService, /scheduledBacklog = 0/);
+  assert.match(autoPostService, /post_after:\s*scheduledBacklog \? postAfter : null/);
 });
 
 test("Books Review no longer exposes page-level Run posting now control", () => {

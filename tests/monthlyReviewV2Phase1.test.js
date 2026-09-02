@@ -75,16 +75,21 @@ test("Monthly Review V2 phase 1 finalization uses accounting-close blocker sourc
 
 test("Monthly Review V2 phase 1 finalization preserves stamps audit and reopen behavior", () => {
   const route = read("src/api/admin/monthlyReview.routes.js");
+  const migration = read("supabase/migrations/20260920_accounting_period_close_authority.sql");
   const finalizeRoute = extractRouteBody(route, "/runs/:runId/finalize");
   const reopenRoute = extractRouteBody(route, "/runs/:runId/reopen");
 
-  assert.match(finalizeRoute, /\.from\("monthly_review_runs"\)/);
-  assert.match(finalizeRoute, /\.from\("financial_monthly_review_stamps"\)/);
-  assert.match(finalizeRoute, /reviewed_by: req\.user\.email \|\| req\.user\.id/);
-  assert.match(finalizeRoute, /reviewer_user_id: req\.user\.id/);
-  assert.match(finalizeRoute, /completed_at: now/);
-  assert.match(finalizeRoute, /logAuditEvent/);
-  assert.match(finalizeRoute, /eventType: "finalized"/);
+  assert.match(finalizeRoute, /refreshMonthlyQboFinancialSnapshot/);
+  assert.match(finalizeRoute, /source: "monthly_admin_review_close"/);
+  assert.match(finalizeRoute, /finalize_monthly_admin_review_close/);
+  assert.match(finalizeRoute, /p_pending_transaction_count: pendingTransactionCount/);
+  assert.match(finalizeRoute, /fetchActiveCloseAuthority/);
+  assert.match(finalizeRoute, /ensureForecastV1Run/);
+  assert.match(migration, /update public\.monthly_review_runs[\s\S]*status = 'finalized'/);
+  assert.match(migration, /insert into public\.financial_monthly_review_stamps/);
+  assert.match(migration, /record_accounting_period_close_authority/);
+  assert.match(migration, /insert into public\.monthly_review_audit_events/);
+  assert.match(migration, /authority_type', 'admin_approved'/);
   assert.match(reopenRoute, /\.from\("monthly_review_runs"\)/);
   assert.match(reopenRoute, /\.from\("financial_monthly_review_stamps"\)/);
   assert.match(reopenRoute, /eventType: "reopened"/);

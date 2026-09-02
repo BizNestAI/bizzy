@@ -1,3 +1,4 @@
+/* global process */
 import crypto from "crypto";
 import { supabase } from "../services/supabaseAdmin.js";
 import { getQBOClient } from "../utils/qboClient.js";
@@ -11,7 +12,11 @@ import { plaidEnvName } from "../services/plaid/plaidClient.js";
 import { triggerContractorCfoInsightsBestEffort } from "../services/insights/contractorCfoTriggerService.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../services/tax/taxChangeEvents.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../services/bookkeeping/bookkeepingScope.js";
-import { getAutoPostToQuickBooks } from "../services/bookkeeping/autoPostControl.js";
+import {
+  classifyAutoPostOperationalScope,
+  getAutoPostPolicy,
+  getAutoPostToQuickBooks,
+} from "../services/bookkeeping/autoPostControl.js";
 import { consumeQuickBooksRefreshMarker, getLatestQuickBooksTokenRow } from "../services/quickbooksTokenService.js";
 import { canonicalizeVendorDisplayName, classifyQboVendorProviderError, getVendorPostingRequirement } from "../services/bookkeeping/canonicalVendorService.js";
 import {
@@ -23,6 +28,13 @@ import {
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
+const DUE_QUERY_PAGE_SIZE = Number(process.env.BOOKS_POST_DUE_QUERY_PAGE_SIZE || 250);
+const MAX_DUE_ROWS_PER_SWEEP = Number(process.env.BOOKS_POST_MAX_DUE_ROWS_PER_SWEEP || 1000);
+const BANK_PRELOAD_CHUNK_SIZE = Number(process.env.BOOKS_POST_PRELOAD_CHUNK_SIZE || 50);
+const BANK_PRELOAD_CHUNK_CONCURRENCY = Number(process.env.BOOKS_POST_PRELOAD_CHUNK_CONCURRENCY || 2);
+const BANK_PRELOAD_RETRIES = Number(process.env.BOOKS_POST_PRELOAD_RETRIES || 2);
+const POSTING_BATCH_SIZE = Number(process.env.BOOKS_POST_BATCH_SIZE || 25);
+const SYSTEMIC_FAILURE_THRESHOLD = Number(process.env.BOOKS_POST_SYSTEMIC_FAILURE_THRESHOLD || 5);
 const BACKOFF_SCHEDULE_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000, 6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000];
 const BIZZI_POSTED_LABEL = "Posted by Bizzi";
 const QBO_RECOVERY_REF_LENGTH = 10;
@@ -33,7 +45,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildPostIdempotencyKey({ businessId, transactionId, plaidTransactionId, finalAccountId, amount, date }) {
+function buildPostIdempotencyKey({ businessId, transactionId, plaidTransactionId, amount, date }) {
   const stableTxn = plaidTransactionId || transactionId || "";
   // Deliberately exclude the GL account. A source bank transaction should map to
   // one QBO transaction; later GL changes update that QBO transaction, not create
@@ -927,25 +939,73 @@ function getQboEntityRef(bankTxn = {}, desiredType = "vendor") {
 
 async function fetchPending(businessId = null, options = {}) {
   const nowIso = new Date().toISOString();
-  let query = supabase
-    .from("transaction_categorizations")
-    .select(
-      "transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id"
-    )
-    .in("status", ["approved", "auto_approved", "failed"])
-    .is("qbo_txn_id", null);
-  if (!options?.force) {
-    query = query.not("post_after", "is", null).lte("post_after", nowIso);
-  }
-  if (businessId) query = query.eq("business_id", businessId);
-  const { data, error } = await query;
+  const pageSize = Math.max(1, Math.min(Number(options?.pageSize || DUE_QUERY_PAGE_SIZE) || 250, 500));
+  const maxRows = Math.max(pageSize, Number(options?.maxRows || MAX_DUE_ROWS_PER_SWEEP) || pageSize);
+  const rows = [];
+  for (let from = 0; from < maxRows; from += pageSize) {
+    const to = Math.min(from + pageSize - 1, maxRows - 1);
+    let query = supabase
+      .from("transaction_categorizations")
+      .select(
+        "transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id"
+      )
+      .in("status", ["approved", "auto_approved", "failed"])
+      .is("qbo_txn_id", null)
+      .order("post_after", { ascending: true, nullsFirst: false })
+      .order("transaction_id", { ascending: true })
+      .range(from, to);
+    if (!options?.force) {
+      query = query.not("post_after", "is", null).lte("post_after", nowIso);
+    }
+    if (businessId) query = query.eq("business_id", businessId);
+    const { data, error } = await query;
 
-  if (error) throw error;
-  return data || [];
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return rows;
 }
 
-async function fetchBankTransactions(ids = [], businessId) {
-  if (!ids.length) return {};
+function uniqueValues(values = []) {
+  return Array.from(new Set((values || []).filter(Boolean)));
+}
+
+function chunkValues(values = [], size = BANK_PRELOAD_CHUNK_SIZE) {
+  const out = [];
+  const chunkSize = Math.max(1, Number(size) || 50);
+  for (let i = 0; i < values.length; i += chunkSize) out.push(values.slice(i, i + chunkSize));
+  return out;
+}
+
+function sanitizeError(error) {
+  return {
+    name: error?.name || null,
+    code: error?.code || error?.cause?.code || error?.cause?.errno || null,
+    status: error?.status || null,
+    message: error?.message || String(error || "unknown_error"),
+  };
+}
+
+function isTransientPreloadError(error) {
+  const code = String(error?.code || error?.cause?.code || error?.cause?.errno || "").toUpperCase();
+  const message = String(error?.message || error || "").toLowerCase();
+  if (["PGRST301", "42501", "42703", "42P01"].includes(code)) return false;
+  return (
+    code === "ETIMEDOUT" ||
+    code === "ECONNRESET" ||
+    code === "ECONNREFUSED" ||
+    code === "EAI_AGAIN" ||
+    code === "ENOTFOUND" ||
+    message.includes("fetch failed") ||
+    message.includes("network") ||
+    message.includes("timeout") ||
+    Number(error?.status) === 429 ||
+    Number(error?.status) >= 500
+  );
+}
+
+async function fetchBankTransactionsChunk(ids = [], businessId) {
   const { data, error } = await supabase
     .from("bank_transactions")
     .select(
@@ -954,11 +1014,82 @@ async function fetchBankTransactions(ids = [], businessId) {
     .eq("business_id", businessId)
     .in("id", ids);
   if (error) throw error;
-  const map = {};
-  (data || []).forEach((row) => {
-    map[row.id] = row;
-  });
-  return map;
+  return data || [];
+}
+
+async function fetchBankTransactions(ids = [], businessId, options = {}) {
+  const uniqueIds = uniqueValues(ids);
+  const details = {
+    rowsById: {},
+    failedIds: [],
+    missingIds: [],
+    errors: [],
+    requestedIds: uniqueIds,
+  };
+  if (!uniqueIds.length) return options?.returnDetails ? details : {};
+
+  const chunks = chunkValues(uniqueIds, options?.chunkSize || BANK_PRELOAD_CHUNK_SIZE);
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(Number(options?.concurrency || BANK_PRELOAD_CHUNK_CONCURRENCY) || 1, chunks.length));
+  async function loadChunk(chunkIndex) {
+    const chunk = chunks[chunkIndex];
+    for (let attempt = 0; attempt <= BANK_PRELOAD_RETRIES; attempt += 1) {
+      try {
+        const rows = await fetchBankTransactionsChunk(chunk, businessId);
+        const seen = new Set();
+        for (const row of rows) {
+          if (row.business_id && row.business_id !== businessId) {
+            details.errors.push({
+              stage: "bank_preload_tenant_validation",
+              chunk: chunkIndex + 1,
+              id: row.id,
+              code: "bank_transaction_business_mismatch",
+            });
+            continue;
+          }
+          details.rowsById[row.id] = row;
+          seen.add(row.id);
+        }
+        details.missingIds.push(...chunk.filter((id) => !seen.has(id)));
+        return;
+      } catch (err) {
+        const retryable = isTransientPreloadError(err);
+        log.warn("[books-post] bank preload chunk failed", {
+          stage: "bank_preload",
+          business_id: businessId,
+          chunk: chunkIndex + 1,
+          chunks: chunks.length,
+          id_count: chunk.length,
+          retryable,
+          attempt: attempt + 1,
+          error: sanitizeError(err),
+        });
+        if (!retryable || attempt >= BANK_PRELOAD_RETRIES) {
+          details.failedIds.push(...chunk);
+          details.errors.push({
+            stage: "bank_preload",
+            chunk: chunkIndex + 1,
+            ids: chunk,
+            retryable,
+            error: sanitizeError(err),
+          });
+          return;
+        }
+        await sleep(Math.min(250 * 2 ** attempt, 2000));
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < chunks.length) {
+        const chunkIndex = cursor;
+        cursor += 1;
+        await loadChunk(chunkIndex);
+      }
+    })
+  );
+
+  return options?.returnDetails ? details : details.rowsById;
 }
 
 async function markTransactionNonPostable(item, reason) {
@@ -1049,7 +1180,7 @@ function classifyPreExistingQboTransferMatch({ qboCandidates = [], pair, request
   return { confidence: "NO_MATCH", candidates: [] };
 }
 
-async function postCreditCardPaymentPairToQbo({ item, bankTxn, pair, qbo, requestId }) {
+async function postCreditCardPaymentPairToQbo({ bankTxn, pair, qbo, requestId }) {
   const amount = Math.abs(Number(pair.amount || bankTxn?.amount || 0));
   if (!Number.isFinite(amount) || amount === 0) throw new Error("invalid_amount");
   if (!pair?.checking_qbo_account_id || !pair?.credit_card_qbo_account_id) throw new Error("cc_payment_mapping_not_safe");
@@ -2081,9 +2212,16 @@ async function runOnce(options = {}) {
     pending: 0,
     due: 0,
     eligible: 0,
+    held: 0,
+    blocked: 0,
     skipped: 0,
     attempted: 0,
+    failed: 0,
+    preload_failed: 0,
+    preload_missing: 0,
+    deferred: 0,
     auto_post_disabled: 0,
+    businesses_failed: 0,
   };
   try {
     if (businessId) {
@@ -2106,12 +2244,22 @@ async function runOnce(options = {}) {
           return true;
         });
     const dueBusinessIds = Array.from(new Set((duePending || []).map((item) => item.business_id).filter(Boolean)));
-    const autoPostByBusiness = {};
+    const policyByBusiness = {};
     for (const biz of dueBusinessIds) {
-      autoPostByBusiness[biz] = await getAutoPostToQuickBooks(supabase, biz);
+      try {
+        policyByBusiness[biz] = await getAutoPostPolicy(supabase, biz);
+      } catch (err) {
+        summary.businesses_failed += 1;
+        log.error("[books-post] business policy fetch failed", {
+          stage: "auto_post_policy",
+          business_id: biz,
+          error: sanitizeError(err),
+        });
+        policyByBusiness[biz] = { enabled: false, policy_columns_available: false };
+      }
     }
-    const autoPostDisabledRows = duePending.filter((item) => autoPostByBusiness[item.business_id] !== true);
-    duePending = duePending.filter((item) => autoPostByBusiness[item.business_id] === true);
+    const autoPostDisabledRows = duePending.filter((item) => policyByBusiness[item.business_id]?.enabled !== true);
+    duePending = duePending.filter((item) => policyByBusiness[item.business_id]?.enabled === true);
     summary.auto_post_disabled = autoPostDisabledRows.length;
     summary.due = duePending.length;
     if (!duePending.length) return summary;
@@ -2124,15 +2272,58 @@ async function runOnce(options = {}) {
       return acc;
     }, {});
     const bankCache = {};
+    const failedPreloadIds = new Set();
+    const missingPreloadIds = new Set();
     for (const [biz, idsSet] of Object.entries(byBusiness)) {
       const ids = Array.from(idsSet);
-      bankCache[biz] = await fetchBankTransactions(ids, biz);
+      try {
+        const preload = await fetchBankTransactions(ids, biz, { returnDetails: true });
+        bankCache[biz] = preload.rowsById || {};
+        for (const id of preload.failedIds || []) failedPreloadIds.add(`${biz}:${id}`);
+        for (const id of preload.missingIds || []) missingPreloadIds.add(`${biz}:${id}`);
+        if (preload.errors?.length) {
+          log.warn("[books-post] bank preload completed with gaps", {
+            stage: "bank_preload_summary",
+            business_id: biz,
+            requested: ids.length,
+            loaded: Object.keys(bankCache[biz]).length,
+            failed: preload.failedIds?.length || 0,
+            missing: preload.missingIds?.length || 0,
+          });
+        }
+      } catch (err) {
+        summary.businesses_failed += 1;
+        bankCache[biz] = {};
+        for (const id of ids) failedPreloadIds.add(`${biz}:${id}`);
+        log.error("[books-post] bank preload failed for business", {
+          stage: "bank_preload_business",
+          business_id: biz,
+          id_count: ids.length,
+          error: sanitizeError(err),
+        });
+      }
     }
+    summary.preload_failed = failedPreloadIds.size;
+    summary.preload_missing = missingPreloadIds.size;
 
     const nowIso = new Date().toISOString();
     const checkUpdates = [];
     const eligible = (duePending || []).filter((item) => {
+      const preloadKey = `${item.business_id}:${item.transaction_id}`;
+      if (failedPreloadIds.has(preloadKey) || missingPreloadIds.has(preloadKey)) {
+        return false;
+      }
       const bankTxn = (bankCache[item.business_id] || {})[item.transaction_id];
+      const scope = classifyAutoPostOperationalScope({
+        item,
+        bankTxn,
+        policy: policyByBusiness[item.business_id],
+      });
+      if (!scope.allowed) {
+        if (scope.code === "historical_scope_review_required") summary.held += 1;
+        else summary.blocked += 1;
+        return false;
+      }
       const checkHit =
         item?.meta?.is_check === true
           ? {
@@ -2204,8 +2395,8 @@ async function runOnce(options = {}) {
         }
         return false;
       }
-      if (item.status === "approved") return true;
       const safe = item?.meta?.safe_to_auto_post === true;
+      if (item.status === "approved") return safe || item?.meta?.auto_approve_reason === "manual_user";
       if (item.status === "auto_approved") return safe;
       if (item.status === "failed") return safe || item?.meta?.auto_approve_reason === "manual_user";
       return false;
@@ -2284,16 +2475,41 @@ async function runOnce(options = {}) {
       }
     }
 
+    const batch = eligible.slice(0, Math.max(1, POSTING_BATCH_SIZE));
+    summary.deferred = Math.max(eligible.length - batch.length, 0);
     const attemptedBusinesses = new Set();
-    for (const item of eligible) {
+    let consecutiveSystemicFailures = 0;
+    for (const item of batch) {
       try {
         await handleItem(item);
         summary.attempted += 1;
+        consecutiveSystemicFailures = 0;
         if (item.business_id) attemptedBusinesses.add(item.business_id);
         await sleep(150); // small delay to avoid hammering QBO
       } catch (err) {
-        log.error("[books-post] failed", item.transaction_id, err?.message || err);
+        summary.failed += 1;
+        const sanitized = sanitizeError(err);
+        log.error("[books-post] transaction failed", {
+          stage: "transaction_post",
+          business_id: item.business_id,
+          transaction_id: item.transaction_id,
+          error: sanitized,
+        });
         await markFailed(item, err?.message || "post_failed");
+        if (isTransientPreloadError(err) || String(err?.message || "").toLowerCase().includes("fetch failed")) {
+          consecutiveSystemicFailures += 1;
+        } else {
+          consecutiveSystemicFailures = 0;
+        }
+        if (consecutiveSystemicFailures >= SYSTEMIC_FAILURE_THRESHOLD) {
+          log.error("[books-post] circuit breaker opened for run", {
+            stage: "circuit_breaker",
+            threshold: SYSTEMIC_FAILURE_THRESHOLD,
+            business_id: item.business_id,
+          });
+          summary.circuit_breaker_open = true;
+          break;
+        }
       }
     }
     for (const biz of attemptedBusinesses) {

@@ -63,6 +63,8 @@ import {
   getMonthlyQboPnlSnapshot,
   refreshMonthlyQboPnlSnapshot,
 } from "../../services/bookkeeping/qboMonthlyPnlIngestionService.js";
+import { refreshMonthlyQboFinancialSnapshot } from "../../services/accounting/healthMonthlySnapshotService.js";
+import { ensureForecastV1Run } from "../../services/accounting/forecastV1Service.js";
 import { getConnectedFinancialAccountsForBusiness } from "../../services/plaid/plaidIntegrationService.js";
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../_shared/internalStaffAuth.js";
 import {
@@ -1283,7 +1285,6 @@ router.post("/runs/:runId/finalize", async (req, res) => {
       .single();
     if (runErr) throw runErr;
 
-    const now = new Date().toISOString();
     const sections = await fetchSections(runId);
     const summaries = await buildSummaries(run.business_id, run.review_month);
     const sourceLedger = await buildMonthlySourceLedger(run.business_id, run.review_month);
@@ -1325,49 +1326,56 @@ router.post("/runs/:runId/finalize", async (req, res) => {
     const evidenceHash = hashEvidence(currentEvidence);
     await persistSectionEvidenceSnapshots(run.id, summaries);
 
-    const { data: updatedRun, error: updateErr } = await supabase
-      .from("monthly_review_runs")
-      .update({
-        status: "finalized",
-        finalized_by: req.user.id,
-        finalized_at: now,
-        notes: req.body?.notes ?? run.notes ?? null,
-        evidence_snapshot: currentEvidence,
-        evidence_hash: evidenceHash,
-        readiness_score: readiness.score,
-        updated_at: now,
-      })
-      .eq("id", runId)
-      .select("*")
-      .single();
-    if (updateErr) throw updateErr;
+    const finalSnapshot = await refreshMonthlyQboFinancialSnapshot({
+      businessId: run.business_id,
+      year: reportYear,
+      month: reportMonth,
+      source: "monthly_admin_review_close",
+    });
+    const approvedSnapshotId = finalSnapshot?.snapshot?.id || null;
+    if (!approvedSnapshotId) {
+      return res.status(409).json({
+        ok: false,
+        error: "monthly_review_final_snapshot_missing",
+        message: "Could not verify the final Cash QuickBooks snapshot for this close.",
+      });
+    }
 
-    const { data: stamp, error: stampErr } = await supabase
-      .from("financial_monthly_review_stamps")
-      .upsert({
-        business_id: run.business_id,
-        review_month: run.review_month,
-        status: "finalized",
-        reviewed_by: req.user.email || req.user.id,
-        reviewer_user_id: req.user.id,
-        completed_at: now,
-        notes: req.body?.notes ?? null,
-        updated_at: now,
-      }, { onConflict: "business_id,review_month" })
-      .select("*")
-      .single();
-    if (stampErr) throw stampErr;
+    const pendingTransactionCount = countSourceLedgerPendingTransactions(sourceLedger);
+    const notes = req.body?.notes ?? run.notes ?? null;
+    const { data: closeResult, error: closeErr } = await supabase.rpc("finalize_monthly_admin_review_close", {
+      p_run_id: run.id,
+      p_business_id: run.business_id,
+      p_review_month: run.review_month,
+      p_actor_user_id: req.user.id,
+      p_actor_email: req.user.email || null,
+      p_notes: notes,
+      p_snapshot_id: approvedSnapshotId,
+      p_pending_transaction_count: pendingTransactionCount,
+      p_readiness_evidence: {
+        guard: finalizationGuard,
+        readiness,
+        pending_transaction_count_at_close: pendingTransactionCount,
+        published_report_id: publishedReport.id,
+        source_snapshot_id: approvedSnapshotId,
+      },
+      p_evidence_snapshot: currentEvidence,
+      p_evidence_hash: evidenceHash,
+      p_readiness_score: readiness.score,
+    });
+    if (closeErr) throw closeErr;
 
-    await logAuditEvent({
-      run: updatedRun,
-      actor: req.user,
-      eventType: "finalized",
-      previousValue: { status: run.status, finalized_at: run.finalized_at },
-      nextValue: { status: "finalized", finalized_at: now, readiness_score: readiness.score },
-      notes: req.body?.notes ?? null,
+    const [updatedRun, stamp, closeAuthority] = await Promise.all([
+      fetchRun(run.id),
+      fetchStamp(run.business_id, run.review_month),
+      fetchActiveCloseAuthority(run.business_id, run.review_month),
+    ]);
+
+    ensureForecastV1Run({ businessId: run.business_id, createdBy: req.user.id }).catch((err) => {
+      console.warn("[monthly-review] post-close forecast ensure skipped", err?.message || err);
     });
 
-    res.json({ ok: true, run: updatedRun, stamp });
+    res.json({ ok: true, run: updatedRun, stamp, accounting_period_close: closeAuthority, close_result: closeResult });
   } catch (e) {
     console.error("[monthly-review] finalize failed", e?.message || e);
     res.status(500).json({ ok: false, error: "monthly_review_finalize_failed", message: e?.message || "Could not finalize review." });
@@ -2036,6 +2044,31 @@ async function fetchStamp(businessId, month) {
     .maybeSingle();
   if (error) throw error;
   return data || null;
+}
+
+async function fetchActiveCloseAuthority(businessId, month) {
+  const { data, error } = await supabase
+    .from("accounting_period_closes")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("period_month", month)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+function countSourceLedgerPendingTransactions(sourceLedger = {}) {
+  const ids = new Set();
+  for (const group of sourceLedger.account_groups || []) {
+    for (const txn of group.transactions || []) {
+      if (txn?.pending === true) ids.add(String(txn.id || txn.transaction_id || `${txn.date}:${txn.amount}:${txn.description}`));
+    }
+  }
+  for (const txn of sourceLedger.reconciliation_trace || []) {
+    if (txn?.pending === true) ids.add(String(txn.transaction_id || txn.id || `${txn.plaid_date}:${txn.amount}:${txn.description}`));
+  }
+  return ids.size;
 }
 
 async function fetchMonthlyPnlReport(businessId, month) {

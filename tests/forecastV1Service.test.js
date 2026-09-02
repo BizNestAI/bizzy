@@ -14,6 +14,7 @@ const {
   ensureForecastV1Run,
   getForecastV1Status,
   loadContiguousCashHistory,
+  loadContiguousForecastAuthorityHistory,
 } = await import("../src/services/accounting/forecastV1Service.js");
 
 const BUSINESS_ID = "00000000-0000-4000-8000-000000000001";
@@ -57,9 +58,28 @@ function historyRows(overrides = {}) {
   });
 }
 
+function authorityRows(overrides = {}) {
+  return historyRows().map((snapshot, index) => ({
+    id: `close-${index + 1}`,
+    business_id: snapshot.business_id,
+    period_month: `${snapshot.review_year}-${String(snapshot.review_month).padStart(2, "0")}-01`,
+    status: "approved",
+    authority_type: index < 10 ? "historical_import" : "admin_approved",
+    approved_snapshot_id: snapshot.id,
+    close_version: 1,
+    is_active: true,
+    snapshot_fingerprint: snapshot.raw_hash || null,
+    readiness_evidence: {},
+    approved_at: index < 10 ? null : "2026-09-01T12:00:00Z",
+    source: index < 10 ? "initial_historical_certification" : "monthly_admin_review",
+    ...overrides[`${snapshot.review_year}-${String(snapshot.review_month).padStart(2, "0")}`],
+  }));
+}
+
 function makeDb(initial = {}) {
   const tables = {
     monthly_review_qbo_pnl_snapshots: [],
+    accounting_period_closes: [],
     forecast_runs: [],
     forecast_months: [],
     forecast_overrides: [],
@@ -192,11 +212,11 @@ function nextId(table, offset) {
 }
 
 test("Forecasts V1 uses Sep 2025-Aug 2026 Cash snapshots to produce Sep 2026-Aug 2027", async () => {
-  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows() });
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows(), accounting_period_closes: authorityRows() });
   const result = await ensureForecastV1Run({ db, businessId: BUSINESS_ID, now: NOW });
 
   assert.equal(result.data_status, "available");
-  assert.equal(result.source, "qbo_cash_health_snapshots");
+  assert.equal(result.source, "accounting_period_closes");
   assert.equal(result.is_sample, false);
   assert.equal(result.model_version, FORECAST_MODEL_VERSION);
   assert.equal(result.history.start, "2025-09-01");
@@ -216,8 +236,8 @@ test("Forecasts V1 requires contiguous current Cash snapshots and treats zero re
   const rows = historyRows({ "2025-12": { status: "failed", is_current: false } });
   rows.push({ id: "accrual-dec", business_id: BUSINESS_ID, review_year: 2025, review_month: 12, accounting_method: "Accrual", status: "current", is_current: true, revenue: 9999, expenses: 1, net_profit: 9998 });
   rows.push({ id: "other", business_id: OTHER_BUSINESS_ID, review_year: 2025, review_month: 12, accounting_method: "Cash", status: "current", is_current: true, revenue: 9999, expenses: 1, net_profit: 9998 });
-  const db = makeDb({ monthly_review_qbo_pnl_snapshots: rows });
-  const history = await loadContiguousCashHistory({ db, businessId: BUSINESS_ID, cutoffYear: 2026, cutoffMonth: 8 });
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: rows, accounting_period_closes: authorityRows() });
+  const history = await loadContiguousForecastAuthorityHistory({ db, businessId: BUSINESS_ID, cutoffYear: 2026, cutoffMonth: 8 });
   const status = await getForecastV1Status({ db, businessId: BUSINESS_ID, now: NOW });
 
   assert.equal(history.complete, false);
@@ -228,8 +248,8 @@ test("Forecasts V1 requires contiguous current Cash snapshots and treats zero re
 });
 
 test("Forecasts V1 snapshot loader includes business_id and accepts production-shaped Cash history", async () => {
-  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows() });
-  const history = await loadContiguousCashHistory({ db, businessId: BUSINESS_ID, cutoffYear: 2026, cutoffMonth: 8 });
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows(), accounting_period_closes: authorityRows() });
+  const history = await loadContiguousForecastAuthorityHistory({ db, businessId: BUSINESS_ID, cutoffYear: 2026, cutoffMonth: 8 });
   const status = await getForecastV1Status({ db, businessId: BUSINESS_ID, now: NOW });
   const snapshotSelect = db.tables.__selects.find((entry) => entry.table === "monthly_review_qbo_pnl_snapshots")?.columns || "";
 
@@ -282,7 +302,7 @@ test("Forecasts V1 treats malformed snapshot scope as a query failure, not missi
 
 test("Forecasts V1 keeps true empty history distinct from snapshot query errors", async () => {
   const emptyStatus = await getForecastV1Status({
-    db: makeDb({ monthly_review_qbo_pnl_snapshots: [] }),
+    db: makeDb({ monthly_review_qbo_pnl_snapshots: [], accounting_period_closes: [] }),
     businessId: BUSINESS_ID,
     now: NOW,
   });
@@ -305,7 +325,7 @@ test("Forecasts V1 keeps true empty history distinct from snapshot query errors"
 });
 
 test("Forecasts V1 generation is deterministic and idempotent for identical source snapshots", async () => {
-  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows() });
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows(), accounting_period_closes: authorityRows() });
   const first = await ensureForecastV1Run({ db, businessId: BUSINESS_ID, now: NOW });
   const second = await ensureForecastV1Run({ db, businessId: BUSINESS_ID, now: NOW });
 
@@ -315,10 +335,37 @@ test("Forecasts V1 generation is deterministic and idempotent for identical sour
   assert.equal(db.tables.forecast_runs[0].status, "completed");
   assert.equal(db.tables.__statusDuringFinalize, "generating");
   assert.equal(db.tables.forecast_months.length, 12);
+  assert.deepEqual(db.tables.forecast_runs[0].source_close_authority_ids, authorityRows().map((row) => row.id));
+  assert.equal(db.tables.forecast_runs[0].source_authority_summary.contains_historical_import, true);
+});
+
+test("Forecasts V1 requires pinned close authority for new generation but preserves prior completed forecast", async () => {
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows(), accounting_period_closes: [] });
+  const initial = await getForecastV1Status({ db, businessId: BUSINESS_ID, now: NOW });
+  assert.equal(initial.data_status, "insufficient_history");
+  assert.equal(initial.history.months_available, 0);
+
+  const seeded = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows(), accounting_period_closes: authorityRows() });
+  const prior = await ensureForecastV1Run({ db: seeded, businessId: BUSINESS_ID, now: NOW });
+  const fallbackDb = makeDb({
+    monthly_review_qbo_pnl_snapshots: historyRows(),
+    accounting_period_closes: [],
+    forecast_runs: structuredClone(seeded.tables.forecast_runs),
+    forecast_months: structuredClone(seeded.tables.forecast_months),
+  });
+  const fallback = await getForecastV1Status({ db: fallbackDb, businessId: BUSINESS_ID, now: NOW });
+
+  assert.equal(fallback.data_status, "available");
+  assert.equal(fallback.run_id, prior.run_id);
+  assert.equal(fallback.update_status, "awaiting_close_authority");
+  assert.deepEqual(fallback.update_detail.awaiting_months, [
+    "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02",
+    "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08",
+  ]);
 });
 
 test("Forecasts V1 treats 6/9/12 horizons as presentation windows over one canonical run", async () => {
-  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows() });
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows(), accounting_period_closes: authorityRows() });
   const first = await ensureForecastV1Run({ db, businessId: BUSINESS_ID, horizonMonths: 6, now: NOW });
   const second = await ensureForecastV1Run({ db, businessId: BUSINESS_ID, horizonMonths: 9, now: NOW });
   const third = await getForecastV1Status({ db, businessId: BUSINESS_ID, horizonMonths: 12, now: NOW });
@@ -338,6 +385,7 @@ test("Forecasts V1 treats 6/9/12 horizons as presentation windows over one canon
 test("Forecasts V1 never exposes generating or incomplete completed runs as available", async () => {
   const db = makeDb({
     monthly_review_qbo_pnl_snapshots: historyRows(),
+    accounting_period_closes: authorityRows(),
     forecast_runs: [{
       id: "active-run",
       business_id: BUSINESS_ID,
@@ -358,7 +406,7 @@ test("Forecasts V1 never exposes generating or incomplete completed runs as avai
       generation_lease_expires_at: "2026-09-02T12:08:00Z",
     }],
   });
-  const history = await loadContiguousCashHistory({ db, businessId: BUSINESS_ID, cutoffYear: 2026, cutoffMonth: 8 });
+  const history = await loadContiguousForecastAuthorityHistory({ db, businessId: BUSINESS_ID, cutoffYear: 2026, cutoffMonth: 8 });
   const sourceHash = history.months.map((row) => row.snapshot_id).join("|");
   const fingerprint = createHashForTest([
     BUSINESS_ID,
@@ -369,6 +417,7 @@ test("Forecasts V1 never exposes generating or incomplete completed runs as avai
     "2026-09-01",
     "2027-08-01",
     createHashForTest(sourceHash),
+    createHashForTest(authorityRows().map((row) => row.id).join("|")),
     createHashForTest('{"expenseTrendCap":{"max":0.02,"min":-0.02},"fullYearWeight":0.2,"priorYearPatternWeight":0.5,"recent3Weight":0.5,"recent6Weight":0.3,"revenueTrendCap":{"max":0.03,"min":-0.03},"trendAdjustedWeight":0.5,"winsorMadMultiplier":2.5}'),
   ].join("|"));
   db.tables.forecast_runs[0].source_snapshot_ids_hash = createHashForTest(sourceHash);
@@ -382,7 +431,7 @@ test("Forecasts V1 never exposes generating or incomplete completed runs as avai
 });
 
 test("Forecasts V1 failed finalization rolls back availability and marks claim failed", async () => {
-  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows(), __failFinalize: true });
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows(), accounting_period_closes: authorityRows(), __failFinalize: true });
 
   await assert.rejects(
     () => ensureForecastV1Run({ db, businessId: BUSINESS_ID, now: NOW }),
@@ -399,6 +448,7 @@ test("Forecasts V1 failed finalization rolls back availability and marks claim f
 test("Forecasts V1 GET does not return a completed run from stale source snapshots", async () => {
   const db = makeDb({
     monthly_review_qbo_pnl_snapshots: historyRows(),
+    accounting_period_closes: authorityRows(),
     forecast_runs: [{
       id: "stale-run",
       business_id: BUSINESS_ID,
@@ -438,7 +488,7 @@ test("Forecasts V1 GET does not return a completed run from stale source snapsho
 
 test("Forecasts V1 overrides layer effective values without changing baseline", async () => {
   const { upsertForecastV1Overrides, resetForecastV1Overrides } = await import("../src/services/accounting/forecastV1Service.js");
-  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows() });
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows(), accounting_period_closes: authorityRows() });
   const base = await ensureForecastV1Run({ db, businessId: BUSINESS_ID, now: NOW });
   const original = base.forecast.months[0];
   const changed = await upsertForecastV1Overrides({
@@ -480,6 +530,7 @@ test("Forecasts V1 model caps trend and clamps revenue/expenses while preserving
 
 test("Forecasts V1 migration creates versioned authority tables and leaves legacy forecast table intact", () => {
   const migration = read("supabase/migrations/20260919_forecast_v1_authority.sql");
+  const closeMigration = read("supabase/migrations/20260920_accounting_period_close_authority.sql");
   assert.match(migration, /create table if not exists public\.forecast_runs/i);
   assert.match(migration, /create table if not exists public\.forecast_months/i);
   assert.match(migration, /create table if not exists public\.forecast_overrides/i);
@@ -492,6 +543,13 @@ test("Forecasts V1 migration creates versioned authority tables and leaves legac
   assert.match(migration, /forecast_overrides_run_business_fkey/i);
   assert.doesNotMatch(migration, /drop table/i);
   assert.doesNotMatch(migration, /month_label/i);
+  assert.match(closeMigration, /create table if not exists public\.accounting_period_closes/i);
+  assert.match(closeMigration, /authority_type.*historical_import.*admin_approved/is);
+  assert.match(closeMigration, /accounting_period_closes_historical_not_admin_approved/i);
+  assert.match(closeMigration, /create or replace function public\.finalize_monthly_admin_review_close/i);
+  assert.match(closeMigration, /create or replace function public\.record_accounting_period_close_authority/i);
+  assert.match(closeMigration, /source_close_authority_ids/i);
+  assert.match(closeMigration, /grant all on table public\.accounting_period_closes to service_role/i);
 });
 
 test("Forecasts Live frontend and routes do not silently persist sample data", () => {

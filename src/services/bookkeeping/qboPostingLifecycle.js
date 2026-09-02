@@ -24,6 +24,9 @@ function isPostingInProgress(row = {}) {
 }
 
 export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {}) {
+  const authoritative = row.qbo_posting_lifecycle || row.posting_lifecycle || null;
+  if (authoritative?.key && authoritative?.label) return authoritative;
+
   const status = String(row.status || "").toLowerCase();
   const hasQboTxn = Boolean(row.qbo_txn_id);
   const meta = row.meta || {};
@@ -78,6 +81,40 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
       label: "Posting...",
       tone: "warning",
       detail: "Bizzi is sending this transaction to QuickBooks.",
+    };
+  }
+
+  const blockReason = meta.post_block_reason || meta.auto_post_block_reason || row.post_block_reason || null;
+  if (blockReason === "historical_scope_review_required") {
+    return {
+      key: "held_historical_backlog",
+      label: "Held: historical backlog review",
+      tone: "warning",
+      detail: "This older handled transaction needs an explicit backlog release before auto-posting.",
+    };
+  }
+  if (blockReason === "missing_final_qbo_account" || (!row.final_qbo_account_id && status === "auto_approved")) {
+    return {
+      key: "blocked_missing_final_account",
+      label: "Blocked: missing final account",
+      tone: "danger",
+      detail: "Choose a final QuickBooks account before posting.",
+    };
+  }
+  if (blockReason === "unsupported_transaction_type" || blockReason === "cc_payment_mapping_not_safe") {
+    return {
+      key: "blocked_unsupported_transaction_type",
+      label: "Blocked: unsupported transaction type",
+      tone: "danger",
+      detail: "This transaction type needs review before QuickBooks posting.",
+    };
+  }
+  if (meta.safe_to_auto_post !== true && meta.auto_approve_reason !== "manual_user" && (status === "approved" || status === "auto_approved")) {
+    return {
+      key: "blocked_unsafe_auto_post",
+      label: "Blocked: not safe for auto-post",
+      tone: "warning",
+      detail: "Bizzi needs a safer posting match before auto-posting this row.",
     };
   }
 
@@ -140,6 +177,22 @@ export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) 
       label: "Posting...",
       tone: "warning",
       detail: lifecycle.detail || "Bizzi is sending this transaction to QuickBooks.",
+    };
+  }
+  if (
+    [
+      "held_historical_backlog",
+      "blocked_unsafe_auto_post",
+      "blocked_missing_final_account",
+      "blocked_unsupported_transaction_type",
+      "verification_required",
+    ].includes(lifecycle.key)
+  ) {
+    return {
+      key: lifecycle.key,
+      label: lifecycle.label,
+      tone: lifecycle.tone || "warning",
+      detail: lifecycle.detail || "This transaction is not eligible for automatic QuickBooks posting.",
     };
   }
   if (lifecycle.key === "ready_to_post") {

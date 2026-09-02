@@ -1,9 +1,11 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
+  classifyAutoPostOperationalScope,
   computePostAfterForAutoPost,
   getAutoPostSettings,
   getAutoPostToQuickBooks,
@@ -42,23 +44,30 @@ test("background cron and forced posting cannot bypass auto-post off", () => {
   const source = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
 
   assert.match(source, /getAutoPostToQuickBooks/);
+  assert.match(source, /getAutoPostPolicy/);
   assert.match(source, /auto-post disabled; skipping transaction/);
   assert.match(source, /if \(businessId\)[\s\S]*?summary\.auto_post_disabled = 1[\s\S]*?return summary/);
-  assert.match(source, /autoPostByBusiness/);
-  assert.match(source, /duePending = duePending\.filter\(\(item\) => autoPostByBusiness\[item\.business_id\] === true\)/);
+  assert.match(source, /policyByBusiness/);
+  assert.match(source, /duePending = duePending\.filter\(\(item\) => policyByBusiness\[item\.business_id\]\?\.enabled === true\)/);
 });
 
-test("turning on requires confirmation for handled backlog and starts a fresh grace period", () => {
+test("turning on requires confirmation and does not release handled historical backlog", () => {
   const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
   const service = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
+  const migration = readFileSync(join(root, "supabase/migrations/20260921_auto_post_backlog_safety.sql"), "utf8");
 
   assert.match(service, /auto_post_backlog_confirmation_required/);
   assert.match(service, /auto_post_confirmation_required/);
   assert.match(route, /confirm_backlog/);
+  assert.match(route, /\/posting\/backlog\/preview/);
+  assert.match(route, /\/posting\/backlog\/release/);
   assert.match(route, /handled_backlog_count/);
   assert.match(route, /setAutoPostEnabled/);
   assert.match(service, /computePostAfterForAutoPost\(nextEnabled, normalizedGraceHours, nowMs\)/);
-  assert.match(service, /post_after:\s*postAfter/);
+  assert.match(service, /scheduledBacklog = 0/);
+  assert.match(service, /historical_backlog_status:\s*backlogIds\.length \? "review_required" : "none"/);
+  assert.match(migration, /auto_post_enabled_at timestamptz/);
+  assert.match(migration, /bookkeeping_auto_post_backlog_releases/);
   assert.match(service, /\.in\("transaction_id", ids\)/);
 });
 
@@ -67,7 +76,7 @@ test("turning off clears unposted grace timestamps and off to on cannot reuse ol
 
   assert.match(service, /clearBacklogPostAfter/);
   assert.match(service, /post_after:\s*null/);
-  assert.match(service, /post_after:\s*postAfter/);
+  assert.match(service, /post_after:\s*null/);
   assert.doesNotMatch(service, /post_after:\s*current|oldPostAfter|existingPostAfter/);
 });
 
@@ -185,7 +194,7 @@ test("auto-post setting route is business scoped and protected by tenant authori
   assert.match(route, /setAutoPostEnabled\(\{[\s\S]*db: supabase,[\s\S]*businessId/);
 });
 
-test("auto-post settings service reads, updates, and persists business-scoped state", async () => {
+test("auto-post settings service reads, updates, and preserves historical backlog for explicit release", async () => {
   const nowMs = Date.parse("2026-08-01T00:00:00Z");
   const db = makeSupabase({
     business_profiles: [{ id: "biz-1", user_id: "user-1", bookkeeping_start_date: "2026-01-01", auto_post_to_quickbooks: false }],
@@ -220,19 +229,20 @@ test("auto-post settings service reads, updates, and persists business-scoped st
   const on = await setAutoPostEnabled({ db, businessId: "biz-1", enabled: true, confirmBacklog: true, graceHours: 24, nowMs });
   assert.equal(on.auto_post_to_quickbooks, true);
   assert.equal(on.handled_backlog_count, 2);
+  assert.equal(on.scheduled_backlog_count, 0);
+  assert.equal(on.historical_backlog_status, "review_required");
   assert.equal(db.table("business_profiles").find((row) => row.id === "biz-1").auto_post_to_quickbooks, true);
   assert.equal(db.table("business_profiles").find((row) => row.id === "biz-2"), undefined);
 
-  const expectedPostAfter = "2026-08-02T00:00:00.000Z";
-  assert.equal(db.cat("biz-1", "txn-1").post_after, expectedPostAfter);
-  assert.equal(db.cat("biz-1", "txn-2").post_after, expectedPostAfter);
+  assert.equal(db.cat("biz-1", "txn-1").post_after, null);
+  assert.equal(db.cat("biz-1", "txn-2").post_after, null);
   assert.equal(db.cat("biz-1", "txn-3").post_after, null);
   assert.equal(db.cat("biz-1", "needs-1").post_after, null);
   assert.equal(db.cat("biz-1", "cc-1").post_after, null);
 
   assert.equal((await getAutoPostSettings({ db, businessId: "biz-1" })).auto_post_to_quickbooks, true);
   await setAutoPostEnabled({ db, businessId: "biz-1", enabled: true, confirmBacklog: true, graceHours: 24, nowMs });
-  assert.equal(db.cat("biz-1", "txn-1").post_after, expectedPostAfter);
+  assert.equal(db.cat("biz-1", "txn-1").post_after, null);
 
   const off = await setAutoPostEnabled({ db, businessId: "biz-1", enabled: false, graceHours: 24, nowMs });
   assert.equal(off.auto_post_to_quickbooks, false);
@@ -260,6 +270,51 @@ test("auto-post settings service batches Supabase IN requests and performs no ex
 
   assert.ok(db.calls.some((call) => call.table === "bank_transactions" && call.op === "in" && call.valuesLength <= 50));
   assert.ok(db.calls.every((call) => call.op !== "fetch" && call.table !== "quickbooks"));
+});
+
+test("auto-post operational scope holds pre-activation backlog unless an explicit release covers it", () => {
+  const held = classifyAutoPostOperationalScope({
+    item: { transaction_id: "txn-1", post_after: "2026-09-01T12:00:00.000Z" },
+    bankTxn: { id: "txn-1", date: "2026-08-15" },
+    policy: {
+      enabled: true,
+      auto_post_enabled_at: "2026-09-02T12:00:00.000Z",
+      auto_post_scope_mode: "new_activity_only",
+      historical_backlog_status: "review_required",
+      active_backlog_releases: [],
+      policy_columns_available: true,
+    },
+  });
+  assert.equal(held.allowed, false);
+  assert.equal(held.code, "historical_scope_review_required");
+
+  const released = classifyAutoPostOperationalScope({
+    item: { transaction_id: "txn-1", post_after: "2026-09-01T12:00:00.000Z" },
+    bankTxn: { id: "txn-1", date: "2026-08-15" },
+    policy: {
+      enabled: true,
+      auto_post_enabled_at: "2026-09-02T12:00:00.000Z",
+      auto_post_scope_mode: "explicit_backlog_released",
+      historical_backlog_status: "released",
+      active_backlog_releases: [{ status: "active", release_start_date: "2026-08-01", release_end_date: "2026-09-01", transaction_ids: [] }],
+      policy_columns_available: true,
+    },
+  });
+  assert.equal(released.allowed, true);
+});
+
+test("books posting worker chunks preload and caps each auto-post batch", () => {
+  const cron = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+
+  assert.match(cron, /const BANK_PRELOAD_CHUNK_SIZE = Number\(process\.env\.BOOKS_POST_PRELOAD_CHUNK_SIZE \|\| 50\)/);
+  assert.match(cron, /const POSTING_BATCH_SIZE = Number\(process\.env\.BOOKS_POST_BATCH_SIZE \|\| 25\)/);
+  assert.match(cron, /chunkValues\(uniqueIds, options\?\.chunkSize \|\| BANK_PRELOAD_CHUNK_SIZE\)/);
+  assert.match(cron, /return options\?\.returnDetails \? details : details\.rowsById/);
+  assert.match(cron, /failedPreloadIds/);
+  assert.match(cron, /missingPreloadIds/);
+  assert.match(cron, /const batch = eligible\.slice\(0, Math\.max\(1, POSTING_BATCH_SIZE\)\)/);
+  assert.match(cron, /summary\.deferred = Math\.max\(eligible\.length - batch\.length, 0\)/);
+  assert.doesNotMatch(cron, /fetchBankTransactions\(ids, biz\);/);
 });
 
 test("auto-post GET and PATCH share one backend settings authority", () => {

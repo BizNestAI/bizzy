@@ -1,6 +1,7 @@
 import { supabase } from "../supabaseAdmin.js";
 import { formatPlaidAccountDisplayLabel } from "./postingTraceDisplay.js";
 import { deriveCreditCardPaymentStatus, isCreditCardPaymentWorkflow } from "./creditCardPaymentStatus.js";
+import { classifyAutoPostOperationalScope, getAutoPostPolicy } from "./autoPostControl.js";
 
 function firstDayOfMonth() {
   const now = new Date();
@@ -269,6 +270,93 @@ async function fetchPlaidAccountDisplayMap({ db = supabase, businessId, plaidAcc
   ]));
 }
 
+function isHandledForPosting(row = {}) {
+  return ["approved", "auto_approved", "failed", "handled"].includes(String(row.status || "").toLowerCase());
+}
+
+function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now()) {
+  if (row.qbo_txn_id) return null;
+  if (!isHandledForPosting(row)) return null;
+  const meta = row.meta || {};
+  if (row.pending === true) {
+    return {
+      key: "pending",
+      label: "Pending",
+      tone: "warning",
+      detail: "Plaid transaction is pending and is not ready for approval or QBO posting.",
+    };
+  }
+  const scope = classifyAutoPostOperationalScope({ item: row, bankTxn: row, policy });
+  if (!scope.allowed && scope.code === "historical_scope_review_required") {
+    return {
+      key: "held_historical_backlog",
+      label: "Held: historical backlog review",
+      tone: "warning",
+      detail: "This older handled transaction needs an explicit backlog release before auto-posting.",
+    };
+  }
+  if (!row.final_qbo_account_id && !meta?.cc_payment_cc_qbo_account_id) {
+    return {
+      key: "blocked_missing_final_account",
+      label: "Blocked: missing final account",
+      tone: "danger",
+      detail: "Choose a final QuickBooks account before posting.",
+    };
+  }
+  const unsupportedTaxonomy = ["transfer_internal", "owner_draw", "owner_contribution", "refund"].includes(
+    String(meta.taxonomy_type || "")
+  );
+  if (unsupportedTaxonomy) {
+    return {
+      key: "blocked_unsupported_transaction_type",
+      label: "Blocked: unsupported transaction type",
+      tone: "danger",
+      detail: "This transaction type needs review before QuickBooks posting.",
+    };
+  }
+  const looksCcPayment =
+    meta.taxonomy_type === "cc_payment" ||
+    meta.cc_payment_bank_qbo_account_id ||
+    meta.cc_payment_cc_qbo_account_id ||
+    meta.cc_payment_mapping_confidence;
+  if (
+    looksCcPayment &&
+    !(
+      meta.safe_to_auto_post === true &&
+      meta.cc_payment_bank_qbo_account_id &&
+      meta.cc_payment_cc_qbo_account_id
+    )
+  ) {
+    return {
+      key: "blocked_unsupported_transaction_type",
+      label: "Blocked: unsupported transaction type",
+      tone: "danger",
+      detail: "Credit-card payment rows need a verified source and destination account before posting.",
+    };
+  }
+  if (meta.safe_to_auto_post !== true && meta.auto_approve_reason !== "manual_user") {
+    return {
+      key: "blocked_unsafe_auto_post",
+      label: "Blocked: not safe for auto-post",
+      tone: "warning",
+      detail: "Bizzi needs a safer posting match before auto-posting this row.",
+    };
+  }
+  const postAfterMs = row.post_after ? Date.parse(row.post_after) : null;
+  if (Number.isFinite(postAfterMs)) {
+    if (postAfterMs <= nowMs) {
+      return {
+        key: "ready_to_post",
+        label: "Ready to post",
+        tone: "warning",
+        detail: "Eligible for the next QuickBooks posting worker run.",
+      };
+    }
+    return null;
+  }
+  return null;
+}
+
 export async function countBookkeepingTransactions({
   businessId,
   statusFilter = "needs_review",
@@ -368,9 +456,20 @@ export async function fetchBookkeepingTransactions({
     businessId,
     plaidAccountIds: rows.map((row) => row.plaid_account_id || row.plaidAccountId),
   });
-  const enrichedRows = rows.map((row) => {
+  const accountEnrichedRows = rows.map((row) => {
     const display = accountDisplayMap.get(String(row.plaid_account_id || row.plaidAccountId || ""));
     return display ? { ...row, ...display } : row;
+  });
+  let policy = null;
+  try {
+    policy = await getAutoPostPolicy(db, businessId);
+  } catch {
+    policy = { enabled: false, policy_columns_available: false };
+  }
+  const nowMs = Date.now();
+  const enrichedRows = accountEnrichedRows.map((row) => {
+    const qboPostingLifecycle = buildPostingLifecycleForFeed(row, policy, nowMs);
+    return qboPostingLifecycle ? { ...row, qbo_posting_lifecycle: qboPostingLifecycle } : row;
   });
   return { rows: enrichedRows, totalCount };
 }

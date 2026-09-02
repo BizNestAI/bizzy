@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -199,7 +200,7 @@ test("Auto-post off blocks autonomous posting while manual one-at-a-time posting
 
   assert.match(cron, /if \(!manual\)[\s\S]*getAutoPostToQuickBooks/);
   assert.match(cron, /postSingleBookkeepingTransactionNow[\s\S]*await handleItem\(item, \{ manual: true, confirmPostAnyway \}\)/);
-  assert.match(cron, /runOnce[\s\S]*autoPostByBusiness/);
+  assert.match(cron, /runOnce[\s\S]*policyByBusiness/);
 });
 
 test("QBO reconnect and undo do not erase immutable posting proof", () => {

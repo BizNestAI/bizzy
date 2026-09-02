@@ -37,12 +37,20 @@ export async function getForecastV1Status({
   if (!businessId) throw new ForecastV1Error("missing_business_id", 400);
   const horizon = FORECAST_DEFAULT_HORIZON_MONTHS;
   const cutoff = lastFullMonthParts(now);
-  const history = await loadContiguousCashHistory({ db, businessId, cutoffYear: cutoff.year, cutoffMonth: cutoff.month });
+  const history = await loadContiguousForecastAuthorityHistory({ db, businessId, cutoffYear: cutoff.year, cutoffMonth: cutoff.month });
   if (!history.complete) {
+    const previous = await getLatestUsableCompletedForecastRun({ db, businessId, expectedMonths: horizon });
+    if (previous?.run?.id) {
+      return serializeAvailableForecast({
+        run: previous.run,
+        rows: previous.rows,
+        updateStatus: buildForecastAuthorityUpdateStatus(history),
+      });
+    }
     const disconnected = await isQuickBooksDisconnected({ db, businessId });
     return {
       data_status: disconnected ? "qbo_disconnected" : "insufficient_history",
-      source: "qbo_cash_health_snapshots",
+      source: "accounting_period_closes",
       is_sample: false,
       model_version: FORECAST_MODEL_VERSION,
       history: historyPayload(history),
@@ -56,6 +64,7 @@ export async function getForecastV1Status({
 
   const forecastMonths = monthsAfter(cutoff.year, cutoff.month, horizon);
   const sourceHash = hashSnapshotIds(history.months.map((row) => row.snapshot_id));
+  const sourceCloseAuthorityHash = hashSnapshotIds(history.months.map((row) => row.close_authority_id).filter(Boolean));
   const identity = buildForecastInputIdentity({
     businessId,
     historyStart: history.window.start,
@@ -63,6 +72,7 @@ export async function getForecastV1Status({
     forecastStart: forecastMonths[0]?.monthKey || null,
     forecastEnd: forecastMonths.at(-1)?.monthKey || null,
     sourceSnapshotIdsHash: sourceHash,
+    sourceCloseAuthorityIdsHash: sourceCloseAuthorityHash,
   });
   const matchingRun = await getUsableMatchingCompletedForecastRun({
     db,
@@ -100,11 +110,19 @@ export async function ensureForecastV1Run({
   if (!businessId) throw new ForecastV1Error("missing_business_id", 400);
   const horizon = FORECAST_DEFAULT_HORIZON_MONTHS;
   const cutoff = lastFullMonthParts(now);
-  const history = await loadContiguousCashHistory({ db, businessId, cutoffYear: cutoff.year, cutoffMonth: cutoff.month });
+  const history = await loadContiguousForecastAuthorityHistory({ db, businessId, cutoffYear: cutoff.year, cutoffMonth: cutoff.month });
   if (!history.complete) {
+    const previous = await getLatestUsableCompletedForecastRun({ db, businessId, expectedMonths: horizon });
+    if (previous?.run?.id) {
+      return serializeAvailableForecast({
+        run: previous.run,
+        rows: previous.rows,
+        updateStatus: buildForecastAuthorityUpdateStatus(history),
+      });
+    }
     return {
       data_status: "insufficient_history",
-      source: "qbo_cash_health_snapshots",
+      source: "accounting_period_closes",
       is_sample: false,
       model_version: FORECAST_MODEL_VERSION,
       history: historyPayload(history),
@@ -119,6 +137,8 @@ export async function ensureForecastV1Run({
   const forecastMonths = buildForecastV1Months({ history: history.months, horizonMonths: horizon });
   const sourceSnapshotIds = history.months.map((row) => row.snapshot_id);
   const sourceHash = hashSnapshotIds(sourceSnapshotIds);
+  const sourceCloseAuthorityIds = history.months.map((row) => row.close_authority_id).filter(Boolean);
+  const sourceCloseAuthorityHash = hashSnapshotIds(sourceCloseAuthorityIds);
   const forecastStart = forecastMonths[0]?.month || null;
   const forecastEnd = forecastMonths.at(-1)?.month || null;
   const identity = buildForecastInputIdentity({
@@ -128,6 +148,7 @@ export async function ensureForecastV1Run({
     forecastStart,
     forecastEnd,
     sourceSnapshotIdsHash: sourceHash,
+    sourceCloseAuthorityIdsHash: sourceCloseAuthorityHash,
   });
   const existing = await getUsableMatchingCompletedForecastRun({
     db,
@@ -175,6 +196,9 @@ export async function ensureForecastV1Run({
     historical_months_count: history.months.length,
     source_snapshot_ids: sourceSnapshotIds,
     source_snapshot_ids_hash: sourceHash,
+    source_close_authority_ids: sourceCloseAuthorityIds,
+    source_close_authority_ids_hash: sourceCloseAuthorityHash,
+    source_authority_summary: buildSourceAuthoritySummary(history.months),
     input_fingerprint: identity.inputFingerprint,
     model_config: FORECAST_V1_CONFIG,
     data_quality: buildDataQuality(history.months),
@@ -364,6 +388,79 @@ export async function loadContiguousCashHistory({
   };
 }
 
+export async function loadContiguousForecastAuthorityHistory({
+  db = defaultSupabase,
+  businessId,
+  cutoffYear,
+  cutoffMonth,
+  monthsRequired = FORECAST_HISTORY_MONTHS,
+} = {}) {
+  const expected = rangeLastNMonths({ year: Number(cutoffYear), month: Number(cutoffMonth), n: monthsRequired });
+  const closeRows = await selectRows(
+    db
+      .from("accounting_period_closes")
+      .select("id,business_id,period_month,status,authority_type,approved_snapshot_id,close_version,is_active,snapshot_fingerprint,readiness_evidence,approved_at,source")
+      .eq("business_id", businessId)
+      .eq("is_active", true)
+      .eq("status", "approved")
+  ).catch((error) => {
+    if (isMissingCloseAuthorityTable(error)) return [];
+    throw error;
+  });
+  assertCloseAuthorityRowsScoped(closeRows, businessId);
+  const closeByMonth = new Map(
+    closeRows
+      .filter(isEligibleForecastCloseAuthority)
+      .map((row) => [normalizeMonthDate(row.period_month), row])
+  );
+  const snapshotRows = await selectRows(
+    db
+      .from("monthly_review_qbo_pnl_snapshots")
+      .select("id,business_id,review_year,review_month,accounting_method,status,is_current,revenue,expenses,net_profit,pulled_at,raw_hash,metadata")
+      .eq("business_id", businessId)
+      .eq("accounting_method", HEALTH_ACCOUNTING_METHOD)
+  );
+  assertForecastHistoryRowsScoped(snapshotRows, businessId);
+  const snapshotById = new Map(snapshotRows.map((row) => [String(row.id), row]));
+  const months = expected
+    .map((entry) => {
+      const close = closeByMonth.get(entry.monthKey);
+      if (!close?.approved_snapshot_id) return null;
+      const snapshot = snapshotById.get(String(close.approved_snapshot_id));
+      if (!isPinnedSnapshotEligibleForForecast(snapshot, close, entry, businessId)) return null;
+      return {
+        year: entry.year,
+        month: entry.month,
+        month_key: entry.monthKey,
+        close_authority_id: close.id,
+        authority_type: close.authority_type,
+        close_version: Number(close.close_version || 1),
+        snapshot_id: snapshot.id,
+        snapshot_fingerprint: close.snapshot_fingerprint || snapshot.raw_hash || null,
+        revenue: roundMoney(snapshot.revenue),
+        expenses: roundMoney(snapshot.expenses),
+        net_profit: roundMoney(snapshot.net_profit),
+      };
+    })
+    .filter(Boolean);
+  const covered = new Set(months.map((row) => row.month_key));
+  const missing = expected
+    .filter((entry) => !covered.has(entry.monthKey))
+    .map((entry) => entry.monthKey.slice(0, 7));
+  return {
+    complete: missing.length === 0 && months.length === monthsRequired,
+    months,
+    missing_months: missing,
+    months_available: months.length,
+    months_required: monthsRequired,
+    authority_source: "accounting_period_closes",
+    window: {
+      start: expected[0]?.monthKey || null,
+      end: expected.at(-1)?.monthKey || null,
+    },
+  };
+}
+
 export function buildForecastV1Months({
   history,
   horizonMonths = FORECAST_DEFAULT_HORIZON_MONTHS,
@@ -396,7 +493,17 @@ export function buildForecastV1Months({
   });
 }
 
-async function getMatchingCompletedForecastRun({ db, businessId, historyStart, historyEnd, forecastStart, forecastEnd, sourceSnapshotIdsHash, inputFingerprint = null }) {
+async function getMatchingCompletedForecastRun({
+  db,
+  businessId,
+  historyStart,
+  historyEnd,
+  forecastStart,
+  forecastEnd,
+  sourceSnapshotIdsHash,
+  sourceCloseAuthorityIdsHash = null,
+  inputFingerprint = null,
+}) {
   let query = db
     .from("forecast_runs")
     .select("*")
@@ -413,6 +520,7 @@ async function getMatchingCompletedForecastRun({ db, businessId, historyStart, h
       .eq("forecast_start", forecastStart)
       .eq("forecast_end", forecastEnd)
       .eq("source_snapshot_ids_hash", sourceSnapshotIdsHash);
+    if (sourceCloseAuthorityIdsHash) query = query.eq("source_close_authority_ids_hash", sourceCloseAuthorityIdsHash);
   }
   const result = await query
     .order("generated_at", { ascending: false })
@@ -431,6 +539,7 @@ async function getUsableMatchingCompletedForecastRun({
   forecastStart,
   forecastEnd,
   sourceSnapshotIdsHash,
+  sourceCloseAuthorityIdsHash = null,
   inputFingerprint = null,
   expectedMonths = FORECAST_DEFAULT_HORIZON_MONTHS,
 }) {
@@ -442,12 +551,35 @@ async function getUsableMatchingCompletedForecastRun({
     forecastStart,
     forecastEnd,
     sourceSnapshotIdsHash,
+    sourceCloseAuthorityIdsHash,
     inputFingerprint,
   });
   if (!run?.id) return null;
   const rows = await getForecastRunMonths({ db, businessId, forecastRunId: run.id });
   if (!forecastRowsAreComplete(run, rows, expectedMonths)) return null;
   return { run, rows };
+}
+
+async function getLatestUsableCompletedForecastRun({ db, businessId, expectedMonths = FORECAST_DEFAULT_HORIZON_MONTHS }) {
+  const rows = await selectRows(
+    db
+      .from("forecast_runs")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("model_version", FORECAST_MODEL_VERSION)
+      .eq("accounting_method", HEALTH_ACCOUNTING_METHOD)
+      .eq("status", "completed")
+      .order("generated_at", { ascending: false })
+      .limit(10)
+  ).catch((error) => {
+    if (isMissingForecastTable(error)) return [];
+    throw error;
+  });
+  for (const run of rows) {
+    const monthRows = await getForecastRunMonths({ db, businessId, forecastRunId: run.id });
+    if (forecastRowsAreComplete(run, monthRows, expectedMonths)) return { run, rows: monthRows };
+  }
+  return null;
 }
 
 async function getActiveGeneratingForecastRun({ db, businessId, inputFingerprint }) {
@@ -610,13 +742,16 @@ async function isQuickBooksDisconnected({ db, businessId }) {
   return !Array.isArray(data) || data.length === 0;
 }
 
-function serializeAvailableForecast({ run, rows }) {
+function serializeAvailableForecast({ run, rows, updateStatus = null }) {
   const months = rows.map(serializeForecastMonth);
+  const authoritySummary = run.source_authority_summary || {};
   return {
     data_status: "available",
-    source: "qbo_cash_health_snapshots",
+    source: authoritySummary?.source || (run.source_close_authority_ids?.length ? "accounting_period_closes" : "qbo_cash_health_snapshots"),
     is_sample: false,
     model_version: run.model_version || FORECAST_MODEL_VERSION,
+    update_status: updateStatus?.status || null,
+    update_detail: updateStatus || null,
     history: {
       start: normalizeMonthDate(run.history_start),
       end: normalizeMonthDate(run.history_end),
@@ -624,6 +759,9 @@ function serializeAvailableForecast({ run, rows }) {
       months_required: FORECAST_HISTORY_MONTHS,
       missing_months: [],
       source_snapshot_ids: run.source_snapshot_ids || [],
+      source_close_authority_ids: run.source_close_authority_ids || [],
+      authority_types_by_month: authoritySummary?.authority_types_by_month || {},
+      authority_summary: authoritySummary,
     },
     forecast: {
       start: normalizeMonthDate(run.forecast_start),
@@ -671,6 +809,11 @@ function historyPayload(history) {
     months_required: history.months_required,
     missing_months: history.missing_months,
     source_snapshot_ids: history.months.map((row) => row.snapshot_id),
+    source_close_authority_ids: history.months.map((row) => row.close_authority_id).filter(Boolean),
+    authority_types_by_month: history.months.reduce((acc, row) => {
+      if (row.month_key && row.authority_type) acc[row.month_key] = row.authority_type;
+      return acc;
+    }, {}),
   };
 }
 
@@ -808,6 +951,31 @@ function isEligibleForecastHistorySnapshot(row) {
   );
 }
 
+function isEligibleForecastCloseAuthority(row) {
+  return Boolean(
+    row &&
+    row.business_id &&
+    row.period_month &&
+    row.status === "approved" &&
+    row.is_active === true &&
+    ["historical_import", "admin_approved"].includes(row.authority_type) &&
+    row.approved_snapshot_id
+  );
+}
+
+function isPinnedSnapshotEligibleForForecast(snapshot, close, expectedMonth, businessId) {
+  if (!snapshot || !close || !expectedMonth) return false;
+  if (snapshot.business_id !== businessId || close.business_id !== businessId) return false;
+  if (snapshot.accounting_method !== HEALTH_ACCOUNTING_METHOD) return false;
+  if (!["current", "validated"].includes(snapshot.status)) return false;
+  if (Number(snapshot.review_year) !== Number(expectedMonth.year)) return false;
+  if (Number(snapshot.review_month) !== Number(expectedMonth.month)) return false;
+  if (normalizeMonthDate(close.period_month) !== expectedMonth.monthKey) return false;
+  if (String(close.approved_snapshot_id) !== String(snapshot.id)) return false;
+  if (close.snapshot_fingerprint && snapshot.raw_hash && close.snapshot_fingerprint !== snapshot.raw_hash) return false;
+  return true;
+}
+
 function assertForecastHistoryRowsScoped(rows, businessId) {
   for (const row of rows || []) {
     if (row?.business_id !== businessId) {
@@ -815,6 +983,18 @@ function assertForecastHistoryRowsScoped(rows, businessId) {
         expected_business_id: businessId,
         returned_business_id: row?.business_id || null,
         snapshot_id: row?.id || null,
+      });
+    }
+  }
+}
+
+function assertCloseAuthorityRowsScoped(rows, businessId) {
+  for (const row of rows || []) {
+    if (row?.business_id !== businessId) {
+      throw new ForecastV1Error("forecast_close_authority_scope_contract_violation", 500, {
+        expected_business_id: businessId,
+        returned_business_id: row?.business_id || null,
+        close_authority_id: row?.id || null,
       });
     }
   }
@@ -833,7 +1013,15 @@ function monthsAfter(year, month, count) {
   return out;
 }
 
-function buildForecastInputIdentity({ businessId, historyStart, historyEnd, forecastStart, forecastEnd, sourceSnapshotIdsHash }) {
+function buildForecastInputIdentity({
+  businessId,
+  historyStart,
+  historyEnd,
+  forecastStart,
+  forecastEnd,
+  sourceSnapshotIdsHash,
+  sourceCloseAuthorityIdsHash = "",
+}) {
   const modelConfigHash = stableHash(FORECAST_V1_CONFIG);
   const inputFingerprint = crypto
     .createHash("sha256")
@@ -846,6 +1034,7 @@ function buildForecastInputIdentity({ businessId, historyStart, historyEnd, fore
       forecastStart,
       forecastEnd,
       sourceSnapshotIdsHash,
+      sourceCloseAuthorityIdsHash || "",
       modelConfigHash,
     ].join("|"))
     .digest("hex");
@@ -857,6 +1046,40 @@ function buildForecastInputIdentity({ businessId, historyStart, historyEnd, fore
     forecastEnd,
     sourceSnapshotIdsHash,
     inputFingerprint,
+  };
+}
+
+function buildSourceAuthoritySummary(months = []) {
+  const authorityTypesByMonth = {};
+  const closeVersionsByMonth = {};
+  for (const row of months) {
+    if (!row?.month_key) continue;
+    authorityTypesByMonth[row.month_key] = row.authority_type || "unknown";
+    closeVersionsByMonth[row.month_key] = Number(row.close_version || 1);
+  }
+  const authorityTypes = [...new Set(Object.values(authorityTypesByMonth))];
+  return {
+    source: "accounting_period_closes",
+    authority_types: authorityTypes,
+    authority_types_by_month: authorityTypesByMonth,
+    close_versions_by_month: closeVersionsByMonth,
+    contains_historical_import: authorityTypes.includes("historical_import"),
+    contains_admin_approved: authorityTypes.includes("admin_approved"),
+  };
+}
+
+function buildForecastAuthorityUpdateStatus(history) {
+  const missing = history?.missing_months || [];
+  const status = missing.length ? "awaiting_close_authority" : null;
+  return {
+    status,
+    reason: "forecast_uses_prior_completed_run_until_pinned_period_authorities_are_ready",
+    awaiting_months: missing,
+    authority_source: "accounting_period_closes",
+    history_start: history?.window?.start || null,
+    history_end: history?.window?.end || null,
+    months_available: history?.months_available || 0,
+    months_required: history?.months_required || FORECAST_HISTORY_MONTHS,
   };
 }
 
@@ -905,7 +1128,15 @@ async function selectRows(query) {
 }
 
 function isMissingForecastTable(error) {
-  return error && ["42P01", "42703", "PGRST200", "PGRST204", "PGRST205"].includes(error.code);
+  return Boolean(
+    error &&
+    (["42P01", "42703", "PGRST200", "PGRST204", "PGRST205"].includes(error.code) ||
+      (error.error === "forecast_query_failed" && /forecast_runs|forecast_months|forecast_overrides|does not exist|Could not find/i.test(String(error?.details?.cause || error?.message || ""))))
+  );
+}
+
+function isMissingCloseAuthorityTable(error) {
+  return error?.error === "forecast_query_failed" && /accounting_period_closes|does not exist|Could not find/i.test(String(error?.details?.cause || error?.message || ""));
 }
 
 function isUniqueViolation(error) {
@@ -981,5 +1212,6 @@ export default {
   upsertForecastV1Overrides,
   resetForecastV1Overrides,
   loadContiguousCashHistory,
+  loadContiguousForecastAuthorityHistory,
   buildForecastV1Months,
 };
