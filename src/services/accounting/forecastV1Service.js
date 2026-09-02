@@ -320,12 +320,13 @@ export async function loadContiguousCashHistory({
   const rows = await selectRows(
     db
       .from("monthly_review_qbo_pnl_snapshots")
-      .select("id,review_year,review_month,accounting_method,status,is_current,revenue,expenses,net_profit,pulled_at,metadata")
+      .select("id,business_id,review_year,review_month,accounting_method,status,is_current,revenue,expenses,net_profit,pulled_at,metadata")
       .eq("business_id", businessId)
       .eq("accounting_method", HEALTH_ACCOUNTING_METHOD)
       .eq("is_current", true)
       .eq("status", "current")
   );
+  assertForecastHistoryRowsScoped(rows, businessId);
   const byMonth = new Map(
     rows
       .filter(isEligibleForecastHistorySnapshot)
@@ -794,6 +795,18 @@ function isEligibleForecastHistorySnapshot(row) {
     row.review_year &&
     row.review_month
   );
+}
+
+function assertForecastHistoryRowsScoped(rows, businessId) {
+  for (const row of rows || []) {
+    if (row?.business_id !== businessId) {
+      throw new ForecastV1Error("forecast_snapshot_scope_contract_violation", 500, {
+        expected_business_id: businessId,
+        returned_business_id: row?.business_id || null,
+        snapshot_id: row?.id || null,
+      });
+    }
+  }
 }
 
 function monthsAfter(year, month, count) {

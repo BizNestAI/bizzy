@@ -27,12 +27,12 @@ router.get("/", async (req, res) => {
     const cutoffMonth = monthKeyFromParts(cutoff.year, cutoff.month);
     const { data: forecastRows, error: forecastError } = await supabase
       .from("forecast_months")
-      .select("month,effective_revenue,effective_expenses,effective_operating_net_cash_flow,forecast_runs!inner(id,business_id,status,model_version,accounting_method)")
+      .select("month,effective_revenue,effective_expenses,effective_operating_net_cash_flow,run:forecast_runs!forecast_months_run_business_fkey(id,business_id,status,model_version,accounting_method,generated_at)")
       .eq("business_id", businessId)
-      .eq("forecast_runs.business_id", businessId)
-      .eq("forecast_runs.status", "completed")
-      .eq("forecast_runs.model_version", FORECAST_MODEL_VERSION)
-      .eq("forecast_runs.accounting_method", HEALTH_ACCOUNTING_METHOD)
+      .eq("run.business_id", businessId)
+      .eq("run.status", "completed")
+      .eq("run.model_version", FORECAST_MODEL_VERSION)
+      .eq("run.accounting_method", HEALTH_ACCOUNTING_METHOD)
       .lte("month", cutoffMonth)
       .order("month", { ascending: false })
       .limit(months);
@@ -75,6 +75,10 @@ router.get("/", async (req, res) => {
         const month = String(forecast.month).slice(0, 10);
         const actual = actualMap.get(month);
         if (!actual) return null;
+        const generatedAt = forecast.run?.generated_at ? new Date(forecast.run.generated_at) : null;
+        const targetMonthStart = new Date(`${month}T00:00:00Z`);
+        const targetMonthClosedAt = new Date(Date.UTC(targetMonthStart.getUTCFullYear(), targetMonthStart.getUTCMonth() + 1, 1));
+        if (!generatedAt || Number.isNaN(generatedAt.getTime()) || generatedAt >= targetMonthClosedAt) return null;
         const fr = Number(forecast.effective_revenue || 0);
         const fe = Number(forecast.effective_expenses || 0);
         const fp = Number(forecast.effective_operating_net_cash_flow ?? fr - fe);
@@ -97,6 +101,8 @@ router.get("/", async (req, res) => {
 
     return res.status(200).json({
       data_status: rows.length ? "available" : "unavailable",
+      reason: rows.length ? null : "no_completed_forecast_samples",
+      samples: rows.length,
       usingMock: false,
       is_sample: false,
       rows,

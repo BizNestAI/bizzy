@@ -64,6 +64,7 @@ function makeDb(initial = {}) {
     forecast_months: [],
     forecast_overrides: [],
     quickbooks_tokens: [{ business_id: BUSINESS_ID, is_active: true, status: "active" }],
+    __selects: [],
     ...initial,
   };
   return {
@@ -115,7 +116,11 @@ class Query {
     this.pendingDelete = false;
     this.upsertConflict = null;
   }
-  select() { return this; }
+  select(columns = "*") {
+    this.selectColumns = String(columns);
+    this.tables.__selects.push({ table: this.table, columns: this.selectColumns });
+    return this;
+  }
   eq(column, value) {
     const key = String(column).includes(".") ? String(column).split(".").at(-1) : column;
     this.filters.push((row) => String(row[key]) === String(value));
@@ -131,6 +136,9 @@ class Query {
   maybeSingle() { this.singleMode = "maybe"; return this; }
   single() { this.singleMode = "single"; return this; }
   then(resolve) {
+    if (this.tables.__errors?.[this.table]) {
+      return resolve({ data: null, error: this.tables.__errors[this.table], count: 0 });
+    }
     if (this.pendingDelete) {
       const rows = this.rows();
       this.tables[this.table] = (this.tables[this.table] || []).filter((row) => !rows.includes(row));
@@ -217,6 +225,83 @@ test("Forecasts V1 requires contiguous current Cash snapshots and treats zero re
   assert.deepEqual(history.missing_months, ["2025-12"]);
   assert.equal(status.data_status, "insufficient_history");
   assert.ok(history.months.some((row) => row.month_key === "2025-11-01" && row.revenue === 0));
+});
+
+test("Forecasts V1 snapshot loader includes business_id and accepts production-shaped Cash history", async () => {
+  const db = makeDb({ monthly_review_qbo_pnl_snapshots: historyRows() });
+  const history = await loadContiguousCashHistory({ db, businessId: BUSINESS_ID, cutoffYear: 2026, cutoffMonth: 8 });
+  const status = await getForecastV1Status({ db, businessId: BUSINESS_ID, now: NOW });
+  const snapshotSelect = db.tables.__selects.find((entry) => entry.table === "monthly_review_qbo_pnl_snapshots")?.columns || "";
+
+  assert.match(snapshotSelect, /\bbusiness_id\b/);
+  assert.equal(history.complete, true);
+  assert.equal(history.months_available, 12);
+  assert.deepEqual(history.missing_months, []);
+  assert.equal(history.window.start, "2025-09-01");
+  assert.equal(history.window.end, "2026-08-01");
+  assert.equal(status.data_status, "generation_required");
+});
+
+test("Forecasts V1 treats malformed snapshot scope as a query failure, not missing history", async () => {
+  const missingBusinessRows = historyRows().map((row) => {
+    const copy = { ...row };
+    delete copy.business_id;
+    return copy;
+  });
+  const wrongBusinessRows = historyRows({ "2026-08": { business_id: OTHER_BUSINESS_ID } });
+  const unscopedDb = (rows) => ({
+    from() {
+      return {
+        select() { return this; },
+        eq() { return this; },
+        then(resolve) { return resolve({ data: rows, error: null }); },
+      };
+    },
+  });
+
+  await assert.rejects(
+    () => loadContiguousCashHistory({
+      db: unscopedDb(missingBusinessRows),
+      businessId: BUSINESS_ID,
+      cutoffYear: 2026,
+      cutoffMonth: 8,
+    }),
+    /forecast_snapshot_scope_contract_violation/
+  );
+
+  await assert.rejects(
+    () => loadContiguousCashHistory({
+      db: unscopedDb(wrongBusinessRows),
+      businessId: BUSINESS_ID,
+      cutoffYear: 2026,
+      cutoffMonth: 8,
+    }),
+    /forecast_snapshot_scope_contract_violation/
+  );
+});
+
+test("Forecasts V1 keeps true empty history distinct from snapshot query errors", async () => {
+  const emptyStatus = await getForecastV1Status({
+    db: makeDb({ monthly_review_qbo_pnl_snapshots: [] }),
+    businessId: BUSINESS_ID,
+    now: NOW,
+  });
+  assert.equal(emptyStatus.data_status, "insufficient_history");
+  assert.equal(emptyStatus.history.months_available, 0);
+
+  await assert.rejects(
+    () => getForecastV1Status({
+      db: makeDb({
+        monthly_review_qbo_pnl_snapshots: [],
+        __errors: {
+          monthly_review_qbo_pnl_snapshots: { code: "42703", message: "column missing" },
+        },
+      }),
+      businessId: BUSINESS_ID,
+      now: NOW,
+    }),
+    /forecast_query_failed/
+  );
 });
 
 test("Forecasts V1 generation is deterministic and idempotent for identical source snapshots", async () => {
@@ -393,6 +478,7 @@ test("Forecasts V1 migration creates versioned authority tables and leaves legac
 
 test("Forecasts Live frontend and routes do not silently persist sample data", () => {
   const route = read("src/api/accounting/forecast.js");
+  const accuracyRoute = read("src/api/accounting/forecastAccuracy.js");
   const editor = read("src/components/Accounting/ForecastEditorChart.jsx");
   const service = read("src/services/accounting/forecastV1Service.js");
   const scenarios = read("src/pages/accounting/Scenarios.jsx");
@@ -408,6 +494,12 @@ test("Forecasts Live frontend and routes do not silently persist sample data", (
   assert.match(editor, /forecast_run_id: forecastRunId/);
   assert.match(editor, /forecastMeta\?\.is_sample/);
   assert.match(route, /generation_in_progress/);
+  assert.match(accuracyRoute, /run:forecast_runs!forecast_months_run_business_fkey/);
+  assert.match(accuracyRoute, /no_completed_forecast_samples/);
+  assert.match(accuracyRoute, /generatedAt >= targetMonthClosedAt/);
+  assert.doesNotMatch(accuracyRoute, /forecast_runs!inner/);
+  assert.doesNotMatch(accuracyRoute, /usingMock:\s*true/);
+  assert.doesNotMatch(accuracyRoute, /MAPE 0|100%/);
   assert.doesNotMatch(service, /Math\.random/);
   assert.doesNotMatch(service, /month_label/);
   assert.doesNotMatch(service, /financial_metrics/);
