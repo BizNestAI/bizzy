@@ -1,3 +1,4 @@
+/* global process */
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -28,10 +29,12 @@ import {
   postTransactionToQuickBooks,
   getAutoPostStatus,
   updateAutoPostStatus,
+  previewAutoPostBacklogScope,
 } from "../../services/bookkeeping/bookkeepingClient.js";
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
 import { ClarificationModal } from "../../components/Bizzy/OperatorRequestsPanel.jsx";
+const __motionUsageForLint = motion;
 
 const MOCK_ACCOUNTS = [
   { id: "acct-cc-1234", name: "Credit Card 1234", type: "Credit Card", balance: -1820.45 },
@@ -383,7 +386,7 @@ function buildManualPostError(err) {
   };
 }
 
-function AccountCard({ account, selected, onClick }) {
+function AccountCard({ account, selected, onClick, autoPostStatus = null }) {
   const firstImported = formatShortDate(account.firstImportedTransactionDate);
   const latestImported = formatShortDate(account.latestImportedTransactionDate);
   const activeStart = formatShortDate(account.bookkeepingStartDate || account.bookkeeping_start_date);
@@ -393,7 +396,9 @@ function AccountCard({ account, selected, onClick }) {
         ? `Imported range: ${firstImported}`
         : `Imported range: ${firstImported} to ${latestImported}`
       : null;
-  const activeRange = activeStart ? `Active books start: ${activeStart}` : "Active books start: all imported dates";
+  const activeRange =
+    autoPostStatus?.scope_copy?.headline ||
+    (activeStart ? `Active books start: ${activeStart}` : "Active books start not set");
 
   return (
     <button
@@ -502,7 +507,7 @@ function BookkeepingCleanup() {
   const [showAccountScrollLeft, setShowAccountScrollLeft] = useState(false);
   const [showAccountScrollRight, setShowAccountScrollRight] = useState(false);
 
-  const { plaidConnected, qbConnected } = useOnboardingStatus({ currentBusiness });
+  const { plaidConnected } = useOnboardingStatus({ currentBusiness });
   const hasLiveAccounts = useMemo(
     () => !usingDemo && Array.isArray(accounts) && accounts.length > 0,
     [accounts, usingDemo]
@@ -596,7 +601,7 @@ function BookkeepingCleanup() {
   const [rowsPerPage, setRowsPerPage] = useState(25);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [bulkAccountId, setBulkAccountId] = useState("");
-  const [showCategorized, setShowCategorized] = useState(false);
+  const [showCategorized] = useState(false);
   const [page, setPage] = useState(1);
   const [showChecksOnly, setShowChecksOnly] = useState(false);
   const showPostedToast = () => window.alert("Already posted to QuickBooks.");
@@ -606,11 +611,14 @@ function BookkeepingCleanup() {
   const [loadingAutoPost, setLoadingAutoPost] = useState(false);
   const [savingAutoPost, setSavingAutoPost] = useState(false);
   const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
+  const [autoPostScopeChoice, setAutoPostScopeChoice] = useState("new_activity_only");
+  const [autoPostEffectiveDate, setAutoPostEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [autoPostPreview, setAutoPostPreview] = useState(null);
+  const [loadingAutoPostPreview, setLoadingAutoPostPreview] = useState(false);
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [manualPostTxn, setManualPostTxn] = useState(null);
   const [manualPostResult, setManualPostResult] = useState(null);
   const [clarRequests, setClarRequests] = useState([]);
-  const [clarCount, setClarCount] = useState(null);
   const [clarOpen, setClarOpen] = useState(false);
   const navigate = useNavigate();
 
@@ -657,13 +665,39 @@ function BookkeepingCleanup() {
     }
   }, [businessId, usingDemo]);
 
-  const updateAutoPost = useCallback(async ({ enabled, confirmBacklog = false }) => {
+  const loadAutoPostPreview = useCallback(async (effectiveDate) => {
+    if (!businessId || usingDemo || !effectiveDate) return;
+    setLoadingAutoPostPreview(true);
+    try {
+      const res = await previewAutoPostBacklogScope(businessId, { effectiveDate });
+      setAutoPostPreview(res || null);
+    } catch (e) {
+      console.warn("[bookkeeping] auto-post preview failed", e?.message || e);
+      setAutoPostPreview(null);
+    } finally {
+      setLoadingAutoPostPreview(false);
+    }
+  }, [businessId, usingDemo]);
+
+  const updateAutoPost = useCallback(async ({
+    enabled,
+    confirmBacklog = false,
+    scopeMode = "new_activity_only",
+    effectiveDate = null,
+    previewAcknowledged = false,
+  }) => {
     if (!businessId || usingDemo || savingAutoPost) return;
     setSavingAutoPost(true);
     try {
       let res;
       try {
-        res = await updateAutoPostStatus(businessId, { enabled, confirmBacklog });
+        res = await updateAutoPostStatus(businessId, {
+          enabled,
+          confirmBacklog,
+          scopeMode,
+          effectiveDate,
+          previewAcknowledged,
+        });
       } catch (err) {
         if (enabled && err?.requiresConfirmation) {
           setAutoPostStatus((prev) => ({
@@ -697,15 +731,36 @@ function BookkeepingCleanup() {
     if (!businessId || usingDemo || savingAutoPost) return;
     const nextEnabled = autoPostStatus?.auto_post_to_quickbooks !== true;
     if (nextEnabled) {
+      setAutoPostScopeChoice("new_activity_only");
+      setAutoPostEffectiveDate(autoPostStatus?.auto_post_effective_date || new Date().toISOString().slice(0, 10));
       setAutoPostConfirmOpen(true);
       return;
     }
     await updateAutoPost({ enabled: false, confirmBacklog: false });
-  }, [autoPostStatus?.auto_post_to_quickbooks, businessId, savingAutoPost, updateAutoPost, usingDemo]);
+  }, [
+    autoPostStatus?.auto_post_effective_date,
+    autoPostStatus?.auto_post_to_quickbooks,
+    businessId,
+    savingAutoPost,
+    updateAutoPost,
+    usingDemo,
+  ]);
 
   const confirmEnableAutoPost = useCallback(async () => {
-    await updateAutoPost({ enabled: true, confirmBacklog: true });
-  }, [updateAutoPost]);
+    const effectiveDate = autoPostScopeChoice === "effective_date" ? autoPostEffectiveDate : null;
+    await updateAutoPost({
+      enabled: true,
+      confirmBacklog: true,
+      scopeMode: autoPostScopeChoice,
+      effectiveDate,
+      previewAcknowledged: autoPostScopeChoice === "effective_date",
+    });
+  }, [autoPostEffectiveDate, autoPostScopeChoice, updateAutoPost]);
+
+  useEffect(() => {
+    if (!autoPostConfirmOpen || autoPostScopeChoice !== "effective_date") return;
+    loadAutoPostPreview(autoPostEffectiveDate);
+  }, [autoPostConfirmOpen, autoPostEffectiveDate, autoPostScopeChoice, loadAutoPostPreview]);
 
   useEffect(() => {
     const modalOpen = autoPostConfirmOpen || Boolean(manualPostTxn) || Boolean(manualPostResult);
@@ -771,9 +826,8 @@ function BookkeepingCleanup() {
       const res = await getClarificationRequests(businessId, { limit: 200 });
       const rows = Array.isArray(res?.rows) ? res.rows : Array.isArray(res) ? res : [];
       setClarRequests(rows);
-      setClarCount(rows.length);
-    } catch (e) {
-      setClarCount(null);
+    } catch {
+      setClarRequests([]);
     }
   }, [businessId, usingDemo]);
 
@@ -818,18 +872,6 @@ function BookkeepingCleanup() {
     if (usingDemo) return true;
     return accountCards.length > 0;
   }, [usingDemo, accountCards]);
-  const totalToReview = useMemo(
-    () => transactions.filter((t) => !["approved", "auto_approved"].includes(t.status)).length,
-    [transactions]
-  );
-  const estimatedImpact = useMemo(
-    () =>
-      transactions.reduce((sum, t) => {
-        const signed = Number(t.signed_amount ?? t.signedAmount ?? t.amount ?? 0) || 0;
-        return sum + Math.abs(signed);
-      }, 0),
-    [transactions]
-  );
   const selectedTransactions = useMemo(
     () => transactions.filter((t) => selectedIds.has(t.id)),
     [transactions, selectedIds]
@@ -1847,7 +1889,7 @@ function BookkeepingCleanup() {
                     onClick={() => {
                       try {
                         navigate("/dashboard/settings?tab=integrations");
-                      } catch (e) {
+                      } catch {
                         window.location.href = "/dashboard/settings?tab=integrations";
                       }
                     }}
@@ -1895,6 +1937,7 @@ function BookkeepingCleanup() {
               key={acct._key || acct.id}
               account={acct}
               selected={accountFilter === getAcctKey(acct)}
+              autoPostStatus={autoPostStatus}
               onClick={() => {
                 const key = getAcctKey(acct);
                 setAccountFilter(key);
@@ -2065,10 +2108,44 @@ function BookkeepingCleanup() {
                   />
                 </span>
               </button>
+              {autoPostStatus?.auto_post_to_quickbooks === true ? (
+                <button
+                  type="button"
+                  disabled={savingAutoPost || loadingAutoPost}
+                  onClick={() => {
+                    setAutoPostScopeChoice(autoPostStatus?.auto_post_scope_mode === "effective_date" ? "effective_date" : "new_activity_only");
+                    setAutoPostEffectiveDate(autoPostStatus?.auto_post_effective_date || new Date().toISOString().slice(0, 10));
+                    setAutoPostConfirmOpen(true);
+                  }}
+                  className="min-w-0 rounded-full border border-white/10 px-3 py-1.5 text-center text-slate-200 transition hover:border-[var(--accent-line)] hover:bg-[var(--panel)] disabled:cursor-not-allowed disabled:opacity-60 sm:px-3.5"
+                >
+                  Update scope
+                </button>
+              ) : null}
             </>
           ) : null}
         </div>
       </div>
+
+      {!usingDemo && autoPostStatus?.auto_post_to_quickbooks === true ? (
+        <div className="mb-3 rounded-xl border border-emerald-300/18 bg-emerald-300/[0.06] px-3 py-2 text-xs leading-5 text-slate-300">
+          <div className="font-semibold text-emerald-100">
+            {autoPostStatus?.scope_copy?.headline || "Auto-posting is enabled"}
+          </div>
+          <div>
+            {autoPostStatus?.scope_copy?.detail || "Eligible handled transactions post automatically after the grace period."}
+            {Number(autoPostStatus?.handled_backlog_count || 0) > 0 ? (
+              <span>
+                {" "}
+                Historical Handled: {Number(autoPostStatus.handled_backlog_count)} held for scope review
+                {autoPostStatus?.backlog_preview_summary
+                  ? ` (${Number(autoPostStatus.backlog_preview_summary.eligible_count || 0)} eligible, ${Number(autoPostStatus.backlog_preview_summary.blocked_count || 0)} blocked).`
+                  : "."}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm mb-2 text-slate-300">
         <label className="flex items-center gap-2">
@@ -2477,20 +2554,108 @@ function BookkeepingCleanup() {
                       </div>
                       <div className="min-w-0">
                         <h2 id="auto-post-confirm-title" className="text-base font-semibold text-white">
-                          Turn on automatic QuickBooks posting?
+                          {autoPostStatus?.auto_post_to_quickbooks === true
+                            ? "Update automatic posting scope"
+                            : "Turn on automatic QuickBooks posting?"}
                         </h2>
                         <p className="mt-2 text-sm leading-6 text-slate-300">
-                          Eligible transactions will move through Bizzi&apos;s posting grace period before being sent to QuickBooks.
-                          You&apos;ll have time to review and correct them before they&apos;re posted.
+                          Choose which handled transactions Bizzi may post automatically. Eligible rows still wait through the posting grace period before going to QuickBooks.
                         </p>
                       </div>
                     </div>
 
-                    {Number(autoPostStatus?.handled_backlog_count || 0) > 0 ? (
+                    <div className="mt-4 grid gap-2">
+                      <label
+                        className={`cursor-pointer rounded-xl border px-3 py-3 text-sm transition ${
+                          autoPostScopeChoice === "new_activity_only"
+                            ? "border-emerald-300/50 bg-emerald-300/[0.10]"
+                            : "border-white/12 bg-white/[0.035] hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        <span className="flex items-start gap-3">
+                          <input
+                            type="radio"
+                            name="auto-post-scope"
+                            value="new_activity_only"
+                            checked={autoPostScopeChoice === "new_activity_only"}
+                            onChange={() => setAutoPostScopeChoice("new_activity_only")}
+                            className="mt-1"
+                          />
+                          <span>
+                            <span className="block font-semibold text-slate-100">New activity only</span>
+                            <span className="block text-slate-400">
+                              Automatically post eligible transactions handled after enablement. Existing Handled transactions remain held.
+                            </span>
+                          </span>
+                        </span>
+                      </label>
+
+                      <label
+                        className={`cursor-pointer rounded-xl border px-3 py-3 text-sm transition ${
+                          autoPostScopeChoice === "effective_date"
+                            ? "border-emerald-300/50 bg-emerald-300/[0.10]"
+                            : "border-white/12 bg-white/[0.035] hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        <span className="flex items-start gap-3">
+                          <input
+                            type="radio"
+                            name="auto-post-scope"
+                            value="effective_date"
+                            checked={autoPostScopeChoice === "effective_date"}
+                            onChange={() => setAutoPostScopeChoice("effective_date")}
+                            className="mt-1"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block font-semibold text-slate-100">Include existing safe Handled transactions</span>
+                            <span className="block text-slate-400">
+                              Pick an effective date. Bizzi enrolls only rows that pass posting safety checks.
+                            </span>
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+
+                    {autoPostScopeChoice === "effective_date" ? (
+                      <div className="mt-4 rounded-xl border border-white/12 bg-black/20 p-3">
+                        <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                          Effective date
+                        </label>
+                        <input
+                          type="date"
+                          value={autoPostEffectiveDate}
+                          onChange={(event) => setAutoPostEffectiveDate(event.target.value)}
+                          className="mt-2 w-full rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-300/60"
+                        />
+                        <div className="mt-3 text-sm leading-5 text-slate-300">
+                          {loadingAutoPostPreview ? (
+                            "Checking eligible rows..."
+                          ) : autoPostPreview ? (
+                            <>
+                              <span className="font-semibold text-emerald-100">{Number(autoPostPreview.eligible_count || 0)}</span>{" "}
+                              will be enrolled.{" "}
+                              <span className="font-semibold text-amber-100">{Number(autoPostPreview.blocked_count || 0)}</span>{" "}
+                              blocked rows will stay out of Auto-post.
+                            </>
+                          ) : (
+                            "Preview the selected scope before confirming."
+                          )}
+                        </div>
+                        {autoPostPreview?.buckets ? (
+                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-400">
+                            {Object.entries(autoPostPreview.buckets).slice(0, 8).map(([key, value]) => (
+                              <div key={key} className="rounded-lg bg-white/[0.035] px-2 py-1">
+                                {key.replace(/_/g, " ")}: <span className="text-slate-200">{Number(value || 0)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && autoPostScopeChoice === "new_activity_only" ? (
                       <div className="mt-4 rounded-xl border border-amber-300/24 bg-amber-300/[0.08] px-3 py-2.5 text-sm leading-5 text-amber-50/88">
-                        You currently have{" "}
-                        <span className="font-semibold text-amber-100">{Number(autoPostStatus?.handled_backlog_count || 0)}</span>{" "}
-                        handled transactions waiting. These will become eligible for QuickBooks posting after a fresh grace period.
+                        Existing Handled transactions remain held. Future eligible transactions post automatically after their grace period.
                       </div>
                     ) : null}
 
@@ -2509,7 +2674,7 @@ function BookkeepingCleanup() {
                         onClick={confirmEnableAutoPost}
                         className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {savingAutoPost ? "Turning on..." : "Turn on Auto-post"}
+                        {savingAutoPost ? "Saving..." : autoPostStatus?.auto_post_to_quickbooks === true ? "Save scope" : "Turn on Auto-post"}
                       </button>
                     </div>
                   </motion.div>

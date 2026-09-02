@@ -96,6 +96,10 @@ router.patch("/posting/auto-post", requireAuth, async (req, res) => {
       businessId,
       enabled,
       confirmBacklog,
+      scopeMode: req.body?.scope_mode || req.body?.auto_post_scope_mode || null,
+      effectiveDate: req.body?.effective_date || req.body?.auto_post_effective_date || null,
+      previewAcknowledged: req.body?.preview_acknowledged === true,
+      requestedBy: req.user?.id || req.user?.sub || null,
       graceHours: POSTING_GRACE_HOURS,
     });
     return res.json(settings);
@@ -125,6 +129,7 @@ router.get("/posting/backlog/preview", requireAuth, async (req, res) => {
       businessId,
       rangeStart: req.query?.range_start || null,
       rangeEnd: req.query?.range_end || null,
+      effectiveDate: req.query?.effective_date || req.query?.range_start || null,
       transactionIds: Array.isArray(req.query?.transaction_id)
         ? req.query.transaction_id
         : req.query?.transaction_id

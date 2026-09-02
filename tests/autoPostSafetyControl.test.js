@@ -9,6 +9,8 @@ import {
   computePostAfterForAutoPost,
   getAutoPostSettings,
   getAutoPostToQuickBooks,
+  previewAutoPostBacklog,
+  releaseAutoPostBacklogScope,
   setAutoPostEnabled,
 } from "../src/services/bookkeeping/autoPostControl.js";
 
@@ -59,12 +61,15 @@ test("turning on requires confirmation and does not release handled historical b
   assert.match(service, /auto_post_backlog_confirmation_required/);
   assert.match(service, /auto_post_confirmation_required/);
   assert.match(route, /confirm_backlog/);
+  assert.match(route, /scopeMode:\s*req\.body\?\.scope_mode/);
+  assert.match(route, /effectiveDate:\s*req\.body\?\.effective_date/);
   assert.match(route, /\/posting\/backlog\/preview/);
   assert.match(route, /\/posting\/backlog\/release/);
   assert.match(route, /handled_backlog_count/);
   assert.match(route, /setAutoPostEnabled/);
   assert.match(service, /computePostAfterForAutoPost\(nextEnabled, normalizedGraceHours, nowMs\)/);
   assert.match(service, /scheduledBacklog = 0/);
+  assert.match(service, /auto_post_effective_date/);
   assert.match(service, /historical_backlog_status:\s*backlogIds\.length \? "review_required" : "none"/);
   assert.match(migration, /auto_post_enabled_at timestamptz/);
   assert.match(migration, /bookkeeping_auto_post_backlog_releases/);
@@ -214,12 +219,14 @@ test("auto-post settings service reads, updates, and preserves historical backlo
     ],
   });
 
-  assert.deepEqual(await getAutoPostSettings({ db, businessId: "biz-1", graceHours: 24 }), {
-    enabled: false,
-    auto_post_to_quickbooks: false,
-    handled_backlog_count: 2,
-    posting_grace_hours: 24,
-  });
+  const initialSettings = await getAutoPostSettings({ db, businessId: "biz-1", graceHours: 24 });
+  assert.equal(initialSettings.enabled, false);
+  assert.equal(initialSettings.auto_post_to_quickbooks, false);
+  assert.equal(initialSettings.handled_backlog_count, 2);
+  assert.equal(initialSettings.posting_grace_hours, 24);
+  assert.equal(initialSettings.auto_post_scope_mode, "new_activity_only");
+  assert.equal(initialSettings.worker.enabled, true);
+  assert.match(initialSettings.scope_copy.headline, /Auto-posting is off/);
 
   await assert.rejects(
     setAutoPostEnabled({ db, businessId: "biz-1", enabled: true, graceHours: 24, nowMs }),
@@ -250,6 +257,80 @@ test("auto-post settings service reads, updates, and preserves historical backlo
   assert.equal(db.cat("biz-1", "txn-2").post_after, null);
   await setAutoPostEnabled({ db, businessId: "biz-1", enabled: false, graceHours: 24, nowMs });
   assert.equal((await getAutoPostSettings({ db, businessId: "biz-1" })).auto_post_to_quickbooks, false);
+});
+
+test("new_activity_only automatically allows post-activation eligible rows without backlog release", () => {
+  const scope = classifyAutoPostOperationalScope({
+    item: {
+      transaction_id: "new-1",
+      post_after: "2026-09-03T12:00:00.000Z",
+    },
+    bankTxn: {
+      id: "new-1",
+      date: "2026-09-03",
+      pending: false,
+    },
+    policy: {
+      enabled: true,
+      auto_post_enabled_at: "2026-09-02T12:00:00.000Z",
+      auto_post_scope_mode: "new_activity_only",
+      historical_backlog_status: "review_required",
+      active_backlog_releases: [],
+      policy_columns_available: true,
+    },
+  });
+  assert.deepEqual(scope, { allowed: true, code: "in_scope" });
+});
+
+test("effective-date preview releases only fully eligible historical rows", async () => {
+  const db = makeSupabase({
+    business_profiles: [{
+      id: "biz-1",
+      bookkeeping_start_date: null,
+      auto_post_to_quickbooks: true,
+      auto_post_enabled_at: "2026-09-02T12:00:00.000Z",
+      auto_post_scope_mode: "new_activity_only",
+      historical_backlog_status: "review_required",
+    }],
+    plaid_qbo_account_mappings: [
+      { business_id: "biz-1", plaid_account_id: "acct-1", qbo_account_id: "qbo-bank-1", qbo_account_name: "Checking" },
+    ],
+    bank_transactions: [
+      { id: "safe-1", business_id: "biz-1", plaid_account_id: "acct-1", is_archived: false, date: "2026-08-10", pending: false },
+      { id: "unsafe-1", business_id: "biz-1", plaid_account_id: "acct-1", is_archived: false, date: "2026-08-11", pending: false },
+      { id: "pending-1", business_id: "biz-1", plaid_account_id: "acct-1", is_archived: false, date: "2026-08-12", pending: true },
+      { id: "missing-source-1", business_id: "biz-1", plaid_account_id: "acct-2", is_archived: false, date: "2026-08-13", pending: false },
+    ],
+    transaction_categorizations: [
+      { business_id: "biz-1", transaction_id: "safe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "unsafe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: false } },
+      { business_id: "biz-1", transaction_id: "pending-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "missing-source-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: true } },
+    ],
+  });
+
+  const preview = await previewAutoPostBacklog({ db, businessId: "biz-1", effectiveDate: "2026-08-01" });
+  assert.equal(preview.total, 4);
+  assert.equal(preview.eligible_count, 1);
+  assert.equal(preview.blocked_count, 3);
+  assert.deepEqual(preview.eligible_transaction_ids, ["safe-1"]);
+  assert.equal(preview.buckets.safe_new_post, 1);
+  assert.equal(preview.buckets.unsafe_auto_post, 1);
+  assert.equal(preview.buckets.pending, 1);
+  assert.equal(preview.buckets.missing_source_mapping, 1);
+
+  const release = await releaseAutoPostBacklogScope({
+    db,
+    businessId: "biz-1",
+    requestedBy: "user-1",
+    rangeStart: "2026-08-01",
+    metadata: { preview_acknowledged: true },
+  });
+  assert.equal(release.released_transaction_count, 1);
+  assert.equal(release.blocked_transaction_count, 3);
+  assert.deepEqual(db.table("bookkeeping_auto_post_backlog_releases")[0].transaction_ids, ["safe-1"]);
+  assert.equal(db.table("business_profiles")[0].auto_post_scope_mode, "effective_date");
+  assert.equal(db.table("business_profiles")[0].historical_backlog_status, "released");
 });
 
 test("auto-post settings service batches Supabase IN requests and performs no external posting fetch", async () => {
@@ -301,6 +382,21 @@ test("auto-post operational scope holds pre-activation backlog unless an explici
     },
   });
   assert.equal(released.allowed, true);
+
+  const effectiveDateReleased = classifyAutoPostOperationalScope({
+    item: { transaction_id: "txn-2", post_after: "2026-09-01T12:00:00.000Z" },
+    bankTxn: { id: "txn-2", date: "2026-08-20" },
+    policy: {
+      enabled: true,
+      auto_post_enabled_at: "2026-09-02T12:00:00.000Z",
+      auto_post_scope_mode: "effective_date",
+      auto_post_effective_date: "2026-08-01",
+      historical_backlog_status: "released",
+      active_backlog_releases: [{ status: "active", release_start_date: "2026-08-01", release_end_date: null, transaction_ids: ["txn-2"] }],
+      policy_columns_available: true,
+    },
+  });
+  assert.equal(effectiveDateReleased.allowed, true);
 });
 
 test("books posting worker chunks preload and caps each auto-post batch", () => {
@@ -339,6 +435,15 @@ test("Books Review auto-post failures use toast UI and do not alert raw fetch er
   assert.doesNotMatch(loadCatchBlock, /setAutoPostStatus/);
 });
 
+test("Auto-post UI uses policy-aware scope copy instead of all imported dates", () => {
+  const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+  assert.match(page, /scope_copy\?\.headline/);
+  assert.doesNotMatch(page, /Active books start: all imported dates/);
+  assert.match(page, /Update automatic posting scope/);
+  assert.match(page, /New activity only/);
+  assert.match(page, /Include existing safe Handled transactions/);
+});
+
 function makeSupabase(tables = {}) {
   const state = Object.fromEntries(Object.entries(tables).map(([table, rows]) => [table, rows.map((row) => ({ ...row }))]));
   const calls = [];
@@ -371,6 +476,15 @@ class Query {
   update(patch) {
     this.patch = { ...(patch || {}) };
     this.calls.push({ table: this.table, op: "update" });
+    return this;
+  }
+  insert(payload) {
+    const rows = Array.isArray(payload) ? payload : [payload];
+    if (!this.state[this.table]) this.state[this.table] = [];
+    const inserted = rows.map((row, index) => ({ id: row.id || `${this.table}-${this.state[this.table].length + index + 1}`, ...row }));
+    this.state[this.table].push(...inserted);
+    this.rows = inserted;
+    this.calls.push({ table: this.table, op: "insert" });
     return this;
   }
   eq(field, value) {

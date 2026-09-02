@@ -1,3 +1,4 @@
+/* global process */
 import { apiUrl, safeFetch } from "../../utils/safeFetch";
 import {
   getPersistedClarificationRequestIds,
@@ -106,7 +107,10 @@ export async function getAutoPostStatus(businessId) {
   });
 }
 
-export async function updateAutoPostStatus(businessId, { enabled, confirmBacklog = false } = {}) {
+export async function updateAutoPostStatus(
+  businessId,
+  { enabled, confirmBacklog = false, scopeMode = null, effectiveDate = null, previewAcknowledged = false } = {}
+) {
   let res;
   try {
     res = await safeFetch(apiUrl("/api/bookkeeping/posting/auto-post"), {
@@ -116,6 +120,9 @@ export async function updateAutoPostStatus(businessId, { enabled, confirmBacklog
         business_id: businessId,
         enabled: enabled === true,
         confirm_backlog: confirmBacklog === true,
+        scope_mode: scopeMode,
+        effective_date: effectiveDate,
+        preview_acknowledged: previewAcknowledged === true,
       }),
     });
   } catch (err) {
@@ -137,6 +144,19 @@ export async function updateAutoPostStatus(businessId, { enabled, confirmBacklog
     throw err;
   }
   return res;
+}
+
+export async function previewAutoPostBacklogScope(businessId, { effectiveDate = null, rangeStart = null, rangeEnd = null } = {}) {
+  const params = new URLSearchParams();
+  if (businessId) params.set("business_id", businessId);
+  if (effectiveDate) params.set("effective_date", effectiveDate);
+  if (rangeStart || effectiveDate) params.set("range_start", rangeStart || effectiveDate);
+  if (rangeEnd) params.set("range_end", rangeEnd);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return safeFetch(apiUrl(`/api/bookkeeping/posting/backlog/preview${suffix}`), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
 }
 
 export async function getQboCoa(businessId) {
