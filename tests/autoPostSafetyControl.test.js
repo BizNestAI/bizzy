@@ -57,12 +57,14 @@ test("turning on requires confirmation and does not release handled historical b
   const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
   const service = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
   const migration = readFileSync(join(root, "supabase/migrations/20260921_auto_post_backlog_safety.sql"), "utf8");
+  const correction = readFileSync(join(root, "supabase/migrations/20260922_auto_post_scope_confirmation_rpc.sql"), "utf8");
 
   assert.match(service, /auto_post_backlog_confirmation_required/);
   assert.match(service, /auto_post_confirmation_required/);
   assert.match(route, /confirm_backlog/);
   assert.match(route, /scopeMode:\s*req\.body\?\.scope_mode/);
   assert.match(route, /effectiveDate:\s*req\.body\?\.effective_date/);
+  assert.match(route, /previewFingerprint:\s*req\.body\?\.preview_fingerprint/);
   assert.match(route, /\/posting\/backlog\/preview/);
   assert.match(route, /\/posting\/backlog\/release/);
   assert.match(route, /handled_backlog_count/);
@@ -73,6 +75,9 @@ test("turning on requires confirmation and does not release handled historical b
   assert.match(service, /historical_backlog_status:\s*backlogIds\.length \? "review_required" : "none"/);
   assert.match(migration, /auto_post_enabled_at timestamptz/);
   assert.match(migration, /bookkeeping_auto_post_backlog_releases/);
+  assert.match(migration, /auto_post_scope_mode in \('new_activity_only', 'explicit_backlog_released'\)/);
+  assert.match(correction, /auto_post_scope_mode in \('new_activity_only', 'effective_date'\)/);
+  assert.match(correction, /confirm_auto_post_effective_date_scope/);
   assert.match(service, /\.in\("transaction_id", ids\)/);
 });
 
@@ -313,6 +318,7 @@ test("effective-date preview releases only fully eligible historical rows", asyn
   assert.equal(preview.total, 4);
   assert.equal(preview.eligible_count, 1);
   assert.equal(preview.blocked_count, 3);
+  assert.match(preview.preview_fingerprint, /^[a-f0-9]{64}$/);
   assert.deepEqual(preview.eligible_transaction_ids, ["safe-1"]);
   assert.equal(preview.buckets.safe_new_post, 1);
   assert.equal(preview.buckets.unsafe_auto_post, 1);
@@ -324,6 +330,7 @@ test("effective-date preview releases only fully eligible historical rows", asyn
     businessId: "biz-1",
     requestedBy: "user-1",
     rangeStart: "2026-08-01",
+    previewFingerprint: preview.preview_fingerprint,
     metadata: { preview_acknowledged: true },
   });
   assert.equal(release.released_transaction_count, 1);
@@ -331,6 +338,184 @@ test("effective-date preview releases only fully eligible historical rows", asyn
   assert.deepEqual(db.table("bookkeeping_auto_post_backlog_releases")[0].transaction_ids, ["safe-1"]);
   assert.equal(db.table("business_profiles")[0].auto_post_scope_mode, "effective_date");
   assert.equal(db.table("business_profiles")[0].historical_backlog_status, "released");
+});
+
+test("effective-date scope save uses canonical enum, preview fingerprint, and one atomic RPC", async () => {
+  const db = makeSupabase({
+    business_profiles: [{
+      id: "biz-1",
+      bookkeeping_start_date: null,
+      auto_post_to_quickbooks: true,
+      auto_post_enabled_at: "2026-09-02T12:00:00.000Z",
+      auto_post_scope_mode: "new_activity_only",
+      historical_backlog_status: "review_required",
+    }],
+    plaid_qbo_account_mappings: [
+      { business_id: "biz-1", plaid_account_id: "acct-1", qbo_account_id: "qbo-bank-1", qbo_account_name: "Checking" },
+    ],
+    bank_transactions: [
+      { id: "safe-1", business_id: "biz-1", plaid_account_id: "acct-1", is_archived: false, date: "2026-08-10", pending: false },
+      { id: "unsafe-1", business_id: "biz-1", plaid_account_id: "acct-1", is_archived: false, date: "2026-08-11", pending: false },
+    ],
+    transaction_categorizations: [
+      { business_id: "biz-1", transaction_id: "safe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "unsafe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: false } },
+    ],
+  });
+  const preview = await previewAutoPostBacklog({ db, businessId: "biz-1", effectiveDate: "2026-08-01" });
+
+  const result = await setAutoPostEnabled({
+    db,
+    businessId: "biz-1",
+    enabled: true,
+    confirmBacklog: true,
+    scopeMode: "effective_date",
+    effectiveDate: "2026-08-01",
+    previewAcknowledged: true,
+    previewFingerprint: preview.preview_fingerprint,
+    requestedBy: "user-1",
+    nowMs: Date.parse("2026-09-02T12:00:00Z"),
+  });
+
+  assert.equal(result.auto_post_scope_mode, "effective_date");
+  assert.equal(result.historical_backlog_status, "released");
+  assert.equal(result.release.released_transaction_count, 1);
+  assert.equal(db.table("business_profiles")[0].auto_post_scope_mode, "effective_date");
+  assert.equal(db.table("business_profiles")[0].auto_post_effective_date, "2026-08-01");
+  assert.equal(db.table("bookkeeping_auto_post_backlog_releases").length, 1);
+  assert.equal(db.table("bookkeeping_auto_post_backlog_releases")[0].preview_fingerprint, preview.preview_fingerprint);
+  assert.ok(db.calls.some((call) => call.op === "rpc" && call.name === "confirm_auto_post_effective_date_scope"));
+});
+
+test("effective-date scope rejects stale or missing preview before persistence", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, auto_post_scope_mode: "new_activity_only", historical_backlog_status: "review_required" }],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "acct-1", qbo_account_id: "qbo-bank-1" }],
+    bank_transactions: [{ id: "safe-1", business_id: "biz-1", plaid_account_id: "acct-1", is_archived: false, date: "2026-08-10", pending: false }],
+    transaction_categorizations: [{ business_id: "biz-1", transaction_id: "safe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, meta: { safe_to_auto_post: true } }],
+  });
+
+  await assert.rejects(
+    () => setAutoPostEnabled({
+      db,
+      businessId: "biz-1",
+      enabled: true,
+      confirmBacklog: true,
+      scopeMode: "effective_date",
+      effectiveDate: "2026-08-01",
+      previewAcknowledged: true,
+    }),
+    /Refresh the posting scope preview/
+  );
+  assert.equal(db.table("bookkeeping_auto_post_backlog_releases").length, 0);
+  assert.equal(db.table("business_profiles")[0].auto_post_scope_mode, "new_activity_only");
+
+  await assert.rejects(
+    () => setAutoPostEnabled({
+      db,
+      businessId: "biz-1",
+      enabled: true,
+      confirmBacklog: true,
+      scopeMode: "effective_date",
+      effectiveDate: "2026-08-01",
+      previewAcknowledged: true,
+      previewFingerprint: "stale",
+    }),
+    /eligible posting population changed/
+  );
+  assert.equal(db.table("bookkeeping_auto_post_backlog_releases").length, 0);
+  assert.equal(db.table("business_profiles")[0].auto_post_scope_mode, "new_activity_only");
+});
+
+test("invalid auto-post scope returns validation error before database update", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, auto_post_scope_mode: "new_activity_only" }],
+    transaction_categorizations: [],
+  });
+
+  await assert.rejects(
+    () => setAutoPostEnabled({
+      db,
+      businessId: "biz-1",
+      enabled: true,
+      confirmBacklog: true,
+      scopeMode: "all_imported_dates",
+    }),
+    (err) => err?.code === "invalid_scope_mode" && err?.status === 400
+  );
+  assert.equal(db.table("business_profiles")[0].auto_post_scope_mode, "new_activity_only");
+});
+
+test("invalid effective date returns validation error before scope RPC", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, auto_post_scope_mode: "new_activity_only" }],
+    transaction_categorizations: [],
+  });
+
+  await assert.rejects(
+    () => setAutoPostEnabled({
+      db,
+      businessId: "biz-1",
+      enabled: true,
+      confirmBacklog: true,
+      scopeMode: "effective_date",
+      effectiveDate: "not-a-date",
+      previewAcknowledged: true,
+      previewFingerprint: "abc",
+    }),
+    (err) => err?.code === "invalid_effective_date" && err?.status === 400
+  );
+  assert.ok(db.calls.every((call) => call.op !== "rpc"));
+});
+
+test("scope confirmation RPC errors map to stable API codes", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, auto_post_scope_mode: "new_activity_only", historical_backlog_status: "review_required" }],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "acct-1", qbo_account_id: "qbo-bank-1" }],
+    bank_transactions: [{ id: "safe-1", business_id: "biz-1", plaid_account_id: "acct-1", is_archived: false, date: "2026-08-10", pending: false }],
+    transaction_categorizations: [{ business_id: "biz-1", transaction_id: "safe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, meta: { safe_to_auto_post: true } }],
+  }, { scopeRpcError: { code: "22023", message: "invalid_scope_mode", status: 400 } });
+  const preview = await previewAutoPostBacklog({ db, businessId: "biz-1", effectiveDate: "2026-08-01" });
+
+  await assert.rejects(
+    () => setAutoPostEnabled({
+      db,
+      businessId: "biz-1",
+      enabled: true,
+      confirmBacklog: true,
+      scopeMode: "effective_date",
+      effectiveDate: "2026-08-01",
+      previewAcknowledged: true,
+      previewFingerprint: preview.preview_fingerprint,
+    }),
+    (err) => err?.code === "invalid_scope_mode" && err?.status === 400
+  );
+});
+
+test("scope RPC failure rolls back policy and release state in the service boundary", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, auto_post_scope_mode: "new_activity_only", historical_backlog_status: "review_required" }],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "acct-1", qbo_account_id: "qbo-bank-1" }],
+    bank_transactions: [{ id: "safe-1", business_id: "biz-1", plaid_account_id: "acct-1", is_archived: false, date: "2026-08-10", pending: false }],
+    transaction_categorizations: [{ business_id: "biz-1", transaction_id: "safe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, meta: { safe_to_auto_post: true } }],
+  }, { failScopeRpc: true });
+  const preview = await previewAutoPostBacklog({ db, businessId: "biz-1", effectiveDate: "2026-08-01" });
+
+  await assert.rejects(
+    () => setAutoPostEnabled({
+      db,
+      businessId: "biz-1",
+      enabled: true,
+      confirmBacklog: true,
+      scopeMode: "effective_date",
+      effectiveDate: "2026-08-01",
+      previewAcknowledged: true,
+      previewFingerprint: preview.preview_fingerprint,
+    }),
+    /auto_post_scope_confirmation_failed/
+  );
+  assert.equal(db.table("business_profiles")[0].auto_post_scope_mode, "new_activity_only");
+  assert.equal(db.table("bookkeeping_auto_post_backlog_releases").length, 0);
 });
 
 test("auto-post settings service batches Supabase IN requests and performs no external posting fetch", async () => {
@@ -444,7 +629,7 @@ test("Auto-post UI uses policy-aware scope copy instead of all imported dates", 
   assert.match(page, /Include existing safe Handled transactions/);
 });
 
-function makeSupabase(tables = {}) {
+function makeSupabase(tables = {}, options = {}) {
   const state = Object.fromEntries(Object.entries(tables).map(([table, rows]) => [table, rows.map((row) => ({ ...row }))]));
   const calls = [];
   return {
@@ -457,6 +642,69 @@ function makeSupabase(tables = {}) {
     },
     from(table) {
       return new Query(state, table, calls);
+    },
+    async rpc(name, params = {}) {
+      calls.push({ op: "rpc", name, params });
+      if (name !== "confirm_auto_post_effective_date_scope") {
+        return { data: null, error: { code: "42883", message: `function ${name} does not exist`, status: 500 } };
+      }
+      if (options.scopeRpcError) {
+        return { data: null, error: options.scopeRpcError };
+      }
+      if (options.failScopeRpc) {
+        return { data: null, error: { code: "scope_rpc_failed", message: "simulated release insert failure", status: 500 } };
+      }
+      const business = (state.business_profiles || []).find((row) => row.id === params.p_business_id);
+      if (!business) return { data: null, error: { code: "business_not_found", message: "business_not_found", status: 400 } };
+      const existing = (state.bookkeeping_auto_post_backlog_releases || []).find(
+        (row) => row.business_id === params.p_business_id && row.status === "active" && row.preview_fingerprint === params.p_preview_fingerprint
+      );
+      let release = existing;
+      if (!release) {
+        if (!state.bookkeeping_auto_post_backlog_releases) state.bookkeeping_auto_post_backlog_releases = [];
+        release = {
+          id: `release-${state.bookkeeping_auto_post_backlog_releases.length + 1}`,
+          business_id: params.p_business_id,
+          release_start_date: params.p_effective_date,
+          release_end_date: null,
+          transaction_ids: params.p_transaction_ids || [],
+          status: "active",
+          requested_by: params.p_requested_by || null,
+          requested_at: "2026-09-02T12:00:00.000Z",
+          release_metadata: params.p_release_metadata || {},
+          preview_total_count: params.p_preview_total_count,
+          released_transaction_count: params.p_released_transaction_count,
+          blocked_transaction_count: params.p_blocked_transaction_count,
+          preview_fingerprint: params.p_preview_fingerprint,
+        };
+        state.bookkeeping_auto_post_backlog_releases.push(release);
+      }
+      Object.assign(business, {
+        auto_post_to_quickbooks: true,
+        auto_post_enabled_at: business.auto_post_enabled_at || params.p_enabled_at || "2026-09-02T12:00:00.000Z",
+        auto_post_scope_mode: "effective_date",
+        auto_post_effective_date: params.p_effective_date,
+        historical_backlog_status: "released",
+        backlog_reviewed_at: "2026-09-02T12:00:00.000Z",
+        backlog_reviewed_by: params.p_requested_by || null,
+        backlog_released_at: "2026-09-02T12:00:00.000Z",
+        backlog_released_by: params.p_requested_by || null,
+      });
+      return {
+        data: [{
+          business_id: params.p_business_id,
+          auto_post_scope_mode: "effective_date",
+          auto_post_effective_date: params.p_effective_date,
+          historical_backlog_status: "released",
+          release_id: release.id,
+          release_status: release.status,
+          preview_total_count: release.preview_total_count,
+          released_transaction_count: release.released_transaction_count,
+          blocked_transaction_count: release.blocked_transaction_count,
+          preview_fingerprint: release.preview_fingerprint,
+        }],
+        error: null,
+      };
     },
   };
 }

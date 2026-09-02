@@ -1,4 +1,6 @@
 /* global process */
+import { createHash } from "node:crypto";
+
 function isMissingAutoPostColumn(error) {
   const message = String(error?.message || error || "").toLowerCase();
   return error?.code === "42703" || message.includes("auto_post_to_quickbooks");
@@ -19,6 +21,18 @@ function normalizeScopeMode(value) {
   if (normalized === AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE) return AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE;
   if (normalized === AUTO_POST_SCOPE_MODES.EXPLICIT_BACKLOG_RELEASED) return AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE;
   return AUTO_POST_SCOPE_MODES.NEW_ACTIVITY_ONLY;
+}
+
+function validateScopeModeForWrite(value) {
+  const normalized = String(value || AUTO_POST_SCOPE_MODES.NEW_ACTIVITY_ONLY).toLowerCase();
+  if (normalized === AUTO_POST_SCOPE_MODES.EXPLICIT_BACKLOG_RELEASED) return AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE;
+  if (normalized === AUTO_POST_SCOPE_MODES.NEW_ACTIVITY_ONLY || normalized === AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE) {
+    return normalized;
+  }
+  const err = new Error("Unsupported automatic posting scope.");
+  err.status = 400;
+  err.code = "invalid_scope_mode";
+  throw err;
 }
 
 export async function getAutoPostToQuickBooks(db, businessId) {
@@ -217,9 +231,33 @@ function normalizeGraceHours(graceHours = DEFAULT_GRACE_HOURS) {
 
 function wrapAutoPostDbError(operation, error) {
   if (!error) return error;
-  const wrapped = new Error(`${operation}: ${error?.message || String(error)}`);
-  wrapped.code = error?.code || operation;
-  wrapped.status = error?.status || 500;
+  const message = String(error?.message || error || "");
+  const lower = message.toLowerCase();
+  let code = error?.code || operation;
+  let status = error?.status || 500;
+  if (operation === "auto_post_scope_confirmation_failed") {
+    if (lower.includes("preview_changed") || lower.includes("preview_required")) {
+      code = lower.includes("preview_changed") ? "preview_changed" : "preview_required";
+      status = 409;
+    } else if (
+      lower.includes("invalid_scope_mode") ||
+      lower.includes("invalid_effective_date") ||
+      lower.includes("invalid_preview_counts") ||
+      lower.includes("released_transaction_count_mismatch")
+    ) {
+      code = lower.includes("invalid_scope_mode")
+        ? "invalid_scope_mode"
+        : lower.includes("invalid_effective_date")
+          ? "invalid_effective_date"
+          : "invalid_release_preview";
+      status = 400;
+    } else {
+      code = "scope_persistence_failed";
+    }
+  }
+  const wrapped = new Error(`${operation}: ${message}`);
+  wrapped.code = code;
+  wrapped.status = status;
   wrapped.cause = error;
   return wrapped;
 }
@@ -346,6 +384,7 @@ export async function setAutoPostEnabled({
   scopeMode = AUTO_POST_SCOPE_MODES.NEW_ACTIVITY_ONLY,
   effectiveDate = null,
   previewAcknowledged = false,
+  previewFingerprint = null,
   requestedBy = null,
   graceHours = DEFAULT_GRACE_HOURS,
   nowMs = Date.now(),
@@ -362,13 +401,24 @@ export async function setAutoPostEnabled({
   const backlogIds = await getHandledBacklogTransactionIds(db, businessId);
   const normalizedGraceHours = normalizeGraceHours(graceHours);
   const nowIso = new Date(nowMs).toISOString();
-  const normalizedScopeMode = normalizeScopeMode(scopeMode);
+  const normalizedScopeMode = validateScopeModeForWrite(scopeMode);
   const normalizedEffectiveDate = normalizeDateString(effectiveDate);
 
   if (
     nextEnabled &&
     normalizedScopeMode === AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE &&
-    (!normalizedEffectiveDate || previewAcknowledged !== true)
+    !normalizedEffectiveDate
+  ) {
+    const err = new Error("Choose a valid effective date before including existing Handled transactions.");
+    err.status = 400;
+    err.code = "invalid_effective_date";
+    throw err;
+  }
+
+  if (
+    nextEnabled &&
+    normalizedScopeMode === AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE &&
+    previewAcknowledged !== true
   ) {
     const err = new Error("Choose an effective date and confirm the preview before including existing Handled transactions.");
     err.status = 409;
@@ -376,6 +426,41 @@ export async function setAutoPostEnabled({
     err.requires_confirmation = true;
     err.handled_backlog_count = backlogIds.length;
     throw err;
+  }
+
+  if (nextEnabled && normalizedScopeMode === AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE) {
+    const preview = await previewAutoPostBacklog({
+      db,
+      businessId,
+      rangeStart: normalizedEffectiveDate,
+      effectiveDate: normalizedEffectiveDate,
+    });
+    const confirmedFingerprint = assertMatchingPreviewFingerprint(preview, previewFingerprint);
+    const releaseResult = await confirmAutoPostScopeFromPreview({
+      db,
+      businessId,
+      requestedBy,
+      effectiveDate: normalizedEffectiveDate,
+      eligibleTransactionIds: preview.eligible_transaction_ids || [],
+      preview,
+      previewFingerprint: confirmedFingerprint,
+      enabledAt: nextEnabled && !currentEnabled ? nowIso : null,
+    });
+
+    return {
+      ok: true,
+      enabled: true,
+      auto_post_to_quickbooks: true,
+      handled_backlog_count: backlogIds.length,
+      scheduled_backlog_count: 0,
+      historical_backlog_status: "released",
+      requires_backlog_review: false,
+      auto_post_scope_mode: AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE,
+      auto_post_effective_date: normalizedEffectiveDate,
+      release: releaseResult,
+      posting_grace_hours: normalizedGraceHours,
+      post_after: null,
+    };
   }
 
   if (nextEnabled && !currentEnabled && confirmBacklog !== true && previewAcknowledged !== true) {
@@ -426,21 +511,6 @@ export async function setAutoPostEnabled({
   }
   if (updateErr) throw wrapAutoPostDbError("auto_post_settings_update_failed", updateErr);
 
-  let releaseResult = null;
-  if (nextEnabled && normalizedScopeMode === AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE) {
-    releaseResult = await releaseAutoPostBacklogScope({
-      db,
-      businessId,
-      requestedBy,
-      rangeStart: normalizedEffectiveDate,
-      metadata: {
-        source: "auto_post_enablement",
-        preview_acknowledged: true,
-        scope_mode: AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE,
-      },
-    });
-  }
-
   const postAfter = computePostAfterForAutoPost(nextEnabled, normalizedGraceHours, nowMs);
   const scheduledBacklog = 0;
 
@@ -457,16 +527,14 @@ export async function setAutoPostEnabled({
     handled_backlog_count: backlogIds.length,
     scheduled_backlog_count: scheduledBacklog,
     historical_backlog_status:
-      releaseResult?.released_transaction_count > 0
-        ? "released"
-        : nextEnabled && backlogIds.length
+      nextEnabled && backlogIds.length
           ? "review_required"
           : "none",
-    requires_backlog_review: nextEnabled && !releaseResult && backlogIds.length > 0,
+    requires_backlog_review: nextEnabled && backlogIds.length > 0,
     auto_post_scope_mode: normalizedScopeMode,
     auto_post_effective_date:
       normalizedScopeMode === AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE ? normalizedEffectiveDate : null,
-    release: releaseResult,
+    release: null,
     posting_grace_hours: normalizedGraceHours,
     post_after: scheduledBacklog ? postAfter : null,
   };
@@ -477,6 +545,44 @@ function normalizeDateString(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return date.toISOString().slice(0, 10);
+}
+
+function buildBacklogPreviewFingerprint(preview = {}) {
+  const eligible = Array.from(new Set(preview.eligible_transaction_ids || [])).sort();
+  const buckets = Object.fromEntries(Object.entries(preview.buckets || {}).sort(([a], [b]) => a.localeCompare(b)));
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        business_id: preview.business_id || null,
+        effective_date: preview.scope?.effective_date || preview.scope?.range_start || null,
+        range_start: preview.scope?.range_start || null,
+        range_end: preview.scope?.range_end || null,
+        total: Number(preview.total || 0),
+        eligible_count: Number(preview.eligible_count || 0),
+        blocked_count: Number(preview.blocked_count || 0),
+        eligible,
+        buckets,
+      })
+    )
+    .digest("hex");
+}
+
+function assertMatchingPreviewFingerprint(preview, expectedFingerprint) {
+  if (!expectedFingerprint) {
+    const err = new Error("Refresh the posting scope preview before saving.");
+    err.status = 409;
+    err.code = "preview_required";
+    throw err;
+  }
+  const actual = buildBacklogPreviewFingerprint(preview);
+  if (actual !== expectedFingerprint) {
+    const err = new Error("The eligible posting population changed. Refresh the preview and confirm again.");
+    err.status = 409;
+    err.code = "preview_changed";
+    err.preview_fingerprint = actual;
+    throw err;
+  }
+  return actual;
 }
 
 async function fetchBacklogCategorizationRows(db, businessId, { transactionIds = [] } = {}) {
@@ -566,7 +672,7 @@ export async function previewAutoPostBacklog({
     err.code = "missing_business_id";
     throw err;
   }
-  const start = normalizeDateString(rangeStart);
+  const start = normalizeDateString(rangeStart || effectiveDate);
   const end = normalizeDateString(rangeEnd);
   const rows = await fetchBacklogCategorizationRows(db, businessId, {
     transactionIds,
@@ -606,7 +712,7 @@ export async function previewAutoPostBacklog({
     }
   }
   const blockedTotal = scopedTotal - eligibleIds.length;
-  return {
+  const preview = {
     ok: true,
     business_id: businessId,
     scope: {
@@ -622,6 +728,63 @@ export async function previewAutoPostBacklog({
     buckets,
     sample,
   };
+  return {
+    ...preview,
+    preview_fingerprint: buildBacklogPreviewFingerprint(preview),
+  };
+}
+
+async function confirmAutoPostScopeFromPreview({
+  db,
+  businessId,
+  requestedBy = null,
+  effectiveDate,
+  eligibleTransactionIds = [],
+  preview = {},
+  previewFingerprint,
+  enabledAt = null,
+  metadata = {},
+} = {}) {
+  if (typeof db?.rpc !== "function") {
+    const err = new Error("Auto-post scope confirmation RPC is not installed.");
+    err.status = 500;
+    err.code = "auto_post_scope_rpc_unavailable";
+    throw err;
+  }
+  const { data, error } = await db.rpc("confirm_auto_post_effective_date_scope", {
+    p_business_id: businessId,
+    p_scope_mode: AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE,
+    p_effective_date: effectiveDate,
+    p_requested_by: requestedBy,
+    p_transaction_ids: Array.from(new Set(eligibleTransactionIds || [])).sort(),
+    p_preview_total_count: Number(preview.total || 0),
+    p_released_transaction_count: Number(preview.eligible_count || 0),
+    p_blocked_transaction_count: Number(preview.blocked_count || 0),
+    p_preview_fingerprint: previewFingerprint,
+    p_enabled_at: enabledAt,
+    p_release_metadata: {
+      ...(metadata || {}),
+      source: "auto_post_enablement",
+      preview_acknowledged: true,
+      scope_mode: AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE,
+      preview_total_count: Number(preview.total || 0),
+      eligible_count: Number(preview.eligible_count || 0),
+      blocked_count: Number(preview.blocked_count || 0),
+      buckets: preview.buckets || {},
+    },
+  });
+  if (error) throw wrapAutoPostDbError("auto_post_scope_confirmation_failed", error);
+  const row = Array.isArray(data) ? data[0] : data;
+  return {
+    ok: true,
+    release_id: row?.release_id || null,
+    status: row?.release_status || "active",
+    released_transaction_count: Number(row?.released_transaction_count ?? preview.eligible_count ?? 0),
+    preview_total_count: Number(row?.preview_total_count ?? preview.total ?? 0),
+    blocked_transaction_count: Number(row?.blocked_transaction_count ?? preview.blocked_count ?? 0),
+    preview_fingerprint: row?.preview_fingerprint || previewFingerprint,
+    buckets: preview.buckets || {},
+  };
 }
 
 export async function releaseAutoPostBacklogScope({
@@ -632,6 +795,7 @@ export async function releaseAutoPostBacklogScope({
   rangeEnd = null,
   transactionIds = [],
   metadata = {},
+  previewFingerprint = null,
 } = {}) {
   if (!db || !businessId) {
     const err = new Error("businessId is required.");
@@ -656,63 +820,20 @@ export async function releaseAutoPostBacklogScope({
     transactionIds: ids,
     effectiveDate: start,
   });
+  const confirmedFingerprint = assertMatchingPreviewFingerprint(preview, previewFingerprint);
   if (!ids.length) ids = preview.eligible_transaction_ids || [];
-  const nowIso = new Date().toISOString();
-  const insertPayload = {
-    business_id: businessId,
-    release_start_date: start,
-    release_end_date: end,
-    transaction_ids: ids,
-    requested_by: requestedBy,
-    requested_at: nowIso,
-    release_metadata: {
-      ...(metadata || {}),
-      preview_total_count: preview.total,
-      eligible_count: preview.eligible_count,
+  return confirmAutoPostScopeFromPreview({
+    db,
+    businessId,
+    requestedBy,
+    effectiveDate: start,
+    eligibleTransactionIds: ids,
+    preview: {
+      ...preview,
+      eligible_count: ids.length,
       blocked_count: preview.blocked_count,
-      buckets: preview.buckets,
     },
-    preview_total_count: preview.total,
-    released_transaction_count: ids.length,
-    blocked_transaction_count: preview.blocked_count,
-  };
-  let { data: release, error: releaseError } = await db
-    .from("bookkeeping_auto_post_backlog_releases")
-    .insert(insertPayload)
-    .select("id")
-    .maybeSingle();
-  if (isMissingAutoPostColumn(releaseError)) {
-    const legacyPayload = { ...insertPayload };
-    delete legacyPayload.preview_total_count;
-    delete legacyPayload.released_transaction_count;
-    delete legacyPayload.blocked_transaction_count;
-    ({ data: release, error: releaseError } = await db
-      .from("bookkeeping_auto_post_backlog_releases")
-      .insert(legacyPayload)
-      .select("id")
-      .maybeSingle());
-  }
-  if (releaseError) throw wrapAutoPostDbError("auto_post_backlog_release_insert_failed", releaseError);
-
-  const { error: businessError } = await db
-    .from("business_profiles")
-    .update({
-      auto_post_scope_mode: AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE,
-      auto_post_effective_date: start,
-      historical_backlog_status: "released",
-      backlog_reviewed_at: nowIso,
-      backlog_reviewed_by: requestedBy,
-      backlog_released_at: nowIso,
-      backlog_released_by: requestedBy,
-    })
-    .eq("id", businessId);
-  if (businessError) throw wrapAutoPostDbError("auto_post_backlog_release_policy_failed", businessError);
-  return {
-    ok: true,
-    release_id: release?.id || null,
-    released_transaction_count: ids.length,
-    preview_total_count: preview.total,
-    blocked_transaction_count: preview.blocked_count,
-    buckets: preview.buckets,
-  };
+    previewFingerprint: confirmedFingerprint,
+    metadata,
+  });
 }

@@ -109,7 +109,7 @@ export async function getAutoPostStatus(businessId) {
 
 export async function updateAutoPostStatus(
   businessId,
-  { enabled, confirmBacklog = false, scopeMode = null, effectiveDate = null, previewAcknowledged = false } = {}
+  { enabled, confirmBacklog = false, scopeMode = null, effectiveDate = null, previewAcknowledged = false, previewFingerprint = null } = {}
 ) {
   let res;
   try {
@@ -123,6 +123,7 @@ export async function updateAutoPostStatus(
         scope_mode: scopeMode,
         effective_date: effectiveDate,
         preview_acknowledged: previewAcknowledged === true,
+        preview_fingerprint: previewFingerprint,
       }),
     });
   } catch (err) {

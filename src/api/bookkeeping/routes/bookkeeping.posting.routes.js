@@ -99,6 +99,7 @@ router.patch("/posting/auto-post", requireAuth, async (req, res) => {
       scopeMode: req.body?.scope_mode || req.body?.auto_post_scope_mode || null,
       effectiveDate: req.body?.effective_date || req.body?.auto_post_effective_date || null,
       previewAcknowledged: req.body?.preview_acknowledged === true,
+      previewFingerprint: req.body?.preview_fingerprint || null,
       requestedBy: req.user?.id || req.user?.sub || null,
       graceHours: POSTING_GRACE_HOURS,
     });
@@ -160,6 +161,7 @@ router.post("/posting/backlog/release", requireAuth, async (req, res) => {
       rangeStart: req.body?.range_start || null,
       rangeEnd: req.body?.range_end || null,
       transactionIds: Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids : [],
+      previewFingerprint: req.body?.preview_fingerprint || null,
       metadata: {
         source: "bookkeeping_backlog_release",
         preview_acknowledged: req.body?.preview_acknowledged === true,

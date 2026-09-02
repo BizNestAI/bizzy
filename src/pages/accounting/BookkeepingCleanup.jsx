@@ -603,7 +603,6 @@ function BookkeepingCleanup() {
   const [bulkAccountId, setBulkAccountId] = useState("");
   const [showCategorized] = useState(false);
   const [page, setPage] = useState(1);
-  const [showChecksOnly, setShowChecksOnly] = useState(false);
   const showPostedToast = () => window.alert("Already posted to QuickBooks.");
   const [mappingStatus, setMappingStatus] = useState(null);
   const [loadingMappingStatus, setLoadingMappingStatus] = useState(false);
@@ -697,6 +696,7 @@ function BookkeepingCleanup() {
           scopeMode,
           effectiveDate,
           previewAcknowledged,
+          previewFingerprint: autoPostScopeChoice === "effective_date" ? autoPostPreview?.preview_fingerprint : null,
         });
       } catch (err) {
         if (enabled && err?.requiresConfirmation) {
@@ -719,13 +719,16 @@ function BookkeepingCleanup() {
         detail: {
           severity: "error",
           title: "Auto-post couldn't be updated",
-          body: "Please try again.",
+          body:
+            e?.code === "preview_changed" || e?.code === "preview_required"
+              ? "Refresh the scope preview and save again."
+              : e?.message || "Please try again.",
         },
       }));
     } finally {
       setSavingAutoPost(false);
     }
-  }, [businessId, savingAutoPost, usingDemo]);
+  }, [autoPostPreview?.preview_fingerprint, autoPostScopeChoice, businessId, savingAutoPost, usingDemo]);
 
   const handleToggleAutoPost = useCallback(async () => {
     if (!businessId || usingDemo || savingAutoPost) return;
@@ -759,6 +762,7 @@ function BookkeepingCleanup() {
 
   useEffect(() => {
     if (!autoPostConfirmOpen || autoPostScopeChoice !== "effective_date") return;
+    setAutoPostPreview(null);
     loadAutoPostPreview(autoPostEffectiveDate);
   }, [autoPostConfirmOpen, autoPostEffectiveDate, autoPostScopeChoice, loadAutoPostPreview]);
 
@@ -868,10 +872,6 @@ function BookkeepingCleanup() {
       return { ...a, toReview: counts[key] || a.toReview || 0, _key: key };
     });
   }, [accounts, transactions, usingDemo]);
-  const accountCardsReady = useMemo(() => {
-    if (usingDemo) return true;
-    return accountCards.length > 0;
-  }, [usingDemo, accountCards]);
   const selectedTransactions = useMemo(
     () => transactions.filter((t) => selectedIds.has(t.id)),
     [transactions, selectedIds]
@@ -898,29 +898,6 @@ function BookkeepingCleanup() {
   useEffect(() => {
     setBulkAccountId(selectedSignature ? selectedAccountId : "");
   }, [selectedAccountId, selectedSignature]);
-
-  const needsReviewChecks = useMemo(
-    () => transactions.filter((t) => t.is_check && (t.status === "needs_review" || t.status === "uncategorized")),
-    [transactions]
-  );
-  const categorizedSuggestionCount = useMemo(() => {
-    const isRealGlName = (name = "") => {
-      const normalized = String(name || "").toLowerCase().trim();
-      if (!normalized) return false;
-      if (["select account", "selected account", "account"].includes(normalized)) return false;
-      if (normalized.includes("uncategorized")) return false;
-      if (normalized.includes("ask my accountant")) return false;
-      return true;
-    };
-
-    return transactions.filter((t) => {
-      const status = String(t.status || "").toLowerCase();
-      if (status === "approved" || status === "auto_approved" || status === "posted") return false;
-      const glId = t.glAccountId || t.suggestedAccountId || null;
-      const glName = t.glAccountName || t.suggestedAccountName || null;
-      return !!glId && isRealGlName(glName);
-    }).length;
-  }, [transactions]);
 
   const groupedChartAccounts = useMemo(() => {
     const byType = { income: [], expense: [], equity: [], other: [] };
@@ -1018,11 +995,8 @@ function BookkeepingCleanup() {
       return matchesTab && matchesAccount && matchesRange;
     });
 
-    if (showChecksOnly) {
-      return base.filter((t) => t.is_check && (t.status === "needs_review" || t.status === "uncategorized"));
-    }
     return base;
-  }, [accountFilter, activeTab, dateRange, transactions, usingDemo, showChecksOnly]);
+  }, [accountFilter, activeTab, dateRange, transactions, usingDemo]);
 
   const displayedTabCounts = useMemo(() => {
     if (!usingDemo) return tabCounts;
@@ -1482,7 +1456,6 @@ function BookkeepingCleanup() {
     setSelectedIds(new Set());
     setPage(1);
     setTotalCount(null);
-    setShowChecksOnly(false);
     if (!usingDemo && businessId) {
       loadMappingStatus();
       loadProcessingStatus();
@@ -1948,42 +1921,6 @@ function BookkeepingCleanup() {
           ))}
         </div>
       </div>
-
-      {!plaidNeverConnected && accountCardsReady && activeTab === "needs_review" && categorizedSuggestionCount > 0 ? (
-        <div
-          className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3"
-          style={{ background: "rgba(16, 185, 129, 0.055)", borderColor: "rgba(16, 185, 129, 0.22)" }}
-        >
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-slate-100">
-              Bizzi has suggested categories for {categorizedSuggestionCount} transactions.
-            </div>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            {needsReviewChecks.length > 0 ? (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-2 rounded-full border border-amber-300/20 bg-amber-300/[0.08] px-3 py-1 text-[12px] text-amber-100 hover:bg-amber-300/[0.12]"
-                  onClick={() => setShowChecksOnly(true)}
-                  title="Checks often need one quick clarification before posting."
-                >
-                  Bizzi needs clarification on {needsReviewChecks.length} checks
-                </button>
-                {showChecksOnly ? (
-                  <button
-                    type="button"
-                    className="text-[11px] text-emerald-300 underline underline-offset-2"
-                    onClick={() => setShowChecksOnly(false)}
-                  >
-                    Show all
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
 
       {activeTab === "handled" ? (
         <div className="mt-2 text-xs text-slate-400">
@@ -2670,7 +2607,11 @@ function BookkeepingCleanup() {
                       </button>
                       <button
                         type="button"
-                        disabled={savingAutoPost}
+                        disabled={
+                          savingAutoPost ||
+                          (autoPostScopeChoice === "effective_date" &&
+                            (loadingAutoPostPreview || !autoPostPreview?.preview_fingerprint))
+                        }
                         onClick={confirmEnableAutoPost}
                         className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
                       >
