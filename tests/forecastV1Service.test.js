@@ -493,7 +493,11 @@ test("Forecasts Live frontend and routes do not silently persist sample data", (
   assert.match(editor, /No sample data is shown in Live Mode/);
   assert.match(editor, /forecast_run_id: forecastRunId/);
   assert.match(editor, /forecastMeta\?\.is_sample/);
+  assert.match(editor, /hasSavedOverrides/);
+  assert.match(editor, /\/api\/accounting\/forecast\/override\/reset/);
+  assert.match(editor, /Revert failed\. Please try again\./);
   assert.match(route, /generation_in_progress/);
+  assert.match(route, /router\.post\("\/override\/reset"/);
   assert.match(accuracyRoute, /run:forecast_runs!forecast_months_run_business_fkey/);
   assert.match(accuracyRoute, /no_completed_forecast_samples/);
   assert.match(accuracyRoute, /generatedAt >= targetMonthClosedAt/);
@@ -509,6 +513,16 @@ test("Forecasts Live frontend and routes do not silently persist sample data", (
   assert.doesNotMatch(affordability, /return MOCK_FORECAST;\n\s*\}/);
   assert.doesNotMatch(affordability, /ending_cash:\s*r\.ending_cash == null \? null : Number\(r\.ending_cash \|\| 0\)/);
   assert.doesNotMatch(affordabilityCard, /endCashAfterHorizon \|\| 0/);
+});
+
+test("Forecasts UI keeps closed-month accuracy unavailable until valid samples exist", () => {
+  const accuracyChart = read("src/components/Accounting/ForecastVsActualChart.jsx");
+
+  assert.match(accuracyChart, /Forecast accuracy will appear after forecasted months close/);
+  assert.match(accuracyChart, /rows\.length > 0 &&/);
+  assert.match(accuracyChart, /Closed forecast months/);
+  assert.match(accuracyChart, /alignToRollingWindow\(data, months, \{ fillMissing: false \}\)/);
+  assert.match(accuracyChart, /if \(!fillMissing\) return \[\]/);
 });
 
 function createHashForTest(value) {

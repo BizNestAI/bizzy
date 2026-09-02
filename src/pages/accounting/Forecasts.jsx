@@ -113,20 +113,23 @@ export default function Forecasts() {
   };
 
   const forecastControls = (
-    <div className="flex flex-wrap items-center gap-2 rounded-full border border-white/[0.07] bg-white/[0.035] px-2 py-1 shadow-[0_12px_28px_rgba(0,0,0,0.22)]">
-      <span className="pl-1 text-[11px] font-semibold text-white/48">Horizon</span>
-      <DarkListbox
-        value={editorMonths}
-        onChange={(v) => setEditorMonths(Number(v))}
-        options={horizonOptions}
-      />
-      <span className="hidden h-4 w-px bg-white/10 sm:inline-block" />
-      <span className="text-[11px] font-semibold text-white/48">Compare</span>
-      <DarkListbox
-        value={compareMonths}
-        onChange={(v) => setCompareMonths(Number(v))}
-        options={compareOptions}
-      />
+    <div className="flex flex-wrap items-center justify-start gap-2 rounded-2xl border border-white/[0.07] bg-white/[0.035] p-1.5 shadow-[0_12px_28px_rgba(0,0,0,0.22)] sm:flex-nowrap">
+      <div className="flex min-w-[176px] items-center justify-between gap-2 rounded-full bg-black/16 pl-3 pr-1">
+        <span className="text-[11px] font-semibold text-white/48">Horizon</span>
+        <DarkListbox
+          value={editorMonths}
+          onChange={(v) => setEditorMonths(Number(v))}
+          options={horizonOptions}
+        />
+      </div>
+      <div className="flex min-w-[176px] items-center justify-between gap-2 rounded-full bg-black/16 pl-3 pr-1">
+        <span className="text-[11px] font-semibold text-white/48">Compare</span>
+        <DarkListbox
+          value={compareMonths}
+          onChange={(v) => setCompareMonths(Number(v))}
+          options={compareOptions}
+        />
+      </div>
     </div>
   );
 

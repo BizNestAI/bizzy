@@ -69,10 +69,10 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
         if (ignore) return;
         if (!data.length) {
           setRows([]);
-          setError(resp?.message || 'Forecast accuracy will appear after forecasted months have completed.');
+          setError(resp?.message || 'Forecast accuracy will appear after forecasted months close and Cash-basis QuickBooks actuals are available.');
           return;
         }
-        setRows(alignToRollingWindow(data, months));
+        setRows(alignToRollingWindow(data, months, { fillMissing: false }));
       } catch (err) {
         if (ignore) return;
         if (readOnly) {
@@ -160,26 +160,28 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          compact
-          label="MAPE"
-          value={`${stats.mapePct.toFixed(1)}%`}
-          detail="Lower is better"
-          tone={stats.mapePct <= 5 ? 'emerald' : stats.mapePct <= 10 ? 'amber' : 'rose'}
-          className="min-h-[108px]"
-        />
-        <KpiCard
-          compact
-          label="Approx. accuracy"
-          value={`${stats.accuracyPct.toFixed(1)}%`}
-          detail="Forecast fit"
-          tone={stats.accuracyPct >= 90 ? 'emerald' : stats.accuracyPct >= 75 ? 'amber' : 'rose'}
-          className="min-h-[108px]"
-        />
-        <KpiCard compact label="Series" value={metric} detail="Active comparison" tone="neutral" className="min-h-[108px]" />
-        <KpiCard compact label="Samples" value={rows.length ? `${rows.length} mo` : '—'} detail="Rolling window" tone="neutral" className="min-h-[108px]" />
-      </div>
+      {rows.length > 0 && (
+        <div className="mt-4 grid grid-cols-1 items-stretch gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <KpiCard
+            compact
+            label="MAPE"
+            value={`${stats.mapePct.toFixed(1)}%`}
+            detail="Lower is better"
+            tone={stats.mapePct <= 5 ? 'emerald' : stats.mapePct <= 10 ? 'amber' : 'rose'}
+            className="min-h-[108px]"
+          />
+          <KpiCard
+            compact
+            label="Approx. accuracy"
+            value={`${stats.accuracyPct.toFixed(1)}%`}
+            detail="Forecast fit"
+            tone={stats.accuracyPct >= 90 ? 'emerald' : stats.accuracyPct >= 75 ? 'amber' : 'rose'}
+            className="min-h-[108px]"
+          />
+          <KpiCard compact label="Series" value={metric} detail="Active comparison" tone="neutral" className="min-h-[108px]" />
+          <KpiCard compact label="Samples" value={`${rows.length} mo`} detail="Closed forecast months" tone="neutral" className="min-h-[108px]" />
+        </div>
+      )}
 
       <div className="mt-6 rounded-2xl bg-[#070b0a]/72 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.025),0_18px_44px_rgba(0,0,0,0.26)]">
         {loading ? (
@@ -191,7 +193,9 @@ export default function ForecastVsActualChart({ userId, businessId, months = 6, 
             </div>
           </div>
         ) : !rows.length ? (
-          <div className="flex h-64 items-center justify-center text-white/60">No data available yet.</div>
+          <div className="flex h-64 items-center justify-center px-6 text-center text-white/60">
+            {error || 'Forecast accuracy will appear after forecasted months close and Cash-basis QuickBooks actuals are available.'}
+          </div>
         ) : (
           <ResponsiveContainer width="100%" height={320}>
             <BarChart data={rows} margin={{ top: 12, right: 16, left: 0, bottom: 0 }} barCategoryGap={20}>
@@ -245,7 +249,7 @@ function formatDelta(actual = 0, forecast = 0) {
   return `${delta >= 0 ? '+' : '-'}${k}`;
 }
 
-function alignToRollingWindow(rows, months = 6) {
+function alignToRollingWindow(rows, months = 6, { fillMissing = true } = {}) {
   const count = Math.max(3, Math.min(12, Number(months) || 6));
   const timeline = buildTrailingMonths(count);
   const normalizedRows = (rows || []).map((row) => {
@@ -260,18 +264,19 @@ function alignToRollingWindow(rows, months = 6) {
     normalizedRows.map((row) => [monthKey(row.month, row.month_label), row])
   );
 
-  const defaults = averageRow(normalizedRows);
+  const defaults = fillMissing ? averageRow(normalizedRows) : null;
 
-  return timeline.map(({ key, label }, index) => {
+  return timeline.flatMap(({ key, label }, index) => {
     const existing = map.get(key) || normalizedRows[index];
     if (existing) {
-      return {
+      return [{
         ...existing,
         month: `${key}-01`,
         month_label: label,
-      };
+      }];
     }
-    return {
+    if (!fillMissing) return [];
+    return [{
       month: `${key}-01`,
       month_label: label,
       forecastRevenue: defaults.forecastRevenue,
@@ -281,7 +286,7 @@ function alignToRollingWindow(rows, months = 6) {
       forecastProfit: defaults.forecastProfit,
       actualProfit: defaults.actualProfit,
       source: 'generated',
-    };
+    }];
   });
 }
 

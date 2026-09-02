@@ -72,6 +72,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
   const [forecastMeta, setForecastMeta] = useState(null);
   const [cashBalanceStatus, setCashBalanceStatus] = useState('unavailable');
   const [edited, setEdited] = useState(new Set());
+  const [reverting, setReverting] = useState(false);
   const mounted = useRef(false);
   const isDemo = useDemoData || shouldUseDemoData();
   const demoFinancials = useMemo(() => (isDemo ? getDemoData()?.financials || null : null), [isDemo]);
@@ -91,6 +92,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
         setPreviousRows(null);
         setLastSavedAt(null);
         setEdited(new Set());
+        setReverting(false);
         setLoading(false);
         setError('');
         return;
@@ -104,6 +106,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
         setEdited(new Set());
         setForecastRunId(null);
         setForecastMeta(null);
+        setReverting(false);
         setStatusMessage('Choose a business to view the live operating forecast.');
         setLoading(false);
         return;
@@ -138,6 +141,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
           setEdited(new Set());
           setForecastRunId(null);
           setForecastMeta(resp || null);
+          setReverting(false);
           setError(resp?.message || 'No persisted forecast is available for this business.');
           return;
         }
@@ -150,6 +154,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
           setForecastRunId(null);
           setForecastMeta(resp || null);
           setCashBalanceStatus(resp?.cash_balance?.status || 'unavailable');
+          setReverting(false);
           if (resp?.data_status === 'insufficient_history') {
             const missing = resp?.history?.missing_months?.join(', ');
             setStatusMessage(`Forecast needs ${resp?.history?.months_required || 12} contiguous Cash-basis QuickBooks months. Missing: ${missing || 'history'}.`);
@@ -173,6 +178,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
         setForecastRunId(resp?.run_id || null);
         setForecastMeta(resp || null);
         setCashBalanceStatus(resp?.cash_balance?.status || 'unavailable');
+        setReverting(false);
         setStatusMessage(buildForecastStatusMessage(resp));
       } catch (err) {
         if (readOnly) {
@@ -193,6 +199,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
         setEdited(new Set());
         setForecastRunId(null);
         setForecastMeta(null);
+        setReverting(false);
         setError('Unable to load the live operating forecast. No sample data is shown in Live Mode.');
         console.warn('[ForecastEditorChart] live forecast error:', err?.message);
       } finally {
@@ -280,9 +287,39 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
   };
 
   const hasEdits = edited.size > 0 && draft.length > 0 && JSON.stringify(draft) !== JSON.stringify(rows);
-  const canRevert = hasEdits || !!previousRows;
+  const hasSavedOverrides = rows.some((row) => row.has_override);
+  const canRevert = hasEdits || !!previousRows || hasSavedOverrides;
 
-  const revertChanges = () => {
+  const revertChanges = async () => {
+    if (readOnly || reverting) return;
+    if (!isDemo && hasSavedOverrides && forecastRunId && businessId && !forecastMeta?.is_sample) {
+      setReverting(true);
+      setError('');
+      try {
+        const resp = await safeFetch('/api/accounting/forecast/override/reset', {
+          method: 'POST',
+          body: { userId, businessId, forecast_run_id: forecastRunId },
+        });
+        const data = Array.isArray(resp?.forecast?.months)
+          ? resp.forecast.months
+          : (Array.isArray(resp?.forecast_rows) ? resp.forecast_rows : []);
+        const normalized = alignForecastHorizon(data, months);
+        setRows(normalized);
+        setDraft(normalized);
+        setPreviousRows(null);
+        setEdited(new Set());
+        setForecastMeta(resp || null);
+        setCashBalanceStatus(resp?.cash_balance?.status || 'unavailable');
+        setStatusMessage(buildForecastStatusMessage(resp));
+        setLastSavedAt(new Date());
+      } catch (e) {
+        console.error('[ForecastEditorChart] revert error', e);
+        setError('Revert failed. Please try again.');
+      } finally {
+        setReverting(false);
+      }
+      return;
+    }
     if (previousRows) {
       setRows(previousRows);
       setDraft(previousRows);
@@ -362,18 +399,18 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
 
   return (
     <div className="rounded-[28px] bg-[linear-gradient(180deg,rgba(11,14,13,0.96)_0%,rgba(6,9,8,0.92)_100%)] px-5 py-6 text-white shadow-[0_30px_82px_rgba(0,0,0,0.42)] ring-1 ring-white/[0.045]">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0 xl:max-w-[620px]">
           <p className="text-xs uppercase tracking-[0.4em] text-white/60">Projection editor</p>
           <h2 className="mt-2 text-2xl font-semibold text-white">Operating Forecast</h2>
           {statusMessage && (
-            <p className="mt-2 max-w-2xl text-xs font-medium leading-relaxed text-white/56">{statusMessage}</p>
+            <p className="mt-2 text-sm font-medium leading-relaxed text-white/56">{statusMessage}</p>
           )}
         </div>
-        <div className="flex flex-col items-start gap-2 lg:items-end lg:text-right">
-          <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        <div className="flex min-w-0 flex-col items-start gap-2 xl:items-end xl:text-right">
+          <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:flex-nowrap xl:justify-end">
             {controls}
-            <p className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs font-semibold text-white/62">
+            <p className="shrink-0 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs font-semibold text-white/62">
               As of {asOfLabel}
             </p>
           </div>
@@ -526,7 +563,7 @@ export default function ForecastEditorChart({ userId, businessId, months = 12, u
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button icon={Undo2} label="Revert" size="sm" onClick={revertChanges} disabled={readOnly || !canRevert} />
+              <Button icon={reverting ? Loader2 : Undo2} spinning={reverting} label="Revert" size="sm" onClick={revertChanges} disabled={readOnly || !canRevert || reverting || saving} />
             </div>
           </div>
         </div>
@@ -794,12 +831,12 @@ function buildForecastStatusMessage(resp) {
   const historyStart = formatMonthLabel(resp?.history?.start);
   const historyEnd = formatMonthLabel(resp?.history?.end);
   const version = resp?.model_version || 'forecast_v1';
-  const generated = resp?.generated_at ? ` · Generated ${formatTimeAgo(resp.generated_at)}` : '';
+  const generated = resp?.generated_at ? ` Generated ${formatTimeAgo(resp.generated_at)}.` : '';
   const confidence = resp?.confidence?.explanation ? ` ${resp.confidence.explanation}` : '';
   const cash = resp?.cash_balance?.status === 'available'
     ? ''
-    : ' Ending cash is unavailable until a QBO cash-balance source is connected.';
-  return `Based on ${historyStart}-${historyEnd} Cash-basis QuickBooks data · ${version}${generated}.${confidence}${cash}`;
+    : ' Ending cash stays unavailable until a QBO cash-balance source is connected.';
+  return `Uses ${historyStart}-${historyEnd} Cash-basis QuickBooks results to project operating revenue, expenses, and net cash flow. ${version}.${generated}${confidence}${cash}`;
 }
 
 function formatMonthLabel(value) {
