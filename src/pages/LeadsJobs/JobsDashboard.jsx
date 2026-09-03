@@ -2976,7 +2976,7 @@ function JobAssignmentBoard({
   const assignmentDisabled = readOnly || bucketMode !== "live";
   const visibleJobs = bucketMode === "completed" ? completedJobs : jobs;
   const suggestedTotal = Math.max(Number(jobCandidatesTotal || 0), pendingCandidates.length);
-  const importJobsLabel = projectsCapabilityView.available ? "Import Jobs" : "Review Jobs";
+  const importJobsLabel = "Import Jobs";
   const importJobsTitle = readOnly
     ? "Job imports are unavailable in read-only Admin View."
     : projectsCapabilityView.available
@@ -5724,7 +5724,7 @@ function JobCostingModal({ open, title, eyebrow, onClose, children, widthClass =
 
   return createPortal(
     <div
-      className={`fixed inset-0 z-[96] flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm transition-opacity duration-200 ease-out ${
+      className={`fixed inset-0 z-[96] flex items-center justify-center bg-black/60 px-4 pb-[220px] pt-6 backdrop-blur-sm transition-opacity duration-300 ease-out sm:pt-[5vh] ${
         visible ? "opacity-100" : "opacity-0"
       }`}
       onMouseDown={(event) => {
@@ -5735,8 +5735,8 @@ function JobCostingModal({ open, title, eyebrow, onClose, children, widthClass =
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`max-h-[min(88vh,760px)] w-full ${widthClass} overflow-hidden rounded-[24px] border border-emerald-300/18 bg-[#111713]/95 shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-all duration-200 ease-out ${
-          visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-3 scale-[0.97] opacity-0"
+        className={`max-h-[calc(100vh-260px)] w-full ${widthClass} overflow-hidden rounded-[24px] border border-emerald-300/18 bg-[#111713]/95 shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+          visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-4 scale-[0.96] opacity-0"
         }`}
       >
         <div className="flex items-start justify-between gap-4 border-b border-white/8 px-5 py-4">
@@ -5753,7 +5753,7 @@ function JobCostingModal({ open, title, eyebrow, onClose, children, widthClass =
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="custom-scrollbar max-h-[calc(min(88vh,760px)-65px)] overflow-y-auto px-5 py-4">
+        <div className="custom-scrollbar max-h-[calc(100vh-325px)] overflow-y-auto px-5 py-4">
           {children}
         </div>
       </section>
@@ -6032,7 +6032,6 @@ function CandidateApprovalImpactModal({ preview, busy, onCancel, onConfirm }) {
           <div className="rounded-[12px] bg-white/[0.04] p-2.5"><div className="text-[9px] uppercase tracking-wide text-white/35">Collected</div><div className="mt-0.5 font-semibold text-white">{money.format(view.collectedCashChange)}</div></div>
           <div className="rounded-[12px] bg-white/[0.04] p-2.5"><div className="text-[9px] uppercase tracking-wide text-white/35">Receivable</div><div className="mt-0.5 font-semibold text-white">{money.format(view.receivableChange)}</div></div>
         </div>
-        <div className="mt-3 text-xs text-white/48">Duplicate prevention: {view.duplicatePreventionResult}</div>
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onCancel} disabled={busy} className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/55 disabled:opacity-50">Cancel</button>
           <button type="button" onClick={onConfirm} disabled={busy} className="rounded-full border border-emerald-300/30 bg-emerald-300/[0.12] px-3 py-1.5 text-xs font-semibold text-emerald-50 disabled:opacity-50">
@@ -6087,23 +6086,25 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
   return (
     <JobCostingModal open={open} title="Add Job" eyebrow="Manual job" onClose={onClose} widthClass="max-w-[560px]">
       <div className="grid gap-3">
-        {[
-          ["customer", "Customer", true],
-          ["jobName", "Job name", true],
-          ["address", "Address", false],
-          ["jobNumber", "Job number", false],
-        ].map(([key, label, required]) => (
-          <label key={key} className="block">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">{label}{required ? " *" : ""}</span>
-            <input
-              id={`add-job-${key}`}
-              name={`add_job_${key}`}
-              value={form[key]}
-              onChange={(event) => update(key, event.target.value)}
-              className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45"
-            />
-          </label>
-        ))}
+        <div className="grid gap-3 sm:grid-cols-2">
+          {[
+            ["customer", "Customer", true],
+            ["jobName", "Job name", true],
+            ["address", "Address", false],
+            ["jobNumber", "Job number", false],
+          ].map(([key, label, required]) => (
+            <label key={key} className="block">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">{label}{required ? " *" : ""}</span>
+              <input
+                id={`add-job-${key}`}
+                name={`add_job_${key}`}
+                value={form[key]}
+                onChange={(event) => update(key, event.target.value)}
+                className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45"
+              />
+            </label>
+          ))}
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <label>
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">Start date</span>

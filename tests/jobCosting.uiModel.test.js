@@ -483,9 +483,13 @@ test("Add Job opens in a centered animated modal without Trade Type", async () =
   const addJobSource = source.slice(addStart, addEnd);
 
   assert.equal(modalSource.includes("items-center justify-center"), true);
-  assert.equal(modalSource.includes("transition-opacity duration-200"), true);
-  assert.equal(modalSource.includes("scale-[0.97]"), true);
+  assert.equal(modalSource.includes("transition-opacity duration-300"), true);
+  assert.equal(modalSource.includes("pb-[220px]"), true);
+  assert.equal(modalSource.includes("max-h-[calc(100vh-260px)]"), true);
+  assert.equal(modalSource.includes("max-h-[calc(100vh-325px)]"), true);
+  assert.equal(modalSource.includes("scale-[0.96]"), true);
   assert.equal(addJobSource.includes("<JobCostingModal open={open} title=\"Add Job\""), true);
+  assert.equal(addJobSource.includes('<div className="grid gap-3 sm:grid-cols-2">'), true);
   assert.equal(addJobSource.includes("tradeType"), false);
   assert.equal(addJobSource.includes("Trade type"), false);
   assert.equal(addJobSource.includes("trade_type"), false);
@@ -493,13 +497,32 @@ test("Add Job opens in a centered animated modal without Trade Type", async () =
 
 test("Review Jobs opens in the centered animated modal", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const boardStart = source.indexOf("function JobAssignmentBoard({");
+  const boardEnd = source.indexOf("const [dateRangeFilter]", boardStart);
   const importStart = source.indexOf("function ImportJobsDrawer({");
   const importEnd = source.indexOf("function JobCostingPage", importStart);
+  assert.ok(boardStart > 0);
+  assert.ok(boardEnd > boardStart);
   assert.ok(importStart > 0);
   assert.ok(importEnd > importStart);
 
+  const boardSource = source.slice(boardStart, boardEnd);
   const importJobsSource = source.slice(importStart, importEnd);
+  assert.equal(boardSource.includes('const importJobsLabel = "Import Jobs";'), true);
+  assert.equal(boardSource.includes('"Review Jobs"'), false);
   assert.equal(importJobsSource.includes("<JobCostingModal open={open} title=\"Import Jobs\""), true);
   assert.equal(importJobsSource.includes("widthClass=\"max-w-[640px]\""), true);
   assert.equal(importJobsSource.includes("<JobCostingDrawer"), false);
+});
+
+test("Create Job confirmation hides duplicate-prevention implementation details", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const modalStart = source.indexOf("function CandidateApprovalImpactModal({");
+  const modalEnd = source.indexOf("function AddJobDrawer", modalStart);
+  assert.ok(modalStart > 0);
+  assert.ok(modalEnd > modalStart);
+
+  const modalSource = source.slice(modalStart, modalEnd);
+  assert.equal(modalSource.includes("Duplicate prevention:"), false);
+  assert.equal(modalSource.includes("duplicatePreventionResult"), false);
 });
