@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
 
 import {
   getJobRevenueBasisView,
@@ -167,4 +168,29 @@ test("projects capability helper preserves unavailable states", () => {
     getProjectsCapabilityView({ status: "partner_entitlement_missing" }).label,
     "Projects entitlement missing"
   );
+});
+
+test("launch Job Costing loader is not coupled to Change Order endpoints", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("const loadJobCosting = useCallback(async () => {");
+  const end = source.indexOf("const loadSuggestions = useCallback", start);
+  assert.ok(start > 0);
+  assert.ok(end > start);
+  const loaderSource = source.slice(start, end);
+
+  assert.equal(loaderSource.includes("/api/job-costing/change-orders"), false);
+  assert.equal(loaderSource.includes("/api/job-costing/potential-change-orders"), false);
+  assert.equal(loaderSource.includes("Promise.allSettled"), true);
+});
+
+test("Job Costing page load reads stored Projects capability instead of refreshing QBO", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("const loadProjectsCapability = useCallback(async () => {");
+  const end = source.indexOf("useEffect(() => {", start);
+  assert.ok(start > 0);
+  assert.ok(end > start);
+  const loaderSource = source.slice(start, end);
+
+  assert.equal(loaderSource.includes("/api/job-costing/qbo/projects/capability?business_id="), true);
+  assert.equal(loaderSource.includes('method: "POST"'), false);
 });

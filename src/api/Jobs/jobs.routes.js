@@ -1,3 +1,4 @@
+/* global process */
 import express from "express";
 import { supabase } from "../../services/supabaseAdmin.js"; // your existing helper
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
@@ -876,13 +877,22 @@ async function fetchJobCostingRows(businessId) {
   // This endpoint intentionally mirrors Books Review Posted transactions for job costing assignment.
   // This reuses the same underlying query as Books Review > Posted:
   // GET /api/bookkeeping/transactions?status=posted
-  const { rows: postedRows } = await fetchBookkeepingTransactions({
-    businessId,
-    statusFilter: "posted",
-    rangeParam: "all",
-    page: 1,
-    pageSize: 200,
-  });
+  const postedRows = [];
+  const pageSize = 200;
+  let totalCount = 0;
+  for (let page = 1; page <= 25; page += 1) {
+    const result = await fetchBookkeepingTransactions({
+      businessId,
+      statusFilter: "posted",
+      rangeParam: "all",
+      page,
+      pageSize,
+    });
+    const rows = Array.isArray(result?.rows) ? result.rows : [];
+    if (page === 1) totalCount = Number(result?.totalCount || rows.length || 0);
+    postedRows.push(...rows);
+    if (!rows.length || postedRows.length >= totalCount) break;
+  }
   const txns = (postedRows || []).map(normalizePostedBookTransaction);
 
   const ids = (txns || []).map((row) => row.id);
@@ -908,7 +918,9 @@ async function fetchJobCostingRows(businessId) {
     .eq("business_id", businessId)
     .limit(100);
   if (jobsErr) throw jobsErr;
-  const changeOrders = await fetchChangeOrders(businessId, (jobs || []).map((job) => job.id).filter(Boolean));
+  // Change Orders are intentionally excluded from launch-critical Job Costing
+  // summaries so an out-of-scope schema/route issue cannot block core jobs.
+  const changeOrders = [];
   const changeOrdersByJob = changeOrders.reduce((acc, row) => {
     const key = String(row.job_id);
     if (!acc[key]) acc[key] = [];
@@ -1016,7 +1028,15 @@ async function fetchJobCostingRows(businessId) {
     };
   });
 
-  return { transactions: rows, jobs: normalizedJobs };
+  return {
+    transactions: rows,
+    jobs: normalizedJobs,
+    pagination: {
+      total_posted_transactions: totalCount || rows.length,
+      loaded_posted_transactions: rows.length,
+      page_size: pageSize,
+    },
+  };
 }
 
 async function fetchPostedTransactionForAssignment(businessId, transactionId) {
@@ -1207,7 +1227,9 @@ async function fetchJobSummaries(businessId) {
   ]);
   if (jobsErr) throw jobsErr;
   if (assignmentsErr) throw assignmentsErr;
-  const changeOrders = await fetchChangeOrders(businessId, (jobs || []).map((job) => job.id).filter(Boolean));
+  // Change Orders are intentionally excluded from launch-critical Job Costing
+  // rows so core posted transactions and jobs do not depend on that feature.
+  const changeOrders = [];
   const changeOrdersByJob = changeOrders.reduce((acc, row) => {
     const key = String(row.job_id);
     if (!acc[key]) acc[key] = [];
@@ -2371,6 +2393,37 @@ async function handleQboProjectsCapabilityCheck(req, res) {
   }
 }
 
+async function handleQboProjectsCapabilityRead(req, res) {
+  try {
+    const businessId = ensureBusinessId(req, res);
+    if (!businessId) return;
+    const { data, error } = await supabase
+      .from("qbo_projects_capabilities")
+      .select("*")
+      .eq("business_id", businessId)
+      .order("checked_at", { ascending: false, nullsFirst: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return res.json({
+      ok: true,
+      capability: data || {
+        status: "unknown",
+        detail: "QuickBooks Projects capability has not been checked yet.",
+        source_of_truth: "manual_link_only",
+        auto_import_enabled: false,
+      },
+    });
+  } catch (e) {
+    console.error("[job-costing.qbo-projects-capability-read]", e);
+    res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.code || "qbo_projects_capability_read_failed",
+      message: e?.message || "Failed to load stored QuickBooks Projects capability.",
+    });
+  }
+}
+
 async function handleQboProjectsSync(req, res) {
   try {
     const businessId = ensureBusinessId(req, res);
@@ -2420,7 +2473,7 @@ async function handleJobCandidatesGet(req, res) {
     if (!businessId) return;
     let query = supabase
       .from("job_candidates")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("business_id", businessId)
       .order("confidence_score", { ascending: false })
       .order("updated_at", { ascending: false });
@@ -2428,9 +2481,14 @@ async function handleJobCandidatesGet(req, res) {
     if (req.query.source_entity_type || req.query.type) query = query.eq("source_entity_type", req.query.source_entity_type || req.query.type);
     const limit = Number(req.query.limit || 100);
     if (Number.isFinite(limit) && limit > 0) query = query.limit(Math.min(limit, 250));
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) throw error;
-    return res.json({ ok: true, candidates: data || [] });
+    return res.json({
+      ok: true,
+      candidates: data || [],
+      total_count: Number.isFinite(Number(count)) ? Number(count) : (data || []).length,
+      loaded_count: (data || []).length,
+    });
   } catch (e) {
     console.error("[job-costing.candidates-get]", e);
     res.status(e?.status || 500).json({
@@ -2746,6 +2804,9 @@ router.post("/qbo/job-costing/daily-reconciliation", requireRouteAuth, highCostJ
 router.post("/job-costing/qbo/daily-reconciliation", requireRouteAuth, highCostJobRouteRateLimit, handleQboDailyReconciliation);
 router.get("/qbo/job-costing/sync/diagnostics", requireRouteAuth, handleQboJobCostingDiagnostics);
 router.get("/job-costing/qbo/sync/diagnostics", requireRouteAuth, handleQboJobCostingDiagnostics);
+router.get("/qbo/projects/capability", requireRouteAuth, handleQboProjectsCapabilityRead);
+router.get("/job-costing/qbo/projects/capability", requireRouteAuth, handleQboProjectsCapabilityRead);
+router.get("/qbo/job-costing/projects/capability", requireRouteAuth, handleQboProjectsCapabilityRead);
 router.post("/qbo/job-costing/projects/capability", requireRouteAuth, handleQboProjectsCapabilityCheck);
 router.post("/job-costing/qbo/projects/capability", requireRouteAuth, handleQboProjectsCapabilityCheck);
 router.post("/qbo/job-costing/projects/sync", requireRouteAuth, highCostJobRouteRateLimit, handleQboProjectsSync);

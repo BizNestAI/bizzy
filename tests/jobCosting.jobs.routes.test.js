@@ -1,3 +1,4 @@
+/* global process, Buffer */
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { Readable, Writable } from "node:stream";
@@ -31,9 +32,12 @@ class SupabaseQuery {
     this.filters = [];
     this.payload = null;
     this.limitCount = null;
+    this.offsetCount = 0;
+    this.countRequested = false;
   }
 
-  select() {
+  select(_columns, options = {}) {
+    this.countRequested = Boolean(options?.count);
     return this;
   }
 
@@ -59,6 +63,12 @@ class SupabaseQuery {
 
   limit(count) {
     this.limitCount = Number(count);
+    return this;
+  }
+
+  range(from, to) {
+    this.offsetCount = Math.max(Number(from) || 0, 0);
+    this.limitCount = Math.max((Number(to) || 0) - this.offsetCount + 1, 0);
     return this;
   }
 
@@ -111,6 +121,9 @@ class SupabaseQuery {
   }
 
   async _execute() {
+    if (this.store.__tableErrors?.[this.table]) {
+      return { data: null, error: this.store.__tableErrors[this.table] };
+    }
     const rows = this.store[this.table] || [];
 
     if (this.operation === "insert") {
@@ -170,9 +183,31 @@ class SupabaseQuery {
     }
 
     let selected = rows.filter((row) => this._matches(row)).map(clone);
+    const total = selected.length;
+    if (Number.isFinite(this.offsetCount) && this.offsetCount > 0) selected = selected.slice(this.offsetCount);
     if (Number.isFinite(this.limitCount)) selected = selected.slice(0, this.limitCount);
-    return { data: selected, error: null };
+    return { data: selected, error: null, count: this.countRequested ? total : null };
   }
+}
+
+function makeRpcPostedRow({ id, businessId = BUSINESS_ID, date = "2026-08-01", qboId = null, assigned = false } = {}) {
+  return {
+    id,
+    business_id: businessId,
+    plaid_account_id: "plaid-account-1",
+    date,
+    name: `Vendor ${id}`,
+    merchant_name: `Vendor ${id}`,
+    amount: -25,
+    pending: false,
+    cat_status: qboId ? "posted" : "approved",
+    qbo_txn_id: qboId,
+    qbo_txn_type: qboId ? "Purchase" : null,
+    final_qbo_account_id: "acct-cost",
+    final_qbo_account_name: "Materials",
+    posted_at: qboId ? "2026-09-02T12:00:00.000Z" : null,
+    assigned,
+  };
 }
 
 function createSupabaseMock(initial = {}) {
@@ -189,6 +224,7 @@ function createSupabaseMock(initial = {}) {
     job_payment_allocations: [],
     business_profiles: [],
     job_candidates: [],
+    qbo_projects_capabilities: [],
     __id: 1,
     ...clone(initial),
   };
@@ -197,6 +233,25 @@ function createSupabaseMock(initial = {}) {
     from(table) {
       if (!store[table]) store[table] = [];
       return new SupabaseQuery(store, table);
+    },
+    async rpc(name, args = {}) {
+      if (name !== "get_bookkeeping_transactions_bounded") {
+        return { data: null, error: { code: "42883", message: `Unknown RPC ${name}` } };
+      }
+      const businessId = args.p_business_id;
+      const status = String(args.p_status_filter || "needs_review").toLowerCase();
+      const limit = Math.max(Number(args.p_limit || 25), 0);
+      const offset = Math.max(Number(args.p_offset || 0), 0);
+      let rows = (store.bookkeeping_rpc_rows || []).filter((row) => String(row.business_id) === String(businessId));
+      if (status === "posted") rows = rows.filter((row) => Boolean(row.qbo_txn_id) || String(row.cat_status || "").toLowerCase() === "posted");
+      rows = rows
+        .slice()
+        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(b.id).localeCompare(String(a.id)));
+      const total = rows.length;
+      return {
+        data: rows.slice(offset, offset + limit).map((row) => ({ ...clone(row), total_count: total })),
+        error: null,
+      };
     },
   };
 }
@@ -263,10 +318,12 @@ describe("job costing jobs routes", () => {
   let app;
   let mockSupabase;
   let originalFrom;
+  let originalRpc;
   let originalConsoleError;
 
   beforeEach(() => {
     originalFrom = supabase.from;
+    originalRpc = supabase.rpc;
     originalConsoleError = console.error;
     console.error = () => {};
     mockSupabase = createSupabaseMock({
@@ -299,11 +356,13 @@ describe("job costing jobs routes", () => {
       ],
     });
     supabase.from = mockSupabase.from.bind(mockSupabase);
+    supabase.rpc = mockSupabase.rpc.bind(mockSupabase);
     app = createApp();
   });
 
   afterEach(() => {
     supabase.from = originalFrom;
+    supabase.rpc = originalRpc;
     console.error = originalConsoleError;
   });
 
@@ -498,5 +557,87 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.preview.collected_cash_change, 0);
     assert.equal(response.body.preview.receivable_change, 8500);
     assert.equal(response.body.preview.duplicate_prevention.result, "source_document_identity_checked");
+  });
+
+  test("job costing loads every posted Books page and does not depend on Change Order tables", async () => {
+    mockSupabase.store.jobs = [
+      { id: JOB_ID, business_id: BUSINESS_ID, job_name: "Kitchen Remodel", status: "active" },
+    ];
+    mockSupabase.store.__tableErrors = {
+      job_change_orders: { code: "42703", message: "column job_change_orders.title does not exist" },
+    };
+    mockSupabase.store.bookkeeping_rpc_rows = Array.from({ length: 204 }, (_, index) => makeRpcPostedRow({
+      id: `posted-${String(index + 1).padStart(3, "0")}`,
+      qboId: `qbo-${index + 1}`,
+      date: `2026-08-${String((index % 28) + 1).padStart(2, "0")}`,
+    }));
+    mockSupabase.store.bookkeeping_rpc_rows.push(makeRpcPostedRow({
+      id: "not-posted",
+      qboId: null,
+      date: "2026-08-31",
+    }));
+
+    const response = await request(app, "/api/job-costing/job-costing", { method: "GET" });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.transactions.length, 204);
+    assert.equal(new Set(response.body.transactions.map((row) => row.id)).size, 204);
+    assert.equal(response.body.transactions.some((row) => row.id === "not-posted"), false);
+    assert.equal(response.body.pagination.total_posted_transactions, 204);
+    assert.equal(response.body.pagination.loaded_posted_transactions, 204);
+    assert.equal(response.body.jobs.length, 1);
+    assert.equal(response.body.jobs[0].change_order_count, 0);
+  });
+
+  test("job candidates endpoint returns the real bounded total for suggested jobs", async () => {
+    mockSupabase.store.job_candidates = Array.from({ length: 102 }, (_, index) => ({
+      id: `candidate-${index + 1}`,
+      business_id: BUSINESS_ID,
+      candidate_status: "pending",
+      suggested_job_name: `Invoice job ${index + 1}`,
+      source_entity_type: "invoice",
+      confidence_score: 80,
+      updated_at: `2026-09-02T12:${String(index % 60).padStart(2, "0")}:00.000Z`,
+    }));
+
+    const response = await request(app, "/api/job-costing/job-candidates?limit=250", { method: "GET" });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.candidates.length, 102);
+    assert.equal(response.body.total_count, 102);
+    assert.equal(response.body.loaded_count, 102);
+  });
+
+  test("Projects capability page-load route reads stored state without a QBO capability check", async () => {
+    mockSupabase.store.qbo_projects_capabilities = [
+      {
+        id: "capability-1",
+        business_id: BUSINESS_ID,
+        realm_id: "realm-1",
+        qbo_env: "production",
+        status: "scope_not_authorized",
+        project_scope_present: false,
+        projects_enabled_preference: false,
+        source_of_truth: "manual_link_only",
+        auto_import_enabled: false,
+        checked_at: "2026-09-02T12:00:00.000Z",
+      },
+      {
+        id: "capability-other",
+        business_id: OTHER_BUSINESS_ID,
+        realm_id: "realm-other",
+        qbo_env: "production",
+        status: "available_and_enabled",
+        checked_at: "2026-09-02T12:00:00.000Z",
+      },
+    ];
+
+    const response = await request(app, "/api/job-costing/qbo/projects/capability", { method: "GET" });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.capability.status, "scope_not_authorized");
+    assert.equal(response.body.capability.business_id, BUSINESS_ID);
+    assert.equal(response.body.capability.auto_import_enabled, false);
   });
 });

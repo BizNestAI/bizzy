@@ -1974,15 +1974,6 @@ function getTransactionMemo(txn = {}) {
   return value ? String(value).trim() : "";
 }
 
-function getGlFilterCategory(txn = {}) {
-  const text = `${getTransactionAccountName(txn)} ${getTransactionMemo(txn)} ${txn.vendor || ""}`.toLowerCase();
-  if (/\b(material|materials|supply|supplies|lumber|tile|paint|hardware|home depot|lowe|ferguson|supplyhouse)\b/.test(text)) return "materials";
-  if (/\b(labor|labour|payroll|wage|crew|employee)\b/.test(text)) return "labor";
-  if (/\b(subcontract|subcontractor|contractor|1099)\b/.test(text)) return "subcontractors";
-  if (/\b(income|revenue|sales|service income|construction income)\b/.test(text) || String(txn.direction || "").toUpperCase() === "INFLOW") return "revenue";
-  return "other";
-}
-
 function normalizeGlAccountKey(value = "") {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -2157,9 +2148,7 @@ function PostedTransactionRow({
       : "Fully assigned"
     : "Unassigned";
   const actionLabel = isFullyAssigned ? "View" : isPartiallyAssigned ? "Assign remaining" : "Assign";
-  const suggestionJob = suggestion ? getSuggestionJob(suggestion) : null;
   const suggestionConfidence = suggestion ? getSuggestionConfidence(suggestion) : 0;
-  const suggestionJobName = suggestionJob?.jobName || suggestionJob?.job_name || "suggested job";
   const showSuggestion = suggestion && !isFullyAssigned;
   const transactionMemo = getTransactionMemo(txn);
   const roleMeta = getTransactionRoleMeta(txn);
@@ -2721,6 +2710,11 @@ function JobAssignmentBoard({
   qboGlAccounts = [],
   suggestions = [],
   jobCandidates = [],
+  jobCandidatesTotal = 0,
+  transactionsError = "",
+  jobsError = "",
+  jobCandidatesError = "",
+  projectsCapability = null,
   jobCandidateBusyId = "",
   assignmentRef,
   instruction,
@@ -2770,6 +2764,7 @@ function JobAssignmentBoard({
   onRefresh,
   readOnly = false,
 }) {
+  const projectsCapabilityView = getProjectsCapabilityView(projectsCapability || {});
   const postedTransactions = transactions.filter((txn) => String(txn.status || "").toLowerCase() === "posted");
   const pendingCandidates = useMemo(() => (
     (Array.isArray(jobCandidates) ? jobCandidates : [])
@@ -2778,7 +2773,14 @@ function JobAssignmentBoard({
   ), [jobCandidates]);
   const assignmentDisabled = readOnly || bucketMode !== "live";
   const visibleJobs = bucketMode === "completed" ? completedJobs : jobs;
-  const [dateRangeFilter, setDateRangeFilter] = useState("all");
+  const suggestedTotal = Math.max(Number(jobCandidatesTotal || 0), pendingCandidates.length);
+  const importJobsLabel = projectsCapabilityView.available ? "Import Jobs" : "Review Jobs";
+  const importJobsTitle = readOnly
+    ? "Job imports are unavailable in read-only Admin View."
+    : projectsCapabilityView.available
+      ? "Import QuickBooks Projects."
+      : "QuickBooks Projects are not enabled or authorized for this company. Review suggested jobs or create a job manually.";
+  const [dateRangeFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [transactionSearch, setTransactionSearch] = useState("");
@@ -2988,7 +2990,7 @@ function JobAssignmentBoard({
         <div className="inline-flex rounded-full border border-white/10 bg-black/25 p-1">
           {[
             { key: "live", label: "Live", count: jobs.length },
-            { key: "suggested", label: "Suggested Jobs", count: pendingCandidates.length },
+            { key: "suggested", label: "Suggested Jobs", count: suggestedTotal },
             { key: "completed", label: "Completed", count: completedJobs.length },
           ].map((tab) => {
             const active = bucketMode === tab.key;
@@ -3024,11 +3026,11 @@ function JobAssignmentBoard({
             type="button"
             onClick={readOnly ? undefined : onImportJobs}
             disabled={readOnly}
-            title={readOnly ? "Job imports are unavailable in read-only Admin View." : undefined}
+            title={importJobsTitle}
             className="inline-flex h-9 items-center gap-2 rounded-full border border-white/10 bg-white/[0.045] px-3 text-xs font-semibold text-white/70 transition hover:border-emerald-300/20 hover:bg-emerald-300/[0.07] hover:text-emerald-50 focus:outline-none focus:ring-2 focus:ring-emerald-300/16"
           >
             <UploadCloud className="h-3.5 w-3.5" />
-            Import Jobs
+            {importJobsLabel}
           </button>
           <button
             type="button"
@@ -3071,7 +3073,11 @@ function JobAssignmentBoard({
               {loading ? (
                 <div className="w-[230px]"><SkeletonCard lines={3} /></div>
               ) : bucketMode === "suggested" ? (
-                pendingCandidates.length ? (
+                jobCandidatesError ? (
+                  <div className="w-full min-w-[360px] rounded-xl border border-amber-300/18 bg-amber-300/[0.08] px-4 py-4 text-center text-sm text-amber-50/75">
+                    {jobCandidatesError}
+                  </div>
+                ) : pendingCandidates.length ? (
                   pendingCandidates.map((candidate) => (
                     <CandidateBucketCard
                       key={candidate.id}
@@ -3113,9 +3119,16 @@ function JobAssignmentBoard({
                 ))
               ) : (
                 <div className="w-full min-w-[360px] rounded-xl border border-white/10 bg-white/[0.035] px-4 py-4 text-center text-sm text-white/55">
-                  {assignmentDisabled
+                  {jobsError
+                    ? jobsError
+                    : assignmentDisabled
                     ? "No completed jobs yet. Mark a live job complete when the work is finished."
                     : "No jobs yet. Import QuickBooks Projects, review suggested jobs, or create a job manually."}
+                  {!jobsError && !projectsCapabilityView.available && !assignmentDisabled ? (
+                    <div className="mt-2 text-xs text-white/38">
+                      QuickBooks Projects are not enabled for this company. Create a job manually or review Suggested Jobs.
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -3256,7 +3269,7 @@ function JobAssignmentBoard({
                   })
                 ) : (
                   <div className="px-4 py-8 text-center text-sm text-white/55">
-                    No unassigned posted QuickBooks transactions match those filters.
+                    {transactionsError || "No unassigned posted QuickBooks transactions match those filters."}
                   </div>
                 )}
               </div>
@@ -5832,6 +5845,11 @@ function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, o
   ];
   return (
     <JobCostingDrawer open={open} title="Import Jobs" eyebrow="Available sources" onClose={onClose}>
+      {!capability.available ? (
+        <div className="mb-3 rounded-[16px] border border-amber-300/18 bg-amber-300/[0.08] px-3 py-3 text-xs text-amber-50/75">
+          QuickBooks Projects are not enabled for this company. Create a job manually or review Suggested Jobs.
+        </div>
+      ) : null}
       <div className="space-y-3">
         {sources.map((source) => (
           <div key={source.key} className="flex flex-wrap items-center justify-between gap-3 rounded-[18px] border border-white/10 bg-black/18 p-4">
@@ -5861,6 +5879,8 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [transactionsError, setTransactionsError] = useState("");
+  const [jobsError, setJobsError] = useState("");
   const [selectedJob, setSelectedJob] = useState(null);
   const assignmentRef = useRef(null);
   const [instruction, setInstruction] = useState("");
@@ -5894,6 +5914,8 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const [markingCompleteJobId, setMarkingCompleteJobId] = useState("");
   const [bucketMode, setBucketMode] = useState("live");
   const [jobCandidates, setJobCandidates] = useState([]);
+  const [jobCandidatesTotal, setJobCandidatesTotal] = useState(0);
+  const [jobCandidatesError, setJobCandidatesError] = useState("");
   const [jobCandidateBusyId, setJobCandidateBusyId] = useState("");
   const [addJobOpen, setAddJobOpen] = useState(false);
   const [importJobsOpen, setImportJobsOpen] = useState(false);
@@ -5910,6 +5932,8 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       setJobs(buildDemoJobCostingJobs(demoJobCostingTransactions));
       setChangeOrders([]);
       setPotentialChangeOrders([]);
+      setTransactionsError("");
+      setJobsError("");
       setLoading(false);
       return;
     }
@@ -5919,17 +5943,34 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     }
     setLoading(true);
     setError("");
+    setTransactionsError("");
+    setJobsError("");
     try {
-      const [data, summary, changeOrderData, potentialChangeOrderData] = await Promise.all([
+      const [dataResult, summaryResult] = await Promise.allSettled([
         safeFetch(apiUrl(`/api/jobs/job-costing?business_id=${encodeURIComponent(businessId)}`)),
         safeFetch(apiUrl(`/api/job-costing/jobs/summary?business_id=${encodeURIComponent(businessId)}`)),
-        safeFetch(apiUrl(`/api/job-costing/change-orders?business_id=${encodeURIComponent(businessId)}&limit=200`)),
-        safeFetch(apiUrl(`/api/job-costing/potential-change-orders?business_id=${encodeURIComponent(businessId)}&limit=100`)),
       ]);
-      setTransactions(Array.isArray(data?.transactions) ? data.transactions : []);
-      setJobs(Array.isArray(summary?.jobs) ? summary.jobs : Array.isArray(data?.jobs) ? data.jobs : []);
-      setChangeOrders(Array.isArray(changeOrderData?.change_orders) ? changeOrderData.change_orders : []);
-      setPotentialChangeOrders(Array.isArray(potentialChangeOrderData?.potential_change_orders) ? potentialChangeOrderData.potential_change_orders : []);
+
+      if (dataResult.status === "fulfilled") {
+        const data = dataResult.value || {};
+        setTransactions(Array.isArray(data?.transactions) ? data.transactions : []);
+      } else {
+        console.warn("[JobCosting] posted transactions failed", dataResult.reason?.message || dataResult.reason);
+        setTransactionsError("Unable to load posted QuickBooks transactions.");
+      }
+
+      if (summaryResult.status === "fulfilled") {
+        const summary = summaryResult.value || {};
+        const fallbackData = dataResult.status === "fulfilled" ? dataResult.value : {};
+        setJobs(Array.isArray(summary?.jobs) ? summary.jobs : Array.isArray(fallbackData?.jobs) ? fallbackData.jobs : []);
+      } else {
+        console.warn("[JobCosting] jobs summary failed", summaryResult.reason?.message || summaryResult.reason);
+        setJobsError("Unable to load jobs.");
+      }
+
+      if (dataResult.status === "rejected" && summaryResult.status === "rejected") {
+        setError("Unable to load Job Costing data.");
+      }
     } catch (e) {
       console.warn("[JobCosting] load failed", e?.message || e);
       setError(e?.message || "Failed to load job costing.");
@@ -5985,14 +6026,20 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const loadJobCandidates = useCallback(async () => {
     if (usingDemo) {
       setJobCandidates(demoJobCandidates);
+      setJobCandidatesTotal(demoJobCandidates.length);
+      setJobCandidatesError("");
       return;
     }
     if (!businessId) return;
+    setJobCandidatesError("");
     try {
-      const data = await safeFetch(apiUrl(`/api/job-costing/job-candidates?business_id=${encodeURIComponent(businessId)}&limit=100`));
-      setJobCandidates(Array.isArray(data?.candidates) ? data.candidates : []);
+      const data = await safeFetch(apiUrl(`/api/job-costing/job-candidates?business_id=${encodeURIComponent(businessId)}&limit=250`));
+      const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+      setJobCandidates(candidates);
+      setJobCandidatesTotal(Number(data?.total_count ?? candidates.length) || candidates.length);
     } catch (e) {
       console.warn("[JobCosting] job candidates failed", e?.message || e);
+      setJobCandidatesError("Unable to load suggested jobs.");
       setAssignmentError("Could not load suggested jobs. Manual jobs are still available.");
     }
   }, [businessId, usingDemo]);
@@ -6008,10 +6055,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     }
     if (!businessId) return;
     try {
-      const data = await safeFetch(apiUrl("/api/job-costing/qbo/projects/capability"), {
-        method: "POST",
-        body: { business_id: businessId },
-      });
+      const data = await safeFetch(apiUrl(`/api/job-costing/qbo/projects/capability?business_id=${encodeURIComponent(businessId)}`));
       const capability = data?.capability || data?.projects_capability || data;
       setProjectsCapability(typeof capability === "string" ? { status: capability } : capability || null);
     } catch (e) {
@@ -7067,6 +7111,11 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             suggestions={suggestions}
             suggestionsLoading={suggestionsLoading}
             jobCandidates={jobCandidates}
+            jobCandidatesTotal={jobCandidatesTotal}
+            transactionsError={transactionsError}
+            jobsError={jobsError}
+            jobCandidatesError={jobCandidatesError}
+            projectsCapability={projectsCapability}
             jobCandidateBusyId={jobCandidateBusyId}
             assignmentRef={assignmentRef}
             instruction={instruction}
