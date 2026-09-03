@@ -746,7 +746,31 @@ export async function revertCandidateCreatedJob({ businessId, jobId, db = defaul
     missing.code = "job_not_found";
     throw missing;
   }
-  if (String(job.creation_method || "").toLowerCase() !== "job_candidate") {
+
+  const { data: candidate, error: candidateError } = await db
+    .from("job_candidates")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("confirmed_job_id", jobId)
+    .maybeSingle();
+  if (candidateError && !isMissingSchemaError(candidateError)) throw candidateError;
+
+  const creationMethod = String(job.creation_method || "").toLowerCase();
+  const sourceType = String(job.source_type || "").toLowerCase();
+  const sourceEntityType = String(job.source_entity_type || job.external_source_type || "").toLowerCase();
+  const jobLooksSuggested =
+    creationMethod === "job_candidate" ||
+    sourceType.includes("candidate") ||
+    Boolean(job.job_candidate_id || job.candidate_id || job.source_candidate_id) ||
+    (
+      sourceEntityType &&
+      (sourceEntityType.includes("invoice") || sourceEntityType.includes("estimate")) &&
+      !sourceType.includes("qbo_project") &&
+      !sourceType.includes("subcustomer") &&
+      !sourceType.includes("manual")
+    );
+
+  if (!candidate?.id && !jobLooksSuggested) {
     const unsupported = new Error("Only jobs created from Suggested Jobs can be moved back to Suggested Jobs.");
     unsupported.status = 400;
     unsupported.code = "job_revert_not_supported";
@@ -766,14 +790,6 @@ export async function revertCandidateCreatedJob({ businessId, jobId, db = defaul
     blocked.code = "job_has_assignments";
     throw blocked;
   }
-
-  const { data: candidate, error: candidateError } = await db
-    .from("job_candidates")
-    .select("*")
-    .eq("business_id", businessId)
-    .eq("confirmed_job_id", jobId)
-    .maybeSingle();
-  if (candidateError && !isMissingSchemaError(candidateError)) throw candidateError;
 
   if (candidate?.id) {
     const { error: restoreError } = await db

@@ -454,6 +454,16 @@ test("Live candidate-created jobs expose the Back to Suggested action from produ
   assert.equal(predicateSource.includes("job.job_candidate_id || job.candidate_id || job.source_candidate_id"), true);
   assert.equal(predicateSource.includes('sourceEntityType.includes("invoice")'), true);
   assert.equal(predicateSource.includes('!sourceType.includes("manual")'), true);
-  assert.equal(source.includes("&& isSuggestedCandidateJob(job)"), true);
+  assert.equal(source.includes("const canShowRevertCandidateJob = !completed && onRevertCandidateJob && assignedTransactionCount <= 0"), true);
   assert.equal(source.includes("Back to Suggested"), true);
+});
+
+test("Job Costing first-load state shows an explicit loading animation instead of empty zero data", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  assert.equal(source.includes("function JobCostingInitialLoadingState"), true);
+  assert.equal(source.includes("Loading live job costing data"), true);
+  assert.equal(source.includes("Fetching saved jobs, suggested jobs, and posted QuickBooks transactions."), true);
+  assert.equal(source.includes("Loading posted QuickBooks transactions..."), true);
+  assert.equal(source.includes("<JobCostingInitialLoadingState />"), true);
+  assert.equal(source.includes('<JobCostingInitialLoadingState type="transactions" />'), true);
 });

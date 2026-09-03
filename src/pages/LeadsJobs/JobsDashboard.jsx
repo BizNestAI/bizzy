@@ -120,6 +120,28 @@ function SkeletonCard({ className = "", lines = 3 }) {
   );
 }
 
+function JobCostingInitialLoadingState({ type = "jobs" }) {
+  const isTransactions = type === "transactions";
+  return (
+    <div className={isTransactions ? "p-4" : "w-full min-w-[720px]"}>
+      <div className={`rounded-xl border border-emerald-300/14 bg-emerald-300/[0.045] ${isTransactions ? "p-4" : "px-4 py-5"}`}>
+        <div className="flex items-center gap-3">
+          <RefreshCcw className="h-4 w-4 animate-spin text-emerald-200" />
+          <div>
+            <div className="text-sm font-semibold text-emerald-50">Loading live job costing data</div>
+            <div className="mt-0.5 text-xs text-white/45">Fetching saved jobs, suggested jobs, and posted QuickBooks transactions.</div>
+          </div>
+        </div>
+        <div className={`mt-4 grid gap-3 ${isTransactions ? "" : "sm:grid-cols-2 lg:grid-cols-3"}`}>
+          {Array.from({ length: isTransactions ? 4 : 3 }).map((_, idx) => (
+            <SkeletonCard key={idx} lines={isTransactions ? 2 : 3} className={isTransactions ? "min-h-[64px]" : "min-h-[148px]"} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function timeAgo(iso) {
   if (!iso) return "";
   const now = Date.now();
@@ -1375,6 +1397,7 @@ function isSuggestedCandidateJob(job = {}) {
     creationMethod === "job_candidate" ||
     sourceType.includes("candidate") ||
     sourceType === "candidate_invoice" ||
+    sourceType === "bizzi" ||
     Boolean(job.job_candidate_id || job.candidate_id || job.source_candidate_id) ||
     (
       sourceEntityType &&
@@ -2467,10 +2490,7 @@ function JobBucketCard({
   const marginBar = Number.isFinite(marginValue) ? Math.max(0, Math.min(100, marginValue)) : 0;
   const assignedCount = getJobDocumentCount(job) || job.assigned_transaction_count || job.transactions?.length || 0;
   const assignedTransactionCount = Number(job.assigned_transaction_count ?? (Array.isArray(job.transactions) ? job.transactions.length : 0)) || 0;
-  const canRevertCandidateJob = !completed
-    && onRevertCandidateJob
-    && isSuggestedCandidateJob(job)
-    && assignedTransactionCount <= 0;
+  const canShowRevertCandidateJob = !completed && onRevertCandidateJob && assignedTransactionCount <= 0;
   const openChangeOrderCount = Number(job.open_change_order_count || 0);
   const approvedChangeOrderValue = Number(job.approved_change_order_value ?? job.change_order_approved_revenue ?? job.change_order_revenue ?? 0) || 0;
   const completedDate = job.completed_at || job.completedAt || job.end_date || job.endDate || null;
@@ -2589,7 +2609,7 @@ function JobBucketCard({
         >
           View {assignedCount} Source{assignedCount === 1 ? "" : "s"}
         </button>
-        {canRevertCandidateJob ? (
+        {canShowRevertCandidateJob ? (
           <button
             type="button"
             onClick={(event) => {
@@ -2597,6 +2617,9 @@ function JobBucketCard({
               onRevertCandidateJob(job);
             }}
             disabled={revertingCandidateJob}
+            title={isSuggestedCandidateJob(job)
+              ? "Move this unassigned job back to Suggested Jobs."
+              : "Move this unassigned job back to Suggested Jobs if it came from a suggestion."}
             className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold text-white/60 transition hover:border-amber-300/25 hover:bg-amber-300/[0.08] hover:text-amber-50 disabled:opacity-50"
           >
             <RefreshCcw className="h-3 w-3" />
@@ -3276,7 +3299,7 @@ function JobAssignmentBoard({
           >
             <div className="flex w-max gap-3 px-0.5 pr-12">
               {loading ? (
-                <div className="w-[230px]"><SkeletonCard lines={3} /></div>
+                <JobCostingInitialLoadingState />
               ) : bucketMode === "suggested" ? (
                 jobCandidatesError ? (
                   <div className="w-full min-w-[360px] rounded-xl border border-amber-300/18 bg-amber-300/[0.08] px-4 py-4 text-center text-sm text-amber-50/75">
@@ -3457,7 +3480,7 @@ function JobAssignmentBoard({
               </div>
               <div className="min-h-[180px] pb-28 md:pb-24">
                 {loading ? (
-                  <div className="p-4"><SkeletonCard lines={5} /></div>
+                  <JobCostingInitialLoadingState type="transactions" />
                 ) : pagedTransactions.length ? (
                   pagedTransactions.map((txn) => {
                     const suggestion = suggestionsByTransactionId.get(String(txn.id));
@@ -3493,7 +3516,9 @@ function JobAssignmentBoard({
           </div>
           <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-t border-white/8 bg-black/10 px-3 py-3 text-xs text-white/45">
             <span>
-              Showing {transactionRangeStart}-{transactionRangeEnd} of {filteredTransactions.length} unassigned posted transactions · 25 per page
+              {loading
+                ? "Loading posted QuickBooks transactions..."
+                : `Showing ${transactionRangeStart}-${transactionRangeEnd} of ${filteredTransactions.length} unassigned posted transactions · 25 per page`}
             </span>
             <div className="flex items-center gap-2">
               <button

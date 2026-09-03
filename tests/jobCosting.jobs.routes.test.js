@@ -625,6 +625,51 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.candidates[0].candidate_status, "pending");
   });
 
+  test("candidate-linked job can move back to Suggested Jobs even when creation_method is absent", async () => {
+    mockSupabase.store.jobs = [
+      { id: "candidate-job-without-method", business_id: BUSINESS_ID, job_name: "Projection and Video LLC", status: "active" },
+    ];
+    mockSupabase.store.job_candidates = [
+      {
+        id: "candidate-revert-linked",
+        business_id: BUSINESS_ID,
+        candidate_status: "approved_new",
+        confirmed_job_id: "candidate-job-without-method",
+        suggested_job_name: "Projection and Video LLC",
+      },
+    ];
+    mockSupabase.store.job_revenue_documents = [
+      { id: "doc-linked", business_id: BUSINESS_ID, job_id: "candidate-job-without-method", source_document_type: "invoice", external_document_id: "1099", total_amount: 1500 },
+    ];
+
+    const response = await request(app, "/api/job-costing/jobs/candidate-job-without-method/revert-to-candidate", {
+      method: "POST",
+      body: {},
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(mockSupabase.store.jobs.some((job) => job.id === "candidate-job-without-method"), false);
+    assert.equal(mockSupabase.store.job_candidates[0].candidate_status, "pending");
+    assert.equal(mockSupabase.store.job_candidates[0].confirmed_job_id, null);
+    assert.equal(mockSupabase.store.job_revenue_documents[0].job_id, null);
+  });
+
+  test("manual job without a candidate link cannot move back to Suggested Jobs", async () => {
+    mockSupabase.store.jobs = [
+      { id: "manual-job-1", business_id: BUSINESS_ID, job_name: "Manual Job", creation_method: "manual", status: "active" },
+    ];
+    mockSupabase.store.job_candidates = [];
+
+    const response = await request(app, "/api/job-costing/jobs/manual-job-1/revert-to-candidate", {
+      method: "POST",
+      body: {},
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, "job_revert_not_supported");
+    assert.equal(mockSupabase.store.jobs.some((job) => job.id === "manual-job-1"), true);
+  });
+
   test("candidate-created job cannot move back to Suggested Jobs while assignments exist", async () => {
     mockSupabase.store.jobs = [
       { id: "candidate-job-2", business_id: BUSINESS_ID, job_name: "Projection and Video LLC", creation_method: "job_candidate", status: "active" },
