@@ -454,7 +454,7 @@ test("Live candidate-created jobs expose the Back to Suggested action from produ
   assert.equal(predicateSource.includes("job.job_candidate_id || job.candidate_id || job.source_candidate_id"), true);
   assert.equal(predicateSource.includes('sourceEntityType.includes("invoice")'), true);
   assert.equal(predicateSource.includes('!sourceType.includes("manual")'), true);
-  assert.equal(source.includes("const canShowRevertCandidateJob = !completed && onRevertCandidateJob && assignedTransactionCount <= 0"), true);
+  assert.equal(source.includes("const canShowRevertCandidateJob = !completed && onRevertCandidateJob && isSuggestedCandidateJob(job) && assignedTransactionCount <= 0"), true);
   assert.equal(source.includes("Back to Suggested"), true);
 });
 
@@ -537,11 +537,17 @@ test("Manual Job buckets expose guarded delete and create handlers", async () =>
   const pageSource = source.slice(pageStart, pageEnd);
   assert.equal(source.includes("function isManualBizziJob"), true);
   assert.equal(cardSource.includes("canDeleteManualJob"), true);
+  assert.equal(cardSource.includes("isManualBizziJob(job);"), true);
+  assert.equal(cardSource.includes("isSuggestedCandidateJob(job) && assignedTransactionCount <= 0"), true);
+  assert.equal(cardSource.includes('"No revenue source yet"'), true);
+  assert.equal(source.includes('label: "New"'), true);
   assert.equal(cardSource.includes("<Trash2"), true);
   assert.equal(cardSource.includes('Delete this manually created job.'), true);
   assert.equal(cardSource.includes('{deletingJob ? "Deleting..." : "Delete"}'), true);
+  assert.equal(pageSource.includes("setTransactions(data.transactions)"), true);
   assert.equal(pageSource.includes("creatingManualJobRef.current"), true);
   assert.equal(pageSource.includes("optimistic-manual-job"), true);
+  assert.equal(pageSource.includes('revenue_source_status: "manual_no_revenue_source"'), true);
   assert.equal(pageSource.includes("const deleteManualJob = useCallback"), true);
   assert.equal(pageSource.includes('method: "DELETE"'), true);
 });

@@ -709,12 +709,15 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.jobs.some((job) => job.id === "manual-delete-1"), false);
   });
 
-  test("manual job cannot be deleted while assignments exist", async () => {
+  test("manual job deletion releases assigned transactions back to the posted feed", async () => {
     mockSupabase.store.jobs = [
       { id: "manual-delete-blocked", business_id: BUSINESS_ID, job_name: "Manual Job", creation_method: "manual", source_type: "manual", status: "active" },
     ];
     mockSupabase.store.job_transaction_assignments = [
       { id: "assignment-manual", business_id: BUSINESS_ID, job_id: "manual-delete-blocked", transaction_id: TXN_ID },
+    ];
+    mockSupabase.store.bookkeeping_rpc_rows = [
+      makeRpcPostedRow({ id: TXN_ID, qboId: "qbo-1", assigned: true }),
     ];
 
     const response = await request(app, "/api/job-costing/jobs/manual-delete-blocked/manual", {
@@ -722,10 +725,11 @@ describe("job costing jobs routes", () => {
       body: {},
     });
 
-    assert.equal(response.status, 409);
-    assert.equal(response.body.error, "job_has_assignments");
-    assert.equal(mockSupabase.store.jobs[0].status, "active");
-    assert.equal(mockSupabase.store.jobs[0].archived_at, undefined);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.released_assignment_count, 1);
+    assert.equal(mockSupabase.store.job_transaction_assignments.length, 0);
+    assert.equal(mockSupabase.store.jobs[0].status, "archived");
+    assert.equal(response.body.transactions.some((txn) => txn.id === TXN_ID), true);
   });
 
   test("non-manual jobs cannot be deleted through the manual delete route", async () => {

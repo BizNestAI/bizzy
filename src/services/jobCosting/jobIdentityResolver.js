@@ -862,13 +862,16 @@ export async function deleteManualJob({ businessId, jobId, db = defaultSupabase 
     .select("id")
     .eq("business_id", businessId)
     .eq("job_id", jobId)
-    .limit(1);
+    .limit(500);
   if (assignmentError && !isMissingSchemaError(assignmentError)) throw assignmentError;
+
   if (assignmentRows?.length) {
-    const blocked = new Error("Remove assigned transactions before deleting this job.");
-    blocked.status = 409;
-    blocked.code = "job_has_assignments";
-    throw blocked;
+    const { error: releaseError } = await db
+      .from("job_transaction_assignments")
+      .delete()
+      .eq("business_id", businessId)
+      .eq("job_id", jobId);
+    if (releaseError && !isMissingSchemaError(releaseError)) throw releaseError;
   }
 
   const now = new Date().toISOString();
@@ -881,7 +884,12 @@ export async function deleteManualJob({ businessId, jobId, db = defaultSupabase 
     .maybeSingle();
   if (archiveError) throw archiveError;
 
-  return { ok: true, deleted_job_id: jobId, job: archivedJob || { ...job, status: "archived", archived_at: now } };
+  return {
+    ok: true,
+    deleted_job_id: jobId,
+    released_assignment_count: assignmentRows?.length || 0,
+    job: archivedJob || { ...job, status: "archived", archived_at: now },
+  };
 }
 
 export async function dismissJobCandidate({ businessId, candidateId, reason = null, db = defaultSupabase } = {}) {

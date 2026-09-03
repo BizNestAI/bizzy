@@ -1527,6 +1527,21 @@ function guardrailStatus(margin, target) {
 }
 
 function jobBucketStatus(job, target) {
+  const assignedCount = Number(job?.assigned_transaction_count ?? (Array.isArray(job?.transactions) ? job.transactions.length : 0)) || 0;
+  const revenue = Number(job?.revenue || 0);
+  const totalCost = Number(job?.total_cost || job?.total_assigned_cost || job?.assigned_cost_total || 0);
+  if (!hasCanonicalRevenueSummary(job) && isManualBizziJob(job) && assignedCount <= 0 && revenue === 0 && totalCost === 0) {
+    return {
+      label: "New",
+      text: "text-white/70",
+      badge: "border-white/12 bg-white/[0.06] text-white/60",
+      card: "border-emerald-300/18 bg-emerald-300/[0.025]",
+      cardHover: "hover:border-emerald-300/30 hover:bg-emerald-300/[0.045]",
+      bar: "bg-emerald-300/55",
+      glow: "",
+      button: "border-emerald-300/20 bg-emerald-300/[0.06] text-emerald-50 hover:border-emerald-300/38 hover:bg-emerald-300/10",
+    };
+  }
   if (!hasCanonicalRevenueSummary(job)) {
     return {
       label: "Refreshing",
@@ -1539,11 +1554,8 @@ function jobBucketStatus(job, target) {
       button: "border-amber-300/25 bg-amber-300/[0.07] text-amber-50 hover:border-amber-300/45 hover:bg-amber-300/12",
     };
   }
-  const revenue = Number(job?.revenue || 0);
-  const totalCost = Number(job?.total_cost || 0);
   const grossMargin = Number(job?.gross_margin ?? job?.gross_margin_dollars ?? (revenue - totalCost));
   const margin = Number(job?.margin_percent);
-  const assignedCount = Number(job?.assigned_transaction_count ?? (Array.isArray(job?.transactions) ? job.transactions.length : 0)) || 0;
   if (assignedCount <= 0 && revenue === 0 && totalCost === 0) {
     return {
       label: "At Risk",
@@ -2500,12 +2512,14 @@ function JobBucketCard({
   const totalCost = Number(job.total_assigned_cost ?? job.assigned_cost_total ?? job.total_cost ?? 0);
   const marginValue = Number(job.margin_percent);
   const displayTone = jobBucketStatus(job, target);
+  const revenueUnavailableLabel = displayTone.label === "New" ? "No revenue source yet" : basis.refreshingLabel;
+  const revenueActionLabel = displayTone.label === "New" ? "Detail" : basis.retryLabel;
   const trend = getMarginTrend(job);
   const marginBar = Number.isFinite(marginValue) ? Math.max(0, Math.min(100, marginValue)) : 0;
   const assignedCount = getJobDocumentCount(job) || job.assigned_transaction_count || job.transactions?.length || 0;
   const assignedTransactionCount = Number(job.assigned_transaction_count ?? (Array.isArray(job.transactions) ? job.transactions.length : 0)) || 0;
-  const canShowRevertCandidateJob = !completed && onRevertCandidateJob && assignedTransactionCount <= 0;
-  const canDeleteManualJob = !completed && onDeleteJob && isManualBizziJob(job) && assignedTransactionCount <= 0;
+  const canShowRevertCandidateJob = !completed && onRevertCandidateJob && isSuggestedCandidateJob(job) && assignedTransactionCount <= 0;
+  const canDeleteManualJob = !completed && onDeleteJob && isManualBizziJob(job);
   const openChangeOrderCount = Number(job.open_change_order_count || 0);
   const approvedChangeOrderValue = Number(job.approved_change_order_value ?? job.change_order_approved_revenue ?? job.change_order_revenue ?? 0) || 0;
   const completedDate = job.completed_at || job.completedAt || job.end_date || job.endDate || null;
@@ -2573,7 +2587,7 @@ function JobBucketCard({
           />
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
-          <div className="truncate text-[9px] font-medium text-white/36">{revenueAvailable ? `Margin based on ${basis.label.toLowerCase()}` : basis.refreshingLabel}</div>
+          <div className="truncate text-[9px] font-medium text-white/36">{revenueAvailable ? `Margin based on ${basis.label.toLowerCase()}` : revenueUnavailableLabel}</div>
           <button
             type="button"
             onClick={(event) => {
@@ -2584,7 +2598,7 @@ function JobBucketCard({
             className="inline-flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-white/[0.035] px-1.5 py-0.5 text-[9px] font-semibold text-white/48 transition hover:border-emerald-300/25 hover:bg-emerald-300/[0.08] hover:text-emerald-50"
           >
             <PanelRightOpen className="h-2.5 w-2.5" />
-            {revenueAvailable ? "Detail" : basis.retryLabel}
+            {revenueAvailable ? "Detail" : revenueActionLabel}
           </button>
         </div>
       </div>
@@ -2652,7 +2666,7 @@ function JobBucketCard({
             }}
             disabled={deletingJob}
             title="Delete this manually created job."
-            className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold text-white/60 transition hover:border-rose-300/25 hover:bg-rose-300/[0.08] hover:text-rose-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full border border-rose-300/20 bg-rose-300/[0.07] px-2.5 py-1 text-[11px] font-semibold text-rose-50 transition hover:border-rose-300/40 hover:bg-rose-300/[0.12] disabled:opacity-50"
           >
             <Trash2 className="h-3 w-3" />
             {deletingJob ? "Deleting..." : "Delete"}
@@ -7067,7 +7081,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       status: payload.job.status || "active",
       source_type: "manual",
       creation_method: "manual",
-      revenue_source_status: "refreshing",
+      revenue_source_status: "manual_no_revenue_source",
       job_costing_revenue_basis: payload.job.job_costing_revenue_basis,
       selected_basis_amount: Number(payload.job.contract_amount || 0),
       contract_value: Number(payload.job.contract_amount || 0),
@@ -7139,6 +7153,14 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       if (Array.isArray(data?.jobs)) {
         setJobs(data.jobs);
         writeJobCostingLiveCache(businessId, readOnly, { jobs: data.jobs });
+      }
+      if (Array.isArray(data?.transactions)) {
+        setTransactions(data.transactions);
+        writeJobCostingLiveCache(businessId, readOnly, {
+          jobs: Array.isArray(data?.jobs) ? data.jobs : nextJobs,
+          transactions: data.transactions,
+          transactionTotal: Number(data?.transactions_total ?? data?.total_count ?? data.transactions.length) || data.transactions.length,
+        });
       }
       setAssignmentMessage(`${getJobDisplayName(job)} deleted.`);
       void loadJobCosting();
