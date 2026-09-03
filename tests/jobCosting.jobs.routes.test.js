@@ -732,6 +732,33 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.transactions.some((txn) => txn.id === TXN_ID), true);
   });
 
+  test("manual job deletion resolves stale external identifiers to the local job id", async () => {
+    mockSupabase.store.jobs = [
+      {
+        id: "manual-delete-local-id",
+        external_id: "external-delete-id",
+        business_id: BUSINESS_ID,
+        job_name: "Manual Job",
+        creation_method: "manual",
+        source_type: "manual",
+        status: "active",
+      },
+    ];
+    mockSupabase.store.job_transaction_assignments = [
+      { id: "assignment-manual-external", business_id: BUSINESS_ID, job_id: "manual-delete-local-id", transaction_id: TXN_ID },
+    ];
+
+    const response = await request(app, "/api/job-costing/jobs/external-delete-id/manual", {
+      method: "DELETE",
+      body: {},
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.deleted_job_id, "manual-delete-local-id");
+    assert.equal(mockSupabase.store.job_transaction_assignments.length, 0);
+    assert.equal(mockSupabase.store.jobs[0].status, "archived");
+  });
+
   test("non-manual jobs cannot be deleted through the manual delete route", async () => {
     mockSupabase.store.jobs = [
       { id: "qbo-job-1", business_id: BUSINESS_ID, job_name: "QBO Job", creation_method: "qbo_project", source_type: "quickbooks", status: "active" },
@@ -777,6 +804,8 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.pagination.loaded_posted_transactions, 204);
     assert.equal(response.body.jobs.length, 1);
     assert.equal(response.body.jobs[0].id, JOB_ID);
+    assert.equal(response.body.jobs[0].job_id, JOB_ID);
+    assert.equal(response.body.jobs[0].local_job_id, JOB_ID);
     assert.equal(response.body.jobs[0].is_manual_job, true);
     assert.equal(response.body.jobs[0].can_delete_manual_job, true);
     assert.equal(response.body.jobs[0].revenue_source_status, "manual_no_revenue_source");

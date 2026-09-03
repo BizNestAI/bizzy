@@ -852,19 +852,33 @@ export function isManualJobRecord(job = {}) {
 export async function deleteManualJob({ businessId, jobId, db = defaultSupabase } = {}) {
   if (!businessId || !jobId) throw new Error("businessId and jobId are required");
 
-  const { data: job, error: jobError } = await db
+  let { data: job, error: jobError } = await db
     .from("jobs")
     .select("*")
     .eq("business_id", businessId)
     .eq("id", jobId)
     .maybeSingle();
   if (jobError) throw jobError;
+
+  if (!job) {
+    const { data: externalJob, error: externalJobError } = await db
+      .from("jobs")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("external_id", jobId)
+      .maybeSingle();
+    if (externalJobError && !isMissingSchemaError(externalJobError)) throw externalJobError;
+    job = externalJob || null;
+  }
+
   if (!job || job.archived_at || String(job.status || "").toLowerCase() === "archived") {
     const missing = new Error("Job was not found.");
     missing.status = 404;
     missing.code = "job_not_found";
     throw missing;
   }
+
+  const localJobId = job.id;
 
   if (!isManualJobRecord(job)) {
     const unsupported = new Error("Only manually created jobs can be deleted.");
@@ -877,7 +891,7 @@ export async function deleteManualJob({ businessId, jobId, db = defaultSupabase 
     .from("job_transaction_assignments")
     .select("id")
     .eq("business_id", businessId)
-    .eq("job_id", jobId)
+    .eq("job_id", localJobId)
     .limit(500);
   if (assignmentError && !isMissingSchemaError(assignmentError)) throw assignmentError;
 
@@ -886,7 +900,7 @@ export async function deleteManualJob({ businessId, jobId, db = defaultSupabase 
       .from("job_transaction_assignments")
       .delete()
       .eq("business_id", businessId)
-      .eq("job_id", jobId);
+      .eq("job_id", localJobId);
     if (releaseError && !isMissingSchemaError(releaseError)) throw releaseError;
   }
 
@@ -895,14 +909,14 @@ export async function deleteManualJob({ businessId, jobId, db = defaultSupabase 
     .from("jobs")
     .update({ status: "archived", archived_at: now, updated_at: now })
     .eq("business_id", businessId)
-    .eq("id", jobId)
+    .eq("id", localJobId)
     .select("*")
     .maybeSingle();
   if (archiveError) throw archiveError;
 
   return {
     ok: true,
-    deleted_job_id: jobId,
+    deleted_job_id: localJobId,
     released_assignment_count: assignmentRows?.length || 0,
     job: archivedJob || { ...job, status: "archived", archived_at: now },
   };

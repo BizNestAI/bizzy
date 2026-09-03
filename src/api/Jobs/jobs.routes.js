@@ -1015,6 +1015,10 @@ async function fetchJobCostingRows(businessId) {
     return {
       ...job,
       ...(summary || {}),
+      id: job.id,
+      job_id: job.id,
+      local_job_id: job.id,
+      external_id: job.external_id || summary?.external_id || null,
       jobName: normalized.jobName,
       job_name: normalized.jobName,
       customerName: normalized.customerName,
@@ -1343,7 +1347,10 @@ async function fetchJobSummaries(businessId) {
       ? "manual_no_revenue_source"
       : revenueSummary?.sourceStatus || null;
     return {
-      id: normalized.id,
+      id: job.id,
+      job_id: job.id,
+      local_job_id: job.id,
+      external_id: job.external_id || null,
       job_name: normalized.jobName,
       jobName: normalized.jobName,
       customer_name: normalized.customerName,

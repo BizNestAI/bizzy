@@ -553,6 +553,8 @@ test("Manual Job buckets expose guarded delete and create handlers", async () =>
   assert.equal(pageSource.includes("optimistic-manual-job"), true);
   assert.equal(pageSource.includes('revenue_source_status: "manual_no_revenue_source"'), true);
   assert.equal(pageSource.includes("const deleteManualJob = useCallback"), true);
+  assert.equal(pageSource.includes("getLocalJobId(job)"), true);
+  assert.equal(pageSource.includes("setSelectedJob(previousSelectedJob || null)"), true);
   assert.equal(pageSource.includes('method: "DELETE"'), true);
 });
 

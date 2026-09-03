@@ -1162,7 +1162,9 @@ function normalizeJob(row = {}) {
       ? ((revenue - totalCost) / revenue) * 100
       : null;
   return {
-    id: row.id || row.job_id || row.external_id || row.job_name || row.name,
+    id: row.local_job_id || row.job_id || row.id || row.external_id || row.job_name || row.name,
+    local_job_id: row.local_job_id || row.job_id || row.id || null,
+    external_id: row.external_id || null,
     jobName: row.name || row.job_name || row.project_name || row.customer_name || "Untitled Job",
     customerName: row.customer_name || row.client_name || row.customer || row.parent_customer_name || "Unknown customer",
     tradeType: row.trade_type || row.trade || row.service_type || row.category || "Unassigned",
@@ -1171,6 +1173,11 @@ function normalizeJob(row = {}) {
     marginPercent,
     status: row.status || row.stage || "active",
   };
+}
+
+function getLocalJobId(job = {}) {
+  if (!job) return "";
+  return job.local_job_id || job.job_id || job.id || "";
 }
 
 function summarizeChangeOrders(changeOrders = []) {
@@ -7149,17 +7156,18 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   }, [businessId, jobs, loadJobCosting, readOnly, usingDemo]);
 
   const deleteManualJob = useCallback(async (job) => {
-    if (!job?.id || deletingJobId) return;
-    const jobId = String(job.id);
+    const jobId = String(getLocalJobId(job) || "");
+    if (!jobId || deletingJobId) return;
     setDeletingJobId(jobId);
     setAssignmentError("");
     setAssignmentMessage("");
     const previousJobs = jobs;
+    const previousSelectedJob = selectedJob;
     try {
-      const nextJobs = jobs.filter((item) => String(item.id) !== jobId);
+      const nextJobs = jobs.filter((item) => String(getLocalJobId(item)) !== jobId);
       setJobs(nextJobs);
       writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
-      if (selectedJob?.id && String(selectedJob.id) === jobId) setSelectedJob(null);
+      if (getLocalJobId(selectedJob) && String(getLocalJobId(selectedJob)) === jobId) setSelectedJob(null);
       if (usingDemo) {
         setAssignmentMessage(`${getJobDisplayName(job)} deleted.`);
         return;
@@ -7185,11 +7193,12 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } catch (e) {
       setJobs(previousJobs);
       writeJobCostingLiveCache(businessId, readOnly, { jobs: previousJobs });
+      setSelectedJob(previousSelectedJob || null);
       setAssignmentError(e?.message || "Could not delete job.");
     } finally {
       setDeletingJobId("");
     }
-  }, [businessId, deletingJobId, jobs, loadJobCosting, readOnly, selectedJob?.id, usingDemo]);
+  }, [businessId, deletingJobId, jobs, loadJobCosting, readOnly, selectedJob, usingDemo]);
 
   const syncQboProjects = useCallback(async () => {
     setImportJobsLoading(true);
