@@ -35,6 +35,7 @@ import {
   generateJobCandidatesForBusiness,
   linkJobCandidateToExisting,
   mergeJobCandidates,
+  revertCandidateCreatedJob,
 } from "../../services/jobCosting/jobIdentityResolver.js";
 
 const highCostJobRouteRateLimit = createRateLimiter({
@@ -1004,6 +1005,7 @@ async function fetchJobCostingRows(businessId) {
     const marginPercent = revenue > 0 ? ((revenue - totalCost) / revenue) * 100 : null;
     return {
       ...job,
+      ...(summary || {}),
       jobName: normalized.jobName,
       job_name: normalized.jobName,
       customerName: normalized.customerName,
@@ -1013,6 +1015,20 @@ async function fetchJobCostingRows(businessId) {
       status: normalized.status,
       base_revenue: baseRevenue,
       base_total_cost: baseCost,
+      revenue_summary: summary?.revenue_summary || null,
+      selected_revenue_basis: summary?.selected_revenue_basis || job.job_costing_revenue_basis || null,
+      revenue_basis_label: summary?.revenue_basis_label || null,
+      revenue_source_status: summary?.revenue_source_status || job.revenue_source_status || null,
+      estimated_value: summary?.estimated_value ?? 0,
+      contract_value: summary?.contract_value ?? asNum(job.contract_amount),
+      gross_invoiced_revenue: summary?.gross_invoiced_revenue ?? baseRevenue,
+      credit_memo_amount: summary?.credit_memo_amount ?? 0,
+      net_invoiced_revenue: summary?.net_invoiced_revenue ?? baseRevenue,
+      collected_cash: summary?.collected_cash ?? 0,
+      outstanding_receivable: summary?.outstanding_receivable ?? 0,
+      remaining_to_bill: summary?.remaining_to_bill ?? 0,
+      recognized_revenue: summary?.recognized_revenue ?? 0,
+      job_costing_revenue: summary?.job_costing_revenue ?? baseRevenue,
       change_order_revenue: changeOrderRevenue,
       change_order_cost: changeOrderCost,
       ...changeOrderSummary,
@@ -2673,6 +2689,40 @@ async function handleJobCandidateLinkExisting(req, res) {
   }
 }
 
+async function handleJobRevertToCandidate(req, res) {
+  try {
+    const businessId = ensureBusinessId(req, res);
+    if (!businessId) return;
+    const jobId = normalizePrompt(req.params.jobId || req.body?.job_id || req.body?.jobId);
+    if (!jobId) return res.status(400).json({ ok: false, error: "job_required", message: "job_id is required." });
+    const result = await revertCandidateCreatedJob({ businessId, jobId });
+    const [summary, candidatesResult] = await Promise.all([
+      fetchJobSummaries(businessId),
+      supabase
+        .from("job_candidates")
+        .select("*", { count: "exact" })
+        .eq("business_id", businessId)
+        .order("confidence_score", { ascending: false })
+        .order("updated_at", { ascending: false })
+        .limit(250),
+    ]);
+    if (candidatesResult.error) throw candidatesResult.error;
+    return res.json({
+      ...result,
+      jobs: summary,
+      candidates: candidatesResult.data || [],
+      total_count: Number.isFinite(Number(candidatesResult.count)) ? Number(candidatesResult.count) : (candidatesResult.data || []).length,
+    });
+  } catch (e) {
+    console.error("[job-costing.jobs-revert-to-candidate]", e);
+    res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.code || "job_revert_to_candidate_failed",
+      message: e?.message || "Failed to move that job back to Suggested Jobs.",
+    });
+  }
+}
+
 async function handleJobCandidateDismiss(req, res) {
   try {
     const businessId = ensureBusinessId(req, res);
@@ -2774,6 +2824,8 @@ router.post("/jobs/:jobId/complete", requireRouteAuth, handleJobComplete);
 router.post("/job-costing/jobs/:jobId/complete", requireRouteAuth, handleJobComplete);
 router.post("/jobs/:jobId/reopen", requireRouteAuth, handleJobReopen);
 router.post("/job-costing/jobs/:jobId/reopen", requireRouteAuth, handleJobReopen);
+router.post("/jobs/:jobId/revert-to-candidate", requireRouteAuth, handleJobRevertToCandidate);
+router.post("/job-costing/jobs/:jobId/revert-to-candidate", requireRouteAuth, handleJobRevertToCandidate);
 router.get("/job-candidates", requireRouteAuth, handleJobCandidatesGet);
 router.get("/job-costing/job-candidates", requireRouteAuth, handleJobCandidatesGet);
 router.post("/job-candidates/generate", requireRouteAuth, highCostJobRouteRateLimit, handleJobCandidatesGenerate);

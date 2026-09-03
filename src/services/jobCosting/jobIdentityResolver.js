@@ -52,6 +52,15 @@ function getDocumentExternalId(document = {}) {
   return document.external_document_id || document.source_entity_id || document.id || null;
 }
 
+function normalizeRevenueDocumentType(value = "") {
+  const type = String(value || "invoice").trim().toLowerCase();
+  if (type.includes("estimate")) return "estimate";
+  if (type.includes("sales_receipt") || type.includes("sales receipt")) return "sales_receipt";
+  if (type.includes("credit_memo") || type.includes("credit memo")) return "credit_memo";
+  if (type.includes("contract")) return "contract";
+  return "invoice";
+}
+
 function getDocumentCustomerRef(document = {}) {
   const ref = document.customer_ref || document.customerRef || document.CustomerRef || null;
   const value = getRefValue(ref);
@@ -586,16 +595,58 @@ async function persistMappingsForCandidate({ db, businessId, candidate, jobId, m
 
 async function updateCandidateDocumentJob({ db, businessId, candidate, jobId, now = new Date() }) {
   if (!candidate?.source_entity_type || !candidate?.source_entity_id) return;
+  const sourceDocumentType = normalizeRevenueDocumentType(candidate.source_entity_type);
+  const externalDocumentId = String(candidate.source_entity_id);
+  const sourceSystem = candidate.source_system || "quickbooks";
   let query = db
     .from("job_revenue_documents")
     .update({ job_id: jobId, updated_at: now.toISOString() })
     .eq("business_id", businessId)
-    .eq("source_system", candidate.source_system || "quickbooks")
-    .eq("source_document_type", candidate.source_entity_type)
-    .eq("external_document_id", candidate.source_entity_id);
+    .eq("source_system", sourceSystem)
+    .eq("source_document_type", sourceDocumentType)
+    .eq("external_document_id", externalDocumentId);
   if (candidate.realm_id) query = query.eq("realm_id", candidate.realm_id);
-  const { error } = await query;
+  const { data: updatedRows, error } = await query.select("id");
   if (error && !isMissingSchemaError(error)) throw error;
+  if (error || updatedRows?.length) return;
+
+  const amount = Math.abs(toNumber(candidate.invoice_estimate_amount ?? candidate.document_amount ?? candidate.total_amount));
+  const documentPayload = {
+    business_id: businessId,
+    job_id: jobId,
+    source_system: sourceSystem,
+    source_document_type: sourceDocumentType,
+    external_document_id: externalDocumentId,
+    document_number: candidate.document_number || candidate.source_document_number || candidate.project_job_number || null,
+    document_date: toDateOnly(candidate.invoice_date || candidate.document_date || candidate.source_document_date || candidate.detected_at) || null,
+    total_amount: amount,
+    open_balance: sourceDocumentType === "invoice" || sourceDocumentType === "estimate" ? amount : 0,
+    status: "active",
+    currency: candidate.currency || candidate.iso_currency_code || "USD",
+    customer_ref: candidate.source_customer_id || candidate.customer_name ? {
+      value: candidate.source_customer_id || null,
+      name: candidate.customer_name || candidate.source_customer_name || null,
+    } : null,
+    project_ref: candidate.source_project_id || candidate.suggested_job_name ? {
+      value: candidate.source_project_id || null,
+      name: candidate.suggested_job_name || null,
+    } : null,
+    billing_address: candidate.billing_address || null,
+    shipping_address: candidate.service_address || candidate.shipping_address || null,
+    source_snapshot: {
+      source: "job_candidate_approval",
+      candidate_id: candidate.id || null,
+      candidate_source: candidate.source || null,
+    },
+    source_updated_at: candidate.source_updated_at || candidate.updated_at || null,
+    last_synced_at: now.toISOString(),
+    sync_status: "current",
+    updated_at: now.toISOString(),
+  };
+  const { error: insertError } = await db
+    .from("job_revenue_documents")
+    .upsert(documentPayload, { onConflict: "business_id,source_system,source_document_type,external_document_id" });
+  if (insertError && !isMissingSchemaError(insertError)) throw insertError;
 }
 
 async function fetchCandidateOrThrow({ db, businessId, candidateId }) {
@@ -677,6 +728,81 @@ export async function linkJobCandidateToExisting({ businessId, candidateId, jobI
     .maybeSingle();
   if (error) throw error;
   return { ok: true, candidate: data, learnedMappings };
+}
+
+export async function revertCandidateCreatedJob({ businessId, jobId, db = defaultSupabase } = {}) {
+  if (!businessId || !jobId) throw new Error("businessId and jobId are required");
+
+  const { data: job, error: jobError } = await db
+    .from("jobs")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("id", jobId)
+    .maybeSingle();
+  if (jobError) throw jobError;
+  if (!job) {
+    const missing = new Error("Job was not found.");
+    missing.status = 404;
+    missing.code = "job_not_found";
+    throw missing;
+  }
+  if (String(job.creation_method || "").toLowerCase() !== "job_candidate") {
+    const unsupported = new Error("Only jobs created from Suggested Jobs can be moved back to Suggested Jobs.");
+    unsupported.status = 400;
+    unsupported.code = "job_revert_not_supported";
+    throw unsupported;
+  }
+
+  const { data: assignmentRows, error: assignmentError } = await db
+    .from("job_transaction_assignments")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("job_id", jobId)
+    .limit(1);
+  if (assignmentError && !isMissingSchemaError(assignmentError)) throw assignmentError;
+  if (assignmentRows?.length) {
+    const blocked = new Error("Remove assigned transactions before moving this job back to Suggested Jobs.");
+    blocked.status = 409;
+    blocked.code = "job_has_assignments";
+    throw blocked;
+  }
+
+  const { data: candidate, error: candidateError } = await db
+    .from("job_candidates")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("confirmed_job_id", jobId)
+    .maybeSingle();
+  if (candidateError && !isMissingSchemaError(candidateError)) throw candidateError;
+
+  if (candidate?.id) {
+    const { error: restoreError } = await db
+      .from("job_candidates")
+      .update({ candidate_status: "pending", confirmed_job_id: null })
+      .eq("business_id", businessId)
+      .eq("id", candidate.id);
+    if (restoreError && !isMissingSchemaError(restoreError)) throw restoreError;
+  }
+
+  const { error: docError } = await db
+    .from("job_revenue_documents")
+    .update({ job_id: null, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("job_id", jobId);
+  if (docError && !isMissingSchemaError(docError)) throw docError;
+
+  const { error: deleteError } = await db
+    .from("jobs")
+    .delete()
+    .eq("business_id", businessId)
+    .eq("id", jobId);
+  if (deleteError) throw deleteError;
+
+  return {
+    ok: true,
+    deleted_job_id: jobId,
+    candidate: candidate ? { ...candidate, candidate_status: "pending", confirmed_job_id: null } : null,
+  };
 }
 
 export async function dismissJobCandidate({ businessId, candidateId, reason = null, db = defaultSupabase } = {}) {

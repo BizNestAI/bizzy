@@ -1323,6 +1323,89 @@ function buildJobRows(jobs, transactions) {
   return rows.sort((a, b) => Date.parse(b.last_activity || b.created_at || 0) - Date.parse(a.last_activity || a.created_at || 0));
 }
 
+function getJobDisplayName(job = {}) {
+  return job.jobName || job.job_name || job.name || "Job";
+}
+
+function getOptimisticJobRevenue(job = {}) {
+  const basis = getJobRevenueBasisView(job);
+  if (basis.available && Number.isFinite(Number(basis.amount))) return Number(basis.amount);
+  const fallback = Number(job.revenue ?? job.total_revenue ?? job.job_costing_revenue ?? job.selected_basis_amount ?? 0);
+  return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function getOptimisticAssignedAmount(transaction = {}, allocationPercent = 100) {
+  const amount = Math.abs(Number(transaction.amount || 0));
+  const percent = Number.isFinite(Number(allocationPercent)) ? Number(allocationPercent) : 100;
+  return Math.round(amount * (Math.max(0, Math.min(100, percent)) / 100) * 100) / 100;
+}
+
+function withOptimisticAssignmentRows(transaction = {}, job = {}, allocationPercent = 100, assignmentId = "") {
+  const currentRows = Array.isArray(transaction.assignment_rows) ? transaction.assignment_rows : [];
+  const keptRows = currentRows.filter((row) => String(row.job_id) !== String(job.id));
+  const allocatedAmount = getOptimisticAssignedAmount(transaction, allocationPercent);
+  const signedAmount = Number(transaction.amount || 0) < 0 ? -allocatedAmount : allocatedAmount;
+  const nextRow = {
+    ...transaction,
+    amount: signedAmount,
+    job_id: job.id,
+    job_label: getJobDisplayName(job),
+    assignment_id: assignmentId,
+    assignment_row_id: assignmentId,
+    allocation_percent: allocationPercent,
+    allocated_amount: allocatedAmount,
+    assignment_source: "manual_drag_drop",
+    assignment_confidence: 1,
+  };
+  const rows = [...keptRows, nextRow];
+  const assignedTotalPercent = rows.reduce((sum, row) => sum + Number(row.allocation_percent || 0), 0);
+  const assignedJobNames = Array.from(new Set(rows.map((row) => row.job_label).filter(Boolean)));
+  return {
+    ...transaction,
+    job_id: job.id,
+    assignment_id: assignmentId,
+    assignment_ids: rows.map((row) => row.assignment_id).filter(Boolean),
+    allocation_percent: allocationPercent,
+    allocated_amount: allocatedAmount,
+    job_label: assignedJobNames.length > 1 ? `Split across ${assignedJobNames.length} jobs` : getJobDisplayName(job),
+    assigned_job_names: assignedJobNames,
+    assigned_total_percent: assignedTotalPercent,
+    remaining_percent: Math.max(0, 100 - assignedTotalPercent),
+    assignment_status: assignedTotalPercent >= 99.999 ? "assigned" : "partial",
+    assignment_count: rows.length,
+    assignment_source: "manual_drag_drop",
+    assignment_confidence: 1,
+    assignment_rows: rows,
+  };
+}
+
+function applyOptimisticJobAssignment(jobs = [], transaction = {}, job = {}, allocationPercent = 100) {
+  const costDelta = getOptimisticAssignedAmount(transaction, allocationPercent);
+  return jobs.map((item) => {
+    if (String(item.id || item.job_id) !== String(job.id)) return item;
+    const revenue = getOptimisticJobRevenue(item);
+    const currentCost = Number(item.total_cost ?? item.total_assigned_cost ?? item.base_total_cost ?? 0) || 0;
+    const totalCost = Math.round((currentCost + costDelta) * 100) / 100;
+    const grossMargin = Math.round((revenue - totalCost) * 100) / 100;
+    const marginPercent = revenue > 0 ? (grossMargin / revenue) * 100 : null;
+    return {
+      ...item,
+      revenue,
+      total_revenue: revenue,
+      total_cost: totalCost,
+      total_assigned_cost: totalCost,
+      base_total_cost: totalCost,
+      gross_margin: grossMargin,
+      gross_margin_dollars: grossMargin,
+      margin_percent: marginPercent,
+      marginPercent: marginPercent,
+      assigned_transaction_count: Number(item.assigned_transaction_count || 0) + 1,
+      revenue_source_status: item.revenue_source_status || "canonical",
+      revenue_summary: item.revenue_summary || { sourceStatus: item.revenue_source_status || "canonical" },
+    };
+  });
+}
+
 function statusClass(status = "") {
   const value = String(status).toLowerCase();
   if (value.includes("complete") || value.includes("won") || value.includes("paid")) return "border-emerald-300/25 bg-emerald-300/10 text-emerald-100";
@@ -2306,7 +2389,9 @@ function JobBucketCard({
   onRetrySummary,
   onMarkComplete,
   onReopenJob,
+  onRevertCandidateJob,
   markingComplete = false,
+  revertingCandidateJob = false,
   allowDrop = true,
   completed = false,
 }) {
@@ -2322,6 +2407,11 @@ function JobBucketCard({
   const trend = getMarginTrend(job);
   const marginBar = Number.isFinite(marginValue) ? Math.max(0, Math.min(100, marginValue)) : 0;
   const assignedCount = getJobDocumentCount(job) || job.assigned_transaction_count || job.transactions?.length || 0;
+  const assignedTransactionCount = Number(job.assigned_transaction_count ?? (Array.isArray(job.transactions) ? job.transactions.length : 0)) || 0;
+  const canRevertCandidateJob = !completed
+    && onRevertCandidateJob
+    && String(job.creation_method || "").toLowerCase() === "job_candidate"
+    && assignedTransactionCount <= 0;
   const openChangeOrderCount = Number(job.open_change_order_count || 0);
   const approvedChangeOrderValue = Number(job.approved_change_order_value ?? job.change_order_approved_revenue ?? job.change_order_revenue ?? 0) || 0;
   const completedDate = job.completed_at || job.completedAt || job.end_date || job.endDate || null;
@@ -2429,7 +2519,7 @@ function JobBucketCard({
           </div>
         </div>
       ) : null}
-      <div className="mt-2 flex items-center justify-start">
+      <div className="mt-2 flex flex-wrap items-center justify-start gap-2">
         <button
           type="button"
           onClick={(event) => {
@@ -2440,6 +2530,20 @@ function JobBucketCard({
         >
           View {assignedCount} Source{assignedCount === 1 ? "" : "s"}
         </button>
+        {canRevertCandidateJob ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRevertCandidateJob(job);
+            }}
+            disabled={revertingCandidateJob}
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold text-white/60 transition hover:border-amber-300/25 hover:bg-amber-300/[0.08] hover:text-amber-50 disabled:opacity-50"
+          >
+            <RefreshCcw className="h-3 w-3" />
+            {revertingCandidateJob ? "Moving..." : "Back to Suggested"}
+          </button>
+        ) : null}
         {onMarkComplete && !completed ? (
           <button
             type="button"
@@ -2448,7 +2552,7 @@ function JobBucketCard({
               onMarkComplete(job);
             }}
             disabled={markingComplete}
-            className="ml-2 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold text-white/60 transition hover:border-emerald-300/25 hover:bg-emerald-300/[0.08] hover:text-emerald-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold text-white/60 transition hover:border-emerald-300/25 hover:bg-emerald-300/[0.08] hover:text-emerald-50 disabled:opacity-50"
           >
             <CheckCircle2 className="h-3 w-3" />
             {markingComplete ? "Moving..." : "Mark Complete"}
@@ -2462,7 +2566,7 @@ function JobBucketCard({
               onReopenJob(job);
             }}
             disabled={markingComplete}
-            className="ml-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-300/22 bg-emerald-300/[0.07] px-2.5 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-300/14 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/22 bg-emerald-300/[0.07] px-2.5 py-1 text-[11px] font-semibold text-emerald-50 transition hover:border-emerald-300/45 hover:bg-emerald-300/14 disabled:opacity-50"
           >
             <CheckCircle2 className="h-3 w-3" />
             {markingComplete ? "Moving..." : "Move to Live"}
@@ -2759,6 +2863,8 @@ function JobAssignmentBoard({
   onRetrySummary,
   onMarkComplete,
   onReopenJob,
+  onRevertCandidateJob,
+  revertingCandidateJobId,
   markingCompleteJobId,
   completedJobs = [],
   bucketMode = "live",
@@ -3154,8 +3260,10 @@ function JobAssignmentBoard({
                     onRetrySummary={onRetrySummary}
                     onMarkComplete={assignmentDisabled ? null : onMarkComplete}
                     onReopenJob={assignmentDisabled ? onReopenJob : null}
+                    onRevertCandidateJob={assignmentDisabled ? null : onRevertCandidateJob}
                     completed={assignmentDisabled}
                     markingComplete={String(markingCompleteJobId || "") === String(job.id)}
+                    revertingCandidateJob={String(revertingCandidateJobId || "") === String(job.id)}
                   />
                 ))
               ) : (
@@ -5992,6 +6100,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const [viewAssignedJob, setViewAssignedJob] = useState(null);
   const [removingAssignmentId, setRemovingAssignmentId] = useState("");
   const [markingCompleteJobId, setMarkingCompleteJobId] = useState("");
+  const [revertingCandidateJobId, setRevertingCandidateJobId] = useState("");
   const [bucketMode, setBucketMode] = useState("live");
   const [jobCandidates, setJobCandidates] = useState([]);
   const [jobCandidatesTotal, setJobCandidatesTotal] = useState(0);
@@ -6498,7 +6607,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         });
         return;
       }
-      await safeFetch(apiUrl(`/api/job-costing/job-candidates/${encodeURIComponent(candidate.id)}/approve-new`), {
+      const result = await safeFetch(apiUrl(`/api/job-costing/job-candidates/${encodeURIComponent(candidate.id)}/approve-new`), {
         method: "POST",
         body: {
           business_id: businessId,
@@ -6511,8 +6620,53 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           approval_preview_confirmed: true,
         },
       });
-      await loadJobCosting();
-      await loadJobCandidates();
+      const createdJob = result?.job || {};
+      const jobId = createdJob.id || result?.candidate?.confirmed_job_id || `candidate-job-${candidate.id}`;
+      const candidateJob = {
+        ...createdJob,
+        id: jobId,
+        jobName: createdJob.jobName || createdJob.job_name || view.name,
+        job_name: createdJob.job_name || createdJob.jobName || view.name,
+        customerName: createdJob.customerName || createdJob.customer_name || view.customer,
+        customer_name: createdJob.customer_name || createdJob.customerName || view.customer,
+        status: createdJob.status || "active",
+        source_type: createdJob.source_type || "quickbooks",
+        creation_method: createdJob.creation_method || "job_candidate",
+        source_entity_type: candidate.source_entity_type || "invoice",
+        job_costing_revenue_basis: createdJob.job_costing_revenue_basis || "invoiced",
+        selected_revenue_basis: "invoiced",
+        revenue_source_status: "canonical",
+        source_document_count: Number(createdJob.source_document_count || 1),
+        revenue_document_count: Number(createdJob.revenue_document_count || 1),
+        selected_basis_amount: view.amount,
+        gross_invoiced_revenue: view.amount,
+        net_invoiced_revenue: view.amount,
+        job_costing_revenue: view.amount,
+        base_revenue: view.amount,
+        revenue: view.amount,
+        total_revenue: view.amount,
+        total_cost: 0,
+        base_total_cost: 0,
+        gross_margin: view.amount,
+        gross_margin_dollars: view.amount,
+        margin_percent: view.amount > 0 ? 100 : 0,
+        marginPercent: view.amount > 0 ? 100 : 0,
+        assigned_transaction_count: 0,
+      };
+      setJobs((prev) => {
+        const withoutExisting = prev.filter((job) => String(job.id || job.job_id) !== String(jobId));
+        return [candidateJob, ...withoutExisting];
+      });
+      setJobCandidates((prev) => prev.map((item) => (
+        String(item.id) === String(candidate.id)
+          ? { ...item, candidate_status: "approved_new", confirmed_job_id: jobId }
+          : item
+      )));
+      setBucketMode("live");
+      setAssignmentMessage(`${view.name} moved to Live Jobs.`);
+      void Promise.all([loadJobCosting(), loadJobCandidates()]).catch((refreshError) => {
+        console.warn("[JobCosting] post-candidate-create refresh failed", refreshError?.message || refreshError);
+      });
     } catch (e) {
       setAssignmentError(e?.message || "Could not create job from candidate.");
     } finally {
@@ -6870,7 +7024,21 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     setAssigningTransactionId(transaction.id);
     setAssignmentError("");
     setAssignmentMessage("");
+    const previousTransactions = transactions;
+    const previousJobs = jobs;
+    const optimisticAssignmentId = `optimistic-${transaction.id}-${job.id}-${Date.now()}`;
+    let optimisticApplied = false;
     try {
+      if (!usingDemo) {
+        optimisticApplied = true;
+        setTransactions((prev) => prev.map((txn) => (
+          String(txn.id) === String(transaction.id)
+            ? withOptimisticAssignmentRows(txn, job, allocationPercent, optimisticAssignmentId)
+            : txn
+        )));
+        setJobs((prev) => applyOptimisticJobAssignment(prev, transaction, job, allocationPercent));
+        setAssignmentMessage(`Transaction assigned to ${getJobDisplayName(job)}.`);
+      }
       let impact = options.impactPreview || null;
       if (!options.previewConfirmed) {
         if (usingDemo) {
@@ -6889,6 +7057,11 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         }
         if (!impact) throw new Error("Assignment impact preview was unavailable.");
         if (!canAssignWithoutImpactModal(impact)) {
+          if (optimisticApplied) {
+            setTransactions(previousTransactions);
+            setJobs(previousJobs);
+            setAssignmentMessage("");
+          }
           setAssignmentImpactPreview({
             transaction,
             job,
@@ -6950,8 +7123,12 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
       setAssignmentMessage(data?.message || `Transaction assigned to ${job.jobName}.`);
       closeAssignmentPicker();
-      await loadSuggestions();
+      void loadSuggestions();
     } catch (e) {
+      if (optimisticApplied) {
+        setTransactions(previousTransactions);
+        setJobs(previousJobs);
+      }
       setAssignmentError(e?.message || "Could not assign transaction.");
     } finally {
       setAssigningTransactionId("");
@@ -6959,7 +7136,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       setDraggedTransaction(null);
       setDragOverJobId("");
     }
-  }, [businessId, closeAssignmentPicker, loadSuggestions, usingDemo]);
+  }, [businessId, closeAssignmentPicker, jobs, loadSuggestions, transactions, usingDemo]);
 
   const markJobComplete = useCallback(async (job) => {
     if (!job?.id) return;
@@ -7038,6 +7215,46 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       setMarkingCompleteJobId("");
     }
   }, [businessId, loadJobCosting, loadSuggestions, usingDemo]);
+
+  const revertCandidateJob = useCallback(async (job) => {
+    if (!job?.id) return;
+    setRevertingCandidateJobId(job.id);
+    setAssignmentError("");
+    setAssignmentMessage("");
+    try {
+      if (usingDemo) {
+        setJobs((prev) => prev.filter((item) => String(item.id || item.job_id) !== String(job.id)));
+        setJobCandidates((prev) => prev.map((candidate) => (
+          String(candidate.confirmed_job_id) === String(job.id)
+            ? { ...candidate, candidate_status: "pending", confirmed_job_id: null }
+            : candidate
+        )));
+        setBucketMode("suggested");
+        setAssignmentMessage(`${getJobDisplayName(job)} moved back to Suggested Jobs.`);
+        return;
+      }
+      const data = await safeFetch(apiUrl(`/api/job-costing/jobs/${encodeURIComponent(job.id)}/revert-to-candidate`), {
+        method: "POST",
+        body: { business_id: businessId },
+      });
+      if (Array.isArray(data?.jobs)) setJobs(data.jobs);
+      else setJobs((prev) => prev.filter((item) => String(item.id || item.job_id) !== String(job.id)));
+      if (Array.isArray(data?.candidates)) {
+        setJobCandidates(data.candidates);
+        setJobCandidatesTotal(Number(data?.total_count ?? data.candidates.length) || data.candidates.length);
+      } else if (data?.candidate?.id) {
+        setJobCandidates((prev) => [data.candidate, ...prev.filter((candidate) => String(candidate.id) !== String(data.candidate.id))]);
+        setJobCandidatesTotal((prev) => Math.max(prev, prev + 1));
+      }
+      setBucketMode("suggested");
+      setAssignmentMessage(`${getJobDisplayName(job)} moved back to Suggested Jobs.`);
+      void loadJobCosting();
+    } catch (e) {
+      setAssignmentError(e?.message || "Could not move that job back to Suggested Jobs.");
+    } finally {
+      setRevertingCandidateJobId("");
+    }
+  }, [businessId, loadJobCosting, usingDemo]);
 
   const removeAssignment = useCallback(async (txn) => {
     if (!txn?.assignment_id) return;
@@ -7226,6 +7443,8 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             onRetrySummary={loadJobCosting}
             onMarkComplete={markJobComplete}
             onReopenJob={reopenJob}
+            onRevertCandidateJob={revertCandidateJob}
+            revertingCandidateJobId={revertingCandidateJobId}
             markingCompleteJobId={markingCompleteJobId}
             onAcceptSuggestion={acceptSuggestion}
             onRejectSuggestion={rejectSuggestion}

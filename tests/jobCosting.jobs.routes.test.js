@@ -559,6 +559,94 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.preview.duplicate_prevention.result, "source_document_identity_checked");
   });
 
+  test("candidate approval creates revenue document evidence for immediate live-job margin", async () => {
+    mockSupabase.store.job_candidates.push({
+      id: "candidate-revenue-1",
+      business_id: BUSINESS_ID,
+      candidate_status: "pending",
+      suggested_job_name: "Projection and Video LLC",
+      customer_name: "Projection and Video LLC",
+      source_system: "quickbooks",
+      source_entity_type: "Invoice",
+      source_entity_id: "1099",
+      document_number: "1099",
+      invoice_date: "2026-08-18",
+      invoice_estimate_amount: 1500,
+      service_address: { line1: "123 Main St", city: "Charlotte", country_subdivision_code: "NC", postal_code: "28202" },
+    });
+
+    const approveResponse = await request(app, "/api/job-costing/job-candidates/candidate-revenue-1/approve-new", {
+      method: "POST",
+      body: { user_id: "user-1", approval_preview_confirmed: true, job: { job_costing_revenue_basis: "invoiced" } },
+    });
+
+    assert.equal(approveResponse.status, 200);
+    assert.equal(mockSupabase.store.job_revenue_documents.length, 1);
+    assert.equal(mockSupabase.store.job_revenue_documents[0].job_id, approveResponse.body.job.id);
+    assert.equal(mockSupabase.store.job_revenue_documents[0].source_document_type, "invoice");
+    assert.equal(mockSupabase.store.job_revenue_documents[0].external_document_id, "1099");
+    assert.equal(mockSupabase.store.job_revenue_documents[0].total_amount, 1500);
+
+    const summaryResponse = await request(app, "/api/job-costing/jobs/summary", { method: "GET" });
+    const job = summaryResponse.body.jobs.find((row) => row.id === approveResponse.body.job.id);
+    assert.equal(job.revenue_source_status, "canonical");
+    assert.equal(job.job_costing_revenue, 1500);
+    assert.equal(job.margin_percent, 100);
+  });
+
+  test("candidate-created job can be moved back to Suggested Jobs when unassigned", async () => {
+    mockSupabase.store.jobs = [
+      { id: "candidate-job-1", business_id: BUSINESS_ID, job_name: "Projection and Video LLC", creation_method: "job_candidate", status: "active" },
+    ];
+    mockSupabase.store.job_candidates = [
+      {
+        id: "candidate-revert-1",
+        business_id: BUSINESS_ID,
+        candidate_status: "approved_new",
+        confirmed_job_id: "candidate-job-1",
+        suggested_job_name: "Projection and Video LLC",
+        confidence_score: 62,
+      },
+    ];
+    mockSupabase.store.job_revenue_documents = [
+      { id: "doc-1", business_id: BUSINESS_ID, job_id: "candidate-job-1", source_system: "quickbooks", source_document_type: "invoice", external_document_id: "1099", total_amount: 1500 },
+    ];
+
+    const response = await request(app, "/api/job-costing/jobs/candidate-job-1/revert-to-candidate", {
+      method: "POST",
+      body: {},
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(mockSupabase.store.jobs.some((job) => job.id === "candidate-job-1"), false);
+    assert.equal(mockSupabase.store.job_candidates[0].candidate_status, "pending");
+    assert.equal(mockSupabase.store.job_candidates[0].confirmed_job_id, null);
+    assert.equal(mockSupabase.store.job_revenue_documents[0].job_id, null);
+    assert.equal(response.body.candidates[0].candidate_status, "pending");
+  });
+
+  test("candidate-created job cannot move back to Suggested Jobs while assignments exist", async () => {
+    mockSupabase.store.jobs = [
+      { id: "candidate-job-2", business_id: BUSINESS_ID, job_name: "Projection and Video LLC", creation_method: "job_candidate", status: "active" },
+    ];
+    mockSupabase.store.job_candidates = [
+      { id: "candidate-revert-2", business_id: BUSINESS_ID, candidate_status: "approved_new", confirmed_job_id: "candidate-job-2" },
+    ];
+    mockSupabase.store.job_transaction_assignments = [
+      { id: "assignment-1", business_id: BUSINESS_ID, job_id: "candidate-job-2", transaction_id: TXN_ID },
+    ];
+
+    const response = await request(app, "/api/job-costing/jobs/candidate-job-2/revert-to-candidate", {
+      method: "POST",
+      body: {},
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error, "job_has_assignments");
+    assert.equal(mockSupabase.store.jobs.some((job) => job.id === "candidate-job-2"), true);
+    assert.equal(mockSupabase.store.job_candidates[0].candidate_status, "approved_new");
+  });
+
   test("job costing loads every posted Books page and does not depend on Change Order tables", async () => {
     mockSupabase.store.jobs = [
       { id: JOB_ID, business_id: BUSINESS_ID, job_name: "Kitchen Remodel", status: "active" },
