@@ -29,6 +29,128 @@ function maybeFiniteNumber(...values) {
   return null;
 }
 
+const PLACEHOLDER_PAYEE_VALUES = new Set([
+  "unknown",
+  "unknown payee",
+  "unknown vendor",
+  "n/a",
+  "na",
+  "null",
+  "undefined",
+]);
+
+function cleanDisplayText(value) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return PLACEHOLDER_PAYEE_VALUES.has(text.toLowerCase()) ? "" : text;
+}
+
+export function safeDisplayText(value, fallback = "") {
+  if (typeof value === "string") return cleanDisplayText(value) || fallback;
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : fallback;
+  if (typeof value === "bigint") return String(value);
+  return fallback;
+}
+
+export function formatCandidateAddress(value) {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "bigint") {
+    return safeDisplayText(value);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+
+  const lineParts = [
+    safeDisplayText(value.line1),
+    safeDisplayText(value.line2),
+    safeDisplayText(value.line3),
+  ].filter(Boolean);
+
+  const city = safeDisplayText(value.city);
+  const subdivision = safeDisplayText(value.country_subdivision_code || value.state || value.region);
+  const postal = safeDisplayText(value.postal_code || value.postalCode || value.zip);
+  const locality = [
+    city,
+    [subdivision, postal].filter(Boolean).join(" "),
+  ].filter(Boolean).join(", ");
+
+  const country = safeDisplayText(value.country);
+  const shouldShowCountry = country && !["US", "USA", "United States", "United States of America"].includes(country);
+  return [
+    ...lineParts,
+    locality,
+    shouldShowCountry ? country : "",
+  ].filter(Boolean).join(", ");
+}
+
+export function normalizeCandidateReasons(value) {
+  const values = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  const reasons = [];
+  for (const item of values) {
+    let reason = safeDisplayText(item);
+    if (!reason && item && typeof item === "object" && !Array.isArray(item)) {
+      reason = safeDisplayText(item.label) || safeDisplayText(item.message) || safeDisplayText(item.reason) || safeDisplayText(item.description);
+    }
+    if (!reason || seen.has(reason.toLowerCase())) continue;
+    seen.add(reason.toLowerCase());
+    reasons.push(reason);
+  }
+  return reasons;
+}
+
+export function normalizeCandidateMatches(value) {
+  const values = Array.isArray(value) ? value : [];
+  return values
+    .map((match) => {
+      if (!match || typeof match !== "object" || Array.isArray(match)) return null;
+      const id = safeDisplayText(match.job_id) || safeDisplayText(match.id);
+      const jobName = safeDisplayText(match.job_name) || safeDisplayText(match.jobName) || safeDisplayText(match.name);
+      if (!id && !jobName) return null;
+      const confidence = maybeFiniteNumber(match.confidence, match.confidence_score);
+      return {
+        ...match,
+        id: id || "",
+        job_id: safeDisplayText(match.job_id) || id || "",
+        job_name: jobName || "Existing job",
+        jobName: jobName || "Existing job",
+        confidence,
+      };
+    })
+    .filter(Boolean);
+}
+
+export function cleanBankMemoDescription(value) {
+  const original = cleanDisplayText(value);
+  if (!original) return "";
+  const cleaned = original
+    .replace(/^(?:aplpay|apple\s+pay|gpay|google\s+pay)\b[\s*:-]*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleanDisplayText(cleaned) || original;
+}
+
+export function getPostedTransactionDisplayName(txn = {}) {
+  const raw = txn?.raw && typeof txn.raw === "object" ? txn.raw : {};
+  const pick = (source, verified, label, ...values) => {
+    for (const value of values) {
+      const text = cleanDisplayText(value);
+      if (text) return { displayName: text, source, sourceLabel: label, payee_is_verified: verified };
+    }
+    return null;
+  };
+
+  return (
+    pick("qbo_payee", true, "QBO payee", txn.qbo_payee_name, txn.qbo_vendor_name, txn.qbo_customer_name, txn.qbo_entity_name, raw.qbo_payee_name, raw.qbo_vendor_name, raw.qbo_customer_name, raw.qbo_entity_name) ||
+    pick("normalized_merchant", false, "Merchant", txn.normalized_merchant_name, txn.canonical_merchant_name, txn.counterparty_name, txn.vendor, txn.payee, raw.normalized_merchant_name, raw.canonical_merchant_name, raw.counterparty_name) ||
+    pick("plaid_merchant", false, "Merchant", txn.plaid_merchant_name, txn.merchant_name, raw.plaid_merchant_name, raw.merchant_name) ||
+    pick("original_payee", false, "Description", txn.original_payee, txn.original_name, txn.name, raw.original_payee, raw.original_name, raw.name) ||
+    (() => {
+      const memo = cleanBankMemoDescription(txn.bank_memo || txn.memo || txn.description || txn.original_description || raw.bank_memo || raw.memo || raw.original_description);
+      return memo ? { displayName: memo, source: "bank_memo", sourceLabel: "Bank memo", payee_is_verified: false } : null;
+    })() ||
+    { displayName: "Unknown payee", source: "unknown", sourceLabel: "Unknown", payee_is_verified: false }
+  );
+}
+
 export function hasCanonicalRevenueSummary(job = {}) {
   const status = String(job.revenue_source_status || job.source_status || job.sync_status || "").toLowerCase();
   if (status === "canonical" || status === "available") return true;
@@ -273,18 +395,19 @@ export function normalizeRevenueSourceRecordView(source = {}) {
 
 export function normalizeCandidateView(candidate = {}) {
   const confidence = firstFiniteNumber(candidate.confidence_score, candidate.confidence, 0);
+  const possibleMatches = normalizeCandidateMatches(candidate.possible_job_matches);
   return {
-    id: candidate.id,
-    name: candidate.suggested_job_name || candidate.job_name || candidate.candidate_name || "Suggested job",
-    customer: candidate.customer_name || candidate.display_name || candidate.source_customer_name || "Unknown customer",
-    address: candidate.service_address || candidate.address || candidate.bill_addr || "",
-    sourceDocument: candidate.document_number || candidate.source_document_number || candidate.source_entity_id || "Source document",
+    id: safeDisplayText(candidate.id),
+    name: safeDisplayText(candidate.suggested_job_name) || safeDisplayText(candidate.job_name) || safeDisplayText(candidate.candidate_name) || "Suggested job",
+    customer: safeDisplayText(candidate.customer_name) || safeDisplayText(candidate.display_name) || safeDisplayText(candidate.source_customer_name) || "Unknown customer",
+    address: formatCandidateAddress(candidate.service_address || candidate.address || candidate.bill_addr),
+    sourceDocument: safeDisplayText(candidate.document_number) || safeDisplayText(candidate.source_document_number) || safeDisplayText(candidate.source_entity_id) || "Source document",
     amount: firstFiniteNumber(candidate.invoice_estimate_amount, candidate.document_amount, candidate.total_amount),
-    date: candidate.document_date || candidate.txn_date || candidate.created_at,
+    date: safeDisplayText(candidate.document_date) || safeDisplayText(candidate.txn_date) || safeDisplayText(candidate.created_at) || null,
     confidence,
-    confidenceLevel: candidate.confidence_level || (confidence >= 85 ? "high" : confidence >= 60 ? "medium" : "review"),
-    reasons: Array.isArray(candidate.detection_reasons) ? candidate.detection_reasons : [],
-    possibleMatches: Array.isArray(candidate.possible_job_matches) ? candidate.possible_job_matches : [],
+    confidenceLevel: safeDisplayText(candidate.confidence_level) || (confidence >= 85 ? "high" : confidence >= 60 ? "medium" : "review"),
+    reasons: normalizeCandidateReasons(candidate.detection_reasons),
+    possibleMatches,
     raw: candidate,
   };
 }

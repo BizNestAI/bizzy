@@ -18,6 +18,7 @@ import {
   getJobRevenueBasisView,
   getJobReviewWarning,
   getJobSourceBadge,
+  getPostedTransactionDisplayName,
   getProjectsCapabilityView,
   getRevenueWaterfallRows,
   getTransactionRoleMeta,
@@ -38,6 +39,13 @@ const money = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
   maximumFractionDigits: 0,
+});
+
+const moneyCents = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 });
 
 const sourceBadgeTone = {
@@ -1974,6 +1982,10 @@ function getTransactionMemo(txn = {}) {
   return value ? String(value).trim() : "";
 }
 
+function getTransactionVendorName(txn = {}) {
+  return getPostedTransactionDisplayName(txn).displayName;
+}
+
 function normalizeGlAccountKey(value = "") {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -2152,6 +2164,7 @@ function PostedTransactionRow({
   const showSuggestion = suggestion && !isFullyAssigned;
   const transactionMemo = getTransactionMemo(txn);
   const roleMeta = getTransactionRoleMeta(txn);
+  const payeeDisplay = getPostedTransactionDisplayName(txn);
   return (
     <div
       draggable={!isFullyAssigned}
@@ -2181,11 +2194,12 @@ function PostedTransactionRow({
       </div>
       <div className="text-white/55">{formatDate(txn.date)}</div>
       <div className="min-w-0">
-        <div className="truncate font-semibold text-white/85">{txn.vendor || txn.payee || "Unknown payee"}</div>
+        <div className="truncate font-semibold text-white/85">{payeeDisplay.displayName}</div>
         <div className="mt-0.5 flex items-center gap-1 text-[8px] font-semibold uppercase tracking-[0.08em] text-white/35">
           <span className={`rounded-full border px-1.5 py-px normal-case tracking-normal ${compactBadgeClass(roleMeta.tone)}`}>
             {roleMeta.label}
           </span>
+          <span className={payeeDisplay.payee_is_verified ? "text-emerald-100/70" : "text-white/35"}>{payeeDisplay.sourceLabel}</span>
           <span>{roleMeta.source}</span>
         </div>
       </div>
@@ -2196,7 +2210,7 @@ function PostedTransactionRow({
         </span>
       </div>
       <div className={`text-right font-semibold ${amount < 0 ? "text-rose-100" : "text-emerald-100"}`}>
-        {money.format(amount)}
+        {moneyCents.format(amount)}
       </div>
       <div className="flex min-w-0 items-center gap-1 pl-2">
         {isAssigned ? (
@@ -2782,9 +2796,9 @@ function JobAssignmentBoard({
       : "QuickBooks Projects are not enabled or authorized for this company. Review suggested jobs or create a job manually.";
   const [dateRangeFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
-  const [sourceFilter, setSourceFilter] = useState("all");
   const [transactionSearch, setTransactionSearch] = useState("");
   const [glFilter, setGlFilter] = useState("all");
+  const [transactionSort, setTransactionSort] = useState("date_desc");
   const [transactionPage, setTransactionPage] = useState(1);
   const [expandedTransactionId, setExpandedTransactionId] = useState("");
   const [assignmentModalMounted, setAssignmentModalMounted] = useState(false);
@@ -2932,27 +2946,53 @@ function JobAssignmentBoard({
         (dateRangeFilter === "last_90" && txnDate >= last90);
       const roleMeta = getTransactionRoleMeta(txn);
       const roleKey = roleMeta.key;
-      const sourceKey = roleMeta.source === "QBO" ? "qbo" : roleMeta.source === "Bank" ? "bank" : "other";
-      const haystack = `${txn.vendor || ""} ${txn.payee || ""} ${getTransactionMemo(txn)} ${getTransactionAccountName(txn)} ${roleMeta.label} ${roleMeta.source}`.toLowerCase();
+      const payeeDisplay = getPostedTransactionDisplayName(txn);
+      const raw = txn?.raw && typeof txn.raw === "object" ? txn.raw : {};
+      const haystack = [
+        payeeDisplay.displayName,
+        txn.qbo_payee_name,
+        txn.qbo_vendor_name,
+        txn.qbo_customer_name,
+        txn.normalized_merchant_name,
+        txn.canonical_merchant_name,
+        txn.counterparty_name,
+        txn.plaid_merchant_name,
+        txn.merchant_name,
+        txn.vendor,
+        txn.payee,
+        raw.qbo_payee_name,
+        raw.qbo_vendor_name,
+        raw.qbo_customer_name,
+        raw.normalized_merchant_name,
+        raw.canonical_merchant_name,
+        raw.counterparty_name,
+        raw.merchant_name,
+        getTransactionMemo(txn),
+        getTransactionAccountName(txn),
+        roleMeta.label,
+        roleMeta.source,
+      ].filter(Boolean).join(" ").toLowerCase();
       return (
         !officiallyAssigned &&
         matchesDate &&
         (roleFilter === "all" || roleFilter === roleKey || (roleFilter === "revenue" && ["invoice", "payment", "deposit", "sales_receipt", "unmatched_inflow"].includes(roleKey))) &&
-        (sourceFilter === "all" || sourceFilter === sourceKey) &&
         (!q || haystack.includes(q)) &&
         (glFilter === "all" || getTransactionGlFilterValues(txn).has(glFilter))
       );
     }).sort((a, b) => {
-      const aSuggestion = suggestionsByTransactionId.has(String(a.id));
-      const bSuggestion = suggestionsByTransactionId.has(String(b.id));
-      if (aSuggestion !== bSuggestion) return aSuggestion ? -1 : 1;
-      return Date.parse(b.date || 0) - Date.parse(a.date || 0);
+      if (transactionSort === "vendor_asc") {
+        const vendorCompare = getTransactionVendorName(a).localeCompare(getTransactionVendorName(b), undefined, { sensitivity: "base" });
+        if (vendorCompare !== 0) return vendorCompare;
+      }
+      const dateCompare = Date.parse(b.date || 0) - Date.parse(a.date || 0);
+      if (dateCompare !== 0) return dateCompare;
+      return String(b.id || "").localeCompare(String(a.id || ""));
     });
-  }, [assignmentDisabled, dateRangeFilter, glFilter, postedTransactions, roleFilter, sourceFilter, suggestionsByTransactionId, transactionSearch]);
+  }, [assignmentDisabled, dateRangeFilter, glFilter, postedTransactions, roleFilter, transactionSearch, transactionSort]);
   useEffect(() => {
     setTransactionPage(1);
     setExpandedTransactionId("");
-  }, [dateRangeFilter, glFilter, roleFilter, sourceFilter, transactionSearch]);
+  }, [dateRangeFilter, glFilter, roleFilter, transactionSearch, transactionSort]);
   const openAssignmentModal = useCallback(() => {
     if (assignmentModalTimerRef.current) window.clearTimeout(assignmentModalTimerRef.current);
     setAssignmentModalMounted(true);
@@ -3079,17 +3119,18 @@ function JobAssignmentBoard({
                   </div>
                 ) : pendingCandidates.length ? (
                   pendingCandidates.map((candidate) => (
-                    <CandidateBucketCard
-                      key={candidate.id}
-                      candidate={candidate}
-                      jobs={jobs}
-                      busyId={jobCandidateBusyId}
-                      onApproveNew={readOnly ? null : onApproveCandidateNew}
-                      onLinkExisting={readOnly ? null : onLinkCandidateExisting}
-                      onDismiss={readOnly ? null : onDismissCandidate}
-                      onMerge={readOnly ? null : onMergeCandidates}
-                      readOnly={readOnly}
-                    />
+                    <SuggestedJobCardBoundary key={candidate.id} candidateId={candidate.id}>
+                      <CandidateBucketCard
+                        candidate={candidate}
+                        jobs={jobs}
+                        busyId={jobCandidateBusyId}
+                        onApproveNew={readOnly ? null : onApproveCandidateNew}
+                        onLinkExisting={readOnly ? null : onLinkCandidateExisting}
+                        onDismiss={readOnly ? null : onDismissCandidate}
+                        onMerge={readOnly ? null : onMergeCandidates}
+                        readOnly={readOnly}
+                      />
+                    </SuggestedJobCardBoundary>
                   ))
                 ) : (
                   <div className="w-full min-w-[360px] rounded-xl border border-white/10 bg-white/[0.035] px-4 py-4 text-center text-sm text-white/55">
@@ -3164,7 +3205,7 @@ function JobAssignmentBoard({
       <div className="relative z-10">
         <div className="flex max-h-[calc(100vh-430px)] min-h-[300px] flex-col overflow-hidden rounded-[18px] border border-white/10 bg-black/15">
           <div className="relative z-[110] shrink-0 border-b border-white/8 bg-[#1d231f]/95 px-3 py-2 backdrop-blur">
-            <div className="grid gap-2 md:grid-cols-[auto_0.62fr_0.62fr_minmax(180px,1.1fr)_0.8fr]">
+            <div className="grid gap-2 md:grid-cols-[auto_0.62fr_0.9fr_minmax(220px,1.35fr)]">
               <button
                 type="button"
                 onClick={readOnly ? undefined : openAssignmentModal}
@@ -3191,16 +3232,12 @@ function JobAssignmentBoard({
                 ]}
               />
               <DarkFilterSelect
-                value={sourceFilter}
-                onChange={setSourceFilter}
-                ariaLabel="Filter by transaction source"
+                value={glFilter}
+                onChange={setGlFilter}
+                ariaLabel="Filter by GL account"
                 compact
-                options={[
-                  { value: "all", label: "All sources" },
-                  { value: "qbo", label: "QuickBooks" },
-                  { value: "bank", label: "Bank/Plaid" },
-                  { value: "other", label: "Other" },
-                ]}
+                menuClassName="max-h-[180px]"
+                options={glAccountOptions}
               />
               <input
                 id="job-costing-transaction-search"
@@ -3209,14 +3246,6 @@ function JobAssignmentBoard({
                 onChange={(event) => setTransactionSearch(event.target.value)}
                 placeholder="Search vendor, memo, GL account"
                 className="h-9 rounded-[14px] border border-white/10 bg-black/20 px-3 text-xs text-white outline-none placeholder:text-white/35 focus:border-emerald-300/45"
-              />
-              <DarkFilterSelect
-                value={glFilter}
-                onChange={setGlFilter}
-                ariaLabel="Filter by GL account"
-                compact
-                menuClassName="max-h-[180px]"
-                options={glAccountOptions}
               />
             </div>
             {assignmentMessage ? (
@@ -3232,8 +3261,28 @@ function JobAssignmentBoard({
             <div className="w-full min-w-[720px]">
               <div className="hidden grid-cols-[20px_50px_142px_118px_58px_158px_126px] gap-1.5 border-b border-white/8 bg-white/[0.035] px-2 py-1.5 text-[9px] uppercase tracking-[0.12em] text-white/40 md:grid">
                 <div />
-                <div>Date</div>
-                <div>Vendor / Payee</div>
+                <button
+                  type="button"
+                  onClick={() => setTransactionSort("date_desc")}
+                  className={`inline-flex items-center gap-1 text-left uppercase tracking-[0.12em] transition hover:text-emerald-100 ${
+                    transactionSort === "date_desc" ? "text-emerald-100" : ""
+                  }`}
+                  title="Sort by most recent date"
+                >
+                  Date
+                  <ChevronDown className={`h-2.5 w-2.5 ${transactionSort === "date_desc" ? "opacity-100" : "opacity-0"}`} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTransactionSort("vendor_asc")}
+                  className={`inline-flex items-center gap-1 text-left uppercase tracking-[0.12em] transition hover:text-emerald-100 ${
+                    transactionSort === "vendor_asc" ? "text-emerald-100" : ""
+                  }`}
+                  title="Sort by vendor or payee A to Z"
+                >
+                  Vendor / Description
+                  <ChevronDown className={`h-2.5 w-2.5 -rotate-90 ${transactionSort === "vendor_asc" ? "opacity-100" : "opacity-0"}`} />
+                </button>
                 <div>GL Account</div>
                 <div className="text-right">Amount</div>
                 <div className="pl-2">Assignment Status</div>
@@ -5547,6 +5596,37 @@ function RevenueDetailDrawer({ job, onClose }) {
       </div>
     </JobCostingDrawer>
   );
+}
+
+class SuggestedJobCardBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error) {
+    if (import.meta.env?.DEV) {
+      console.error("[job-costing.suggested-job-card]", {
+        candidate_id: this.props.candidateId || null,
+        message: error?.message || "render_failed",
+      });
+    }
+  }
+
+  render() {
+    if (this.state.failed) {
+      return (
+        <article className="flex h-[318px] w-[340px] shrink-0 items-center justify-center rounded-[18px] border border-amber-300/18 bg-amber-300/[0.055] p-4 text-center text-sm font-semibold text-amber-50/75">
+          Unable to display this suggested job.
+        </article>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function CandidateBucketCard({ candidate, jobs = [], busyId, onApproveNew, onLinkExisting, onDismiss, onMerge, readOnly = false }) {
