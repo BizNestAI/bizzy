@@ -31,6 +31,7 @@ import {
 import {
   approveJobCandidateCreateNew,
   createManualJob,
+  deleteManualJob,
   dismissJobCandidate,
   generateJobCandidatesForBusiness,
   linkJobCandidateToExisting,
@@ -991,7 +992,10 @@ async function fetchJobCostingRows(businessId) {
     acc[String(row.id)] = row;
     return acc;
   }, {});
-  const normalizedJobs = (jobs || []).map((job) => {
+  const activeJobs = (jobs || []).filter((job) => (
+    !job.archived_at && String(job.status || "").toLowerCase() !== "archived"
+  ));
+  const normalizedJobs = activeJobs.map((job) => {
     const normalized = normalizeJob(job);
     const summary = summaryByJob[String(job.id)] || null;
     const jobChangeOrders = changeOrdersByJob[String(job.id)] || [];
@@ -2788,6 +2792,25 @@ async function handleManualJobCreate(req, res) {
   }
 }
 
+async function handleManualJobDelete(req, res) {
+  try {
+    const businessId = ensureBusinessId(req, res);
+    if (!businessId) return;
+    const jobId = req.params?.jobId;
+    if (!jobId) return res.status(400).json({ ok: false, error: "job_id_required", message: "Job ID is required." });
+    const result = await deleteManualJob({ businessId, jobId });
+    const refreshed = await fetchJobCostingRows(businessId);
+    return res.json({ ...result, ...refreshed });
+  } catch (e) {
+    console.error("[job-costing.manual-job-delete]", e);
+    res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.code || "manual_job_delete_failed",
+      message: e?.message || "Failed to delete the job.",
+    });
+  }
+}
+
 router.get("/assignment-history", requireRouteAuth, handleAssignmentHistory);
 router.post("/assignment-preview", requireRouteAuth, handleAssignmentPreview);
 router.post("/assignments/confirm", requireRouteAuth, handleAssignmentConfirm);
@@ -2842,6 +2865,8 @@ router.post("/job-candidates/merge", requireRouteAuth, handleJobCandidatesMerge)
 router.post("/job-costing/job-candidates/merge", requireRouteAuth, handleJobCandidatesMerge);
 router.post("/jobs/manual", requireRouteAuth, handleManualJobCreate);
 router.post("/job-costing/jobs/manual", requireRouteAuth, handleManualJobCreate);
+router.delete("/jobs/:jobId/manual", requireRouteAuth, handleManualJobDelete);
+router.delete("/job-costing/jobs/:jobId/manual", requireRouteAuth, handleManualJobDelete);
 router.post("/qbo/job-costing/sync", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
 router.post("/job-costing/qbo/sync", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);
 router.post("/qbo/job-costing/backfill", requireRouteAuth, highCostJobRouteRateLimit, handleQboJobCostingSync);

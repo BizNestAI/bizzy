@@ -692,9 +692,62 @@ describe("job costing jobs routes", () => {
     assert.equal(mockSupabase.store.job_candidates[0].candidate_status, "approved_new");
   });
 
+  test("manual job can be soft deleted when it has no assignments", async () => {
+    mockSupabase.store.jobs = [
+      { id: "manual-delete-1", business_id: BUSINESS_ID, job_name: "Manual Job", creation_method: "manual", source_type: "manual", status: "active" },
+    ];
+
+    const response = await request(app, "/api/job-costing/jobs/manual-delete-1/manual", {
+      method: "DELETE",
+      body: {},
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.deleted_job_id, "manual-delete-1");
+    assert.equal(mockSupabase.store.jobs[0].status, "archived");
+    assert.ok(mockSupabase.store.jobs[0].archived_at);
+    assert.equal(response.body.jobs.some((job) => job.id === "manual-delete-1"), false);
+  });
+
+  test("manual job cannot be deleted while assignments exist", async () => {
+    mockSupabase.store.jobs = [
+      { id: "manual-delete-blocked", business_id: BUSINESS_ID, job_name: "Manual Job", creation_method: "manual", source_type: "manual", status: "active" },
+    ];
+    mockSupabase.store.job_transaction_assignments = [
+      { id: "assignment-manual", business_id: BUSINESS_ID, job_id: "manual-delete-blocked", transaction_id: TXN_ID },
+    ];
+
+    const response = await request(app, "/api/job-costing/jobs/manual-delete-blocked/manual", {
+      method: "DELETE",
+      body: {},
+    });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error, "job_has_assignments");
+    assert.equal(mockSupabase.store.jobs[0].status, "active");
+    assert.equal(mockSupabase.store.jobs[0].archived_at, undefined);
+  });
+
+  test("non-manual jobs cannot be deleted through the manual delete route", async () => {
+    mockSupabase.store.jobs = [
+      { id: "qbo-job-1", business_id: BUSINESS_ID, job_name: "QBO Job", creation_method: "qbo_project", source_type: "quickbooks", status: "active" },
+    ];
+
+    const response = await request(app, "/api/job-costing/jobs/qbo-job-1/manual", {
+      method: "DELETE",
+      body: {},
+    });
+
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error, "job_delete_not_supported");
+    assert.equal(mockSupabase.store.jobs[0].status, "active");
+    assert.equal(mockSupabase.store.jobs[0].archived_at, undefined);
+  });
+
   test("job costing loads every posted Books page and does not depend on Change Order tables", async () => {
     mockSupabase.store.jobs = [
       { id: JOB_ID, business_id: BUSINESS_ID, job_name: "Kitchen Remodel", status: "active" },
+      { id: "archived-job", business_id: BUSINESS_ID, job_name: "Archived", status: "archived", archived_at: "2026-09-03T12:00:00.000Z" },
     ];
     mockSupabase.store.__tableErrors = {
       job_change_orders: { code: "42703", message: "column job_change_orders.title does not exist" },
@@ -719,6 +772,7 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.pagination.total_posted_transactions, 204);
     assert.equal(response.body.pagination.loaded_posted_transactions, 204);
     assert.equal(response.body.jobs.length, 1);
+    assert.equal(response.body.jobs[0].id, JOB_ID);
     assert.equal(response.body.jobs[0].change_order_count, 0);
   });
 

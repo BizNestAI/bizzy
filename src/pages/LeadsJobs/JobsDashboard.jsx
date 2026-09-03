@@ -1409,6 +1409,18 @@ function isSuggestedCandidateJob(job = {}) {
   );
 }
 
+function isManualBizziJob(job = {}) {
+  const creationMethod = String(job.creation_method || job.creationMethod || "").toLowerCase();
+  const sourceType = String(job.source_type || job.sourceType || "").toLowerCase();
+  return (
+    (creationMethod.includes("manual") || sourceType.includes("manual")) &&
+    !creationMethod.includes("candidate") &&
+    !sourceType.includes("candidate") &&
+    !sourceType.includes("qbo") &&
+    !sourceType.includes("quickbooks")
+  );
+}
+
 function getOptimisticJobRevenue(job = {}) {
   const basis = getJobRevenueBasisView(job);
   if (basis.available && Number.isFinite(Number(basis.amount))) return Number(basis.amount);
@@ -2472,8 +2484,10 @@ function JobBucketCard({
   onMarkComplete,
   onReopenJob,
   onRevertCandidateJob,
+  onDeleteJob,
   markingComplete = false,
   revertingCandidateJob = false,
+  deletingJob = false,
   allowDrop = true,
   completed = false,
 }) {
@@ -2491,6 +2505,7 @@ function JobBucketCard({
   const assignedCount = getJobDocumentCount(job) || job.assigned_transaction_count || job.transactions?.length || 0;
   const assignedTransactionCount = Number(job.assigned_transaction_count ?? (Array.isArray(job.transactions) ? job.transactions.length : 0)) || 0;
   const canShowRevertCandidateJob = !completed && onRevertCandidateJob && assignedTransactionCount <= 0;
+  const canDeleteManualJob = !completed && onDeleteJob && isManualBizziJob(job) && assignedTransactionCount <= 0;
   const openChangeOrderCount = Number(job.open_change_order_count || 0);
   const approvedChangeOrderValue = Number(job.approved_change_order_value ?? job.change_order_approved_revenue ?? job.change_order_revenue ?? 0) || 0;
   const completedDate = job.completed_at || job.completedAt || job.end_date || job.endDate || null;
@@ -2626,6 +2641,21 @@ function JobBucketCard({
           >
             <RefreshCcw className="h-3 w-3" />
             {revertingCandidateJob ? "Moving..." : "Back to Suggested"}
+          </button>
+        ) : null}
+        {canDeleteManualJob ? (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDeleteJob(job);
+            }}
+            disabled={deletingJob}
+            title="Delete this manually created job."
+            className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-semibold text-white/60 transition hover:border-rose-300/25 hover:bg-rose-300/[0.08] hover:text-rose-50 disabled:opacity-50"
+          >
+            <Trash2 className="h-3 w-3" />
+            {deletingJob ? "Deleting..." : "Delete"}
           </button>
         ) : null}
         {onMarkComplete && !completed ? (
@@ -2948,8 +2978,10 @@ function JobAssignmentBoard({
   onMarkComplete,
   onReopenJob,
   onRevertCandidateJob,
+  onDeleteJob,
   revertingCandidateJobId,
   markingCompleteJobId,
+  deletingJobId = "",
   completedJobs = [],
   bucketMode = "live",
   setBucketMode,
@@ -3345,9 +3377,11 @@ function JobAssignmentBoard({
                     onMarkComplete={assignmentDisabled ? null : onMarkComplete}
                     onReopenJob={assignmentDisabled ? onReopenJob : null}
                     onRevertCandidateJob={assignmentDisabled ? null : onRevertCandidateJob}
+                    onDeleteJob={assignmentDisabled ? null : onDeleteJob}
                     completed={assignmentDisabled}
                     markingComplete={String(markingCompleteJobId || "") === String(job.id)}
                     revertingCandidateJob={String(revertingCandidateJobId || "") === String(job.id)}
+                    deletingJob={String(deletingJobId || "") === String(job.id)}
                   />
                 ))
               ) : (
@@ -6047,7 +6081,7 @@ function CandidateApprovalImpactModal({ preview, busy, onCancel, onConfirm }) {
   );
 }
 
-function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
+function AddJobDrawer({ open, onClose, onSubmit, projectsCapability, submitting = false }) {
   const [form, setForm] = useState({
     customer: "",
     jobName: "",
@@ -6060,36 +6094,43 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
     contractValue: "",
     createInQbo: false,
   });
+  const submittingRef = useRef(false);
   const capability = getProjectsCapabilityView(projectsCapability || {});
   const canCreateInQbo = false;
   const qboCreateUnavailableMessage = "QuickBooks Project creation is not available for this connection.";
   useEffect(() => {
     if (!open) return;
+    submittingRef.current = false;
     setForm((current) => ({ ...current, createInQbo: false }));
   }, [open]);
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
-  const submit = () => {
-    if (!form.customer.trim() || !form.jobName.trim()) return;
-    onSubmit?.({
-      customer: { display_name: form.customer.trim() },
-      job: {
-        job_name: form.jobName.trim(),
-        client_name: form.customer.trim(),
-        address: form.address.trim() || null,
-        start_date: form.startDate || null,
-        end_date: form.endDate || null,
-        target_margin: form.targetMargin ? Number(form.targetMargin) : null,
-        job_number: form.jobNumber.trim() || null,
-        job_costing_revenue_basis: form.revenueBasis,
-        contract_amount: form.contractValue ? Number(form.contractValue) : null,
-        creation_method: "manual",
-      },
-      createInQbo: Boolean(form.createInQbo && canCreateInQbo),
-    });
+  const submit = async () => {
+    if (!form.customer.trim() || !form.jobName.trim() || submitting || submittingRef.current) return;
+    submittingRef.current = true;
+    try {
+      await Promise.resolve(onSubmit?.({
+        customer: { display_name: form.customer.trim() },
+        job: {
+          job_name: form.jobName.trim(),
+          client_name: form.customer.trim(),
+          address: form.address.trim() || null,
+          start_date: form.startDate || null,
+          end_date: form.endDate || null,
+          target_margin: form.targetMargin ? Number(form.targetMargin) : null,
+          job_number: form.jobNumber.trim() || null,
+          job_costing_revenue_basis: form.revenueBasis,
+          contract_amount: form.contractValue ? Number(form.contractValue) : null,
+          creation_method: "manual",
+        },
+        createInQbo: Boolean(form.createInQbo && canCreateInQbo),
+      }));
+    } finally {
+      submittingRef.current = false;
+    }
   };
   return (
     <JobCostingModal open={open} title="Add Job" eyebrow="Manual job" onClose={onClose} widthClass="max-w-[560px]">
-      <div className="grid gap-3">
+      <div className="grid gap-3 pb-8">
         <div className="grid gap-3 sm:grid-cols-2">
           {[
             ["customer", "Customer", true],
@@ -6131,11 +6172,11 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
         </div>
         <label>
           <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">Revenue basis</span>
-          <select id="add-job-revenueBasis" name="add_job_revenueBasis" value={form.revenueBasis} onChange={(event) => update("revenueBasis", event.target.value)} className="mt-1 h-10 w-full rounded-[14px] border border-white/10 bg-black/22 px-3 text-sm text-white outline-none focus:border-emerald-300/45">
-            <option value="invoiced">Invoiced revenue</option>
-            <option value="collected">Collected cash</option>
-            <option value="contract_value">Contract value</option>
-            <option value="recognized">Recognized revenue</option>
+          <select id="add-job-revenueBasis" name="add_job_revenueBasis" value={form.revenueBasis} onChange={(event) => update("revenueBasis", event.target.value)} className="dark-dropdown mt-1 h-10 w-full appearance-none rounded-[14px] border border-white/10 bg-[#0f1115] px-3 text-sm text-white outline-none transition focus:border-emerald-300/45 [color-scheme:dark]">
+            <option value="invoiced" className="bg-[#0b0e12] text-white">Invoiced revenue</option>
+            <option value="collected" className="bg-[#0b0e12] text-white">Collected cash</option>
+            <option value="contract_value" className="bg-[#0b0e12] text-white">Contract value</option>
+            <option value="recognized" className="bg-[#0b0e12] text-white">Recognized revenue</option>
           </select>
         </label>
         <div className="rounded-[16px] border border-white/10 bg-white/[0.035] px-3 py-3">
@@ -6154,8 +6195,8 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
             <div className="mt-2 text-xs text-white/38">{capability.label}</div>
           )}
         </div>
-        <button type="button" onClick={submit} disabled={!form.customer.trim() || !form.jobName.trim()} className="mt-2 rounded-full border border-emerald-300/30 bg-emerald-300/[0.12] px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-300/[0.18] disabled:opacity-50">
-          Add Job
+        <button type="button" onClick={submit} disabled={!form.customer.trim() || !form.jobName.trim() || submitting} className="mt-2 rounded-full border border-emerald-300/30 bg-emerald-300/[0.12] px-4 py-2 text-sm font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.18] disabled:opacity-50">
+          {submitting ? "Creating..." : "Add Job"}
         </button>
       </div>
     </JobCostingModal>
@@ -6258,6 +6299,9 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const [jobCandidatesError, setJobCandidatesError] = useState("");
   const [jobCandidateBusyId, setJobCandidateBusyId] = useState("");
   const [addJobOpen, setAddJobOpen] = useState(false);
+  const [creatingManualJob, setCreatingManualJob] = useState(false);
+  const creatingManualJobRef = useRef(false);
+  const [deletingJobId, setDeletingJobId] = useState("");
   const [importJobsOpen, setImportJobsOpen] = useState(false);
   const [revenueDrawerJob, setRevenueDrawerJob] = useState(null);
   const [projectsCapability, setProjectsCapability] = useState(() => initialLiveCache?.projectsCapability || null);
@@ -7008,34 +7052,49 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   }, [businessId, loadJobCandidates, usingDemo]);
 
   const createManualJob = useCallback(async (payload) => {
+    if (creatingManualJobRef.current) return;
+    creatingManualJobRef.current = true;
+    setCreatingManualJob(true);
     setAssignmentError("");
+    setAssignmentMessage("");
+    const optimisticId = `optimistic-manual-job-${Date.now()}`;
+    const optimisticJob = {
+      id: optimisticId,
+      jobName: payload.job.job_name,
+      job_name: payload.job.job_name,
+      customerName: payload.customer.display_name,
+      client_name: payload.customer.display_name,
+      status: payload.job.status || "active",
+      source_type: "manual",
+      creation_method: "manual",
+      revenue_source_status: "refreshing",
+      job_costing_revenue_basis: payload.job.job_costing_revenue_basis,
+      selected_basis_amount: Number(payload.job.contract_amount || 0),
+      contract_value: Number(payload.job.contract_amount || 0),
+      total_assigned_cost: 0,
+      margin_percent: null,
+      source_document_count: 0,
+      assigned_transaction_count: 0,
+    };
     try {
       if (usingDemo) {
         const id = `demo-manual-job-${Date.now()}`;
         setJobs((prev) => [
           ...prev,
           {
+            ...optimisticJob,
             id,
-            jobName: payload.job.job_name,
-            job_name: payload.job.job_name,
-            customerName: payload.customer.display_name,
-            client_name: payload.customer.display_name,
-            status: payload.job.status || "active",
-            source_type: "manual",
-            creation_method: "manual",
             revenue_source_status: "canonical",
-            job_costing_revenue_basis: payload.job.job_costing_revenue_basis,
-            selected_basis_amount: Number(payload.job.contract_amount || 0),
-            contract_value: Number(payload.job.contract_amount || 0),
-            total_assigned_cost: 0,
             margin_percent: 0,
-            source_document_count: 0,
           },
         ]);
         setAddJobOpen(false);
         return;
       }
-      await safeFetch(apiUrl("/api/job-costing/jobs/manual"), {
+      setJobs((prev) => [optimisticJob, ...prev]);
+      writeJobCostingLiveCache(businessId, readOnly, { jobs: [optimisticJob, ...jobs] });
+      setAddJobOpen(false);
+      const data = await safeFetch(apiUrl("/api/job-costing/jobs/manual"), {
         method: "POST",
         body: {
           business_id: businessId,
@@ -7044,12 +7103,53 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           create_in_qbo: payload.createInQbo,
         },
       });
+      if (data?.job) {
+        setJobs((prev) => prev.map((job) => String(job.id) === optimisticId ? normalizeJob(data.job) : job));
+      }
       await loadJobCosting();
-      setAddJobOpen(false);
     } catch (e) {
+      setJobs((prev) => prev.filter((job) => String(job.id) !== optimisticId));
       setAssignmentError(e?.message || "Could not add job.");
+    } finally {
+      creatingManualJobRef.current = false;
+      setCreatingManualJob(false);
     }
-  }, [businessId, loadJobCosting, usingDemo]);
+  }, [businessId, jobs, loadJobCosting, readOnly, usingDemo]);
+
+  const deleteManualJob = useCallback(async (job) => {
+    if (!job?.id || deletingJobId) return;
+    const jobId = String(job.id);
+    setDeletingJobId(jobId);
+    setAssignmentError("");
+    setAssignmentMessage("");
+    const previousJobs = jobs;
+    try {
+      const nextJobs = jobs.filter((item) => String(item.id) !== jobId);
+      setJobs(nextJobs);
+      writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
+      if (selectedJob?.id && String(selectedJob.id) === jobId) setSelectedJob(null);
+      if (usingDemo) {
+        setAssignmentMessage(`${getJobDisplayName(job)} deleted.`);
+        return;
+      }
+      const data = await safeFetch(apiUrl(`/api/job-costing/jobs/${encodeURIComponent(jobId)}/manual`), {
+        method: "DELETE",
+        body: { business_id: businessId },
+      });
+      if (Array.isArray(data?.jobs)) {
+        setJobs(data.jobs);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: data.jobs });
+      }
+      setAssignmentMessage(`${getJobDisplayName(job)} deleted.`);
+      void loadJobCosting();
+    } catch (e) {
+      setJobs(previousJobs);
+      writeJobCostingLiveCache(businessId, readOnly, { jobs: previousJobs });
+      setAssignmentError(e?.message || "Could not delete job.");
+    } finally {
+      setDeletingJobId("");
+    }
+  }, [businessId, deletingJobId, jobs, loadJobCosting, readOnly, selectedJob?.id, usingDemo]);
 
   const syncQboProjects = useCallback(async () => {
     setImportJobsLoading(true);
@@ -7708,8 +7808,10 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             onMarkComplete={markJobComplete}
             onReopenJob={reopenJob}
             onRevertCandidateJob={revertCandidateJob}
+            onDeleteJob={deleteManualJob}
             revertingCandidateJobId={revertingCandidateJobId}
             markingCompleteJobId={markingCompleteJobId}
+            deletingJobId={deletingJobId}
             onAcceptSuggestion={acceptSuggestion}
             onRejectSuggestion={rejectSuggestion}
             onApproveCandidateNew={approveCandidateNew}
@@ -7932,6 +8034,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           onClose={() => setAddJobOpen(false)}
           onSubmit={createManualJob}
           projectsCapability={projectsCapability}
+          submitting={creatingManualJob}
         />
         <ImportJobsDrawer
           open={importJobsOpen}

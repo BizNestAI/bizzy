@@ -821,6 +821,69 @@ export async function revertCandidateCreatedJob({ businessId, jobId, db = defaul
   };
 }
 
+export function isManualJobRecord(job = {}) {
+  const creationMethod = String(job.creation_method || job.creationMethod || "").toLowerCase();
+  const sourceType = String(job.source_type || job.sourceType || "").toLowerCase();
+  return (
+    (creationMethod.includes("manual") || sourceType.includes("manual")) &&
+    !creationMethod.includes("candidate") &&
+    !sourceType.includes("candidate") &&
+    !sourceType.includes("qbo") &&
+    !sourceType.includes("quickbooks")
+  );
+}
+
+export async function deleteManualJob({ businessId, jobId, db = defaultSupabase } = {}) {
+  if (!businessId || !jobId) throw new Error("businessId and jobId are required");
+
+  const { data: job, error: jobError } = await db
+    .from("jobs")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("id", jobId)
+    .maybeSingle();
+  if (jobError) throw jobError;
+  if (!job || job.archived_at || String(job.status || "").toLowerCase() === "archived") {
+    const missing = new Error("Job was not found.");
+    missing.status = 404;
+    missing.code = "job_not_found";
+    throw missing;
+  }
+
+  if (!isManualJobRecord(job)) {
+    const unsupported = new Error("Only manually created jobs can be deleted.");
+    unsupported.status = 400;
+    unsupported.code = "job_delete_not_supported";
+    throw unsupported;
+  }
+
+  const { data: assignmentRows, error: assignmentError } = await db
+    .from("job_transaction_assignments")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("job_id", jobId)
+    .limit(1);
+  if (assignmentError && !isMissingSchemaError(assignmentError)) throw assignmentError;
+  if (assignmentRows?.length) {
+    const blocked = new Error("Remove assigned transactions before deleting this job.");
+    blocked.status = 409;
+    blocked.code = "job_has_assignments";
+    throw blocked;
+  }
+
+  const now = new Date().toISOString();
+  const { data: archivedJob, error: archiveError } = await db
+    .from("jobs")
+    .update({ status: "archived", archived_at: now, updated_at: now })
+    .eq("business_id", businessId)
+    .eq("id", jobId)
+    .select("*")
+    .maybeSingle();
+  if (archiveError) throw archiveError;
+
+  return { ok: true, deleted_job_id: jobId, job: archivedJob || { ...job, status: "archived", archived_at: now } };
+}
+
 export async function dismissJobCandidate({ businessId, candidateId, reason = null, db = defaultSupabase } = {}) {
   const { data, error } = await db
     .from("job_candidates")

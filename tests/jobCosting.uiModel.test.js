@@ -509,10 +509,41 @@ test("Add Job opens in a dashboard-centered animated modal without Trade Type", 
   assert.equal(modalSource.includes("max-h-[calc(100vh-325px)]"), true);
   assert.equal(modalSource.includes("scale-[0.96]"), true);
   assert.equal(addJobSource.includes("<JobCostingModal open={open} title=\"Add Job\""), true);
+  assert.equal(addJobSource.includes("submittingRef.current"), true);
+  assert.equal(addJobSource.includes('className="grid gap-3 pb-8"'), true);
+  assert.equal(addJobSource.includes('disabled={!form.customer.trim() || !form.jobName.trim() || submitting}'), true);
+  assert.equal(addJobSource.includes('{submitting ? "Creating..." : "Add Job"}'), true);
   assert.equal(addJobSource.includes('<div className="grid gap-3 sm:grid-cols-2">'), true);
+  assert.equal(addJobSource.includes("dark-dropdown mt-1 h-10 w-full appearance-none"), true);
+  assert.equal(addJobSource.includes("[color-scheme:dark]"), true);
+  assert.equal(addJobSource.includes('className="bg-[#0b0e12] text-white"'), true);
   assert.equal(addJobSource.includes("tradeType"), false);
   assert.equal(addJobSource.includes("Trade type"), false);
   assert.equal(addJobSource.includes("trade_type"), false);
+});
+
+test("Manual Job buckets expose guarded delete and create handlers", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const cardStart = source.indexOf("function JobBucketCard({");
+  const cardEnd = source.indexOf("function ChangeOrderOverview", cardStart);
+  const pageStart = source.indexOf("function JobCostingPage({");
+  const pageEnd = source.indexOf("function AssignedTransactionsModal", pageStart);
+  assert.ok(cardStart > 0);
+  assert.ok(cardEnd > cardStart);
+  assert.ok(pageStart > 0);
+  assert.ok(pageEnd > pageStart);
+
+  const cardSource = source.slice(cardStart, cardEnd);
+  const pageSource = source.slice(pageStart, pageEnd);
+  assert.equal(source.includes("function isManualBizziJob"), true);
+  assert.equal(cardSource.includes("canDeleteManualJob"), true);
+  assert.equal(cardSource.includes("<Trash2"), true);
+  assert.equal(cardSource.includes('Delete this manually created job.'), true);
+  assert.equal(cardSource.includes('{deletingJob ? "Deleting..." : "Delete"}'), true);
+  assert.equal(pageSource.includes("creatingManualJobRef.current"), true);
+  assert.equal(pageSource.includes("optimistic-manual-job"), true);
+  assert.equal(pageSource.includes("const deleteManualJob = useCallback"), true);
+  assert.equal(pageSource.includes('method: "DELETE"'), true);
 });
 
 test("Import Jobs opens in the dashboard-centered animated modal", async () => {
