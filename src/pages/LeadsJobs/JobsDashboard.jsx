@@ -31,6 +31,8 @@ import {
 } from "./jobCostingUiModel.js";
 
 const DAILY_AR_SYNC_MS = 24 * 60 * 60 * 1000;
+const JOB_COSTING_LIVE_CACHE_TTL_MS = 5 * 60 * 1000;
+const jobCostingLiveCache = new Map();
 
 const glass =
   "rounded-[28px] bg-white/[0.04] border-0 shadow-[0_24px_60px_rgba(0,0,0,0.35)] backdrop-blur-xl";
@@ -58,6 +60,44 @@ const sourceBadgeTone = {
 
 function compactBadgeClass(tone = "slate") {
   return sourceBadgeTone[tone] || sourceBadgeTone.slate;
+}
+
+function getJobCostingCacheKey(businessId, readOnly) {
+  if (!businessId) return "";
+  return `${businessId}:${readOnly ? "readonly" : "live"}`;
+}
+
+function hasJobCostingCacheData(cache) {
+  return Boolean(
+    (Array.isArray(cache?.transactions) && cache.transactions.length > 0) ||
+    (Array.isArray(cache?.jobs) && cache.jobs.length > 0) ||
+    (Array.isArray(cache?.jobCandidates) && cache.jobCandidates.length > 0) ||
+    Number(cache?.jobCandidatesTotal || 0) > 0 ||
+    cache?.projectsCapability
+  );
+}
+
+function readJobCostingLiveCache(businessId, readOnly = false) {
+  const key = getJobCostingCacheKey(businessId, readOnly);
+  if (!key) return null;
+  const cached = jobCostingLiveCache.get(key);
+  if (!cached) return null;
+  if (Date.now() - Number(cached.cachedAt || 0) > JOB_COSTING_LIVE_CACHE_TTL_MS) {
+    jobCostingLiveCache.delete(key);
+    return null;
+  }
+  return cached;
+}
+
+function writeJobCostingLiveCache(businessId, readOnly, patch) {
+  const key = getJobCostingCacheKey(businessId, readOnly);
+  if (!key || !patch || typeof patch !== "object") return;
+  const previous = jobCostingLiveCache.get(key) || {};
+  jobCostingLiveCache.set(key, {
+    ...previous,
+    ...patch,
+    cachedAt: Date.now(),
+  });
 }
 
 function SkeletonCard({ className = "", lines = 3 }) {
@@ -1327,6 +1367,25 @@ function getJobDisplayName(job = {}) {
   return job.jobName || job.job_name || job.name || "Job";
 }
 
+function isSuggestedCandidateJob(job = {}) {
+  const creationMethod = String(job.creation_method || job.creationMethod || "").toLowerCase();
+  const sourceType = String(job.source_type || job.sourceType || "").toLowerCase();
+  const sourceEntityType = String(job.source_entity_type || job.external_source_type || job.sourceEntityType || "").toLowerCase();
+  return (
+    creationMethod === "job_candidate" ||
+    sourceType.includes("candidate") ||
+    sourceType === "candidate_invoice" ||
+    Boolean(job.job_candidate_id || job.candidate_id || job.source_candidate_id) ||
+    (
+      sourceEntityType &&
+      (sourceEntityType.includes("invoice") || sourceEntityType.includes("estimate")) &&
+      !sourceType.includes("qbo_project") &&
+      !sourceType.includes("subcustomer") &&
+      !sourceType.includes("manual")
+    )
+  );
+}
+
 function getOptimisticJobRevenue(job = {}) {
   const basis = getJobRevenueBasisView(job);
   if (basis.available && Number.isFinite(Number(basis.amount))) return Number(basis.amount);
@@ -2410,7 +2469,7 @@ function JobBucketCard({
   const assignedTransactionCount = Number(job.assigned_transaction_count ?? (Array.isArray(job.transactions) ? job.transactions.length : 0)) || 0;
   const canRevertCandidateJob = !completed
     && onRevertCandidateJob
-    && String(job.creation_method || "").toLowerCase() === "job_candidate"
+    && isSuggestedCandidateJob(job)
     && assignedTransactionCount <= 0;
   const openChangeOrderCount = Number(job.open_change_order_count || 0);
   const approvedChangeOrderValue = Number(job.approved_change_order_value ?? job.change_order_approved_revenue ?? job.change_order_revenue ?? 0) || 0;
@@ -6063,9 +6122,10 @@ function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, o
 
 function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const location = useLocation();
-  const [transactions, setTransactions] = useState([]);
-  const [jobs, setJobs] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const initialLiveCache = usingDemo ? null : readJobCostingLiveCache(businessId, readOnly);
+  const [transactions, setTransactions] = useState(() => initialLiveCache?.transactions || []);
+  const [jobs, setJobs] = useState(() => initialLiveCache?.jobs || []);
+  const [loading, setLoading] = useState(() => !hasJobCostingCacheData(initialLiveCache));
   const [error, setError] = useState("");
   const [transactionsError, setTransactionsError] = useState("");
   const [jobsError, setJobsError] = useState("");
@@ -6073,17 +6133,17 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const assignmentRef = useRef(null);
   const [instruction, setInstruction] = useState("");
   const [assignmentPreview, setAssignmentPreview] = useState(null);
-  const [assignmentHistory, setAssignmentHistory] = useState([]);
+  const [assignmentHistory, setAssignmentHistory] = useState(() => initialLiveCache?.assignmentHistory || []);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [confirmingAssignment, setConfirmingAssignment] = useState(false);
   const [assignmentError, setAssignmentError] = useState("");
   const [assignmentMessage, setAssignmentMessage] = useState("");
   const [listening, setListening] = useState(false);
-  const [suggestions, setSuggestions] = useState([]);
+  const [suggestions, setSuggestions] = useState(() => initialLiveCache?.suggestions || []);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [suggestionBusyId, setSuggestionBusyId] = useState("");
-  const [marginTargets, setMarginTargets] = useState([]);
-  const [qboGlAccounts, setQboGlAccounts] = useState([]);
+  const [marginTargets, setMarginTargets] = useState(() => initialLiveCache?.marginTargets || []);
+  const [qboGlAccounts, setQboGlAccounts] = useState(() => initialLiveCache?.qboGlAccounts || []);
   const [_changeOrders, setChangeOrders] = useState([]);
   const [potentialChangeOrders, setPotentialChangeOrders] = useState([]);
   const [savingChangeOrder, setSavingChangeOrder] = useState(false);
@@ -6102,18 +6162,64 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const [markingCompleteJobId, setMarkingCompleteJobId] = useState("");
   const [revertingCandidateJobId, setRevertingCandidateJobId] = useState("");
   const [bucketMode, setBucketMode] = useState("live");
-  const [jobCandidates, setJobCandidates] = useState([]);
-  const [jobCandidatesTotal, setJobCandidatesTotal] = useState(0);
+  const [jobCandidates, setJobCandidates] = useState(() => initialLiveCache?.jobCandidates || []);
+  const [jobCandidatesTotal, setJobCandidatesTotal] = useState(() => Number(initialLiveCache?.jobCandidatesTotal || 0));
   const [jobCandidatesError, setJobCandidatesError] = useState("");
   const [jobCandidateBusyId, setJobCandidateBusyId] = useState("");
   const [addJobOpen, setAddJobOpen] = useState(false);
   const [importJobsOpen, setImportJobsOpen] = useState(false);
   const [revenueDrawerJob, setRevenueDrawerJob] = useState(null);
-  const [projectsCapability, setProjectsCapability] = useState(null);
+  const [projectsCapability, setProjectsCapability] = useState(() => initialLiveCache?.projectsCapability || null);
   const [importJobsLoading, setImportJobsLoading] = useState(false);
   const [assignmentImpactPreview, setAssignmentImpactPreview] = useState(null);
   const [candidateApprovalPreview, setCandidateApprovalPreview] = useState(null);
   const assignmentPickerTimerRef = useRef(null);
+  const hasVisibleJobCostingDataRef = useRef(hasJobCostingCacheData(initialLiveCache));
+
+  useEffect(() => {
+    if (usingDemo) return;
+    if (!businessId) {
+      hasVisibleJobCostingDataRef.current = false;
+      setTransactions([]);
+      setJobs([]);
+      setJobCandidates([]);
+      setJobCandidatesTotal(0);
+      setProjectsCapability(null);
+      setSuggestions([]);
+      setAssignmentHistory([]);
+      setLoading(false);
+      return;
+    }
+    const cached = readJobCostingLiveCache(businessId, readOnly);
+    const hasCachedData = hasJobCostingCacheData(cached);
+    hasVisibleJobCostingDataRef.current = hasCachedData;
+    if (hasCachedData) {
+      setTransactions(cached?.transactions || []);
+      setJobs(cached?.jobs || []);
+      setJobCandidates(cached?.jobCandidates || []);
+      setJobCandidatesTotal(Number(cached?.jobCandidatesTotal || 0));
+      setProjectsCapability(cached?.projectsCapability || null);
+      setSuggestions(cached?.suggestions || []);
+      setAssignmentHistory(cached?.assignmentHistory || []);
+      setMarginTargets(cached?.marginTargets || []);
+      setQboGlAccounts(cached?.qboGlAccounts || []);
+      setTransactionsError("");
+      setJobsError("");
+      setJobCandidatesError("");
+      setLoading(false);
+    } else {
+      setTransactions([]);
+      setJobs([]);
+      setJobCandidates([]);
+      setJobCandidatesTotal(0);
+      setProjectsCapability(null);
+      setSuggestions([]);
+      setAssignmentHistory([]);
+      setMarginTargets([]);
+      setQboGlAccounts([]);
+      setLoading(true);
+    }
+  }, [businessId, readOnly, usingDemo]);
 
   const loadJobCosting = useCallback(async () => {
     if (usingDemo) {
@@ -6130,7 +6236,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    setLoading(!hasVisibleJobCostingDataRef.current);
     setError("");
     setTransactionsError("");
     setJobsError("");
@@ -6142,7 +6248,10 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
 
       if (dataResult.status === "fulfilled") {
         const data = dataResult.value || {};
-        setTransactions(Array.isArray(data?.transactions) ? data.transactions : []);
+        const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
+        setTransactions(nextTransactions);
+        writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions });
+        hasVisibleJobCostingDataRef.current = true;
       } else {
         console.warn("[JobCosting] posted transactions failed", dataResult.reason?.message || dataResult.reason);
         setTransactionsError("Unable to load posted QuickBooks transactions.");
@@ -6151,7 +6260,10 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       if (summaryResult.status === "fulfilled") {
         const summary = summaryResult.value || {};
         const fallbackData = dataResult.status === "fulfilled" ? dataResult.value : {};
-        setJobs(Array.isArray(summary?.jobs) ? summary.jobs : Array.isArray(fallbackData?.jobs) ? fallbackData.jobs : []);
+        const nextJobs = Array.isArray(summary?.jobs) ? summary.jobs : Array.isArray(fallbackData?.jobs) ? fallbackData.jobs : [];
+        setJobs(nextJobs);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
+        hasVisibleJobCostingDataRef.current = true;
       } else {
         console.warn("[JobCosting] jobs summary failed", summaryResult.reason?.message || summaryResult.reason);
         setJobsError("Unable to load jobs.");
@@ -6166,7 +6278,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } finally {
       setLoading(false);
     }
-  }, [businessId, usingDemo]);
+  }, [businessId, readOnly, usingDemo]);
 
   useEffect(() => {
     loadJobCosting();
@@ -6181,14 +6293,16 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     setSuggestionsLoading(true);
     try {
       const data = await safeFetch(apiUrl(`/api/job-costing/suggestions?business_id=${encodeURIComponent(businessId)}`));
-      setSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []);
+      const nextSuggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+      setSuggestions(nextSuggestions);
+      writeJobCostingLiveCache(businessId, readOnly, { suggestions: nextSuggestions });
     } catch (e) {
       console.warn("[JobCosting] suggestions failed", e?.message || e);
       setAssignmentError("Could not load assignment suggestions. Manual assignment is still available.");
     } finally {
       setSuggestionsLoading(false);
     }
-  }, [businessId, jobs, transactions, usingDemo]);
+  }, [businessId, jobs, readOnly, transactions, usingDemo]);
 
   useEffect(() => {
     if (loading) return;
@@ -6200,12 +6314,14 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     if (!businessId) return;
     try {
       const data = await safeFetch(apiUrl(`/api/job-costing/assignment-history?business_id=${encodeURIComponent(businessId)}`));
-      setAssignmentHistory(Array.isArray(data?.history) ? data.history : []);
+      const nextHistory = Array.isArray(data?.history) ? data.history : [];
+      setAssignmentHistory(nextHistory);
+      writeJobCostingLiveCache(businessId, readOnly, { assignmentHistory: nextHistory });
     } catch (e) {
       console.warn("[JobCosting] assignment history failed", e?.message || e);
       setAssignmentError("Could not load assignment history. New assignments can still be created.");
     }
-  }, [businessId, usingDemo]);
+  }, [businessId, readOnly, usingDemo]);
 
   useEffect(() => {
     if (loading) return;
@@ -6224,14 +6340,19 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     try {
       const data = await safeFetch(apiUrl(`/api/job-costing/job-candidates?business_id=${encodeURIComponent(businessId)}&limit=250`));
       const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
+      const nextTotal = Number(data?.total_count ?? candidates.length) || candidates.length;
       setJobCandidates(candidates);
-      setJobCandidatesTotal(Number(data?.total_count ?? candidates.length) || candidates.length);
+      setJobCandidatesTotal(nextTotal);
+      writeJobCostingLiveCache(businessId, readOnly, {
+        jobCandidates: candidates,
+        jobCandidatesTotal: nextTotal,
+      });
     } catch (e) {
       console.warn("[JobCosting] job candidates failed", e?.message || e);
       setJobCandidatesError("Unable to load suggested jobs.");
       setAssignmentError("Could not load suggested jobs. Manual jobs are still available.");
     }
-  }, [businessId, usingDemo]);
+  }, [businessId, readOnly, usingDemo]);
 
   const loadProjectsCapability = useCallback(async () => {
     if (usingDemo) {
@@ -6246,10 +6367,14 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     try {
       const data = await safeFetch(apiUrl(`/api/job-costing/qbo/projects/capability?business_id=${encodeURIComponent(businessId)}`));
       const capability = data?.capability || data?.projects_capability || data;
-      setProjectsCapability(typeof capability === "string" ? { status: capability } : capability || null);
+      const nextCapability = typeof capability === "string" ? { status: capability } : capability || null;
+      setProjectsCapability(nextCapability);
+      writeJobCostingLiveCache(businessId, readOnly, { projectsCapability: nextCapability });
     } catch (e) {
       console.warn("[JobCosting] QBO Projects capability failed", e?.message || e);
-      setProjectsCapability({ status: "unknown", detail: e?.message || "Could not check Projects capability." });
+      const nextCapability = { status: "unknown", detail: e?.message || "Could not check Projects capability." };
+      setProjectsCapability(nextCapability);
+      writeJobCostingLiveCache(businessId, readOnly, { projectsCapability: nextCapability });
     }
   }, [businessId, readOnly, usingDemo]);
 
@@ -6266,12 +6391,14 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     }
     try {
       const data = await safeFetch(apiUrl(`/api/job-costing/margin-targets?business_id=${encodeURIComponent(businessId)}`));
-      setMarginTargets(Array.isArray(data?.targets) ? data.targets : []);
+      const nextTargets = Array.isArray(data?.targets) ? data.targets : [];
+      setMarginTargets(nextTargets);
+      writeJobCostingLiveCache(businessId, readOnly, { marginTargets: nextTargets });
     } catch (e) {
       console.warn("[JobCosting] margin targets fallback", e?.message || e);
       setMarginTargets([]);
     }
-  }, [businessId, usingDemo]);
+  }, [businessId, readOnly, usingDemo]);
 
   useEffect(() => {
     loadMarginTargets();
@@ -6293,6 +6420,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         if (!active) return;
         const accounts = Array.isArray(data?.accounts) ? data.accounts : Array.isArray(data) ? data : [];
         setQboGlAccounts(accounts);
+        writeJobCostingLiveCache(businessId, readOnly, { qboGlAccounts: accounts });
       } catch (e) {
         console.warn("[JobCosting] QBO chart of accounts fallback", e?.message || e);
         if (active) setQboGlAccounts([]);
@@ -6653,15 +6781,19 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         marginPercent: view.amount > 0 ? 100 : 0,
         assigned_transaction_count: 0,
       };
-      setJobs((prev) => {
-        const withoutExisting = prev.filter((job) => String(job.id || job.job_id) !== String(jobId));
-        return [candidateJob, ...withoutExisting];
-      });
-      setJobCandidates((prev) => prev.map((item) => (
+      const nextCandidates = jobCandidates.map((item) => (
         String(item.id) === String(candidate.id)
           ? { ...item, candidate_status: "approved_new", confirmed_job_id: jobId }
           : item
-      )));
+      ));
+      setJobs((prev) => {
+        const withoutExisting = prev.filter((job) => String(job.id || job.job_id) !== String(jobId));
+        const nextJobs = [candidateJob, ...withoutExisting];
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
+        return nextJobs;
+      });
+      setJobCandidates(nextCandidates);
+      writeJobCostingLiveCache(businessId, readOnly, { jobCandidates: nextCandidates });
       setBucketMode("live");
       setAssignmentMessage(`${view.name} moved to Live Jobs.`);
       void Promise.all([loadJobCosting(), loadJobCandidates()]).catch((refreshError) => {
@@ -6672,7 +6804,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } finally {
       setJobCandidateBusyId("");
     }
-  }, [businessId, loadJobCandidates, loadJobCosting, usingDemo]);
+  }, [businessId, jobCandidates, loadJobCandidates, loadJobCosting, readOnly, usingDemo]);
 
   const linkCandidateExisting = useCallback(async (candidate, jobId) => {
     if (!candidate?.id || !jobId) return;
@@ -6919,9 +7051,15 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         method: "POST",
         body: { business_id: businessId, instruction: clean },
       });
-      setTransactions(Array.isArray(data?.transactions) ? data.transactions : []);
-      setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
-      if (Array.isArray(data?.history)) setAssignmentHistory(data.history);
+      const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
+      const nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      setTransactions(nextTransactions);
+      setJobs(nextJobs);
+      writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions, jobs: nextJobs });
+      if (Array.isArray(data?.history)) {
+        setAssignmentHistory(data.history);
+        writeJobCostingLiveCache(businessId, readOnly, { assignmentHistory: data.history });
+      }
       setAssignmentMessage(data?.message || "Transactions assigned to job.");
       setAssignmentPreview(null);
       setInstruction("");
@@ -6932,7 +7070,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } finally {
       setConfirmingAssignment(false);
     }
-  }, [assignmentPreview, businessId, instruction, loadAssignmentHistory, loadSuggestions, usingDemo]);
+  }, [assignmentPreview, businessId, instruction, loadAssignmentHistory, loadSuggestions, readOnly, usingDemo]);
 
   const cancelAssignment = useCallback(() => {
     setAssignmentPreview(null);
@@ -6979,9 +7117,19 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         method: "POST",
         body: { business_id: businessId },
       });
-      setTransactions(Array.isArray(data?.transactions) ? data.transactions : []);
-      setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
-      setSuggestions((prev) => prev.filter((item) => item.id !== suggestion.id));
+      const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
+      const nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      setTransactions(nextTransactions);
+      setJobs(nextJobs);
+      setSuggestions((prev) => {
+        const nextSuggestions = prev.filter((item) => item.id !== suggestion.id);
+        writeJobCostingLiveCache(businessId, readOnly, {
+          transactions: nextTransactions,
+          jobs: nextJobs,
+          suggestions: nextSuggestions,
+        });
+        return nextSuggestions;
+      });
       setAssignmentMessage("Suggestion assigned to job.");
       await loadJobCosting();
       await loadSuggestions();
@@ -6990,7 +7138,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } finally {
       setSuggestionBusyId("");
     }
-  }, [businessId, loadJobCosting, loadSuggestions, usingDemo]);
+  }, [businessId, loadJobCosting, loadSuggestions, readOnly, usingDemo]);
 
   const rejectSuggestion = useCallback(async (suggestion) => {
     setSuggestionBusyId(suggestion.id);
@@ -7119,8 +7267,11 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           impact_preview_confirmed: true,
         },
       });
-      setTransactions(Array.isArray(data?.transactions) ? data.transactions : []);
-      setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
+      const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
+      const nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      setTransactions(nextTransactions);
+      setJobs(nextJobs);
+      writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions, jobs: nextJobs });
       setAssignmentMessage(data?.message || `Transaction assigned to ${job.jobName}.`);
       closeAssignmentPicker();
       void loadSuggestions();
@@ -7136,7 +7287,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       setDraggedTransaction(null);
       setDragOverJobId("");
     }
-  }, [businessId, closeAssignmentPicker, jobs, loadSuggestions, transactions, usingDemo]);
+  }, [businessId, closeAssignmentPicker, jobs, loadSuggestions, readOnly, transactions, usingDemo]);
 
   const markJobComplete = useCallback(async (job) => {
     if (!job?.id) return;
@@ -7166,6 +7317,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       });
       if (Array.isArray(data?.jobs)) {
         setJobs(data.jobs);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: data.jobs });
       } else {
         await loadJobCosting();
       }
@@ -7177,7 +7329,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } finally {
       setMarkingCompleteJobId("");
     }
-  }, [businessId, loadJobCosting, loadSuggestions, selectedJob?.id, usingDemo]);
+  }, [businessId, loadJobCosting, loadSuggestions, readOnly, selectedJob?.id, usingDemo]);
 
   const reopenJob = useCallback(async (job) => {
     if (!job?.id) return;
@@ -7204,6 +7356,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       });
       if (Array.isArray(data?.jobs)) {
         setJobs(data.jobs);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: data.jobs });
     } else {
       await loadJobCosting();
     }
@@ -7214,7 +7367,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } finally {
       setMarkingCompleteJobId("");
     }
-  }, [businessId, loadJobCosting, loadSuggestions, usingDemo]);
+  }, [businessId, loadJobCosting, loadSuggestions, readOnly, usingDemo]);
 
   const revertCandidateJob = useCallback(async (job) => {
     if (!job?.id) return;
@@ -7237,14 +7390,34 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         method: "POST",
         body: { business_id: businessId },
       });
-      if (Array.isArray(data?.jobs)) setJobs(data.jobs);
-      else setJobs((prev) => prev.filter((item) => String(item.id || item.job_id) !== String(job.id)));
+      if (Array.isArray(data?.jobs)) {
+        setJobs(data.jobs);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: data.jobs });
+      } else {
+        setJobs((prev) => {
+          const nextJobs = prev.filter((item) => String(item.id || item.job_id) !== String(job.id));
+          writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
+          return nextJobs;
+        });
+      }
       if (Array.isArray(data?.candidates)) {
         setJobCandidates(data.candidates);
         setJobCandidatesTotal(Number(data?.total_count ?? data.candidates.length) || data.candidates.length);
+        writeJobCostingLiveCache(businessId, readOnly, {
+          jobCandidates: data.candidates,
+          jobCandidatesTotal: Number(data?.total_count ?? data.candidates.length) || data.candidates.length,
+        });
       } else if (data?.candidate?.id) {
-        setJobCandidates((prev) => [data.candidate, ...prev.filter((candidate) => String(candidate.id) !== String(data.candidate.id))]);
-        setJobCandidatesTotal((prev) => Math.max(prev, prev + 1));
+        setJobCandidates((prev) => {
+          const nextCandidates = [data.candidate, ...prev.filter((candidate) => String(candidate.id) !== String(data.candidate.id))];
+          writeJobCostingLiveCache(businessId, readOnly, { jobCandidates: nextCandidates });
+          return nextCandidates;
+        });
+        setJobCandidatesTotal((prev) => {
+          const nextTotal = Math.max(prev, prev + 1);
+          writeJobCostingLiveCache(businessId, readOnly, { jobCandidatesTotal: nextTotal });
+          return nextTotal;
+        });
       }
       setBucketMode("suggested");
       setAssignmentMessage(`${getJobDisplayName(job)} moved back to Suggested Jobs.`);
@@ -7254,7 +7427,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } finally {
       setRevertingCandidateJobId("");
     }
-  }, [businessId, loadJobCosting, usingDemo]);
+  }, [businessId, loadJobCosting, readOnly, usingDemo]);
 
   const removeAssignment = useCallback(async (txn) => {
     if (!txn?.assignment_id) return;
@@ -7280,8 +7453,11 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         method: "DELETE",
         body: { business_id: businessId },
       });
-      setTransactions(Array.isArray(data?.transactions) ? data.transactions : []);
-      setJobs(Array.isArray(data?.jobs) ? data.jobs : []);
+      const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
+      const nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      setTransactions(nextTransactions);
+      setJobs(nextJobs);
+      writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions, jobs: nextJobs });
       setAssignmentMessage(data?.message || "Transaction removed from job.");
       await loadSuggestions();
     } catch (e) {
@@ -7289,7 +7465,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     } finally {
       setRemovingAssignmentId("");
     }
-  }, [businessId, loadSuggestions, usingDemo]);
+  }, [businessId, loadSuggestions, readOnly, usingDemo]);
 
   const handleDragStart = useCallback((event, transaction) => {
     const assignedPercent = Number(transaction?.assigned_total_percent || 0);

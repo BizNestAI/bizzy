@@ -414,3 +414,46 @@ test("Suggested Jobs cards are wrapped in a card-level render boundary", async (
   assert.equal(source.includes("<SuggestedJobCardBoundary key={candidate.id} candidateId={candidate.id}>"), true);
   assert.equal(source.includes("Unable to display this suggested job."), true);
 });
+
+test("Job Costing hydrates live route from a short-lived per-business memory cache", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  assert.equal(source.includes("const JOB_COSTING_LIVE_CACHE_TTL_MS = 5 * 60 * 1000"), true);
+  assert.equal(source.includes("const jobCostingLiveCache = new Map()"), true);
+  assert.equal(source.includes("readJobCostingLiveCache(businessId, readOnly)"), true);
+  assert.equal(source.includes("useState(() => initialLiveCache?.transactions || [])"), true);
+  assert.equal(source.includes("useState(() => initialLiveCache?.jobs || [])"), true);
+  assert.equal(source.includes("useState(() => initialLiveCache?.jobCandidates || [])"), true);
+  assert.equal(source.includes("useState(() => Number(initialLiveCache?.jobCandidatesTotal || 0))"), true);
+});
+
+test("Job Costing live refresh preserves cached data instead of showing empty zero state", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("const loadJobCosting = useCallback(async () => {");
+  const end = source.indexOf("const loadSuggestions = useCallback", start);
+  assert.ok(start > 0);
+  assert.ok(end > start);
+  const loaderSource = source.slice(start, end);
+
+  assert.equal(loaderSource.includes("setLoading(!hasVisibleJobCostingDataRef.current)"), true);
+  assert.equal(loaderSource.includes("writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions })"), true);
+  assert.equal(loaderSource.includes("writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs })"), true);
+  assert.equal(loaderSource.includes("setTransactions([]);"), false);
+  assert.equal(loaderSource.includes("setJobs([]);"), false);
+});
+
+test("Live candidate-created jobs expose the Back to Suggested action from production source fields", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("function isSuggestedCandidateJob(job = {})");
+  const end = source.indexOf("function getOptimisticJobRevenue", start);
+  assert.ok(start > 0);
+  assert.ok(end > start);
+  const predicateSource = source.slice(start, end);
+
+  assert.equal(predicateSource.includes('creationMethod === "job_candidate"'), true);
+  assert.equal(predicateSource.includes('sourceType.includes("candidate")'), true);
+  assert.equal(predicateSource.includes("job.job_candidate_id || job.candidate_id || job.source_candidate_id"), true);
+  assert.equal(predicateSource.includes('sourceEntityType.includes("invoice")'), true);
+  assert.equal(predicateSource.includes('!sourceType.includes("manual")'), true);
+  assert.equal(source.includes("&& isSuggestedCandidateJob(job)"), true);
+  assert.equal(source.includes("Back to Suggested"), true);
+});
