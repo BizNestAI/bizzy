@@ -458,6 +458,25 @@ test("Live candidate-created jobs expose the Back to Suggested action from produ
   assert.equal(source.includes("Back to Suggested"), true);
 });
 
+test("candidate create and revert keep the user on the current Job Costing tab", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const approveStart = source.indexOf("const approveCandidateNew = useCallback(async (candidate) => {");
+  const approveEnd = source.indexOf("const linkCandidateExisting = useCallback", approveStart);
+  const revertStart = source.indexOf("const revertCandidateJob = useCallback(async (job) => {");
+  const revertEnd = source.indexOf("const removeAssignment = useCallback", revertStart);
+  assert.ok(approveStart > 0);
+  assert.ok(approveEnd > approveStart);
+  assert.ok(revertStart > 0);
+  assert.ok(revertEnd > revertStart);
+
+  const approveSource = source.slice(approveStart, approveEnd);
+  const revertSource = source.slice(revertStart, revertEnd);
+  assert.equal(approveSource.includes('setBucketMode("live")'), false);
+  assert.equal(revertSource.includes('setBucketMode("suggested")'), false);
+  assert.equal(source.includes("revertingCandidateJob ? \"scale-[0.98] opacity-55\""), true);
+  assert.equal(source.includes("busy ? \"scale-[0.98] opacity-55\""), true);
+});
+
 test("Job Costing first-load state shows an explicit loading animation instead of empty zero data", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("function JobCostingInitialLoadingState"), true);
@@ -468,7 +487,7 @@ test("Job Costing first-load state shows an explicit loading animation instead o
   assert.equal(source.includes('<JobCostingInitialLoadingState type="transactions" />'), true);
 });
 
-test("Add Job opens in a centered animated modal without Trade Type", async () => {
+test("Add Job opens in a dashboard-centered animated modal without Trade Type", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const modalStart = source.indexOf("function JobCostingModal({");
   const modalEnd = source.indexOf("function RevenueDetailDrawer", modalStart);
@@ -483,6 +502,7 @@ test("Add Job opens in a centered animated modal without Trade Type", async () =
   const addJobSource = source.slice(addStart, addEnd);
 
   assert.equal(modalSource.includes("items-center justify-center"), true);
+  assert.equal(modalSource.includes("md:left-[var(--nav-w,0px)]"), true);
   assert.equal(modalSource.includes("transition-opacity duration-300"), true);
   assert.equal(modalSource.includes("pb-[220px]"), true);
   assert.equal(modalSource.includes("max-h-[calc(100vh-260px)]"), true);
@@ -495,7 +515,7 @@ test("Add Job opens in a centered animated modal without Trade Type", async () =
   assert.equal(addJobSource.includes("trade_type"), false);
 });
 
-test("Review Jobs opens in the centered animated modal", async () => {
+test("Import Jobs opens in the dashboard-centered animated modal", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const boardStart = source.indexOf("function JobAssignmentBoard({");
   const boardEnd = source.indexOf("const [dateRangeFilter]", boardStart);
@@ -513,6 +533,12 @@ test("Review Jobs opens in the centered animated modal", async () => {
   assert.equal(importJobsSource.includes("<JobCostingModal open={open} title=\"Import Jobs\""), true);
   assert.equal(importJobsSource.includes("widthClass=\"max-w-[640px]\""), true);
   assert.equal(importJobsSource.includes("<JobCostingDrawer"), false);
+  assert.equal(importJobsSource.includes('key: "projects"'), true);
+  assert.equal(importJobsSource.includes('key: "csv"'), true);
+  assert.equal(importJobsSource.includes('key: "subcustomers"'), false);
+  assert.equal(importJobsSource.includes('key: "documents"'), false);
+  assert.equal(importJobsSource.includes("QBO sub-customers"), false);
+  assert.equal(importJobsSource.includes("Invoice and estimate candidates"), false);
 });
 
 test("Create Job confirmation hides duplicate-prevention implementation details", async () => {

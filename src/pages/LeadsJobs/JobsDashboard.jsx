@@ -2506,7 +2506,9 @@ function JobBucketCard({
       onDragOver={allowDrop ? (event) => onDragOver(event, job) : undefined}
       onDragLeave={allowDrop ? onDragLeave : undefined}
       onDrop={allowDrop ? (event) => onDrop(event, job) : undefined}
-      className={`relative min-w-[230px] overflow-hidden rounded-xl border px-3 py-2.5 text-left shadow-[0_14px_30px_rgba(0,0,0,0.22)] transition duration-200 ${
+      className={`relative min-w-[230px] overflow-hidden rounded-xl border px-3 py-2.5 text-left shadow-[0_14px_30px_rgba(0,0,0,0.22)] transition-all duration-300 ease-out ${
+        revertingCandidateJob ? "scale-[0.98] opacity-55" : "scale-100 opacity-100"
+      } ${
         isDragOver
           ? dragOverClass
           : `${displayTone.card} ${displayTone.cardHover} hover:shadow-[0_20px_48px_rgba(0,0,0,0.32)]`
@@ -5724,7 +5726,7 @@ function JobCostingModal({ open, title, eyebrow, onClose, children, widthClass =
 
   return createPortal(
     <div
-      className={`fixed inset-0 z-[96] flex items-center justify-center bg-black/60 px-4 pb-[220px] pt-6 backdrop-blur-sm transition-opacity duration-300 ease-out sm:pt-[5vh] ${
+      className={`fixed bottom-0 left-0 right-0 top-0 z-[96] flex items-center justify-center bg-black/60 px-4 pb-[220px] pt-6 backdrop-blur-sm transition-opacity duration-300 ease-out md:left-[var(--nav-w,0px)] sm:pt-[5vh] ${
         visible ? "opacity-100" : "opacity-0"
       }`}
       onMouseDown={(event) => {
@@ -5906,7 +5908,9 @@ function CandidateBucketCard({ candidate, jobs = [], busyId, onApproveNew, onLin
   const matchJobId = firstMatch?.job_id || firstMatch?.id || jobs?.[0]?.id || "";
   const busy = busyId === candidate.id;
   return (
-    <article className="group flex h-[318px] w-[340px] shrink-0 flex-col rounded-[18px] border border-amber-300/22 bg-[linear-gradient(135deg,rgba(251,191,36,0.08),rgba(16,185,129,0.045)_58%,rgba(255,255,255,0.025))] p-3.5 shadow-[0_18px_42px_rgba(0,0,0,0.26)] transition hover:border-amber-200/35">
+    <article className={`group flex h-[318px] w-[340px] shrink-0 flex-col rounded-[18px] border border-amber-300/22 bg-[linear-gradient(135deg,rgba(251,191,36,0.08),rgba(16,185,129,0.045)_58%,rgba(255,255,255,0.025))] p-3.5 shadow-[0_18px_42px_rgba(0,0,0,0.26)] transition-all duration-300 ease-out hover:border-amber-200/35 ${
+      busy ? "scale-[0.98] opacity-55" : "scale-100 opacity-100"
+    }`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -6158,7 +6162,7 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
   );
 }
 
-function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, onGenerateCandidates, loading }) {
+function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, loading }) {
   const capability = getProjectsCapabilityView(projectsCapability || {});
   const sources = [
     {
@@ -6168,22 +6172,6 @@ function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, o
       enabled: capability.available,
       action: onSyncProjects,
       actionLabel: "Sync Projects",
-    },
-    {
-      key: "subcustomers",
-      title: "QBO sub-customers",
-      detail: "Review sub-customers as job candidates before creating live jobs.",
-      enabled: true,
-      action: onGenerateCandidates,
-      actionLabel: "Review Candidates",
-    },
-    {
-      key: "documents",
-      title: "Invoice and estimate candidates",
-      detail: "Generate candidates from synced invoices and estimates without auto-creating jobs.",
-      enabled: true,
-      action: onGenerateCandidates,
-      actionLabel: "Generate",
     },
     {
       key: "csv",
@@ -6197,7 +6185,7 @@ function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, o
     <JobCostingModal open={open} title="Import Jobs" eyebrow="Available sources" onClose={onClose} widthClass="max-w-[640px]">
       {!capability.available ? (
         <div className="mb-3 rounded-[16px] border border-amber-300/18 bg-amber-300/[0.08] px-3 py-3 text-xs text-amber-50/75">
-          QuickBooks Projects are not enabled for this company. Create a job manually or review Suggested Jobs.
+          QuickBooks Projects are not enabled for this company. Create jobs manually or use Suggested Jobs from the main page.
         </div>
       ) : null}
       <div className="space-y-3">
@@ -6897,7 +6885,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       });
       setJobCandidates(nextCandidates);
       writeJobCostingLiveCache(businessId, readOnly, { jobCandidates: nextCandidates });
-      setBucketMode("live");
       setAssignmentMessage(`${view.name} moved to Live Jobs.`);
       void Promise.all([loadJobCosting(), loadJobCandidates()]).catch((refreshError) => {
         console.warn("[JobCosting] post-candidate-create refresh failed", refreshError?.message || refreshError);
@@ -7485,7 +7472,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             ? { ...candidate, candidate_status: "pending", confirmed_job_id: null }
             : candidate
         )));
-        setBucketMode("suggested");
         setAssignmentMessage(`${getJobDisplayName(job)} moved back to Suggested Jobs.`);
         return;
       }
@@ -7522,7 +7508,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           return nextTotal;
         });
       }
-      setBucketMode("suggested");
       setAssignmentMessage(`${getJobDisplayName(job)} moved back to Suggested Jobs.`);
       void loadJobCosting();
     } catch (e) {
