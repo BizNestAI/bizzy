@@ -824,12 +824,28 @@ export async function revertCandidateCreatedJob({ businessId, jobId, db = defaul
 export function isManualJobRecord(job = {}) {
   const creationMethod = String(job.creation_method || job.creationMethod || "").toLowerCase();
   const sourceType = String(job.source_type || job.sourceType || "").toLowerCase();
+  const sourceEntityType = String(job.source_entity_type || job.external_source_type || job.sourceEntityType || "").toLowerCase();
+  const hasCandidateEvidence = (
+    creationMethod.includes("candidate") ||
+    sourceType.includes("candidate") ||
+    Boolean(job.job_candidate_id || job.candidate_id || job.source_candidate_id) ||
+    (
+      sourceEntityType &&
+      (sourceEntityType.includes("invoice") || sourceEntityType.includes("estimate")) &&
+      !sourceType.includes("manual")
+    )
+  );
+  const hasQuickBooksEvidence = (
+    sourceType.includes("qbo") ||
+    sourceType.includes("quickbooks") ||
+    sourceType.includes("project") ||
+    sourceType.includes("subcustomer") ||
+    Boolean(job.qbo_project_id || job.qbo_customer_id || job.qbo_subcustomer_id)
+  );
   return (
-    (creationMethod.includes("manual") || sourceType.includes("manual")) &&
-    !creationMethod.includes("candidate") &&
-    !sourceType.includes("candidate") &&
-    !sourceType.includes("qbo") &&
-    !sourceType.includes("quickbooks")
+    (creationMethod.includes("manual") || sourceType.includes("manual") || sourceType === "bizzi") &&
+    !hasCandidateEvidence &&
+    !hasQuickBooksEvidence
   );
 }
 

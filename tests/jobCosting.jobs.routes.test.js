@@ -750,7 +750,7 @@ describe("job costing jobs routes", () => {
 
   test("job costing loads every posted Books page and does not depend on Change Order tables", async () => {
     mockSupabase.store.jobs = [
-      { id: JOB_ID, business_id: BUSINESS_ID, job_name: "Kitchen Remodel", status: "active" },
+      { id: JOB_ID, business_id: BUSINESS_ID, job_name: "Kitchen Remodel", status: "active", source_type: "bizzi" },
       { id: "archived-job", business_id: BUSINESS_ID, job_name: "Archived", status: "archived", archived_at: "2026-09-03T12:00:00.000Z" },
     ];
     mockSupabase.store.__tableErrors = {
@@ -777,6 +777,9 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.pagination.loaded_posted_transactions, 204);
     assert.equal(response.body.jobs.length, 1);
     assert.equal(response.body.jobs[0].id, JOB_ID);
+    assert.equal(response.body.jobs[0].is_manual_job, true);
+    assert.equal(response.body.jobs[0].can_delete_manual_job, true);
+    assert.equal(response.body.jobs[0].revenue_source_status, "manual_no_revenue_source");
     assert.equal(response.body.jobs[0].change_order_count, 0);
   });
 

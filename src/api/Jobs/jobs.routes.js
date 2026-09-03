@@ -34,6 +34,7 @@ import {
   deleteManualJob,
   dismissJobCandidate,
   generateJobCandidatesForBusiness,
+  isManualJobRecord,
   linkJobCandidateToExisting,
   mergeJobCandidates,
   revertCandidateCreatedJob,
@@ -998,9 +999,13 @@ async function fetchJobCostingRows(businessId) {
   const normalizedJobs = activeJobs.map((job) => {
     const normalized = normalizeJob(job);
     const summary = summaryByJob[String(job.id)] || null;
+    const isManualJob = isManualJobRecord(job);
     const jobChangeOrders = changeOrdersByJob[String(job.id)] || [];
     const baseRevenue = asNum(summary?.base_revenue ?? summary?.revenue);
     const baseCost = asNum(summary?.base_total_cost ?? summary?.total_cost);
+    const revenueSourceStatus = isManualJob && baseRevenue === 0
+      ? "manual_no_revenue_source"
+      : summary?.revenue_source_status || job.revenue_source_status || null;
     const changeOrderSummary = finalizeChangeOrderSummary(summarizeChangeOrders(jobChangeOrders));
     const changeOrderRevenue = changeOrderSummary.change_order_approved_revenue;
     const changeOrderCost = changeOrderSummary.change_order_cost_total;
@@ -1022,7 +1027,11 @@ async function fetchJobCostingRows(businessId) {
       revenue_summary: summary?.revenue_summary || null,
       selected_revenue_basis: summary?.selected_revenue_basis || job.job_costing_revenue_basis || null,
       revenue_basis_label: summary?.revenue_basis_label || null,
-      revenue_source_status: summary?.revenue_source_status || job.revenue_source_status || null,
+      revenue_source_status: revenueSourceStatus,
+      source_status: revenueSourceStatus,
+      is_manual_job: isManualJob,
+      can_delete_job: isManualJob,
+      can_delete_manual_job: isManualJob,
       estimated_value: summary?.estimated_value ?? 0,
       contract_value: summary?.contract_value ?? asNum(job.contract_amount),
       gross_invoiced_revenue: summary?.gross_invoiced_revenue ?? baseRevenue,
@@ -1324,11 +1333,15 @@ async function fetchJobSummaries(businessId) {
     const totals = totalsByJob[String(job.id)] || { revenue: 0, total_cost: 0, assigned_transaction_count: 0 };
     const changeOrderSummary = finalizeChangeOrderSummary(summarizeChangeOrders(changeOrdersByJob[String(job.id)] || []));
     const revenueSummary = canonicalRevenueByJob[String(job.id)] || null;
+    const isManualJob = isManualJobRecord(job);
     const baseRevenue = asNum(revenueSummary?.jobCostingRevenue);
     const totalRevenue = baseRevenue + changeOrderSummary.change_order_approved_revenue;
     const totalCost = totals.total_cost + changeOrderSummary.change_order_cost_total;
     const grossMargin = totalRevenue - totalCost;
     const marginPercent = totalRevenue > 0 ? (grossMargin / totalRevenue) * 100 : null;
+    const revenueSourceStatus = isManualJob && baseRevenue === 0
+      ? "manual_no_revenue_source"
+      : revenueSummary?.sourceStatus || null;
     return {
       id: normalized.id,
       job_name: normalized.jobName,
@@ -1341,7 +1354,11 @@ async function fetchJobSummaries(businessId) {
       revenue_summary: revenueSummary,
       selected_revenue_basis: revenueSummary?.selectedBasis || null,
       revenue_basis_label: revenueSummary?.basisLabel || null,
-      revenue_source_status: revenueSummary?.sourceStatus || null,
+      revenue_source_status: revenueSourceStatus,
+      source_status: revenueSourceStatus,
+      is_manual_job: isManualJob,
+      can_delete_job: isManualJob,
+      can_delete_manual_job: isManualJob,
       estimated_value: revenueSummary?.estimatedValue ?? 0,
       contract_value: revenueSummary?.contractValue ?? asNum(job.contract_amount),
       gross_invoiced_revenue: revenueSummary?.grossInvoicedRevenue ?? 0,

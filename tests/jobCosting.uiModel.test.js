@@ -444,13 +444,14 @@ test("Job Costing live refresh preserves cached data instead of showing empty ze
 test("Live candidate-created jobs expose the Back to Suggested action from production source fields", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const start = source.indexOf("function isSuggestedCandidateJob(job = {})");
-  const end = source.indexOf("function getOptimisticJobRevenue", start);
+  const end = source.indexOf("function isManualBizziJob", start);
   assert.ok(start > 0);
   assert.ok(end > start);
   const predicateSource = source.slice(start, end);
 
   assert.equal(predicateSource.includes('creationMethod === "job_candidate"'), true);
   assert.equal(predicateSource.includes('sourceType.includes("candidate")'), true);
+  assert.equal(predicateSource.includes('sourceType === "bizzi"'), false);
   assert.equal(predicateSource.includes("job.job_candidate_id || job.candidate_id || job.source_candidate_id"), true);
   assert.equal(predicateSource.includes('sourceEntityType.includes("invoice")'), true);
   assert.equal(predicateSource.includes('!sourceType.includes("manual")'), true);
@@ -536,11 +537,14 @@ test("Manual Job buckets expose guarded delete and create handlers", async () =>
   const cardSource = source.slice(cardStart, cardEnd);
   const pageSource = source.slice(pageStart, pageEnd);
   assert.equal(source.includes("function isManualBizziJob"), true);
+  assert.equal(source.includes("job.can_delete_manual_job === true || job.can_delete_job === true || job.is_manual_job === true"), true);
+  assert.equal(source.includes('sourceType === "bizzi"'), true);
   assert.equal(cardSource.includes("canDeleteManualJob"), true);
   assert.equal(cardSource.includes("isManualBizziJob(job);"), true);
   assert.equal(cardSource.includes("isSuggestedCandidateJob(job) && assignedTransactionCount <= 0"), true);
   assert.equal(cardSource.includes('"No revenue source yet"'), true);
-  assert.equal(source.includes('label: "New"'), true);
+  assert.equal(source.includes('emptyManualJob ? "New" : "Revenue Needed"'), true);
+  assert.equal(source.includes('"Revenue Needed"'), true);
   assert.equal(cardSource.includes("<Trash2"), true);
   assert.equal(cardSource.includes('Delete this manually created job.'), true);
   assert.equal(cardSource.includes('{deletingJob ? "Deleting..." : "Delete"}'), true);

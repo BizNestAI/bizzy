@@ -1397,7 +1397,6 @@ function isSuggestedCandidateJob(job = {}) {
     creationMethod === "job_candidate" ||
     sourceType.includes("candidate") ||
     sourceType === "candidate_invoice" ||
-    sourceType === "bizzi" ||
     Boolean(job.job_candidate_id || job.candidate_id || job.source_candidate_id) ||
     (
       sourceEntityType &&
@@ -1410,14 +1409,31 @@ function isSuggestedCandidateJob(job = {}) {
 }
 
 function isManualBizziJob(job = {}) {
+  if (job.can_delete_manual_job === true || job.can_delete_job === true || job.is_manual_job === true) return true;
   const creationMethod = String(job.creation_method || job.creationMethod || "").toLowerCase();
   const sourceType = String(job.source_type || job.sourceType || "").toLowerCase();
+  const sourceEntityType = String(job.source_entity_type || job.external_source_type || job.sourceEntityType || "").toLowerCase();
+  const hasCandidateEvidence = (
+    creationMethod.includes("candidate") ||
+    sourceType.includes("candidate") ||
+    Boolean(job.job_candidate_id || job.candidate_id || job.source_candidate_id) ||
+    (
+      sourceEntityType &&
+      (sourceEntityType.includes("invoice") || sourceEntityType.includes("estimate")) &&
+      !sourceType.includes("manual")
+    )
+  );
+  const hasQuickBooksEvidence = (
+    sourceType.includes("qbo") ||
+    sourceType.includes("quickbooks") ||
+    sourceType.includes("project") ||
+    sourceType.includes("subcustomer") ||
+    Boolean(job.qbo_project_id || job.qbo_customer_id || job.qbo_subcustomer_id)
+  );
   return (
-    (creationMethod.includes("manual") || sourceType.includes("manual")) &&
-    !creationMethod.includes("candidate") &&
-    !sourceType.includes("candidate") &&
-    !sourceType.includes("qbo") &&
-    !sourceType.includes("quickbooks")
+    (creationMethod.includes("manual") || sourceType.includes("manual") || sourceType === "bizzi") &&
+    !hasCandidateEvidence &&
+    !hasQuickBooksEvidence
   );
 }
 
@@ -1530,9 +1546,10 @@ function jobBucketStatus(job, target) {
   const assignedCount = Number(job?.assigned_transaction_count ?? (Array.isArray(job?.transactions) ? job.transactions.length : 0)) || 0;
   const revenue = Number(job?.revenue || 0);
   const totalCost = Number(job?.total_cost || job?.total_assigned_cost || job?.assigned_cost_total || 0);
-  if (!hasCanonicalRevenueSummary(job) && isManualBizziJob(job) && assignedCount <= 0 && revenue === 0 && totalCost === 0) {
+  if (!hasCanonicalRevenueSummary(job) && isManualBizziJob(job)) {
+    const emptyManualJob = assignedCount <= 0 && revenue === 0 && totalCost === 0;
     return {
-      label: "New",
+      label: emptyManualJob ? "New" : "Revenue Needed",
       text: "text-white/70",
       badge: "border-white/12 bg-white/[0.06] text-white/60",
       card: "border-emerald-300/18 bg-emerald-300/[0.025]",
@@ -2512,8 +2529,9 @@ function JobBucketCard({
   const totalCost = Number(job.total_assigned_cost ?? job.assigned_cost_total ?? job.total_cost ?? 0);
   const marginValue = Number(job.margin_percent);
   const displayTone = jobBucketStatus(job, target);
-  const revenueUnavailableLabel = displayTone.label === "New" ? "No revenue source yet" : basis.refreshingLabel;
-  const revenueActionLabel = displayTone.label === "New" ? "Detail" : basis.retryLabel;
+  const manualWithoutRevenue = isManualBizziJob(job) && !hasCanonicalRevenueSummary(job);
+  const revenueUnavailableLabel = manualWithoutRevenue ? "No revenue source yet" : basis.refreshingLabel;
+  const revenueActionLabel = manualWithoutRevenue ? "Detail" : basis.retryLabel;
   const trend = getMarginTrend(job);
   const marginBar = Number.isFinite(marginValue) ? Math.max(0, Math.min(100, marginValue)) : 0;
   const assignedCount = getJobDocumentCount(job) || job.assigned_transaction_count || job.transactions?.length || 0;
