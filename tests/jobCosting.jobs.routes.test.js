@@ -709,6 +709,36 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.jobs.some((job) => job.id === "manual-delete-1"), false);
   });
 
+  test("manual job deletion is idempotent when the authorized manual job is already archived", async () => {
+    const archivedAt = "2026-09-03T21:13:20.761Z";
+    mockSupabase.store.jobs = [
+      {
+        id: "manual-delete-archived",
+        business_id: BUSINESS_ID,
+        job_name: "Manual Job",
+        creation_method: "manual",
+        source_type: "manual",
+        status: "archived",
+        archived_at: archivedAt,
+      },
+    ];
+
+    const response = await request(app, "/api/job-costing/jobs/manual-delete-archived/manual", {
+      method: "DELETE",
+      body: {},
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.already_deleted, true);
+    assert.equal(response.body.deleted_job_id, "manual-delete-archived");
+    assert.equal(response.body.job_id, "manual-delete-archived");
+    assert.equal(response.body.released_assignment_count, 0);
+    assert.equal(mockSupabase.store.jobs[0].archived_at, archivedAt);
+    assert.equal(mockSupabase.store.job_transaction_assignments.length, 0);
+    assert.equal(response.body.jobs.some((job) => job.id === "manual-delete-archived"), false);
+  });
+
   test("manual job deletion releases assigned transactions back to the posted feed", async () => {
     mockSupabase.store.jobs = [
       { id: "manual-delete-blocked", business_id: BUSINESS_ID, job_name: "Manual Job", creation_method: "manual", source_type: "manual", status: "active" },
@@ -773,6 +803,23 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.error, "job_delete_not_supported");
     assert.equal(mockSupabase.store.jobs[0].status, "active");
     assert.equal(mockSupabase.store.jobs[0].archived_at, undefined);
+  });
+
+  test("jobs summary excludes archived jobs from active and completed counts", async () => {
+    mockSupabase.store.jobs = [
+      { id: "active-job", business_id: BUSINESS_ID, job_name: "Active", status: "active", source_type: "manual", creation_method: "manual" },
+      { id: "completed-job", business_id: BUSINESS_ID, job_name: "Completed", status: "completed", source_type: "manual", creation_method: "manual" },
+      { id: "archived-at-job", business_id: BUSINESS_ID, job_name: "Archived At", status: "active", archived_at: "2026-09-03T12:00:00.000Z", source_type: "manual", creation_method: "manual" },
+      { id: "archived-status-job", business_id: BUSINESS_ID, job_name: "Archived Status", status: " ARCHIVED ", source_type: "manual", creation_method: "manual" },
+    ];
+
+    const response = await request(app, "/api/job-costing/jobs/summary", { method: "GET" });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.jobs.map((job) => job.id).sort(), ["active-job", "completed-job"]);
+    assert.equal(response.body.jobs.filter((job) => String(job.status || "").toLowerCase() !== "completed").length, 1);
+    assert.equal(response.body.jobs.filter((job) => String(job.status || "").toLowerCase() === "completed").length, 1);
+    assert.equal(response.body.jobs.some((job) => String(job.status || "").trim().toLowerCase() === "archived"), false);
   });
 
   test("job costing loads every posted Books page and does not depend on Change Order tables", async () => {

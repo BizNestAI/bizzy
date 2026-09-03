@@ -871,7 +871,7 @@ export async function deleteManualJob({ businessId, jobId, db = defaultSupabase 
     job = externalJob || null;
   }
 
-  if (!job || job.archived_at || String(job.status || "").toLowerCase() === "archived") {
+  if (!job) {
     const missing = new Error("Job was not found.");
     missing.status = 404;
     missing.code = "job_not_found";
@@ -885,6 +885,18 @@ export async function deleteManualJob({ businessId, jobId, db = defaultSupabase 
     unsupported.status = 400;
     unsupported.code = "job_delete_not_supported";
     throw unsupported;
+  }
+
+  if (job.archived_at || String(job.status || "").trim().toLowerCase() === "archived") {
+    return {
+      ok: true,
+      success: true,
+      already_deleted: true,
+      deleted_job_id: localJobId,
+      job_id: localJobId,
+      released_assignment_count: 0,
+      job,
+    };
   }
 
   const { data: assignmentRows, error: assignmentError } = await db

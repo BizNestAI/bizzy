@@ -93,6 +93,14 @@ function normalizeJob(row = {}) {
   };
 }
 
+function isArchivedJob(row = {}) {
+  return Boolean(row?.archived_at) || String(row?.status || "").trim().toLowerCase() === "archived";
+}
+
+function filterActiveJobs(rows = []) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => !isArchivedJob(row));
+}
+
 function withNormalizedJob(row = {}) {
   const normalized = normalizeJob(row);
   return {
@@ -993,9 +1001,7 @@ async function fetchJobCostingRows(businessId) {
     acc[String(row.id)] = row;
     return acc;
   }, {});
-  const activeJobs = (jobs || []).filter((job) => (
-    !job.archived_at && String(job.status || "").toLowerCase() !== "archived"
-  ));
+  const activeJobs = filterActiveJobs(jobs);
   const normalizedJobs = activeJobs.map((job) => {
     const normalized = normalizeJob(job);
     const summary = summaryByJob[String(job.id)] || null;
@@ -1260,6 +1266,7 @@ async function fetchJobSummaries(businessId) {
   ]);
   if (jobsErr) throw jobsErr;
   if (assignmentsErr) throw assignmentsErr;
+  const activeJobs = filterActiveJobs(jobs);
   // Change Orders are intentionally excluded from launch-critical Job Costing
   // rows so core posted transactions and jobs do not depend on that feature.
   const changeOrders = [];
@@ -1329,10 +1336,10 @@ async function fetchJobSummaries(businessId) {
 
   const canonicalRevenueByJob = await fetchCanonicalJobRevenueSummaries({
     businessId,
-    jobs: jobs || [],
+    jobs: activeJobs,
   });
 
-  return (jobs || []).map((job) => {
+  return activeJobs.map((job) => {
     const normalized = normalizeJob(job);
     const totals = totalsByJob[String(job.id)] || { revenue: 0, total_cost: 0, assigned_transaction_count: 0 };
     const changeOrderSummary = finalizeChangeOrderSummary(summarizeChangeOrders(changeOrdersByJob[String(job.id)] || []));

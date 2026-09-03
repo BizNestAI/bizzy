@@ -93,9 +93,13 @@ function writeJobCostingLiveCache(businessId, readOnly, patch) {
   const key = getJobCostingCacheKey(businessId, readOnly);
   if (!key || !patch || typeof patch !== "object") return;
   const previous = jobCostingLiveCache.get(key) || {};
+  const sanitizedPatch = {
+    ...patch,
+    ...(Array.isArray(patch.jobs) ? { jobs: filterActiveUiJobs(patch.jobs) } : {}),
+  };
   jobCostingLiveCache.set(key, {
     ...previous,
-    ...patch,
+    ...sanitizedPatch,
     cachedAt: Date.now(),
   });
 }
@@ -1172,7 +1176,20 @@ function normalizeJob(row = {}) {
     totalCost,
     marginPercent,
     status: row.status || row.stage || "active",
+    archived_at: row.archived_at || null,
   };
+}
+
+function isArchivedUiJob(job = {}) {
+  return Boolean(job?.archived_at) || String(job?.status || "").trim().toLowerCase() === "archived";
+}
+
+function filterActiveUiJobs(rows = [], excludedIds = new Set()) {
+  const ids = excludedIds instanceof Set ? excludedIds : new Set();
+  return (Array.isArray(rows) ? rows : []).filter((job) => {
+    const localId = String(getLocalJobId(job) || "");
+    return !isArchivedUiJob(job) && (!localId || !ids.has(localId));
+  });
 }
 
 function getLocalJobId(job = {}) {
@@ -5428,7 +5445,7 @@ function ChangeOrdersPage({ businessId, usingDemo }) {
       ]);
       setChangeOrders(Array.isArray(changeOrderData?.change_orders) ? changeOrderData.change_orders : []);
       setPotentialChangeOrders(Array.isArray(potentialData?.potential_change_orders) ? potentialData.potential_change_orders : []);
-      setJobs(Array.isArray(summary?.jobs) ? summary.jobs : []);
+      setJobs(filterActiveUiJobs(Array.isArray(summary?.jobs) ? summary.jobs : []));
     } catch (e) {
       console.warn("[ChangeOrdersPage] load failed", e?.message || e);
       setError(e?.message || "Failed to load change orders.");
@@ -6349,6 +6366,8 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const [candidateApprovalPreview, setCandidateApprovalPreview] = useState(null);
   const assignmentPickerTimerRef = useRef(null);
   const hasVisibleJobCostingDataRef = useRef(hasJobCostingCacheData(initialLiveCache));
+  const pendingDeletedJobIdsRef = useRef(new Set());
+  const confirmedDeletedJobIdsRef = useRef(new Set());
 
   useEffect(() => {
     if (usingDemo) return;
@@ -6368,8 +6387,12 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     const hasCachedData = hasJobCostingCacheData(cached);
     hasVisibleJobCostingDataRef.current = hasCachedData;
     if (hasCachedData) {
+      const excludedJobIds = new Set([
+        ...pendingDeletedJobIdsRef.current,
+        ...confirmedDeletedJobIdsRef.current,
+      ]);
       setTransactions(cached?.transactions || []);
-      setJobs(cached?.jobs || []);
+      setJobs(filterActiveUiJobs(cached?.jobs || [], excludedJobIds));
       setJobCandidates(cached?.jobCandidates || []);
       setJobCandidatesTotal(Number(cached?.jobCandidatesTotal || 0));
       setProjectsCapability(cached?.projectsCapability || null);
@@ -6434,7 +6457,14 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       if (summaryResult.status === "fulfilled") {
         const summary = summaryResult.value || {};
         const fallbackData = dataResult.status === "fulfilled" ? dataResult.value : {};
-        const nextJobs = Array.isArray(summary?.jobs) ? summary.jobs : Array.isArray(fallbackData?.jobs) ? fallbackData.jobs : [];
+        const excludedJobIds = new Set([
+          ...pendingDeletedJobIdsRef.current,
+          ...confirmedDeletedJobIdsRef.current,
+        ]);
+        const nextJobs = filterActiveUiJobs(
+          Array.isArray(summary?.jobs) ? summary.jobs : Array.isArray(fallbackData?.jobs) ? fallbackData.jobs : [],
+          excludedJobIds
+        );
         setJobs(nextJobs);
         writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
         hasVisibleJobCostingDataRef.current = true;
@@ -7159,6 +7189,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     const jobId = String(getLocalJobId(job) || "");
     if (!jobId || deletingJobId) return;
     setDeletingJobId(jobId);
+    pendingDeletedJobIdsRef.current.add(jobId);
     setAssignmentError("");
     setAssignmentMessage("");
     const previousJobs = jobs;
@@ -7176,14 +7207,16 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         method: "DELETE",
         body: { business_id: businessId },
       });
+      confirmedDeletedJobIdsRef.current.add(jobId);
       if (Array.isArray(data?.jobs)) {
-        setJobs(data.jobs);
-        writeJobCostingLiveCache(businessId, readOnly, { jobs: data.jobs });
+        const nextServerJobs = filterActiveUiJobs(data.jobs, confirmedDeletedJobIdsRef.current);
+        setJobs(nextServerJobs);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: nextServerJobs });
       }
       if (Array.isArray(data?.transactions)) {
         setTransactions(data.transactions);
         writeJobCostingLiveCache(businessId, readOnly, {
-          jobs: Array.isArray(data?.jobs) ? data.jobs : nextJobs,
+          jobs: Array.isArray(data?.jobs) ? filterActiveUiJobs(data.jobs, confirmedDeletedJobIdsRef.current) : nextJobs,
           transactions: data.transactions,
           transactionTotal: Number(data?.transactions_total ?? data?.total_count ?? data.transactions.length) || data.transactions.length,
         });
@@ -7191,11 +7224,13 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       setAssignmentMessage(`${getJobDisplayName(job)} deleted.`);
       void loadJobCosting();
     } catch (e) {
+      pendingDeletedJobIdsRef.current.delete(jobId);
       setJobs(previousJobs);
       writeJobCostingLiveCache(businessId, readOnly, { jobs: previousJobs });
       setSelectedJob(previousSelectedJob || null);
       setAssignmentError(e?.message || "Could not delete job.");
     } finally {
+      pendingDeletedJobIdsRef.current.delete(jobId);
       setDeletingJobId("");
     }
   }, [businessId, deletingJobId, jobs, loadJobCosting, readOnly, selectedJob, usingDemo]);
@@ -7291,7 +7326,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         body: { business_id: businessId, instruction: clean },
       });
       const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
-      const nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      const nextJobs = filterActiveUiJobs(Array.isArray(data?.jobs) ? data.jobs : []);
       setTransactions(nextTransactions);
       setJobs(nextJobs);
       writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions, jobs: nextJobs });
@@ -7357,7 +7392,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         body: { business_id: businessId },
       });
       const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
-      const nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      const nextJobs = filterActiveUiJobs(Array.isArray(data?.jobs) ? data.jobs : []);
       setTransactions(nextTransactions);
       setJobs(nextJobs);
       setSuggestions((prev) => {
@@ -7507,7 +7542,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         },
       });
       const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
-      const nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      const nextJobs = filterActiveUiJobs(Array.isArray(data?.jobs) ? data.jobs : []);
       setTransactions(nextTransactions);
       setJobs(nextJobs);
       writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions, jobs: nextJobs });
@@ -7555,8 +7590,9 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         body: { business_id: businessId },
       });
       if (Array.isArray(data?.jobs)) {
-        setJobs(data.jobs);
-        writeJobCostingLiveCache(businessId, readOnly, { jobs: data.jobs });
+        const nextJobs = filterActiveUiJobs(data.jobs);
+        setJobs(nextJobs);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
       } else {
         await loadJobCosting();
       }
@@ -7594,8 +7630,9 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         body: { business_id: businessId },
       });
       if (Array.isArray(data?.jobs)) {
-        setJobs(data.jobs);
-        writeJobCostingLiveCache(businessId, readOnly, { jobs: data.jobs });
+        const nextJobs = filterActiveUiJobs(data.jobs);
+        setJobs(nextJobs);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
     } else {
       await loadJobCosting();
     }
@@ -7629,8 +7666,9 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         body: { business_id: businessId },
       });
       if (Array.isArray(data?.jobs)) {
-        setJobs(data.jobs);
-        writeJobCostingLiveCache(businessId, readOnly, { jobs: data.jobs });
+        const nextJobs = filterActiveUiJobs(data.jobs);
+        setJobs(nextJobs);
+        writeJobCostingLiveCache(businessId, readOnly, { jobs: nextJobs });
       } else {
         setJobs((prev) => {
           const nextJobs = prev.filter((item) => String(item.id || item.job_id) !== String(job.id));
@@ -7691,7 +7729,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         body: { business_id: businessId },
       });
       const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
-      const nextJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+      const nextJobs = filterActiveUiJobs(Array.isArray(data?.jobs) ? data.jobs : []);
       setTransactions(nextTransactions);
       setJobs(nextJobs);
       writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions, jobs: nextJobs });

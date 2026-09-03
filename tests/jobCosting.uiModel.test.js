@@ -558,6 +558,36 @@ test("Manual Job buckets expose guarded delete and create handlers", async () =>
   assert.equal(pageSource.includes('method: "DELETE"'), true);
 });
 
+test("Job Costing dashboard filters archived and deleted jobs from summary and cache payloads", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const cacheStart = source.indexOf("function writeJobCostingLiveCache");
+  const normalizeStart = source.indexOf("function isArchivedUiJob");
+  const loaderStart = source.indexOf("const loadJobCosting = useCallback(async () => {");
+  const deleteStart = source.indexOf("const deleteManualJob = useCallback(async (job) => {");
+  const deleteEnd = source.indexOf("const syncQboProjects = useCallback", deleteStart);
+  assert.ok(cacheStart > 0);
+  assert.ok(normalizeStart > 0);
+  assert.ok(loaderStart > 0);
+  assert.ok(deleteStart > 0);
+  assert.ok(deleteEnd > deleteStart);
+
+  const cacheSource = source.slice(cacheStart, source.indexOf("function SkeletonCard", cacheStart));
+  const normalizeSource = source.slice(normalizeStart, source.indexOf("function getLocalJobId", normalizeStart));
+  const loaderSource = source.slice(loaderStart, source.indexOf("const loadSuggestions = useCallback", loaderStart));
+  const deleteSource = source.slice(deleteStart, deleteEnd);
+
+  assert.equal(normalizeSource.includes("function isArchivedUiJob"), true);
+  assert.equal(normalizeSource.includes('trim().toLowerCase() === "archived"'), true);
+  assert.equal(normalizeSource.includes("function filterActiveUiJobs"), true);
+  assert.equal(cacheSource.includes("filterActiveUiJobs(patch.jobs)"), true);
+  assert.equal(loaderSource.includes("pendingDeletedJobIdsRef.current"), true);
+  assert.equal(loaderSource.includes("confirmedDeletedJobIdsRef.current"), true);
+  assert.equal(loaderSource.includes("filterActiveUiJobs("), true);
+  assert.equal(deleteSource.includes("pendingDeletedJobIdsRef.current.add(jobId)"), true);
+  assert.equal(deleteSource.includes("confirmedDeletedJobIdsRef.current.add(jobId)"), true);
+  assert.equal(deleteSource.includes("filterActiveUiJobs(data.jobs, confirmedDeletedJobIdsRef.current)"), true);
+});
+
 test("Import Jobs opens in the dashboard-centered animated modal", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const boardStart = source.indexOf("function JobAssignmentBoard({");
