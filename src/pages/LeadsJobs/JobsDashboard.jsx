@@ -5682,6 +5682,86 @@ function JobCostingDrawer({ open, title, eyebrow, onClose, children, widthClass 
   );
 }
 
+function JobCostingModal({ open, title, eyebrow, onClose, children, widthClass = "max-w-[560px]" }) {
+  const [mounted, setMounted] = useState(open);
+  const [visible, setVisible] = useState(false);
+  const timerRef = useRef(null);
+
+  const close = useCallback(() => {
+    setVisible(false);
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      setMounted(false);
+      onClose?.();
+    }, 180);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!open) {
+      if (mounted) close();
+      return undefined;
+    }
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    setMounted(true);
+    const frame = window.requestAnimationFrame(() => setVisible(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [close, mounted, open]);
+
+  useEffect(() => {
+    if (!mounted) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [close, mounted]);
+
+  useEffect(() => () => {
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+  }, []);
+
+  if (!mounted || typeof document === "undefined") return null;
+
+  return createPortal(
+    <div
+      className={`fixed inset-0 z-[96] flex items-center justify-center bg-black/60 px-4 py-6 backdrop-blur-sm transition-opacity duration-200 ease-out ${
+        visible ? "opacity-100" : "opacity-0"
+      }`}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) close();
+      }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className={`max-h-[min(88vh,760px)] w-full ${widthClass} overflow-hidden rounded-[24px] border border-emerald-300/18 bg-[#111713]/95 shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-all duration-200 ease-out ${
+          visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-3 scale-[0.97] opacity-0"
+        }`}
+      >
+        <div className="flex items-start justify-between gap-4 border-b border-white/8 px-5 py-4">
+          <div className="min-w-0">
+            {eyebrow ? <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-200/70">{eyebrow}</p> : null}
+            <h2 className="mt-1 truncate text-lg font-semibold text-white">{title}</h2>
+          </div>
+          <button
+            type="button"
+            onClick={close}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] text-white/70 transition hover:border-emerald-300/30 hover:bg-emerald-300/10 hover:text-white"
+            aria-label={`Close ${title}`}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="custom-scrollbar max-h-[calc(min(88vh,760px)-65px)] overflow-y-auto px-5 py-4">
+          {children}
+        </div>
+      </section>
+    </div>,
+    document.body
+  );
+}
+
 function RevenueDetailDrawer({ job, onClose }) {
   const basis = getJobRevenueBasisView(job || {});
   const rows = getRevenueWaterfallRows(job || {});
@@ -5972,7 +6052,6 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
     startDate: "",
     endDate: "",
     targetMargin: "",
-    tradeType: "",
     jobNumber: "",
     revenueBasis: "invoiced",
     contractValue: "",
@@ -5997,7 +6076,6 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
         start_date: form.startDate || null,
         end_date: form.endDate || null,
         target_margin: form.targetMargin ? Number(form.targetMargin) : null,
-        trade_type: form.tradeType.trim() || null,
         job_number: form.jobNumber.trim() || null,
         job_costing_revenue_basis: form.revenueBasis,
         contract_amount: form.contractValue ? Number(form.contractValue) : null,
@@ -6007,14 +6085,13 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
     });
   };
   return (
-    <JobCostingDrawer open={open} title="Add Job" eyebrow="Manual job" onClose={onClose} widthClass="max-w-[560px]">
+    <JobCostingModal open={open} title="Add Job" eyebrow="Manual job" onClose={onClose} widthClass="max-w-[560px]">
       <div className="grid gap-3">
         {[
           ["customer", "Customer", true],
           ["jobName", "Job name", true],
           ["address", "Address", false],
           ["jobNumber", "Job number", false],
-          ["tradeType", "Trade type", false],
         ].map(([key, label, required]) => (
           <label key={key} className="block">
             <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">{label}{required ? " *" : ""}</span>
@@ -6076,7 +6153,7 @@ function AddJobDrawer({ open, onClose, onSubmit, projectsCapability }) {
           Add Job
         </button>
       </div>
-    </JobCostingDrawer>
+    </JobCostingModal>
   );
 }
 
@@ -6116,7 +6193,7 @@ function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, o
     },
   ];
   return (
-    <JobCostingDrawer open={open} title="Import Jobs" eyebrow="Available sources" onClose={onClose}>
+    <JobCostingModal open={open} title="Import Jobs" eyebrow="Available sources" onClose={onClose} widthClass="max-w-[640px]">
       {!capability.available ? (
         <div className="mb-3 rounded-[16px] border border-amber-300/18 bg-amber-300/[0.08] px-3 py-3 text-xs text-amber-50/75">
           QuickBooks Projects are not enabled for this company. Create a job manually or review Suggested Jobs.
@@ -6141,7 +6218,7 @@ function ImportJobsDrawer({ open, onClose, projectsCapability, onSyncProjects, o
           </div>
         ))}
       </div>
-    </JobCostingDrawer>
+    </JobCostingModal>
   );
 }
 

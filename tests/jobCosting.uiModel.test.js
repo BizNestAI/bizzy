@@ -467,3 +467,39 @@ test("Job Costing first-load state shows an explicit loading animation instead o
   assert.equal(source.includes("<JobCostingInitialLoadingState />"), true);
   assert.equal(source.includes('<JobCostingInitialLoadingState type="transactions" />'), true);
 });
+
+test("Add Job opens in a centered animated modal without Trade Type", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const modalStart = source.indexOf("function JobCostingModal({");
+  const modalEnd = source.indexOf("function RevenueDetailDrawer", modalStart);
+  const addStart = source.indexOf("function AddJobDrawer({");
+  const addEnd = source.indexOf("function ImportJobsDrawer", addStart);
+  assert.ok(modalStart > 0);
+  assert.ok(modalEnd > modalStart);
+  assert.ok(addStart > 0);
+  assert.ok(addEnd > addStart);
+
+  const modalSource = source.slice(modalStart, modalEnd);
+  const addJobSource = source.slice(addStart, addEnd);
+
+  assert.equal(modalSource.includes("items-center justify-center"), true);
+  assert.equal(modalSource.includes("transition-opacity duration-200"), true);
+  assert.equal(modalSource.includes("scale-[0.97]"), true);
+  assert.equal(addJobSource.includes("<JobCostingModal open={open} title=\"Add Job\""), true);
+  assert.equal(addJobSource.includes("tradeType"), false);
+  assert.equal(addJobSource.includes("Trade type"), false);
+  assert.equal(addJobSource.includes("trade_type"), false);
+});
+
+test("Review Jobs opens in the centered animated modal", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const importStart = source.indexOf("function ImportJobsDrawer({");
+  const importEnd = source.indexOf("function JobCostingPage", importStart);
+  assert.ok(importStart > 0);
+  assert.ok(importEnd > importStart);
+
+  const importJobsSource = source.slice(importStart, importEnd);
+  assert.equal(importJobsSource.includes("<JobCostingModal open={open} title=\"Import Jobs\""), true);
+  assert.equal(importJobsSource.includes("widthClass=\"max-w-[640px]\""), true);
+  assert.equal(importJobsSource.includes("<JobCostingDrawer"), false);
+});
