@@ -125,6 +125,7 @@ test("tax profile editor is a centered compact modal without a page-blur overlay
   assert.doesNotMatch(dashboard, /Sources current/);
   assert.match(modal, /grid place-items-center/);
   assert.match(modal, /left-\[var\(--nav-w,0px\)\]/);
+  assert.match(modal, /--chat-clearance/);
   assert.match(modal, /max-w-\[720px\]/);
   assert.match(modal, /font-sans/);
   assert.match(modal, /createPortal\(modal, document\.body\)/);

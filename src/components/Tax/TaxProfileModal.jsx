@@ -64,13 +64,22 @@ export default function TaxProfileModal({
   const [rendered, setRendered] = useState(open);
   const [visible, setVisible] = useState(false);
   const saveInFlightRef = useRef(false);
+  const closeAfterSaveTimerRef = useRef(null);
 
   useEffect(() => {
+    if (closeAfterSaveTimerRef.current) {
+      window.clearTimeout(closeAfterSaveTimerRef.current);
+      closeAfterSaveTimerRef.current = null;
+    }
     if (!open) return;
     setValues(profileToValues(profile));
     setDirty(false);
     setNotice("");
   }, [open, profile?.id, profile]);
+
+  useEffect(() => () => {
+    if (closeAfterSaveTimerRef.current) window.clearTimeout(closeAfterSaveTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (open) {
@@ -110,6 +119,10 @@ export default function TaxProfileModal({
       const readiness = result?.readiness || result?.profile?.readiness || null;
       setNotice(readiness?.profile_status === "draft" ? "Tax Profile saved as draft." : "Tax Profile saved.");
       await onSaved?.(result);
+      closeAfterSaveTimerRef.current = window.setTimeout(() => {
+        closeAfterSaveTimerRef.current = null;
+        onClose?.();
+      }, 650);
     } catch (err) {
       setNotice(err?.message || "Tax profile could not be saved.");
     } finally {
@@ -122,12 +135,16 @@ export default function TaxProfileModal({
 
   const modal = (
     <div
-      className={`fixed bottom-0 right-0 top-0 left-[var(--nav-w,0px)] z-[90] grid place-items-center px-4 py-8 font-sans transition-opacity duration-200 ease-out ${visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
+      className={`fixed right-0 top-0 left-[var(--nav-w,0px)] z-[90] grid place-items-center px-4 pt-5 pb-4 font-sans transition-opacity duration-200 ease-out ${visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
+      style={{ bottom: "calc(var(--chat-clearance, 156px) + 16px)" }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="tax-profile-modal-title"
     >
-      <section className={`pointer-events-auto flex max-h-[min(760px,calc(100vh-96px))] w-full max-w-[720px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] text-white shadow-[0_24px_90px_rgba(0,0,0,0.68)] transition-all duration-200 ease-out ${visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-2 scale-[0.98] opacity-0"}`}>
+      <section
+        className={`pointer-events-auto flex w-full max-w-[720px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] text-white shadow-[0_24px_90px_rgba(0,0,0,0.68)] transition-all duration-200 ease-out ${visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-2 scale-[0.98] opacity-0"}`}
+        style={{ maxHeight: "min(720px, calc(100svh - var(--chat-clearance, 156px) - 48px))" }}
+      >
         <header className="flex items-start justify-between gap-4 border-b border-white/10 px-4 py-3.5">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-100/62">Tax profile</div>
