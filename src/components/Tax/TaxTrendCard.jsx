@@ -16,12 +16,17 @@ export default function TaxTrendCard({
   loading,
   error,
   source,
+  surfaceReadiness = {},
   onRecordPayment,
   onViewCalculation,
   headerActions = null,
 }) {
   const topMetrics = buildTopMetrics({ summary, asOfDate, payments, taxYear });
   const statusSentence = summary.status?.sentence;
+  const chartReadiness = surfaceReadiness.chart || {};
+  const liabilityReadiness = surfaceReadiness.liability || {};
+  const hasChartData = Array.isArray(data) && data.length > 0;
+  const chartUnavailable = !loading && !error && source !== "demo" && !hasChartData;
   return (
     <div className="rounded-[20px] border border-white/10 bg-gradient-to-br from-white/[0.06] via-white/[0.03] to-black/60 shadow-[0_18px_50px_rgba(0,0,0,0.35)] p-4 sm:p-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -53,22 +58,29 @@ export default function TaxTrendCard({
       <div className="mt-5 space-y-4">
         {error ? <div className="col-span-full text-xs text-rose-300">{error}</div> : null}
         <div id="tax-trajectory-chart" className="min-w-0">
-          <TaxLiabilityChart
-            data={data}
-            taxYear={taxYear}
-            asOfDate={asOfDate}
-            payments={payments}
-            reserve={reserve}
-            deadlines={deadlines}
-            explanation={explanation}
-            height={420}
-            source={source}
-            loading={loading}
-            showHeader={false}
-            onPointSelect={(point) => onViewCalculation?.(point?.workpaperDeepLink?.includes("section=") ? point.workpaperDeepLink.split("section=")[1] : "through_date_tax")}
-          />
+          {chartUnavailable ? (
+            <UnavailablePanel
+              title="Tax trajectory unavailable"
+              message={chartReadiness.message || "The tax trajectory will appear after the first completed tax calculation."}
+            />
+          ) : (
+            <TaxLiabilityChart
+              data={data}
+              taxYear={taxYear}
+              asOfDate={asOfDate}
+              payments={payments}
+              reserve={reserve}
+              deadlines={deadlines}
+              explanation={explanation}
+              height={420}
+              source={source}
+              loading={loading}
+              showHeader={false}
+              onPointSelect={(point) => onViewCalculation?.(point?.workpaperDeepLink?.includes("section=") ? point.workpaperDeepLink.split("section=")[1] : "through_date_tax")}
+            />
+          )}
         </div>
-        <TaxMetricSummary metrics={topMetrics} payments={payments} onRecordPayment={onRecordPayment} onViewCalculation={onViewCalculation} />
+        <TaxMetricSummary metrics={topMetrics} payments={payments} liabilityReadiness={liabilityReadiness} onRecordPayment={onRecordPayment} onViewCalculation={onViewCalculation} />
       </div>
     </div>
   );
@@ -97,7 +109,7 @@ function ConfidencePill({ score, level, tooltip = null }) {
   );
 }
 
-function TaxMetricSummary({ metrics = [], payments = {}, onRecordPayment, onViewCalculation }) {
+function TaxMetricSummary({ metrics = [], payments = {}, liabilityReadiness = {}, onRecordPayment, onViewCalculation }) {
   const metricMap = Object.fromEntries(metrics.map((metric) => [metric.key, metric]));
   const projected = metricMap["projected-annual-tax"];
   const throughToday = metricMap["through-today"];
@@ -112,7 +124,9 @@ function TaxMetricSummary({ metrics = [], payments = {}, onRecordPayment, onView
       <div className="flex flex-col gap-3 border-b border-white/[0.07] pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/42">Estimated tax liability</div>
-          <p className="mt-1 text-[11px] leading-relaxed text-white/48">Projected tax, through-date allocation, remaining liability, and reserve recommendation.</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-white/48">
+            {liabilityReadiness.message || "Projected tax, through-date allocation, remaining liability, and reserve recommendation."}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {onViewCalculation ? (
@@ -151,6 +165,17 @@ function TaxMetricSummary({ metrics = [], payments = {}, onRecordPayment, onView
         </div>
       </div>
     </section>
+  );
+}
+
+function UnavailablePanel({ title, message }) {
+  return (
+    <div className="flex min-h-[260px] items-center justify-center rounded-[18px] border border-white/[0.08] bg-black/[0.18] px-4 py-8 text-center">
+      <div className="max-w-md">
+        <div className="text-sm font-semibold text-white/84">{title}</div>
+        <p className="mt-2 text-sm leading-relaxed text-white/54">{message}</p>
+      </div>
+    </div>
   );
 }
 
@@ -542,14 +567,6 @@ function confirmedPaymentRows(rows = []) {
       && ["federal", "state"].includes(jurisdiction)
       && paymentType !== "other";
   });
-}
-
-function jurisdictionLabel(row = {}) {
-  return row.jurisdiction === "state" && row.stateCode ? `${row.stateCode} state` : labelize(row.jurisdiction);
-}
-
-function paymentTypeLabel(value) {
-  return labelize(String(value || "payment").replace("balance_due", "balance due"));
 }
 
 function formatCurrency(value) {

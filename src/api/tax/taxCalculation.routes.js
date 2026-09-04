@@ -12,7 +12,11 @@ import { buildTaxCalculationSummary } from "../../services/tax/explanations/taxE
 import { toCanonicalTaxCalculationDto } from "../../services/tax/api/taxCalculationDto.js";
 import { parseTaxApiIncludes, resolveTaxApiVersion } from "../../services/tax/api/taxApiVersion.js";
 import { computeTaxProfileReadiness, getTaxProfile } from "../../services/tax/taxProfile.service.js";
-import { countPostedTransactionsForTax, countUnclassifiedPostedTransactions } from "../../services/tax/taxPostedTransaction.repository.js";
+import {
+  countPostedTransactionsForTax,
+  countReviewRequiredTaxClassifications,
+  countUnclassifiedPostedTransactions,
+} from "../../services/tax/taxPostedTransaction.repository.js";
 import { assertTaxBusinessAccess, getAuthenticatedUserId } from "./taxRouteUtils.js";
 import { optionalDate, optionalEnum, optionalTaxYear, requireUuid, validateBusinessIdInput, validatePagination } from "./taxValidation.js";
 import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
@@ -386,25 +390,25 @@ function adminViewTaxUnavailableDto({ businessId, taxYear, apiVersion }) {
 async function taxOverviewLifecycleDto({ supabase, businessId, taxYear, requestedAsOfDate, apiVersion }) {
   const profile = await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
   let dataStatus = "profile_required";
-  let postedCount = null;
-  let unclassifiedCount = null;
-  let financialDataReady = null;
-  let taxClassificationReady = null;
+  const postedCount = await countPostedTransactionsForTax({ supabase, businessId, taxYear });
+  const unclassifiedCount = postedCount > 0
+    ? await countUnclassifiedPostedTransactions({ supabase, businessId, taxYear })
+    : 0;
+  const reviewRequiredCount = postedCount > 0
+    ? await countReviewRequiredTaxClassifications({ supabase, businessId, taxYear })
+    : 0;
+  const classifiedCount = Math.max(0, postedCount - unclassifiedCount);
+  const financialDataReady = postedCount > 0;
+  const taxClassificationReady = postedCount > 0 && unclassifiedCount === 0 && reviewRequiredCount === 0;
 
   if (profile) {
     const profileReadiness = computeTaxProfileReadiness(profile);
     if (profileReadiness.profile_complete !== true) {
       dataStatus = "profile_draft";
     } else {
-      postedCount = await countPostedTransactionsForTax({ supabase, businessId, taxYear });
-      unclassifiedCount = postedCount > 0
-        ? await countUnclassifiedPostedTransactions({ supabase, businessId, taxYear })
-        : 0;
-      financialDataReady = postedCount > 0;
-      taxClassificationReady = postedCount > 0 && unclassifiedCount === 0;
       dataStatus = postedCount <= 0
         ? "insufficient_financial_data"
-        : unclassifiedCount > 0
+        : !taxClassificationReady
           ? "classifications_required"
           : "calculation_required";
     }
@@ -412,6 +416,15 @@ async function taxOverviewLifecycleDto({ supabase, businessId, taxYear, requeste
 
   const readiness = computeTaxProfileReadiness(profile, { financialDataReady, taxClassificationReady });
   const message = lifecycleMessage(dataStatus);
+  const classificationSummary = buildClassificationSummary({ postedCount, classifiedCount, unclassifiedCount, reviewRequiredCount });
+  const surfaceReadiness = buildSurfaceReadiness({
+    dataStatus,
+    profile,
+    readiness,
+    classificationSummary,
+    financialDataReady,
+    taxClassificationReady,
+  });
   return {
     data_status: dataStatus,
     meta: {
@@ -440,8 +453,12 @@ async function taxOverviewLifecycleDto({ supabase, businessId, taxYear, requeste
       financialDataReady,
       taxClassificationReady,
       postedTransactionCount: postedCount,
+      classifiedTransactionCount: classifiedCount,
       unclassifiedTransactionCount: unclassifiedCount,
+      reviewRequiredTransactionCount: reviewRequiredCount,
     },
+    classification_summary: classificationSummary,
+    surface_readiness: surfaceReadiness,
     calculation: null,
     profile,
     missing_fields: readiness.missing_fields,
@@ -463,6 +480,98 @@ async function taxOverviewLifecycleDto({ supabase, businessId, taxYear, requeste
     explanationSummary: null,
     links: {},
   };
+}
+
+function buildClassificationSummary({ postedCount, classifiedCount, unclassifiedCount, reviewRequiredCount }) {
+  const coverage = postedCount > 0 ? Math.round((classifiedCount / postedCount) * 10000) / 100 : null;
+  return {
+    posted_transaction_count: postedCount,
+    classified_transaction_count: classifiedCount,
+    unclassified_transaction_count: unclassifiedCount,
+    review_required_transaction_count: reviewRequiredCount,
+    excluded_transaction_count: null,
+    classification_coverage_percent: coverage,
+    postedTransactionCount: postedCount,
+    classifiedTransactionCount: classifiedCount,
+    unclassifiedTransactionCount: unclassifiedCount,
+    reviewRequiredTransactionCount: reviewRequiredCount,
+    classificationCoveragePercent: coverage,
+  };
+}
+
+function buildSurfaceReadiness({
+  dataStatus,
+  profile,
+  readiness,
+  classificationSummary,
+  financialDataReady,
+  taxClassificationReady,
+}) {
+  const profileStatus = readiness.profile_status;
+  const postedCount = classificationSummary.posted_transaction_count;
+  const unclassifiedCount = classificationSummary.unclassified_transaction_count;
+  const reviewRequiredCount = classificationSummary.review_required_transaction_count;
+  const classificationsMessage = classificationReadinessMessage({ postedCount, unclassifiedCount, reviewRequiredCount });
+
+  const profileBlocker = !profile
+    ? "profile_required"
+    : profileStatus !== "calculation_ready"
+      ? "profile_draft"
+      : null;
+  const financialBlocker = !financialDataReady ? "insufficient_financial_data" : null;
+  const classificationBlocker = financialDataReady && !taxClassificationReady ? "classifications_required" : null;
+  const readinessReason = profileBlocker || financialBlocker || classificationBlocker || "calculation_required";
+
+  return {
+    chart: {
+      status: dataStatus === "available" ? "available" : readinessReason,
+      ready: false,
+      reason: readinessReason,
+      message: readinessReason === "calculation_required"
+        ? "The tax trajectory will appear after the first completed tax calculation."
+        : surfaceMessage(readinessReason, classificationsMessage),
+    },
+    liability: {
+      status: dataStatus === "available" ? "available" : readinessReason,
+      ready: false,
+      reason: readinessReason,
+      message: readinessReason === "calculation_required"
+        ? "A completed tax calculation is required before estimated liability is available."
+        : surfaceMessage(readinessReason, classificationsMessage),
+    },
+    deductions: {
+      status: taxClassificationReady ? "available" : (financialDataReady ? "classifications_required" : "insufficient_financial_data"),
+      ready: taxClassificationReady,
+      reason: taxClassificationReady ? null : (financialDataReady ? "classifications_required" : "insufficient_financial_data"),
+      message: taxClassificationReady
+        ? "Deduction classification data is available."
+        : classificationsMessage,
+    },
+  };
+}
+
+function classificationReadinessMessage({ postedCount, unclassifiedCount, reviewRequiredCount }) {
+  if (postedCount <= 0) {
+    return "Confirmed QuickBooks-posted transactions are required before deductible totals can be calculated.";
+  }
+  if (unclassifiedCount > 0) {
+    return `${unclassifiedCount} posted QuickBooks transactions are awaiting tax classification before deductible totals can be calculated.`;
+  }
+  if (reviewRequiredCount > 0) {
+    return `${reviewRequiredCount} tax classifications require review before deductible totals can be calculated.`;
+  }
+  return "Deductible totals require reviewed transaction tax classifications.";
+}
+
+function surfaceMessage(reason, classificationsMessage) {
+  const messages = {
+    profile_required: "Complete your Tax Profile to prepare an estimate.",
+    profile_draft: "Your Tax Profile is saved as a draft.",
+    insufficient_financial_data: "Confirmed QuickBooks-posted financial activity is required before an estimate can be calculated.",
+    classifications_required: classificationsMessage,
+    calculation_required: "A tax estimate has not been generated yet.",
+  };
+  return messages[reason] || lifecycleMessage(reason);
 }
 
 function lifecycleMessage(status) {

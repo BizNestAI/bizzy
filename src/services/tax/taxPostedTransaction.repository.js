@@ -152,6 +152,27 @@ export async function countUnclassifiedPostedTransactions({ supabase, businessId
   return result.counts.unclassified;
 }
 
+export async function countReviewRequiredTaxClassifications({ supabase, businessId, taxYear } = {}) {
+  if (!supabase) throw new Error("Supabase client required");
+  if (!businessId) throw validationError("missing_business_id", "businessId is required.");
+  const year = requireTaxYear(taxYear);
+  const postedRows = await listAllEligiblePostedRows({ supabase, businessId, taxYear: year });
+  const transactionIds = postedRows.map((row) => row.transactionId).filter(Boolean);
+  const reviewRequiredIds = new Set();
+  for (const chunk of chunks([...new Set(transactionIds.map(String))], CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from("transaction_tax_classifications")
+      .select("transaction_id")
+      .eq("business_id", businessId)
+      .eq("tax_year", year)
+      .eq("requires_review", true)
+      .in("transaction_id", chunk);
+    if (error) throw error;
+    for (const row of data || []) reviewRequiredIds.add(String(row.transaction_id));
+  }
+  return reviewRequiredIds.size;
+}
+
 export async function getPostedTransactionIdsForTax({ supabase, businessId, taxYear, dateFrom, dateTo } = {}) {
   const result = await listPostedTransactionsForTax({ supabase, businessId, taxYear, dateFrom, dateTo, limit: MAX_LIMIT, offset: 0 });
   return result.rows.map((row) => row.transactionId);

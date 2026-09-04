@@ -11,7 +11,7 @@ import {
   getTaxProfile,
   assertTaxProfileMutableBody,
   sanitizeTaxProfileForClient,
-  updateTaxProfile,
+  upsertTaxProfile,
 } from "../../services/tax/taxProfile.service.js";
 import { TAX_CHANGE_TYPES, emitTaxDataChanged } from "../../services/tax/taxChangeEvents.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
@@ -68,18 +68,18 @@ router.patch("/profile", async (req, res) => {
     const { businessId, taxYear } = await authorizedProfileContext(req);
     assertTaxProfileMutableBody(req.body || {});
     const before = await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
-    const profile = await updateTaxProfile({
+    const profile = await upsertTaxProfile({
       supabase,
       businessId,
       taxYear,
-      patch: req.body || {},
+      input: req.body || {},
       userId: req.user.id,
       source: req.body?.source,
     });
     emitTaxDataChanged({
       businessId,
       taxYear,
-      changeType: TAX_CHANGE_TYPES.PROFILE_UPDATED,
+      changeType: before ? TAX_CHANGE_TYPES.PROFILE_UPDATED : TAX_CHANGE_TYPES.PROFILE_CREATED,
       entityId: profile.id,
       userId: req.user.id,
       metadata: {

@@ -52,6 +52,73 @@ test("GET /api/tax/overview is read-only and reports lifecycle state when no com
   assert.equal(res.body.data.meta.readOnly, true);
 });
 
+test("GET /api/tax/overview reports profile and classification setup separately for 205 posted rows", async () => {
+  const posted = Array.from({ length: 205 }, (_, index) => {
+    const day = String((index % 28) + 1).padStart(2, "0");
+    const id = `posted-${String(index + 1).padStart(3, "0")}`;
+    return {
+      bank: bankTxn({
+        id,
+        date: `2026-06-${day}`,
+        signed_amount: -10 - index,
+        direction: "OUTFLOW",
+        name: `Posted transaction ${index + 1}`,
+        created_at: `2026-06-${day}T00:00:00Z`,
+      }),
+      cat: cat({
+        id: `cat-${id}`,
+        transaction_id: id,
+        qbo_txn_id: `qbo-${id}`,
+        qbo_txn_type: "Purchase",
+        posted_at: `2026-06-${day}T12:00:00Z`,
+      }),
+      qbo: {
+        id: `qbo-row-${id}`,
+        business_id: BUSINESS_ID,
+        transaction_id: id,
+        qbo_txn_type: "Purchase",
+        qbo_txn_id: `qbo-${id}`,
+        status: "posted",
+        posted_at: `2026-06-${day}T12:00:00Z`,
+        response: {},
+      },
+    };
+  });
+  const store = baseStore({
+    bank_transactions: posted.map((row) => row.bank),
+    transaction_categorizations: posted.map((row) => row.cat),
+    qbo_posted_transactions: posted.map((row) => row.qbo),
+    transaction_tax_classifications: [],
+    tax_profiles: [],
+    tax_calculation_runs: Array.from({ length: 45 }, (_, index) => ({
+      id: `failed-run-${index}`,
+      business_id: BUSINESS_ID,
+      tax_year: 2026,
+      status: "failed",
+      calculation_type: "full_estimate",
+      error_code: "entity_context_unavailable",
+      created_at: `2026-08-${String((index % 28) + 1).padStart(2, "0")}T00:00:00Z`,
+    })),
+  });
+  const app = createApp(store);
+  const res = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-09-03`, { token: "valid-user" });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(store.tax_calculation_runs.length, 45);
+  assert.equal(res.body.data.data_status, "profile_required");
+  assert.equal(res.body.data.calculation, null);
+  assert.equal(res.body.data.profile, null);
+  assert.equal(res.body.data.classification_summary.posted_transaction_count, 205);
+  assert.equal(res.body.data.classification_summary.classified_transaction_count, 0);
+  assert.equal(res.body.data.classification_summary.unclassified_transaction_count, 205);
+  assert.equal(res.body.data.classification_summary.classification_coverage_percent, 0);
+  assert.equal(res.body.data.surface_readiness.deductions.status, "classifications_required");
+  assert.equal(res.body.data.surface_readiness.liability.status, "profile_required");
+  assert.match(res.body.data.surface_readiness.deductions.message, /205 posted QuickBooks transactions/);
+  assert.deepEqual(res.body.data.summary, {});
+  assert.equal(res.body.data.projection, null);
+});
+
 test("GET /api/tax/overview reuses stored completed runs and ignores refresh generation", async () => {
   const store = baseStore();
   const app = createApp(store);

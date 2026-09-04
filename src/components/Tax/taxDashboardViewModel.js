@@ -15,6 +15,8 @@ export function buildTaxDashboardViewModel(taxOverview) {
   const confidence = dto.confidence || {};
   const safeHarbor = dto.safeHarbor || {};
   const reserve = dto.reserve || {};
+  const classificationSummary = normalizeClassificationSummary(dto.classificationSummary || dto.classification_summary || {});
+  const surfaceReadiness = normalizeSurfaceReadiness(dto.surfaceReadiness || dto.surface_readiness || {});
   const warnings = normalizeList(dto.warnings);
   const setupState = normalizeSetupState(readiness.setupState, warnings, confidence);
   const actions = collectActions({ readiness, confidence, setupState });
@@ -87,19 +89,27 @@ export function buildTaxDashboardViewModel(taxOverview) {
       topImprovementAction: normalizeList(confidence.improvementActions)[0] || actions[0] || null,
     },
     health: buildHealth({ dto, readiness, confidence, warnings, actions }),
+    classificationSummary,
+    surfaceReadiness,
     profileSummary: buildProfileSummary(dto.profile),
     nextActions: buildNextActions({ actions, confidence, setupState, dto }),
     trend: buildTrend(dto),
     warnings,
     actions,
-    narrative: buildNarrative({ dto, summary, readiness, confidence }),
+    narrative: buildNarrative({ dto, summary, readiness, confidence, surfaceReadiness }),
   };
 }
 
 function buildHealth({ dto, readiness, confidence, warnings, actions }) {
   const score = nullableNumber(confidence.score);
   const profile = profileCompletion(dto.profile?.completeness || dto.profileCompleteness || {});
-  const classificationCoverage = nullableNumber(dto.deductions?.coverage?.classificationCoveragePercent);
+  const classificationCoverage = nullableNumber(
+    dto.deductions?.coverage?.classificationCoveragePercent
+    ?? dto.classificationSummary?.classificationCoveragePercent
+    ?? dto.classificationSummary?.classification_coverage_percent
+    ?? dto.classification_summary?.classificationCoveragePercent
+    ?? dto.classification_summary?.classification_coverage_percent
+  );
   const level = score == null
     ? readiness.estimateReady ? "Partial" : "Unavailable"
     : score >= 90 ? "Excellent"
@@ -218,17 +228,52 @@ function buildNextActions({ actions, confidence, setupState, dto }) {
   }).slice(0, 5);
 }
 
-function buildNarrative({ dto, summary, readiness, confidence }) {
+function buildNarrative({ dto, summary, readiness, confidence, surfaceReadiness }) {
   if (dto.meta?.source === "demo") {
     return dto.explanationSummary?.summary || "Demo scenario showing how Bizzi will present your tax position.";
   }
   if (dto.meta?.status === "failed") return "The latest tax calculation failed. Bizzi will keep any previous calculation separate from the failed refresh state.";
+  if (surfaceReadiness?.liability?.message) return surfaceReadiness.liability.message;
   if (readiness.estimateReady !== true) return readiness.setupState?.message || "Complete your tax profile to generate a reliable estimate.";
   const projected = formatMoney(summary.projectedTotalTax);
   const paid = formatMoney(summary.taxPaidAndWithheldYtd);
   const remaining = formatMoney(summary.remainingProjectedLiability);
   const confidenceText = confidence.level ? ` Estimate confidence is ${String(confidence.level).replaceAll("_", " ")}.` : "";
   return `Based on your books, projected tax is ${projected}. Payments and withholding currently cover ${paid}, leaving ${remaining} as projected remaining liability.${confidenceText}`;
+}
+
+function normalizeClassificationSummary(summary = {}) {
+  const postedTransactionCount = nullableNumber(summary.postedTransactionCount ?? summary.posted_transaction_count);
+  const classifiedTransactionCount = nullableNumber(summary.classifiedTransactionCount ?? summary.classified_transaction_count);
+  const unclassifiedTransactionCount = nullableNumber(summary.unclassifiedTransactionCount ?? summary.unclassified_transaction_count);
+  const reviewRequiredTransactionCount = nullableNumber(summary.reviewRequiredTransactionCount ?? summary.review_required_transaction_count);
+  return {
+    postedTransactionCount,
+    classifiedTransactionCount,
+    unclassifiedTransactionCount,
+    reviewRequiredTransactionCount,
+    excludedTransactionCount: nullableNumber(summary.excludedTransactionCount ?? summary.excluded_transaction_count),
+    classificationCoveragePercent: nullableNumber(summary.classificationCoveragePercent ?? summary.classification_coverage_percent),
+  };
+}
+
+function normalizeSurfaceReadiness(value = {}) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    chart: normalizeSurface(source.chart || source.taxTrajectory || source.tax_trajectory),
+    liability: normalizeSurface(source.liability || source.estimatedTaxLiability || source.estimated_tax_liability),
+    deductions: normalizeSurface(source.deductions || source.deductionsPreview || source.deductions_preview),
+  };
+}
+
+function normalizeSurface(surface = {}) {
+  const source = surface && typeof surface === "object" ? surface : {};
+  return {
+    status: source.status || source.reason || "unavailable",
+    ready: source.ready === true,
+    reason: source.reason || source.status || null,
+    message: source.message || null,
+  };
 }
 
 function normalizeSetupState(setupState, warnings, confidence) {

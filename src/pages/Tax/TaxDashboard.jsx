@@ -163,6 +163,7 @@ export default function TaxDashboard() {
               loading={tax.refreshing}
               error={tax.error && hasPreviousData ? tax.error.message : ""}
               source={tax.isDemo ? "demo" : "live"}
+              surfaceReadiness={model.surfaceReadiness}
               onRecordPayment={() => {
                 if (readOnly) setSetupNotice("Tax payment changes are unavailable in read-only Admin View.");
                 else setPaymentModalOpen(true);
@@ -422,8 +423,11 @@ function resolveOverviewStatus(model, isDemo) {
 function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const [selectedCell, setSelectedCell] = useState(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 } });
+  const classificationSummary = useMemo(() => buildDeductionClassificationSummary(deductions), [deductions]);
+  const classificationsRequired = !deductions.isDemo && classificationSummary.requiresClassification;
   const matrix = useMemo(
     () => {
+      if (classificationsRequired) return buildDeductionAccountMatrix([], year, { isDemo: deductions.isDemo });
       const classifiedRows = (deductions.allTransactions?.rows || deductions.transactions?.rows || []).map(mapDeductionTransactionRow);
       const classifiedById = new Map(classifiedRows.map((row) => [String(row.id), row]));
       const postedRows = deductions.postedTransactions?.rows || [];
@@ -432,8 +436,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
         : classifiedRows;
       return buildDeductionAccountMatrix(rows, year, { isDemo: deductions.isDemo });
     },
-    [deductions.allTransactions, deductions.postedTransactions, deductions.transactions, deductions.isDemo, year]
+    [classificationsRequired, deductions.allTransactions, deductions.postedTransactions, deductions.transactions, deductions.isDemo, year]
   );
+  const deductionsMessage = classificationsRequired
+    ? deductionClassificationMessage(classificationSummary)
+    : "Deductible totals by tax category from posted QuickBooks expense transactions. Click a month amount to inspect the Plaid transactions behind it.";
 
   useEffect(() => {
     if (!selectedCell) return;
@@ -454,7 +461,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           <div className="text-[12px] uppercase tracking-[0.14em] text-white/65">Deductions</div>
           <div className="text-xl font-semibold leading-tight">Deductions preview</div>
           <p className="mt-1 max-w-2xl text-sm text-white/55">
-            Deductible totals by tax category from posted QuickBooks expense transactions. Click a month amount to inspect the Plaid transactions behind it.
+            {deductionsMessage}
           </p>
         </div>
 
@@ -526,14 +533,16 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           </div>
         ) : (
           <div className="px-4 py-8 text-center text-sm text-white/54">
-            No posted QuickBooks expense category totals are available yet.
+            {classificationsRequired
+              ? "Deductible totals stay unavailable until transaction tax treatment is reviewed."
+              : "No posted QuickBooks expense category totals are available yet."}
           </div>
         )}
       </div>
 
       <div className="mt-3 flex flex-col gap-2 text-xs text-white/45 sm:flex-row sm:items-center sm:justify-between">
-        <span>Cells show deductible amount, not gross spend.</span>
-        <span>{matrix.transactionCount ? `${matrix.transactionCount} posted expense transactions loaded` : "Transaction detail loads from posted QuickBooks expense data."}</span>
+        <span>{classificationsRequired ? "No deduction total is shown until classification authority exists." : "Cells show deductible amount, not gross spend."}</span>
+        <span>{classificationsRequired ? formatClassificationSummaryLine(classificationSummary) : matrix.transactionCount ? `${matrix.transactionCount} posted expense transactions loaded` : "Transaction detail loads from posted QuickBooks expense data."}</span>
       </div>
 
       <DeductionMonthDetailModal
@@ -544,6 +553,66 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
       />
     </div>
   );
+}
+
+function buildDeductionClassificationSummary(deductions) {
+  const coverage = deductions.overview?.coverage || {};
+  const postedTotal = nullableNumber(
+    coverage.postedTransactionCount
+    ?? coverage.posted_transaction_count
+    ?? coverage.eligiblePostedCount
+    ?? coverage.eligible_posted_count
+    ?? deductions.postedTransactions?.pagination?.total
+    ?? deductions.postedTransactions?.counts?.eligiblePosted
+  );
+  const classifiedTotal = nullableNumber(
+    coverage.classifiedTransactionCount
+    ?? coverage.classified_transaction_count
+    ?? coverage.classifiedCount
+    ?? coverage.classified_count
+    ?? deductions.allTransactions?.pagination?.total
+    ?? deductions.transactions?.pagination?.total
+  );
+  const reviewRequiredTotal = nullableNumber(
+    coverage.reviewRequiredTransactionCount
+    ?? coverage.review_required_transaction_count
+    ?? coverage.reviewRequiredCount
+    ?? coverage.requiresReviewCount
+  ) ?? 0;
+  const unclassifiedTotal = nullableNumber(
+    coverage.unclassifiedTransactionCount
+    ?? coverage.unclassified_transaction_count
+    ?? coverage.unclassifiedCount
+    ?? coverage.unclassified_count
+  ) ?? (postedTotal != null && classifiedTotal != null ? Math.max(0, postedTotal - classifiedTotal) : null);
+  const effectiveClassified = classifiedTotal ?? (postedTotal != null && unclassifiedTotal != null ? Math.max(0, postedTotal - unclassifiedTotal) : null);
+  const requiresClassification = (postedTotal ?? 0) > 0 && ((unclassifiedTotal ?? 0) > 0 || reviewRequiredTotal > 0 || (effectiveClassified ?? 0) === 0);
+  return {
+    postedTotal,
+    classifiedTotal: effectiveClassified,
+    unclassifiedTotal,
+    reviewRequiredTotal,
+    requiresClassification,
+  };
+}
+
+function deductionClassificationMessage(summary) {
+  if ((summary.unclassifiedTotal ?? 0) > 0) {
+    return `${summary.unclassifiedTotal} posted QuickBooks transactions are awaiting tax classification before deductible totals can be calculated.`;
+  }
+  if ((summary.reviewRequiredTotal ?? 0) > 0) {
+    return `${summary.reviewRequiredTotal} tax classifications require review before deductible totals can be calculated.`;
+  }
+  return "Posted QuickBooks transactions need tax review before deductible totals can be calculated.";
+}
+
+function formatClassificationSummaryLine(summary) {
+  const parts = [];
+  if (summary.postedTotal != null) parts.push(`${summary.postedTotal} posted`);
+  if (summary.classifiedTotal != null) parts.push(`${summary.classifiedTotal} classified`);
+  if (summary.unclassifiedTotal != null) parts.push(`${summary.unclassifiedTotal} unclassified`);
+  if (summary.reviewRequiredTotal) parts.push(`${summary.reviewRequiredTotal} review required`);
+  return parts.length ? parts.join(" · ") : "Classification counts unavailable.";
 }
 
 function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassification, readOnly = false }) {
@@ -1100,6 +1169,12 @@ const SkeletonCard = ({ className = "", lines = 3, height = "h-48" }) => (
 function formatCurrencyLocal(value, fallback = "—") {
   if (value == null || Number.isNaN(Number(value))) return fallback;
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Number(value));
+}
+
+function nullableNumber(value) {
+  if (value == null || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function formatDateLocal(value) {

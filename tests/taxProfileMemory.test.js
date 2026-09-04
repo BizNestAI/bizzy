@@ -136,6 +136,53 @@ test("tax profile draft saves partial valid fields without requiring prior-year 
   assert.ok(readiness.blockers.includes("tax_classifications"));
 });
 
+test("tax profile PATCH upsert can create the first draft profile", async () => {
+  const { computeTaxProfileReadiness, upsertTaxProfile } = await import("../src/services/tax/taxProfile.service.js");
+  const supabase = makeSupabase({ tax_profiles: [] });
+
+  const profile = await upsertTaxProfile({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    userId: USER_ID,
+    source: "user",
+    input: {
+      entityType: "sole_proprietor",
+      filingStatus: "single",
+      primaryTaxState: "NC",
+      accountingMethod: "cash",
+      safeHarborMethod: "current_year_90",
+      priorYearTotalTax: "",
+      priorYearAgi: "",
+      federalWithholdingYtd: "0",
+      stateWithholdingYtd: "",
+      reserveBufferPercent: "",
+    },
+  });
+  const readiness = computeTaxProfileReadiness(profile, {
+    financialDataReady: true,
+    taxClassificationReady: false,
+  });
+
+  assert.equal(supabase.store.tax_profiles.length, 1);
+  assert.equal(profile.business_id, BUSINESS_ID);
+  assert.equal(profile.tax_year, 2026);
+  assert.equal(profile.entity_type, "sole_proprietor");
+  assert.equal(profile.filing_status, "single");
+  assert.equal(profile.primary_tax_state, "NC");
+  assert.equal(profile.accounting_method, "cash");
+  assert.equal(profile.safe_harbor_method, "current_year_90");
+  assert.equal(profile.prior_year_total_tax, null);
+  assert.equal(profile.prior_year_agi, null);
+  assert.equal(profile.federal_withholding_ytd, 0);
+  assert.equal(profile.state_withholding_ytd, null);
+  assert.equal(profile.reserve_buffer_percent, null);
+  assert.equal(readiness.profile_status, "draft");
+  assert.ok(readiness.missing_fields.includes("self_employment_tax_applies"));
+  assert.equal(readiness.missing_fields.includes("prior_year_total_tax"), false);
+  assert.equal(readiness.missing_fields.includes("prior_year_agi"), false);
+});
+
 test("tax profile mutable body rejects unsupported fields before persistence", async () => {
   const { assertTaxProfileMutableBody } = await import("../src/services/tax/taxProfile.service.js");
 

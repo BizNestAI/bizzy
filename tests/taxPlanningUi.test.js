@@ -113,6 +113,7 @@ test("Tax Dashboard keeps payment logging in the trajectory modal without a stan
 test("tax profile editor is a centered compact modal without a page-blur overlay", () => {
   const modal = fs.readFileSync("src/components/Tax/TaxProfileModal.jsx", "utf8");
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const fields = fs.readFileSync("src/components/Tax/Setup/taxProfileFields.js", "utf8");
   assert.match(dashboard, /Edit Tax Profile/);
   assert.doesNotMatch(dashboard, /TaxDataFreshnessBadge/);
   assert.doesNotMatch(dashboard, /tax-year-select/);
@@ -130,6 +131,18 @@ test("tax profile editor is a centered compact modal without a page-blur overlay
   assert.match(modal, /setRendered/);
   assert.match(modal, /transition-all duration-200/);
   assert.match(modal, /dark-dropdown/);
+  assert.doesNotMatch(modal, /<select/);
+  assert.match(modal, /role="combobox"/);
+  assert.match(modal, /role="listbox"/);
+  assert.match(modal, /open && menuStyle \? createPortal\(/);
+  assert.match(modal, /document\.body/);
+  assert.match(modal, /z-\[120\]/);
+  assert.match(modal, /maxHeight/);
+  assert.match(modal, /overflow-y-auto/);
+  assert.match(modal, /event\.stopPropagation\(\)/);
+  assert.match(fields, /value: "current_year_90"/);
+  assert.match(fields, /"NY", "NC", "ND"/);
+  assert.match(fields, /\{ value: code, label: code \}/);
   assert.doesNotMatch(modal, /backdrop-blur/);
   assert.doesNotMatch(modal, /fixed right-4 top-24/);
 });
@@ -200,8 +213,23 @@ test("Tax Dashboard deductions preview renders a QuickBooks account by month mat
   assert.match(dashboard, /Unmapped QuickBooks account/);
   assert.match(dashboard, /account\.expenseTotal > 0/);
   assert.match(dashboard, /limit: 100/);
+  assert.match(dashboard, /buildDeductionClassificationSummary/);
+  assert.match(dashboard, /classificationsRequired/);
+  assert.match(dashboard, /posted QuickBooks transactions are awaiting tax classification/);
+  assert.match(dashboard, /No deduction total is shown until classification authority exists/);
   assert.doesNotMatch(dashboard, /Confirmed deductible/);
   assert.doesNotMatch(dashboard, /Estimated deductible/);
   assert.doesNotMatch(dashboard, /Top categories/);
   assert.doesNotMatch(dashboard, /Recent tax treatments/);
+});
+
+test("Tax trajectory surfaces render unavailable states without fabricating live chart values", () => {
+  const trendCard = fs.readFileSync("src/components/Tax/TaxTrendCard.jsx", "utf8");
+  const viewModel = fs.readFileSync("src/components/Tax/taxDashboardViewModel.js", "utf8");
+  assert.match(trendCard, /surfaceReadiness/);
+  assert.match(trendCard, /UnavailablePanel/);
+  assert.match(trendCard, /chartUnavailable/);
+  assert.match(trendCard, /The tax trajectory will appear after the first completed tax calculation/);
+  assert.match(viewModel, /normalizeSurfaceReadiness/);
+  assert.match(viewModel, /classificationSummary/);
 });
