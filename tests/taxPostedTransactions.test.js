@@ -129,6 +129,41 @@ test("repository paginates over more than 1000 posted rows", async () => {
   assert.equal(result.pagination.total, 1005);
 });
 
+test("repository hydrates production-sized posted rows through bounded related chunks", async () => {
+  const bankRows = Array.from({ length: 205 }, (_, i) => bankTxn({
+    id: `chunk-${String(i).padStart(3, "0")}`,
+    date: "2026-08-01",
+    created_at: `2026-08-01T00:${String(i % 60).padStart(2, "0")}:00Z`,
+  }));
+  const catRows = bankRows.map((row) => cat({
+    id: `cat-${row.id}`,
+    transaction_id: row.id,
+    status: "posted",
+    qbo_txn_id: `qbo-${row.id}`,
+  }));
+  const qboRows = bankRows.map((row) => qbo({
+    id: `qbo-row-${row.id}`,
+    transaction_id: row.id,
+    qbo_txn_id: `qbo-${row.id}`,
+  }));
+  const calls = [];
+  const result = await listPostedTransactionsForTax({
+    supabase: makeSupabase({ bank_transactions: bankRows, transaction_categorizations: catRows, qbo_posted_transactions: qboRows }, calls),
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    limit: 205,
+  });
+
+  assert.equal(result.rows.length, 205);
+  assert.equal(new Set(result.rows.map((row) => row.transactionId)).size, 205);
+  const relatedIns = calls.filter((call) => (
+    ["transaction_categorizations", "qbo_posted_transactions"].includes(call.table)
+    && call.field === "transaction_id"
+  ));
+  assert.equal(relatedIns.some((call) => call.count > 50), false);
+  assert.equal(relatedIns.some((call) => call.count === 205), false);
+});
+
 test("unclassified query only suppresses classifications for same tax year", async () => {
   const supabase = makeSupabase({
     bank_transactions: [bankTxn({ id: "same-year" }), bankTxn({ id: "other-year-classified" })],
@@ -237,17 +272,19 @@ function qbo(overrides = {}) {
   };
 }
 
-function makeSupabase(tables) {
+function makeSupabase(tables, calls = []) {
   return {
     from(table) {
-      return new Query(table, tables[table] || []);
+      return new Query(table, tables[table] || [], calls);
     },
   };
 }
 
 class Query {
-  constructor(_table, rows) {
+  constructor(table, rows, calls = []) {
+    this.table = table;
     this.rows = [...rows];
+    this.calls = calls;
     this.rangeStart = null;
     this.rangeEnd = null;
   }
@@ -265,6 +302,7 @@ class Query {
     return this;
   }
   in(field, values) {
+    this.calls.push({ table: this.table, field, count: values.length, values: [...values] });
     const set = new Set(values.map(String));
     this.rows = this.rows.filter((row) => set.has(String(row[field])));
     return this;
@@ -278,7 +316,7 @@ class Query {
     return this;
   }
   range(start, end) {
-    const next = new Query("range", this.rows);
+    const next = new Query(this.table, this.rows, this.calls);
     next.rangeStart = start;
     next.rangeEnd = end;
     return next;

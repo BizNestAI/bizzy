@@ -1,3 +1,4 @@
+/* global global */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -145,6 +146,63 @@ test("tax client serializes overview query and validates include values", async 
     () => taxClient.getTaxOverview({ businessId: "biz-1", include: ["rawPayloads"] }),
     /Unsupported tax include/
   );
+});
+
+test("tax client keeps Tax Profile identity in query params and mutable body allowlisted", async () => {
+  const calls = [];
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: async () => ({ data: { session: { access_token: "t" } } }) } },
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init, body: init.body ? JSON.parse(init.body) : null });
+      return jsonResponse({ ok: true, data: { profile: { id: "profile-1" }, completeness: {}, readiness: {} } });
+    },
+  });
+
+  await taxClient.updateTaxProfile({
+    businessId: "biz-1",
+    year: 2026,
+    patch: {
+      businessId: "other-business",
+      business_id: "other-business",
+      year: 2025,
+      tax_year: 2025,
+      userId: "other-user",
+      entity_type: "sole_proprietor",
+      filing_status: "single",
+      primary_tax_state: "NC",
+      prior_year_total_tax: "",
+    },
+  });
+
+  const url = new URL(calls[0].url);
+  assert.equal(url.pathname, "/api/tax/profile");
+  assert.equal(url.searchParams.get("businessId"), "biz-1");
+  assert.equal(url.searchParams.get("year"), "2026");
+  assert.deepEqual(calls[0].body, {
+    entity_type: "sole_proprietor",
+    filing_status: "single",
+    primary_tax_state: "NC",
+    prior_year_total_tax: "",
+  });
+});
+
+test("tax client clamps Tax detail page sizes to the server maximum", async () => {
+  const calls = [];
+  authMod.__setAuthenticatedFetchTestDeps({
+    getApiBase: () => "https://api.example.test",
+    supabase: { auth: { getSession: async () => ({ data: { session: { access_token: "t" } } }) } },
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return jsonResponse({ ok: true, data: { rows: [], pagination: { total: 0, limit: 200, offset: 0 } } });
+    },
+  });
+
+  await taxClient.getTaxDeductionTransactions({ businessId: "biz-1", year: 2026, limit: 250, offset: 0 });
+  await taxClient.getTaxPostedTransactions({ businessId: "biz-1", year: 2026, limit: 250, offset: 0 });
+
+  assert.equal(new URL(calls[0]).searchParams.get("limit"), "200");
+  assert.equal(new URL(calls[1]).searchParams.get("limit"), "200");
 });
 
 test("tax client sends tax payment idempotency key in header and body", async () => {

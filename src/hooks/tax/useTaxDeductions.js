@@ -33,6 +33,7 @@ export function useTaxDeductions({
   const [postedTransactions, setPostedTransactions] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [resourceErrors, setResourceErrors] = useState({});
   const seq = useRef(0);
   const isDemo = shouldUseDemoData();
 
@@ -45,16 +46,18 @@ export function useTaxDeductions({
       setPostedTransactions(fixture.deductionTransactions);
       setLoading(false);
       setError(null);
+      setResourceErrors({});
       return { overview: fixture.deductions, transactions: fixture.deductionTransactions };
     }
     if (!enabled || !businessId) return null;
     const request = ++seq.current;
     setLoading(true);
     setError(null);
+    setResourceErrors({});
     try {
       const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
       const parsedPagination = paginationKey ? JSON.parse(paginationKey) : {};
-      const [nextOverview, nextTransactions, nextAllTransactions, nextPostedTransactions] = await Promise.all([
+      const [overviewResult, transactionsResult, allTransactionsResult, postedTransactionsResult] = await Promise.allSettled([
         getTaxDeductionsOverview({ businessId, year, asOfDate, signal }),
         getTaxDeductionTransactions({
           businessId,
@@ -69,12 +72,25 @@ export function useTaxDeductions({
         fetchAllPostedTransactions({ businessId, year, signal }),
       ]);
       if (request === seq.current) {
-        setOverview(nextOverview);
-        setTransactions(nextTransactions);
-        setAllTransactions(nextAllTransactions);
-        setPostedTransactions(nextPostedTransactions);
+        if (overviewResult.status === "fulfilled") setOverview(overviewResult.value);
+        if (transactionsResult.status === "fulfilled") setTransactions(transactionsResult.value);
+        if (allTransactionsResult.status === "fulfilled") setAllTransactions(allTransactionsResult.value);
+        if (postedTransactionsResult.status === "fulfilled") setPostedTransactions(postedTransactionsResult.value);
+        const errors = collectResourceErrors({
+          overview: overviewResult,
+          transactions: transactionsResult,
+          allTransactions: allTransactionsResult,
+          postedTransactions: postedTransactionsResult,
+        });
+        setResourceErrors(errors);
+        setError(Object.values(errors)[0] || null);
       }
-      return { overview: nextOverview, transactions: nextTransactions, allTransactions: nextAllTransactions, postedTransactions: nextPostedTransactions };
+      return {
+        overview: valueOrNull(overviewResult),
+        transactions: valueOrNull(transactionsResult),
+        allTransactions: valueOrNull(allTransactionsResult),
+        postedTransactions: valueOrNull(postedTransactionsResult),
+      };
     } catch (err) {
       if (err?.code !== "request_aborted" && request === seq.current) setError(err);
       return null;
@@ -96,6 +112,7 @@ export function useTaxDeductions({
     postedTransactions,
     loading,
     error,
+    resourceErrors,
     isDemo,
     refetch: load,
     getTransactionDetail: (transactionId, options = {}) =>
@@ -184,7 +201,7 @@ async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filte
 }
 
 async function fetchAllPostedTransactions({ businessId, year, signal }) {
-  const limit = 250;
+  const limit = 200;
   const rows = [];
   let latestPage = null;
   for (let offset = 0; ; offset += limit) {
@@ -206,6 +223,18 @@ async function fetchAllPostedTransactions({ businessId, year, signal }) {
       hasMore: false,
     },
   };
+}
+
+function valueOrNull(result) {
+  return result?.status === "fulfilled" ? result.value : null;
+}
+
+function collectResourceErrors(results = {}) {
+  return Object.fromEntries(
+    Object.entries(results)
+      .filter(([, result]) => result?.status === "rejected" && result.reason?.code !== "request_aborted")
+      .map(([keyName, result]) => [keyName, result.reason])
+  );
 }
 
 function stableObject(value) {

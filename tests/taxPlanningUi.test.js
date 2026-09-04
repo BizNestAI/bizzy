@@ -199,7 +199,7 @@ test("Tax Dashboard deductions preview renders a QuickBooks account by month mat
   assert.match(dashboard, /qboAccountId/);
   assert.match(dashboard, /Unmapped QuickBooks account/);
   assert.match(dashboard, /account\.expenseTotal > 0/);
-  assert.match(dashboard, /limit: 250/);
+  assert.match(dashboard, /limit: 100/);
   assert.doesNotMatch(dashboard, /Confirmed deductible/);
   assert.doesNotMatch(dashboard, /Estimated deductible/);
   assert.doesNotMatch(dashboard, /Top categories/);

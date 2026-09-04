@@ -23,7 +23,67 @@ import { ENTITY_PATHS } from "./entity/entityDomain.js";
 import { resolveEntityPath } from "./entity/entityResolver.js";
 import { getEntityRequirements } from "./entity/entityRequirements.js";
 
-const PROTECTED_PROFILE_FIELDS = new Set(["id", "business_id", "businessId", "tax_year", "taxYear", "created_at"]);
+const PROTECTED_PROFILE_FIELDS = new Set([
+  "id",
+  "business_id",
+  "businessId",
+  "tax_year",
+  "taxYear",
+  "year",
+  "created_at",
+  "createdAt",
+  "created_by",
+  "createdBy",
+  "user_id",
+  "userId",
+]);
+
+const MUTABLE_PROFILE_FIELDS = new Set([
+  "entity_type",
+  "entityType",
+  "tax_election",
+  "taxElection",
+  "filing_status",
+  "filingStatus",
+  "primary_tax_state",
+  "primaryTaxState",
+  "accounting_method",
+  "accountingMethod",
+  "safe_harbor_method",
+  "safeHarborMethod",
+  "source",
+  "qbi_eligible",
+  "qbiEligible",
+  "self_employment_tax_applies",
+  "selfEmploymentTaxApplies",
+  "prior_year_total_tax",
+  "priorYearTotalTax",
+  "prior_year_agi",
+  "priorYearAgi",
+  "owner_reasonable_salary",
+  "ownerReasonableSalary",
+  "owner_w2_wages_ytd",
+  "ownerW2WagesYtd",
+  "federal_withholding_ytd",
+  "federalWithholdingYtd",
+  "state_withholding_ytd",
+  "stateWithholdingYtd",
+  "health_insurance_deduction_ytd",
+  "healthInsuranceDeductionYtd",
+  "retirement_contributions_ytd",
+  "retirementContributionsYtd",
+  "hsa_contributions_ytd",
+  "hsaContributionsYtd",
+  "reserve_buffer_percent",
+  "reserveBufferPercent",
+  "confidence_score",
+  "confidenceScore",
+  "profile_status",
+  "profileStatus",
+  "last_reviewed_at",
+  "lastReviewedAt",
+  "metadata",
+]);
 
 export async function getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults = true }) {
   assertDeps({ supabase, businessId, taxYear });
@@ -182,6 +242,41 @@ export function computeTaxProfileCompleteness(profile) {
   };
 }
 
+export function computeTaxProfileReadiness(profile, { financialDataReady = null, taxClassificationReady = null } = {}) {
+  const completeness = computeTaxProfileCompleteness(profile);
+  const profileStatus = !profile
+    ? "profile_required"
+    : completeness.isCompleteForEstimate
+      ? "calculation_ready"
+      : "draft";
+  const blockers = [];
+  if (!profile) blockers.push("tax_profile");
+  blockers.push(...(completeness.missingRequired || []));
+  if (financialDataReady === false) blockers.push("financial_data");
+  if (taxClassificationReady === false) blockers.push("tax_classifications");
+  return {
+    profile_status: profileStatus,
+    missing_fields: completeness.missingRequired || [],
+    recommended_fields: completeness.missingRecommended || [],
+    validation_errors: [],
+    profile_complete: completeness.isCompleteForEstimate === true,
+    financial_data_ready: financialDataReady,
+    tax_classification_ready: taxClassificationReady,
+    calculation_ready: completeness.isCompleteForEstimate === true && financialDataReady === true && taxClassificationReady === true,
+    blockers: [...new Set(blockers)],
+    completeness,
+  };
+}
+
+export function assertTaxProfileMutableBody(body = {}) {
+  assertPatchDoesNotMutateProtectedFields(body);
+  for (const field of Object.keys(body || {})) {
+    if (!MUTABLE_PROFILE_FIELDS.has(field)) {
+      throw validationError("unsupported_tax_profile_field", `${field} cannot be patched on a tax profile.`, { field });
+    }
+  }
+}
+
 export function buildTaxProfileWarnings(profile) {
   const warnings = [];
   if (!profile) return [warning("tax_profile_missing", "critical", "Create a tax profile before estimating tax liability.")];
@@ -301,6 +396,8 @@ function normalizeProfilePatch(patch, existing = {}) {
   ["qbi_eligible", "self_employment_tax_applies"].forEach((field) => {
     if (field in patch) out[field] = patch[field] == null ? null : Boolean(patch[field]);
   });
+  if ("qbiEligible" in patch) out.qbi_eligible = patch.qbiEligible == null ? null : Boolean(patch.qbiEligible);
+  if ("selfEmploymentTaxApplies" in patch) out.self_employment_tax_applies = patch.selfEmploymentTaxApplies == null ? null : Boolean(patch.selfEmploymentTaxApplies);
   [
     "prior_year_total_tax", "prior_year_agi", "owner_reasonable_salary", "owner_w2_wages_ytd",
     "federal_withholding_ytd", "state_withholding_ytd", "health_insurance_deduction_ytd",
@@ -308,13 +405,29 @@ function normalizeProfilePatch(patch, existing = {}) {
   ].forEach((field) => {
     if (field in patch) {
       const n = normalizeMoney(patch[field]);
-      if (patch[field] != null && n == null) throw validationError(`invalid_${field}`, `${field} must be a finite number.`);
+      if (patch[field] != null && patch[field] !== "" && n == null) throw validationError(`invalid_${field}`, `${field} must be a finite number.`);
       out[field] = n;
     }
   });
+  normalizeMoneyAlias(patch, out, "priorYearTotalTax", "prior_year_total_tax");
+  normalizeMoneyAlias(patch, out, "priorYearAgi", "prior_year_agi");
+  normalizeMoneyAlias(patch, out, "ownerReasonableSalary", "owner_reasonable_salary");
+  normalizeMoneyAlias(patch, out, "ownerW2WagesYtd", "owner_w2_wages_ytd");
+  normalizeMoneyAlias(patch, out, "federalWithholdingYtd", "federal_withholding_ytd");
+  normalizeMoneyAlias(patch, out, "stateWithholdingYtd", "state_withholding_ytd");
+  normalizeMoneyAlias(patch, out, "healthInsuranceDeductionYtd", "health_insurance_deduction_ytd");
+  normalizeMoneyAlias(patch, out, "retirementContributionsYtd", "retirement_contributions_ytd");
+  normalizeMoneyAlias(patch, out, "hsaContributionsYtd", "hsa_contributions_ytd");
   if ("reserve_buffer_percent" in patch) {
     const n = normalizePercent(patch.reserve_buffer_percent);
-    if (patch.reserve_buffer_percent != null && (n == null || n < 0 || n > 1)) {
+    if (patch.reserve_buffer_percent != null && patch.reserve_buffer_percent !== "" && (n == null || n < 0 || n > 1)) {
+      throw validationError("invalid_reserve_buffer_percent", "reserve_buffer_percent must be a decimal between 0 and 1.");
+    }
+    out.reserve_buffer_percent = n;
+  }
+  if ("reserveBufferPercent" in patch) {
+    const n = normalizePercent(patch.reserveBufferPercent);
+    if (patch.reserveBufferPercent != null && patch.reserveBufferPercent !== "" && (n == null || n < 0 || n > 1)) {
       throw validationError("invalid_reserve_buffer_percent", "reserve_buffer_percent must be a decimal between 0 and 1.");
     }
     out.reserve_buffer_percent = n;
@@ -324,11 +437,24 @@ function normalizeProfilePatch(patch, existing = {}) {
     if (patch.confidence_score != null && (n == null || n < 0 || n > 1)) throw validationError("invalid_confidence_score", "confidence_score must be between 0 and 1.");
     out.confidence_score = n;
   }
+  if ("confidenceScore" in patch) {
+    const n = normalizePercent(patch.confidenceScore);
+    if (patch.confidenceScore != null && (n == null || n < 0 || n > 1)) throw validationError("invalid_confidence_score", "confidence_score must be between 0 and 1.");
+    out.confidence_score = n;
+  }
   if ("profile_status" in patch) out.profile_status = String(patch.profile_status);
+  if ("profileStatus" in patch) out.profile_status = String(patch.profileStatus);
   if ("last_reviewed_at" in patch) out.last_reviewed_at = patch.last_reviewed_at || null;
-  if ("reviewed_by" in patch) out.reviewed_by = patch.reviewed_by || null;
+  if ("lastReviewedAt" in patch) out.last_reviewed_at = patch.lastReviewedAt || null;
   if ("metadata" in patch) out.metadata = { ...(existing.metadata || {}), ...(patch.metadata || {}) };
   return out;
+}
+
+function normalizeMoneyAlias(patch, out, alias, field) {
+  if (!(alias in patch)) return;
+  const n = normalizeMoney(patch[alias]);
+  if (patch[alias] != null && patch[alias] !== "" && n == null) throw validationError(`invalid_${field}`, `${field} must be a finite number.`);
+  out[field] = n;
 }
 
 function assertPatchDoesNotMutateProtectedFields(patch) {

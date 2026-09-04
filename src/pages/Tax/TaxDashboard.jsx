@@ -8,7 +8,6 @@ import TaxTrendCard from "../../components/Tax/TaxTrendCard";
 import TaxProfileModal from "../../components/Tax/TaxProfileModal.jsx";
 import TaxSetupWorkflow from "../../components/Tax/Setup/TaxSetupWorkflow.jsx";
 import RecordTaxPaymentModal from "../../components/Tax/Planning/RecordTaxPaymentModal.jsx";
-import { resolveTaxSetupAction } from "../../components/Tax/Setup/taxSetupRouting.js";
 import { buildTaxDashboardViewModel } from "../../components/Tax/taxDashboardViewModel.js";
 import { useBusinessContext } from "../../context/BusinessContext";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
@@ -22,7 +21,7 @@ import { mapDeductionTransactionRow } from "../../components/Tax/Deductions/dedu
 
 const CURRENT_YEAR = new Date().getFullYear();
 
-export default function TaxDashboard({ onAskBizzy }) {
+export default function TaxDashboard() {
   const { currentBusiness } = (useBusinessContext?.() || {});
   const adminView = useAdminView();
   const readOnly = adminView.active && adminView.readOnly;
@@ -69,31 +68,6 @@ export default function TaxDashboard({ onAskBizzy }) {
     health: model.health,
     status: resolveOverviewStatus(model, tax.isDemo),
   }), [model, tax.isDemo]);
-
-  const handleAction = (action) => {
-    if (readOnly) {
-      setSetupNotice("Tax setup changes are unavailable in read-only Admin View.");
-      return;
-    }
-    const resolved = resolveTaxSetupAction(action, model);
-    if (resolved.type === "workflow") {
-      setSetupWorkflow({ open: true, initialStepId: resolved.initialStepId || "business_structure" });
-      return;
-    }
-    if (resolved.type === "support_limitation") {
-      setSetupNotice(resolved.message);
-      return;
-    }
-    if (resolved.type === "route") {
-      navigate(resolved.route.startsWith("/") ? resolved.route : `/${resolved.route}`);
-      return;
-    }
-    if (action?.route) {
-      navigate(action.route.startsWith("/") ? action.route : `/${action.route}`);
-      return;
-    }
-    onAskBizzy?.(`Help me with ${action?.label || "my tax setup"}.`, { module: "tax", action });
-  };
 
   const refreshTaxPaymentState = async () => {
     const reloadPayments = payments.refetch;
@@ -447,7 +421,7 @@ function resolveOverviewStatus(model, isDemo) {
 
 function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
   const [selectedCell, setSelectedCell] = useState(null);
-  const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 250, offset: 0 } });
+  const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 } });
   const matrix = useMemo(
     () => {
       const classifiedRows = (deductions.allTransactions?.rows || deductions.transactions?.rows || []).map(mapDeductionTransactionRow);

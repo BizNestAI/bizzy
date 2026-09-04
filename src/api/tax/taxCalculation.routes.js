@@ -11,6 +11,8 @@ import { compareExplanationComponents } from "../../services/tax/explanations/ta
 import { buildTaxCalculationSummary } from "../../services/tax/explanations/taxExplanationSummary.js";
 import { toCanonicalTaxCalculationDto } from "../../services/tax/api/taxCalculationDto.js";
 import { parseTaxApiIncludes, resolveTaxApiVersion } from "../../services/tax/api/taxApiVersion.js";
+import { computeTaxProfileReadiness, getTaxProfile } from "../../services/tax/taxProfile.service.js";
+import { countPostedTransactionsForTax, countUnclassifiedPostedTransactions } from "../../services/tax/taxPostedTransaction.repository.js";
 import { assertTaxBusinessAccess, getAuthenticatedUserId } from "./taxRouteUtils.js";
 import { optionalDate, optionalEnum, optionalTaxYear, requireUuid, validateBusinessIdInput, validatePagination } from "./taxValidation.js";
 import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
@@ -85,23 +87,27 @@ router.get("/calculations/latest", async (req, res) => {
     const businessId = validateBusinessIdInput(req);
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const taxYear = optionalTaxYear(req.query?.year ?? req.query?.taxYear, new Date().getFullYear());
-    const refresh = optionalBoolean(req.query?.refresh, "refresh") === true;
-    const calculationType = optionalEnum(req.query?.calculationType, Object.values(TAX_CALCULATION_TYPES), "calculationType") || TAX_CALCULATION_TYPES.FULL_ESTIMATE;
-    if (refresh) {
-      const data = await runCanonicalTaxCalculation({
-        supabase,
-        businessId,
-        taxYear,
-        asOfDate: optionalDate(req.query?.asOfDate, "asOfDate"),
-        calculationType,
-        triggerSource: TAX_TRIGGER_SOURCES.MANUAL,
-        userId: getAuthenticatedUserId(req),
-        persistRun: true,
-      });
-      return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ canonicalResult: data, include, apiVersion }));
-    }
+    optionalBoolean(req.query?.refresh, "refresh");
+    optionalEnum(req.query?.calculationType, Object.values(TAX_CALCULATION_TYPES), "calculationType");
     const latest = await getLatestTaxRun({ supabase, businessId, taxYear });
-    if (!latest) throw notFoundError("tax_calculation_not_found", "No completed tax calculation exists for this business and year.", { businessId, taxYear });
+    if (!latest) {
+      return sendTaxSuccess(res, {
+        data_status: "calculation_required",
+        calculation: null,
+        meta: { apiVersion, businessId, taxYear, status: "calculation_required", source: "persisted_read_only" },
+        readiness: {
+          status: "calculation_required",
+          estimateReady: false,
+          reserveReady: false,
+          setupState: {
+            code: "calculation_required",
+            status: "action_needed",
+            message: "A tax estimate has not been generated yet.",
+            actions: ["generate_tax_estimate"],
+          },
+        },
+      });
+    }
     return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ run: latest, include, apiVersion }));
   } catch (err) {
     return sendTaxError(res, err, "tax_calculation_latest_failed");
@@ -269,23 +275,15 @@ router.get("/confidence/current", async (req, res) => {
     const businessId = validateBusinessIdInput(req);
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const taxYear = optionalTaxYear(req.query?.year ?? req.query?.taxYear, new Date().getFullYear());
-    const refresh = optionalBoolean(req.query?.refresh, "refresh") === true;
-    const calculationType = optionalEnum(req.query?.calculationType, Object.values(TAX_CALCULATION_TYPES), "calculationType") || TAX_CALCULATION_TYPES.FULL_ESTIMATE;
-    if (refresh) {
-      const data = await runCanonicalTaxCalculation({
-        supabase,
-        businessId,
-        taxYear,
-        asOfDate: optionalDate(req.query?.asOfDate, "asOfDate"),
-        calculationType,
-        triggerSource: TAX_TRIGGER_SOURCES.MANUAL,
-        userId: getAuthenticatedUserId(req),
-        persistRun: true,
-      });
-      return sendTaxSuccess(res, { runId: data?.meta?.runId || null, confidence: data.confidence }, { source: "refreshed" });
-    }
+    optionalBoolean(req.query?.refresh, "refresh");
+    optionalEnum(req.query?.calculationType, Object.values(TAX_CALCULATION_TYPES), "calculationType");
     const latest = await getLatestTaxRun({ supabase, businessId, taxYear });
-    if (!latest) throw notFoundError("tax_calculation_not_found", "No completed tax calculation exists for this business and year.", { businessId, taxYear });
+    if (!latest) {
+      return sendTaxSuccess(res, {
+        runId: null,
+        confidence: { score: null, level: "unavailable", status: "calculation_required", estimateReady: false, reserveReady: false },
+      }, { source: "persisted_read_only", data_status: "calculation_required" });
+    }
     return sendTaxSuccess(res, { runId: latest.id, confidence: confidenceFromRun(latest) }, { source: "persisted" });
   } catch (err) {
     return sendTaxError(res, err, "tax_current_confidence_failed");
@@ -320,45 +318,23 @@ router.get("/overview", async (req, res) => {
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const taxYear = optionalTaxYear(req.query?.year ?? req.query?.taxYear, new Date().getFullYear());
     const requestedAsOfDate = optionalDate(req.query?.asOfDate, "asOfDate");
-    const refresh = String(req.query?.refresh || "").toLowerCase() === "true";
-    if (isAdminView && refresh) {
-      return sendTaxSuccess(res, adminViewTaxUnavailableDto({ businessId, taxYear, apiVersion }));
-    }
-    if (refresh) {
-      const data = await runCanonicalTaxCalculation({
-        supabase,
-        businessId,
-        taxYear,
-        asOfDate: requestedAsOfDate,
-        triggerSource: TAX_TRIGGER_SOURCES.MANUAL,
-        userId: getAuthenticatedUserId(req),
-        persistRun: true,
-      });
-      return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ canonicalResult: data, include, apiVersion }));
-    }
+    optionalBoolean(req.query?.refresh, "refresh");
     const latest = await getLatestTaxRun({ supabase, businessId, taxYear });
     if (!latest) {
       if (isAdminView) {
         return sendTaxSuccess(res, adminViewTaxUnavailableDto({ businessId, taxYear, apiVersion }));
       }
-      throw notFoundError("tax_calculation_not_found", "No completed tax calculation exists for this business and year.", { businessId, taxYear });
+      return sendTaxSuccess(res, await taxOverviewLifecycleDto({ supabase, businessId, taxYear, requestedAsOfDate, apiVersion }));
     }
     if (requestedAsOfDate && String(latest.as_of_date || "") !== requestedAsOfDate) {
-      if (isAdminView) {
-        return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ run: latest, include, apiVersion }));
-      }
-      const data = await runCanonicalTaxCalculation({
-        supabase,
-        businessId,
-        taxYear,
-        asOfDate: requestedAsOfDate,
-        triggerSource: TAX_TRIGGER_SOURCES.PAGE_REFRESH,
-        userId: getAuthenticatedUserId(req),
-        persistRun: true,
-      });
-      return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ canonicalResult: data, include, apiVersion }));
+      const dto = toCanonicalTaxCalculationDto({ run: latest, include, apiVersion });
+      dto.data.meta = { ...(dto.data.meta || {}), stale: true, requestedAsOfDate };
+      dto.data.data_status = "stale";
+      return sendTaxSuccess(res, dto.data);
     }
-    return sendTaxSuccess(res, toCanonicalTaxCalculationDto({ run: latest, include, apiVersion }));
+    const dto = toCanonicalTaxCalculationDto({ run: latest, include, apiVersion });
+    dto.data.data_status = "available";
+    return sendTaxSuccess(res, dto.data);
   } catch (err) {
     return sendTaxError(res, err, "tax_overview_failed");
   }
@@ -405,6 +381,106 @@ function adminViewTaxUnavailableDto({ businessId, taxYear, apiVersion }) {
       admin_view_read_only_data_unavailable: true,
     },
   };
+}
+
+async function taxOverviewLifecycleDto({ supabase, businessId, taxYear, requestedAsOfDate, apiVersion }) {
+  const profile = await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
+  let dataStatus = "profile_required";
+  let postedCount = null;
+  let unclassifiedCount = null;
+  let financialDataReady = null;
+  let taxClassificationReady = null;
+
+  if (profile) {
+    const profileReadiness = computeTaxProfileReadiness(profile);
+    if (profileReadiness.profile_complete !== true) {
+      dataStatus = "profile_draft";
+    } else {
+      postedCount = await countPostedTransactionsForTax({ supabase, businessId, taxYear });
+      unclassifiedCount = postedCount > 0
+        ? await countUnclassifiedPostedTransactions({ supabase, businessId, taxYear })
+        : 0;
+      financialDataReady = postedCount > 0;
+      taxClassificationReady = postedCount > 0 && unclassifiedCount === 0;
+      dataStatus = postedCount <= 0
+        ? "insufficient_financial_data"
+        : unclassifiedCount > 0
+          ? "classifications_required"
+          : "calculation_required";
+    }
+  }
+
+  const readiness = computeTaxProfileReadiness(profile, { financialDataReady, taxClassificationReady });
+  const message = lifecycleMessage(dataStatus);
+  return {
+    data_status: dataStatus,
+    meta: {
+      apiVersion,
+      businessId,
+      taxYear,
+      asOfDate: requestedAsOfDate || null,
+      status: dataStatus,
+      source: "persisted_read_only",
+      readOnly: true,
+    },
+    readiness: {
+      status: dataStatus,
+      estimateReady: false,
+      reserveReady: false,
+      profileStatus: readiness.profile_status,
+      missingFields: readiness.missing_fields,
+      validationErrors: readiness.validation_errors,
+      blockers: readiness.blockers,
+      setupState: {
+        code: dataStatus,
+        status: "action_needed",
+        message,
+        actions: lifecycleActions(dataStatus),
+      },
+      financialDataReady,
+      taxClassificationReady,
+      postedTransactionCount: postedCount,
+      unclassifiedTransactionCount: unclassifiedCount,
+    },
+    calculation: null,
+    profile,
+    missing_fields: readiness.missing_fields,
+    message,
+    summary: {},
+    actuals: null,
+    projection: null,
+    federal: null,
+    state: null,
+    payments: null,
+    safeHarbor: null,
+    reserve: null,
+    deadlines: [],
+    confidence: null,
+    warnings: [],
+    assumptions: [],
+    unsupportedItems: [],
+    supportedButDeferred: [],
+    explanationSummary: null,
+    links: {},
+  };
+}
+
+function lifecycleMessage(status) {
+  const messages = {
+    profile_required: "Complete your Tax Profile to prepare an estimate.",
+    profile_draft: "Your Tax Profile is saved. Additional information is required before calculating.",
+    insufficient_financial_data: "Confirmed QuickBooks-posted financial activity is required before an estimate can be calculated.",
+    classifications_required: "Posted QuickBooks transactions need tax review before an estimate can be calculated.",
+    calculation_required: "A tax estimate has not been generated yet.",
+  };
+  return messages[status] || "Tax setup is not ready for calculation.";
+}
+
+function lifecycleActions(status) {
+  if (status === "profile_required" || status === "profile_draft") return ["complete_tax_profile"];
+  if (status === "classifications_required") return ["review_tax_classifications"];
+  if (status === "calculation_required") return ["generate_tax_estimate"];
+  return [];
 }
 
 async function loadRunComponents({ supabase, businessId, runId }) {

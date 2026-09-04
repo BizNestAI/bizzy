@@ -588,6 +588,31 @@ test("Job Costing dashboard filters archived and deleted jobs from summary and c
   assert.equal(deleteSource.includes("filterActiveUiJobs(data.jobs, confirmedDeletedJobIdsRef.current)"), true);
 });
 
+test("drag/drop assignment updates job buckets optimistically before server reconciliation", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const optimisticStart = source.indexOf("function withOptimisticAssignmentRows");
+  const optimisticEnd = source.indexOf("function statusClass", optimisticStart);
+  const assignStart = source.indexOf("const assignTransactionToJob = useCallback");
+  const assignEnd = source.indexOf("const markJobComplete = useCallback", assignStart);
+  assert.ok(optimisticStart > 0);
+  assert.ok(optimisticEnd > optimisticStart);
+  assert.ok(assignStart > 0);
+  assert.ok(assignEnd > assignStart);
+
+  const optimisticSource = source.slice(optimisticStart, optimisticEnd);
+  const assignSource = source.slice(assignStart, assignEnd);
+
+  assert.equal(source.includes("function transactionMatchesIdentity"), true);
+  assert.equal(optimisticSource.includes("replaceExisting ? []"), true);
+  assert.equal(optimisticSource.includes("transactions: nextTransactions"), true);
+  assert.equal(optimisticSource.includes("assigned_transaction_count: Math.max(0, currentAssignedCount + countDelta)"), true);
+  assert.equal(assignSource.includes("optimisticTransactions = transactions.map"), true);
+  assert.equal(assignSource.includes("optimisticJobs = applyOptimisticJobAssignment(jobs, transaction, job, allocationPercent"), true);
+  assert.equal(assignSource.includes("writeJobCostingLiveCache(businessId, readOnly, { transactions: optimisticTransactions, jobs: optimisticJobs })"), true);
+  assert.equal(assignSource.includes("Array.isArray(data?.transactions) ? data.transactions : (optimisticTransactions || [])"), true);
+  assert.equal(assignSource.includes("Array.isArray(data?.jobs) ? filterActiveUiJobs(data.jobs) : filterActiveUiJobs(optimisticJobs || [])"), true);
+});
+
 test("Import Jobs opens in the dashboard-centered animated modal", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const boardStart = source.indexOf("function JobAssignmentBoard({");

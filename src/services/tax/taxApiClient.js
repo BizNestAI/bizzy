@@ -16,6 +16,7 @@ const ALLOWED_INCLUDES = new Set([
 
 const CACHE_TTL_MS = 30_000;
 const MAX_CACHE_ENTRIES = 50;
+const TAX_DETAIL_PAGE_LIMIT = 200;
 const cache = new Map();
 const inflight = new Map();
 
@@ -141,7 +142,7 @@ export async function initializeTaxProfile({ businessId, year, source, signal } 
   requireBusinessId(businessId);
   const result = unwrap(await request(`/api/tax/profile/initialize?${query({ businessId, year })}`, {
     method: "POST",
-    body: compact({ businessId, year, source }),
+    body: compact({ source }),
     signal,
   }));
   clearBusinessCache(businessId);
@@ -152,7 +153,7 @@ export async function createTaxProfile({ businessId, year, profile = {}, signal 
   requireBusinessId(businessId);
   const result = unwrap(await request(`/api/tax/profile?${query({ businessId, year })}`, {
     method: "POST",
-    body: { ...profile, businessId, year },
+    body: taxProfileMutableBody(profile),
     signal,
   }));
   clearBusinessCache(businessId);
@@ -163,7 +164,7 @@ export async function updateTaxProfile({ businessId, year, patch = {}, signal } 
   requireBusinessId(businessId);
   const result = unwrap(await request(`/api/tax/profile?${query({ businessId, year })}`, {
     method: "PATCH",
-    body: { ...patch, businessId, year },
+    body: taxProfileMutableBody(patch),
     signal,
   }));
   clearBusinessCache(businessId);
@@ -206,12 +207,12 @@ export async function getTaxDeductionsOverview({ businessId, year, asOfDate, sig
 
 export async function getTaxDeductionTransactions({ businessId, year, asOfDate, filters = {}, limit, offset, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/deductions/transactions?${query({ businessId, year, asOfDate, limit, offset, ...filters })}`, { signal }));
+  return unwrap(await cachedGet(`/api/tax/deductions/transactions?${query({ businessId, year, asOfDate, limit: clampTaxDetailLimit(limit), offset, ...filters })}`, { signal }));
 }
 
 export async function getTaxPostedTransactions({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit, offset, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/transactions/posted?${query({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit, offset })}`, { signal }));
+  return unwrap(await cachedGet(`/api/tax/transactions/posted?${query({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit: clampTaxDetailLimit(limit), offset })}`, { signal }));
 }
 
 export async function getTaxDeductionTransactionDetail({ businessId, year, transactionId, signal } = {}) {
@@ -592,6 +593,29 @@ function query(values = {}) {
     }
   });
   return params.toString();
+}
+
+function taxProfileMutableBody(input = {}) {
+  const allowed = new Set([
+    "entity_type", "entityType", "tax_election", "taxElection", "filing_status", "filingStatus",
+    "primary_tax_state", "primaryTaxState", "accounting_method", "accountingMethod",
+    "safe_harbor_method", "safeHarborMethod", "source", "qbi_eligible",
+    "self_employment_tax_applies", "prior_year_total_tax", "prior_year_agi",
+    "owner_reasonable_salary", "owner_w2_wages_ytd", "federal_withholding_ytd",
+    "state_withholding_ytd", "health_insurance_deduction_ytd", "retirement_contributions_ytd",
+    "hsa_contributions_ytd", "reserve_buffer_percent", "confidence_score",
+    "profile_status", "last_reviewed_at", "metadata",
+  ]);
+  return Object.fromEntries(
+    Object.entries(input || {}).filter(([field, value]) => allowed.has(field) && value !== undefined)
+  );
+}
+
+function clampTaxDetailLimit(limit) {
+  if (limit == null || limit === "") return limit;
+  const n = Number(limit);
+  if (!Number.isFinite(n)) return limit;
+  return Math.min(Math.max(Math.trunc(n), 1), TAX_DETAIL_PAGE_LIMIT);
 }
 
 function key(prefix, serializedParams) {

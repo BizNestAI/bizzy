@@ -1,5 +1,19 @@
-const READINESS_STATUSES = new Set(["ready", "partial", "blocked", "setup_required", "unavailable", "unknown"]);
-const RUN_STATUSES = new Set(["completed", "partial", "failed", "running", "superseded", "abandoned", "unknown"]);
+const TAX_LIFECYCLE_STATUSES = [
+  "profile_required",
+  "profile_draft",
+  "profile_invalid",
+  "classifications_required",
+  "calculation_required",
+  "calculating",
+  "available",
+  "stale",
+  "calculation_failed",
+  "insufficient_financial_data",
+  "unsupported_entity",
+  "unsupported_state",
+];
+const READINESS_STATUSES = new Set(["ready", "partial", "blocked", "setup_required", "unavailable", "unknown", ...TAX_LIFECYCLE_STATUSES]);
+const RUN_STATUSES = new Set(["completed", "partial", "failed", "running", "superseded", "abandoned", "unknown", ...TAX_LIFECYCLE_STATUSES]);
 const SAFE_HARBOR_STATUSES = new Set(["available", "partial", "unavailable", "unknown"]);
 const RESERVE_STATUSES = new Set([
   "on_track",
@@ -41,7 +55,6 @@ export function normalizeTaxOverview(payload) {
   };
 
   if (isDev() && contractWarnings.length) {
-    // eslint-disable-next-line no-console
     console.warn("[tax] canonical overview contract warnings", contractWarnings);
   }
 
@@ -129,8 +142,7 @@ function isObject(value) {
 
 function isDev() {
   return (
-    (typeof import.meta !== "undefined" && import.meta.env?.DEV) ||
-    (typeof process !== "undefined" && process.env?.NODE_ENV !== "production")
+    typeof import.meta !== "undefined" && import.meta.env?.DEV
   );
 }
 

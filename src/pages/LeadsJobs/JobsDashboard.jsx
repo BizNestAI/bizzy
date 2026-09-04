@@ -1474,9 +1474,24 @@ function getOptimisticAssignedAmount(transaction = {}, allocationPercent = 100) 
   return Math.round(amount * (Math.max(0, Math.min(100, percent)) / 100) * 100) / 100;
 }
 
-function withOptimisticAssignmentRows(transaction = {}, job = {}, allocationPercent = 100, assignmentId = "") {
+function getAssignmentRowAmount(row = {}) {
+  const allocatedAmount = Number(row.allocated_amount);
+  if (Number.isFinite(allocatedAmount)) return Math.abs(allocatedAmount);
+  return Math.abs(Number(row.amount || 0));
+}
+
+function transactionMatchesIdentity(a = {}, b = {}) {
+  return Boolean(
+    (a.id && b.id && String(a.id) === String(b.id)) ||
+    (a.transaction_id && b.id && String(a.transaction_id) === String(b.id)) ||
+    (a.id && b.transaction_id && String(a.id) === String(b.transaction_id)) ||
+    (a.bank_transaction_id && b.bank_transaction_id && String(a.bank_transaction_id) === String(b.bank_transaction_id))
+  );
+}
+
+function withOptimisticAssignmentRows(transaction = {}, job = {}, allocationPercent = 100, assignmentId = "", replaceExisting = false) {
   const currentRows = Array.isArray(transaction.assignment_rows) ? transaction.assignment_rows : [];
-  const keptRows = currentRows.filter((row) => String(row.job_id) !== String(job.id));
+  const keptRows = replaceExisting ? [] : currentRows.filter((row) => String(row.job_id) !== String(job.id));
   const allocatedAmount = getOptimisticAssignedAmount(transaction, allocationPercent);
   const signedAmount = Number(transaction.amount || 0) < 0 ? -allocatedAmount : allocatedAmount;
   const nextRow = {
@@ -1513,15 +1528,42 @@ function withOptimisticAssignmentRows(transaction = {}, job = {}, allocationPerc
   };
 }
 
-function applyOptimisticJobAssignment(jobs = [], transaction = {}, job = {}, allocationPercent = 100) {
-  const costDelta = getOptimisticAssignedAmount(transaction, allocationPercent);
+function applyOptimisticJobAssignment(jobs = [], transaction = {}, job = {}, allocationPercent = 100, options = {}) {
+  const assignmentId = options.assignmentId || `optimistic-${transaction.id}-${job.id}`;
+  const replaceExisting = Boolean(options.replaceExisting);
+  const optimisticTransaction = withOptimisticAssignmentRows(transaction, job, allocationPercent, assignmentId, replaceExisting);
+  const optimisticRows = Array.isArray(optimisticTransaction.assignment_rows) ? optimisticTransaction.assignment_rows : [];
+  const currentRows = Array.isArray(transaction.assignment_rows) ? transaction.assignment_rows : [];
+  const targetJobId = String(job.id);
   return jobs.map((item) => {
-    if (String(item.id || item.job_id) !== String(job.id)) return item;
+    const itemJobId = String(item.id || item.job_id);
+    const existingRowsForJob = currentRows.filter((row) => String(row.job_id) === itemJobId);
+    const existingAmountForJob = existingRowsForJob.reduce((sum, row) => sum + getAssignmentRowAmount(row), 0);
+    const isTargetJob = itemJobId === targetJobId;
+    const nextRowForJob = optimisticRows.find((row) => String(row.job_id) === itemJobId);
+    const nextAmountForJob = isTargetJob && nextRowForJob ? getAssignmentRowAmount(nextRowForJob) : 0;
+    const costDelta = isTargetJob
+      ? nextAmountForJob - existingAmountForJob
+      : replaceExisting
+        ? -existingAmountForJob
+        : 0;
+
+    if (!isTargetJob && costDelta === 0) return item;
+
+    const existingTransactions = Array.isArray(item.transactions) ? item.transactions : [];
+    const transactionsWithoutCurrent = existingTransactions.filter((row) => !transactionMatchesIdentity(row, transaction));
+    const nextTransactions = isTargetJob && nextRowForJob
+      ? [nextRowForJob, ...transactionsWithoutCurrent]
+      : transactionsWithoutCurrent;
     const revenue = getOptimisticJobRevenue(item);
     const currentCost = Number(item.total_cost ?? item.total_assigned_cost ?? item.base_total_cost ?? 0) || 0;
     const totalCost = Math.round((currentCost + costDelta) * 100) / 100;
     const grossMargin = Math.round((revenue - totalCost) * 100) / 100;
     const marginPercent = revenue > 0 ? (grossMargin / revenue) * 100 : null;
+    const currentAssignedCount = Number(item.assigned_transaction_count ?? existingTransactions.length) || 0;
+    const countDelta = isTargetJob
+      ? (existingRowsForJob.length || existingTransactions.some((row) => transactionMatchesIdentity(row, transaction)) ? 0 : 1)
+      : (existingRowsForJob.length || existingTransactions.some((row) => transactionMatchesIdentity(row, transaction)) ? -1 : 0);
     return {
       ...item,
       revenue,
@@ -1533,7 +1575,8 @@ function applyOptimisticJobAssignment(jobs = [], transaction = {}, job = {}, all
       gross_margin_dollars: grossMargin,
       margin_percent: marginPercent,
       marginPercent: marginPercent,
-      assigned_transaction_count: Number(item.assigned_transaction_count || 0) + 1,
+      assigned_transaction_count: Math.max(0, currentAssignedCount + countDelta),
+      transactions: nextTransactions,
       revenue_source_status: item.revenue_source_status || "canonical",
       revenue_summary: item.revenue_summary || { sourceStatus: item.revenue_source_status || "canonical" },
     };
@@ -7450,15 +7493,23 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     const previousJobs = jobs;
     const optimisticAssignmentId = `optimistic-${transaction.id}-${job.id}-${Date.now()}`;
     let optimisticApplied = false;
+    let optimisticTransactions = null;
+    let optimisticJobs = null;
     try {
       if (!usingDemo) {
         optimisticApplied = true;
-        setTransactions((prev) => prev.map((txn) => (
+        optimisticTransactions = transactions.map((txn) => (
           String(txn.id) === String(transaction.id)
-            ? withOptimisticAssignmentRows(txn, job, allocationPercent, optimisticAssignmentId)
+            ? withOptimisticAssignmentRows(txn, job, allocationPercent, optimisticAssignmentId, replaceExisting)
             : txn
-        )));
-        setJobs((prev) => applyOptimisticJobAssignment(prev, transaction, job, allocationPercent));
+        ));
+        optimisticJobs = applyOptimisticJobAssignment(jobs, transaction, job, allocationPercent, {
+          assignmentId: optimisticAssignmentId,
+          replaceExisting,
+        });
+        setTransactions(optimisticTransactions);
+        setJobs(optimisticJobs);
+        writeJobCostingLiveCache(businessId, readOnly, { transactions: optimisticTransactions, jobs: optimisticJobs });
         setAssignmentMessage(`Transaction assigned to ${getJobDisplayName(job)}.`);
       }
       let impact = options.impactPreview || null;
@@ -7482,6 +7533,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           if (optimisticApplied) {
             setTransactions(previousTransactions);
             setJobs(previousJobs);
+            writeJobCostingLiveCache(businessId, readOnly, { transactions: previousTransactions, jobs: previousJobs });
             setAssignmentMessage("");
           }
           setAssignmentImpactPreview({
@@ -7541,8 +7593,8 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           impact_preview_confirmed: true,
         },
       });
-      const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : [];
-      const nextJobs = filterActiveUiJobs(Array.isArray(data?.jobs) ? data.jobs : []);
+      const nextTransactions = Array.isArray(data?.transactions) ? data.transactions : (optimisticTransactions || []);
+      const nextJobs = Array.isArray(data?.jobs) ? filterActiveUiJobs(data.jobs) : filterActiveUiJobs(optimisticJobs || []);
       setTransactions(nextTransactions);
       setJobs(nextJobs);
       writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions, jobs: nextJobs });
@@ -7553,6 +7605,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       if (optimisticApplied) {
         setTransactions(previousTransactions);
         setJobs(previousJobs);
+        writeJobCostingLiveCache(businessId, readOnly, { transactions: previousTransactions, jobs: previousJobs });
       }
       setAssignmentError(e?.message || "Could not assign transaction.");
     } finally {

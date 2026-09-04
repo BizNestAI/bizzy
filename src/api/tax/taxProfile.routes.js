@@ -5,15 +5,17 @@ import {
   archiveTaxProfile,
   buildTaxProfileWarnings,
   computeTaxProfileCompleteness,
+  computeTaxProfileReadiness,
   createTaxProfile,
   getOrInitializeTaxProfile,
   getTaxProfile,
+  assertTaxProfileMutableBody,
   sanitizeTaxProfileForClient,
   updateTaxProfile,
 } from "../../services/tax/taxProfile.service.js";
 import { TAX_CHANGE_TYPES, emitTaxDataChanged } from "../../services/tax/taxChangeEvents.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
-import { optionalTaxYear, validateBusinessIdInput } from "./taxValidation.js";
+import { optionalTaxYear, requireUuid, validateBusinessIdInput } from "./taxValidation.js";
 import { sendTaxError, sendTaxSuccess, setTaxNoStore } from "./taxHttp.js";
 
 const router = Router();
@@ -27,6 +29,7 @@ router.get("/profile", async (req, res) => {
     return sendTaxSuccess(res, {
       profile,
       completeness,
+      readiness: computeTaxProfileReadiness(profile),
       warnings: buildTaxProfileWarnings(profile),
       suggestedDefaults: profile?.metadata?.suggestedDefaults || {},
     });
@@ -39,6 +42,7 @@ router.post("/profile", async (req, res) => {
   setTaxNoStore(res);
   try {
     const { businessId, taxYear } = await authorizedProfileContext(req);
+    assertTaxProfileMutableBody(req.body || {});
     const profile = await createTaxProfile({
       supabase,
       businessId,
@@ -47,7 +51,12 @@ router.post("/profile", async (req, res) => {
       userId: req.user.id,
     });
     emitTaxDataChanged({ businessId, taxYear, changeType: TAX_CHANGE_TYPES.PROFILE_CREATED, entityId: profile.id, userId: req.user.id });
-    return sendTaxSuccess(res, profile);
+    return sendTaxSuccess(res, {
+      profile: sanitizeTaxProfileForClient(profile),
+      completeness: computeTaxProfileCompleteness(profile),
+      readiness: computeTaxProfileReadiness(profile),
+      warnings: buildTaxProfileWarnings(profile),
+    });
   } catch (err) {
     return sendTaxError(res, err, "tax_profile_create_failed");
   }
@@ -57,6 +66,7 @@ router.patch("/profile", async (req, res) => {
   setTaxNoStore(res);
   try {
     const { businessId, taxYear } = await authorizedProfileContext(req);
+    assertTaxProfileMutableBody(req.body || {});
     const before = await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
     const profile = await updateTaxProfile({
       supabase,
@@ -81,6 +91,7 @@ router.patch("/profile", async (req, res) => {
     return sendTaxSuccess(res, {
       profile: sanitizeTaxProfileForClient(profile),
       completeness: computeTaxProfileCompleteness(profile),
+      readiness: computeTaxProfileReadiness(profile),
       warnings: buildTaxProfileWarnings(profile),
     });
   } catch (err) {
@@ -92,6 +103,7 @@ router.post("/profile/initialize", async (req, res) => {
   setTaxNoStore(res);
   try {
     const { businessId, taxYear } = await authorizedProfileContext(req);
+    assertTaxProfileMutableBody(req.body || {});
     const profile = await getOrInitializeTaxProfile({
       supabase,
       businessId,
@@ -103,6 +115,7 @@ router.post("/profile/initialize", async (req, res) => {
     return sendTaxSuccess(res, {
       profile,
       completeness: computeTaxProfileCompleteness(profile),
+      readiness: computeTaxProfileReadiness(profile),
       warnings: buildTaxProfileWarnings(profile),
       suggestedDefaults: profile?.metadata?.suggestedDefaults || {},
     });
@@ -141,11 +154,16 @@ router.get("/profile/years", async (req, res) => {
 });
 
 async function authorizedProfileContext(req) {
-  const businessId = validateBusinessIdInput(req);
-  const src = req.method === "GET" ? req.query : req.body;
+  const businessId = validateProfileBusinessIdInput(req);
+  const src = req.query || {};
   const taxYear = optionalTaxYear(src?.year ?? src?.taxYear, new Date().getFullYear());
   await assertTaxBusinessAccess({ req, businessId, supabase });
   return { businessId, taxYear };
+}
+
+function validateProfileBusinessIdInput(req) {
+  const value = req?.params?.businessId ?? req?.query?.businessId ?? req?.query?.business_id ?? req?.businessId ?? req?.user?.business_id;
+  return requireUuid(value, "businessId");
 }
 
 function changedFields(before = {}, after = {}) {

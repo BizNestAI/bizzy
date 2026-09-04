@@ -1,5 +1,5 @@
 /* global process */
-import test from "node:test";
+import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Readable, Writable } from "node:stream";
 import { Buffer } from "node:buffer";
@@ -11,14 +11,17 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 
 const { default: taxRouter } = await import("../src/api/tax/index.js");
 const { __setTaxCalculateLiabilityTestDeps } = await import("../src/api/tax/calculateTaxLiability.js");
-const { buildTaxRunFingerprint } = await import("../src/services/tax/runs/taxRunFingerprint.js");
-const { TAX_ORCHESTRATOR_ENGINE_VERSION } = await import("../src/services/tax/taxEngineVersions.js");
+const { resetTaxRateLimits } = await import("../src/api/tax/taxSecurity.js");
 
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_BUSINESS_ID = "22222222-2222-4222-8222-222222222222";
 const MISSING_BUSINESS_ID = "33333333-3333-4333-8333-333333333333";
 const USER_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const OTHER_USER_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+beforeEach(() => {
+  resetTaxRateLimits();
+});
 
 test("GET /api/tax/overview requires auth and business authorization", async () => {
   const app = createApp(baseStore());
@@ -36,10 +39,23 @@ test("GET /api/tax/overview requires auth and business authorization", async () 
   assert.equal(missingBusiness.statusCode, 404);
 });
 
-test("GET /api/tax/overview reuses stored runs and refresh uses fingerprint policy", async () => {
+test("GET /api/tax/overview is read-only and reports lifecycle state when no completed run exists", async () => {
   const store = baseStore();
   const app = createApp(store);
-  const first = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-12-31&refresh=true`, { token: "valid-user" });
+  const before = store.tax_calculation_runs.length;
+  const res = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-12-31&refresh=true`, { token: "valid-user" });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(store.tax_calculation_runs.length, before);
+  assert.equal(res.body.data.calculation, null);
+  assert.equal(res.body.data.data_status, "calculation_required");
+  assert.equal(res.body.data.meta.readOnly, true);
+});
+
+test("GET /api/tax/overview reuses stored completed runs and ignores refresh generation", async () => {
+  const store = baseStore();
+  const app = createApp(store);
+  const first = await createCompletedRun(app, "2026-12-31");
   const latest = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026`, { token: "valid-user" });
   const refreshAgain = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-12-31&refresh=true`, { token: "valid-user" });
 
@@ -53,36 +69,22 @@ test("GET /api/tax/overview reuses stored runs and refresh uses fingerprint poli
   assert.equal(store.tax_calculation_runs.filter((row) => ["completed", "partial"].includes(row.status)).length, 1);
 });
 
-test("GET /api/tax/overview recalculates when requested through-date is newer than latest run", async () => {
+test("GET /api/tax/overview marks stored run stale instead of recalculating a newer through-date", async () => {
   const store = baseStore();
   const app = createApp(store);
-  const first = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-07-20&refresh=true`, { token: "valid-user" });
+  const first = await createCompletedRun(app, "2026-07-20");
   const nextDay = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-07-21`, { token: "valid-user" });
 
   assert.equal(first.statusCode, 200);
   assert.equal(nextDay.statusCode, 200);
-  assert.notEqual(nextDay.body.data.meta.runId, first.body.data.meta.runId);
-  assert.equal(nextDay.body.data.meta.asOfDate, "2026-07-21");
-  assert.equal(nextDay.body.data.meta.reusedExistingRun, false);
-  assert.equal(store.tax_calculation_runs.filter((row) => ["completed", "partial"].includes(row.status)).length, 2);
+  assert.equal(nextDay.body.data.meta.runId, first.body.data.meta.runId);
+  assert.equal(nextDay.body.data.data_status, "stale");
+  assert.equal(nextDay.body.data.meta.stale, true);
+  assert.equal(store.tax_calculation_runs.filter((row) => ["completed", "partial"].includes(row.status)).length, 1);
 });
 
-test("GET /api/tax/overview refresh abandons stale identical running runs", async () => {
+test("GET /api/tax/overview does not abandon or replace historical failed/running runs", async () => {
   const store = baseStore();
-  const fingerprint = buildTaxRunFingerprint({
-    businessId: BUSINESS_ID,
-    taxYear: 2026,
-    asOfDate: "2026-12-31",
-    calculationType: "full_estimate",
-    projectionMethod: "blended",
-    projectionScenario: "base",
-    triggerSource: "page_refresh",
-    profileVersion: "profile-1",
-    sourceFreshness: {},
-    engineVersions: { orchestrator: TAX_ORCHESTRATOR_ENGINE_VERSION },
-    ruleVersions: {},
-    manualOverrides: null,
-  });
   store.tax_calculation_runs.push({
     id: "stale-run",
     business_id: BUSINESS_ID,
@@ -91,7 +93,7 @@ test("GET /api/tax/overview refresh abandons stale identical running runs", asyn
     status: "running",
     calculation_type: "full_estimate",
     trigger_source: "page_refresh",
-    calculation_fingerprint: fingerprint,
+    calculation_fingerprint: "stale-fingerprint",
     started_at: "2026-01-01T00:00:00Z",
     created_at: "2026-01-01T00:00:00Z",
   });
@@ -99,8 +101,8 @@ test("GET /api/tax/overview refresh abandons stale identical running runs", asyn
   const res = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-12-31&refresh=true`, { token: "valid-user" });
 
   assert.equal(res.statusCode, 200);
-  assert.equal(store.tax_calculation_runs.find((row) => row.id === "stale-run").status, "abandoned");
-  assert.ok(store.tax_calculation_runs.some((row) => row.id !== "stale-run" && ["completed", "partial"].includes(row.status)));
+  assert.equal(store.tax_calculation_runs.find((row) => row.id === "stale-run").status, "running");
+  assert.equal(store.tax_calculation_runs.filter((row) => ["completed", "partial"].includes(row.status)).length, 0);
 });
 
 test("GET /api/tax/overview validates query params, version, booleans, and includes", async () => {
@@ -129,7 +131,8 @@ test("GET /api/tax/overview returns stable canonical contract with null/unavaila
     tax_rule_configs: federalRules().filter((row) => !["estimated_tax_safe_harbor", "estimated_tax_due_dates"].includes(row.rule_type)),
   });
   const app = createApp(store);
-  const res = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-12-31&refresh=true`, { token: "valid-user" });
+  await createCompletedRun(app, "2026-12-31");
+  const res = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-12-31`, { token: "valid-user" });
 
   assert.equal(res.statusCode, 200);
   const data = res.body.data;
@@ -156,8 +159,9 @@ test("GET /api/tax/overview returns stable canonical contract with null/unavaila
 test("GET /api/tax/overview include controls keep default bounded and expose safe details when requested", async () => {
   const store = baseStore();
   const app = createApp(store);
-  const base = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&refresh=true`, { token: "valid-user" });
-  const detailed = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&refresh=true&include=components,explanations,confidenceFactors,ruleSupport,paymentDetails,reserveHistory`, { token: "valid-user" });
+  await createCompletedRun(app, "2026-12-31");
+  const base = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026`, { token: "valid-user" });
+  const detailed = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&include=components,explanations,confidenceFactors,ruleSupport,paymentDetails,reserveHistory`, { token: "valid-user" });
   const text = JSON.stringify(detailed.body);
 
   assert.equal(base.statusCode, 200);
@@ -180,7 +184,8 @@ test("GET /api/tax/overview include controls keep default bounded and expose saf
 test("GET /api/tax/overview core totals reconcile with legacy calculate-tax-liability", async () => {
   const store = baseStore({ tax_reserve_accounts: [reserveAccount({ manual_balance: 500 })] });
   const app = createApp(store);
-  const overview = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-12-31&refresh=true`, { token: "valid-user" });
+  await createCompletedRun(app, "2026-12-31");
+  const overview = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-12-31`, { token: "valid-user" });
   const legacy = await request(app, "/api/tax/calculate-tax-liability", {
     method: "POST",
     token: "valid-user",
@@ -205,8 +210,8 @@ test("legacy overview trend labels reconstructed past periods instead of calling
     token: "valid-user",
     body: { businessId: BUSINESS_ID, year: 2026, asOfDate: "2026-06-15" },
   });
+  assert.equal(legacy.statusCode, 200, JSON.stringify(legacy.body));
   const periods = new Set(legacy.body.data.trend.map((row) => row.periodType));
-  assert.equal(legacy.statusCode, 200);
   assert.equal(periods.has("actual"), false);
   assert.equal(periods.has("modeled_reconstructed"), true);
   assert.equal(periods.has("current_partial"), true);
@@ -216,9 +221,11 @@ test("legacy overview trend labels reconstructed past periods instead of calling
 
 test("canonical overview exposes cumulative tax trend without duplicate current months", async () => {
   const app = createApp(baseStore());
-  const overview = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-06-15&refresh=true`, { token: "valid-user" });
+  const created = await createCompletedRun(app, "2026-06-15");
+  assert.equal(created.statusCode, 200, JSON.stringify(created.body));
+  const overview = await request(app, `/api/tax/overview?businessId=${BUSINESS_ID}&year=2026&asOfDate=2026-06-15`, { token: "valid-user" });
+  assert.equal(overview.statusCode, 200, JSON.stringify(overview.body));
   const trend = overview.body.data.projection.taxTrend;
-  assert.equal(overview.statusCode, 200);
   assert.equal(Array.isArray(trend), true);
   assert.equal(trend.length, 12);
   assert.equal(new Set(trend.map((row) => row.month)).size, 12);
@@ -325,6 +332,14 @@ async function request(app, path, { method = "GET", token = null, body = null } 
   });
   const text = Buffer.concat(chunks).toString("utf8");
   return { statusCode: res.statusCode, headers: res.headers, body: text ? JSON.parse(text) : null, text };
+}
+
+async function createCompletedRun(app, asOfDate = "2026-12-31") {
+  return request(app, "/api/tax/calculations", {
+    method: "POST",
+    token: "valid-user",
+    body: { businessId: BUSINESS_ID, year: 2026, asOfDate },
+  });
 }
 
 function baseStore(overrides = {}) {

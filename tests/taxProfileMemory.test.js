@@ -96,6 +96,64 @@ test("tax profile patch cannot mutate business_id or tax_year", async () => {
   );
 });
 
+test("tax profile draft saves partial valid fields without requiring prior-year safe-harbor facts", async () => {
+  const { computeTaxProfileReadiness, createTaxProfile } = await import("../src/services/tax/taxProfile.service.js");
+  const supabase = makeSupabase({ tax_profiles: [] });
+
+  const profile = await createTaxProfile({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    userId: USER_ID,
+    input: {
+      entity_type: "sole_proprietor",
+      tax_election: "sole_proprietor",
+      filing_status: "single",
+      primary_tax_state: "NC",
+      accounting_method: "cash",
+      safe_harbor_method: "current_year_90",
+      self_employment_tax_applies: true,
+      prior_year_total_tax: "",
+      prior_year_agi: "",
+      federal_withholding_ytd: "0",
+      reserve_buffer_percent: "",
+    },
+  });
+  const readiness = computeTaxProfileReadiness(profile, {
+    financialDataReady: false,
+    taxClassificationReady: false,
+  });
+
+  assert.equal(profile.prior_year_total_tax, null);
+  assert.equal(profile.prior_year_agi, null);
+  assert.equal(profile.federal_withholding_ytd, 0);
+  assert.equal(profile.reserve_buffer_percent, null);
+  assert.equal(readiness.profile_status, "calculation_ready");
+  assert.equal(readiness.calculation_ready, false);
+  assert.equal(readiness.missing_fields.includes("prior_year_total_tax"), false);
+  assert.equal(readiness.missing_fields.includes("prior_year_agi"), false);
+  assert.ok(readiness.blockers.includes("financial_data"));
+  assert.ok(readiness.blockers.includes("tax_classifications"));
+});
+
+test("tax profile mutable body rejects unsupported fields before persistence", async () => {
+  const { assertTaxProfileMutableBody } = await import("../src/services/tax/taxProfile.service.js");
+
+  assert.doesNotThrow(() => assertTaxProfileMutableBody({
+    entityType: "sole_proprietor",
+    safeHarborMethod: "current_year_90",
+    federalWithholdingYtd: "",
+  }));
+  assert.throws(
+    () => assertTaxProfileMutableBody({ businessId: BUSINESS_ID, filingStatus: "single" }),
+    (err) => err.code === "protected_tax_profile_field"
+  );
+  assert.throws(
+    () => assertTaxProfileMutableBody({ random_tax_fact: "unsafe" }),
+    (err) => err.code === "unsupported_tax_profile_field"
+  );
+});
+
 test("tax business authorization denies another business", async () => {
   const { assertTaxBusinessAccess } = await import("../src/api/tax/taxRouteUtils.js");
   const supabase = makeSupabase({

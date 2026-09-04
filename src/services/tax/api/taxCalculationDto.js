@@ -197,9 +197,9 @@ function fromRun({ run, included, apiVersion }) {
     },
     safeHarbor: {
       status: run?.safe_harbor_target == null ? "unavailable" : "available",
-      federal: { requiredAnnual: nullableMoney(run?.safe_harbor_target), coveredAmount: nullableMoney(run?.safe_harbor_covered), remainingAmount: nullableMoney(run?.safe_harbor_gap) },
-      state: {},
-      combined: { requiredAnnual: nullableMoney(run?.safe_harbor_target), coveredAmount: nullableMoney(run?.safe_harbor_covered), remainingAmount: nullableMoney(run?.safe_harbor_gap) },
+      federal: { requiredAnnual: nullableMoney(run?.safe_harbor_target), coveredAmount: nullableMoney(run?.safe_harbor_covered), remainingAmount: nullableMoney(run?.safe_harbor_gap), quarterSchedule: [], warnings: [] },
+      state: { quarterSchedule: [], warnings: [] },
+      combined: { requiredAnnual: nullableMoney(run?.safe_harbor_target), coveredAmount: nullableMoney(run?.safe_harbor_covered), remainingAmount: nullableMoney(run?.safe_harbor_gap), quarterSchedule: [], warnings: [] },
     },
     reserve: {
       status: run?.current_reserve == null ? "setup_incomplete" : nullableMoney(run?.reserve_gap) > 0 ? "reserve_gap" : "on_track",
@@ -488,8 +488,8 @@ function buildTaxTrendFromRun(run) {
   const reserveTarget = nullableMoney(run?.recommended_reserve);
   return months.map((month, index) => {
     const cumulative = money((annualTotal * (index + 1)) / 12);
-    const periodType = month === currentMonth ? "current_partial" : month < currentMonth ? "actual" : "projected";
-    const isActualLike = periodType === "actual" || periodType === "current_partial";
+    const periodType = month === currentMonth ? "current_partial" : month < currentMonth ? "modeled_reconstructed" : "projected";
+    const isActualLike = periodType === "modeled_reconstructed" || periodType === "current_partial";
     return {
       month,
       periodType,
@@ -506,7 +506,7 @@ function buildTaxTrendFromRun(run) {
       amount: cumulative,
       pointType: periodType === "projected" ? "projected_future_period" : "legacy_elapsed_time_reconstruction",
       sourceType: "legacy_elapsed_time_reconstruction",
-      method: THROUGH_DATE_TAX_METHODS.ELAPSED_TIME,
+      method: periodType === "projected" ? "projected_future_period_from_persisted_run" : "persisted_run_linear_reconstruction",
       confidence: { score: null, level: "low", status: "legacy_reconstruction" },
       sourceFreshness: run?.source_freshness || {},
       workpaperDeepLink: run?.id ? `/api/tax/calculations/${run.id}/workpaper?section=through_date_tax` : null,

@@ -1,11 +1,13 @@
 // /src/services/tax/taxPostedTransaction.repository.js
 import { normalizeTaxYear } from "./taxDomain.js";
-import { notFoundError, validationError } from "./taxErrors.js";
+import { dataUnavailableError, notFoundError, validationError } from "./taxErrors.js";
 import { getTaxEligibilityReason } from "./taxTransactionEligibility.js";
 import { normalizePostedTransactionForTax } from "./taxTransactionNormalizer.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../bookkeeping/bookkeepingScope.js";
 
-const CHUNK_SIZE = 500;
+const CHUNK_SIZE = 50;
+const RELATED_ROW_CONCURRENCY = 3;
+const RELATED_ROW_RETRY_ATTEMPTS = 2;
 const BANK_PAGE_SIZE = 1000;
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 250;
@@ -206,7 +208,7 @@ async function fetchBankRows({ supabase, businessId, range, accountId, direction
 }
 
 async function hydrateRows({ supabase, businessId, bankRows }) {
-  const ids = bankRows.map((row) => row.id).filter(Boolean);
+  const ids = [...new Set(bankRows.map((row) => row.id).filter(Boolean).map(String))];
   const { catMap, qboMap } = await fetchRelatedRows({ supabase, businessId, transactionIds: ids });
   return bankRows.map((bankTransaction) => buildTaxRow({
     bankTransaction,
@@ -219,25 +221,55 @@ async function hydrateRows({ supabase, businessId, bankRows }) {
 async function fetchRelatedRows({ supabase, businessId, transactionIds }) {
   const catRows = [];
   const qboRows = [];
-  for (const chunk of chunks(transactionIds, CHUNK_SIZE)) {
-    const [catRes, qboRes] = await Promise.all([
-      supabase.from("transaction_categorizations").select(CAT_SELECT).eq("business_id", businessId).in("transaction_id", chunk),
-      supabase.from("qbo_posted_transactions").select(QBO_SELECT).eq("business_id", businessId).in("transaction_id", chunk),
-    ]);
-    if (catRes.error) throw catRes.error;
-    if (qboRes.error) throw qboRes.error;
-    catRows.push(...(catRes.data || []));
-    qboRows.push(...(qboRes.data || []));
-  }
+  const idChunks = chunks([...new Set((transactionIds || []).filter(Boolean).map(String))], CHUNK_SIZE);
+  await mapWithConcurrency(idChunks, RELATED_ROW_CONCURRENCY, async (chunk, chunkIndex) => {
+    const result = await fetchRelatedChunkWithRetry({ supabase, businessId, chunk, chunkIndex });
+    catRows.push(...result.catRows);
+    qboRows.push(...result.qboRows);
+  });
   return {
     catMap: latestByTransaction(catRows),
     qboMap: latestByTransaction(qboRows),
   };
 }
 
+async function fetchRelatedChunkWithRetry({ supabase, businessId, chunk, chunkIndex }) {
+  let lastError = null;
+  for (let attempt = 0; attempt <= RELATED_ROW_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await fetchRelatedChunk({ supabase, businessId, chunk });
+    } catch (err) {
+      lastError = err;
+      if (!isTransientReadError(err) || attempt >= RELATED_ROW_RETRY_ATTEMPTS) break;
+      await delay(50 * 2 ** attempt);
+    }
+  }
+  throw dataUnavailableError("Tax posted transaction related rows are temporarily unavailable.", {
+    stage: "posted_transaction_hydration",
+    chunkIndex,
+    chunkSize: chunk.length,
+    retryable: isTransientReadError(lastError),
+    code: lastError?.code || lastError?.name || "unknown",
+  });
+}
+
+async function fetchRelatedChunk({ supabase, businessId, chunk }) {
+  const [catRes, qboRes] = await Promise.all([
+    supabase.from("transaction_categorizations").select(CAT_SELECT).eq("business_id", businessId).in("transaction_id", chunk),
+    supabase.from("qbo_posted_transactions").select(QBO_SELECT).eq("business_id", businessId).in("transaction_id", chunk),
+  ]);
+  if (catRes.error) throw catRes.error;
+  if (qboRes.error) throw qboRes.error;
+  const catRows = catRes.data || [];
+  const qboRows = qboRes.data || [];
+  assertRowsBelongToBusiness(catRows, businessId, "transaction_categorizations");
+  assertRowsBelongToBusiness(qboRows, businessId, "qbo_posted_transactions");
+  return { catRows, qboRows };
+}
+
 async function fetchClassifiedTransactionIds({ supabase, businessId, taxYear, transactionIds }) {
   const out = new Set();
-  for (const chunk of chunks(transactionIds, CHUNK_SIZE)) {
+  for (const chunk of chunks([...new Set((transactionIds || []).filter(Boolean).map(String))], CHUNK_SIZE)) {
     const { data, error } = await supabase
       .from("transaction_tax_classifications")
       .select("transaction_id")
@@ -248,6 +280,36 @@ async function fetchClassifiedTransactionIds({ supabase, businessId, taxYear, tr
     for (const row of data || []) out.add(String(row.transaction_id));
   }
   return out;
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async (_, workerIndex) => {
+    for (let index = workerIndex; index < items.length; index += concurrency) {
+      await worker(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+}
+
+function assertRowsBelongToBusiness(rows, businessId, table) {
+  const invalid = rows.find((row) => row?.business_id && String(row.business_id) !== String(businessId));
+  if (invalid) {
+    throw validationError("cross_business_tax_row", "Tax posted transaction hydration returned a row for another business.", { table });
+  }
+}
+
+function isTransientReadError(error) {
+  const text = `${error?.name || ""} ${error?.code || ""} ${error?.message || ""}`.toLowerCase();
+  if (["42501", "42703", "42p01", "23503", "23505"].includes(String(error?.code || "").toLowerCase())) return false;
+  return text.includes("fetch failed") ||
+    text.includes("network") ||
+    text.includes("timeout") ||
+    text.includes("temporarily") ||
+    /^5\d\d$/.test(String(error?.status || ""));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function buildTaxRow({ bankTransaction, categorization, qboPostedTransaction, businessId }) {
