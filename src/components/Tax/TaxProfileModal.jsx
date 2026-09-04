@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Loader2, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import useTaxProfile from "../../hooks/tax/useTaxProfile.js";
 import {
   ACCOUNTING_METHOD_OPTIONS,
@@ -8,11 +8,17 @@ import {
   FILING_STATUS_OPTIONS,
   LLC_ELECTION_OPTIONS,
   SAFE_HARBOR_OPTIONS,
+  SELF_EMPLOYMENT_OPTIONS,
   US_STATE_OPTIONS,
   isSCorp,
   isSoleOrDisregarded,
 } from "./Setup/taxProfileFields.js";
 import { buildTaxProfilePatch } from "./Setup/taxSetupValidation.js";
+import TaxProfileSelectField from "./Setup/TaxProfileSelectField.jsx";
+import {
+  TAX_PROFILE_EMPTY_VALUES,
+  profileToTaxProfileValues,
+} from "./Setup/taxProfileFormModel.js";
 
 const EDITABLE_FIELDS = [
   "entity_type",
@@ -31,23 +37,6 @@ const EDITABLE_FIELDS = [
   "reserve_buffer_percent",
 ];
 
-const EMPTY_VALUES = {
-  entity_type: "",
-  tax_election: "",
-  filing_status: "",
-  primary_tax_state: "",
-  accounting_method: "",
-  safe_harbor_method: "",
-  self_employment_tax_applies: "",
-  prior_year_total_tax: "",
-  prior_year_agi: "",
-  owner_reasonable_salary: "",
-  owner_w2_wages_ytd: "",
-  federal_withholding_ytd: "",
-  state_withholding_ytd: "",
-  reserve_buffer_percent: "",
-};
-
 export default function TaxProfileModal({
   open,
   businessId,
@@ -58,7 +47,7 @@ export default function TaxProfileModal({
 }) {
   const taxProfile = useTaxProfile({ businessId, year, enabled: open && Boolean(businessId) });
   const profile = taxProfile.profile || overviewProfile || null;
-  const [values, setValues] = useState(EMPTY_VALUES);
+  const [values, setValues] = useState(TAX_PROFILE_EMPTY_VALUES);
   const [dirty, setDirty] = useState(false);
   const [notice, setNotice] = useState("");
   const [rendered, setRendered] = useState(open);
@@ -72,7 +61,7 @@ export default function TaxProfileModal({
       closeAfterSaveTimerRef.current = null;
     }
     if (!open) return;
-    setValues(profileToValues(profile));
+    setValues(profileToTaxProfileValues(profile));
     setDirty(false);
     setNotice("");
   }, [open, profile?.id, profile]);
@@ -171,16 +160,16 @@ export default function TaxProfileModal({
           ) : null}
 
           <div className="grid gap-2.5 sm:grid-cols-2">
-            <SelectField label="Business tax structure" value={values.entity_type} options={ENTITY_OPTIONS} onChange={(value) => updateField("entity_type", value)} />
+            <TaxProfileSelectField label="Business tax structure" value={values.entity_type} options={ENTITY_OPTIONS} onChange={(value) => updateField("entity_type", value)} />
             {values.entity_type === "single_member_llc" ? (
-              <SelectField label="LLC tax election" value={values.tax_election} options={LLC_ELECTION_OPTIONS} onChange={(value) => updateField("tax_election", value)} />
+              <TaxProfileSelectField label="LLC tax election" value={values.tax_election} options={LLC_ELECTION_OPTIONS} onChange={(value) => updateField("tax_election", value)} />
             ) : null}
-            <SelectField label="Filing status" value={values.filing_status} options={FILING_STATUS_OPTIONS} onChange={(value) => updateField("filing_status", value)} />
-            <SelectField label="Primary tax state" value={values.primary_tax_state} options={[{ value: "", label: "Select state" }, ...US_STATE_OPTIONS]} onChange={(value) => updateField("primary_tax_state", value)} />
-            <SelectField label="Accounting method" value={values.accounting_method} options={ACCOUNTING_METHOD_OPTIONS} onChange={(value) => updateField("accounting_method", value)} />
-            <SelectField label="Safe-harbor method" value={values.safe_harbor_method} options={SAFE_HARBOR_OPTIONS} onChange={(value) => updateField("safe_harbor_method", value)} />
+            <TaxProfileSelectField label="Filing status" value={values.filing_status} options={FILING_STATUS_OPTIONS} onChange={(value) => updateField("filing_status", value)} />
+            <TaxProfileSelectField label="Primary tax state" value={values.primary_tax_state} options={[{ value: "", label: "Select state" }, ...US_STATE_OPTIONS]} onChange={(value) => updateField("primary_tax_state", value)} />
+            <TaxProfileSelectField label="Accounting method" value={values.accounting_method} options={ACCOUNTING_METHOD_OPTIONS} onChange={(value) => updateField("accounting_method", value)} />
+            <TaxProfileSelectField label="Safe-harbor method" value={values.safe_harbor_method} options={SAFE_HARBOR_OPTIONS} onChange={(value) => updateField("safe_harbor_method", value)} />
             {showSelfEmploymentQuestion ? (
-              <SelectField
+              <TaxProfileSelectField
                 label="Is this business income subject to self-employment tax?"
                 value={values.self_employment_tax_applies}
                 options={SELF_EMPLOYMENT_OPTIONS}
@@ -225,182 +214,6 @@ export default function TaxProfileModal({
   return createPortal(modal, document.body);
 }
 
-const SELF_EMPLOYMENT_OPTIONS = [
-  { value: "", label: "Not answered" },
-  { value: "true", label: "Yes" },
-  { value: "false", label: "No" },
-];
-
-function SelectField({ label, value, options, onChange, helper = "" }) {
-  const buttonRef = useRef(null);
-  const menuRef = useRef(null);
-  const [open, setOpen] = useState(false);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [menuStyle, setMenuStyle] = useState(null);
-  const typeaheadRef = useRef("");
-  const typeaheadTimerRef = useRef(null);
-
-  const normalizedOptions = useMemo(
-    () => (options || []).map((option) => ({
-      value: option?.value ?? "",
-      label: String(option?.label ?? option?.value ?? "").trim(),
-    })),
-    [options]
-  );
-  const selectedIndex = Math.max(0, normalizedOptions.findIndex((option) => String(option.value) === String(value ?? "")));
-  const selectedOption = normalizedOptions[selectedIndex] || normalizedOptions[0] || { value: "", label: "Select" };
-  const selectId = useMemo(() => `tax-profile-${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`, [label]);
-
-  const updateMenuPosition = useCallback(() => {
-    if (!buttonRef.current || typeof window === "undefined") return;
-    const rect = buttonRef.current.getBoundingClientRect();
-    const margin = 12;
-    const width = Math.max(rect.width, 220);
-    const maxWidth = Math.max(180, window.innerWidth - margin * 2);
-    const safeWidth = Math.min(width, maxWidth);
-    const below = window.innerHeight - rect.bottom - margin;
-    const above = rect.top - margin;
-    const preferredMaxHeight = label.toLowerCase().includes("state") ? 280 : 220;
-    const openUp = below < 180 && above > below;
-    const maxHeight = Math.max(120, Math.min(preferredMaxHeight, openUp ? above - 8 : below - 8));
-    const left = Math.min(Math.max(margin, rect.left), window.innerWidth - safeWidth - margin);
-    setMenuStyle({
-      position: "fixed",
-      left,
-      top: openUp ? Math.max(margin, rect.top - maxHeight - 8) : Math.min(window.innerHeight - margin, rect.bottom + 8),
-      width: safeWidth,
-      maxHeight,
-    });
-  }, [label]);
-
-  useLayoutEffect(() => {
-    if (!open) return undefined;
-    setActiveIndex(selectedIndex);
-    updateMenuPosition();
-    window.addEventListener("resize", updateMenuPosition);
-    window.addEventListener("scroll", updateMenuPosition, true);
-    return () => {
-      window.removeEventListener("resize", updateMenuPosition);
-      window.removeEventListener("scroll", updateMenuPosition, true);
-    };
-  }, [open, selectedIndex, updateMenuPosition]);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const onPointerDown = (event) => {
-      if (buttonRef.current?.contains(event.target) || menuRef.current?.contains(event.target)) return;
-      setOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [open]);
-
-  const choose = (option) => {
-    onChange?.(option.value);
-    setOpen(false);
-    window.requestAnimationFrame(() => buttonRef.current?.focus());
-  };
-
-  const onKeyDown = (event) => {
-    if (event.key === "Escape") {
-      if (open) {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpen(false);
-      }
-      return;
-    }
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      if (!open) {
-        setOpen(true);
-      } else {
-        choose(normalizedOptions[activeIndex] || selectedOption);
-      }
-      return;
-    }
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      if (!open) setOpen(true);
-      const direction = event.key === "ArrowDown" ? 1 : -1;
-      setActiveIndex((current) => {
-        const count = normalizedOptions.length || 1;
-        return (current + direction + count) % count;
-      });
-      return;
-    }
-    if (event.key.length === 1 && /\S/.test(event.key)) {
-      typeaheadRef.current += event.key.toLowerCase();
-      window.clearTimeout(typeaheadTimerRef.current);
-      typeaheadTimerRef.current = window.setTimeout(() => {
-        typeaheadRef.current = "";
-      }, 500);
-      const index = normalizedOptions.findIndex((option) => option.label.toLowerCase().startsWith(typeaheadRef.current));
-      if (index >= 0) {
-        event.preventDefault();
-        setActiveIndex(index);
-        if (!open) choose(normalizedOptions[index]);
-      }
-    }
-  };
-
-  return (
-    <div className="block">
-      <span id={`${selectId}-label`} className="text-[11px] font-semibold text-white/70">{label}</span>
-      <button
-        ref={buttonRef}
-        type="button"
-        role="combobox"
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        aria-controls={`${selectId}-listbox`}
-        aria-labelledby={`${selectId}-label`}
-        onClick={() => setOpen((current) => !current)}
-        onKeyDown={onKeyDown}
-        className="dark-dropdown mt-1 flex w-full items-center justify-between gap-2 rounded-[11px] border border-white/10 bg-[#0f1115] px-3 py-1.5 text-left text-xs text-white outline-none transition hover:border-emerald-200/28 hover:bg-white/[0.04] focus:ring-2 focus:ring-emerald-300/35"
-      >
-        <span className={selectedOption.value === "" ? "text-white/42" : "text-white"}>{selectedOption.label}</span>
-        <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-white/48 transition ${open ? "rotate-180" : ""}`} aria-hidden="true" />
-      </button>
-      {open && menuStyle ? createPortal(
-        <div
-          ref={menuRef}
-          id={`${selectId}-listbox`}
-          role="listbox"
-          aria-labelledby={`${selectId}-label`}
-          style={menuStyle}
-          className="z-[120] overflow-y-auto rounded-xl border border-white/12 bg-[#080b0f] p-1 text-xs text-white shadow-[0_22px_54px_rgba(0,0,0,0.72)] ring-1 ring-emerald-300/10"
-        >
-          {normalizedOptions.map((option, index) => {
-            const selected = String(option.value) === String(value ?? "");
-            const active = index === activeIndex;
-            return (
-              <button
-                key={`${selectId}-${String(option.value)}`}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onMouseEnter={() => setActiveIndex(index)}
-                onClick={() => choose(option)}
-                className={[
-                  "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition",
-                  selected ? "bg-emerald-300/[0.13] text-emerald-50" : "text-white/78",
-                  active && !selected ? "bg-white/[0.075] text-white" : "",
-                ].join(" ")}
-              >
-                <span className="truncate">{option.label}</span>
-                {selected ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-200" aria-hidden="true" /> : null}
-              </button>
-            );
-          })}
-        </div>,
-        document.body
-      ) : null}
-      {helper ? <p className="mt-1 text-[11px] leading-relaxed text-white/46">{helper}</p> : null}
-    </div>
-  );
-}
-
 function MoneyField({ label, value, onChange }) {
   return (
     <label className="block">
@@ -417,32 +230,4 @@ function PercentField({ label, value, onChange }) {
       <input type="number" min="0" max="100" step="1" value={value ?? ""} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-[11px] border border-white/10 bg-[#0f1115] px-3 py-1.5 text-xs text-white outline-none transition focus:ring-2 focus:ring-emerald-300/35" />
     </label>
   );
-}
-
-function profileToValues(profile) {
-  const source = profile || {};
-  return {
-    ...EMPTY_VALUES,
-    ...source,
-    entity_type: source.entity_type || source.entityType || "",
-    tax_election: source.tax_election || source.taxElection || "",
-    filing_status: source.filing_status || source.filingStatus || "",
-    primary_tax_state: source.primary_tax_state || source.primaryState || source.state || "",
-    accounting_method: source.accounting_method || source.accountingMethod || "",
-    safe_harbor_method: source.safe_harbor_method || source.safeHarborMethod || "",
-    self_employment_tax_applies: source.self_employment_tax_applies === true || source.selfEmploymentTaxApplies === true
-      ? "true"
-      : source.self_employment_tax_applies === false || source.selfEmploymentTaxApplies === false
-        ? "false"
-        : "",
-    prior_year_total_tax: source.prior_year_total_tax ?? source.priorYearTotalTax ?? "",
-    prior_year_agi: source.prior_year_agi ?? source.priorYearAgi ?? source.priorYearAGI ?? "",
-    owner_reasonable_salary: source.owner_reasonable_salary ?? source.ownerReasonableSalary ?? "",
-    owner_w2_wages_ytd: source.owner_w2_wages_ytd ?? source.ownerW2WagesYtd ?? source.ownerW2WagesYTD ?? source.ownerWagesYtd ?? "",
-    federal_withholding_ytd: source.federal_withholding_ytd ?? source.federalWithholdingYtd ?? source.federalWithholdingYTD ?? "",
-    state_withholding_ytd: source.state_withholding_ytd ?? source.stateWithholdingYtd ?? source.stateWithholdingYTD ?? "",
-    reserve_buffer_percent: source.reserve_buffer_percent == null && source.reserveBufferPercent == null
-      ? ""
-      : Math.round(Number(source.reserve_buffer_percent ?? source.reserveBufferPercent) * 100),
-  };
 }

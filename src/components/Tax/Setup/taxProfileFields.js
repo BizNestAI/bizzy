@@ -1,5 +1,6 @@
 export const TAX_PROFILE_SOURCE_LABELS = {
   user: "Confirmed by you",
+  onboarding: "Collected during onboarding",
   cpa: "Provided by CPA",
   imported: "Imported",
   inferred: "Inferred by Bizzi",
@@ -56,6 +57,18 @@ export const TRI_STATE_OPTIONS = [
   { value: true, label: "Yes" },
   { value: false, label: "No" },
   { value: null, label: "I'm not sure" },
+];
+
+export const SELF_EMPLOYMENT_OPTIONS = [
+  { value: "", label: "Not answered" },
+  { value: "true", label: "Yes" },
+  { value: "false", label: "No" },
+];
+
+export const REQUIRED_SELF_EMPLOYMENT_OPTIONS = [
+  { value: "", label: "Select..." },
+  { value: "true", label: "Yes" },
+  { value: "false", label: "No" },
 ];
 
 export const TAX_PROFILE_FIELDS = {

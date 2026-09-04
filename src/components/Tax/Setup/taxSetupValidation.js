@@ -18,9 +18,11 @@ const STATE_VALUES = new Set(US_STATE_OPTIONS.map((option) => option.value));
 const ACCOUNTING_VALUES = new Set(ACCOUNTING_METHOD_OPTIONS.map((option) => option.value));
 const SAFE_HARBOR_VALUES = new Set(SAFE_HARBOR_OPTIONS.map((option) => option.value));
 
-export function validateTaxSetup(values = {}, { stepId = null } = {}) {
+export function validateTaxSetup(values = {}, { stepId = null, fieldsOverride = null } = {}) {
   const errors = {};
-  const fields = stepId ? getStepFields(stepId, values) : Object.keys(TAX_PROFILE_FIELDS);
+  const fields = Array.isArray(fieldsOverride)
+    ? fieldsOverride
+    : stepId ? getStepFields(stepId, values) : Object.keys(TAX_PROFILE_FIELDS);
 
   if (fields.includes("entity_type")) {
     if (!values.entity_type) errors.entity_type = "Choose a business tax structure.";
@@ -52,6 +54,15 @@ export function validateTaxSetup(values = {}, { stepId = null } = {}) {
   if (fields.includes("safe_harbor_method")) {
     if (!values.safe_harbor_method || values.safe_harbor_method === "unknown") errors.safe_harbor_method = "Choose a safe-harbor planning method.";
     else if (!SAFE_HARBOR_VALUES.has(values.safe_harbor_method)) errors.safe_harbor_method = "Choose a valid safe-harbor method.";
+  }
+
+  if (fields.includes("self_employment_tax_applies") && isSoleOrDisregarded(values)) {
+    const value = values.self_employment_tax_applies;
+    if (value === "" || value == null) {
+      errors.self_employment_tax_applies = "Confirm whether this business income is subject to self-employment tax.";
+    } else if (![true, false, "true", "false"].includes(value)) {
+      errors.self_employment_tax_applies = "Choose yes or no for self-employment tax.";
+    }
   }
 
   if (isSCorp(values)) {

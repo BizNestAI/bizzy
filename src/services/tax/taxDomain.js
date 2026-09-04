@@ -48,6 +48,7 @@ export const TAX_PROFILE_STATUSES = freeze({
 
 export const TAX_PROFILE_SOURCES = freeze({
   USER: "user",
+  ONBOARDING: "onboarding",
   CPA: "cpa",
   IMPORTED: "imported",
   INFERRED: "inferred",
@@ -124,6 +125,7 @@ export const TAX_CLASSIFICATION_RUN_STATUSES = freeze({
 
 export const TAX_CLASSIFICATION_TRIGGER_SOURCES = freeze({
   PROFILE_COMPLETED: "profile_completed",
+  ONBOARDING_PROFILE_COMPLETED: "onboarding_profile_completed",
   QBO_TRANSACTION_POSTED: "qbo_transaction_posted",
   RULES_CHANGED: "rules_changed",
   RECOVERY_SCAN: "recovery_scan",

@@ -47,6 +47,7 @@ create table if not exists public.tax_classification_runs (
   constraint tax_classification_runs_trigger_source_check check (
     trigger_source in (
       'profile_completed',
+      'onboarding_profile_completed',
       'qbo_transaction_posted',
       'rules_changed',
       'recovery_scan',

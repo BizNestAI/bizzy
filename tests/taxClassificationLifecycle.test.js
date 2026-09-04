@@ -66,6 +66,37 @@ test("profile completion enqueues one idempotent historical classification run",
   assert.equal(supabase.store.tax_classification_runs[0].total_eligible, 205);
 });
 
+test("onboarding profile completion enqueues one idempotent historical classification run", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 205 }));
+  const before = completeProfile({ self_employment_tax_applies: null });
+  const after = completeProfile({ self_employment_tax_applies: true, source: "onboarding" });
+
+  const first = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.PROFILE_UPDATED,
+    entityId: "profile-1",
+    userId: "user-1",
+    metadata: { before, after, source: "onboarding" },
+  });
+  const second = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.PROFILE_UPDATED,
+    entityId: "profile-1",
+    userId: "user-1",
+    metadata: { before, after, source: "onboarding" },
+  });
+
+  assert.equal(first?.queued, true);
+  assert.equal(second?.queued, false);
+  assert.equal(supabase.store.tax_classification_runs.length, 1);
+  assert.equal(supabase.store.tax_classification_runs[0].trigger_source, TAX_CLASSIFICATION_TRIGGER_SOURCES.ONBOARDING_PROFILE_COMPLETED);
+  assert.equal(supabase.store.tax_classification_runs[0].total_eligible, 205);
+});
+
 test("worker processes a 205-row production-shaped run in bounded batches and blocks calculation without verified standard deduction rule", async () => {
   const supabase = makeSupabase(baseStore({ transactionCount: 205 }));
   const queued = await enqueueTaxClassificationRun({

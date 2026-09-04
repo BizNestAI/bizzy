@@ -16,14 +16,18 @@ export async function handleTaxClassificationEvent({ supabase, businessId, taxYe
     const afterProfile = metadata?.after || await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
     const afterComplete = computeTaxProfileCompleteness(afterProfile).isCompleteForEstimate === true;
     if (!afterComplete || beforeComplete) return { queued: false, outcome: "profile_not_newly_complete" };
+    const completedFromOnboarding = String(metadata?.source || afterProfile?.source || "").toLowerCase() === "onboarding";
+    const triggerSource = completedFromOnboarding
+      ? TAX_CLASSIFICATION_TRIGGER_SOURCES.ONBOARDING_PROFILE_COMPLETED
+      : TAX_CLASSIFICATION_TRIGGER_SOURCES.PROFILE_COMPLETED;
     return enqueueTaxClassificationRun({
       supabase,
       businessId,
       taxYear,
-      triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.PROFILE_COMPLETED,
+      triggerSource,
       actorUserId: userId,
       sourceRecordId: entityId,
-      metadata: { source: "tax_profile_completed" },
+      metadata: { source: completedFromOnboarding ? "onboarding_profile_completed" : "tax_profile_completed" },
       now,
     });
   }

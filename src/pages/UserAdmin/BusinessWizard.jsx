@@ -6,6 +6,26 @@ import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../services/supabaseClient.js';
 import { ArrowRight, Info } from 'lucide-react';
 import bizzyLogo from '../../assets/bizzy-logo.png';
+import TaxProfileSelectField from '../../components/Tax/Setup/TaxProfileSelectField.jsx';
+import {
+  ACCOUNTING_METHOD_OPTIONS,
+  ENTITY_OPTIONS,
+  FILING_STATUS_OPTIONS,
+  LLC_ELECTION_OPTIONS,
+  REQUIRED_SELF_EMPLOYMENT_OPTIONS,
+  SAFE_HARBOR_OPTIONS,
+  US_STATE_OPTIONS,
+  isSoleOrDisregarded,
+} from '../../components/Tax/Setup/taxProfileFields.js';
+import {
+  TAX_PROFILE_EMPTY_VALUES,
+  buildOnboardingTaxProfilePatch,
+  getOnboardingTaxYear,
+  profileResultHasMinimumCompleteness,
+  profileToTaxProfileValues,
+  validateOnboardingTaxProfile,
+} from '../../components/Tax/Setup/taxProfileFormModel.js';
+import { getTaxProfile, updateTaxProfile } from '../../services/tax/taxApiClient.js';
 
 // ----- Options (expandable later) -----
 const INDUSTRIES = [
@@ -257,6 +277,8 @@ const BusinessWizard = () => {
   const [loading, setLoading] = useState(false);
 
   const [formData, setFormData] = useState(() => readInitialDraft() || DEFAULT_FORM_DATA);
+  const [taxFormData, setTaxFormData] = useState(TAX_PROFILE_EMPTY_VALUES);
+  const [taxProfileLoading, setTaxProfileLoading] = useState(false);
   const [existingBusinessId, setExistingBusinessId] = useState(null);
   const [draftReady, setDraftReady] = useState(false);
   const [animateEntry] = useState(() => {
@@ -268,6 +290,7 @@ const BusinessWizard = () => {
     return shouldAnimate;
   });
   const draftStorageKey = useMemo(() => getDraftStorageKey(user?.id), [user?.id]);
+  const taxYear = useMemo(() => getOnboardingTaxYear(), []);
 
   const accent = useMemo(() => ACCENT_HEX, []);
   const ctaStyle = useMemo(
@@ -302,6 +325,17 @@ const BusinessWizard = () => {
       }
       return next;
     });
+    if (name === 'state' && value && value !== 'Other') {
+      setTaxFormData((prev) => (prev.primary_tax_state ? prev : { ...prev, primary_tax_state: value }));
+    }
+  };
+
+  const setTaxField = (name, value) => {
+    setTaxFormData((prev) => {
+      const next = { ...prev, [name]: value };
+      if (name === 'entity_type' && value !== 'single_member_llc') next.tax_election = '';
+      return next;
+    });
   };
 
   const hasRequiredFields =
@@ -311,7 +345,10 @@ const BusinessWizard = () => {
     formData.state &&
     formData.services_offered;
 
-  const canFinish = hasRequiredFields && !loading;
+  const taxValidationErrors = useMemo(() => validateOnboardingTaxProfile(taxFormData), [taxFormData]);
+  const hasRequiredTaxFields = Object.keys(taxValidationErrors).length === 0;
+
+  const canFinish = hasRequiredFields && hasRequiredTaxFields && !loading && !taxProfileLoading;
 
   useEffect(() => {
     setDraftReady(false);
@@ -360,6 +397,24 @@ const BusinessWizard = () => {
           billing_model: normalize(record.billing_model, prev.billing_model),
           top_challenge: normalize(record.top_challenge, prev.top_challenge),
         }));
+        setTaxProfileLoading(true);
+        try {
+          const taxResult = await getTaxProfile({ businessId: record.id, year: taxYear });
+          if (!alive) return;
+          const profile = taxResult?.profile || null;
+          setTaxFormData((prev) => ({
+            ...prev,
+            ...profileToTaxProfileValues(profile),
+            primary_tax_state: profile?.primary_tax_state || profile?.primaryTaxState || record.state || prev.primary_tax_state,
+          }));
+        } catch (taxErr) {
+          console.warn('[BusinessWizard] tax profile preload failed:', taxErr);
+          if (alive && record.state && record.state !== 'Other') {
+            setTaxFormData((prev) => ({ ...prev, primary_tax_state: prev.primary_tax_state || record.state }));
+          }
+        } finally {
+          if (alive) setTaxProfileLoading(false);
+        }
         setDraftReady(true);
       } catch (err) {
         console.warn('[BusinessWizard] preload failed:', err);
@@ -369,7 +424,7 @@ const BusinessWizard = () => {
     return () => {
       alive = false;
     };
-  }, [user?.id]);
+  }, [taxYear, user?.id]);
 
   useEffect(() => {
     if (!draftReady || !draftStorageKey || existingBusinessId) return;
@@ -444,6 +499,14 @@ const BusinessWizard = () => {
       }
 
       if (businessId) {
+        const taxPatch = buildOnboardingTaxProfilePatch(taxFormData);
+        const taxResult = await updateTaxProfile({ businessId, year: taxYear, patch: taxPatch });
+        if (!profileResultHasMinimumCompleteness(taxResult)) {
+          const missing = taxResult?.readiness?.missing_fields || taxResult?.completeness?.missingRequired || [];
+          throw new Error(missing.length
+            ? `Complete Tax setup before finishing: ${missing.join(', ')}.`
+            : 'Tax setup could not be confirmed.');
+        }
         clearDraft(draftStorageKey);
         localStorage.setItem('isProfileComplete', 'true');
         localStorage.setItem('currentBusinessId', businessId);
@@ -677,6 +740,87 @@ const BusinessWizard = () => {
                   <Info size={14} className="text-white/36" />
                   You can adjust these later in Settings → Preferences.
                 </div>
+              </div>
+            </div>
+          </Section>
+
+          <Section
+            title="Tax setup"
+            subtitle={`Tax setup for ${taxYear}. These details help Bizzi organize deductions and prepare tax estimates. You can update them later.`}
+          >
+            <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2">
+              <div>
+                <TaxProfileSelectField
+                  id="onboarding-tax-entity-type"
+                  label="Business tax structure"
+                  value={taxFormData.entity_type}
+                  options={[{ value: '', label: 'Select...' }, ...ENTITY_OPTIONS]}
+                  onChange={(value) => setTaxField('entity_type', value)}
+                  helper="Used to route the estimate through the right tax model."
+                />
+              </div>
+              {taxFormData.entity_type === 'single_member_llc' ? (
+                <div>
+                  <TaxProfileSelectField
+                    id="onboarding-tax-election"
+                    label="LLC tax election"
+                    value={taxFormData.tax_election}
+                    options={[{ value: '', label: 'Select...' }, ...LLC_ELECTION_OPTIONS]}
+                    onChange={(value) => setTaxField('tax_election', value)}
+                  />
+                </div>
+              ) : null}
+              <div>
+                <TaxProfileSelectField
+                  id="onboarding-tax-filing-status"
+                  label="Filing status"
+                  value={taxFormData.filing_status}
+                  options={[{ value: '', label: 'Select...' }, ...FILING_STATUS_OPTIONS]}
+                  onChange={(value) => setTaxField('filing_status', value)}
+                />
+              </div>
+              <div>
+                <TaxProfileSelectField
+                  id="onboarding-tax-primary-state"
+                  label="Primary tax state"
+                  value={taxFormData.primary_tax_state}
+                  options={[{ value: '', label: 'Select state' }, ...US_STATE_OPTIONS]}
+                  onChange={(value) => setTaxField('primary_tax_state', value)}
+                />
+              </div>
+              <div>
+                <TaxProfileSelectField
+                  id="onboarding-tax-accounting-method"
+                  label="Accounting method"
+                  value={taxFormData.accounting_method}
+                  options={[{ value: '', label: 'Select...' }, ...ACCOUNTING_METHOD_OPTIONS]}
+                  onChange={(value) => setTaxField('accounting_method', value)}
+                />
+              </div>
+              <div>
+                <TaxProfileSelectField
+                  id="onboarding-tax-safe-harbor-method"
+                  label="Safe-harbor method"
+                  value={taxFormData.safe_harbor_method}
+                  options={[{ value: '', label: 'Select...' }, ...SAFE_HARBOR_OPTIONS]}
+                  onChange={(value) => setTaxField('safe_harbor_method', value)}
+                  helper="Used to choose the planning method for estimated-tax targets."
+                />
+              </div>
+              {isSoleOrDisregarded(taxFormData) ? (
+                <div>
+                  <TaxProfileSelectField
+                    id="onboarding-tax-self-employment"
+                    label="Is this business income subject to self-employment tax?"
+                    value={taxFormData.self_employment_tax_applies}
+                    options={REQUIRED_SELF_EMPLOYMENT_OPTIONS}
+                    onChange={(value) => setTaxField('self_employment_tax_applies', value)}
+                    helper="Used to determine whether self-employment tax should be included in your estimate."
+                  />
+                </div>
+              ) : null}
+              <div className="md:col-span-2 text-xs leading-5 text-white/48">
+                These answers are saved to your canonical Tax Profile for this business and year.
               </div>
             </div>
           </Section>

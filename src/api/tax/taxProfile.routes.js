@@ -83,6 +83,7 @@ router.patch("/profile", async (req, res) => {
       entityId: profile.id,
       userId: req.user.id,
       metadata: {
+        source: req.body?.source || profile?.source || null,
         changedFields: changedFields(before, profile),
         before: pickProfileEventFields(before),
         after: pickProfileEventFields(profile),
@@ -182,6 +183,7 @@ function pickProfileEventFields(profile = {}) {
     "self_employment_tax_applies",
     "prior_year_total_tax",
     "prior_year_agi",
+    "source",
   ];
   return Object.fromEntries(fields.map((field) => [field, profile?.[field]]).filter(([, value]) => value !== undefined));
 }
