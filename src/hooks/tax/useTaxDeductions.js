@@ -6,12 +6,16 @@ import {
   confirmTaxClassification,
   excludeTaxClassification,
   exportTaxDeductions,
+  getTaxClassificationCoverage,
+  getTaxClassificationReviewSummary,
+  getTaxClassifications,
   getTaxDeductionCategoryDetail,
   getTaxDeductionTransactionDetail,
   getTaxDeductionTransactions,
   getTaxDeductionsOverview,
   getTaxPostedTransactions,
   overrideTaxClassification,
+  previewTaxClassificationBackfill,
   rejectTaxClassification,
   restoreTaxClassification,
   runTaxClassification,
@@ -31,6 +35,9 @@ export function useTaxDeductions({
   const [transactions, setTransactions] = useState(null);
   const [allTransactions, setAllTransactions] = useState(null);
   const [postedTransactions, setPostedTransactions] = useState(null);
+  const [classificationCoverage, setClassificationCoverage] = useState(null);
+  const [classificationRows, setClassificationRows] = useState(null);
+  const [classificationReviewSummary, setClassificationReviewSummary] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [resourceErrors, setResourceErrors] = useState({});
@@ -44,6 +51,9 @@ export function useTaxDeductions({
       setTransactions(fixture.deductionTransactions);
       setAllTransactions(fixture.deductionTransactions);
       setPostedTransactions(fixture.deductionTransactions);
+      setClassificationCoverage(fixture.deductions?.coverage || null);
+      setClassificationRows(fixture.deductionTransactions);
+      setClassificationReviewSummary(null);
       setLoading(false);
       setError(null);
       setResourceErrors({});
@@ -57,7 +67,7 @@ export function useTaxDeductions({
     try {
       const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
       const parsedPagination = paginationKey ? JSON.parse(paginationKey) : {};
-      const [overviewResult, transactionsResult, allTransactionsResult, postedTransactionsResult] = await Promise.allSettled([
+      const [overviewResult, transactionsResult, allTransactionsResult, postedTransactionsResult, coverageResult, classificationRowsResult, reviewSummaryResult] = await Promise.allSettled([
         getTaxDeductionsOverview({ businessId, year, asOfDate, signal }),
         getTaxDeductionTransactions({
           businessId,
@@ -70,17 +80,26 @@ export function useTaxDeductions({
         }),
         fetchAllDeductionTransactions({ businessId, year, asOfDate, filters: parsedFilters, signal }),
         fetchAllPostedTransactions({ businessId, year, signal }),
+        getTaxClassificationCoverage({ businessId, year, signal }),
+        getTaxClassifications({ businessId, year, limit: 200, offset: 0, signal }),
+        getTaxClassificationReviewSummary({ businessId, year, signal }),
       ]);
       if (request === seq.current) {
         if (overviewResult.status === "fulfilled") setOverview(overviewResult.value);
         if (transactionsResult.status === "fulfilled") setTransactions(transactionsResult.value);
         if (allTransactionsResult.status === "fulfilled") setAllTransactions(allTransactionsResult.value);
         if (postedTransactionsResult.status === "fulfilled") setPostedTransactions(postedTransactionsResult.value);
+        if (coverageResult.status === "fulfilled") setClassificationCoverage(coverageResult.value);
+        if (classificationRowsResult.status === "fulfilled") setClassificationRows(classificationRowsResult.value);
+        if (reviewSummaryResult.status === "fulfilled") setClassificationReviewSummary(reviewSummaryResult.value);
         const errors = collectResourceErrors({
           overview: overviewResult,
           transactions: transactionsResult,
           allTransactions: allTransactionsResult,
           postedTransactions: postedTransactionsResult,
+          classificationCoverage: coverageResult,
+          classificationRows: classificationRowsResult,
+          classificationReviewSummary: reviewSummaryResult,
         });
         setResourceErrors(errors);
         setError(Object.values(errors)[0] || null);
@@ -90,6 +109,9 @@ export function useTaxDeductions({
         transactions: valueOrNull(transactionsResult),
         allTransactions: valueOrNull(allTransactionsResult),
         postedTransactions: valueOrNull(postedTransactionsResult),
+        classificationCoverage: valueOrNull(coverageResult),
+        classificationRows: valueOrNull(classificationRowsResult),
+        classificationReviewSummary: valueOrNull(reviewSummaryResult),
       };
     } catch (err) {
       if (err?.code !== "request_aborted" && request === seq.current) setError(err);
@@ -110,6 +132,9 @@ export function useTaxDeductions({
     transactions,
     allTransactions,
     postedTransactions,
+    classificationCoverage,
+    classificationRows,
+    classificationReviewSummary,
     loading,
     error,
     resourceErrors,
@@ -168,6 +193,13 @@ export function useTaxDeductions({
     },
     bulkUpdateClassifications: async (transactionIds, changes = {}, options = {}) => {
       const result = await bulkUpdateTaxClassifications({ businessId, year, transactionIds, changes, ...options });
+      await load();
+      return result;
+    },
+    previewClassificationBackfill: (options = {}) =>
+      previewTaxClassificationBackfill({ businessId, year, ...options }),
+    prepareDeductions: async (options = {}) => {
+      const result = await runTaxClassification({ businessId, year, limit: 100, force: false, ...options });
       await load();
       return result;
     },

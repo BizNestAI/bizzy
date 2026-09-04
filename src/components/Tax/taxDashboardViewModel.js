@@ -2,6 +2,7 @@ const SETUP_MESSAGES = {
   profile_incomplete: "Complete your tax profile so Bizzi can estimate your federal and state taxes.",
   entity_unknown: "Tell Bizzi how your LLC is taxed before using this estimate.",
   classifications_missing: "Your posted transactions need tax classification before deductions can be estimated.",
+  classifications_required: "Your Tax Profile is complete. Bizzi is preparing the tax treatment of your posted QuickBooks transactions.",
   state_rules_missing: "Federal estimate is available. State tax is not yet supported for this setup.",
   reserve_setup_incomplete: "Your tax estimate is available. Connect or select a reserve account to track what you have set aside.",
   no_posted_transactions: "Bizzi does not have posted transactions for this tax year yet.",
@@ -252,8 +253,13 @@ function normalizeClassificationSummary(summary = {}) {
     classifiedTransactionCount,
     unclassifiedTransactionCount,
     reviewRequiredTransactionCount,
+    autoClassifiedTransactionCount: nullableNumber(summary.autoClassifiedTransactionCount ?? summary.auto_classified_transaction_count),
     excludedTransactionCount: nullableNumber(summary.excludedTransactionCount ?? summary.excluded_transaction_count),
+    processingTransactionCount: nullableNumber(summary.processingTransactionCount ?? summary.processing_transaction_count),
+    failedTransactionCount: nullableNumber(summary.failedTransactionCount ?? summary.failed_transaction_count),
     classificationCoveragePercent: nullableNumber(summary.classificationCoveragePercent ?? summary.classification_coverage_percent),
+    classificationStatus: summary.classificationStatus || summary.classification_status || null,
+    lastRunAt: summary.lastRunAt || summary.last_run_at || null,
   };
 }
 
@@ -263,6 +269,7 @@ function normalizeSurfaceReadiness(value = {}) {
     chart: normalizeSurface(source.chart || source.taxTrajectory || source.tax_trajectory),
     liability: normalizeSurface(source.liability || source.estimatedTaxLiability || source.estimated_tax_liability),
     deductions: normalizeSurface(source.deductions || source.deductionsPreview || source.deductions_preview),
+    deadline: normalizeSurface(source.deadline || source.deadlines),
   };
 }
 
@@ -273,6 +280,7 @@ function normalizeSurface(surface = {}) {
     ready: source.ready === true,
     reason: source.reason || source.status || null,
     message: source.message || null,
+    amountStatus: source.amountStatus || source.amount_status || null,
   };
 }
 

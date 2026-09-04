@@ -100,6 +100,14 @@ export async function getClassificationCoverage({ supabase, businessId, taxYear,
   const autoClassifiedCount = rows.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED).length;
   const needsReviewCount = rows.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW).length;
   const excludedCount = rows.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.EXCLUDED).length;
+  const unclassifiedCount = Math.max(0, Number(eligiblePostedCount || 0) - classifiedCount);
+  const classificationStatus = unclassifiedCount > 0
+    ? "classifications_required"
+    : needsReviewCount > 0
+      ? "review_required"
+      : classifiedCount > 0
+        ? "classifications_ready"
+        : "classifications_required";
   const sum = (field) => round2(rows.reduce((acc, row) => acc + Number(row[field] || 0), 0));
   return {
     eligiblePostedCount,
@@ -108,6 +116,14 @@ export async function getClassificationCoverage({ supabase, businessId, taxYear,
     autoClassifiedCount,
     needsReviewCount,
     excludedCount,
+    unclassifiedCount,
+    processingCount: 0,
+    failedCount: 0,
+    classificationStatus,
+    lastRunAt: rows.reduce((latest, row) => {
+      const value = row.updated_at || row.created_at || null;
+      return value && (!latest || String(value) > String(latest)) ? value : latest;
+    }, null),
     coveragePercent: eligiblePostedCount ? round2((classifiedCount / eligiblePostedCount) * 100) : 0,
     deductibleAmount: sum("deductible_amount"),
     nondeductibleAmount: sum("nondeductible_amount"),

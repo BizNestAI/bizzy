@@ -12,6 +12,10 @@ import { buildTaxCalculationSummary } from "../../services/tax/explanations/taxE
 import { toCanonicalTaxCalculationDto } from "../../services/tax/api/taxCalculationDto.js";
 import { parseTaxApiIncludes, resolveTaxApiVersion } from "../../services/tax/api/taxApiVersion.js";
 import { computeTaxProfileReadiness, getTaxProfile } from "../../services/tax/taxProfile.service.js";
+import { buildTaxDeadlines } from "../../services/tax/payments/taxDeadlineEngine.js";
+import { getTaxRuleConfig } from "../../services/tax/taxRuleConfig.repository.js";
+import { getStateTaxRuleConfig } from "../../services/tax/stateTaxRule.repository.js";
+import { FEDERAL_TAX_RULE_TYPES, STATE_TAX_RULE_TYPES } from "../../services/tax/taxRuleTypes.js";
 import {
   countPostedTransactionsForTax,
   countReviewRequiredTaxClassifications,
@@ -389,6 +393,7 @@ function adminViewTaxUnavailableDto({ businessId, taxYear, apiVersion }) {
 
 async function taxOverviewLifecycleDto({ supabase, businessId, taxYear, requestedAsOfDate, apiVersion }) {
   const profile = await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
+  const deadlineState = await buildReadOnlyDeadlineState({ supabase, businessId, taxYear, profile, requestedAsOfDate });
   let dataStatus = "profile_required";
   const postedCount = await countPostedTransactionsForTax({ supabase, businessId, taxYear });
   const unclassifiedCount = postedCount > 0
@@ -424,6 +429,7 @@ async function taxOverviewLifecycleDto({ supabase, businessId, taxYear, requeste
     classificationSummary,
     financialDataReady,
     taxClassificationReady,
+    deadlineReadiness: deadlineState.readiness,
   });
   return {
     data_status: dataStatus,
@@ -471,7 +477,7 @@ async function taxOverviewLifecycleDto({ supabase, businessId, taxYear, requeste
     payments: null,
     safeHarbor: null,
     reserve: null,
-    deadlines: [],
+    deadlines: deadlineState.deadlines,
     confidence: null,
     warnings: [],
     assumptions: [],
@@ -482,6 +488,108 @@ async function taxOverviewLifecycleDto({ supabase, businessId, taxYear, requeste
   };
 }
 
+async function buildReadOnlyDeadlineState({ supabase, businessId, taxYear, profile, requestedAsOfDate }) {
+  const profileReadiness = computeTaxProfileReadiness(profile);
+  if (!profile) {
+    return {
+      deadlines: [],
+      readiness: {
+        status: "profile_required",
+        ready: false,
+        reason: "profile_required",
+        message: "Complete your Tax Profile to show estimated-tax deadlines.",
+        amountStatus: "estimated_payment_amount_pending",
+      },
+    };
+  }
+  if (profileReadiness.profile_complete !== true) {
+    return {
+      deadlines: [],
+      readiness: {
+        status: "profile_draft",
+        ready: false,
+        reason: "profile_draft",
+        message: "Finish required Tax Profile fields to show estimated-tax deadlines.",
+        amountStatus: "estimated_payment_amount_pending",
+      },
+    };
+  }
+
+  try {
+    const [federalDueDateConfig, stateDueDateConfig] = await Promise.all([
+      getTaxRuleConfig({
+        supabase,
+        taxYear,
+        ruleType: FEDERAL_TAX_RULE_TYPES.ESTIMATED_TAX_DUE_DATES,
+        filingStatus: profile.filing_status,
+        entityType: profile.entity_type,
+        asOfDate: requestedAsOfDate,
+      }).catch(() => null),
+      profile.primary_tax_state
+        ? getStateTaxRuleConfig({
+            supabase,
+            taxYear,
+            stateCode: profile.primary_tax_state,
+            ruleType: STATE_TAX_RULE_TYPES.ESTIMATED_TAX_DUE_DATES,
+            filingStatus: profile.filing_status,
+            entityType: profile.entity_type,
+            taxElection: profile.tax_election,
+            asOfDate: requestedAsOfDate,
+          }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    if (!federalDueDateConfig && !stateDueDateConfig) {
+      return {
+        deadlines: [],
+        readiness: {
+          status: "rules_unavailable",
+          ready: false,
+          reason: "rules_unavailable",
+          message: "Estimated-tax deadline rules are unavailable for this profile.",
+          amountStatus: "estimated_payment_amount_pending",
+        },
+      };
+    }
+    const deadlines = buildTaxDeadlines({
+      businessId,
+      taxYear,
+      federalDueDateConfig,
+      stateDueDateConfig,
+      entityContext: {
+        entity: {
+          entityPath: profile.entity_type || null,
+          entityType: profile.entity_type || null,
+          taxElection: profile.tax_election || null,
+        },
+      },
+      asOfDate: requestedAsOfDate,
+    });
+    return {
+      deadlines,
+      readiness: {
+        status: deadlines.length ? "available" : "rules_unavailable",
+        ready: deadlines.length > 0,
+        reason: deadlines.length ? null : "rules_unavailable",
+        message: deadlines.length
+          ? "Estimated-tax deadlines are available from the current tax rule set."
+          : "Estimated-tax deadline rules are unavailable for this profile.",
+        amountStatus: "estimated_payment_amount_pending",
+      },
+    };
+  } catch {
+    return {
+      deadlines: [],
+      readiness: {
+        status: "rules_unavailable",
+        ready: false,
+        reason: "rules_unavailable",
+        message: "Estimated-tax deadline rules are unavailable for this profile.",
+        amountStatus: "estimated_payment_amount_pending",
+      },
+    };
+  }
+}
+
 function buildClassificationSummary({ postedCount, classifiedCount, unclassifiedCount, reviewRequiredCount }) {
   const coverage = postedCount > 0 ? Math.round((classifiedCount / postedCount) * 10000) / 100 : null;
   return {
@@ -490,12 +598,19 @@ function buildClassificationSummary({ postedCount, classifiedCount, unclassified
     unclassified_transaction_count: unclassifiedCount,
     review_required_transaction_count: reviewRequiredCount,
     excluded_transaction_count: null,
+    auto_classified_transaction_count: null,
+    processing_transaction_count: 0,
+    failed_transaction_count: 0,
     classification_coverage_percent: coverage,
     postedTransactionCount: postedCount,
     classifiedTransactionCount: classifiedCount,
     unclassifiedTransactionCount: unclassifiedCount,
     reviewRequiredTransactionCount: reviewRequiredCount,
+    autoClassifiedTransactionCount: null,
+    processingTransactionCount: 0,
+    failedTransactionCount: 0,
     classificationCoveragePercent: coverage,
+    classificationStatus: postedCount > 0 && unclassifiedCount > 0 ? "classifications_required" : reviewRequiredCount > 0 ? "review_required" : postedCount > 0 ? "classifications_ready" : "no_posted_transactions",
   };
 }
 
@@ -506,12 +621,14 @@ function buildSurfaceReadiness({
   classificationSummary,
   financialDataReady,
   taxClassificationReady,
+  deadlineReadiness,
 }) {
   const profileStatus = readiness.profile_status;
   const postedCount = classificationSummary.posted_transaction_count;
   const unclassifiedCount = classificationSummary.unclassified_transaction_count;
   const reviewRequiredCount = classificationSummary.review_required_transaction_count;
   const classificationsMessage = classificationReadinessMessage({ postedCount, unclassifiedCount, reviewRequiredCount });
+  const profileReadyClassificationMessage = "Your Tax Profile is complete. Bizzi is preparing the tax treatment of your posted QuickBooks transactions.";
 
   const profileBlocker = !profile
     ? "profile_required"
@@ -529,7 +646,7 @@ function buildSurfaceReadiness({
       reason: readinessReason,
       message: readinessReason === "calculation_required"
         ? "The tax trajectory will appear after the first completed tax calculation."
-        : surfaceMessage(readinessReason, classificationsMessage),
+        : surfaceMessage(readinessReason, readinessReason === "classifications_required" ? profileReadyClassificationMessage : classificationsMessage),
     },
     liability: {
       status: dataStatus === "available" ? "available" : readinessReason,
@@ -537,7 +654,7 @@ function buildSurfaceReadiness({
       reason: readinessReason,
       message: readinessReason === "calculation_required"
         ? "A completed tax calculation is required before estimated liability is available."
-        : surfaceMessage(readinessReason, classificationsMessage),
+        : surfaceMessage(readinessReason, readinessReason === "classifications_required" ? profileReadyClassificationMessage : classificationsMessage),
     },
     deductions: {
       status: taxClassificationReady ? "available" : (financialDataReady ? "classifications_required" : "insufficient_financial_data"),
@@ -546,6 +663,13 @@ function buildSurfaceReadiness({
       message: taxClassificationReady
         ? "Deduction classification data is available."
         : classificationsMessage,
+    },
+    deadline: deadlineReadiness || {
+      status: "unavailable",
+      ready: false,
+      reason: "unavailable",
+      message: "Estimated-tax deadline status is unavailable.",
+      amountStatus: "estimated_payment_amount_pending",
     },
   };
 }
@@ -579,7 +703,7 @@ function lifecycleMessage(status) {
     profile_required: "Complete your Tax Profile to prepare an estimate.",
     profile_draft: "Your Tax Profile is saved. Additional information is required before calculating.",
     insufficient_financial_data: "Confirmed QuickBooks-posted financial activity is required before an estimate can be calculated.",
-    classifications_required: "Posted QuickBooks transactions need tax review before an estimate can be calculated.",
+    classifications_required: "Your Tax Profile is complete. Bizzi is preparing the tax treatment of your posted QuickBooks transactions.",
     calculation_required: "A tax estimate has not been generated yet.",
   };
   return messages[status] || "Tax setup is not ready for calculation.";

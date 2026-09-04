@@ -89,7 +89,20 @@ test("GET /api/tax/overview reports profile and classification setup separately 
     transaction_categorizations: posted.map((row) => row.cat),
     qbo_posted_transactions: posted.map((row) => row.qbo),
     transaction_tax_classifications: [],
-    tax_profiles: [],
+    tax_profiles: [profile({
+      entity_type: "sole_proprietor",
+      tax_election: null,
+      filing_status: "single",
+      primary_tax_state: "NC",
+      accounting_method: "cash",
+      safe_harbor_method: "current_year_90",
+      self_employment_tax_applies: true,
+      prior_year_total_tax: null,
+      prior_year_agi: null,
+      federal_withholding_ytd: null,
+      state_withholding_ytd: null,
+      reserve_buffer_percent: null,
+    })],
     tax_calculation_runs: Array.from({ length: 45 }, (_, index) => ({
       id: `failed-run-${index}`,
       business_id: BUSINESS_ID,
@@ -105,16 +118,21 @@ test("GET /api/tax/overview reports profile and classification setup separately 
 
   assert.equal(res.statusCode, 200);
   assert.equal(store.tax_calculation_runs.length, 45);
-  assert.equal(res.body.data.data_status, "profile_required");
+  assert.equal(res.body.data.data_status, "classifications_required");
   assert.equal(res.body.data.calculation, null);
-  assert.equal(res.body.data.profile, null);
+  assert.ok(res.body.data.profile);
+  assert.equal(res.body.data.readiness.profileStatus, "calculation_ready");
   assert.equal(res.body.data.classification_summary.posted_transaction_count, 205);
   assert.equal(res.body.data.classification_summary.classified_transaction_count, 0);
   assert.equal(res.body.data.classification_summary.unclassified_transaction_count, 205);
   assert.equal(res.body.data.classification_summary.classification_coverage_percent, 0);
   assert.equal(res.body.data.surface_readiness.deductions.status, "classifications_required");
-  assert.equal(res.body.data.surface_readiness.liability.status, "profile_required");
+  assert.equal(res.body.data.surface_readiness.liability.status, "classifications_required");
+  assert.equal(res.body.data.surface_readiness.deadline.status, "available");
+  assert.equal(res.body.data.surface_readiness.deadline.amountStatus, "estimated_payment_amount_pending");
   assert.match(res.body.data.surface_readiness.deductions.message, /205 posted QuickBooks transactions/);
+  assert.match(res.body.data.surface_readiness.liability.message, /Tax Profile is complete/);
+  assert.ok(res.body.data.deadlines.some((deadline) => deadline.dueDate === "2026-09-15"));
   assert.deepEqual(res.body.data.summary, {});
   assert.equal(res.body.data.projection, null);
 });

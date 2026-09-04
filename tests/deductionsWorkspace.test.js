@@ -112,3 +112,23 @@ test("Tax Dashboard no longer embeds the legacy deductions matrix", () => {
   assert.match(dashboard, /useTaxDeductions/);
   assert.doesNotMatch(dashboard, /Open workspace/);
 });
+
+test("Tax Dashboard embeds classification workspace controls in Deductions", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  assert.match(dashboard, /Classification status/);
+  assert.match(dashboard, /Prepare deductions/);
+  assert.match(dashboard, /Auto-classified/);
+  assert.match(dashboard, /Needs review/);
+  assert.match(dashboard, /Unclassified/);
+  assert.match(dashboard, /Estimated payment amount pending/);
+  assert.match(hook, /getTaxClassificationCoverage/);
+  assert.match(hook, /previewClassificationBackfill/);
+  assert.match(hook, /prepareDeductions/);
+});
+
+test("Tax Dashboard does not present missing classification authority as zero deductible", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /No deduction total is shown until classification authority exists/);
+  assert.doesNotMatch(dashboard, /0 deductible/);
+});

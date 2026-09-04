@@ -54,6 +54,54 @@ test("dashboard view model exposes a date-only next deadline KPI model", () => {
   assert.equal(model.primaryMetrics.nextPaymentAmount, null);
 });
 
+test("dashboard view model preserves classification-required state without profile setup copy", () => {
+  const model = buildTaxDashboardViewModel({
+    data_status: "classifications_required",
+    meta: { taxYear: 2026, status: "classifications_required" },
+    readiness: {
+      estimateReady: false,
+      setupState: {
+        code: "classifications_required",
+        message: "Your Tax Profile is complete. Bizzi is preparing the tax treatment of your posted QuickBooks transactions.",
+      },
+    },
+    classification_summary: {
+      posted_transaction_count: 205,
+      classified_transaction_count: 0,
+      unclassified_transaction_count: 205,
+      review_required_transaction_count: 0,
+      processing_transaction_count: 0,
+      failed_transaction_count: 0,
+    },
+    surface_readiness: {
+      liability: {
+        status: "classifications_required",
+        ready: false,
+        message: "Your Tax Profile is complete. Bizzi is preparing the tax treatment of your posted QuickBooks transactions.",
+      },
+      deductions: {
+        status: "classifications_required",
+        ready: false,
+        message: "205 posted QuickBooks transactions are awaiting tax classification before deductible totals can be calculated.",
+      },
+      deadline: {
+        status: "available",
+        ready: true,
+        amount_status: "estimated_payment_amount_pending",
+      },
+    },
+    deadlines: [{ label: "Federal estimated tax Q3", dueDate: "2026-09-15", status: "upcoming" }],
+  });
+
+  assert.equal(model.status.setupState.code, "classifications_required");
+  assert.equal(model.classificationSummary.postedTransactionCount, 205);
+  assert.equal(model.classificationSummary.unclassifiedTransactionCount, 205);
+  assert.equal(model.surfaceReadiness.deadline.ready, true);
+  assert.equal(model.surfaceReadiness.deadline.amountStatus, "estimated_payment_amount_pending");
+  assert.match(model.narrative, /Tax Profile is complete/);
+  assert.doesNotMatch(model.narrative, /Complete your tax profile/i);
+});
+
 test("dashboard view model represents partial federal-only state and safe harbor unavailable", () => {
   const model = buildTaxDashboardViewModel({
     meta: { taxYear: 2026, status: "partial" },

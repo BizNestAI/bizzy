@@ -11,6 +11,7 @@ import {
   getTaxClassification,
   listTaxClassifications,
 } from "../../services/tax/taxClassification.repository.js";
+import { previewTaxClassificationBackfill } from "../../services/tax/taxClassificationBackfillPreview.service.js";
 import { countPostedTransactionsForTax } from "../../services/tax/taxPostedTransaction.repository.js";
 import { validationError } from "../../services/tax/taxErrors.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
@@ -78,6 +79,21 @@ router.get("/classifications/coverage", async (req, res) => {
     return sendTaxSuccess(res, data);
   } catch (err) {
     return sendTaxError(res, err, "tax_classification_coverage_failed");
+  }
+});
+
+router.post("/classifications/backfill/preview", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const taxYear = optionalTaxYear(req.query.year ?? req.query.taxYear ?? req.body?.year ?? req.body?.taxYear, new Date().getFullYear());
+    const limit = Math.min(Math.max(Number(req.body?.limit || 1000), 1), 1000);
+    const data = await previewTaxClassificationBackfill({ supabase, businessId, taxYear, limit });
+    return sendTaxSuccess(res, data);
+  } catch (err) {
+    return sendTaxError(res, err, "tax_classification_backfill_preview_failed");
   }
 });
 

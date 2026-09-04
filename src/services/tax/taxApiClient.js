@@ -233,6 +233,51 @@ export async function getTaxClassificationHistory({ businessId, year, transactio
   return unwrap(await cachedGet(`/api/tax/classifications/${encodeURIComponent(transactionId)}/history?${query({ businessId, year })}`, { signal }));
 }
 
+export async function getTaxClassificationCoverage({ businessId, year, signal } = {}) {
+  requireBusinessId(businessId);
+  return unwrap(await cachedGet(`/api/tax/classifications/coverage?${query({ businessId, year })}`, { signal }));
+}
+
+export async function getTaxClassifications({
+  businessId,
+  year,
+  status,
+  deductibilityStatus,
+  taxCategory,
+  requiresReview,
+  search,
+  limit,
+  offset,
+  signal,
+} = {}) {
+  requireBusinessId(businessId);
+  return unwrap(await cachedGet(`/api/tax/classifications?${query({
+    businessId,
+    year,
+    status,
+    deductibilityStatus,
+    taxCategory,
+    requiresReview,
+    search,
+    limit: clampTaxDetailLimit(limit),
+    offset,
+  })}`, { signal }));
+}
+
+export async function getTaxClassificationReviewSummary({ businessId, year, signal } = {}) {
+  requireBusinessId(businessId);
+  return unwrap(await cachedGet(`/api/tax/classifications/review/summary?${query({ businessId, year })}`, { signal }));
+}
+
+export async function previewTaxClassificationBackfill({ businessId, year, limit, signal } = {}) {
+  requireBusinessId(businessId);
+  return unwrap(await request(`/api/tax/classifications/backfill/preview?${query({ businessId, year })}`, {
+    method: "POST",
+    body: compact({ limit }),
+    signal,
+  }));
+}
+
 export async function runTaxClassification({ businessId, year, transactionIds = [], force = false, limit, cursor, signal } = {}) {
   requireBusinessId(businessId);
   const result = unwrap(await request(`/api/tax/classifications/run?${query({ businessId, year })}`, {
@@ -674,6 +719,10 @@ export default {
   getTaxDeductionTransactionDetail,
   getTaxDeductionCategoryDetail,
   getTaxClassificationHistory,
+  getTaxClassificationCoverage,
+  getTaxClassifications,
+  getTaxClassificationReviewSummary,
+  previewTaxClassificationBackfill,
   runTaxClassification,
   confirmTaxClassification,
   rejectTaxClassification,
