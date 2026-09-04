@@ -1,3 +1,4 @@
+/* global process */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import fs from "node:fs";
@@ -69,6 +70,50 @@ describe("tax setup workflow rules", () => {
     );
     assert.equal(patch.reserve_buffer_percent, 0.15);
     assert.equal(patch.federal_withholding_ytd, null);
+  });
+
+  it("does not let the setup patch set profile status or review metadata", () => {
+    const patch = buildTaxProfilePatch(
+      {
+        entity_type: "sole_proprietor",
+        filing_status: "single",
+        primary_tax_state: "NC",
+        accounting_method: "cash",
+        safe_harbor_method: "current_year_90",
+        self_employment_tax_applies: "",
+      },
+      {
+        confirmedFields: new Set([
+          "entity_type",
+          "filing_status",
+          "primary_tax_state",
+          "accounting_method",
+          "safe_harbor_method",
+          "self_employment_tax_applies",
+        ]),
+      }
+    );
+
+    assert.equal("profile_status" in patch, false);
+    assert.equal("last_reviewed_at" in patch, false);
+    assert.equal("metadata" in patch, false);
+    assert.equal("self_employment_tax_applies" in patch, false);
+  });
+
+  it("preserves true, false, and unanswered self-employment states", () => {
+    const confirmedFields = new Set(["entity_type", "self_employment_tax_applies"]);
+    assert.equal(buildTaxProfilePatch(
+      { entity_type: "sole_proprietor", self_employment_tax_applies: "true" },
+      { confirmedFields }
+    ).self_employment_tax_applies, true);
+    assert.equal(buildTaxProfilePatch(
+      { entity_type: "sole_proprietor", self_employment_tax_applies: "false" },
+      { confirmedFields }
+    ).self_employment_tax_applies, false);
+    assert.equal("self_employment_tax_applies" in buildTaxProfilePatch(
+      { entity_type: "sole_proprietor", self_employment_tax_applies: "" },
+      { confirmedFields }
+    ), false);
   });
 
   it("supports QBI unsure as an explicit option", () => {

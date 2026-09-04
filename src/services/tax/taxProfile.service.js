@@ -18,7 +18,7 @@ import {
   normalizeTaxElection,
   normalizeTaxYear,
 } from "./taxDomain.js";
-import { TAX_ERROR_CODES, notFoundError, validationError } from "./taxErrors.js";
+import { TAX_ERROR_CODES, notFoundError, taxPersistenceError, validationError } from "./taxErrors.js";
 import { ENTITY_PATHS } from "./entity/entityDomain.js";
 import { resolveEntityPath } from "./entity/entityResolver.js";
 import { getEntityRequirements } from "./entity/entityRequirements.js";
@@ -36,6 +36,17 @@ const PROTECTED_PROFILE_FIELDS = new Set([
   "createdBy",
   "user_id",
   "userId",
+  "profile_status",
+  "profileStatus",
+  "readiness_status",
+  "readinessStatus",
+  "calculation_ready",
+  "calculationReady",
+  "last_reviewed_at",
+  "lastReviewedAt",
+  "reviewed_by",
+  "reviewedBy",
+  "metadata",
 ]);
 
 const MUTABLE_PROFILE_FIELDS = new Set([
@@ -78,11 +89,6 @@ const MUTABLE_PROFILE_FIELDS = new Set([
   "reserveBufferPercent",
   "confidence_score",
   "confidenceScore",
-  "profile_status",
-  "profileStatus",
-  "last_reviewed_at",
-  "lastReviewedAt",
-  "metadata",
 ]);
 
 export async function getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults = true }) {
@@ -110,15 +116,15 @@ export async function getOrInitializeTaxProfile({ supabase, businessId, taxYear,
   });
 }
 
-export async function createTaxProfile({ supabase, businessId, taxYear, input = {}, userId }) {
+export async function createTaxProfile({ supabase, businessId, taxYear, input = {} }) {
   assertDeps({ supabase, businessId, taxYear });
-  const row = normalizeProfileInput(input, { businessId, taxYear, userId, creating: true });
+  const row = normalizeProfileCreateInput(input, { businessId, taxYear });
   const { data, error } = await supabase
     .from("tax_profiles")
-    .insert(row)
+    .upsert(row, { onConflict: "business_id,tax_year" })
     .select("*")
     .single();
-  if (error) throw error;
+  if (error) throw toTaxProfilePersistenceError(error, "profile_upsert");
   return sanitizeTaxProfileForClient(data);
 }
 
@@ -131,13 +137,13 @@ export async function updateTaxProfile({ supabase, businessId, taxYear, patch = 
   const normalized = normalizeProfilePatch(patch, existing);
   const metadata = {
     ...(existing.metadata || {}),
-    ...(normalized.metadata || {}),
     last_patch_source: source || normalized.source || existing.source || TAX_PROFILE_SOURCES.USER,
     last_patched_by: userId || null,
   };
   const updates = {
     ...normalized,
     metadata,
+    profile_status: derivePersistedProfileStatus({ ...existing, ...normalized, metadata }),
     updated_at: new Date().toISOString(),
   };
 
@@ -148,28 +154,39 @@ export async function updateTaxProfile({ supabase, businessId, taxYear, patch = 
     .eq("tax_year", taxYear)
     .select("*")
     .single();
-  if (error) throw error;
+  if (error) throw toTaxProfilePersistenceError(error, "profile_update");
   return sanitizeTaxProfileForClient(data);
 }
 
 export async function upsertTaxProfile({ supabase, businessId, taxYear, input = {}, userId, source }) {
+  assertPatchDoesNotMutateProtectedFields(input);
   const existing = await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
   if (existing) return updateTaxProfile({ supabase, businessId, taxYear, patch: input, userId, source });
   return createTaxProfile({ supabase, businessId, taxYear, input: { ...input, source: source || input.source }, userId });
 }
 
 export async function archiveTaxProfile({ supabase, businessId, taxYear, userId }) {
-  return updateTaxProfile({
-    supabase,
-    businessId,
-    taxYear,
-    userId,
-    source: TAX_PROFILE_SOURCES.USER,
-    patch: {
+  assertDeps({ supabase, businessId, taxYear });
+  const existing = await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
+  if (!existing) throw notFoundError(TAX_ERROR_CODES.TAX_PROFILE_NOT_FOUND, "Tax profile was not found.");
+  const metadata = {
+    ...(existing.metadata || {}),
+    archived_by: userId || null,
+    archived_at: new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from("tax_profiles")
+    .update({
       profile_status: TAX_PROFILE_STATUSES.ARCHIVED,
-      metadata: { archived_by: userId || null, archived_at: new Date().toISOString() },
-    },
-  });
+      metadata,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("business_id", businessId)
+    .eq("tax_year", taxYear)
+    .select("*")
+    .single();
+  if (error) throw toTaxProfilePersistenceError(error, "profile_archive");
+  return sanitizeTaxProfileForClient(data);
 }
 
 export function computeTaxProfileCompleteness(profile) {
@@ -344,43 +361,44 @@ async function buildInitialProfileInput({ supabase, businessId, taxYear, source 
   };
 }
 
-function normalizeProfileInput(input, { businessId, taxYear, userId, creating = false }) {
+function normalizeProfileCreateInput(input, { businessId, taxYear }) {
   const normalized = normalizeProfilePatch(input, {});
   const now = new Date().toISOString();
-  return {
+  const row = {
     business_id: businessId,
     tax_year: taxYear,
     entity_type: normalized.entity_type ?? TAX_ENTITY_TYPES.UNKNOWN,
     tax_election: normalized.tax_election ?? TAX_ELECTIONS.UNKNOWN,
     filing_status: normalized.filing_status ?? TAX_FILING_STATUSES.UNKNOWN,
-    primary_tax_state: normalized.primary_tax_state ?? null,
     accounting_method: normalized.accounting_method ?? ACCOUNTING_METHODS.CASH,
-    qbi_eligible: normalized.qbi_eligible ?? null,
-    self_employment_tax_applies: normalized.self_employment_tax_applies ?? null,
     safe_harbor_method: normalized.safe_harbor_method ?? SAFE_HARBOR_METHODS.UNKNOWN,
-    prior_year_total_tax: normalized.prior_year_total_tax ?? null,
-    prior_year_agi: normalized.prior_year_agi ?? null,
-    owner_reasonable_salary: normalized.owner_reasonable_salary ?? null,
-    owner_w2_wages_ytd: normalized.owner_w2_wages_ytd ?? null,
-    federal_withholding_ytd: normalized.federal_withholding_ytd ?? null,
-    state_withholding_ytd: normalized.state_withholding_ytd ?? null,
-    health_insurance_deduction_ytd: normalized.health_insurance_deduction_ytd ?? null,
-    retirement_contributions_ytd: normalized.retirement_contributions_ytd ?? null,
-    hsa_contributions_ytd: normalized.hsa_contributions_ytd ?? null,
-    reserve_buffer_percent: normalized.reserve_buffer_percent ?? null,
-    profile_status: normalized.profile_status ?? TAX_PROFILE_STATUSES.INCOMPLETE,
     confidence_score: normalized.confidence_score ?? 0.1,
     source: normalized.source ?? TAX_PROFILE_SOURCES.SYSTEM,
-    last_reviewed_at: normalized.last_reviewed_at ?? null,
-    reviewed_by: normalized.reviewed_by ?? null,
-    metadata: normalized.metadata ?? {},
-    ...(creating ? { created_at: now } : {}),
+    metadata: isPlainObject(input.metadata) ? input.metadata : {},
     updated_at: now,
-    ...(userId ? { reviewed_by: normalized.reviewed_by ?? null } : {}),
   };
+  [
+    "primary_tax_state",
+    "qbi_eligible",
+    "self_employment_tax_applies",
+    "prior_year_total_tax",
+    "prior_year_agi",
+    "owner_reasonable_salary",
+    "owner_w2_wages_ytd",
+    "federal_withholding_ytd",
+    "state_withholding_ytd",
+    "health_insurance_deduction_ytd",
+    "retirement_contributions_ytd",
+    "hsa_contributions_ytd",
+    "reserve_buffer_percent",
+  ].forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(normalized, field)) row[field] = normalized[field];
+  });
+  row.profile_status = derivePersistedProfileStatus(row);
+  return row;
 }
 
-function normalizeProfilePatch(patch, existing = {}) {
+function normalizeProfilePatch(patch) {
   const out = {};
   if ("entity_type" in patch || "entityType" in patch) out.entity_type = normalizeEntityType(patch.entity_type ?? patch.entityType);
   if ("tax_election" in patch || "taxElection" in patch) out.tax_election = normalizeTaxElection(patch.tax_election ?? patch.taxElection);
@@ -394,10 +412,10 @@ function normalizeProfilePatch(patch, existing = {}) {
   if ("safe_harbor_method" in patch || "safeHarborMethod" in patch) out.safe_harbor_method = normalizeSafeHarborMethod(patch.safe_harbor_method ?? patch.safeHarborMethod);
   if ("source" in patch) out.source = normalizeProfileSource(patch.source);
   ["qbi_eligible", "self_employment_tax_applies"].forEach((field) => {
-    if (field in patch) out[field] = patch[field] == null ? null : Boolean(patch[field]);
+    if (field in patch) out[field] = normalizeOptionalBoolean(patch[field], field);
   });
-  if ("qbiEligible" in patch) out.qbi_eligible = patch.qbiEligible == null ? null : Boolean(patch.qbiEligible);
-  if ("selfEmploymentTaxApplies" in patch) out.self_employment_tax_applies = patch.selfEmploymentTaxApplies == null ? null : Boolean(patch.selfEmploymentTaxApplies);
+  if ("qbiEligible" in patch) out.qbi_eligible = normalizeOptionalBoolean(patch.qbiEligible, "qbi_eligible");
+  if ("selfEmploymentTaxApplies" in patch) out.self_employment_tax_applies = normalizeOptionalBoolean(patch.selfEmploymentTaxApplies, "self_employment_tax_applies");
   [
     "prior_year_total_tax", "prior_year_agi", "owner_reasonable_salary", "owner_w2_wages_ytd",
     "federal_withholding_ytd", "state_withholding_ytd", "health_insurance_deduction_ytd",
@@ -442,12 +460,11 @@ function normalizeProfilePatch(patch, existing = {}) {
     if (patch.confidenceScore != null && (n == null || n < 0 || n > 1)) throw validationError("invalid_confidence_score", "confidence_score must be between 0 and 1.");
     out.confidence_score = n;
   }
-  if ("profile_status" in patch) out.profile_status = String(patch.profile_status);
-  if ("profileStatus" in patch) out.profile_status = String(patch.profileStatus);
-  if ("last_reviewed_at" in patch) out.last_reviewed_at = patch.last_reviewed_at || null;
-  if ("lastReviewedAt" in patch) out.last_reviewed_at = patch.lastReviewedAt || null;
-  if ("metadata" in patch) out.metadata = { ...(existing.metadata || {}), ...(patch.metadata || {}) };
   return out;
+}
+
+function isPlainObject(value) {
+  return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeMoneyAlias(patch, out, alias, field) {
@@ -455,6 +472,13 @@ function normalizeMoneyAlias(patch, out, alias, field) {
   const n = normalizeMoney(patch[alias]);
   if (patch[alias] != null && patch[alias] !== "" && n == null) throw validationError(`invalid_${field}`, `${field} must be a finite number.`);
   out[field] = n;
+}
+
+function normalizeOptionalBoolean(value, field) {
+  if (value == null || value === "") return null;
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  throw validationError(`invalid_${field}`, `${field} must be true, false, or null.`);
 }
 
 function assertPatchDoesNotMutateProtectedFields(patch) {
@@ -469,6 +493,26 @@ function assertDeps({ supabase, businessId, taxYear }) {
   if (!supabase) throw validationError("missing_supabase", "Supabase client is required.");
   if (!businessId) throw validationError(TAX_ERROR_CODES.MISSING_BUSINESS_ID, "businessId is required.");
   if (!normalizeTaxYear(taxYear)) throw validationError(TAX_ERROR_CODES.INVALID_TAX_YEAR, "Tax year must be between 2000 and 2100.");
+}
+
+function derivePersistedProfileStatus(profile) {
+  if (!profile) return TAX_PROFILE_STATUSES.INCOMPLETE;
+  if (profile.profile_status === TAX_PROFILE_STATUSES.ARCHIVED) return TAX_PROFILE_STATUSES.ARCHIVED;
+  const readiness = computeTaxProfileCompleteness(profile);
+  return readiness.isCompleteForEstimate ? TAX_PROFILE_STATUSES.ACTIVE : TAX_PROFILE_STATUSES.INCOMPLETE;
+}
+
+function toTaxProfilePersistenceError(error, stage) {
+  return taxPersistenceError(
+    "tax_profile_persistence_failed",
+    "Your Tax Profile could not be saved.",
+    {
+      stage,
+      postgres_code: error?.code || null,
+      constraint: error?.constraint || null,
+      column: error?.column || null,
+    }
+  );
 }
 
 function requireField(value, field, out) {

@@ -10,6 +10,7 @@ import {
   SAFE_HARBOR_OPTIONS,
   US_STATE_OPTIONS,
   isSCorp,
+  isSoleOrDisregarded,
 } from "./Setup/taxProfileFields.js";
 import { buildTaxProfilePatch } from "./Setup/taxSetupValidation.js";
 
@@ -20,6 +21,7 @@ const EDITABLE_FIELDS = [
   "primary_tax_state",
   "accounting_method",
   "safe_harbor_method",
+  "self_employment_tax_applies",
   "prior_year_total_tax",
   "prior_year_agi",
   "owner_reasonable_salary",
@@ -36,6 +38,7 @@ const EMPTY_VALUES = {
   primary_tax_state: "",
   accounting_method: "",
   safe_harbor_method: "",
+  self_employment_tax_applies: "",
   prior_year_total_tax: "",
   prior_year_agi: "",
   owner_reasonable_salary: "",
@@ -60,6 +63,7 @@ export default function TaxProfileModal({
   const [notice, setNotice] = useState("");
   const [rendered, setRendered] = useState(open);
   const [visible, setVisible] = useState(false);
+  const saveInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -96,17 +100,25 @@ export default function TaxProfileModal({
   };
 
   const save = async () => {
+    if (saveInFlightRef.current || taxProfile.saving) return;
+    saveInFlightRef.current = true;
     setNotice("");
     try {
       const patch = buildTaxProfilePatch(values, { confirmedFields, existingProfile: profile });
-      await taxProfile.update(patch);
+      const result = await taxProfile.update(patch);
       setDirty(false);
-      setNotice("Tax profile saved.");
-      await onSaved?.();
+      const readiness = result?.readiness || result?.profile?.readiness || null;
+      setNotice(readiness?.profile_status === "draft" ? "Tax Profile saved as draft." : "Tax Profile saved.");
+      await onSaved?.(result);
     } catch (err) {
       setNotice(err?.message || "Tax profile could not be saved.");
+    } finally {
+      saveInFlightRef.current = false;
     }
   };
+
+  const showSelfEmploymentQuestion = isSoleOrDisregarded(values);
+  const showPriorYearFields = ["prior_year_100", "prior_year_110"].includes(values.safe_harbor_method);
 
   const modal = (
     <div
@@ -150,8 +162,21 @@ export default function TaxProfileModal({
             <SelectField label="Primary tax state" value={values.primary_tax_state} options={[{ value: "", label: "Select state" }, ...US_STATE_OPTIONS]} onChange={(value) => updateField("primary_tax_state", value)} />
             <SelectField label="Accounting method" value={values.accounting_method} options={ACCOUNTING_METHOD_OPTIONS} onChange={(value) => updateField("accounting_method", value)} />
             <SelectField label="Safe-harbor method" value={values.safe_harbor_method} options={SAFE_HARBOR_OPTIONS} onChange={(value) => updateField("safe_harbor_method", value)} />
-            <MoneyField label="Prior-year total tax" value={values.prior_year_total_tax} onChange={(value) => updateField("prior_year_total_tax", value)} />
-            <MoneyField label="Prior-year AGI" value={values.prior_year_agi} onChange={(value) => updateField("prior_year_agi", value)} />
+            {showSelfEmploymentQuestion ? (
+              <SelectField
+                label="Is this business income subject to self-employment tax?"
+                value={values.self_employment_tax_applies}
+                options={SELF_EMPLOYMENT_OPTIONS}
+                onChange={(value) => updateField("self_employment_tax_applies", value)}
+                helper="Used to determine whether self-employment tax should be included in your estimate."
+              />
+            ) : null}
+            {showPriorYearFields ? (
+              <MoneyField label="Prior-year total tax" value={values.prior_year_total_tax} onChange={(value) => updateField("prior_year_total_tax", value)} />
+            ) : null}
+            {values.safe_harbor_method === "prior_year_110" ? (
+              <MoneyField label="Prior-year AGI" value={values.prior_year_agi} onChange={(value) => updateField("prior_year_agi", value)} />
+            ) : null}
             {isSCorp(values) ? (
               <>
                 <MoneyField label="Reasonable salary target" value={values.owner_reasonable_salary} onChange={(value) => updateField("owner_reasonable_salary", value)} />
@@ -183,7 +208,13 @@ export default function TaxProfileModal({
   return createPortal(modal, document.body);
 }
 
-function SelectField({ label, value, options, onChange }) {
+const SELF_EMPLOYMENT_OPTIONS = [
+  { value: "", label: "Not answered" },
+  { value: "true", label: "Yes" },
+  { value: "false", label: "No" },
+];
+
+function SelectField({ label, value, options, onChange, helper = "" }) {
   const buttonRef = useRef(null);
   const menuRef = useRef(null);
   const [open, setOpen] = useState(false);
@@ -348,6 +379,7 @@ function SelectField({ label, value, options, onChange }) {
         </div>,
         document.body
       ) : null}
+      {helper ? <p className="mt-1 text-[11px] leading-relaxed text-white/46">{helper}</p> : null}
     </div>
   );
 }
@@ -381,6 +413,11 @@ function profileToValues(profile) {
     primary_tax_state: source.primary_tax_state || source.primaryState || source.state || "",
     accounting_method: source.accounting_method || source.accountingMethod || "",
     safe_harbor_method: source.safe_harbor_method || source.safeHarborMethod || "",
+    self_employment_tax_applies: source.self_employment_tax_applies === true || source.selfEmploymentTaxApplies === true
+      ? "true"
+      : source.self_employment_tax_applies === false || source.selfEmploymentTaxApplies === false
+        ? "false"
+        : "",
     prior_year_total_tax: source.prior_year_total_tax ?? source.priorYearTotalTax ?? "",
     prior_year_agi: source.prior_year_agi ?? source.priorYearAgi ?? source.priorYearAGI ?? "",
     owner_reasonable_salary: source.owner_reasonable_salary ?? source.ownerReasonableSalary ?? "",

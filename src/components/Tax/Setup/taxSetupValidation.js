@@ -82,19 +82,9 @@ export function validateTaxSetup(values = {}, { stepId = null } = {}) {
   return errors;
 }
 
-export function buildTaxProfilePatch(values = {}, { confirmedFields = new Set(), existingProfile = null } = {}) {
-  const readinessErrors = validateTaxSetup(values);
+export function buildTaxProfilePatch(values = {}, { confirmedFields = new Set() } = {}) {
   const out = {
     source: "user",
-    profile_status: Object.keys(readinessErrors).length ? "incomplete" : "active",
-    last_reviewed_at: new Date().toISOString(),
-    metadata: {
-      ...(existingProfile?.metadata || {}),
-      setup_workflow: {
-        completed_at: new Date().toISOString(),
-        confirmed_fields: Array.from(confirmedFields),
-      },
-    },
   };
 
   const candidateFields = [
@@ -156,6 +146,12 @@ function isFiniteNonnegative(value) {
 
 function normalizePatchValue(field, value) {
   if (value === undefined || value === "") return undefined;
+  if (field === "qbi_eligible" || field === "self_employment_tax_applies") {
+    if (value == null) return null;
+    if (value === true || value === "true") return true;
+    if (value === false || value === "false") return false;
+    return undefined;
+  }
   if (field === "reserve_buffer_percent") {
     if (value == null) return null;
     return Number(value) / 100;

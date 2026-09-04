@@ -36,6 +36,9 @@ export const taxConfigurationError = (code = "tax_rule_config_missing", message 
 export const taxCalculationError = (code = "tax_calculation_failed", message = "Tax calculation failed.", details) =>
   makeError(code, message, 500, details, false);
 
+export const taxPersistenceError = (code = "tax_persistence_failed", message = "Tax data could not be saved.", details) =>
+  makeError(code, message, 500, details, true);
+
 export const unsupportedTaxScenarioError = (code = "unsupported_tax_scenario", message = "This tax scenario is not supported yet.", details) =>
   makeError(code, message, 422, details);
 

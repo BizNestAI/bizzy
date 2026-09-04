@@ -604,7 +604,6 @@ function taxProfileMutableBody(input = {}) {
     "owner_reasonable_salary", "owner_w2_wages_ytd", "federal_withholding_ytd",
     "state_withholding_ytd", "health_insurance_deduction_ytd", "retirement_contributions_ytd",
     "hsa_contributions_ytd", "reserve_buffer_percent", "confidence_score",
-    "profile_status", "last_reviewed_at", "metadata",
   ]);
   return Object.fromEntries(
     Object.entries(input || {}).filter(([field, value]) => allowed.has(field) && value !== undefined)

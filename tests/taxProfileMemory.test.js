@@ -183,6 +183,90 @@ test("tax profile PATCH upsert can create the first draft profile", async () => 
   assert.equal(readiness.missing_fields.includes("prior_year_agi"), false);
 });
 
+test("tax profile first-save preserves omitted optional facts and derives status", async () => {
+  const { upsertTaxProfile } = await import("../src/services/tax/taxProfile.service.js");
+  const supabase = makeSupabase({ tax_profiles: [] });
+
+  const profile = await upsertTaxProfile({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    userId: USER_ID,
+    source: "user",
+    input: {
+      entity_type: "sole_proprietor",
+      filing_status: "single",
+      primary_tax_state: "NC",
+      accounting_method: "cash",
+      safe_harbor_method: "current_year_90",
+    },
+  });
+
+  const stored = supabase.store.tax_profiles[0];
+  assert.equal(profile.profile_status, "incomplete");
+  assert.equal(stored.profile_status, "incomplete");
+  assert.equal(Object.hasOwn(stored, "federal_withholding_ytd"), false);
+  assert.equal(Object.hasOwn(stored, "state_withholding_ytd"), false);
+  assert.equal(Object.hasOwn(stored, "reserve_buffer_percent"), false);
+});
+
+test("tax profile patch preserves omitted existing values and accepts explicit null for nullable facts", async () => {
+  const { upsertTaxProfile } = await import("../src/services/tax/taxProfile.service.js");
+  const supabase = makeSupabase({
+    tax_profiles: [{
+      id: "p1",
+      business_id: BUSINESS_ID,
+      tax_year: 2026,
+      entity_type: "sole_proprietor",
+      filing_status: "single",
+      primary_tax_state: "NC",
+      accounting_method: "cash",
+      safe_harbor_method: "current_year_90",
+      self_employment_tax_applies: true,
+      federal_withholding_ytd: 200,
+      reserve_buffer_percent: 0.05,
+      metadata: {},
+    }],
+  });
+
+  const profile = await upsertTaxProfile({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    userId: USER_ID,
+    source: "user",
+    input: {
+      filing_status: "head_of_household",
+      state_withholding_ytd: null,
+    },
+  });
+
+  assert.equal(profile.filing_status, "head_of_household");
+  assert.equal(profile.federal_withholding_ytd, 200);
+  assert.equal(profile.reserve_buffer_percent, 0.05);
+  assert.equal(profile.state_withholding_ytd, null);
+});
+
+test("tax profile status is server-authoritative", async () => {
+  const { assertTaxProfileMutableBody, upsertTaxProfile } = await import("../src/services/tax/taxProfile.service.js");
+  const supabase = makeSupabase({ tax_profiles: [] });
+
+  assert.throws(
+    () => assertTaxProfileMutableBody({ profile_status: "active" }),
+    (err) => err.code === "protected_tax_profile_field"
+  );
+  await assert.rejects(
+    () => upsertTaxProfile({
+      supabase,
+      businessId: BUSINESS_ID,
+      taxYear: 2026,
+      userId: USER_ID,
+      input: { entity_type: "sole_proprietor", profile_status: "active" },
+    }),
+    (err) => err.code === "protected_tax_profile_field"
+  );
+});
+
 test("tax profile mutable body rejects unsupported fields before persistence", async () => {
   const { assertTaxProfileMutableBody } = await import("../src/services/tax/taxProfile.service.js");
 
@@ -321,6 +405,7 @@ class Query {
   range(from, to) { this.rangeArgs = [from, to]; return this; }
   limit(count) { this.limitCount = count; return this; }
   insert(payload) { this.operation = "insert"; this.payload = Array.isArray(payload) ? payload : [payload]; return this; }
+  upsert(payload) { this.operation = "upsert"; this.payload = Array.isArray(payload) ? payload : [payload]; return this; }
   update(payload) { this.operation = "update"; this.payload = payload; return this; }
   async maybeSingle() { const r = await this._execute(); return { data: r.data[0] || null, error: r.error }; }
   async single() { const r = await this._execute(); return { data: r.data[0] || null, error: r.error }; }
@@ -335,6 +420,22 @@ class Query {
         return clone(next);
       });
       return { data: inserted, error: null };
+    }
+    if (this.operation === "upsert") {
+      const upserted = this.payload.map((row) => {
+        const match = rows.find((existing) =>
+          String(existing.business_id) === String(row.business_id) &&
+          String(existing.tax_year) === String(row.tax_year)
+        );
+        if (match) {
+          Object.assign(match, clone(row), { id: match.id });
+          return clone(match);
+        }
+        const next = { id: row.id || `${this.table}-${this.store.__id++}`, ...clone(row) };
+        rows.push(next);
+        return clone(next);
+      });
+      return { data: upserted, error: null };
     }
     if (this.operation === "update") {
       const updated = [];
