@@ -15,6 +15,7 @@ import {
   getTaxDeductionsOverview,
   getTaxPostedTransactions,
   overrideTaxClassification,
+  prepareTaxClassifications,
   previewTaxClassificationBackfill,
   rejectTaxClassification,
   restoreTaxClassification,
@@ -43,6 +44,7 @@ export function useTaxDeductions({
   const [resourceErrors, setResourceErrors] = useState({});
   const seq = useRef(0);
   const isDemo = shouldUseDemoData();
+  const shouldPollClassification = isActiveClassificationStatus(classificationCoverage?.classificationStatus);
 
   const load = useCallback(async ({ signal } = {}) => {
     if (isDemo) {
@@ -127,6 +129,14 @@ export function useTaxDeductions({
     return () => controller.abort();
   }, [load]);
 
+  useEffect(() => {
+    if (isDemo || !enabled || !businessId || !shouldPollClassification) return undefined;
+    const timer = setInterval(() => {
+      load().catch(() => {});
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [businessId, enabled, isDemo, load, shouldPollClassification]);
+
   return {
     overview,
     transactions,
@@ -199,12 +209,16 @@ export function useTaxDeductions({
     previewClassificationBackfill: (options = {}) =>
       previewTaxClassificationBackfill({ businessId, year, ...options }),
     prepareDeductions: async (options = {}) => {
-      const result = await runTaxClassification({ businessId, year, limit: 100, force: false, ...options });
+      const result = await prepareTaxClassifications({ businessId, year, ...options });
       await load();
       return result;
     },
     exportDeductions: (options = {}) => exportTaxDeductions({ businessId, year, asOfDate, filters: filterKey ? JSON.parse(filterKey) : {}, ...options }),
   };
+}
+
+function isActiveClassificationStatus(status) {
+  return ["classification_queued", "classifying"].includes(status);
 }
 
 async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filters, signal }) {

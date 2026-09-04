@@ -111,6 +111,26 @@ export const TAX_CLASSIFICATION_SOURCES = freeze({
   IMPORTED: "imported",
 });
 
+export const TAX_CLASSIFICATION_RUN_STATUSES = freeze({
+  QUEUED: "queued",
+  RUNNING: "running",
+  COMPLETED: "completed",
+  REVIEW_REQUIRED: "review_required",
+  FAILED: "failed",
+  DEAD_LETTER: "dead_letter",
+  SKIPPED: "skipped",
+  CANCELLED: "cancelled",
+});
+
+export const TAX_CLASSIFICATION_TRIGGER_SOURCES = freeze({
+  PROFILE_COMPLETED: "profile_completed",
+  QBO_TRANSACTION_POSTED: "qbo_transaction_posted",
+  RULES_CHANGED: "rules_changed",
+  RECOVERY_SCAN: "recovery_scan",
+  USER_PREPARE: "user_prepare",
+  SYSTEM: "system",
+});
+
 export const TAX_ADJUSTMENT_DIRECTIONS = freeze({
   INCREASE_TAXABLE_INCOME: "increase_taxable_income",
   DECREASE_TAXABLE_INCOME: "decrease_taxable_income",

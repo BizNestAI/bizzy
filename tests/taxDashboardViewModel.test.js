@@ -54,15 +54,15 @@ test("dashboard view model exposes a date-only next deadline KPI model", () => {
   assert.equal(model.primaryMetrics.nextPaymentAmount, null);
 });
 
-test("dashboard view model preserves classification-required state without profile setup copy", () => {
+test("dashboard view model preserves ready-to-classify state without profile setup copy", () => {
   const model = buildTaxDashboardViewModel({
-    data_status: "classifications_required",
-    meta: { taxYear: 2026, status: "classifications_required" },
+    data_status: "ready_to_classify",
+    meta: { taxYear: 2026, status: "ready_to_classify" },
     readiness: {
       estimateReady: false,
       setupState: {
-        code: "classifications_required",
-        message: "Your Tax Profile is complete. Bizzi is preparing the tax treatment of your posted QuickBooks transactions.",
+        code: "ready_to_classify",
+        message: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
       },
     },
     classification_summary: {
@@ -75,12 +75,12 @@ test("dashboard view model preserves classification-required state without profi
     },
     surface_readiness: {
       liability: {
-        status: "classifications_required",
+        status: "ready_to_classify",
         ready: false,
-        message: "Your Tax Profile is complete. Bizzi is preparing the tax treatment of your posted QuickBooks transactions.",
+        message: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
       },
       deductions: {
-        status: "classifications_required",
+        status: "ready_to_classify",
         ready: false,
         message: "205 posted QuickBooks transactions are awaiting tax classification before deductible totals can be calculated.",
       },
@@ -93,12 +93,12 @@ test("dashboard view model preserves classification-required state without profi
     deadlines: [{ label: "Federal estimated tax Q3", dueDate: "2026-09-15", status: "upcoming" }],
   });
 
-  assert.equal(model.status.setupState.code, "classifications_required");
+  assert.equal(model.status.setupState.code, "ready_to_classify");
   assert.equal(model.classificationSummary.postedTransactionCount, 205);
   assert.equal(model.classificationSummary.unclassifiedTransactionCount, 205);
   assert.equal(model.surfaceReadiness.deadline.ready, true);
   assert.equal(model.surfaceReadiness.deadline.amountStatus, "estimated_payment_amount_pending");
-  assert.match(model.narrative, /Tax Profile is complete/);
+  assert.match(model.narrative, /Prepare your posted QuickBooks transactions/);
   assert.doesNotMatch(model.narrative, /Complete your tax profile/i);
 });
 

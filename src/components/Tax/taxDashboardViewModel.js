@@ -2,7 +2,11 @@ const SETUP_MESSAGES = {
   profile_incomplete: "Complete your tax profile so Bizzi can estimate your federal and state taxes.",
   entity_unknown: "Tell Bizzi how your LLC is taxed before using this estimate.",
   classifications_missing: "Your posted transactions need tax classification before deductions can be estimated.",
-  classifications_required: "Your Tax Profile is complete. Bizzi is preparing the tax treatment of your posted QuickBooks transactions.",
+  classifications_required: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
+  ready_to_classify: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
+  classification_queued: "Your transactions are waiting to be classified.",
+  classifying: "Bizzi is classifying your posted QuickBooks transactions.",
+  classification_review_required: "Bizzi classified most transactions automatically. Review the items that need more context.",
   state_rules_missing: "Federal estimate is available. State tax is not yet supported for this setup.",
   reserve_setup_incomplete: "Your tax estimate is available. Connect or select a reserve account to track what you have set aside.",
   no_posted_transactions: "Bizzi does not have posted transactions for this tax year yet.",
@@ -120,9 +124,7 @@ function buildHealth({ dto, readiness, confidence, warnings, actions }) {
   const ready = [];
   const needsAttention = [];
   if (readiness.estimateReady) ready.push("Tax estimate has the required inputs");
-  else needsAttention.push("Complete setup to improve the estimate");
   if (readiness.reserveReady || confidence.reserveReady) ready.push("Reserve planning is available");
-  else needsAttention.push("Connect or select a reserve account");
   if (profile.percent != null) {
     const label = `${Math.round(profile.percent)}% profile complete`;
     if (profile.missingRequired.length === 0 && profile.missingRecommended.length === 0 && profile.percent >= 90) ready.push(label);
@@ -134,7 +136,7 @@ function buildHealth({ dto, readiness, confidence, warnings, actions }) {
     ready.push("Required profile inputs complete");
   }
   if (profile.missingRecommended.length) {
-    needsAttention.push(`${profile.missingRecommended.length} optional profile input${profile.missingRecommended.length === 1 ? "" : "s"} not filled`);
+    ready.push("Optional: Set a reserve preference");
   }
   if (classificationCoverage != null) {
     const label = `${Math.round(classificationCoverage)}% of transactions classified`;
@@ -244,22 +246,25 @@ function buildNarrative({ dto, summary, readiness, confidence, surfaceReadiness 
 }
 
 function normalizeClassificationSummary(summary = {}) {
-  const postedTransactionCount = nullableNumber(summary.postedTransactionCount ?? summary.posted_transaction_count);
-  const classifiedTransactionCount = nullableNumber(summary.classifiedTransactionCount ?? summary.classified_transaction_count);
-  const unclassifiedTransactionCount = nullableNumber(summary.unclassifiedTransactionCount ?? summary.unclassified_transaction_count);
-  const reviewRequiredTransactionCount = nullableNumber(summary.reviewRequiredTransactionCount ?? summary.review_required_transaction_count);
+  const postedTransactionCount = nullableNumber(summary.postedTransactionCount ?? summary.posted_transaction_count ?? summary.eligiblePostedCount ?? summary.eligible_posted_count);
+  const classifiedTransactionCount = nullableNumber(summary.classifiedTransactionCount ?? summary.classified_transaction_count ?? summary.classifiedCount ?? summary.classified_count);
+  const unclassifiedTransactionCount = nullableNumber(summary.unclassifiedTransactionCount ?? summary.unclassified_transaction_count ?? summary.unclassifiedCount ?? summary.unclassified_count);
+  const reviewRequiredTransactionCount = nullableNumber(summary.reviewRequiredTransactionCount ?? summary.review_required_transaction_count ?? summary.needsReviewCount ?? summary.needs_review_count);
   return {
     postedTransactionCount,
     classifiedTransactionCount,
     unclassifiedTransactionCount,
     reviewRequiredTransactionCount,
-    autoClassifiedTransactionCount: nullableNumber(summary.autoClassifiedTransactionCount ?? summary.auto_classified_transaction_count),
-    excludedTransactionCount: nullableNumber(summary.excludedTransactionCount ?? summary.excluded_transaction_count),
-    processingTransactionCount: nullableNumber(summary.processingTransactionCount ?? summary.processing_transaction_count),
-    failedTransactionCount: nullableNumber(summary.failedTransactionCount ?? summary.failed_transaction_count),
+    autoClassifiedTransactionCount: nullableNumber(summary.autoClassifiedTransactionCount ?? summary.auto_classified_transaction_count ?? summary.autoClassifiedCount ?? summary.auto_classified_count),
+    excludedTransactionCount: nullableNumber(summary.excludedTransactionCount ?? summary.excluded_transaction_count ?? summary.excludedCount ?? summary.excluded_count),
+    processingTransactionCount: nullableNumber(summary.processingTransactionCount ?? summary.processing_transaction_count ?? summary.processingCount ?? summary.processing_count),
+    failedTransactionCount: nullableNumber(summary.failedTransactionCount ?? summary.failed_transaction_count ?? summary.failedCount ?? summary.failed_count),
     classificationCoveragePercent: nullableNumber(summary.classificationCoveragePercent ?? summary.classification_coverage_percent),
     classificationStatus: summary.classificationStatus || summary.classification_status || null,
     lastRunAt: summary.lastRunAt || summary.last_run_at || null,
+    rulesVersion: summary.rulesVersion || summary.rules_version || null,
+    activeRun: summary.activeRun || summary.active_run || null,
+    latestRun: summary.latestRun || summary.latest_run || null,
   };
 }
 

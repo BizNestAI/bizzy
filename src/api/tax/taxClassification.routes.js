@@ -7,12 +7,15 @@ import {
   previewTaxClassification,
 } from "../../services/tax/taxClassificationEngine.js";
 import {
-  getClassificationCoverage,
   getTaxClassification,
   listTaxClassifications,
 } from "../../services/tax/taxClassification.repository.js";
 import { previewTaxClassificationBackfill } from "../../services/tax/taxClassificationBackfillPreview.service.js";
-import { countPostedTransactionsForTax } from "../../services/tax/taxPostedTransaction.repository.js";
+import {
+  enqueueTaxClassificationRun,
+  getTaxClassificationLifecycleStatus,
+} from "../../services/tax/taxClassificationRun.service.js";
+import { TAX_CLASSIFICATION_TRIGGER_SOURCES } from "../../services/tax/taxDomain.js";
 import { validationError } from "../../services/tax/taxErrors.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
 import { optionalTaxYear, validateBusinessIdInput, validatePagination } from "./taxValidation.js";
@@ -67,6 +70,28 @@ router.post("/classifications/run", async (req, res) => {
   }
 });
 
+router.post("/classifications/prepare", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const taxYear = optionalTaxYear(req.query.year ?? req.query.taxYear ?? req.body?.year ?? req.body?.taxYear, new Date().getFullYear());
+    const queued = await enqueueTaxClassificationRun({
+      supabase,
+      businessId,
+      taxYear,
+      triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+      actorUserId: req.user?.id || null,
+      metadata: { source: "deductions_workspace_prepare" },
+    });
+    const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear });
+    return sendTaxSuccess(res, { ...queued, lifecycle });
+  } catch (err) {
+    return sendTaxError(res, err, "tax_classification_prepare_failed");
+  }
+});
+
 router.get("/classifications/coverage", async (req, res) => {
   setTaxNoStore(res);
   try {
@@ -74,8 +99,7 @@ router.get("/classifications/coverage", async (req, res) => {
     const businessId = validateBusinessIdInput(req);
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const taxYear = optionalTaxYear(req.query.year ?? req.query.taxYear, new Date().getFullYear());
-    const eligiblePostedCount = await countPostedTransactionsForTax({ supabase, businessId, taxYear });
-    const data = await getClassificationCoverage({ supabase, businessId, taxYear, eligiblePostedCount });
+    const data = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear });
     return sendTaxSuccess(res, data);
   } catch (err) {
     return sendTaxError(res, err, "tax_classification_coverage_failed");

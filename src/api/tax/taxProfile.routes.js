@@ -172,7 +172,17 @@ function changedFields(before = {}, after = {}) {
 }
 
 function pickProfileEventFields(profile = {}) {
-  const fields = ["entity_type", "tax_election", "filing_status", "primary_tax_state", "accounting_method", "safe_harbor_method", "prior_year_total_tax", "prior_year_agi"];
+  const fields = [
+    "entity_type",
+    "tax_election",
+    "filing_status",
+    "primary_tax_state",
+    "accounting_method",
+    "safe_harbor_method",
+    "self_employment_tax_applies",
+    "prior_year_total_tax",
+    "prior_year_agi",
+  ];
   return Object.fromEntries(fields.map((field) => [field, profile?.[field]]).filter(([, value]) => value !== undefined));
 }
 

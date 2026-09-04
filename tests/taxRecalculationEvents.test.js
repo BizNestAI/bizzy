@@ -112,6 +112,7 @@ test("worker processes due request once, reuses fingerprints, and second worker 
     }],
   });
   __setTaxRecalculationWorkerTestDeps({
+    evaluateTaxCalculationPrerequisites: async () => ({ ready: true }),
     getLatestTaxRun: async () => ({ id: "run-1" }),
     runCanonicalTaxCalculation: async () => ({ meta: { runId: "run-1", reusedExistingRun: true } }),
     emitTaxDataChanged: () => assert.fail("identical reused run should not emit material change"),
@@ -146,6 +147,7 @@ test("worker retries failures and dead-letters after max attempts", async () => 
     }],
   });
   __setTaxRecalculationWorkerTestDeps({
+    evaluateTaxCalculationPrerequisites: async () => ({ ready: true }),
     getLatestTaxRun: async () => null,
     runCanonicalTaxCalculation: async () => {
       const err = new Error("boom");
@@ -181,6 +183,7 @@ test("material-change event is emitted only when comparison is material", async 
   });
   let latestCall = 0;
   __setTaxRecalculationWorkerTestDeps({
+    evaluateTaxCalculationPrerequisites: async () => ({ ready: true }),
     getLatestTaxRun: async () => {
       latestCall += 1;
       return latestCall === 1 ? { id: "run-old", estimated_total_tax: 1000, warnings: [] } : { id: "run-new", estimated_total_tax: 1500, warnings: [] };

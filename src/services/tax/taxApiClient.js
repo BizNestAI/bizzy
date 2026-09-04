@@ -278,6 +278,17 @@ export async function previewTaxClassificationBackfill({ businessId, year, limit
   }));
 }
 
+export async function prepareTaxClassifications({ businessId, year, signal } = {}) {
+  requireBusinessId(businessId);
+  const result = unwrap(await request(`/api/tax/classifications/prepare?${query({ businessId, year })}`, {
+    method: "POST",
+    body: {},
+    signal,
+  }));
+  clearBusinessCache(businessId);
+  return result;
+}
+
 export async function runTaxClassification({ businessId, year, transactionIds = [], force = false, limit, cursor, signal } = {}) {
   requireBusinessId(businessId);
   const result = unwrap(await request(`/api/tax/classifications/run?${query({ businessId, year })}`, {
@@ -723,6 +734,7 @@ export default {
   getTaxClassifications,
   getTaxClassificationReviewSummary,
   previewTaxClassificationBackfill,
+  prepareTaxClassifications,
   runTaxClassification,
   confirmTaxClassification,
   rejectTaxClassification,

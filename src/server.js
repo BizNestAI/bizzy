@@ -1,7 +1,7 @@
 // /src/server.js
+/* global process */
 import "dotenv/config";
 import express from "express";
-import cors from "cors";
 import fileUpload from "express-fileupload";
 import morgan from "morgan";
 import { getBackendBuildInfo } from "./utils/buildInfo.js";
@@ -65,6 +65,7 @@ import { callback as gmailOAuthCallback } from "./api/email/gmail.auth.js";
 import { qboEnvName } from "./utils/qboEnv.js";
 import { validateTaxEnvironmentSafety } from "./services/tax/taxEnvironmentSafety.js";
 import { startTaxRecalculationWorker } from "./services/tax/events/taxRecalculationWorker.service.js";
+import { startTaxClassificationWorker } from "./services/tax/taxClassificationWorker.service.js";
 import { startTaxScheduler } from "./services/tax/scheduling/taxScheduler.service.js";
 
 // Tax (router)
@@ -325,7 +326,8 @@ app.use("/api", (req, res, next) => {
 });
 
 /* ------------------------------------ Error handler ------------------------------------- */
-app.use((err, _req, res, _next) => {
+app.use((err, _req, res, next) => {
+  void next;
   console.error("[server] unhandled error:", redactErrorForLog({
     message: err?.message || err,
     code: err?.code || err?.errorCode || null,
@@ -346,6 +348,7 @@ startBookkeepingProcessingWorker();
 startOperatorRequestSummaryCron();
 startPlaidDailySyncCron();
 startContractorCfoInsightsCron();
+startTaxClassificationWorker();
 startTaxRecalculationWorker();
 startTaxScheduler();
 startQboJobCostingSyncCron();

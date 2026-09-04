@@ -220,12 +220,11 @@ export default function TaxDashboard() {
 function TaxProfileButton({ model, profileOpen = false, onOpen, disabled = false }) {
   const [showTooltip, setShowTooltip] = useState(false);
   const setup = model?.status?.setupState || {};
-  const needsAttention =
-    model?.status?.isPartial ||
-    model?.status?.isUnavailable ||
-    model?.status?.estimateReady === false ||
-    model?.status?.reserveReady === false ||
-    Boolean(setup.code);
+  const missingRequired = Array.isArray(model?.profileSummary?.missingRequired)
+    ? model.profileSummary.missingRequired
+    : [];
+  const profileSetupCodes = new Set(["profile_required", "profile_draft", "profile_invalid", "unsupported_entity", "unsupported_state"]);
+  const needsAttention = missingRequired.length > 0 || profileSetupCodes.has(String(setup.code || ""));
   const openProfile = () => {
     setShowTooltip(false);
     onOpen?.();
@@ -374,33 +373,32 @@ function buildCalculationPreview(workpaper) {
 
 function SetupAttentionTooltip({ model }) {
   const setup = model?.status?.setupState || {};
+  const missingRequired = Array.isArray(model?.profileSummary?.missingRequired)
+    ? model.profileSummary.missingRequired
+    : [];
   return (
     <div className="text-white">
       <div className="flex gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" aria-hidden="true" />
         <div>
           <div className="text-sm font-semibold text-amber-50">
-            {model?.status?.isPartial ? "Partial tax estimate available" : "Tax setup needs attention"}
+            Tax setup needs attention
           </div>
           <p className="mt-1 text-xs leading-relaxed text-white/68">
-            {setup.message || "Some tax inputs are incomplete. Available sections remain visible with unavailable values clearly labeled."}
+            {setup.message || `${missingRequired.length || "Some"} required Tax Profile field${missingRequired.length === 1 ? "" : "s"} need${missingRequired.length === 1 ? "s" : ""} an answer.`}
           </p>
         </div>
       </div>
-      <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-white/64">
-        <ReadinessPill ready={model?.status?.estimateReady} label="Estimate" />
-        <ReadinessPill ready={model?.status?.reserveReady} label="Reserve" />
-      </div>
+      {missingRequired.length ? (
+        <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-white/64">
+          {missingRequired.slice(0, 4).map((field) => (
+            <span key={field} className="inline-flex rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1">
+              {humanizeTaxField(field)}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
-  );
-}
-
-function ReadinessPill({ ready, label }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1">
-      <CheckCircle2 className={`h-3.5 w-3.5 ${ready ? "text-emerald-200" : "text-white/35"}`} aria-hidden="true" />
-      {label}: {ready ? "ready" : "needs input"}
-    </span>
   );
 }
 
@@ -419,16 +417,40 @@ function resolveOverviewStatus(model, isDemo) {
   if (setupCode === "classifications_required") {
     return {
       tone: "partial",
-      label: "Tax classification pending",
-      sentence: "Your Tax Profile is complete. Bizzi is preparing the tax treatment of your posted QuickBooks transactions.",
+      label: "Tax classification ready",
+      sentence: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
     };
   }
-  if (setupCode === "review_required") {
+  if (setupCode === "ready_to_classify") {
     return {
       tone: "partial",
-      label: "Tax review pending",
+      label: "Tax classification ready",
+      sentence: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
+    };
+  }
+  if (setupCode === "classification_queued") {
+    return {
+      tone: "partial",
+      label: "Classification queued",
+      sentence: "Your transactions are waiting to be classified.",
+    };
+  }
+  if (setupCode === "classifying") {
+    return {
+      tone: "partial",
+      label: "Classifying transactions",
+      sentence: model.surfaceReadiness?.liability?.message || "Bizzi is classifying your posted QuickBooks transactions.",
+    };
+  }
+  if (setupCode === "review_required" || setupCode === "classification_review_required") {
+    return {
+      tone: "partial",
+      label: "Tax review needed",
       sentence: "Most transactions were classified automatically. Review the items that need more context.",
     };
+  }
+  if (setupCode === "failed") {
+    return { tone: "failed", label: "Tax classification failed", sentence: "Tax classification needs attention before an estimate can be calculated." };
   }
   if (setupCode === "calculation_required") {
     return {
@@ -444,7 +466,7 @@ function resolveOverviewStatus(model, isDemo) {
       sentence: "Your Tax Profile is saved. Additional information is required before calculating.",
     };
   }
-  if (model.status.estimateReady === false) {
+  if (model.profileSummary?.missingRequired?.length) {
     return { tone: "partial", label: "Needs setup", sentence: "Complete your tax profile to generate a reliable estimate." };
   }
   if (model.status.isPartial) {
@@ -877,6 +899,7 @@ function PreviewSummaryList({ title, rows, nameKey }) {
 
 function buildDeductionClassificationSummary(deductions) {
   const coverage = deductions.classificationCoverage || deductions.overview?.coverage || {};
+  const classificationStatus = coverage.classificationStatus || coverage.classification_status || null;
   const postedTotal = nullableNumber(
     coverage.postedTransactionCount
     ?? coverage.posted_transaction_count
@@ -927,6 +950,8 @@ function buildDeductionClassificationSummary(deductions) {
     processingTotal,
     failedTotal,
     lastRunAt,
+    classificationStatus,
+    rulesVersion: coverage.rulesVersion || coverage.rules_version || null,
     requiresClassification,
   };
 }
@@ -967,6 +992,19 @@ function filterClassificationWorkspaceRows(rows, tab) {
 }
 
 function classificationWorkspaceMessage(summary) {
+  if (summary.classificationStatus === "classification_queued") {
+    return "Your transactions are waiting to be classified.";
+  }
+  if (summary.classificationStatus === "classifying") {
+    const total = Number(summary.postedTotal || 0);
+    const processed = Math.max(0, Number(summary.classifiedTotal || 0) + Number(summary.excludedTotal || 0) + Number(summary.failedTotal || 0));
+    return total > 0
+      ? `Bizzi has classified ${Math.min(processed, total)} of ${total} transactions.`
+      : "Bizzi is classifying your posted QuickBooks transactions.";
+  }
+  if (summary.classificationStatus === "failed") {
+    return "Tax classification needs attention before deductible totals can be calculated.";
+  }
   if ((summary.processingTotal ?? 0) > 0) {
     return "Bizzi is classifying your posted QuickBooks transactions.";
   }
@@ -1050,6 +1088,12 @@ function safeText(value, fallback = "") {
   if (typeof value === "string") return value.trim() || fallback;
   if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return fallback;
+}
+
+function humanizeTaxField(value) {
+  return safeText(value, "Tax profile field")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function formatClassificationSummaryLine(summary) {

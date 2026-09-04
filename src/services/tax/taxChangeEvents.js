@@ -2,6 +2,7 @@
 // /src/services/tax/taxChangeEvents.js
 import { handleTaxRecalculationEvent } from "./events/taxRecalculationTrigger.service.js";
 import { TAX_RECALCULATION_EVENT_TYPES, isNonRecalculationEvent } from "./events/taxRecalculationEventDomain.js";
+import { handleTaxClassificationEvent } from "./taxClassificationTrigger.service.js";
 
 export const TAX_CHANGE_TYPES = Object.freeze({
   PROFILE_CREATED: "tax_profile_created",
@@ -30,6 +31,7 @@ export const TAX_CHANGE_TYPES = Object.freeze({
 let deps = {
   supabase: null,
   handleTaxRecalculationEvent,
+  handleTaxClassificationEvent,
 };
 
 export function __setTaxChangeEventTestDeps(next = {}) {
@@ -46,6 +48,17 @@ export function emitTaxDataChanged({ businessId, taxYear, changeType, entityId, 
       import("../insights/contractorCfoTriggerService.js")
         .then((mod) => mod.triggerContractorCfoInsightsBestEffort?.({ businessId, trigger: "tax", force: false }))
         .catch((err) => console.warn("[tax-change] downstream signal failed", err?.message || err));
+    }
+    if (shouldDispatchTaxClassification(changeType) && process.env.NODE_ENV !== "test" && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      getSupabaseForEvents().then((supabase) => deps.handleTaxClassificationEvent?.({
+        supabase,
+        businessId,
+        taxYear,
+        changeType,
+        entityId,
+        userId,
+        metadata,
+      })).catch((err) => console.warn("[tax-change] classification enqueue failed", err?.code || err?.message || err));
     }
     const eventType = mapChangeTypeToRecalculationEvent(changeType);
     if (!eventType || isNonRecalculationEvent(eventType)) return;
@@ -72,6 +85,15 @@ export function emitTaxDataChanged({ businessId, taxYear, changeType, entityId, 
   } catch (err) {
     console.warn("[tax-change] downstream signal failed", err?.message || err);
   }
+}
+
+function shouldDispatchTaxClassification(changeType) {
+  return [
+    TAX_CHANGE_TYPES.PROFILE_CREATED,
+    TAX_CHANGE_TYPES.PROFILE_UPDATED,
+    TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED,
+    TAX_CHANGE_TYPES.BUSINESS_RULE_CREATED,
+  ].includes(changeType);
 }
 
 async function getSupabaseForEvents() {

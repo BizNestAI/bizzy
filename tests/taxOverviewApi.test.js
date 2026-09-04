@@ -118,7 +118,7 @@ test("GET /api/tax/overview reports profile and classification setup separately 
 
   assert.equal(res.statusCode, 200);
   assert.equal(store.tax_calculation_runs.length, 45);
-  assert.equal(res.body.data.data_status, "classifications_required");
+  assert.equal(res.body.data.data_status, "ready_to_classify");
   assert.equal(res.body.data.calculation, null);
   assert.ok(res.body.data.profile);
   assert.equal(res.body.data.readiness.profileStatus, "calculation_ready");
@@ -126,12 +126,12 @@ test("GET /api/tax/overview reports profile and classification setup separately 
   assert.equal(res.body.data.classification_summary.classified_transaction_count, 0);
   assert.equal(res.body.data.classification_summary.unclassified_transaction_count, 205);
   assert.equal(res.body.data.classification_summary.classification_coverage_percent, 0);
-  assert.equal(res.body.data.surface_readiness.deductions.status, "classifications_required");
-  assert.equal(res.body.data.surface_readiness.liability.status, "classifications_required");
+  assert.equal(res.body.data.surface_readiness.deductions.status, "ready_to_classify");
+  assert.equal(res.body.data.surface_readiness.liability.status, "ready_to_classify");
   assert.equal(res.body.data.surface_readiness.deadline.status, "available");
   assert.equal(res.body.data.surface_readiness.deadline.amountStatus, "estimated_payment_amount_pending");
   assert.match(res.body.data.surface_readiness.deductions.message, /205 posted QuickBooks transactions/);
-  assert.match(res.body.data.surface_readiness.liability.message, /Tax Profile is complete/);
+  assert.match(res.body.data.surface_readiness.liability.message, /Prepare your posted QuickBooks transactions/);
   assert.ok(res.body.data.deadlines.some((deadline) => deadline.dueDate === "2026-09-15"));
   assert.deepEqual(res.body.data.summary, {});
   assert.equal(res.body.data.projection, null);

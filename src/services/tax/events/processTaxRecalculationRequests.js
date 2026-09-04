@@ -1,3 +1,4 @@
+/* global process */
 import { runCanonicalTaxCalculation } from "../orchestrator/taxOrchestrator.js";
 import { getLatestTaxRun } from "../runs/taxRun.repository.js";
 import { compareTaxRuns } from "../runs/taxRunComparison.service.js";
@@ -9,12 +10,14 @@ import {
 } from "./taxRecalculationEventDomain.js";
 import { isMaterialChangeComparison } from "./taxRecalculationPolicy.js";
 import { recordRecalculationOutcome } from "./taxRecalculationTrigger.service.js";
+import { evaluateTaxCalculationPrerequisites } from "../taxCalculationPrerequisites.service.js";
 
 let deps = {
   runCanonicalTaxCalculation,
   getLatestTaxRun,
   compareTaxRuns,
   emitTaxDataChanged,
+  evaluateTaxCalculationPrerequisites,
 };
 
 export function __setTaxRecalculationWorkerTestDeps(next = {}) {
@@ -68,6 +71,26 @@ export async function getTaxRecalculationDiagnostics({ supabase, businessId = nu
 async function processOneRequest({ supabase, request, workerId, now }) {
   const logContext = { requestId: request.id, eventId: request.event_id, businessId: request.business_id, taxYear: request.tax_year };
   try {
+    const prerequisites = await deps.evaluateTaxCalculationPrerequisites({
+      supabase,
+      businessId: request.business_id,
+      taxYear: request.tax_year,
+      asOfDate: now.toISOString().slice(0, 10),
+    });
+    if (!prerequisites.ready) {
+      return recordRecalculationOutcome({
+        supabase,
+        requestId: request.id,
+        status: TAX_RECALCULATION_REQUEST_STATUSES.SKIPPED,
+        outcome: TAX_RECALCULATION_OUTCOMES.BLOCKED_SETUP,
+        metadata: {
+          ...(request.metadata || {}),
+          workerId,
+          blockedReason: prerequisites.blocker,
+          completedLogContext: logContext,
+        },
+      });
+    }
     const previousRun = await deps.getLatestTaxRun({ supabase, businessId: request.business_id, taxYear: request.tax_year });
     const result = await deps.runCanonicalTaxCalculation({
       supabase,
