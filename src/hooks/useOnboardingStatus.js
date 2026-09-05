@@ -113,7 +113,6 @@ async function fetchOnboardingStatus(businessId, options = {}) {
           business_name: contextBusiness.business_name || contextBusiness.businessName || contextBusiness.name || "",
           industry: contextBusiness.industry || "",
           state: contextBusiness.state || "",
-          services_offered: contextBusiness.services_offered || contextBusiness.servicesOffered || "",
         },
         error: null,
       }
@@ -122,7 +121,7 @@ async function fetchOnboardingStatus(businessId, options = {}) {
     if (!adminView && !profileRes) {
       profileRes = await supabase
         .from("business_profiles")
-        .select("id,business_name,industry,state,services_offered")
+        .select("id,business_name,industry,state")
         .eq("id", businessId)
         .maybeSingle();
     }
@@ -173,7 +172,7 @@ async function fetchOnboardingStatus(businessId, options = {}) {
   const localForce = readLocalFlag(LOCAL_KEYS.forceComplete);
   const localProfileFallback = readLocalProfileFallback();
   const businessProfileComplete = profile
-    ? Boolean(profile?.business_name && profile?.industry && profile?.state && profile?.services_offered) ||
+    ? Boolean(profile?.business_name && profile?.industry && profile?.state) ||
       Boolean(localProfileFallback.businessProfileComplete && localForce)
     : false;
 

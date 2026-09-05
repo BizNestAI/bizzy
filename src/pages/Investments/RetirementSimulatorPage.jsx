@@ -49,7 +49,7 @@ export default function RetirementSimulatorPage({
     <div className="relative w-full min-h-screen bg-app text-white overflow-hidden">
       <div className="pointer-events-none absolute inset-0 opacity-70" style={{ background: HERO_GLOW }} />
 
-      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 lg:px-10 py-6 pb-24 space-y-5">
+      <div className="bizzy-page-width bizzy-page-width--workspace relative z-10 py-6 pb-24 space-y-5">
         {/* Header */}
         <header
           className="rounded-[26px] border px-5 sm:px-7 py-5 shadow-[0_18px_55px_rgba(0,0,0,0.55)]"

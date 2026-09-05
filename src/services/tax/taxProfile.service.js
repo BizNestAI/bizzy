@@ -1,6 +1,5 @@
 // /src/services/tax/taxProfile.service.js
 import {
-  ACCOUNTING_METHODS,
   SAFE_HARBOR_METHODS,
   TAX_ENTITY_TYPES,
   TAX_ELECTIONS,
@@ -261,9 +260,16 @@ export function computeTaxProfileCompleteness(profile) {
 
 export function computeTaxProfileReadiness(profile, { financialDataReady = null, taxClassificationReady = null } = {}) {
   const completeness = computeTaxProfileCompleteness(profile);
-  const profileStatus = !profile
-    ? "profile_required"
+  const taxProfileState = !profile
+    ? "profile_missing"
     : completeness.isCompleteForEstimate
+      ? "profile_ready"
+      : "profile_draft";
+  const classificationState = deriveClassificationState({ financialDataReady, taxClassificationReady });
+  const calculationState = deriveCalculationState({ completeness, financialDataReady, taxClassificationReady });
+  const profileStatus = taxProfileState === "profile_missing"
+    ? "profile_required"
+    : taxProfileState === "profile_ready"
       ? "calculation_ready"
       : "draft";
   const blockers = [];
@@ -272,6 +278,11 @@ export function computeTaxProfileReadiness(profile, { financialDataReady = null,
   if (financialDataReady === false) blockers.push("financial_data");
   if (taxClassificationReady === false) blockers.push("tax_classifications");
   return {
+    business_onboarding_state: profile ? "business_setup_complete" : "business_setup_incomplete",
+    tax_profile_state: taxProfileState,
+    profile_state: taxProfileState,
+    classification_state: classificationState,
+    calculation_state: calculationState,
     profile_status: profileStatus,
     missing_fields: completeness.missingRequired || [],
     recommended_fields: completeness.missingRecommended || [],
@@ -283,6 +294,21 @@ export function computeTaxProfileReadiness(profile, { financialDataReady = null,
     blockers: [...new Set(blockers)],
     completeness,
   };
+}
+
+function deriveClassificationState({ financialDataReady, taxClassificationReady }) {
+  if (financialDataReady === false) return "classification_waiting_for_financial_data";
+  if (taxClassificationReady === true) return "classification_complete";
+  if (taxClassificationReady === false) return "ready_to_classify";
+  return "classification_waiting_for_financial_data";
+}
+
+function deriveCalculationState({ completeness, financialDataReady, taxClassificationReady }) {
+  if (completeness.isCompleteForEstimate !== true) return "blocked_by_profile";
+  if (financialDataReady === false) return "blocked_by_financial_authority";
+  if (taxClassificationReady === false) return "blocked_by_classifications";
+  if (financialDataReady === true && taxClassificationReady === true) return "calculation_queued";
+  return "blocked_by_financial_authority";
 }
 
 export function assertTaxProfileMutableBody(body = {}) {
@@ -352,7 +378,6 @@ async function buildInitialProfileInput({ supabase, businessId, taxYear, source 
     tax_election: TAX_ELECTIONS.UNKNOWN,
     filing_status: TAX_FILING_STATUSES.UNKNOWN,
     primary_tax_state: state,
-    accounting_method: ACCOUNTING_METHODS.CASH,
     safe_harbor_method: SAFE_HARBOR_METHODS.UNKNOWN,
     profile_status: TAX_PROFILE_STATUSES.INCOMPLETE,
     confidence_score: state ? 0.25 : 0.1,
@@ -370,7 +395,7 @@ function normalizeProfileCreateInput(input, { businessId, taxYear }) {
     entity_type: normalized.entity_type ?? TAX_ENTITY_TYPES.UNKNOWN,
     tax_election: normalized.tax_election ?? TAX_ELECTIONS.UNKNOWN,
     filing_status: normalized.filing_status ?? TAX_FILING_STATUSES.UNKNOWN,
-    accounting_method: normalized.accounting_method ?? ACCOUNTING_METHODS.CASH,
+    accounting_method: normalized.accounting_method ?? null,
     safe_harbor_method: normalized.safe_harbor_method ?? SAFE_HARBOR_METHODS.UNKNOWN,
     confidence_score: normalized.confidence_score ?? 0.1,
     source: normalized.source ?? TAX_PROFILE_SOURCES.SYSTEM,

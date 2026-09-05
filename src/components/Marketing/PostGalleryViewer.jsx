@@ -55,7 +55,7 @@ export default function PostGalleryViewer({ businessId }) {
   }, [search, platformFilter, typeFilter, statusFilter, sortBy, gallery, published]);
 
   return (
-    <div className="w-full max-w-6xl mx-auto p-4 text-white">
+    <div className="bizzy-page-width bizzy-page-width--workspace py-4 text-white">
       <h2 className="text-2xl font-semibold text-blue-400 mb-4">Post Gallery</h2>
 
       <div className="flex flex-wrap gap-2 mb-4">

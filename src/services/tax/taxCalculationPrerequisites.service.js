@@ -16,15 +16,15 @@ export async function evaluateTaxCalculationPrerequisites({
 } = {}) {
   const profile = await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
   const completeness = computeTaxProfileCompleteness(profile);
-  if (!profile) return blocked("profile_required", { profile, completeness });
-  if (!completeness.isCompleteForEstimate) return blocked("profile_draft", { profile, completeness, missingFields: completeness.missingRequired });
+  if (!profile) return blocked("profile_required", { profile, completeness, calculationState: "blocked_by_profile" });
+  if (!completeness.isCompleteForEstimate) return blocked("profile_draft", { profile, completeness, missingFields: completeness.missingRequired, calculationState: "blocked_by_profile" });
 
   const eligiblePostedCount = await countPostedTransactionsForTax({ supabase, businessId, taxYear });
-  if (eligiblePostedCount <= 0) return blocked("pnl_authority_missing", { profile, completeness, eligiblePostedCount });
+  if (eligiblePostedCount <= 0) return blocked("pnl_authority_missing", { profile, completeness, eligiblePostedCount, calculationState: "blocked_by_financial_authority" });
 
   const classification = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear });
   const classificationBlocker = mapClassificationStatusToCalculationBlocker(classification.classificationStatus);
-  if (classificationBlocker) return blocked(classificationBlocker, { profile, completeness, classification, eligiblePostedCount });
+  if (classificationBlocker) return blocked(classificationBlocker, { profile, completeness, classification, eligiblePostedCount, calculationState: "blocked_by_classifications" });
 
   try {
     await getTaxRuleConfig({
@@ -43,6 +43,7 @@ export async function evaluateTaxCalculationPrerequisites({
       completeness,
       classification,
       eligiblePostedCount,
+      calculationState: "blocked_by_tax_rules",
       errorCode: error?.code || "tax_rule_config_unavailable",
     });
   }
@@ -50,6 +51,7 @@ export async function evaluateTaxCalculationPrerequisites({
   return {
     ready: true,
     blocker: null,
+    calculationState: "calculation_queued",
     profile,
     completeness,
     classification,

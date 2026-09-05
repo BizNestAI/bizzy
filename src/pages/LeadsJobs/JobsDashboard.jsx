@@ -8645,8 +8645,8 @@ export default function JobsDashboard() {
 
   if (qbStatusLoading) {
     return (
-      <div className="w-full px-3 md:px-4 pt-0 pb-4">
-        <div className="max-w-[1100px] mx-auto space-y-4">
+      <div className="w-full pt-0 pb-4">
+        <div className="bizzy-page-width bizzy-page-width--workspace space-y-4">
           <ModuleHeader module="jobs" subtitle="Loading persisted QuickBooks status for Admin View." />
           <SkeletonCard lines={5} />
         </div>
@@ -8671,8 +8671,8 @@ export default function JobsDashboard() {
   }
 
   return (
-    <div className="w-full px-3 md:px-4 pt-0 pb-4">
-      <div className="max-w-[1100px] mx-auto space-y-4">
+    <div className="w-full pt-0 pb-4">
+      <div className="bizzy-page-width bizzy-page-width--workspace space-y-4">
         <ModuleHeader
           module="jobs"
           subtitle="Track collections and overdue invoices from QuickBooks."

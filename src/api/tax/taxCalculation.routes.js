@@ -723,6 +723,7 @@ function surfaceMessage(reason, classificationsMessage) {
     classification_queued: classificationsMessage,
     classifying: classificationsMessage,
     classification_review_required: classificationsMessage,
+    classification_failed: "Tax classification needs attention before an estimate can be calculated.",
     failed: "Tax classification needs attention before an estimate can be calculated.",
     calculation_required: "A tax estimate has not been generated yet.",
   };
@@ -739,6 +740,7 @@ function lifecycleMessage(status) {
     classification_queued: "Your transactions are waiting to be classified.",
     classifying: "Bizzi is classifying your posted QuickBooks transactions.",
     classification_review_required: "Bizzi classified most transactions automatically. Review the items that need more context.",
+    classification_failed: "Tax classification needs attention before an estimate can be calculated.",
     failed: "Tax classification needs attention before an estimate can be calculated.",
     calculation_required: "A tax estimate has not been generated yet.",
   };
@@ -760,6 +762,7 @@ function isClassificationStatus(status) {
     "classification_queued",
     "classifying",
     "classification_review_required",
+    "classification_failed",
     "failed",
   ].includes(status);
 }

@@ -227,7 +227,7 @@ export default function InvestmentsDashboard({
   return (
     <div className="w-full min-h-screen bg-app text-primary">
       {/* Module Header */}
-      <div className="max-w-[1200px] mx-auto px-4 pt-0 pb-2">
+      <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-2">
         <ModuleHeader
           module="investments"
           title="Wealth View"
@@ -238,7 +238,7 @@ export default function InvestmentsDashboard({
       </div>
 
       {/* Body */}
-      <div className="max-w-[1200px] mx-auto px-4 pb-28">
+      <div className="bizzy-page-width bizzy-page-width--workspace pb-28">
       <div className="grid grid-cols-12 gap-5">
           <section className="col-span-12">
             {/* Overview */}

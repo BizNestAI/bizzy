@@ -125,6 +125,7 @@ export const TAX_CLASSIFICATION_RUN_STATUSES = freeze({
 
 export const TAX_CLASSIFICATION_TRIGGER_SOURCES = freeze({
   PROFILE_COMPLETED: "profile_completed",
+  PROFILE_CONTEXT_UPDATED: "profile_context_updated",
   ONBOARDING_PROFILE_COMPLETED: "onboarding_profile_completed",
   QBO_TRANSACTION_POSTED: "qbo_transaction_posted",
   RULES_CHANGED: "rules_changed",

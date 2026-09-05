@@ -263,7 +263,7 @@ export function mapClassificationStatusToCalculationBlocker(classificationStatus
   if (classificationStatus === "classification_complete") return null;
   if (classificationStatus === "classification_review_required") return "classification_review_required";
   if (classificationStatus === "classification_queued" || classificationStatus === "classifying") return "classification_in_progress";
-  if (classificationStatus === "failed") return "classification_failed";
+  if (classificationStatus === "classification_failed" || classificationStatus === "failed") return "classification_failed";
   return "classifications_required";
 }
 
@@ -271,7 +271,7 @@ function deriveLifecycleStatus({ coverage, latestRun, activeRun }) {
   if (coverage.eligiblePostedCount <= 0) return "no_posted_transactions";
   if (activeRun?.status === TAX_CLASSIFICATION_RUN_STATUSES.QUEUED || activeRun?.status === TAX_CLASSIFICATION_RUN_STATUSES.FAILED) return "classification_queued";
   if (activeRun?.status === TAX_CLASSIFICATION_RUN_STATUSES.RUNNING) return "classifying";
-  if (latestRun?.status === TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER || coverage.failedCount > 0) return "failed";
+  if (latestRun?.status === TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER || coverage.failedCount > 0) return "classification_failed";
   if (coverage.needsReviewCount > 0) return "classification_review_required";
   if (coverage.unclassifiedCount > 0) return "ready_to_classify";
   return "classification_complete";

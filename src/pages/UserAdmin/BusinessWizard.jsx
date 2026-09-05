@@ -21,7 +21,7 @@ import {
   TAX_PROFILE_EMPTY_VALUES,
   buildOnboardingTaxProfilePatch,
   getOnboardingTaxYear,
-  profileResultHasMinimumCompleteness,
+  hasOnboardingTaxProfileAnswers,
   profileToTaxProfileValues,
   validateOnboardingTaxProfile,
 } from '../../components/Tax/Setup/taxProfileFormModel.js';
@@ -42,6 +42,10 @@ const CTA_TEXT = '#f5f7fb';
 const CTA_GLOW = '0 18px 44px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.10)';
 const DRAFT_SCHEMA_VERSION = 1;
 const LAST_DRAFT_STORAGE_KEY = `bizzy:onboarding-draft:last-key:v${DRAFT_SCHEMA_VERSION}`;
+const ACCOUNTING_METHOD_SUGGESTION_OPTIONS = [
+  { value: '', label: 'Cash (suggested)' },
+  ...ACCOUNTING_METHOD_OPTIONS,
+];
 const DEFAULT_FORM_DATA = {
   business_name: '',
   founded_year: '',
@@ -52,7 +56,6 @@ const DEFAULT_FORM_DATA = {
   services_offered: '',
   billing_model: BILLING_MODELS[0],
   top_challenge: '',
-  bookkeeping_start_date: '',
 };
 
 const getDraftStorageKey = (userId) =>
@@ -118,7 +121,6 @@ const hasDraftValues = (formData) =>
       formData.state ||
       formData.services_offered ||
       formData.top_challenge ||
-      formData.bookkeeping_start_date ||
       formData.billing_model !== DEFAULT_FORM_DATA.billing_model
   );
 
@@ -131,12 +133,22 @@ const PANEL_BG = 'linear-gradient(180deg, rgba(15,18,17,0.82), rgba(8,10,10,0.86
 const BORDER = 'rgba(255,255,255,0.105)';
 const TEXT_MUTED = 'rgba(245,247,251,0.78)';
 
-const Section = ({ title, subtitle, children }) => (
+const Section = ({ title, subtitle, children, eyebrow, className = '' }) => (
   <div
-    className="rounded-[18px] p-4 shadow-[0_18px_52px_rgba(0,0,0,0.34)] md:p-5"
-    style={{ background: PANEL_BG, border: `1px solid ${BORDER}` }}
+    className={`relative overflow-hidden rounded-[18px] p-4 shadow-[0_12px_36px_rgba(0,0,0,0.24)] md:p-5 ${className}`}
+    style={{ background: 'linear-gradient(180deg, rgba(15,18,17,0.74), rgba(8,10,10,0.78))', border: `1px solid ${BORDER}` }}
   >
+    <div
+      aria-hidden
+      className="absolute inset-x-0 top-0 h-px"
+      style={{ background: 'linear-gradient(90deg, transparent, rgba(52,211,153,0.48), transparent)' }}
+    />
     <div className="mb-3">
+      {eyebrow ? (
+        <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-200/58">
+          {eyebrow}
+        </p>
+      ) : null}
       <h3 className="text-base font-semibold text-white">{title}</h3>
       {subtitle && <p className="text-xs leading-5" style={{ color: TEXT_MUTED }}>{subtitle}</p>}
     </div>
@@ -151,12 +163,12 @@ const Section = ({ title, subtitle, children }) => (
 const Label = ({ children, required = false, htmlFor }) => (
   <label
     htmlFor={htmlFor}
-    className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]"
+    className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]"
     style={{ color: TEXT_MUTED }}
   >
     <span>{children}</span>
     {required && (
-      <span className="text-[9px] uppercase tracking-[0.12em] text-white/42">
+      <span className="text-[9px] uppercase tracking-[0.12em] text-emerald-200/70">
         Required
       </span>
     )}
@@ -278,6 +290,7 @@ const BusinessWizard = () => {
 
   const [formData, setFormData] = useState(() => readInitialDraft() || DEFAULT_FORM_DATA);
   const [taxFormData, setTaxFormData] = useState(TAX_PROFILE_EMPTY_VALUES);
+  const [taxSetupExpanded, setTaxSetupExpanded] = useState(false);
   const [taxProfileLoading, setTaxProfileLoading] = useState(false);
   const [existingBusinessId, setExistingBusinessId] = useState(null);
   const [draftReady, setDraftReady] = useState(false);
@@ -325,9 +338,6 @@ const BusinessWizard = () => {
       }
       return next;
     });
-    if (name === 'state' && value && value !== 'Other') {
-      setTaxFormData((prev) => (prev.primary_tax_state ? prev : { ...prev, primary_tax_state: value }));
-    }
   };
 
   const setTaxField = (name, value) => {
@@ -341,12 +351,19 @@ const BusinessWizard = () => {
   const hasRequiredFields =
     formData.business_name &&
     formData.industry &&
-    formData.team_size &&
-    formData.state &&
-    formData.services_offered;
+    formData.state;
 
   const taxValidationErrors = useMemo(() => validateOnboardingTaxProfile(taxFormData), [taxFormData]);
   const hasRequiredTaxFields = Object.keys(taxValidationErrors).length === 0;
+  const hasOptionalTaxAnswers = Boolean(
+    taxFormData.filing_status ||
+      taxFormData.primary_tax_state ||
+      taxFormData.accounting_method ||
+      taxFormData.safe_harbor_method ||
+      taxFormData.self_employment_tax_applies ||
+      taxFormData.tax_election
+  );
+  const showTaxEstimateFields = taxSetupExpanded || hasOptionalTaxAnswers;
 
   const canFinish = hasRequiredFields && hasRequiredTaxFields && !loading && !taxProfileLoading;
 
@@ -390,7 +407,6 @@ const BusinessWizard = () => {
           industry: normalize(record.industry, prev.industry),
           state: normalize(record.state, prev.state),
           services_offered: normalize(record.services_offered, prev.services_offered),
-          bookkeeping_start_date: normalize(record.bookkeeping_start_date, prev.bookkeeping_start_date),
           annual_revenue: normalize(record.annual_revenue, prev.annual_revenue),
           founded_year: normalize(record.founded_year, prev.founded_year),
           team_size: normalize(record.team_size, prev.team_size),
@@ -402,16 +418,23 @@ const BusinessWizard = () => {
           const taxResult = await getTaxProfile({ businessId: record.id, year: taxYear });
           if (!alive) return;
           const profile = taxResult?.profile || null;
+          const values = profileToTaxProfileValues(profile);
           setTaxFormData((prev) => ({
             ...prev,
-            ...profileToTaxProfileValues(profile),
-            primary_tax_state: profile?.primary_tax_state || profile?.primaryTaxState || record.state || prev.primary_tax_state,
+            ...values,
           }));
+          if (
+            values.filing_status ||
+            values.primary_tax_state ||
+            values.accounting_method ||
+            values.safe_harbor_method ||
+            values.self_employment_tax_applies ||
+            values.tax_election
+          ) {
+            setTaxSetupExpanded(true);
+          }
         } catch (taxErr) {
           console.warn('[BusinessWizard] tax profile preload failed:', taxErr);
-          if (alive && record.state && record.state !== 'Other') {
-            setTaxFormData((prev) => ({ ...prev, primary_tax_state: prev.primary_tax_state || record.state }));
-          }
         } finally {
           if (alive) setTaxProfileLoading(false);
         }
@@ -473,7 +496,7 @@ const BusinessWizard = () => {
 
       const payload = {
         ...profileRow,
-        team_size: parseInt(formData.team_size || '0', 10),
+        team_size: formData.team_size === '' || formData.team_size == null ? null : parseInt(formData.team_size, 10),
         founded_year: founded_year_safe,
       };
       let businessId = existingBusinessId;
@@ -499,13 +522,9 @@ const BusinessWizard = () => {
       }
 
       if (businessId) {
-        const taxPatch = buildOnboardingTaxProfilePatch(taxFormData);
-        const taxResult = await updateTaxProfile({ businessId, year: taxYear, patch: taxPatch });
-        if (!profileResultHasMinimumCompleteness(taxResult)) {
-          const missing = taxResult?.readiness?.missing_fields || taxResult?.completeness?.missingRequired || [];
-          throw new Error(missing.length
-            ? `Complete Tax setup before finishing: ${missing.join(', ')}.`
-            : 'Tax setup could not be confirmed.');
+        if (hasOnboardingTaxProfileAnswers(taxFormData)) {
+          const taxPatch = buildOnboardingTaxProfilePatch(taxFormData);
+          await updateTaxProfile({ businessId, year: taxYear, patch: taxPatch });
         }
         clearDraft(draftStorageKey);
         localStorage.setItem('isProfileComplete', 'true');
@@ -558,6 +577,25 @@ const BusinessWizard = () => {
         .dropdown-scroll::-webkit-scrollbar { width: 0; height: 0; }
         .dropdown-scroll::-webkit-scrollbar-thumb { background: transparent; }
         .dropdown-scroll::-webkit-scrollbar-track { background: transparent; }
+        .setup-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(98,104,101,0.82) rgba(255,255,255,0.045);
+        }
+        .setup-scrollbar::-webkit-scrollbar {
+          width: 12px;
+        }
+        .setup-scrollbar::-webkit-scrollbar-track {
+          background: rgba(255,255,255,0.045);
+          border-radius: 999px;
+        }
+        .setup-scrollbar::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, rgba(120,126,123,0.9), rgba(58,62,60,0.9));
+          border: 3px solid rgba(5,6,6,0.92);
+          border-radius: 999px;
+        }
+        .setup-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, rgba(148,154,151,0.94), rgba(78,83,80,0.94));
+        }
       `}</style>
       <div
         aria-hidden
@@ -579,9 +617,9 @@ const BusinessWizard = () => {
       />
 
       <div className="relative z-10 h-screen w-full overflow-hidden">
-        <div className="no-scrollbar h-full overflow-y-auto px-4 py-8 sm:py-10">
+        <div className="setup-scrollbar h-full overflow-y-auto px-4 py-8 sm:py-10">
           <div
-            className={`${animateEntry ? 'bizzy-auth-card-wrap' : ''} relative mx-auto w-full max-w-4xl text-white`}
+            className={`${animateEntry ? 'bizzy-auth-card-wrap' : ''} bizzy-page-width bizzy-page-width--workspace relative text-white`}
           >
             {showBackToSettings ? (
             <div className="absolute right-0 top-1 z-10">
@@ -594,7 +632,7 @@ const BusinessWizard = () => {
               </button>
             </div>
             ) : null}
-        <div className="relative flex flex-col items-center gap-3 text-center">
+        <div className="relative flex flex-col items-center gap-2 text-center">
           <div
             className="h-12 w-12 rounded-full border border-emerald-300/32 bg-white/[0.07] p-[6px] shadow-[0_12px_28px_rgba(0,0,0,0.40),inset_0_1px_0_rgba(255,255,255,0.08)]"
             style={{
@@ -607,15 +645,20 @@ const BusinessWizard = () => {
             <div className="mb-2 text-[12px] font-light uppercase tracking-[0.5em] text-white/[0.74]">Bizzi</div>
             <h2 className="text-2xl font-semibold tracking-[-0.01em] text-white md:text-[1.7rem]">Set up your business</h2>
             <p className="mx-auto mt-1 max-w-2xl text-sm leading-5 text-white/58">
-              Bizzi uses these signals to tailor your workspace and chat guidance.
+              A few setup details help Bizzi tailor your workspace and chat guidance.
             </p>
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="relative mt-6 space-y-4">
+        <form
+          onSubmit={handleSubmit}
+          className="relative mt-6 grid grid-cols-1 items-start gap-4 rounded-[24px] border border-white/[0.11] bg-[rgba(8,10,9,0.62)] p-3 shadow-[0_26px_80px_rgba(0,0,0,0.38)] md:p-4 xl:grid-cols-[minmax(0,1.04fr)_minmax(420px,0.96fr)]"
+        >
           <Section
+            eyebrow="Step 1"
             title="Business identity"
-            subtitle="Let's ground Bizzi in the core details needed to tailor your workspace."
+            subtitle="Core details for your workspace."
+            className="bg-white/[0.018]"
           >
             <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2">
               <div className="md:col-span-2">
@@ -641,7 +684,7 @@ const BusinessWizard = () => {
                 />
               </div>
               <div>
-                <Label htmlFor="setup-team-size" required>Team size</Label>
+                <Label htmlFor="setup-team-size">Team size</Label>
                 <Input
                   id="setup-team-size"
                   name="team_size"
@@ -650,7 +693,6 @@ const BusinessWizard = () => {
                   value={formData.team_size}
                   onChange={(e)=>setField('team_size', e.target.value)}
                   placeholder="e.g., 8"
-                  required
                 />
               </div>
               <div>
@@ -688,7 +730,7 @@ const BusinessWizard = () => {
                 />
               </div>
               <div>
-                <Label htmlFor="setup-services-offered" required>Services offered</Label>
+                <Label htmlFor="setup-services-offered">Services offered</Label>
                 <Input
                   id="setup-services-offered"
                   name="services_offered"
@@ -696,7 +738,6 @@ const BusinessWizard = () => {
                   value={formData.services_offered}
                   onChange={(e)=>setField('services_offered', e.target.value)}
                   placeholder="Remodeling, renovations, home repair"
-                  required
                 />
               </div>
               <div>
@@ -706,17 +747,6 @@ const BusinessWizard = () => {
                   value={formData.billing_model}
                   onChange={(e)=>setField('billing_model', e.target.value)}
                   options={BILLING_MODELS}
-                />
-              </div>
-              <div>
-                <Label htmlFor="setup-bookkeeping-start">When should Bizzi start managing your books?</Label>
-                <Input
-                  id="setup-bookkeeping-start"
-                  name="bookkeeping_start_date"
-                  autoComplete="off"
-                  type="date"
-                  value={formData.bookkeeping_start_date}
-                  onChange={(e)=>setField('bookkeeping_start_date', e.target.value)}
                 />
               </div>
               <div className="md:col-span-2">
@@ -745,18 +775,21 @@ const BusinessWizard = () => {
           </Section>
 
           <Section
-            title="Tax setup"
-            subtitle={`Tax setup for ${taxYear}. These details help Bizzi organize deductions and prepare tax estimates. You can update them later.`}
+            eyebrow="Step 2"
+            title="Tax estimate setup"
+            subtitle="Answer a few additional questions to unlock your estimated tax liability and trajectory. You can complete this now or later."
+            className="bg-white/[0.018]"
           >
             <div className="grid grid-cols-1 gap-x-4 gap-y-3 md:grid-cols-2">
               <div>
                 <TaxProfileSelectField
                   id="onboarding-tax-entity-type"
                   label="Business tax structure"
+                  required
                   value={taxFormData.entity_type}
                   options={[{ value: '', label: 'Select...' }, ...ENTITY_OPTIONS]}
                   onChange={(value) => setTaxField('entity_type', value)}
-                  helper="Used to route the estimate through the right tax model."
+                  helper="Used to organize your business context and route tax estimates later."
                 />
               </div>
               {taxFormData.entity_type === 'single_member_llc' ? (
@@ -770,65 +803,74 @@ const BusinessWizard = () => {
                   />
                 </div>
               ) : null}
-              <div>
-                <TaxProfileSelectField
-                  id="onboarding-tax-filing-status"
-                  label="Filing status"
-                  value={taxFormData.filing_status}
-                  options={[{ value: '', label: 'Select...' }, ...FILING_STATUS_OPTIONS]}
-                  onChange={(value) => setTaxField('filing_status', value)}
-                />
-              </div>
-              <div>
-                <TaxProfileSelectField
-                  id="onboarding-tax-primary-state"
-                  label="Primary tax state"
-                  value={taxFormData.primary_tax_state}
-                  options={[{ value: '', label: 'Select state' }, ...US_STATE_OPTIONS]}
-                  onChange={(value) => setTaxField('primary_tax_state', value)}
-                />
-              </div>
-              <div>
-                <TaxProfileSelectField
-                  id="onboarding-tax-accounting-method"
-                  label="Accounting method"
-                  value={taxFormData.accounting_method}
-                  options={[{ value: '', label: 'Select...' }, ...ACCOUNTING_METHOD_OPTIONS]}
-                  onChange={(value) => setTaxField('accounting_method', value)}
-                />
-              </div>
-              <div>
-                <TaxProfileSelectField
-                  id="onboarding-tax-safe-harbor-method"
-                  label="Safe-harbor method"
-                  value={taxFormData.safe_harbor_method}
-                  options={[{ value: '', label: 'Select...' }, ...SAFE_HARBOR_OPTIONS]}
-                  onChange={(value) => setTaxField('safe_harbor_method', value)}
-                  helper="Used to choose the planning method for estimated-tax targets."
-                />
-              </div>
-              {isSoleOrDisregarded(taxFormData) ? (
-                <div>
-                  <TaxProfileSelectField
-                    id="onboarding-tax-self-employment"
-                    label="Is this business income subject to self-employment tax?"
-                    value={taxFormData.self_employment_tax_applies}
-                    options={REQUIRED_SELF_EMPLOYMENT_OPTIONS}
-                    onChange={(value) => setTaxField('self_employment_tax_applies', value)}
-                    helper="Used to determine whether self-employment tax should be included in your estimate."
-                  />
+              {showTaxEstimateFields ? (
+                <>
+                  <div>
+                    <TaxProfileSelectField
+                      id="onboarding-tax-primary-state"
+                      label="Primary tax state"
+                      value={taxFormData.primary_tax_state}
+                      options={[{ value: '', label: formData.state && formData.state !== 'Other' ? `${formData.state} (suggested)` : 'Select state' }, ...US_STATE_OPTIONS]}
+                      onChange={(value) => setTaxField('primary_tax_state', value)}
+                    />
+                  </div>
+                  <div>
+                    <TaxProfileSelectField
+                      id="onboarding-tax-accounting-method"
+                      label="Accounting method"
+                      value={taxFormData.accounting_method}
+                      options={ACCOUNTING_METHOD_SUGGESTION_OPTIONS}
+                      onChange={(value) => setTaxField('accounting_method', value)}
+                      helper="Cash records income and expenses when money moves. Accrual records them when earned or incurred."
+                    />
+                  </div>
+                  <div>
+                    <TaxProfileSelectField
+                      id="onboarding-tax-filing-status"
+                      label="Filing status"
+                      value={taxFormData.filing_status}
+                      options={[{ value: '', label: 'Select...' }, ...FILING_STATUS_OPTIONS]}
+                      onChange={(value) => setTaxField('filing_status', value)}
+                    />
+                  </div>
+                  <div>
+                    <TaxProfileSelectField
+                      id="onboarding-tax-safe-harbor-method"
+                      label="Safe-harbor method"
+                      value={taxFormData.safe_harbor_method}
+                      options={[{ value: '', label: 'Select...' }, ...SAFE_HARBOR_OPTIONS]}
+                      onChange={(value) => setTaxField('safe_harbor_method', value)}
+                      helper="How Bizzi should plan your estimated payments. If you’re unsure, you can choose this later."
+                    />
+                  </div>
+                  {isSoleOrDisregarded(taxFormData) ? (
+                    <div>
+                      <TaxProfileSelectField
+                        id="onboarding-tax-self-employment"
+                        label="Is this business income subject to self-employment tax?"
+                        value={taxFormData.self_employment_tax_applies}
+                        options={REQUIRED_SELF_EMPLOYMENT_OPTIONS}
+                        onChange={(value) => setTaxField('self_employment_tax_applies', value)}
+                        helper="Usually applies to sole proprietors and some LLC owners. You can confirm this later if you’re unsure."
+                      />
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="rounded-[14px] border border-white/[0.09] bg-black/18 px-3 py-3 text-sm leading-5 text-white/62 md:col-span-2">
+                  Bizzi can start organizing eligible deductions with your business context. Tax estimates unlock after the remaining Tax Profile questions are answered.
                 </div>
-              ) : null}
+              )}
               <div className="md:col-span-2 text-xs leading-5 text-white/48">
-                These answers are saved to your canonical Tax Profile for this business and year.
+                You can update these answers anytime from the Tax page.
               </div>
             </div>
           </Section>
 
           {/* Errors */}
-          {error && <p className="text-rose-400 text-sm">{error}</p>}
+          {error && <p className="text-rose-400 text-sm xl:col-span-2">{error}</p>}
 
-          <div className="flex items-center justify-end pt-1">
+          <div className="flex items-center justify-end pt-1 xl:col-span-2">
             <button
               type="submit"
               disabled={!canFinish}

@@ -27,6 +27,8 @@ export const MINIMUM_TAX_PROFILE_FIELDS = [
   "self_employment_tax_applies",
 ];
 
+export const ONBOARDING_REQUIRED_TAX_CONTEXT_FIELDS = ["entity_type"];
+
 export function getOnboardingTaxYear(asOf = new Date()) {
   const date = asOf instanceof Date ? asOf : new Date(asOf);
   const year = date.getFullYear();
@@ -40,15 +42,23 @@ export function getOnboardingTaxProfileFields(values = {}) {
 }
 
 export function validateOnboardingTaxProfile(values = {}) {
-  return validateTaxSetup(values, { fieldsOverride: getOnboardingTaxProfileFields(values) });
+  return validateTaxSetup(values, { fieldsOverride: ONBOARDING_REQUIRED_TAX_CONTEXT_FIELDS });
 }
 
 export function buildOnboardingTaxProfilePatch(values = {}) {
-  const confirmedFields = new Set(getOnboardingTaxProfileFields(values));
+  const confirmedFields = new Set(getAnsweredOnboardingTaxProfileFields(values));
   return {
     ...buildTaxProfilePatch(values, { confirmedFields }),
     source: "onboarding",
   };
+}
+
+export function getAnsweredOnboardingTaxProfileFields(values = {}) {
+  return getOnboardingTaxProfileFields(values).filter((field) => isAnsweredTaxProfileValue(values[field]));
+}
+
+export function hasOnboardingTaxProfileAnswers(values = {}) {
+  return getAnsweredOnboardingTaxProfileFields(values).length > 0;
 }
 
 export function profileToTaxProfileValues(profile) {
@@ -89,4 +99,8 @@ export function profileResultHasMinimumCompleteness(result = {}) {
     completeness?.isCompleteForEstimate === true ||
     (Array.isArray(missingRequired) && missingRequired.length === 0 && Boolean(result?.profile))
   );
+}
+
+function isAnsweredTaxProfileValue(value) {
+  return value !== undefined && value !== null && value !== "";
 }

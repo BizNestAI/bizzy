@@ -156,7 +156,7 @@ export default function MarketingDashboard() {
   const summaryData = marketingSummaryFallback;
 
   return (
-    <div className={`w-full px-3 md:px-4 pt-0 pb-6 font-sans ${textColor} ${bgColor}`}>
+    <div className={`w-full pt-0 pb-6 font-sans ${textColor} ${bgColor}`}>
       {/* Header (title + optional hero) */}
       <ModuleHeader
         module="marketing"
@@ -167,7 +167,7 @@ export default function MarketingDashboard() {
       />
 
       {/* Middle column constrained between sidebar and insights rail */}
-      <div className="mx-auto w-full max-w-[1200px] 2xl:max-w-[1280px]">
+      <div className="bizzy-page-width bizzy-page-width--workspace">
         <div className="mb-5">
           <MarketingSummaryTiles summary={summaryData} />
         </div>

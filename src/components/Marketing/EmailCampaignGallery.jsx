@@ -42,7 +42,7 @@ export default function EmailCampaignGallery({ businessId }) {
   };
 
   return (
-    <div className="w-full max-w-6xl mx-auto p-4 text-white">
+    <div className="bizzy-page-width bizzy-page-width--workspace py-4 text-white">
       <h2 className="text-2xl font-semibold text-blue-400 mb-4">📬 Your Email Campaigns</h2>
       <input type="text" placeholder="Search by campaign type or subject..." className="mb-4 p-2 w-full rounded bg-gray-800 border border-blue-500/30" value={search} onChange={e=>setSearch(e.target.value)} />
 

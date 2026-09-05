@@ -1,5 +1,5 @@
 import { TAX_CLASSIFICATION_TRIGGER_SOURCES } from "./taxDomain.js";
-import { computeTaxProfileCompleteness, getTaxProfile } from "./taxProfile.service.js";
+import { getTaxProfile } from "./taxProfile.service.js";
 import { enqueueTaxClassificationRun } from "./taxClassificationRun.service.js";
 
 const CLASSIFICATION_TRIGGER_EVENTS = Object.freeze({
@@ -12,22 +12,20 @@ const CLASSIFICATION_TRIGGER_EVENTS = Object.freeze({
 export async function handleTaxClassificationEvent({ supabase, businessId, taxYear, changeType, entityId = null, userId = null, metadata = {}, now = new Date() } = {}) {
   if (!supabase || !businessId || !taxYear || !changeType) return { queued: false, outcome: "missing_context" };
   if (changeType === CLASSIFICATION_TRIGGER_EVENTS.PROFILE_CREATED || changeType === CLASSIFICATION_TRIGGER_EVENTS.PROFILE_UPDATED) {
-    const beforeComplete = computeTaxProfileCompleteness(metadata?.before || null).isCompleteForEstimate === true;
     const afterProfile = metadata?.after || await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
-    const afterComplete = computeTaxProfileCompleteness(afterProfile).isCompleteForEstimate === true;
-    if (!afterComplete || beforeComplete) return { queued: false, outcome: "profile_not_newly_complete" };
+    if (!hasClassificationContext(afterProfile)) return { queued: false, outcome: "classification_context_missing" };
+    if (changeType === CLASSIFICATION_TRIGGER_EVENTS.PROFILE_UPDATED && !classificationContextChanged(metadata?.before, afterProfile)) {
+      return { queued: false, outcome: "classification_context_unchanged" };
+    }
     const completedFromOnboarding = String(metadata?.source || afterProfile?.source || "").toLowerCase() === "onboarding";
-    const triggerSource = completedFromOnboarding
-      ? TAX_CLASSIFICATION_TRIGGER_SOURCES.ONBOARDING_PROFILE_COMPLETED
-      : TAX_CLASSIFICATION_TRIGGER_SOURCES.PROFILE_COMPLETED;
     return enqueueTaxClassificationRun({
       supabase,
       businessId,
       taxYear,
-      triggerSource,
+      triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.PROFILE_CONTEXT_UPDATED,
       actorUserId: userId,
       sourceRecordId: entityId,
-      metadata: { source: completedFromOnboarding ? "onboarding_profile_completed" : "tax_profile_completed" },
+      metadata: { source: completedFromOnboarding ? "onboarding_profile_context_updated" : "tax_profile_context_updated" },
       now,
     });
   }
@@ -56,4 +54,14 @@ export async function handleTaxClassificationEvent({ supabase, businessId, taxYe
     });
   }
   return { queued: false, outcome: "unsupported_classification_trigger" };
+}
+
+function hasClassificationContext(profile = {}) {
+  if (!profile?.entity_type || ["unknown", "unsupported"].includes(String(profile.entity_type))) return false;
+  return true;
+}
+
+function classificationContextChanged(before = {}, after = {}) {
+  if (!before) return true;
+  return ["entity_type", "tax_election", "primary_tax_state", "accounting_method"].some((field) => before?.[field] !== after?.[field]);
 }

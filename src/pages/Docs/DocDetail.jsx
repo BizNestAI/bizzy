@@ -323,7 +323,7 @@ export default function DocDetail() {
 
   if (loading) {
     return (
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      <div className="bizzy-page-width bizzy-page-width--workspace py-6">
         <div className="rounded-2xl border" style={{ borderColor: NEUTRAL_BORDER, background: PANEL_BG }}>
           <div className="p-6 animate-pulse">
             <div className="h-6 w-1/2 rounded" style={{ background: 'rgba(255,255,255,0.08)' }} />
@@ -341,7 +341,7 @@ export default function DocDetail() {
 
   if (err || !doc) {
     return (
-      <div className="max-w-5xl mx-auto px-4 py-6">
+      <div className="bizzy-page-width bizzy-page-width--workspace py-6">
         <div className="rounded-2xl p-6" style={{ background: 'rgba(244,63,94,0.10)', border: '1px solid rgba(244,63,94,0.30)', color: 'rgb(252,165,165)' }}>
           Error: {err || 'not_found'}
           <div className="mt-3">
@@ -355,7 +355,7 @@ export default function DocDetail() {
   const viewMd = formatForView(body);
 
   return (
-    <div className="w-full max-w-7xl mx-auto px-4 pt-0 pb-40">
+    <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-40">
       {/* Top bar */}
       <div className="mb-3 flex items-center justify-between">
         <Link to={LIST_ROUTE} className="text-sm" style={{ color: TEXT_MUTED }}>

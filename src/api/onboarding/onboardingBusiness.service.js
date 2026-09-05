@@ -1,3 +1,4 @@
+/* global process */
 const BUSINESS_FIELD_ALLOWLIST = [
   "business_name",
   "industry",
@@ -14,9 +15,7 @@ const BUSINESS_FIELD_ALLOWLIST = [
 const REQUIRED_FIELDS = [
   "business_name",
   "industry",
-  "team_size",
   "state",
-  "services_offered",
 ];
 
 export const INITIAL_BUSINESS_ALREADY_EXISTS = "INITIAL_BUSINESS_ALREADY_EXISTS";
@@ -76,7 +75,7 @@ export function sanitizeInitialBusinessPayload(body = {}) {
     throw err;
   }
 
-  if (out.team_size < 0) {
+  if (out.team_size != null && out.team_size < 0) {
     const err = new Error("Invalid team size.");
     err.status = 400;
     err.code = "BUSINESS_PROFILE_INVALID";

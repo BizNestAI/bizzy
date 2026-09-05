@@ -17,7 +17,7 @@ import { useRightExtras } from "../insights/RightExtrasContext";
 import { useBusiness } from "../context/BusinessContext"
 import useOnboardingStatus from "../hooks/useOnboardingStatus";
 import NavRail from "./NavRail";
-import { CHAT_BAR_MAX_W, CHAT_BAR_VW, CHAT_CONTENT_MAX_W, CHAT_CONTENT_VW } from "../config/chatLayout";
+import { CHAT_CONTENT_MAX_W, CHAT_CONTENT_VW } from "../config/chatLayout";
 import { useInsightsUnread } from "../insights/InsightsUnreadContext";
 import { useMemo } from "react";
 import { ACCENT_HEX } from "../config/accent";
@@ -38,10 +38,9 @@ const RIGHT_RAIL_W = 320;
 const HANDLE_W = 46;
 const GRID_GAP = 6;
 
-// Curtain sizing (tuned for “just covers chips”)
+// Curtain sizing (tuned to start just above the prompt row)
 const CURTAIN_MIN_H = 75;
-const CURTAIN_TRIM_TOP = 16; // shave a bit so we stop at top of chips
-const UNDERLAP = 8;          // tuck slightly under the bar so no seam
+const UNDERLAP = 8;          // tuck slightly above the chips so no content peeks through
 
 // This must match the wrapper class "bottom-12"
 const WRAPPER_BOTTOM_OFFSET_PX = 50;
@@ -56,6 +55,45 @@ const LAYERS = {
 };
 
 const GLOBAL_INSIGHTS_MODULE = "contractor_cfo";
+
+class DashboardRouteErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    console.error("[DashboardRouteErrorBoundary]", error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen w-full bg-app px-6 py-10 text-primary">
+          <div className="mx-auto max-w-[520px] rounded-2xl border border-white/12 bg-white/[0.045] p-5 shadow-[0_20px_70px_rgba(0,0,0,0.45)]">
+            <h1 className="text-lg font-semibold text-white">Something went wrong.</h1>
+            <p className="mt-2 text-sm leading-6 text-white/65">
+              Refresh this page to reload your workspace. Your data was not changed.
+            </p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="mt-4 rounded-full border border-white/16 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white/86 transition hover:bg-white/[0.1]"
+            >
+              Refresh page
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 // Normalize unread counts while honoring business suffix (module:businessId)
 // so we don't aggregate across businesses.
@@ -167,6 +205,7 @@ const DashboardContent = ({ children }) => {
     }
   }, [railOpen, markModuleAsRead, moduleKey, unreadCount]);
   const centerRef = useRef(null);
+  const chatMeasureRef = useRef(null);
   const contentRef = useRef(null);
   const rightAsideRef = useRef(null);
   const prevPathRef = useRef(location.pathname);
@@ -193,6 +232,14 @@ const DashboardContent = ({ children }) => {
   const prevCanvasOpen = useRef(isCanvasOpen);
   const preCanvasBarHeightRef = useRef(null);
   const ignoreBarMeasureUntilRef = useRef(0);
+  const chatWrapperRef = useRef(null);
+  const lastBarHeightRef = useRef(DEFAULT_BAR_HEIGHT);
+  const [barHeight, setBarHeight] = useState(DEFAULT_BAR_HEIGHT);
+  const clampBarHeight = (h = 0) => {
+    const numericHeight = Number(h);
+    if (!Number.isFinite(numericHeight) || numericHeight <= 0) return DEFAULT_BAR_HEIGHT;
+    return Math.min(MAX_BAR_HEIGHT, Math.max(DEFAULT_BAR_HEIGHT, Math.round(numericHeight)));
+  };
 
   useEffect(() => {
     const becameOpen = !prevCanvasOpen.current && isCanvasOpen;
@@ -206,7 +253,7 @@ const DashboardContent = ({ children }) => {
       }
     }
     prevCanvasOpen.current = isCanvasOpen;
-  }, [isCanvasOpen, showRail, isChatHome]);
+  }, [isCanvasOpen, barHeight]);
 
   // Ensure canvas closes (and body overflow resets) when navigating away from ChatHome
   // Allow canvas on dashboards/chat; close only when leaving both
@@ -249,48 +296,37 @@ const DashboardContent = ({ children }) => {
   const userId     = localStorage.getItem("user_id");
   const businessId = localStorage.getItem("currentBusinessId");
 
-  const chatWrapperRef = useRef(null);
-  const lastBarHeightRef = useRef(DEFAULT_BAR_HEIGHT);
-  const [barHeight, setBarHeight] = useState(DEFAULT_BAR_HEIGHT);
   const chatClearance = Math.max(72, (barHeight || DEFAULT_BAR_HEIGHT) + BAR_GAP_PX);
-  const clampBarHeight = (h = 0) =>
-    Math.min(MAX_BAR_HEIGHT, Math.max(DEFAULT_BAR_HEIGHT, Math.round(h) || 0));
 
   useEffect(() => {
     // Only measure the desktop chat bar when it is rendered (canvas closed); ignore ChatCanvas-only height.
     if (!showPortalBar) return;
     if (!chatWrapperRef.current) return;
+    if (typeof ResizeObserver === "undefined") return;
     const el = chatWrapperRef.current;
     const ro = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
-      const h = Math.round(rect?.height || 0);
-      if (h > 0) {
-        if (Date.now() < ignoreBarMeasureUntilRef.current) return;
-        const next = clampBarHeight(h);
-        const stable = Math.max(lastBarHeightRef.current || DEFAULT_BAR_HEIGHT, next);
-        lastBarHeightRef.current = stable;
-        setBarHeight(stable);
-      }
+      const next = clampBarHeight(rect?.height);
+      if (Date.now() < ignoreBarMeasureUntilRef.current) return;
+      if (next === lastBarHeightRef.current && next === barHeight) return;
+      const stable = Math.max(lastBarHeightRef.current || DEFAULT_BAR_HEIGHT, next);
+      lastBarHeightRef.current = stable;
+      setBarHeight((current) => (Math.abs(current - stable) >= 1 ? stable : current));
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [showPortalBar]);
+  }, [showPortalBar, barHeight]);
 
   // On first paint after closing the canvas (or showing the portal bar), measure immediately
   useEffect(() => {
     if (!showPortalBar) return;
     const el = chatWrapperRef.current;
     if (!el) return;
-    const h = Math.round(el.getBoundingClientRect()?.height || 0);
-    if (h > 0) {
-      if (Date.now() < ignoreBarMeasureUntilRef.current) return;
-      const next = clampBarHeight(h);
-      const stable = Math.max(lastBarHeightRef.current || DEFAULT_BAR_HEIGHT, next);
-      lastBarHeightRef.current = stable;
-      setBarHeight(stable);
-    } else if (lastBarHeightRef.current) {
-      setBarHeight(lastBarHeightRef.current);
-    }
+    if (Date.now() < ignoreBarMeasureUntilRef.current) return;
+    const next = clampBarHeight(el.getBoundingClientRect()?.height);
+    const stable = Math.max(lastBarHeightRef.current || DEFAULT_BAR_HEIGHT, next);
+    lastBarHeightRef.current = stable;
+    setBarHeight((current) => (Math.abs(current - stable) >= 1 ? stable : current));
   }, [showPortalBar, isCanvasOpen]);
 
   // When canvas closes, immediately restore the last measured bar height to avoid a temporary shrink
@@ -308,7 +344,7 @@ const DashboardContent = ({ children }) => {
     // Measure the outer center column, not contentRef. contentRef is sized from
     // chatBounds, so measuring it can permanently lock in a narrower width after
     // DevTools changes the viewport until a full refresh.
-    const rectSource = centerRef.current || contentRef.current;
+    const rectSource = chatMeasureRef.current || centerRef.current || contentRef.current;
     if (rectSource) {
       const rect = rectSource.getBoundingClientRect();
       const left = Math.round(rect.left);
@@ -331,8 +367,17 @@ const DashboardContent = ({ children }) => {
       requestAnimationFrame(measureCenter);
       setTimeout(measureCenter, 0);
     }
+    if (typeof ResizeObserver === "undefined") {
+      const onResize = () => measureCenter();
+      window.addEventListener("resize", onResize);
+      window.visualViewport?.addEventListener("resize", onResize);
+      return () => {
+        window.removeEventListener("resize", onResize);
+        window.visualViewport?.removeEventListener("resize", onResize);
+      };
+    }
     const ro = new ResizeObserver(measureCenter);
-    if (centerRef.current) ro.observe(centerRef.current);
+    if (chatMeasureRef.current) ro.observe(chatMeasureRef.current);
     const onResize = () => measureCenter();
     window.addEventListener("resize", onResize);
     window.visualViewport?.addEventListener("resize", onResize);
@@ -462,31 +507,42 @@ const DashboardContent = ({ children }) => {
               style={{ position: "relative", zIndex: 1 }}
             >
               <div
+                ref={chatMeasureRef}
+                aria-hidden
+                className="pointer-events-none absolute left-1/2 top-0 hidden h-px -translate-x-1/2 md:block"
+                data-chat-center-col
+                style={{
+                  width: `min(${CHAT_CONTENT_VW * 100}vw, ${CHAT_MAX_W}px)`,
+                  maxWidth: `${CHAT_MAX_W}px`,
+                }}
+              />
+              <div
                 ref={centerRef}
-                className="flex w-full h-full"
+                className={[
+                  "flex h-full",
+                  isMonthlyReviewAdmin
+                    ? "w-full"
+                    : isChatHome
+                      ? "bizzy-page-width bizzy-page-width--conversation"
+                      : "bizzy-page-width bizzy-page-width--workspace",
+                ].join(" ")}
                 data-center-col
                 style={{
                   width: isMonthlyReviewAdmin
                     ? "calc(100vw - var(--nav-w, 0px) - 48px)"
-                    : `min(${CHAT_CONTENT_VW * 100}vw, ${CHAT_MAX_W}px)`,
-                  maxWidth: isMonthlyReviewAdmin ? "none" : `${CHAT_MAX_W}px`,
+                    : undefined,
+                  maxWidth: isMonthlyReviewAdmin ? "none" : undefined,
                   margin: "0 auto",
                 }}
               >
                 <div
                   ref={contentRef}
-                  className={`flex-1 min-h-0 px-0 ${isChatHome ? "overflow-hidden" : "overflow-y-auto no-scrollbar touch-scroll"}`}
+                  className={`flex-1 min-h-0 ${isChatHome ? "overflow-hidden" : "overflow-y-auto no-scrollbar touch-scroll"}`}
                   style={{
                     width: isMonthlyReviewAdmin
                       ? "100%"
-                      : chatBounds.width
-                        ? `${chatBounds.width}px`
-                        : `min(${CHAT_CONTENT_VW * 100}vw, ${CHAT_MAX_W}px)`,
-                    maxWidth: isMonthlyReviewAdmin
-                      ? "none"
-                      : chatBounds.width
-                        ? `${chatBounds.width}px`
-                        : `${CHAT_MAX_W}px`,
+                      : "100%",
+                    maxWidth: isMonthlyReviewAdmin ? "none" : "100%",
                     margin: "0 auto",
                     // hide page content under the overlay on ChatHome
                     visibility: hideCenter ? "hidden" : "visible",
@@ -632,26 +688,32 @@ const DashboardContent = ({ children }) => {
           (() => {
             const measured = chatWrapperRef.current?.getBoundingClientRect()?.height || 0;
             const barH = Math.max(DEFAULT_BAR_HEIGHT, measured || barHeight || DEFAULT_BAR_HEIGHT);
-            const barLeft = chatBounds.left + DASH_BAR_ALIGN_NUDGE_PX;
+            const navWidthPx =
+              showRail && typeof window !== "undefined"
+                ? Number.parseFloat(
+                    window
+                      .getComputedStyle(document.documentElement)
+                      .getPropertyValue("--nav-w")
+                  ) || 0
+                : 0;
+            const bandLeft = navWidthPx;
+            const barLeft = Math.max(0, chatBounds.left + DASH_BAR_ALIGN_NUDGE_PX - bandLeft);
             const barWidth = Math.max(0, chatBounds.width - DASH_BAR_ALIGN_NUDGE_PX);
 
-            // Exactly cover chips + bar, no higher
-            // Use a shorter curtain on ChatCanvas so it stops at the top of quick prompts;
-            // keep the taller version on dashboards.
-            const trimTop = isChatHome ? CURTAIN_TRIM_TOP + 0 : CURTAIN_TRIM_TOP;
-            const curtainH = Math.max(barH - trimTop + UNDERLAP, CURTAIN_MIN_H);
+            // Cover only the fixed prompt/composer stack and the small gap above it.
+            const curtainH = Math.max(barH + UNDERLAP, CURTAIN_MIN_H);
 
             return (
               <MotionDiv
                 ref={chatWrapperRef}
-                className="hidden md:block fixed bottom-8 pointer-events-none"
+                className="hidden md:block fixed bottom-0 right-0 pointer-events-none"
                 data-bizzy-chatbar
                 data-bizzy-chatbar-shell
                 style={{
-                  left: `${barLeft}px`,
+                  left: `${bandLeft}px`,
                   transform: "none",
-                  width: `${barWidth}px`,
-                  maxWidth: `${CHAT_MAX_W}px`,
+                  width: "auto",
+                  maxWidth: "none",
                   zIndex: LAYERS.BAR,
                   overflow: "visible",
                   isolation: "isolate",
@@ -661,7 +723,7 @@ const DashboardContent = ({ children }) => {
                 exit={{ opacity: 0, y: 40 }}
                 transition={{ duration: 0.25, ease: [0.22, 0.1, 0.25, 1] }}
               >
-                {/* CURTAIN: behind the bar (upwards) */}
+                {/* Main-area bottom backdrop; prompts/composer stay constrained inside it. */}
                 <div
                   data-bizzy-chatbar-measure
                   data-bizzy-curtain
@@ -680,37 +742,25 @@ const DashboardContent = ({ children }) => {
                     style={{
                       position: "absolute",
                       inset: 0,
-                      backgroundColor: "var(--bg)",
-                      pointerEvents: "none",
-                    }}
-                  />
-                </div>
-
-                {/* CURTAIN FOOTER: fill the gap below the bar to the viewport edge */}
-                <div
-                  aria-hidden
-                  style={{
-                    position: "absolute",
-                    left: 4,
-                    right: 0,
-                    bottom: `-${WRAPPER_BOTTOM_OFFSET_PX}px`,
-                    height: `${WRAPPER_BOTTOM_OFFSET_PX}px`,
-                    pointerEvents: "none",
-                    zIndex: 0,
-                  }}
-                >
-                  <div
-                    style={{
-                      position: "absolute",
-                      inset: 0,
-                      backgroundColor: "var(--bg)",
+                      background:
+                        "linear-gradient(180deg, rgba(5,6,6,0), rgba(5,6,6,0.96) 12px, var(--bg) 34px, var(--bg) 100%)",
                       pointerEvents: "none",
                     }}
                   />
                 </div>
 
                 {/* Bar above curtain */}
-                <div style={{ position: "relative", zIndex: 1 }} className="pointer-events-auto">
+                <div
+                  style={{
+                    position: "relative",
+                    zIndex: 1,
+                    width: `${barWidth}px`,
+                    maxWidth: `${CHAT_MAX_W}px`,
+                    marginLeft: `${barLeft}px`,
+                    marginBottom: "32px",
+                  }}
+                  className="pointer-events-auto"
+                >
                   <BizzyChatBar
                     variant="contained"
                     quickPromptMode={quickPromptMode}
@@ -735,7 +785,9 @@ const DashboardLayout = ({ children }) => {
       <NavRail businessId={businessId} open />
       <InsightsUnreadProvider userId={userId} businessId={businessId}>
         <RightExtrasProvider>
-          <DashboardContent>{children}</DashboardContent>
+          <DashboardRouteErrorBoundary>
+            <DashboardContent>{children}</DashboardContent>
+          </DashboardRouteErrorBoundary>
         </RightExtrasProvider>
       </InsightsUnreadProvider>
     </>

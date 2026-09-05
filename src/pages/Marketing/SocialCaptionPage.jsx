@@ -69,7 +69,7 @@ export default function SocialCaptionPage() {
         right={<SyncButton label="Sync Socials" providers={["facebook", "instagram", "linkedin"]} />}
       />
 
-      <div className="mx-auto w-full max-w-[1200px] space-y-6">
+      <div className="bizzy-page-width bizzy-page-width--workspace space-y-6">
         <div
           className="rounded-[32px] border border-white/10 p-5 sm:p-7 relative overflow-hidden shadow-[0_35px_100px_rgba(0,0,0,0.55)]"
           style={{ background: heroGrad }}

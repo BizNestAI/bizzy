@@ -37,7 +37,7 @@ export default function Reports() {
 
   if (qbStatusLoading) {
     return (
-      <div className="min-h-screen text-white px-3 md:px-4 pt-0 pb-8 bg-transparent">
+      <div className="bizzy-page-width bizzy-page-width--workspace min-h-screen text-white pt-0 pb-8 bg-transparent">
         <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 text-sm text-white/55">
           Loading persisted report archive...
         </div>
@@ -50,7 +50,7 @@ export default function Reports() {
   }
 
   return (
-    <div className="min-h-screen text-white px-3 md:px-4 pt-0 pb-8 bg-transparent">
+    <div className="bizzy-page-width bizzy-page-width--workspace min-h-screen text-white pt-0 pb-8 bg-transparent">
       <PNLArchiveViewer />
     </div>
   );

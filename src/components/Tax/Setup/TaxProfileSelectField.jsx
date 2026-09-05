@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef,
 import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 
-export default function TaxProfileSelectField({ label, value, options, onChange, helper = "", id = null }) {
+export default function TaxProfileSelectField({ label, value, options, onChange, helper = "", id = null, required = false }) {
   const buttonRef = useRef(null);
   const menuRef = useRef(null);
   const generatedId = useId();
@@ -119,7 +119,14 @@ export default function TaxProfileSelectField({ label, value, options, onChange,
 
   return (
     <div className="block">
-      <span id={`${selectId}-label`} className="text-[11px] font-semibold text-white/70">{label}</span>
+      <span id={`${selectId}-label`} className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-white/70">
+        <span>{label}</span>
+        {required ? (
+          <span className="text-[9px] uppercase tracking-[0.12em] text-emerald-200/70">
+            Required
+          </span>
+        ) : null}
+      </span>
       <button
         ref={buttonRef}
         type="button"
@@ -130,7 +137,7 @@ export default function TaxProfileSelectField({ label, value, options, onChange,
         aria-labelledby={`${selectId}-label`}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={onKeyDown}
-        className="dark-dropdown mt-1 flex w-full items-center justify-between gap-2 rounded-[11px] border border-white/10 bg-[#0f1115] px-3 py-1.5 text-left text-xs text-white outline-none transition hover:border-emerald-200/28 hover:bg-white/[0.04] focus:ring-2 focus:ring-emerald-300/35"
+        className="dark-dropdown flex h-10 w-full items-center justify-between gap-2 rounded-[13px] border border-white/[0.13] bg-[#111513] px-3 text-left text-sm text-white outline-none transition shadow-[inset_0_1px_0_rgba(255,255,255,0.04),inset_0_-8px_16px_rgba(0,0,0,0.14)] hover:border-emerald-200/28 hover:bg-white/[0.04] focus:ring-2 focus:ring-emerald-300/35"
       >
         <span className={selectedOption.value === "" ? "text-white/42" : "text-white"}>{selectedOption.label}</span>
         <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-white/48 transition ${open ? "rotate-180" : ""}`} aria-hidden="true" />
@@ -142,7 +149,7 @@ export default function TaxProfileSelectField({ label, value, options, onChange,
           role="listbox"
           aria-labelledby={`${selectId}-label`}
           style={menuStyle}
-          className="z-[120] overflow-y-auto rounded-xl border border-white/12 bg-[#080b0f] p-1 text-xs text-white shadow-[0_22px_54px_rgba(0,0,0,0.72)] ring-1 ring-emerald-300/10"
+          className="z-[120] overflow-y-auto rounded-xl border border-white/12 bg-[#080b0f] p-1 text-sm text-white shadow-[0_22px_54px_rgba(0,0,0,0.72)] ring-1 ring-emerald-300/10"
         >
           {normalizedOptions.map((option, index) => {
             const selected = String(option.value) === String(value ?? "");

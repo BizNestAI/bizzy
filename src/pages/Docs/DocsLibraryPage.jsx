@@ -235,8 +235,8 @@ export default function DocsLibraryPage(props) {
   }
 
   return (
-    <div className="w-full px-3 pt-2 pb-28 bg-app text-primary min-h-screen md:px-4">
-      <div className="mx-auto max-w-[1100px]">
+    <div className="w-full pt-2 pb-28 bg-app text-primary min-h-screen">
+      <div className="bizzy-page-width bizzy-page-width--workspace">
         <div className="mb-6">
           <h1 className="text-[20px] sm:text-[22px] font-semibold leading-tight tracking-[0.2em] text-[color:var(--text)] text-left">
             Bizzi Docs Library

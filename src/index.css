@@ -64,6 +64,11 @@
   /* Layout */
   --nav-w: 180px;
   --insights-w: 360px;
+  --workspace-max-width: 1180px;
+  --workspace-col-max: var(--workspace-max-width);
+  --workspace-col-pad: clamp(24px, 3vw, 48px);
+  --conversation-col-max: 860px;
+  --conversation-col-pad: var(--chat-col-pad);
   /* Chat column alignment */
   --chat-col-max: 820px;
   --chat-col-pad: 18px;
@@ -76,7 +81,38 @@
   :root {
     --chat-col-max: 100%;
     --chat-col-pad: 16px;
+    --workspace-col-max: 100%;
+    --workspace-col-pad: 16px;
+    --conversation-col-max: 100%;
+    --conversation-col-pad: 16px;
   }
+}
+
+/* Explicit page width modes. Workspace pages can grow independently from chat. */
+.bizzy-page-width {
+  box-sizing: border-box;
+  margin-inline: auto;
+  width: 100%;
+}
+
+.bizzy-page-width--workspace {
+  max-width: var(--workspace-col-max);
+  padding-inline: var(--workspace-col-pad);
+}
+
+.bizzy-page-width--conversation {
+  max-width: var(--conversation-col-max);
+  padding-inline: var(--conversation-col-pad);
+}
+
+.bizzy-page-width--fullBleed {
+  max-width: none;
+  padding-inline: 0;
+}
+
+.bizzy-page-width--workspace .bizzy-page-width--workspace {
+  max-width: none;
+  padding-inline: 0;
 }
 
 /* Optional theme switch hook */

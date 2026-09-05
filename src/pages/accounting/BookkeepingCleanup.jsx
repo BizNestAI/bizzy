@@ -1798,7 +1798,7 @@ function BookkeepingCleanup() {
   }, [canRunAI]);
 
   return (
-    <div className="px-3 md:px-4 pt-0 pb-8 text-slate-100 min-h-screen">
+    <div className="pt-0 pb-8 text-slate-100 min-h-screen">
       <style>
         {`@keyframes fadeInTab {
             from { opacity: 0; transform: translateY(4px); }
@@ -1874,7 +1874,7 @@ function BookkeepingCleanup() {
             ) : null}
 
             {/* Account cards with scroll controls */}
-            <div className="relative" style={{ overflow: "visible" }}>
+            <div className="relative w-full" style={{ overflow: "visible" }}>
               {showAccountScrollLeft ? (
                 <button
                   type="button"
@@ -1895,7 +1895,7 @@ function BookkeepingCleanup() {
         ) : null}
         <div
           ref={accountScrollRef}
-          className="flex gap-3 overflow-x-auto pb-3 no-scrollbar pr-8"
+          className="flex w-full gap-3 overflow-x-auto pb-3 no-scrollbar"
           style={{
             scrollBehavior: "smooth",
             overflowY: "visible", // allow hover scale to render outside the row

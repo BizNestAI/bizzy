@@ -83,7 +83,6 @@ export async function enqueueRecoveryTaxClassificationRuns({ supabase, taxYear =
     if (business.eligible === false && business.reason !== "recent_run_fresh") continue;
     const profile = business.profile || business.taxProfile || business;
     if (!profile?.business_id || !profile?.tax_year) continue;
-    if (profile.profile_status && !["active", "calculation_ready"].includes(String(profile.profile_status))) continue;
     try {
       const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId: profile.business_id, taxYear: profile.tax_year });
       if (lifecycle.classificationStatus !== "ready_to_classify") continue;

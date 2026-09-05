@@ -436,9 +436,9 @@ useEffect(() => {
 
   /* ---------------- Render ---------------- */
   return (
-    <div className="w-full px-3 md:px-4 pb-12 pt-0 bg-app text-primary" style={{ "--accent": "var(--accent)" }}>
+    <div className="w-full pb-12 pt-0 bg-app text-primary" style={{ "--accent": "var(--accent)" }}>
       {/* Header (aligned with page content) */}
-      <div className="mx-auto mb-5 max-w-[1100px]">
+      <div className="bizzy-page-width bizzy-page-width--workspace mb-5">
         <h1 className="text-[20px] sm:text-[22px] font-semibold tracking-[0.2em] text-[color:var(--text)] text-left">
           Settings
         </h1>
@@ -447,7 +447,7 @@ useEffect(() => {
         </p>
       </div>
 
-      <div className="mx-auto max-w-[1100px]">
+      <div className="bizzy-page-width bizzy-page-width--workspace">
       <section
         className="mb-4 rounded-xl border px-4 py-3"
         style={{ background: "rgba(17,19,18,0.52)", borderColor: SOFT_BORDER, boxShadow: "none" }}

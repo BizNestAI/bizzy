@@ -265,7 +265,7 @@ export default function PNLArchiveViewer() {
   }
 
   return (
-    <div className="mx-auto max-w-[1100px] pt-0 pb-8">
+    <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-8">
       <div className="mb-8">
         <h1 className="text-[20px] sm:text-[22px] font-semibold tracking-[0.2em] text-white leading-tight">
           P&L Report Archive

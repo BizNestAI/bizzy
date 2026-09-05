@@ -73,8 +73,8 @@ export function buildTaxSetupState({ canonicalResult = null, run = null } = {}) 
     state = TAX_SETUP_STATES.PROFILE_INCOMPLETE;
     severity = "medium";
     title = "Tax profile incomplete";
-    message = "Some profile fields are missing and reduce confidence.";
-    actions.push(action("complete_tax_profile", "Complete tax profile", "/tax/profile"));
+    message = "Bizzi is organizing your deductions. Complete the remaining tax questions to unlock your estimated liability and trajectory.";
+    actions.push(action("finish_tax_profile", "Finish Tax Profile", "/tax/profile"));
   } else if (coverage.eligiblePostedCount === 0 || hasWarning("no_posted_transactions")) {
     state = TAX_SETUP_STATES.NO_POSTED_TRANSACTIONS;
     severity = "medium";

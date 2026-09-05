@@ -621,8 +621,8 @@ export default function AccountingDashboard() {
     /**
      * ⚠️ Keep this root NON-scrolling. No h-screen/min-h-full/overflow here.
      */
-    <div className={`w-full px-3 md:px-4 pt-0 pb-2 ${bgColor} ${textColor}`}>
-      <div className="max-w-[1100px] mx-auto">
+    <div className={`w-full pt-0 pb-2 ${bgColor} ${textColor}`}>
+      <div className="bizzy-page-width bizzy-page-width--workspace">
         {/* Header */}
         <ModuleHeader
           module="financials"

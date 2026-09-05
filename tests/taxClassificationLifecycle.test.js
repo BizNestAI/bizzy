@@ -34,10 +34,10 @@ test("idle complete profile with 205 unclassified posted rows is ready to classi
   assert.equal(lifecycle.processingCount, 0);
 });
 
-test("profile completion enqueues one idempotent historical classification run", async () => {
+test("profile context update enqueues one idempotent historical classification run before estimate profile is complete", async () => {
   const supabase = makeSupabase(baseStore({ transactionCount: 205 }));
-  const before = completeProfile({ self_employment_tax_applies: null });
-  const after = completeProfile({ self_employment_tax_applies: true });
+  const before = draftProfile({ entity_type: "unknown" });
+  const after = draftProfile({ entity_type: "sole_proprietor" });
 
   const first = await handleTaxClassificationEvent({
     supabase,
@@ -62,14 +62,14 @@ test("profile completion enqueues one idempotent historical classification run",
   assert.equal(second?.queued, false);
   assert.equal(second?.outcome, "existing_active_run");
   assert.equal(supabase.store.tax_classification_runs.length, 1);
-  assert.equal(supabase.store.tax_classification_runs[0].trigger_source, TAX_CLASSIFICATION_TRIGGER_SOURCES.PROFILE_COMPLETED);
+  assert.equal(supabase.store.tax_classification_runs[0].trigger_source, TAX_CLASSIFICATION_TRIGGER_SOURCES.PROFILE_CONTEXT_UPDATED);
   assert.equal(supabase.store.tax_classification_runs[0].total_eligible, 205);
 });
 
-test("onboarding profile completion enqueues one idempotent historical classification run", async () => {
+test("onboarding draft context update enqueues one idempotent historical classification run", async () => {
   const supabase = makeSupabase(baseStore({ transactionCount: 205 }));
-  const before = completeProfile({ self_employment_tax_applies: null });
-  const after = completeProfile({ self_employment_tax_applies: true, source: "onboarding" });
+  const before = draftProfile({ entity_type: "unknown" });
+  const after = draftProfile({ entity_type: "sole_proprietor", source: "onboarding" });
 
   const first = await handleTaxClassificationEvent({
     supabase,
@@ -93,8 +93,33 @@ test("onboarding profile completion enqueues one idempotent historical classific
   assert.equal(first?.queued, true);
   assert.equal(second?.queued, false);
   assert.equal(supabase.store.tax_classification_runs.length, 1);
-  assert.equal(supabase.store.tax_classification_runs[0].trigger_source, TAX_CLASSIFICATION_TRIGGER_SOURCES.ONBOARDING_PROFILE_COMPLETED);
+  assert.equal(supabase.store.tax_classification_runs[0].trigger_source, TAX_CLASSIFICATION_TRIGGER_SOURCES.PROFILE_CONTEXT_UPDATED);
   assert.equal(supabase.store.tax_classification_runs[0].total_eligible, 205);
+});
+
+test("missing estimate-only fields do not block classification enqueue but still block calculation", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 1, taxProfiles: [draftProfile({ entity_type: "sole_proprietor" })] }));
+
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+  const prerequisites = await evaluateTaxCalculationPrerequisites({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    asOfDate: "2026-09-04",
+  });
+
+  assert.equal(queued.queued, true);
+  assert.equal(prerequisites.ready, false);
+  assert.equal(prerequisites.blocker, "profile_draft");
+  assert.equal(prerequisites.calculationState, "blocked_by_profile");
+  assert.ok(prerequisites.missingFields.includes("filing_status"));
+  assert.ok(prerequisites.missingFields.includes("safe_harbor_method"));
+  assert.ok(prerequisites.missingFields.includes("self_employment_tax_applies"));
 });
 
 test("worker processes a 205-row production-shaped run in bounded batches and blocks calculation without verified standard deduction rule", async () => {
@@ -185,7 +210,7 @@ test("new QBO-confirmed posting event enqueues classification and calculation pr
   assert.equal(supabase.store.transaction_tax_classifications.some((row) => row.business_id === OTHER_BUSINESS_ID), false);
 });
 
-function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false } = {}) {
+function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false, taxProfiles = [completeProfile()] } = {}) {
   const store = {
     business_profiles: [{ id: BUSINESS_ID, bookkeeping_start_date: null }],
     bank_transactions: [],
@@ -194,7 +219,7 @@ function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false
     transaction_tax_classifications: [],
     tax_classification_runs: [],
     tax_recalculation_requests: [],
-    tax_profiles: [completeProfile()],
+    tax_profiles: taxProfiles,
     tax_deduction_rules: [softwareRule(), mealsRule()],
     tax_rule_configs: [],
   };
@@ -217,6 +242,18 @@ function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false
     store.qbo_posted_transactions.push(qboPosted({ id: "other-qbo", business_id: OTHER_BUSINESS_ID, transaction_id: "other-txn", qbo_txn_id: "other-qbo-id" }));
   }
   return store;
+}
+
+function draftProfile(overrides = {}) {
+  return completeProfile({
+    filing_status: null,
+    primary_tax_state: "NC",
+    accounting_method: null,
+    safe_harbor_method: null,
+    self_employment_tax_applies: null,
+    profile_status: "incomplete",
+    ...overrides,
+  });
 }
 
 function completeProfile(overrides = {}) {

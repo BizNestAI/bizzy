@@ -123,7 +123,7 @@ export default function TaxDashboard() {
 
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-app text-primary">
-      <div className="mx-auto w-full max-w-[1200px] min-w-0 px-4 pt-0 pb-2">
+      <div className="bizzy-page-width bizzy-page-width--workspace min-w-0 pt-0 pb-2">
         <ModuleHeader
           module="tax"
           title="Tax"
@@ -132,7 +132,7 @@ export default function TaxDashboard() {
         />
       </div>
 
-      <main className="relative z-0 mx-auto flex w-full max-w-[1200px] min-w-0 flex-col gap-7 overflow-x-hidden px-4 pt-1 pb-40">
+      <main className="bizzy-page-width bizzy-page-width--workspace relative z-0 flex min-w-0 flex-col gap-7 overflow-x-hidden pt-1 pb-40">
         {initialLoading ? (
           <DashboardSkeleton />
         ) : (
@@ -449,7 +449,7 @@ function resolveOverviewStatus(model, isDemo) {
       sentence: "Most transactions were classified automatically. Review the items that need more context.",
     };
   }
-  if (setupCode === "failed") {
+  if (setupCode === "classification_failed" || setupCode === "failed") {
     return { tone: "failed", label: "Tax classification failed", sentence: "Tax classification needs attention before an estimate can be calculated." };
   }
   if (setupCode === "calculation_required") {

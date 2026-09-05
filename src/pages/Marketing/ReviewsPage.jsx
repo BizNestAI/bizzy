@@ -171,7 +171,7 @@ export default function ReviewsPage({ businessId: propBusinessId }) {
   const avg = (typeof stats?.avg_rating === 'number' ? stats.avg_rating : avgFromItems);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 pt-2 pb-6 text-white">
+    <div className="bizzy-page-width bizzy-page-width--workspace pt-2 pb-6 text-white">
       {/* Header */}
       <div className="mb-5 rounded-[28px] border border-white/12 bg-gradient-to-r from-[#1b2030] via-[#111522] to-[#0a0d14] px-5 py-4 shadow-[0_20px_50px_rgba(0,0,0,0.45)] flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>

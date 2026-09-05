@@ -30,8 +30,8 @@ export default function CompanionPage() {
      * Keep this root NON-scrolling (DashboardLayout owns scroll).
      * Use graphite tokens + consistent horizontal padding.
      */
-    <div className="w-full px-3 md:px-4 pt-0 pb-24 bg-app text-primary">
-      <div className="max-w-[1200px] mx-auto">
+    <div className="w-full pt-0 pb-24 bg-app text-primary">
+      <div className="bizzy-page-width bizzy-page-width--workspace">
         <BizzyCompanion />
       </div>
     </div>

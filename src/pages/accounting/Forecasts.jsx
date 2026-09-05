@@ -135,7 +135,7 @@ export default function Forecasts() {
 
   return (
     qbStatusLoading ? (
-      <div className="px-3 md:px-4 pt-0 pb-8 text-white space-y-5">
+      <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-8 text-white space-y-5">
         <ModuleHeader
           module="financials"
           title="Cash Flow Forecasts"
@@ -147,7 +147,7 @@ export default function Forecasts() {
         </div>
       </div>
     ) : canView ? (
-    <div className="px-3 md:px-4 pt-0 pb-8 text-white space-y-5">
+    <div className="bizzy-page-width bizzy-page-width--workspace pt-0 pb-8 text-white space-y-5">
       <ModuleHeader
         module="financials"
         title="Cash Flow Forecasts"
