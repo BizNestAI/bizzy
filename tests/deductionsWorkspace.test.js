@@ -127,6 +127,32 @@ test("Tax Dashboard embeds classification workspace controls in Deductions", () 
   assert.match(hook, /prepareDeductions/);
 });
 
+test("Tax Dashboard uses authoritative classification job progress instead of inferred processing", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  const client = fs.readFileSync("src/services/tax/taxApiClient.js", "utf8");
+  assert.match(client, /getTaxClassificationStatus/);
+  assert.match(hook, /classificationJobStatus/);
+  assert.match(hook, /getTaxClassificationStatus\(\{ businessId, year \}\)/);
+  assert.match(hook, /pollInFlight/);
+  assert.doesNotMatch(hook, /setInterval\(\(\) => \{\s*load\(\)/);
+  assert.match(dashboard, /ClassificationProgressSummary/);
+  assert.match(dashboard, /Deductions preparation is queued\./);
+  assert.match(dashboard, /Bizzi is classifying your posted QuickBooks transactions\./);
+  assert.match(dashboard, /Deductions preparation appears to be delayed\./);
+  assert.match(dashboard, /label=\{classificationSummary\.isActiveJob \? "Remaining" : "Processing"\}/);
+});
+
+test("Prepare deductions accepts quickly and refreshes via polling, not a blocking full reload", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  assert.doesNotMatch(hook, /const result = await prepareTaxClassifications[\s\S]{0,120}await load\(\)/);
+  assert.match(hook, /setClassificationJobStatus\(job \|\| null\)/);
+  assert.match(dashboard, /Deductions preparation started\./);
+  assert.match(dashboard, /Starting deductions preparation\.\.\./);
+  assert.match(dashboard, /Deductions preparation complete\./);
+});
+
 test("Tax Dashboard does not present missing classification authority as zero deductible", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /No deduction total is shown until classification authority exists/);

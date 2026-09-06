@@ -1,14 +1,22 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 
 import {
+  buildTaxClassificationJobStatus,
+  claimTaxClassificationRuns,
   enqueueTaxClassificationRun,
+  getTaxClassificationJobStatus,
   getTaxClassificationLifecycleStatus,
 } from "../src/services/tax/taxClassificationRun.service.js";
 import { handleTaxClassificationEvent } from "../src/services/tax/taxClassificationTrigger.service.js";
 import {
+  parseTaxClassificationWorkerEnabled,
+  enqueueRecoveryTaxClassificationRuns,
   processPendingTaxClassificationRuns,
+  requestTaxClassificationWorkerKick,
 } from "../src/services/tax/taxClassificationWorker.service.js";
+import { getBusinessesEligibleForTaxClassification } from "../src/services/tax/taxClassificationRecovery.service.js";
 import { evaluateTaxCalculationPrerequisites } from "../src/services/tax/taxCalculationPrerequisites.service.js";
 import {
   TAX_CHANGE_TYPES,
@@ -122,6 +130,241 @@ test("missing estimate-only fields do not block classification enqueue but still
   assert.ok(prerequisites.missingFields.includes("self_employment_tax_applies"));
 });
 
+test("prepare creates an authoritative queued job without marking all remaining rows as processing", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 207 }));
+
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+  const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+  const job = buildTaxClassificationJobStatus({ run: queued.run, coverage: lifecycle });
+
+  assert.equal(queued.queued, true);
+  assert.ok(job.jobId);
+  assert.equal(job.status, "queued");
+  assert.equal(job.total, 207);
+  assert.equal(job.processed, 0);
+  assert.equal(job.remaining, 207);
+  assert.equal(lifecycle.classificationStatus, "classification_queued");
+  assert.equal(lifecycle.processingCount, 0);
+  assert.equal(lifecycle.remainingCount, 207);
+});
+
+test("duplicate prepare clicks reuse the active durable classification job", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 3 }));
+
+  const first = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+  const second = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+
+  assert.equal(first.queued, true);
+  assert.equal(second.queued, false);
+  assert.equal(second.outcome, "existing_active_run");
+  assert.equal(second.run.id, first.run.id);
+  assert.equal(supabase.store.tax_classification_runs.length, 1);
+});
+
+test("worker kick consumes an accepted job and persists progress", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 4 }));
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+
+  const kicked = await requestTaxClassificationWorkerKick({
+    supabase,
+    workerId: "test-kick-worker",
+  });
+  const job = await getTaxClassificationJobStatus({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+
+  assert.equal(kicked.processed, 1);
+  assert.equal(job.jobId, queued.run.id);
+  assert.equal(job.status, "completed_with_review");
+  assert.equal(job.total, 4);
+  assert.equal(job.processed, 4);
+  assert.equal(job.remaining, 0);
+});
+
+test("recurring worker path discovers queued jobs without a prepare-request kick", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 2 }));
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+
+  await processPendingTaxClassificationRuns({
+    supabase,
+    workerId: "recurring-worker",
+    runBatchSize: 1,
+    transactionBatchSize: 50,
+  });
+
+  const run = supabase.store.tax_classification_runs.find((row) => row.id === queued.run.id);
+  assert.equal(run.status, TAX_CLASSIFICATION_RUN_STATUSES.REVIEW_REQUIRED);
+  assert.equal(run.processed_count, 2);
+});
+
+test("concurrent worker claims do not claim an already locked healthy run", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 2 }));
+  await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+    now: new Date("2026-09-04T12:00:00Z"),
+  });
+
+  const first = await claimTaxClassificationRuns({
+    supabase,
+    workerId: "worker-a",
+    batchSize: 1,
+    now: new Date("2026-09-04T12:01:00Z"),
+  });
+  const second = await claimTaxClassificationRuns({
+    supabase,
+    workerId: "worker-b",
+    batchSize: 1,
+    now: new Date("2026-09-04T12:02:00Z"),
+  });
+
+  assert.equal(first.length, 1);
+  assert.equal(second.length, 0);
+  assert.equal(first[0].locked_by, "worker-a");
+});
+
+test("healthy running heartbeat prevents stale recovery claim", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 2 }));
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+  const run = supabase.store.tax_classification_runs.find((row) => row.id === queued.run.id);
+  Object.assign(run, {
+    status: TAX_CLASSIFICATION_RUN_STATUSES.RUNNING,
+    locked_at: "2026-09-04T12:00:00Z",
+    heartbeat_at: "2026-09-04T12:00:00Z",
+    locked_by: "healthy-worker",
+    attempt_count: 1,
+  });
+
+  const claimed = await claimTaxClassificationRuns({
+    supabase,
+    workerId: "recovery-worker",
+    batchSize: 1,
+    now: new Date("2026-09-04T12:05:00Z"),
+  });
+
+  assert.equal(claimed.length, 0);
+  assert.equal(run.locked_by, "healthy-worker");
+  assert.equal(run.status, TAX_CLASSIFICATION_RUN_STATUSES.RUNNING);
+});
+
+test("retryable failed run is requeued in place instead of duplicated", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 2 }));
+  const first = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+  const run = supabase.store.tax_classification_runs.find((row) => row.id === first.run.id);
+  Object.assign(run, {
+    status: TAX_CLASSIFICATION_RUN_STATUSES.FAILED,
+    failed_at: "2026-09-04T12:00:00Z",
+    last_error_code: "test_failure",
+    attempt_count: 1,
+  });
+
+  const retried = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+    now: new Date("2026-09-04T12:05:00Z"),
+  });
+
+  assert.equal(retried.queued, true);
+  assert.equal(retried.outcome, "retried_failed_run");
+  assert.equal(retried.run.id, first.run.id);
+  assert.equal(supabase.store.tax_classification_runs.length, 1);
+  assert.equal(run.status, TAX_CLASSIFICATION_RUN_STATUSES.QUEUED);
+  assert.equal(run.last_error_code, null);
+});
+
+test("classification worker environment parsing is fail-safe", () => {
+  assert.deepEqual(parseTaxClassificationWorkerEnabled(undefined), {
+    enabled: true,
+    source: "default",
+    reason: "unset_defaults_enabled",
+  });
+  assert.equal(parseTaxClassificationWorkerEnabled("true").enabled, true);
+  assert.equal(parseTaxClassificationWorkerEnabled("false").enabled, false);
+  assert.equal(parseTaxClassificationWorkerEnabled("0").enabled, false);
+  assert.equal(parseTaxClassificationWorkerEnabled("unexpected").enabled, true);
+});
+
+test("stale recovery migration preserves claim RPC contract and only expands due running recovery", () => {
+  const migration = fs.readFileSync("supabase/migrations/20260928_tax_classification_worker_recovery.sql", "utf8");
+  assert.match(migration, /CREATE OR REPLACE FUNCTION public\.claim_tax_classification_runs/);
+  assert.match(migration, /RETURNS SETOF public\.tax_classification_runs/);
+  assert.match(migration, /FOR UPDATE SKIP LOCKED/);
+  assert.match(migration, /r\.status = 'running'/);
+  assert.match(migration, /r\.locked_at < p_now - interval '15 minutes'/);
+  assert.match(migration, /tax_classification_runs_stale_running_idx/);
+  assert.match(migration, /GRANT EXECUTE ON FUNCTION public\.claim_tax_classification_runs\(text, integer, timestamptz\) TO service_role/);
+  assert.doesNotMatch(migration, /DROP POLICY|DISABLE ROW LEVEL SECURITY|ALTER TABLE public\.tax_classification_runs DISABLE/);
+});
+
+test("stale running classification runs can be claimed by a recovery worker", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 2 }));
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+    now: new Date("2026-09-04T12:00:00Z"),
+  });
+  const run = supabase.store.tax_classification_runs.find((row) => row.id === queued.run.id);
+  Object.assign(run, {
+    status: TAX_CLASSIFICATION_RUN_STATUSES.RUNNING,
+    locked_at: "2026-09-04T12:00:00Z",
+    heartbeat_at: "2026-09-04T12:00:00Z",
+    attempt_count: 1,
+  });
+
+  await processPendingTaxClassificationRuns({
+    supabase,
+    workerId: "recovery-worker",
+    runBatchSize: 1,
+    transactionBatchSize: 50,
+    now: new Date("2026-09-04T12:16:00Z"),
+  });
+
+  const recovered = supabase.store.tax_classification_runs.find((row) => row.id === queued.run.id);
+  assert.equal(recovered.locked_by, null);
+  assert.equal(recovered.status, TAX_CLASSIFICATION_RUN_STATUSES.REVIEW_REQUIRED);
+  assert.equal(recovered.processed_count, 2);
+  assert.equal(recovered.attempt_count, 2);
+});
+
 test("worker processes a 205-row production-shaped run in bounded batches and blocks calculation without verified standard deduction rule", async () => {
   const supabase = makeSupabase(baseStore({ transactionCount: 205 }));
   const queued = await enqueueTaxClassificationRun({
@@ -209,6 +452,243 @@ test("new QBO-confirmed posting event enqueues classification and calculation pr
   assert.equal(afterClassification.blocker, "standard_deduction_rule_missing");
   assert.equal(supabase.store.transaction_tax_classifications.some((row) => row.business_id === OTHER_BUSINESS_ID), false);
 });
+
+test("incomplete profile without entity context does not enqueue unsafe automatic classification", async () => {
+  const supabase = makeSupabase(baseStore({
+    transactionCount: 1,
+    taxProfiles: [draftProfile({ entity_type: "unknown" })],
+  }));
+
+  const queued = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED,
+    entityId: "txn-001",
+  });
+  const recovery = await enqueueRecoveryTaxClassificationRuns({ supabase, taxYear: 2026 });
+
+  assert.equal(queued.queued, false);
+  assert.equal(queued.outcome, "classification_context_missing");
+  assert.equal(recovery.length, 0);
+  assert.equal(supabase.store.tax_classification_runs.length, 0);
+});
+
+test("profile already classification-ready with missed unclassified rows is recovered without calculation eligibility", async () => {
+  const supabase = makeSupabase(baseStore({
+    transactionCount: 3,
+    taxProfiles: [draftProfile({ entity_type: "sole_proprietor", filing_status: null, safe_harbor_method: null })],
+  }));
+
+  const eligible = await getBusinessesEligibleForTaxClassification({ supabase, taxYear: 2026 });
+  const queued = await enqueueRecoveryTaxClassificationRuns({ supabase, taxYear: 2026 });
+
+  assert.equal(eligible.businesses[0].eligible, true);
+  assert.equal(eligible.businesses[0].requiredContext.requiredForClassification.includes("entity_type"), true);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].queued, true);
+  assert.equal(supabase.store.tax_classification_runs[0].trigger_source, TAX_CLASSIFICATION_TRIGGER_SOURCES.RECOVERY_SCAN);
+});
+
+test("posted GL account change marks prior machine classification stale and reclassifies current facts", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 1 }));
+  await processPendingRunFromEvent({ supabase, changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED, transactionId: "txn-001" });
+  let classification = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-001");
+  assert.equal(classification.tax_category, "software");
+  Object.assign(supabase.store.transaction_categorizations[0], {
+    final_qbo_account_name: "Meals",
+    updated_at: "2026-09-04T13:00:00Z",
+  });
+
+  const updated = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_UPDATED,
+    entityId: "txn-001",
+    metadata: { changedFields: ["final_qbo_account_name"] },
+    now: new Date("2026-09-04T13:00:00Z"),
+  });
+  await processPendingTaxClassificationRuns({ supabase, workerId: "test-worker", runBatchSize: 1, transactionBatchSize: 50 });
+
+  classification = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-001");
+  assert.equal(updated.stale.changed, true);
+  assert.equal(updated.queued, true);
+  assert.equal(classification.tax_category, "meals");
+  assert.equal(classification.classification_status, "needs_review");
+  assert.equal(classification.metadata.tax_classification_stale, false);
+});
+
+test("reviewed transaction fact change is preserved as renewed review, not silently overwritten", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 1 }));
+  await processPendingRunFromEvent({ supabase, changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED, transactionId: "txn-001" });
+  const classification = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-001");
+  Object.assign(classification, { classification_status: "user_confirmed", user_override: true, requires_review: false });
+  Object.assign(supabase.store.transaction_categorizations[0], { final_qbo_account_name: "Meals" });
+
+  await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_UPDATED,
+    entityId: "txn-001",
+    metadata: { changedFields: ["final_qbo_account_name"] },
+  });
+
+  assert.equal(classification.user_override, true);
+  assert.equal(classification.classification_status, "needs_review");
+  assert.equal(classification.requires_review, true);
+  assert.equal(classification.metadata.reviewed_decision_requires_renewed_review, true);
+});
+
+test("voided transaction neutralizes prior tax contribution without deleting audit row", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 1 }));
+  await processPendingRunFromEvent({ supabase, changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED, transactionId: "txn-001" });
+  const classification = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-001");
+  assert.equal(classification.classification_status, "auto_classified");
+
+  const result = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_VOIDED,
+    entityId: "txn-001",
+    metadata: { source: "qbo_void" },
+  });
+
+  assert.equal(result.outcome, "classification_neutralized");
+  assert.equal(supabase.store.transaction_tax_classifications.length, 1);
+  assert.equal(classification.classification_status, "excluded");
+  assert.equal(classification.deductible_amount, 0);
+  assert.equal(classification.metadata.neutralized_reason, "qbo_transaction_voided");
+});
+
+test("older machine classification engine version is recovered as stale work", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 1 }));
+  await processPendingRunFromEvent({ supabase, changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED, transactionId: "txn-001" });
+  const classification = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-001");
+  classification.metadata.classification_engine_version = "tax-classification-legacy";
+
+  const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+  const queued = await enqueueRecoveryTaxClassificationRuns({ supabase, taxYear: 2026 });
+
+  assert.equal(lifecycle.classificationStatus, "ready_to_classify");
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].run.trigger_source, TAX_CLASSIFICATION_TRIGGER_SOURCES.RECOVERY_SCAN);
+});
+
+test("business mapping change stales machine classifications and enqueues bounded reclassification", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 1 }));
+  await processPendingRunFromEvent({ supabase, changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED, transactionId: "txn-001" });
+  const classification = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-001");
+  assert.equal(classification.metadata.tax_classification_stale, false);
+
+  const queued = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.BUSINESS_RULE_CREATED,
+    entityId: "business-rule-1",
+  });
+
+  assert.equal(queued.stale.changed, 1);
+  assert.equal(queued.queued, true);
+  assert.equal(classification.metadata.tax_classification_stale, true);
+  assert.equal(supabase.store.tax_classification_runs.at(-1).trigger_source, TAX_CLASSIFICATION_TRIGGER_SOURCES.RULES_CHANGED);
+});
+
+test("calculation-only tax change events do not enqueue classification work", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 1 }));
+
+  const result = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.PAYMENT_UPDATED,
+    entityId: "payment-1",
+  });
+
+  assert.equal(result.queued, false);
+  assert.equal(result.outcome, "unsupported_classification_trigger");
+  assert.equal(supabase.store.tax_classification_runs.length, 0);
+});
+
+test("manual link-existing posting route emits canonical tax classification event after persistence", () => {
+  const route = fs.readFileSync("src/api/bookkeeping/routes/bookkeeping.posting.routes.js", "utf8");
+  const linkExistingStart = route.indexOf('router.post("/posting/transactions/:transactionId/link-existing"');
+  const successUpdate = route.indexOf(".from(\"transaction_categorizations\")", linkExistingStart);
+  const eventEmit = route.indexOf("emitTaxDataChanged({", successUpdate);
+  const response = route.indexOf("return res.json", successUpdate);
+
+  assert.ok(linkExistingStart > 0);
+  assert.ok(successUpdate > linkExistingStart);
+  assert.ok(eventEmit > successUpdate);
+  assert.ok(response > eventEmit);
+  assert.match(route.slice(eventEmit, response), /changeType: TAX_CHANGE_TYPES\.QBO_TRANSACTION_POSTED/);
+  assert.match(route.slice(eventEmit, response), /taxYearFromDate\(bankTxn\?\.date \|\| nowIso\)/);
+});
+
+test("posted bookkeeping reclassification service emits canonical updated tax event", () => {
+  const service = fs.readFileSync("src/services/bookkeeping/bookkeepingReclassificationService.js", "utf8");
+  const postedBranch = service.indexOf('mode: "posted_qbo_reclassification"');
+  const eventEmit = service.indexOf("emitTaxDataChanged({");
+
+  assert.ok(eventEmit > 0);
+  assert.ok(postedBranch > eventEmit);
+  assert.match(service.slice(eventEmit, postedBranch), /changeType: TAX_CHANGE_TYPES\.QBO_TRANSACTION_UPDATED/);
+  assert.match(service.slice(eventEmit, postedBranch), /changedFields: \["final_qbo_account_id", "final_qbo_account_name"\]/);
+  assert.match(service.slice(eventEmit, postedBranch), /taxYearFromDate\(context\.bankTxn\?\.date \|\| now\)/);
+});
+
+test("classification lifecycle covers deletion and reversal events idempotently", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 1 }));
+  await processPendingRunFromEvent({ supabase, changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED, transactionId: "txn-001" });
+
+  const deleted = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_DELETED,
+    entityId: "txn-001",
+  });
+  const repeated = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_DELETED,
+    entityId: "txn-001",
+  });
+  supabase.store.bank_transactions.push(bankTxn({ id: "txn-002", name: "Refund reversal", signed_amount: 25, amount: 25, direction: "INFLOW" }));
+  supabase.store.transaction_categorizations.push(categorization({ id: "cat-txn-002", transaction_id: "txn-002", final_qbo_account_name: "Refunds", qbo_txn_id: "qbo-txn-002" }));
+  supabase.store.qbo_posted_transactions.push(qboPosted({ id: "qbo-row-txn-002", transaction_id: "txn-002", qbo_txn_id: "qbo-txn-002" }));
+  const reversal = await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_REVERSED,
+    entityId: "txn-002",
+  });
+
+  assert.equal(deleted.outcome, "classification_neutralized");
+  assert.equal(repeated.outcome, "no_classification_to_neutralize");
+  assert.equal(reversal.queued, true);
+});
+
+async function processPendingRunFromEvent({ supabase, changeType, transactionId }) {
+  await handleTaxClassificationEvent({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    changeType,
+    entityId: transactionId,
+  });
+  return processPendingTaxClassificationRuns({
+    supabase,
+    workerId: "test-worker",
+    runBatchSize: 1,
+    transactionBatchSize: 50,
+  });
+}
 
 function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false, taxProfiles = [completeProfile()] } = {}) {
   const store = {

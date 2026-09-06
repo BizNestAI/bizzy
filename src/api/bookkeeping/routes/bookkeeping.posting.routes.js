@@ -13,6 +13,7 @@ import {
 import { assertTaxBusinessAccess } from "../../tax/taxRouteUtils.js";
 import { getQBOClient } from "../../../utils/qboClient.js";
 import { getLatestQuickBooksTokenRow } from "../../../services/quickbooksTokenService.js";
+import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../../services/tax/taxChangeEvents.js";
 
 const router = Router();
 const POSTING_GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
@@ -325,6 +326,32 @@ router.post("/posting/transactions/:transactionId/link-existing", requireAuth, a
       .eq("transaction_id", transactionId);
     if (updateErr) throw updateErr;
 
+    const { data: bankTxn } = await supabase
+      .from("bank_transactions")
+      .select("date,amount")
+      .eq("business_id", businessId)
+      .eq("id", transactionId)
+      .maybeSingle();
+    emitTaxDataChanged({
+      businessId,
+      taxYear: taxYearFromDate(bankTxn?.date || nowIso),
+      changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_POSTED,
+      entityId: transactionId,
+      userId: req.user?.id || null,
+      metadata: {
+        source: "bookkeeping_link_existing_qbo",
+        changedFields: ["status", "qbo_txn_id", "qbo_txn_type", "posted_at"],
+        after: {
+          status: "posted",
+          qboTxnId,
+          qboTxnType,
+          postedAt: nowIso,
+          effectiveDate: bankTxn?.date || null,
+        },
+        materiality: { amount: Math.abs(Number(bankTxn?.amount || 0)) || null, transactionCount: 1 },
+      },
+    });
+
     return res.json({
       ok: true,
       transaction_id: transactionId,
@@ -347,5 +374,10 @@ router.post("/posting/transactions/:transactionId/link-existing", requireAuth, a
     });
   }
 });
+
+function taxYearFromDate(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.getFullYear() : new Date().getFullYear();
+}
 
 export default router;

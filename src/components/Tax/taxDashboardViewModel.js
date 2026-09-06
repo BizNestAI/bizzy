@@ -4,7 +4,7 @@ const SETUP_MESSAGES = {
   classifications_missing: "Your posted transactions need tax classification before deductions can be estimated.",
   classifications_required: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
   ready_to_classify: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
-  classification_queued: "Your transactions are waiting to be classified.",
+  classification_queued: "Deductions preparation is queued.",
   classifying: "Bizzi is classifying your posted QuickBooks transactions.",
   classification_review_required: "Bizzi classified most transactions automatically. Review the items that need more context.",
   state_rules_missing: "Federal estimate is available. State tax is not yet supported for this setup.",

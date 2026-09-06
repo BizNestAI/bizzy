@@ -83,6 +83,132 @@ export async function updateClassificationStatus({ supabase, businessId, transac
   return data;
 }
 
+export async function markTaxClassificationStaleForTransaction({
+  supabase,
+  businessId,
+  transactionId,
+  taxYear,
+  reason = "posted_transaction_changed",
+  metadata = {},
+  now = new Date(),
+} = {}) {
+  const year = requireTaxYear(taxYear);
+  const existing = await getTaxClassification({ supabase, businessId, transactionId, taxYear: year });
+  if (!existing) return { changed: false, reason: "classification_missing" };
+  const currentMetadata = existing.metadata || {};
+  const reviewed = isConfirmed(existing);
+  const patch = {
+    classification_status: TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
+    requires_review: true,
+    metadata: mergeMetadata(currentMetadata, {
+      tax_classification_stale: true,
+      stale_reason: reason,
+      stale_at: now.toISOString(),
+      stale_changed_fields: metadata?.changedFields || metadata?.changed_fields || [],
+      previous_classification_status: existing.classification_status || null,
+      reviewed_decision_requires_renewed_review: reviewed,
+    }),
+    updated_at: now.toISOString(),
+  };
+  if (isMemorySupabase(supabase)) {
+    Object.assign(existing, patch);
+    return { changed: true, classification: existing, reviewed };
+  }
+  const { data, error } = await supabase
+    .from("transaction_tax_classifications")
+    .update(patch)
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .eq("tax_year", year)
+    .select(CLASSIFICATION_SELECT)
+    .single();
+  if (error) throw error;
+  return { changed: true, classification: data, reviewed };
+}
+
+export async function neutralizeTaxClassificationForTransaction({
+  supabase,
+  businessId,
+  transactionId,
+  taxYear,
+  reason = "qbo_transaction_voided",
+  metadata = {},
+  now = new Date(),
+} = {}) {
+  const year = requireTaxYear(taxYear);
+  const existing = await getTaxClassification({ supabase, businessId, transactionId, taxYear: year });
+  if (!existing) return { changed: false, reason: "classification_missing" };
+  if (existing.classification_status === TAX_CLASSIFICATION_STATUSES.EXCLUDED && existing.metadata?.neutralized_at) {
+    return { changed: false, reason: "already_neutralized", classification: existing };
+  }
+  const patch = {
+    classification_status: TAX_CLASSIFICATION_STATUSES.EXCLUDED,
+    deductibility_status: "nondeductible",
+    deductible_percent: 0,
+    deductible_amount: 0,
+    nondeductible_amount: 0,
+    capitalizable_amount: 0,
+    requires_review: false,
+    reason: "Posted transaction was voided, deleted, or reversed and no longer contributes to deductions.",
+    metadata: mergeMetadata(existing.metadata, {
+      neutralized_at: now.toISOString(),
+      neutralized_reason: reason,
+      previous_classification_status: existing.classification_status || null,
+      previous_tax_category: existing.tax_category || null,
+      previous_deductible_amount: existing.deductible_amount ?? null,
+      source_event: metadata?.source || reason,
+      tax_classification_stale: false,
+    }),
+    updated_at: now.toISOString(),
+  };
+  if (isMemorySupabase(supabase)) {
+    Object.assign(existing, patch);
+    return { changed: true, classification: existing };
+  }
+  const { data, error } = await supabase
+    .from("transaction_tax_classifications")
+    .update(patch)
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .eq("tax_year", year)
+    .select(CLASSIFICATION_SELECT)
+    .single();
+  if (error) throw error;
+  return { changed: true, classification: data };
+}
+
+export async function markMachineTaxClassificationsStaleForBusinessYear({
+  supabase,
+  businessId,
+  taxYear,
+  reason = "classification_rules_changed",
+  sourceRecordId = null,
+  limit = 250,
+  now = new Date(),
+} = {}) {
+  const year = requireTaxYear(taxYear);
+  const listed = await listTaxClassifications({ supabase, businessId, taxYear: year, limit, offset: 0 });
+  const machineRows = (listed.rows || []).filter((row) =>
+    !isConfirmed(row) &&
+    row.classification_status !== TAX_CLASSIFICATION_STATUSES.EXCLUDED &&
+    !row.metadata?.neutralized_at
+  );
+  let changed = 0;
+  for (const row of machineRows) {
+    const result = await markTaxClassificationStaleForTransaction({
+      supabase,
+      businessId,
+      taxYear: year,
+      transactionId: row.transaction_id,
+      reason,
+      metadata: { changedFields: ["classification_rules_version"], sourceRecordId },
+      now,
+    });
+    if (result.changed) changed += 1;
+  }
+  return { changed, scanned: listed.rows?.length || 0, limit };
+}
+
 export async function countClassificationsByStatus({ supabase, businessId, taxYear } = {}) {
   const listed = await listTaxClassifications({ supabase, businessId, taxYear, limit: 10000, offset: 0 });
   return listed.rows.reduce((acc, row) => {
@@ -176,6 +302,10 @@ function toDbRow(c, existing) {
 
 function mergeMetadata(previous, next) {
   return { ...(previous || {}), ...(next || {}) };
+}
+
+function isMemorySupabase(supabase) {
+  return Boolean(supabase?.store);
 }
 
 function requireTaxYear(value) {

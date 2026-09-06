@@ -7,6 +7,7 @@ import {
   excludeTaxClassification,
   exportTaxDeductions,
   getTaxClassificationCoverage,
+  getTaxClassificationStatus,
   getTaxClassificationReviewSummary,
   getTaxClassifications,
   getTaxDeductionCategoryDetail,
@@ -37,14 +38,18 @@ export function useTaxDeductions({
   const [allTransactions, setAllTransactions] = useState(null);
   const [postedTransactions, setPostedTransactions] = useState(null);
   const [classificationCoverage, setClassificationCoverage] = useState(null);
+  const [classificationJobStatus, setClassificationJobStatus] = useState(null);
   const [classificationRows, setClassificationRows] = useState(null);
   const [classificationReviewSummary, setClassificationReviewSummary] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [resourceErrors, setResourceErrors] = useState({});
   const seq = useRef(0);
+  const pollInFlight = useRef(false);
   const isDemo = shouldUseDemoData();
-  const shouldPollClassification = isActiveClassificationStatus(classificationCoverage?.classificationStatus);
+  const shouldPollClassification = isActiveClassificationStatus(
+    classificationJobStatus?.status || classificationCoverage?.jobStatus?.status || classificationCoverage?.classificationStatus
+  );
 
   const load = useCallback(async ({ signal } = {}) => {
     if (isDemo) {
@@ -54,6 +59,7 @@ export function useTaxDeductions({
       setAllTransactions(fixture.deductionTransactions);
       setPostedTransactions(fixture.deductionTransactions);
       setClassificationCoverage(fixture.deductions?.coverage || null);
+      setClassificationJobStatus(fixture.deductions?.coverage?.jobStatus || null);
       setClassificationRows(fixture.deductionTransactions);
       setClassificationReviewSummary(null);
       setLoading(false);
@@ -91,7 +97,10 @@ export function useTaxDeductions({
         if (transactionsResult.status === "fulfilled") setTransactions(transactionsResult.value);
         if (allTransactionsResult.status === "fulfilled") setAllTransactions(allTransactionsResult.value);
         if (postedTransactionsResult.status === "fulfilled") setPostedTransactions(postedTransactionsResult.value);
-        if (coverageResult.status === "fulfilled") setClassificationCoverage(coverageResult.value);
+        if (coverageResult.status === "fulfilled") {
+          setClassificationCoverage(coverageResult.value);
+          setClassificationJobStatus(coverageResult.value?.jobStatus || null);
+        }
         if (classificationRowsResult.status === "fulfilled") setClassificationRows(classificationRowsResult.value);
         if (reviewSummaryResult.status === "fulfilled") setClassificationReviewSummary(reviewSummaryResult.value);
         const errors = collectResourceErrors({
@@ -131,11 +140,47 @@ export function useTaxDeductions({
 
   useEffect(() => {
     if (isDemo || !enabled || !businessId || !shouldPollClassification) return undefined;
-    const timer = setInterval(() => {
-      load().catch(() => {});
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [businessId, enabled, isDemo, load, shouldPollClassification]);
+    let cancelled = false;
+    let timer = null;
+    let delayMs = Math.max(1000, Number(classificationJobStatus?.pollAfterMs || classificationCoverage?.jobStatus?.pollAfterMs || 2000));
+    const poll = async () => {
+      if (cancelled) return;
+      if (pollInFlight.current) {
+        timer = setTimeout(poll, delayMs);
+        return;
+      }
+      pollInFlight.current = true;
+      try {
+        const status = await getTaxClassificationStatus({ businessId, year });
+        if (cancelled) return;
+        setClassificationJobStatus(status || null);
+        setClassificationCoverage((current) => ({
+          ...(current || {}),
+          jobStatus: status || null,
+          classificationStatus: mapJobStatusToLifecycle(status?.status, current?.classificationStatus),
+          processingCount: status?.status === "processing" ? Number(status.remaining || 0) : 0,
+          remainingCount: Number(status?.remaining || 0),
+          failedCount: Number(status?.failed ?? current?.failedCount ?? 0),
+          lastRunAt: status?.completedAt || status?.failedAt || status?.heartbeatAt || status?.queuedAt || current?.lastRunAt || null,
+        }));
+        if (isTerminalJobStatus(status?.status)) {
+          await load();
+          return;
+        }
+        delayMs = Math.min(8000, Math.max(delayMs + 1000, Number(status?.pollAfterMs || 2000)));
+      } catch {
+        delayMs = Math.min(10000, delayMs + 2000);
+      } finally {
+        pollInFlight.current = false;
+      }
+      if (!cancelled) timer = setTimeout(poll, delayMs);
+    };
+    timer = setTimeout(poll, delayMs);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [businessId, classificationCoverage?.jobStatus?.pollAfterMs, classificationJobStatus?.pollAfterMs, enabled, isDemo, load, shouldPollClassification, year]);
 
   return {
     overview,
@@ -143,6 +188,7 @@ export function useTaxDeductions({
     allTransactions,
     postedTransactions,
     classificationCoverage,
+    classificationJobStatus,
     classificationRows,
     classificationReviewSummary,
     loading,
@@ -210,7 +256,16 @@ export function useTaxDeductions({
       previewTaxClassificationBackfill({ businessId, year, ...options }),
     prepareDeductions: async (options = {}) => {
       const result = await prepareTaxClassifications({ businessId, year, ...options });
-      await load();
+      const job = result?.job || result;
+      setClassificationJobStatus(job || null);
+      setClassificationCoverage((current) => ({
+        ...(current || {}),
+        jobStatus: job || null,
+        classificationStatus: mapJobStatusToLifecycle(job?.status, current?.classificationStatus),
+        processingCount: job?.status === "processing" ? Number(job.remaining || 0) : 0,
+        remainingCount: Number(job?.remaining || 0),
+        failedCount: Number(job?.failed ?? current?.failedCount ?? 0),
+      }));
       return result;
     },
     exportDeductions: (options = {}) => exportTaxDeductions({ businessId, year, asOfDate, filters: filterKey ? JSON.parse(filterKey) : {}, ...options }),
@@ -218,7 +273,20 @@ export function useTaxDeductions({
 }
 
 function isActiveClassificationStatus(status) {
-  return ["classification_queued", "classifying"].includes(status);
+  return ["queued", "processing", "classification_queued", "classifying"].includes(status);
+}
+
+function isTerminalJobStatus(status) {
+  return ["completed", "completed_with_review", "failed"].includes(status);
+}
+
+function mapJobStatusToLifecycle(status, fallback = null) {
+  if (status === "queued") return "classification_queued";
+  if (status === "processing") return "classifying";
+  if (status === "completed") return "classification_complete";
+  if (status === "completed_with_review") return "classification_review_required";
+  if (status === "failed") return "classification_failed";
+  return fallback;
 }
 
 async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filters, signal }) {

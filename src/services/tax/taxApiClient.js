@@ -238,6 +238,14 @@ export async function getTaxClassificationCoverage({ businessId, year, signal } 
   return unwrap(await cachedGet(`/api/tax/classifications/coverage?${query({ businessId, year })}`, { signal }));
 }
 
+export async function getTaxClassificationStatus({ businessId, year, signal } = {}) {
+  requireBusinessId(businessId);
+  return unwrap(await request(`/api/tax/classifications/status?${query({ businessId, year })}`, {
+    method: "GET",
+    signal,
+  }));
+}
+
 export async function getTaxClassifications({
   businessId,
   year,
@@ -731,6 +739,7 @@ export default {
   getTaxDeductionCategoryDetail,
   getTaxClassificationHistory,
   getTaxClassificationCoverage,
+  getTaxClassificationStatus,
   getTaxClassifications,
   getTaxClassificationReviewSummary,
   previewTaxClassificationBackfill,

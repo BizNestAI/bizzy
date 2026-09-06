@@ -735,9 +735,9 @@ function lifecycleMessage(status) {
     profile_required: "Complete your Tax Profile to prepare an estimate.",
     profile_draft: "Your Tax Profile is saved. Additional information is required before calculating.",
     insufficient_financial_data: "Confirmed QuickBooks-posted financial activity is required before an estimate can be calculated.",
-    classifications_required: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
-    ready_to_classify: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
-    classification_queued: "Your transactions are waiting to be classified.",
+    classifications_required: "Transactions are ready for automatic tax classification.",
+    ready_to_classify: "Transactions are ready for automatic tax classification.",
+    classification_queued: "Deductions preparation is queued.",
     classifying: "Bizzi is classifying your posted QuickBooks transactions.",
     classification_review_required: "Bizzi classified most transactions automatically. Review the items that need more context.",
     classification_failed: "Tax classification needs attention before an estimate can be calculated.",
@@ -768,7 +768,7 @@ function isClassificationStatus(status) {
 }
 
 function classificationLifecycleMessage(status, summary = {}) {
-  if (status === "classification_queued") return "Your transactions are waiting to be classified.";
+  if (status === "classification_queued") return "Deductions preparation is queued.";
   if (status === "classifying") {
     const total = Number(summary.postedTransactionCount || summary.posted_transaction_count || 0);
     const processed = Number(summary.classifiedTransactionCount || summary.classified_transaction_count || 0)

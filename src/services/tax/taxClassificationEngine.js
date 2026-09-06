@@ -8,7 +8,7 @@ import {
   normalizeTaxYear,
 } from "./taxDomain.js";
 import { validationError } from "./taxErrors.js";
-import { getPostedTransactionForTax, listUnclassifiedPostedTransactions } from "./taxPostedTransaction.repository.js";
+import { computeTaxTransactionFingerprint, getPostedTransactionForTax, listUnclassifiedPostedTransactions } from "./taxPostedTransaction.repository.js";
 import { getTaxProfile } from "./taxProfile.service.js";
 import { getActiveTaxMemories } from "./taxProfileMemory.service.js";
 import { evaluateDeductionRules, findMatchingDeductionRules, explainDeductionRuleMatch } from "./taxDeductionRule.repository.js";
@@ -267,10 +267,12 @@ function buildClassification({
       confidence_penalties: confidence.penalties,
       source_truth: transaction.sourceTruth,
       source_warnings: transaction.sourceWarnings,
+      transaction_source_fingerprint: transaction.sourceFingerprint || computeTaxTransactionFingerprint(transaction),
       profile_id: profile?.id || null,
       profile_status: profile?.profile_status || null,
       memory_keys_used: memoryKeysUsed,
       classified_at: new Date().toISOString(),
+      tax_classification_stale: false,
       source_qbo_txn_id: transaction.qboTxnId,
       source_qbo_txn_type: transaction.qboTxnType,
       source_qbo_account_id: transaction.qboAccountId,

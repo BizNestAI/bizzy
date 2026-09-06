@@ -1,6 +1,7 @@
 // /src/services/tax/taxPostedTransaction.repository.js
 import { normalizeTaxYear } from "./taxDomain.js";
 import { dataUnavailableError, notFoundError, validationError } from "./taxErrors.js";
+import { TAX_CLASSIFICATION_ENGINE_VERSION } from "./taxEngineVersions.js";
 import { getTaxEligibilityReason } from "./taxTransactionEligibility.js";
 import { normalizePostedTransactionForTax } from "./taxTransactionNormalizer.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../bookkeeping/bookkeepingScope.js";
@@ -111,10 +112,8 @@ export async function listPostedTransactionsForTax({
 
 export async function listUnclassifiedPostedTransactions({ supabase, businessId, taxYear, limit = DEFAULT_LIMIT, offset = 0, cursor } = {}) {
   const year = requireTaxYear(taxYear);
-  const postedRows = await listAllEligiblePostedRows({ supabase, businessId, taxYear: year });
-  const ids = postedRows.map((row) => row.transactionId);
-  const classifiedIds = await fetchClassifiedTransactionIds({ supabase, businessId, taxYear: year, transactionIds: ids });
-  const unclassified = postedRows.filter((row) => !classifiedIds.has(String(row.transactionId)));
+  const snapshot = await getTaxClassificationSourceSnapshot({ supabase, businessId, taxYear: year });
+  const unclassified = snapshot.rows;
   const page = normalizePagination({ limit, offset });
   const paged = unclassified.slice(page.offset, page.offset + page.limit);
   return {
@@ -127,7 +126,11 @@ export async function listUnclassifiedPostedTransactions({ supabase, businessId,
       total: unclassified.length,
       hasMore: page.offset + page.limit < unclassified.length,
     },
-    counts: { unclassified: unclassified.length },
+    counts: {
+      eligiblePosted: snapshot.eligiblePostedCount,
+      classified: snapshot.classifiedCount,
+      unclassified: snapshot.unclassifiedCount,
+    },
     warnings: collectListWarnings(paged),
   };
 }
@@ -140,6 +143,28 @@ async function listAllEligiblePostedRows({ supabase, businessId, taxYear }) {
     if (!page.pagination.hasMore) break;
   }
   return rows.sort(compareTaxRows);
+}
+
+export async function getTaxClassificationSourceSnapshot({ supabase, businessId, taxYear } = {}) {
+  const year = requireTaxYear(taxYear);
+  const postedRows = await listAllEligiblePostedRows({ supabase, businessId, taxYear: year });
+  const fingerprintedRows = postedRows.map((row) => ({
+    ...row,
+    sourceFingerprint: computeTaxTransactionFingerprint(row),
+  }));
+  const ids = fingerprintedRows.map((row) => row.transactionId).filter(Boolean);
+  const classificationMap = await fetchClassificationMap({ supabase, businessId, taxYear: year, transactionIds: ids });
+  const unclassified = fingerprintedRows.filter((row) => {
+    const classification = classificationMap.get(String(row.transactionId));
+    return !classification || isMachineClassificationStaleForSource(classification, row);
+  });
+  return {
+    rows: unclassified,
+    transactionIds: unclassified.map((row) => String(row.transactionId)).filter(Boolean),
+    eligiblePostedCount: fingerprintedRows.length,
+    classifiedCount: Math.max(0, fingerprintedRows.length - unclassified.length),
+    unclassifiedCount: unclassified.length,
+  };
 }
 
 export async function countPostedTransactionsForTax({ supabase, businessId, taxYear } = {}) {
@@ -288,19 +313,30 @@ async function fetchRelatedChunk({ supabase, businessId, chunk }) {
   return { catRows, qboRows };
 }
 
-async function fetchClassifiedTransactionIds({ supabase, businessId, taxYear, transactionIds }) {
-  const out = new Set();
+async function fetchClassificationMap({ supabase, businessId, taxYear, transactionIds }) {
+  const out = new Map();
   for (const chunk of chunks([...new Set((transactionIds || []).filter(Boolean).map(String))], CHUNK_SIZE)) {
     const { data, error } = await supabase
       .from("transaction_tax_classifications")
-      .select("transaction_id")
+      .select("transaction_id,classification_status,source,metadata")
       .eq("business_id", businessId)
       .eq("tax_year", taxYear)
       .in("transaction_id", chunk);
     if (error) throw error;
-    for (const row of data || []) out.add(String(row.transaction_id));
+    for (const row of data || []) out.set(String(row.transaction_id), row);
   }
   return out;
+}
+
+function isMachineClassificationStaleForSource(classification, transaction) {
+  const status = String(classification?.classification_status || "").toLowerCase();
+  if (["user_confirmed", "cpa_confirmed"].includes(status)) return false;
+  const metadata = classification?.metadata || {};
+  if (metadata.tax_classification_stale === true) return true;
+  if (metadata.neutralized_at || metadata.superseded_at) return false;
+  if (metadata.classification_engine_version && metadata.classification_engine_version !== TAX_CLASSIFICATION_ENGINE_VERSION) return true;
+  const priorFingerprint = metadata.transaction_source_fingerprint || null;
+  return Boolean(priorFingerprint && transaction?.sourceFingerprint && priorFingerprint !== transaction.sourceFingerprint);
 }
 
 async function mapWithConcurrency(items, concurrency, worker) {
@@ -342,6 +378,22 @@ function buildTaxRow({ bankTransaction, categorization, qboPostedTransaction, bu
     eligibilityReason,
     taxTransactionStatus: eligibilityReason === "eligible_posted" ? "eligible_posted" : "excluded",
   };
+}
+
+export function computeTaxTransactionFingerprint(row = {}) {
+  return JSON.stringify({
+    transactionId: row.transactionId || row.transaction_id || null,
+    date: row.transactionDate || row.transaction_date || row.date || null,
+    signedAmount: Number(row.signedAmount ?? row.signed_amount ?? row.amount ?? 0),
+    direction: row.direction || null,
+    qboTxnId: row.qboTxnId || row.qbo_txn_id || null,
+    qboTxnType: row.qboTxnType || row.qbo_txn_type || null,
+    qboAccountId: row.qboAccountId || row.qbo_account_id || null,
+    qboAccountName: row.qboAccountName || row.qbo_account_name || row.bookkeepingCategory || null,
+    bookkeepingCategory: row.bookkeepingCategory || row.bookkeeping_category || null,
+    taxonomyType: row.taxonomyType || row.taxonomy_type || null,
+    merchantEntityId: row.merchantEntityId || row.merchant_entity_id || null,
+  });
 }
 
 function latestByTransaction(rows = []) {

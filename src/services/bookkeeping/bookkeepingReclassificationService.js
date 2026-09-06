@@ -9,6 +9,7 @@ import {
 } from "./bookkeepingApprovalService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
+import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../tax/taxChangeEvents.js";
 
 export class BookkeepingReclassificationError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -102,6 +103,27 @@ export async function reclassifyBookkeepingTransaction({
       reason,
       now,
       qboUpdate,
+    });
+    emitTaxDataChanged({
+      businessId,
+      taxYear: taxYearFromDate(context.bankTxn?.date || now),
+      changeType: TAX_CHANGE_TYPES.QBO_TRANSACTION_UPDATED,
+      entityId: transactionId,
+      userId: actor?.id || actor?.userId || actor || null,
+      metadata: {
+        source: "posted_bookkeeping_reclassification",
+        changedFields: ["final_qbo_account_id", "final_qbo_account_name"],
+        before: {
+          qboAccountId: previous?.final_qbo_account_id || previous?.suggested_qbo_account_id || null,
+          qboAccountName: previous?.final_qbo_account_name || previous?.suggested_qbo_account_name || null,
+        },
+        after: {
+          qboAccountId: targetAccount.id,
+          qboAccountName: targetAccount.name,
+          effectiveDate: context.bankTxn?.date || null,
+        },
+        materiality: { amount: Math.abs(Number(context.bankTxn?.amount || 0)) || null, transactionCount: 1 },
+      },
     });
     return {
       ok: true,
@@ -201,6 +223,11 @@ export async function reclassifyBookkeepingTransaction({
     transaction_id: transactionId,
     status: previousStatus || null,
   });
+}
+
+function taxYearFromDate(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.getFullYear() : new Date().getFullYear();
 }
 
 export async function updatePostedQboTransactionAccount({

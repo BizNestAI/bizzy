@@ -12,9 +12,12 @@ import {
 } from "../../services/tax/taxClassification.repository.js";
 import { previewTaxClassificationBackfill } from "../../services/tax/taxClassificationBackfillPreview.service.js";
 import {
+  buildTaxClassificationJobStatus,
   enqueueTaxClassificationRun,
+  getTaxClassificationJobStatus,
   getTaxClassificationLifecycleStatus,
 } from "../../services/tax/taxClassificationRun.service.js";
+import { requestTaxClassificationWorkerKick } from "../../services/tax/taxClassificationWorker.service.js";
 import { TAX_CLASSIFICATION_TRIGGER_SOURCES } from "../../services/tax/taxDomain.js";
 import { validationError } from "../../services/tax/taxErrors.js";
 import { assertTaxBusinessAccess } from "./taxRouteUtils.js";
@@ -85,10 +88,46 @@ router.post("/classifications/prepare", async (req, res) => {
       actorUserId: req.user?.id || null,
       metadata: { source: "deductions_workspace_prepare" },
     });
-    const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear });
-    return sendTaxSuccess(res, { ...queued, lifecycle });
+    const job = buildTaxClassificationJobStatus({
+      run: queued.run,
+      coverage: {
+        eligiblePostedCount: queued.eligiblePostedCount,
+        unclassifiedCount: queued.unclassifiedCount,
+      },
+    });
+    if (job.jobId && ["queued", "processing"].includes(job.status)) {
+      void requestTaxClassificationWorkerKick({
+        supabase,
+        workerId: `tax-classifier-prepare-${Date.now()}`,
+      });
+    }
+    return sendTaxSuccess(res, {
+      ...queued,
+      job,
+      jobId: job.jobId,
+      status: job.status,
+      total: job.total,
+      processed: job.processed,
+      remaining: job.remaining,
+      createdAt: job.queuedAt,
+      pollAfterMs: job.pollAfterMs,
+    });
   } catch (err) {
     return sendTaxError(res, err, "tax_classification_prepare_failed");
+  }
+});
+
+router.get("/classifications/status", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const supabase = req.app?.locals?.supabase || defaultSupabase;
+    const businessId = validateBusinessIdInput(req);
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const taxYear = optionalTaxYear(req.query.year ?? req.query.taxYear, new Date().getFullYear());
+    const job = await getTaxClassificationJobStatus({ supabase, businessId, taxYear });
+    return sendTaxSuccess(res, job);
+  } catch (err) {
+    return sendTaxError(res, err, "tax_classification_status_failed");
   }
 });
 

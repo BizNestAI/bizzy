@@ -1,5 +1,5 @@
 // File: /components/Tax/TaxDashboard.jsx
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, CheckCircle2, ChevronDown, Info, RefreshCcw, Settings2, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -114,7 +114,7 @@ export default function TaxDashboard() {
         model={model}
         profileOpen={profileOpen}
         onOpen={() => {
-          if (readOnly) setSetupNotice("Tax profile editing is unavailable in read-only Admin View.");
+          if (readOnly) setSetupNotice("Tax setup changes are unavailable in read-only Admin View.");
           else setProfileOpen(true);
         }}
         disabled={readOnly}
@@ -192,6 +192,8 @@ export default function TaxDashboard() {
                 businessId={businessId}
                 year={taxYear}
                 readOnly={readOnly}
+                onNotice={setSetupNotice}
+                onClassificationComplete={tax.refetch}
               />
             </section>
           </>
@@ -255,7 +257,7 @@ function TaxProfileButton({ model, profileOpen = false, onOpen, disabled = false
         type="button"
         onClick={openProfile}
         disabled={disabled}
-        title={disabled ? "Tax profile editing is unavailable in read-only Admin View." : undefined}
+        title={disabled ? "Tax setup changes are unavailable in read-only Admin View." : undefined}
         className="inline-flex max-w-full items-center gap-2 rounded-full border border-white/12 bg-white/[0.055] px-3 py-1.5 text-left text-[12px] font-semibold text-white/86 shadow-[0_12px_32px_rgba(0,0,0,0.24)] transition hover:border-emerald-200/28 hover:bg-emerald-300/[0.11] hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/35 disabled:cursor-not-allowed disabled:opacity-55"
       >
         <Settings2 className="h-4 w-4 shrink-0 text-white/72" />
@@ -431,22 +433,22 @@ function resolveOverviewStatus(model, isDemo) {
   if (setupCode === "classifications_required") {
     return {
       tone: "partial",
-      label: "Tax classification ready",
-      sentence: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
+      label: "Monitoring automatically",
+      sentence: "Transactions are ready for automatic tax classification.",
     };
   }
   if (setupCode === "ready_to_classify") {
     return {
       tone: "partial",
-      label: "Tax classification ready",
-      sentence: "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.",
+      label: "Monitoring automatically",
+      sentence: "Transactions are ready for automatic tax classification.",
     };
   }
   if (setupCode === "classification_queued") {
     return {
       tone: "partial",
       label: "Classification queued",
-      sentence: "Your transactions are waiting to be classified.",
+      sentence: "Deductions preparation is queued.",
     };
   }
   if (setupCode === "classifying") {
@@ -493,16 +495,23 @@ function resolveOverviewStatus(model, isDemo) {
   };
 }
 
-function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
+function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice = null, onClassificationComplete = null }) {
   const [selectedCell, setSelectedCell] = useState(null);
   const [classificationTab, setClassificationTab] = useState("all");
   const [backfillPreview, setBackfillPreview] = useState(null);
   const [backfillLoading, setBackfillLoading] = useState(false);
   const [backfillError, setBackfillError] = useState("");
   const [prepareLoading, setPrepareLoading] = useState(false);
+  const lastTerminalJobRef = useRef(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 } });
   const classificationSummary = useMemo(() => buildDeductionClassificationSummary(deductions), [deductions]);
   const classificationsRequired = !deductions.isDemo && classificationSummary.requiresClassification;
+  const classificationActive = classificationSummary.isActiveJob;
+  const canPrepareDeductions = !readOnly && !classificationActive && !deductions.loading && (
+    (classificationSummary.unclassifiedTotal ?? 0) > 0 ||
+    classificationSummary.jobStatus?.canRetry === true ||
+    classificationSummary.classificationStatus === "classification_failed"
+  );
   const workspaceRows = useMemo(() => buildClassificationWorkspaceRows(deductions), [deductions]);
   const filteredWorkspaceRows = useMemo(() => filterClassificationWorkspaceRows(workspaceRows, classificationTab), [workspaceRows, classificationTab]);
   const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
@@ -528,6 +537,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
       setBackfillError("Tax classification changes are unavailable in read-only Admin View.");
       return;
     }
+    if (classificationActive) {
+      setBackfillError("Deductions preparation is already running.");
+      return;
+    }
     setBackfillLoading(true);
     setBackfillError("");
     try {
@@ -542,11 +555,17 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
 
   const confirmPrepareDeductions = async () => {
     if (readOnly) return;
+    if (classificationActive) {
+      setBackfillPreview(null);
+      return;
+    }
     setPrepareLoading(true);
     setBackfillError("");
     try {
       await deductions.prepareDeductions({ limit: 100 });
       setBackfillPreview(null);
+      onNotice?.("Deductions preparation started.");
+      dispatchBizziToast("Deductions preparation started.", "Bizzi is classifying your posted QuickBooks transactions.");
     } catch (err) {
       setBackfillError(err?.message || "Could not start tax classification.");
     } finally {
@@ -565,6 +584,18 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
     });
   }, [matrix]);
 
+  useEffect(() => {
+    const job = classificationSummary.jobStatus;
+    if (!job?.jobId || !["completed", "completed_with_review", "failed"].includes(job.status)) return;
+    const key = `${job.jobId}:${job.status}`;
+    if (lastTerminalJobRef.current === key) return;
+    lastTerminalJobRef.current = key;
+    if (job.status === "failed") return;
+    onNotice?.("Deductions preparation complete.");
+    dispatchBizziToast("Deductions preparation complete.", job.needsReview > 0 ? "Review tax items that need more context." : "Your deductions are organized.");
+    onClassificationComplete?.();
+  }, [classificationSummary.jobStatus, onClassificationComplete, onNotice]);
+
   return (
     <div className="relative max-w-full overflow-hidden rounded-[24px] border border-white/10 bg-white/[0.045] p-4 text-white shadow-[0_18px_50px_rgba(0,0,0,0.35)] sm:p-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -580,10 +611,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           <button
             type="button"
             onClick={openBackfillPreview}
-            disabled={readOnly || backfillLoading || deductions.loading}
+            disabled={!canPrepareDeductions || backfillLoading}
             className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/24 bg-emerald-300/[0.10] px-3 py-1.5 text-[12px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.16] disabled:cursor-not-allowed disabled:opacity-55 focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           >
-            {backfillLoading ? "Preparing..." : "Prepare deductions"}
+            {classificationActive ? "Preparing deductions" : backfillLoading ? "Preparing..." : classificationSummary.jobStatus?.canRetry ? "Retry preparation" : "Prepare deductions"}
           </button>
           <button
             type="button"
@@ -620,6 +651,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
             {classificationSummary.lastRunAt ? `Last run ${formatDateLocal(classificationSummary.lastRunAt)}` : "No classification run yet"}
           </div>
         </div>
+        <ClassificationProgressSummary summary={classificationSummary} />
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
           <ClassificationStat label="Eligible posted" value={classificationSummary.postedTotal} />
           <ClassificationStat label="Classified" value={classificationSummary.classifiedTotal} />
@@ -627,7 +659,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false }) {
           <ClassificationStat label="Needs review" value={classificationSummary.reviewRequiredTotal} tone={classificationSummary.reviewRequiredTotal ? "amber" : "default"} />
           <ClassificationStat label="Unclassified" value={classificationSummary.unclassifiedTotal} tone={classificationSummary.unclassifiedTotal ? "amber" : "default"} />
           <ClassificationStat label="Excluded" value={classificationSummary.excludedTotal} />
-          <ClassificationStat label="Processing" value={classificationSummary.processingTotal} />
+          <ClassificationStat
+            label={classificationSummary.isActiveJob ? "Remaining" : "Processing"}
+            value={classificationSummary.isActiveJob ? classificationSummary.remainingTotal : classificationSummary.processingTotal}
+          />
           <ClassificationStat label="Failed" value={classificationSummary.failedTotal} tone={classificationSummary.failedTotal ? "rose" : "default"} />
         </div>
       </div>
@@ -762,6 +797,66 @@ function ClassificationStat({ label, value, tone = "default" }) {
   );
 }
 
+function ClassificationProgressSummary({ summary }) {
+  const job = summary.jobStatus;
+  if (!job || !["queued", "processing", "failed"].includes(job.status)) return null;
+  const total = Number(job.total || summary.postedTotal || 0);
+  const processed = Math.min(total, Math.max(0, Number(job.processed || 0)));
+  const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
+  const heading = job.status === "queued"
+    ? "Deductions preparation is queued."
+    : job.status === "failed"
+      ? "Deductions preparation needs attention."
+      : job.isStalled
+        ? "Deductions preparation appears to be delayed."
+        : "Bizzi is classifying your posted QuickBooks transactions.";
+  const detail = job.status === "failed"
+    ? "The run stopped before all eligible transactions were classified. Any completed classifications are preserved."
+    : job.isStalled
+      ? "No recent worker heartbeat was recorded. Retry is available when the backend marks it safe."
+      : job.isSlow
+        ? "Still working. You can leave this page and check back shortly."
+        : "This usually takes a few minutes. You can leave this page while Bizzi continues.";
+  return (
+    <div className={`mt-3 rounded-2xl border px-3 py-3 ${
+      job.status === "failed" || job.isStalled
+        ? "border-amber-300/18 bg-amber-300/[0.07]"
+        : "border-emerald-300/18 bg-black/18"
+    }`}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          {job.status === "failed" || job.isStalled ? (
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" aria-hidden="true" />
+          ) : (
+            <span className="mt-1 inline-flex h-3 w-3 shrink-0 rounded-full bg-emerald-300 motion-safe:animate-pulse" aria-hidden="true" />
+          )}
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-white">{heading}</div>
+            <div className="mt-1 text-xs leading-relaxed text-white/52">{detail}</div>
+          </div>
+        </div>
+        <div className="shrink-0 text-sm font-semibold tabular-nums text-emerald-50">
+          {job.status === "queued" ? `0 of ${total} ready` : `${processed} of ${total} complete`}
+        </div>
+      </div>
+      {total > 0 ? (
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/[0.08]" aria-label={`Classification progress ${percent}%`}>
+          <div
+            className="h-full rounded-full bg-emerald-300 transition-[width] duration-500"
+            style={{ width: `${Math.max(2, percent)}%` }}
+          />
+        </div>
+      ) : null}
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-white/54 sm:grid-cols-4">
+        <span>Remaining <b className="font-semibold text-white/82">{job.remaining ?? summary.remainingTotal ?? 0}</b></span>
+        <span>Auto-classified <b className="font-semibold text-white/82">{job.autoClassified ?? summary.autoClassifiedTotal ?? 0}</b></span>
+        <span>Needs review <b className="font-semibold text-white/82">{job.needsReview ?? summary.reviewRequiredTotal ?? 0}</b></span>
+        <span>Excluded <b className="font-semibold text-white/82">{job.excluded ?? summary.excludedTotal ?? 0}</b></span>
+      </div>
+    </div>
+  );
+}
+
 function ClassificationWorkspaceTable({ rows, loading }) {
   if (loading && !rows.length) {
     return (
@@ -887,7 +982,7 @@ function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfi
         <footer className="shrink-0 flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
           <button type="button" onClick={onClose} disabled={loading} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/10 disabled:opacity-50">Cancel</button>
           <button type="button" onClick={onConfirm} disabled={loading} className="rounded-full bg-emerald-300 px-5 py-2 text-sm font-semibold text-[#05110d] hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-60">
-            {loading ? "Starting..." : "Confirm preparation"}
+            {loading ? "Starting deductions preparation..." : "Confirm preparation"}
           </button>
         </footer>
       </section>
@@ -919,6 +1014,7 @@ function PreviewSummaryList({ title, rows, nameKey }) {
 
 function buildDeductionClassificationSummary(deductions) {
   const coverage = deductions.classificationCoverage || deductions.overview?.coverage || {};
+  const jobStatus = deductions.classificationJobStatus || coverage.jobStatus || coverage.job_status || null;
   const classificationStatus = coverage.classificationStatus || coverage.classification_status || null;
   const postedTotal = nullableNumber(
     coverage.postedTransactionCount
@@ -956,10 +1052,13 @@ function buildDeductionClassificationSummary(deductions) {
   );
   const excludedTotal = nullableNumber(coverage.excludedTransactionCount ?? coverage.excluded_transaction_count ?? coverage.excludedCount);
   const processingTotal = nullableNumber(coverage.processingTransactionCount ?? coverage.processing_transaction_count ?? coverage.processingCount) ?? 0;
+  const remainingTotal = nullableNumber(jobStatus?.remaining ?? coverage.remainingTransactionCount ?? coverage.remaining_transaction_count ?? coverage.remainingCount) ?? 0;
   const failedTotal = nullableNumber(coverage.failedTransactionCount ?? coverage.failed_transaction_count ?? coverage.failedCount) ?? 0;
-  const lastRunAt = coverage.lastRunAt || coverage.last_run_at || deductions.classificationReviewSummary?.lastRunAt || null;
-  const effectiveClassified = classifiedTotal ?? (postedTotal != null && unclassifiedTotal != null ? Math.max(0, postedTotal - unclassifiedTotal) : null);
+  const lastRunAt = jobStatus?.completedAt || jobStatus?.failedAt || jobStatus?.heartbeatAt || jobStatus?.queuedAt || coverage.lastRunAt || coverage.last_run_at || deductions.classificationReviewSummary?.lastRunAt || null;
+  const jobProcessed = nullableNumber(jobStatus?.processed);
+  const effectiveClassified = jobProcessed ?? classifiedTotal ?? (postedTotal != null && unclassifiedTotal != null ? Math.max(0, postedTotal - unclassifiedTotal) : null);
   const requiresClassification = (postedTotal ?? 0) > 0 && ((unclassifiedTotal ?? 0) > 0 || reviewRequiredTotal > 0 || (effectiveClassified ?? 0) === 0);
+  const isActiveJob = ["queued", "processing"].includes(jobStatus?.status);
   return {
     postedTotal,
     classifiedTotal: effectiveClassified,
@@ -968,9 +1067,12 @@ function buildDeductionClassificationSummary(deductions) {
     reviewRequiredTotal,
     excludedTotal,
     processingTotal,
+    remainingTotal,
     failedTotal,
     lastRunAt,
     classificationStatus,
+    jobStatus,
+    isActiveJob,
     rulesVersion: coverage.rulesVersion || coverage.rules_version || null,
     requiresClassification,
   };
@@ -1012,8 +1114,19 @@ function filterClassificationWorkspaceRows(rows, tab) {
 }
 
 function classificationWorkspaceMessage(summary) {
+  if (summary.jobStatus?.status === "queued") {
+    return "Deductions preparation is queued.";
+  }
+  if (summary.jobStatus?.status === "processing") {
+    return summary.jobStatus?.isStalled
+      ? "Deductions preparation appears to be delayed."
+      : "Bizzi is classifying your posted QuickBooks transactions.";
+  }
+  if (summary.jobStatus?.status === "failed") {
+    return "Deductions preparation needs attention.";
+  }
   if (summary.classificationStatus === "classification_queued") {
-    return "Your transactions are waiting to be classified.";
+    return "Deductions preparation is queued.";
   }
   if (summary.classificationStatus === "classifying") {
     const total = Number(summary.postedTotal || 0);
@@ -1022,7 +1135,7 @@ function classificationWorkspaceMessage(summary) {
       ? `Bizzi has classified ${Math.min(processed, total)} of ${total} transactions.`
       : "Bizzi is classifying your posted QuickBooks transactions.";
   }
-  if (summary.classificationStatus === "failed") {
+  if (summary.classificationStatus === "classification_failed" || summary.classificationStatus === "failed") {
     return "Tax classification needs attention before deductible totals can be calculated.";
   }
   if ((summary.processingTotal ?? 0) > 0) {
@@ -1038,6 +1151,13 @@ function classificationWorkspaceMessage(summary) {
     return "No QBO-confirmed posted transactions are available for tax classification yet.";
   }
   return "Tax classifications are up to date.";
+}
+
+function dispatchBizziToast(title, body) {
+  if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
+  window.dispatchEvent(new CustomEvent("bizzy:toast", {
+    detail: { title, body, module: "tax", severity: "info" },
+  }));
 }
 
 function normalizeRows(value) {
