@@ -16,6 +16,8 @@ import {
 } from "./taxClassificationRun.service.js";
 import { classifyPostedTransactionsBatch } from "./taxClassificationEngine.js";
 import { listUnclassifiedPostedTransactions } from "./taxPostedTransaction.repository.js";
+import { listDeductionRules } from "./taxDeductionRule.repository.js";
+import { getTaxProfile } from "./taxProfile.service.js";
 import { evaluateTaxCalculationPrerequisites } from "./taxCalculationPrerequisites.service.js";
 import { handleTaxRecalculationEvent } from "./events/taxRecalculationTrigger.service.js";
 import { TAX_RECALCULATION_EVENT_TYPES } from "./events/taxRecalculationEventDomain.js";
@@ -194,6 +196,7 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
   const businessId = run.business_id || run.businessId;
   const taxYear = run.tax_year || run.taxYear;
   try {
+    await validateDeductionRuleConfiguration({ supabase, businessId, taxYear });
     const page = await listUnclassifiedPostedTransactions({
       supabase,
       businessId,
@@ -203,12 +206,19 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
     });
     const ids = (page.rows || []).map((row) => row.transactionId).filter(Boolean);
     if (ids.length) {
-      await classifyPostedTransactionsBatch({
+      const batch = await classifyPostedTransactionsBatch({
         supabase,
         businessId,
         taxYear,
         transactionIds: ids,
         source: TAX_CLASSIFICATION_SOURCES.RULE_ENGINE,
+      });
+      assertBatchMadeProgress({ batch, selectedCount: ids.length, run });
+    } else if (Number(run.queued_count || run.queuedCount || 0) > 0 || Number(run.total_eligible || run.totalEligible || 0) > 0) {
+      throw classificationWorkerInvariantError("candidate_snapshot_mismatch", "Classification run expected remaining transactions but selected none.", {
+        selectedCount: 0,
+        expectedRemaining: Number(run.queued_count || run.queuedCount || 0),
+        totalEligible: Number(run.total_eligible || run.totalEligible || 0),
       });
     }
     const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear });
@@ -269,6 +279,16 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
   }
 }
 
+async function validateDeductionRuleConfiguration({ supabase, businessId, taxYear }) {
+  const profile = await getTaxProfile({ supabase, businessId, taxYear, includeBusinessDefaults: false });
+  await listDeductionRules({
+    supabase,
+    businessId,
+    taxYear,
+    entityType: profile?.entity_type,
+  });
+}
+
 async function enqueueCalculationIfReady({ supabase, businessId, taxYear, runId, now }) {
   const prerequisites = await evaluateTaxCalculationPrerequisites({
     supabase,
@@ -297,6 +317,26 @@ function sanitizeWorkerError(error) {
     code: error?.code || error?.name || "tax_classification_worker_failed",
     message: "Tax classification worker failed.",
   };
+}
+
+function assertBatchMadeProgress({ batch, selectedCount, run }) {
+  const persistedOrPreserved = Number(batch?.classified || 0) + Number(batch?.skippedConfirmed || 0);
+  if (selectedCount > 0 && persistedOrPreserved <= 0 && Number(batch?.failed || 0) > 0) {
+    const first = batch.errors?.[0] || {};
+    throw classificationWorkerInvariantError(first.code || "classification_batch_all_failed", "Classification batch selected transactions but persisted no outcomes.", {
+      selectedCount,
+      failedCount: Number(batch.failed || 0),
+      attempted: Number(batch.attempted || 0),
+      runId: run?.id || null,
+    });
+  }
+}
+
+function classificationWorkerInvariantError(code, message, details = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.details = details;
+  return error;
 }
 
 async function getDefaultSupabase() {

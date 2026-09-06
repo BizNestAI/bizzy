@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 
 import { getTaxRuleConfig, validateTaxRuleConfigRow } from "../src/services/tax/taxRuleConfig.repository.js";
 import { getStateTaxConfigSet, getStateTaxRuleConfig } from "../src/services/tax/stateTaxRule.repository.js";
-import { findMatchingDeductionRules, validateDeductionRuleRow, explainDeductionRuleMatch } from "../src/services/tax/taxDeductionRule.repository.js";
+import { assertConsistentDeductionPercentUnits, findMatchingDeductionRules, validateDeductionRuleRow, explainDeductionRuleMatch } from "../src/services/tax/taxDeductionRule.repository.js";
 import { getStateRule } from "../src/services/tax/stateTaxRules.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -171,8 +171,28 @@ test("deduction repository ignores inactive, expired, future, and unverified rul
   assert.deepEqual(result.rules.map((rule) => rule.id), ["current"]);
 });
 
-test("deduction repository rejects invalid deductible percent and excludes inactive/wrong-year rules", async () => {
-  assert.throws(() => validateDeductionRuleRow(deductionRow({ default_deductible_percent: 1.5 })), /default_deductible_percent/);
+test("deduction repository accepts whole-percent deductible values", () => {
+  assert.equal(validateDeductionRuleRow(deductionRow({ default_deductible_percent: 0 })).default_deductible_percent, 0);
+  assert.equal(validateDeductionRuleRow(deductionRow({ default_deductible_percent: 50 })).default_deductible_percent, 50);
+  assert.equal(validateDeductionRuleRow(deductionRow({ default_deductible_percent: 50.5 })).default_deductible_percent, 50.5);
+  assert.equal(validateDeductionRuleRow(deductionRow({ default_deductible_percent: 100 })).default_deductible_percent, 100);
+});
+
+test("deduction repository detects mixed legacy fraction and whole-percent datasets", () => {
+  assert.throws(
+    () => assertConsistentDeductionPercentUnits([
+      deductionRow({ id: "legacy-fraction", default_deductible_percent: 0.5 }),
+      deductionRow({ id: "whole-percent", default_deductible_percent: 50 }),
+    ]),
+    /Tax deduction rule percentages must use one unit convention/
+  );
+});
+
+test("deduction repository rejects out-of-range deductible percent and excludes inactive/wrong-year rules", async () => {
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ default_deductible_percent: -1 })), /default_deductible_percent/);
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ default_deductible_percent: 101 })), /default_deductible_percent/);
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ default_deductible_percent: null })), /default_deductible_percent/);
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ default_deductible_percent: "50" })), /default_deductible_percent/);
   const result = await findMatchingDeductionRules({
     supabase: makeSupabase({
       tax_deduction_rules: [
@@ -266,7 +286,7 @@ function deductionRow(overrides = {}) {
     match_conditions: {},
     tax_category: "meals",
     deductibility_status: "partially_deductible",
-    default_deductible_percent: 0.5,
+    default_deductible_percent: 50,
     treatment: {},
     requires_review: false,
     priority: 100,

@@ -56,6 +56,24 @@ export async function enqueueTaxClassificationRun({
     };
   }
 
+  const suppressed = await getSuppressedMatchingTaxClassificationRun({
+    supabase,
+    businessId,
+    taxYear: year,
+    sourceFingerprint,
+    rulesVersion,
+  });
+  if (suppressed) {
+    return {
+      queued: false,
+      outcome: "suppressed_repeated_failure",
+      run: suppressed,
+      status: "classification_failed",
+      eligiblePostedCount,
+      unclassifiedCount,
+    };
+  }
+
   if (isMemorySupabase(supabase)) {
     return enqueueMemoryRun({
       supabase,
@@ -239,6 +257,25 @@ export async function getMatchingTaxClassificationRun({
   const { data, error } = await query.maybeSingle();
   if (error) throw error;
   return data || null;
+}
+
+export async function getSuppressedMatchingTaxClassificationRun({
+  supabase,
+  businessId,
+  taxYear,
+  sourceFingerprint,
+  rulesVersion,
+} = {}) {
+  const run = await getMatchingTaxClassificationRun({
+    supabase,
+    businessId,
+    taxYear,
+    sourceFingerprint,
+    rulesVersion,
+    statuses: [TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER],
+  });
+  if (!run || !isSuppressibleFailureCode(run.last_error_code || run.lastErrorCode)) return null;
+  return run;
 }
 
 export async function getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear } = {}) {
@@ -437,6 +474,15 @@ function hasExhaustedAttempts(run) {
   return Number.isFinite(attempts) && Number.isFinite(maxAttempts) && maxAttempts > 0 && attempts >= maxAttempts;
 }
 
+function isSuppressibleFailureCode(code) {
+  return [
+    "candidate_snapshot_mismatch",
+    "classification_batch_all_failed",
+    "invalid_default_deductible_percent",
+    "tax_deduction_rules_query_failed",
+  ].includes(String(code || ""));
+}
+
 export async function failExhaustedActiveTaxClassificationRuns({ supabase, now = new Date(), limit = 25 } = {}) {
   if (isMemorySupabase(supabase)) {
     const runs = ensureRuns(supabase);
@@ -539,6 +585,17 @@ async function findRun({ supabase, runId }) {
 
 function enqueueMemoryRun(args) {
   const runs = ensureRuns(args.supabase);
+  const suppressed = runs.find((row) =>
+    row.business_id === args.businessId &&
+    Number(row.tax_year) === args.taxYear &&
+    row.source_fingerprint === args.sourceFingerprint &&
+    row.rules_version === args.rulesVersion &&
+    row.status === TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER &&
+    isSuppressibleFailureCode(row.last_error_code)
+  );
+  if (suppressed) {
+    return { queued: false, outcome: "suppressed_repeated_failure", run: normalizeRun(suppressed) };
+  }
   const existing = runs.find((row) =>
     row.business_id === args.businessId &&
     Number(row.tax_year) === args.taxYear &&

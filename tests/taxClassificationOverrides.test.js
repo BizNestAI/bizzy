@@ -174,6 +174,7 @@ test("business rule is created only when requested and unsafe merchant-only rule
     actor: actor(),
   });
   assert.equal(withRule.store.tax_deduction_rules.length, 1);
+  assert.equal(withRule.store.tax_deduction_rules[0].default_deductible_percent, 100);
 });
 
 test("duplicate review tasks are not created", async () => {
@@ -374,7 +375,7 @@ function rule(overrides = {}) {
     bookkeeping_category: "Fees",
     tax_category: "bank_fees",
     deductibility_status: "fully_deductible",
-    default_deductible_percent: 1,
+    default_deductible_percent: 100,
     treatment: { type: "ordinary_expense" },
     requires_review: false,
     priority: 100,

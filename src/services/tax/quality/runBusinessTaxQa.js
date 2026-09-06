@@ -175,8 +175,8 @@ function buildClassificationIntegrity({ classifications, postedTransactions, inc
     const percentValue = Number(row.deductible_percent ?? 0);
     const basis = absAmount(postedMap.get(String(row.transaction_id)) || row);
     const deductible = money(row.deductible_amount);
-    const expected = round2(basis * (Number.isFinite(percentValue) ? percentValue : 0));
-    if (!Number.isFinite(percentValue) || percentValue < 0 || percentValue > 1) issues.push(issue("invalid_deductible_percent", "critical", "Deductible percent must be between 0 and 100%.", { transactionId: row.transaction_id, amount: basis }));
+    const expected = round2(basis * ((Number.isFinite(percentValue) ? percentValue : 0) / 100));
+    if (!Number.isFinite(percentValue) || percentValue < 0 || percentValue > 100) issues.push(issue("invalid_deductible_percent", "critical", "Deductible percent must be between 0 and 100%.", { transactionId: row.transaction_id, amount: basis }));
     if (deductible != null && Math.abs(deductible - expected) > Math.max(CENT_TOLERANCE, basis * 0.01) && !["capitalizable", "balance_sheet", "nondeductible", "needs_review"].includes(row.deductibility_status)) {
       issues.push(issue("deductible_amount_mismatch", "high", "Deductible amount does not reconcile to deductible percent.", { transactionId: row.transaction_id, amount: Math.abs(deductible - expected) }));
     }
@@ -221,7 +221,7 @@ function buildBucketReconciliation({ classifications }) {
     else if (treatment === "balance_sheet") buckets.balanceSheet += amount;
     else if (treatment === "nondeductible") buckets.nondeductible += amount;
     else {
-      const deductibleAmount = money(row.deductible_amount) ?? round2(amount * Number(row.deductible_percent ?? 0));
+      const deductibleAmount = money(row.deductible_amount) ?? round2(amount * (Number(row.deductible_percent ?? 0) / 100));
       buckets.deductible += deductibleAmount;
       buckets.nondeductible += Math.max(0, round2(amount - deductibleAmount));
     }

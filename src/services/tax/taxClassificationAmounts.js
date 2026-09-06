@@ -1,5 +1,6 @@
 // /src/services/tax/taxClassificationAmounts.js
 import { DEDUCTIBILITY_STATUSES } from "./taxDomain.js";
+import { validationError } from "./taxErrors.js";
 
 export function computeClassificationAmounts({
   signedAmount,
@@ -37,10 +38,15 @@ export function normalizeDeductiblePercent({ deductibilityStatus, deductiblePerc
   const status = String(deductibilityStatus || "");
   if (status === DEDUCTIBILITY_STATUSES.FULLY_DEDUCTIBLE) return 100;
   if ([DEDUCTIBILITY_STATUSES.NONDEDUCTIBLE, DEDUCTIBILITY_STATUSES.CAPITALIZABLE, DEDUCTIBILITY_STATUSES.BALANCE_SHEET].includes(status)) return 0;
-  const raw = Number(deductiblePercent || 0);
-  if (!Number.isFinite(raw)) return 0;
-  const pct = raw <= 1 ? raw * 100 : raw;
-  return round2(Math.max(0, Math.min(100, pct)));
+  if (deductiblePercent == null || deductiblePercent === "") return 0;
+  if (typeof deductiblePercent === "string") {
+    throw validationError("invalid_deductible_percent", "deductiblePercent must be a numeric whole percentage from 0 to 100.", { field: "deductiblePercent" });
+  }
+  const raw = Number(deductiblePercent);
+  if (!Number.isFinite(raw) || raw < 0 || raw > 100) {
+    throw validationError("invalid_deductible_percent", "deductiblePercent must be between 0 and 100.", { field: "deductiblePercent" });
+  }
+  return round2(raw);
 }
 
 function round2(n) {

@@ -15,9 +15,19 @@ export function validateDeductionRuleShape(row) {
   if (!Object.values(DEDUCTIBILITY_STATUSES).includes(row.deductibility_status)) {
     throw validationError("invalid_deductibility_status", "Deductibility status is not supported.", { field: "deductibility_status" });
   }
-  if (row.default_deductible_percent != null) {
-    assertFiniteNumber(row.default_deductible_percent, "default_deductible_percent", { min: 0, max: 1 });
-  }
+  assertDefaultDeductiblePercent(row.default_deductible_percent);
   if (row.match_conditions != null) assertObject(row.match_conditions, "match_conditions");
   return row;
+}
+
+function assertDefaultDeductiblePercent(value) {
+  if (value == null || value === "") {
+    throw validationError("invalid_default_deductible_percent", "default_deductible_percent is required.", { field: "default_deductible_percent" });
+  }
+  if (typeof value === "string") {
+    throw validationError("invalid_default_deductible_percent", "default_deductible_percent must be a numeric whole percentage from 0 to 100.", {
+      field: "default_deductible_percent",
+    });
+  }
+  assertFiniteNumber(value, "default_deductible_percent", { min: 0, max: 100 });
 }

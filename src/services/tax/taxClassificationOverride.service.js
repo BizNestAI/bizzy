@@ -239,7 +239,7 @@ function buildBusinessRule({ businessId, taxYear, transaction, classification, o
     entity_type: null,
     tax_category: classification.tax_category,
     deductibility_status: classification.deductibility_status,
-    default_deductible_percent: Number(classification.deductible_percent || 0) / 100,
+    default_deductible_percent: Number(classification.deductible_percent || 0),
     treatment: classification.tax_treatment || { type: "ordinary_expense" },
     requires_review: false,
     priority: 10,

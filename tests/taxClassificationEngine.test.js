@@ -6,6 +6,7 @@ import {
   classifyPostedTransaction,
   classifyPostedTransactionsBatch,
 } from "../src/services/tax/taxClassificationEngine.js";
+import { computeClassificationAmounts } from "../src/services/tax/taxClassificationAmounts.js";
 import { TAX_CLASSIFICATION_ENGINE_VERSION } from "../src/services/tax/taxEngineVersions.js";
 
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
@@ -84,7 +85,7 @@ test("generic outflow is not assumed deductible and income is not stored as dedu
 test("meals percentage comes from rule config, equipment can be capitalizable, and amounts do not double-count", async () => {
   const meals = await classifyNormalizedTransaction(baseArgs({
     transaction: txn({ bookkeepingCategory: "Meals" }),
-    rules: [rule({ id: "meals-rule", rule_code: "meals_50", tax_category: "meals", bookkeeping_category: "Meals", deductibility_status: "partially_deductible", default_deductible_percent: 0.5 })],
+    rules: [rule({ id: "meals-rule", rule_code: "meals_50", tax_category: "meals", bookkeeping_category: "Meals", deductibility_status: "partially_deductible", default_deductible_percent: 50 })],
   }));
   assert.equal(meals.deductiblePercent, 50);
   assert.equal(meals.deductibleAmount, 50);
@@ -107,11 +108,89 @@ test("meals percentage comes from rule config, equipment can be capitalizable, a
   assert.equal(equipment.deductibleAmount, 0);
 });
 
+test("deductible amount math treats persisted percentages as whole percents", async () => {
+  const zero = computeClassificationAmounts({
+    signedAmount: -100,
+    direction: "OUTFLOW",
+    deductibilityStatus: "partially_deductible",
+    deductiblePercent: 0,
+  });
+  assert.equal(zero.deductibleAmount, 0);
+  assert.equal(zero.nondeductibleAmount, 100);
+
+  const half = computeClassificationAmounts({
+    signedAmount: -100,
+    direction: "OUTFLOW",
+    deductibilityStatus: "partially_deductible",
+    deductiblePercent: 50,
+  });
+  assert.equal(half.deductibleAmount, 50);
+  assert.equal(half.nondeductibleAmount, 50);
+
+  const full = computeClassificationAmounts({
+    signedAmount: -100,
+    direction: "OUTFLOW",
+    deductibilityStatus: "partially_deductible",
+    deductiblePercent: 100,
+  });
+  assert.equal(full.deductibleAmount, 100);
+  assert.equal(full.nondeductibleAmount, 0);
+
+  const meal = computeClassificationAmounts({
+    signedAmount: -53,
+    direction: "OUTFLOW",
+    deductibilityStatus: "partially_deductible",
+    deductiblePercent: 50,
+  });
+  assert.equal(meal.deductibleAmount, 26.5);
+  assert.equal(meal.nondeductibleAmount, 26.5);
+
+  const decimal = computeClassificationAmounts({
+    signedAmount: -200,
+    direction: "OUTFLOW",
+    deductibilityStatus: "partially_deductible",
+    deductiblePercent: 50.5,
+  });
+  assert.equal(decimal.deductibleAmount, 101);
+  assert.equal(decimal.nondeductibleAmount, 99);
+
+  assert.throws(() => computeClassificationAmounts({
+    signedAmount: -100,
+    direction: "OUTFLOW",
+    deductibilityStatus: "partially_deductible",
+    deductiblePercent: 101,
+  }), /deductiblePercent/);
+  assert.throws(() => computeClassificationAmounts({
+    signedAmount: -100,
+    direction: "OUTFLOW",
+    deductibilityStatus: "partially_deductible",
+    deductiblePercent: "50",
+  }), /deductiblePercent/);
+});
+
+test("ordinary deductible amounts cannot exceed eligible expense totals for 0 through 100 percent rules", async () => {
+  for (const percent of [0, 50, 50.5, 100]) {
+    const result = await classifyNormalizedTransaction(baseArgs({
+      transaction: txn({ signedAmount: -53, absoluteAmount: 53, bookkeepingCategory: `Percent ${percent}` }),
+      rules: [rule({
+        id: `rule-${percent}`,
+        rule_code: `percent_${String(percent).replace(".", "_")}`,
+        tax_category: "ordinary_expense",
+        bookkeeping_category: `Percent ${percent}`,
+        deductibility_status: "partially_deductible",
+        default_deductible_percent: percent,
+      })],
+    }));
+    assert.equal(result.deductiblePercent, percent);
+    assert.ok(result.deductibleAmount <= Math.abs(result.bookAmount), `deductible amount exceeded transaction amount for ${percent}%`);
+  }
+});
+
 test("business rule beats global rule through repository-backed matching", async () => {
   const supabase = makeSupabase({
     tax_deduction_rules: [
-      rule({ id: "global", rule_code: "global_supplies", tax_category: "supplies_materials", bookkeeping_category: "Supplies", default_deductible_percent: 1 }),
-      rule({ id: "business", business_id: BUSINESS_ID, scope: "business_override", rule_code: "biz_supplies", tax_category: "office_expense", bookkeeping_category: "Supplies", default_deductible_percent: 1, priority: 999 }),
+      rule({ id: "global", rule_code: "global_supplies", tax_category: "supplies_materials", bookkeeping_category: "Supplies", default_deductible_percent: 100 }),
+      rule({ id: "business", business_id: BUSINESS_ID, scope: "business_override", rule_code: "biz_supplies", tax_category: "office_expense", bookkeeping_category: "Supplies", default_deductible_percent: 100, priority: 999 }),
     ],
   });
   const result = await classifyNormalizedTransaction(baseArgs({
@@ -141,19 +220,19 @@ test("rule engine ignores inactive, expired, future, and unverified in-memory ru
 test("verified exact rule can auto-classify while unverified rule and source conflict force review", async () => {
   const verified = await classifyNormalizedTransaction(baseArgs({
     transaction: txn({ bookkeepingCategory: "Bank Fees" }),
-    rules: [rule({ rule_code: "bank_fees", tax_category: "bank_fees", bookkeeping_category: "Bank Fees", default_deductible_percent: 1 })],
+    rules: [rule({ rule_code: "bank_fees", tax_category: "bank_fees", bookkeeping_category: "Bank Fees", default_deductible_percent: 100 })],
   }));
   assert.equal(verified.classificationStatus, "auto_classified");
 
   const unverified = await classifyNormalizedTransaction(baseArgs({
     transaction: txn({ bookkeepingCategory: "Bank Fees" }),
-    rules: [rule({ rule_code: "bank_fees_unverified", tax_category: "bank_fees", bookkeeping_category: "Bank Fees", default_deductible_percent: 1, support_level: "unverified" })],
+    rules: [rule({ rule_code: "bank_fees_unverified", tax_category: "bank_fees", bookkeeping_category: "Bank Fees", default_deductible_percent: 100, support_level: "unverified" })],
   }));
   assert.equal(unverified.classificationStatus, "needs_review");
 
   const conflict = await classifyNormalizedTransaction(baseArgs({
     transaction: txn({ bookkeepingCategory: "Bank Fees", sourceWarnings: ["qbo_id_mismatch"] }),
-    rules: [rule({ rule_code: "bank_fees", tax_category: "bank_fees", bookkeeping_category: "Bank Fees", default_deductible_percent: 1 })],
+    rules: [rule({ rule_code: "bank_fees", tax_category: "bank_fees", bookkeeping_category: "Bank Fees", default_deductible_percent: 100 })],
   }));
   assert.equal(conflict.classificationStatus, "needs_review");
 });
@@ -177,7 +256,7 @@ test("classification persistence is year/business isolated and repeated run is i
     bank_transactions: [bankTxn({ id: "txn-1" }), bankTxn({ id: "txn-other", business_id: OTHER_BUSINESS_ID })],
     transaction_categorizations: [cat({ transaction_id: "txn-1" }), cat({ transaction_id: "txn-other", business_id: OTHER_BUSINESS_ID })],
     tax_profiles: [profile()],
-    tax_deduction_rules: [rule({ rule_code: "fees", tax_category: "bank_fees", bookkeeping_category: "Fees", default_deductible_percent: 1 })],
+    tax_deduction_rules: [rule({ rule_code: "fees", tax_category: "bank_fees", bookkeeping_category: "Fees", default_deductible_percent: 100 })],
   });
   const first = await classifyPostedTransaction({ supabase, businessId: BUSINESS_ID, taxYear: 2026, transactionId: "txn-1" });
   const second = await classifyPostedTransaction({ supabase, businessId: BUSINESS_ID, taxYear: 2026, transactionId: "txn-1" });
@@ -193,7 +272,7 @@ test("batch processing continues past one malformed transaction", async () => {
     bank_transactions: [bankTxn({ id: "good" })],
     transaction_categorizations: [cat({ transaction_id: "good" })],
     tax_profiles: [profile()],
-    tax_deduction_rules: [rule({ rule_code: "fees", tax_category: "bank_fees", bookkeeping_category: "Fees", default_deductible_percent: 1 })],
+    tax_deduction_rules: [rule({ rule_code: "fees", tax_category: "bank_fees", bookkeeping_category: "Fees", default_deductible_percent: 100 })],
   });
   const result = await classifyPostedTransactionsBatch({
     supabase,
@@ -263,7 +342,7 @@ function rule(overrides = {}) {
     match_conditions: {},
     tax_category: "bank_fees",
     deductibility_status: "fully_deductible",
-    default_deductible_percent: 1,
+    default_deductible_percent: 100,
     treatment: { type: "ordinary_expense" },
     requires_review: false,
     priority: 100,
@@ -286,7 +365,7 @@ function pack2Rules() {
   return [
     rule({ id: "r-materials", rule_code: "materials_and_supplies", tax_category: "supplies", bookkeeping_category: "materials_and_supplies", priority: 40, match_conditions: { vendor_names: ["Home Depot"], assigned_job_required: true } }),
     rule({ id: "r-contract", rule_code: "subcontractors_contract_labor", tax_category: "contract_labor", bookkeeping_category: "subcontractors_contract_labor", priority: 35, match_conditions: { requires_employee: false } }),
-    rule({ id: "r-meals", rule_code: "meals", tax_category: "meals", bookkeeping_category: "meals", qbo_account_type: "Expense", qbo_account_subtype: "Meals", priority: 45, deductibility_status: "partially_deductible", default_deductible_percent: 0.5, requires_review: true, match_conditions: { merchant_regex: "restaurant|grill|cafe" } }),
+    rule({ id: "r-meals", rule_code: "meals", tax_category: "meals", bookkeeping_category: "meals", qbo_account_type: "Expense", qbo_account_subtype: "Meals", priority: 45, deductibility_status: "partially_deductible", default_deductible_percent: 50, requires_review: true, match_conditions: { merchant_regex: "restaurant|grill|cafe" } }),
     rule({ id: "r-fuel", rule_code: "vehicle_fuel", tax_category: "auto", bookkeeping_category: "vehicle_fuel", priority: 45, deductibility_status: "needs_review", default_deductible_percent: 0, requires_review: true, treatment: { type: "allocation_required" }, match_conditions: { merchant_regex: "fuel|shell|exxon|chevron" } }),
     rule({ id: "r-insurance", rule_code: "insurance", tax_category: "insurance", bookkeeping_category: "insurance", priority: 40 }),
     rule({ id: "r-office", rule_code: "office_expense", tax_category: "office", bookkeeping_category: "office_expense", priority: 40, match_conditions: { vendor_names: ["Staples"] } }),

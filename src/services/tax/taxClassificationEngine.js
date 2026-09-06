@@ -352,10 +352,15 @@ function buildRuleTransactionContext(transaction, entityType) {
 }
 
 function normalizeDeductiblePercent(value) {
-  const n = Number(value || 0);
-  if (!Number.isFinite(n)) return 0;
-  if (n <= 1) return round2(n * 100);
-  return round2(Math.max(0, Math.min(100, n)));
+  if (value == null || value === "") return 0;
+  if (typeof value === "string") {
+    throw validationError("invalid_deductible_percent", "deductiblePercent must be a numeric whole percentage from 0 to 100.", { field: "deductiblePercent" });
+  }
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > 100) {
+    throw validationError("invalid_deductible_percent", "deductiblePercent must be between 0 and 100.", { field: "deductiblePercent" });
+  }
+  return round2(n);
 }
 
 function requireTaxYear(value) {

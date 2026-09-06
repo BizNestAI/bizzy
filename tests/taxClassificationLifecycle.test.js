@@ -293,6 +293,98 @@ test("worker kick consumes an accepted job and persists progress", async () => {
   assert.equal(job.remaining, 0);
 });
 
+test("worker classifies production whole-percent deduction rules", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 4 }));
+  supabase.store.tax_deduction_rules = [
+    softwareRule({ default_deductible_percent: 100 }),
+    mealsRule({ default_deductible_percent: 50 }),
+  ];
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+
+  const result = await processPendingTaxClassificationRuns({
+    supabase,
+    workerId: "whole-percent-worker",
+    runBatchSize: 1,
+    transactionBatchSize: 10,
+  });
+  const run = supabase.store.tax_classification_runs.find((row) => row.id === queued.run.id);
+  const rows = supabase.store.transaction_tax_classifications;
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.failed, 0);
+  assert.equal(run.status, TAX_CLASSIFICATION_RUN_STATUSES.REVIEW_REQUIRED);
+  assert.equal(run.processed_count, 4);
+  assert.equal(rows.length, 4);
+  assert.equal(rows.find((row) => row.tax_category === "software")?.deductible_percent, 100);
+  assert.equal(rows.find((row) => row.tax_category === "meals")?.deductible_percent, 50);
+});
+
+test("selected batch with all row failures records a diagnostic instead of silent zero-progress requeue", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 2 }));
+  supabase.store.tax_deduction_rules = [
+    softwareRule({ default_deductible_percent: 150 }),
+    mealsRule({ default_deductible_percent: 150 }),
+  ];
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+
+  const result = await processPendingTaxClassificationRuns({
+    supabase,
+    workerId: "all-failed-worker",
+    runBatchSize: 1,
+    transactionBatchSize: 10,
+  });
+  const run = supabase.store.tax_classification_runs.find((row) => row.id === queued.run.id);
+
+  assert.equal(result.processed, 1);
+  assert.equal(result.failed, 1);
+  assert.equal(run.status, TAX_CLASSIFICATION_RUN_STATUSES.FAILED);
+  assert.equal(run.processed_count, 0);
+  assert.equal(run.queued_count, 2);
+  assert.equal(run.last_error_code, "invalid_default_deductible_percent");
+  assert.equal(supabase.store.transaction_tax_classifications.length, 0);
+});
+
+test("repeated deterministic zero-progress dead letters suppress duplicate recovery loops", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 2 }));
+  const first = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+  });
+  const run = supabase.store.tax_classification_runs.find((row) => row.id === first.run.id);
+  Object.assign(run, {
+    status: TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER,
+    attempt_count: 5,
+    max_attempts: 5,
+    last_error_code: "candidate_snapshot_mismatch",
+    failed_at: "2026-09-04T12:00:00Z",
+  });
+
+  const repeated = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.RECOVERY_SCAN,
+  });
+
+  assert.equal(repeated.queued, false);
+  assert.equal(repeated.outcome, "suppressed_repeated_failure");
+  assert.equal(repeated.status, "classification_failed");
+  assert.equal(repeated.run.id, first.run.id);
+  assert.equal(supabase.store.tax_classification_runs.length, 1);
+});
+
 test("recurring worker path discovers queued jobs without a prepare-request kick", async () => {
   const supabase = makeSupabase(baseStore({ transactionCount: 2 }));
   const queued = await enqueueTaxClassificationRun({
@@ -896,28 +988,30 @@ function qboPosted(overrides = {}) {
   };
 }
 
-function softwareRule() {
+function softwareRule(overrides = {}) {
   return rule({
     id: "software-rule",
     rule_code: "software",
     tax_category: "software",
     bookkeeping_category: "Software",
     deductibility_status: "fully_deductible",
-    default_deductible_percent: 1,
+    default_deductible_percent: 100,
     priority: 10,
+    ...overrides,
   });
 }
 
-function mealsRule() {
+function mealsRule(overrides = {}) {
   return rule({
     id: "meals-rule",
     rule_code: "meals_requires_review",
     tax_category: "meals",
     bookkeeping_category: "Meals",
     deductibility_status: "partially_deductible",
-    default_deductible_percent: 0.5,
+    default_deductible_percent: 50,
     requires_review: true,
     priority: 20,
+    ...overrides,
   });
 }
 
@@ -935,7 +1029,7 @@ function rule(overrides = {}) {
     qbo_account_subtype: null,
     tax_category: "software",
     deductibility_status: "fully_deductible",
-    default_deductible_percent: 1,
+    default_deductible_percent: 100,
     treatment: { type: "ordinary_expense" },
     match_conditions: {},
     priority: 100,

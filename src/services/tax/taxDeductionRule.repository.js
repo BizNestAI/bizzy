@@ -22,13 +22,15 @@ export async function listDeductionRules({
   if (error) throw taxConfigurationError("tax_deduction_rules_query_failed", "Could not load tax deduction rules.");
 
   const normalizedEntity = normalizeEntityType(entityType);
-  return (data || [])
+  const rows = (data || [])
     .filter((row) => row.business_id == null || String(row.business_id) === String(businessId))
     .filter((row) => normalizedEntity === TAX_ENTITY_TYPES.UNKNOWN || row.entity_type == null || row.entity_type === normalizedEntity)
     .map(validateDeductionRuleRow)
     .map(normalizeDeductionRule)
     .filter((row) => isEffective(row, asOfDate))
     .filter((row) => includeInactive || isRuleVerified(row));
+  assertConsistentDeductionPercentUnits(rows);
+  return rows;
 }
 
 export async function findMatchingDeductionRules({
@@ -67,6 +69,20 @@ export function evaluateDeductionRules({ rules = [], transactionContext = {}, bu
 
 export function validateDeductionRuleRow(row) {
   return validateDeductionRuleShape(row);
+}
+
+export function assertConsistentDeductionPercentUnits(rows = []) {
+  const positive = (rows || [])
+    .map((row) => Number(row.default_deductible_percent))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const fractionalLooking = positive.filter((value) => value > 0 && value < 1);
+  const wholePercentConvention = positive.filter((value) => value >= 1);
+  if (fractionalLooking.length && wholePercentConvention.length) {
+    throw taxConfigurationError(
+      "mixed_default_deductible_percent_units",
+      "Tax deduction rule percentages must use one unit convention."
+    );
+  }
 }
 
 export function explainDeductionRuleMatch(rule, transactionContext = {}) {

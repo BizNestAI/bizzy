@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -476,7 +477,7 @@ function certificationDeductionRules() {
     deductionRule("supplies", "fully_deductible"),
     deductionRule("cost_of_goods_sold", "fully_deductible"),
     deductionRule("contract_labor", "fully_deductible"),
-    deductionRule("meals", "partially_deductible", 0.5),
+    deductionRule("meals", "partially_deductible", 50),
     deductionRule("auto", "needs_review", 0),
     deductionRule("insurance", "fully_deductible"),
     deductionRule("office", "fully_deductible"),
@@ -492,7 +493,7 @@ function certificationDeductionRules() {
   ];
 }
 
-function deductionRule(category, status, percent = 1) {
+function deductionRule(category, status, percent = 100) {
   return {
     id: `cert-deduct-${category}`,
     tax_year: TAX_YEAR,
@@ -580,7 +581,7 @@ function deductionRules(categories) {
     tax_category: category,
     bookkeeping_category: category,
     deductibility_status: category === "equipment" ? "capitalizable" : "fully_deductible",
-    default_deductible_percent: category === "meals" ? 0.5 : 1,
+    default_deductible_percent: category === "meals" ? 50 : 100,
     is_active: true,
     effective_from: "2026-01-01",
     effective_to: "2026-12-31",
