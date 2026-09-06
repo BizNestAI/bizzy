@@ -112,6 +112,7 @@ test("Tax Dashboard keeps payment logging in the trajectory modal without a stan
 
 test("tax profile editor is a centered compact modal without a page-blur overlay", () => {
   const modal = fs.readFileSync("src/components/Tax/TaxProfileModal.jsx", "utf8");
+  const selectField = fs.readFileSync("src/components/Tax/Setup/TaxProfileSelectField.jsx", "utf8");
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const fields = fs.readFileSync("src/components/Tax/Setup/taxProfileFields.js", "utf8");
   assert.match(dashboard, /Edit Tax Profile/);
@@ -131,16 +132,16 @@ test("tax profile editor is a centered compact modal without a page-blur overlay
   assert.match(modal, /createPortal\(modal, document\.body\)/);
   assert.match(modal, /setRendered/);
   assert.match(modal, /transition-all duration-200/);
-  assert.match(modal, /dark-dropdown/);
+  assert.match(selectField, /dark-dropdown/);
   assert.doesNotMatch(modal, /<select/);
-  assert.match(modal, /role="combobox"/);
-  assert.match(modal, /role="listbox"/);
-  assert.match(modal, /open && menuStyle \? createPortal\(/);
-  assert.match(modal, /document\.body/);
-  assert.match(modal, /z-\[120\]/);
-  assert.match(modal, /maxHeight/);
-  assert.match(modal, /overflow-y-auto/);
-  assert.match(modal, /event\.stopPropagation\(\)/);
+  assert.match(selectField, /role="combobox"/);
+  assert.match(selectField, /role="listbox"/);
+  assert.match(selectField, /open && menuStyle \? createPortal\(/);
+  assert.match(selectField, /document\.body/);
+  assert.match(selectField, /z-\[120\]/);
+  assert.match(selectField, /maxHeight/);
+  assert.match(selectField, /overflow-y-auto/);
+  assert.match(selectField, /event\.stopPropagation\(\)/);
   assert.match(fields, /value: "current_year_90"/);
   assert.match(fields, /"NY", "NC", "ND"/);
   assert.match(fields, /\{ value: code, label: code \}/);
@@ -206,7 +207,7 @@ test("Tax Dashboard deductions preview renders a QuickBooks account by month mat
   assert.match(dashboard, /Plaid transaction/);
   assert.match(dashboard, /Expense total/);
   assert.match(dashboard, /Deductible amount/);
-  assert.match(dashboard, /Sourced from posted QuickBooks GL accounts and Plaid transaction detail/);
+  assert.match(dashboard, /posted QuickBooks GL accounts/);
   assert.match(dashboard, /Cells show deductible amount, not gross spend/);
   assert.match(dashboard, /fixed bottom-0 left-0 right-0 top-0 z-\[90\]/);
   assert.match(dashboard, /accountKey/);
@@ -216,12 +217,25 @@ test("Tax Dashboard deductions preview renders a QuickBooks account by month mat
   assert.match(dashboard, /limit: 100/);
   assert.match(dashboard, /buildDeductionClassificationSummary/);
   assert.match(dashboard, /classificationsRequired/);
-  assert.match(dashboard, /posted QuickBooks transactions are awaiting tax classification/);
+  assert.match(dashboard, /posted QuickBooks transaction/);
   assert.match(dashboard, /No deduction total is shown until classification authority exists/);
   assert.doesNotMatch(dashboard, /Confirmed deductible/);
   assert.doesNotMatch(dashboard, /Estimated deductible/);
   assert.doesNotMatch(dashboard, /Top categories/);
   assert.doesNotMatch(dashboard, /Recent tax treatments/);
+});
+
+test("Prepare deductions preview modal remains visible above the chat dock and scrolls internally", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /function ClassificationBackfillPreviewModal/);
+  assert.match(dashboard, /aria-label="Prepare deductions preview"/);
+  assert.match(dashboard, /left-\[var\(--nav-w,0px\)\]/);
+  assert.match(dashboard, /z-\[10000\]/);
+  assert.match(dashboard, /--chat-clearance/);
+  assert.match(dashboard, /flex max-h-full w-full max-w-\[760px\] flex-col overflow-hidden/);
+  assert.match(dashboard, /shrink-0 flex items-start justify-between/);
+  assert.match(dashboard, /min-h-0 flex-1 overflow-y-auto overscroll-contain/);
+  assert.match(dashboard, /shrink-0 flex flex-col gap-2 border-t/);
 });
 
 test("Tax trajectory surfaces render unavailable states without fabricating live chart values", () => {

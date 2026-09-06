@@ -196,8 +196,10 @@ test("TaxDashboard consumes canonical overview and excludes stale integrations",
 test("TaxDashboard layout keeps responsive stacking and loading skeletons", () => {
   const source = readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const trendCard = readFileSync("src/components/Tax/TaxTrendCard.jsx", "utf8");
-  assert.match(source, /grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4/);
-  assert.match(source, /xl:grid-cols-\[minmax\(0,1\.45fr\)_minmax\(320px,0\.85fr\)\]/);
+  assert.match(source, /Loading your tax overview…/);
+  assert.match(source, /Fetching your profile, transactions, deductions, and estimate\./);
+  assert.match(source, /xl:grid-cols-\[minmax\(0,0\.9fr\)_minmax\(0,1\.1fr\)\]/);
+  assert.match(source, /lg:grid-cols-\[minmax\(250px,0\.82fr\)_minmax\(0,1fr\)\]/);
   assert.match(trendCard, /As of/);
   assert.doesNotMatch(trendCard, /Updated just now|lastRefreshed|RefreshCw/);
   assert.match(source, /DashboardSkeleton/);

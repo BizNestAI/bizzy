@@ -32,12 +32,14 @@ export default function TaxDashboard() {
   const [setupNotice, setSetupNotice] = useState(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [slowInitialLoad, setSlowInitialLoad] = useState(false);
 
   const tax = useTaxOverview({ businessId, year: taxYear });
   const payments = useTaxPayments({ businessId, year: taxYear, enabled: Boolean(businessId) });
   const model = useMemo(() => buildTaxDashboardViewModel(tax.data), [tax.data]);
   const hasPreviousData = !!tax.data;
   const initialLoading = tax.loading && !hasPreviousData;
+  const initialRequestFailed = Boolean(tax.error && !hasPreviousData && !tax.loading);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -50,6 +52,16 @@ export default function TaxDashboard() {
       document.body.style.overflowX = previousBodyOverflowX;
     };
   }, []);
+
+  useEffect(() => {
+    if (!initialLoading) {
+      setSlowInitialLoad(false);
+      return undefined;
+    }
+    if (typeof window === "undefined") return undefined;
+    const timeout = window.setTimeout(() => setSlowInitialLoad(true), 8000);
+    return () => window.clearTimeout(timeout);
+  }, [initialLoading]);
 
   const trendSummary = useMemo(() => ({
     projectedYearEndTax: model.primaryMetrics.projectedTotalTax,
@@ -134,7 +146,9 @@ export default function TaxDashboard() {
 
       <main className="bizzy-page-width bizzy-page-width--workspace relative z-0 flex min-w-0 flex-col gap-7 overflow-x-hidden pt-1 pb-40">
         {initialLoading ? (
-          <DashboardSkeleton />
+          <DashboardSkeleton slow={slowInitialLoad} />
+        ) : initialRequestFailed ? (
+          <ErrorPanel error={tax.error} onRetry={tax.refetch} hasPreviousData={false} />
         ) : (
           <>
             {setupNotice ? (
@@ -827,9 +841,15 @@ function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfi
     ? summary.totalsByGlAccount
     : Object.entries(summary.totalsByGlAccount || {}).map(([glAccount, value]) => ({ glAccount, ...value }));
   const modal = (
-    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/45 px-4 py-8" role="dialog" aria-modal="true" aria-label="Prepare deductions preview">
-      <section className="w-full max-w-[760px] overflow-hidden rounded-[22px] border border-white/10 bg-[#08100d] text-white shadow-[0_24px_90px_rgba(0,0,0,0.7)]">
-        <header className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+    <div
+      className="fixed right-0 top-0 left-[var(--nav-w,0px)] z-[10000] flex items-center justify-center bg-black/45 px-4 py-4"
+      style={{ bottom: "calc(var(--chat-clearance, 156px) + 12px)" }}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Prepare deductions preview"
+    >
+      <section className="flex max-h-full w-full max-w-[760px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#08100d] text-white shadow-[0_24px_90px_rgba(0,0,0,0.7)]">
+        <header className="shrink-0 flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
           <div>
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-100/62">Classification preview</div>
             <h3 className="mt-1 text-xl font-semibold">Prepare deductions</h3>
@@ -839,7 +859,7 @@ function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfi
             <X className="h-4 w-4" />
           </button>
         </header>
-        <div className="max-h-[min(620px,calc(100vh-190px))] overflow-auto px-5 py-4">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <ClassificationStat label="Eligible" value={counts.eligibleRowCount ?? counts.eligibleCount ?? counts.eligible} />
             <ClassificationStat label="Estimated auto" value={counts.estimatedAutomaticClassifications} />
@@ -864,7 +884,7 @@ function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfi
             No QuickBooks or Plaid call is made here. Meals, vehicles, possible fixed assets, mixed-use expenses, and unmapped rows remain review-required instead of being auto-approved.
           </p>
         </div>
-        <footer className="flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
+        <footer className="shrink-0 flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
           <button type="button" onClick={onClose} disabled={loading} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/10 disabled:opacity-50">Cancel</button>
           <button type="button" onClick={onConfirm} disabled={loading} className="rounded-full bg-emerald-300 px-5 py-2 text-sm font-semibold text-[#05110d] hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-60">
             {loading ? "Starting..." : "Confirm preparation"}
@@ -1611,16 +1631,90 @@ function formatDeductiblePercent(value) {
   return `${Math.round(Number(value))}% deductible`;
 }
 
-function DashboardSkeleton() {
+function DashboardSkeleton({ slow = false }) {
   return (
-    <div aria-live="polite" aria-busy="true" className="space-y-5">
-      <SkeletonCard lines={2} height="h-24" />
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, index) => <SkeletonCard key={index} lines={2} height="h-24" />)}
+    <div
+      role="status"
+      aria-live="polite"
+      aria-busy="true"
+      className="space-y-5"
+    >
+      <section className="relative overflow-hidden rounded-[20px] border border-white/10 bg-gradient-to-br from-white/[0.06] via-white/[0.03] to-black/60 p-4 shadow-[0_18px_50px_rgba(0,0,0,0.35)] sm:p-5">
+        <SkeletonSheen />
+        <div aria-hidden="true" className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <SkeletonLine className="h-3 w-36" />
+            <SkeletonLine className="h-7 w-[min(360px,72vw)]" />
+            <SkeletonLine className="h-4 w-44" />
+          </div>
+          <div className="flex flex-wrap gap-2 lg:justify-end">
+            <SkeletonLine className="h-9 w-40 rounded-full" />
+            <SkeletonLine className="h-9 w-44 rounded-full" />
+            <SkeletonLine className="h-9 w-32 rounded-full" />
+          </div>
+        </div>
+        <div className="relative mt-5 min-h-[360px] overflow-hidden rounded-[18px] border border-white/[0.08] bg-black/[0.18] px-4 py-8">
+          <div aria-hidden="true" className="absolute inset-x-8 top-12 space-y-14">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <SkeletonLine key={index} className="h-px w-full bg-white/[0.08]" />
+            ))}
+          </div>
+          <div aria-hidden="true" className="absolute inset-x-12 bottom-20 h-28 rounded-[50%] border-t-2 border-emerald-300/40" />
+          <div className="absolute inset-0 flex items-center justify-center px-4 text-center">
+            <div className="max-w-md">
+              <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-300">
+                <div className="flex gap-[6px]" aria-hidden="true">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300 animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "0ms" }} />
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300 animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "120ms" }} />
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-300 animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "240ms" }} />
+                </div>
+              </div>
+              <p className="mt-3 text-sm font-semibold text-white">Loading your tax overview…</p>
+              <p className="mt-1 text-sm leading-6 text-white/56">
+                {slow
+                  ? "This is taking longer than expected. You can stay here or return shortly."
+                  : "Fetching your profile, transactions, deductions, and estimate."}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div aria-hidden="true" className="mt-4 rounded-[18px] border border-white/[0.08] bg-black/[0.14] px-3.5 py-3.5">
+          <div className="flex flex-col gap-3 border-b border-white/[0.07] pb-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-2">
+              <SkeletonLine className="h-3 w-40" />
+              <SkeletonLine className="h-3 w-[min(460px,70vw)]" />
+            </div>
+            <div className="flex gap-2">
+              <SkeletonLine className="h-8 w-28 rounded-full" />
+              <SkeletonLine className="h-8 w-28 rounded-full" />
+            </div>
+          </div>
+          <div className="grid gap-4 pt-3 lg:grid-cols-[minmax(250px,0.82fr)_minmax(0,1fr)]">
+            <SkeletonCard lines={2} height="h-28" />
+            <SkeletonCard lines={4} height="h-28" />
+          </div>
+        </div>
+      </section>
+
+      <div aria-hidden="true" className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <SkeletonCard lines={4} height="h-44" />
+        <SkeletonCard lines={5} height="h-44" />
       </div>
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.85fr)]">
-        <SkeletonCard lines={4} height="h-[280px]" />
-        <SkeletonCard lines={4} height="h-[280px]" />
+
+      <div aria-hidden="true" className="rounded-[20px] border border-white/10 bg-white/[0.04] p-4 shadow-[0_18px_40px_rgba(0,0,0,0.35)]">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-2">
+            <SkeletonLine className="h-4 w-48" />
+            <SkeletonLine className="h-3 w-[min(540px,76vw)]" />
+          </div>
+          <SkeletonLine className="h-9 w-36 rounded-full" />
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => <SkeletonCard key={index} lines={1} height="h-16" />)}
+        </div>
+        <div className="mt-4 space-y-2">
+          {Array.from({ length: 4 }).map((_, index) => <SkeletonLine key={index} className="h-11 w-full rounded-xl" />)}
+        </div>
       </div>
     </div>
   );
@@ -1633,11 +1727,11 @@ function ErrorPanel({ error, onRetry, hasPreviousData }) {
         <div className="inline-flex items-start gap-2">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            {hasPreviousData ? "Refresh failed. Keeping the last calculation on screen." : "Tax dashboard failed to load."} {error?.message || ""}
+            {hasPreviousData ? "Refresh failed. Keeping the last calculation on screen." : "We couldn’t load your tax overview."} {error?.message || ""}
           </span>
         </div>
         <button type="button" onClick={onRetry} className="rounded-full border border-white/12 bg-black/18 px-3 py-1.5 font-semibold text-white/82 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-rose-200/40">
-          Retry
+          Try again
         </button>
       </div>
     </div>
@@ -1645,15 +1739,31 @@ function ErrorPanel({ error, onRetry, hasPreviousData }) {
 }
 
 const SkeletonCard = ({ className = "", lines = 3, height = "h-48" }) => (
-  <div className={`rounded-[20px] bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] p-4 animate-pulse ${className}`}>
+  <div className={`rounded-[20px] bg-white/[0.05] border border-white/10 shadow-[0_18px_40px_rgba(0,0,0,0.35)] p-4 motion-safe:animate-pulse ${className}`}>
     <div className={`space-y-3 ${height}`}>
-      <div className="h-3 w-28 bg-white/15 rounded-full" />
-      <div className="h-5 w-44 bg-white/18 rounded-md" />
+      <SkeletonLine className="h-3 w-28" />
+      <SkeletonLine className="h-5 w-44 rounded-md" />
       {Array.from({ length: lines }).map((_, idx) => (
-        <div key={idx} className="h-3 w-full bg-white/10 rounded-full" style={{ opacity: 0.8 - idx * 0.15 }} />
+        <SkeletonLine key={idx} className="h-3 w-full" style={{ opacity: 0.8 - idx * 0.15 }} />
       ))}
     </div>
   </div>
+);
+
+const SkeletonLine = ({ className = "", style = null }) => (
+  <div className={`rounded-full bg-white/10 motion-safe:animate-pulse ${className}`} style={style || undefined} />
+);
+
+const SkeletonSheen = () => (
+  <div
+    aria-hidden="true"
+    className="pointer-events-none absolute inset-0 opacity-70 motion-reduce:hidden"
+    style={{
+      background:
+        "linear-gradient(110deg, transparent 0%, transparent 34%, rgba(32,216,155,0.075) 48%, transparent 62%, transparent 100%)",
+      animation: "bizzyBarSheen 2.8s ease-in-out infinite",
+    }}
+  />
 );
 
 function formatCurrencyLocal(value, fallback = "—") {

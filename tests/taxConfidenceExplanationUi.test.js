@@ -77,8 +77,8 @@ test("dashboard keeps confidence breakdown in the trajectory header pill and lin
   assert.match(trendCard, /Confidence breakdown/);
   assert.match(dashboard, /viewCalculation/);
   assert.match(dashboard, /\/dashboard\/tax\/calculation/);
-  assert.match(trendCard, /ViewCalculationButton/);
   assert.match(trendCard, /View calculation/);
+  assert.match(trendCard, /onViewCalculation/);
   assert.match(trendCard, /Show estimate confidence details/);
   assert.doesNotMatch(trendCard, /label="Estimate confidence"/);
   assert.doesNotMatch(dashboard, /TaxConfidenceDrawer/);

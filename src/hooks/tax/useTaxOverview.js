@@ -17,8 +17,9 @@ export function useTaxOverview({
     businessId,
     appDemoState: appDemoState ?? (shouldUseDemoData() ? TAX_DATA_MODES.DEMO : undefined),
   });
+  const startsWithLiveRequest = enabled && mode === TAX_DATA_MODES.LIVE;
   const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(startsWithLiveRequest);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
