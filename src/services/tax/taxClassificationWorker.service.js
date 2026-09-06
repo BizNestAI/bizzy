@@ -9,6 +9,7 @@ import {
   claimTaxClassificationRuns,
   completeTaxClassificationRun,
   enqueueTaxClassificationRun,
+  failExhaustedActiveTaxClassificationRuns,
   failTaxClassificationRun,
   getTaxClassificationLifecycleStatus,
   requeueTaxClassificationRun,
@@ -68,6 +69,13 @@ export function startTaxClassificationWorker({
     inFlight = true;
     try {
       const resolvedSupabase = supabase || await getDefaultSupabase();
+      const exhausted = await failExhaustedActiveTaxClassificationRuns({ supabase: resolvedSupabase });
+      if (exhausted.length) {
+        console.warn("[tax-classification-worker] exhausted active runs dead-lettered", {
+          count: exhausted.length,
+          runIds: exhausted.map((run) => run.id).filter(Boolean),
+        });
+      }
       await enqueueRecoveryTaxClassificationRuns({ supabase: resolvedSupabase });
       const result = await processPendingTaxClassificationRuns({ supabase: resolvedSupabase, workerId });
       if (result.processed) {

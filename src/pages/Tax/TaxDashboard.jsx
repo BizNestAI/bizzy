@@ -799,33 +799,37 @@ function ClassificationStat({ label, value, tone = "default" }) {
 
 function ClassificationProgressSummary({ summary }) {
   const job = summary.jobStatus;
-  if (!job || !["queued", "processing", "failed"].includes(job.status)) return null;
+  if (!job || !["queued", "delayed", "processing", "stalled", "failed"].includes(job.status)) return null;
   const total = Number(job.total || summary.postedTotal || 0);
   const processed = Math.min(total, Math.max(0, Number(job.processed || 0)));
   const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
   const heading = job.status === "queued"
     ? "Deductions preparation is queued."
-    : job.status === "failed"
+    : job.status === "delayed"
+      ? "Deductions preparation is delayed."
+      : job.status === "failed"
       ? "Deductions preparation needs attention."
-      : job.isStalled
-        ? "Deductions preparation appears to be delayed."
+      : job.status === "stalled"
+        ? "Deductions preparation appears to be stalled."
         : "Bizzi is classifying your posted QuickBooks transactions.";
   const detail = job.status === "failed"
     ? "The run stopped before all eligible transactions were classified. Any completed classifications are preserved."
-    : job.isStalled
+    : job.status === "stalled"
       ? "No recent worker heartbeat was recorded. Retry is available when the backend marks it safe."
+      : job.status === "delayed"
+        ? "No worker has claimed this job yet. Bizzi will keep checking automatically."
       : job.isSlow
         ? "Still working. You can leave this page and check back shortly."
         : "This usually takes a few minutes. You can leave this page while Bizzi continues.";
   return (
     <div className={`mt-3 rounded-2xl border px-3 py-3 ${
-      job.status === "failed" || job.isStalled
+      job.status === "failed" || job.status === "stalled" || job.status === "delayed"
         ? "border-amber-300/18 bg-amber-300/[0.07]"
         : "border-emerald-300/18 bg-black/18"
     }`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          {job.status === "failed" || job.isStalled ? (
+          {job.status === "failed" || job.status === "stalled" || job.status === "delayed" ? (
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" aria-hidden="true" />
           ) : (
             <span className="mt-1 inline-flex h-3 w-3 shrink-0 rounded-full bg-emerald-300 motion-safe:animate-pulse" aria-hidden="true" />
@@ -836,7 +840,7 @@ function ClassificationProgressSummary({ summary }) {
           </div>
         </div>
         <div className="shrink-0 text-sm font-semibold tabular-nums text-emerald-50">
-          {job.status === "queued" ? `0 of ${total} ready` : `${processed} of ${total} complete`}
+          <ClassificationProgressCount job={job} total={total} processed={processed} />
         </div>
       </div>
       {total > 0 ? (
@@ -923,6 +927,13 @@ function ClassificationWorkspaceTable({ rows, loading }) {
       </table>
     </div>
   );
+}
+
+function ClassificationProgressCount({ job, total, processed }) {
+  if (job.status === "queued") return `0 of ${total} queued`;
+  if (job.status === "delayed") return `${total} awaiting worker`;
+  if (job.status === "stalled") return `${processed} of ${total} complete`;
+  return `${processed} of ${total} complete`;
 }
 
 function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfirm }) {
@@ -1058,7 +1069,7 @@ function buildDeductionClassificationSummary(deductions) {
   const jobProcessed = nullableNumber(jobStatus?.processed);
   const effectiveClassified = jobProcessed ?? classifiedTotal ?? (postedTotal != null && unclassifiedTotal != null ? Math.max(0, postedTotal - unclassifiedTotal) : null);
   const requiresClassification = (postedTotal ?? 0) > 0 && ((unclassifiedTotal ?? 0) > 0 || reviewRequiredTotal > 0 || (effectiveClassified ?? 0) === 0);
-  const isActiveJob = ["queued", "processing"].includes(jobStatus?.status);
+  const isActiveJob = ["queued", "delayed", "processing"].includes(jobStatus?.status);
   return {
     postedTotal,
     classifiedTotal: effectiveClassified,
@@ -1117,10 +1128,16 @@ function classificationWorkspaceMessage(summary) {
   if (summary.jobStatus?.status === "queued") {
     return "Deductions preparation is queued.";
   }
+  if (summary.jobStatus?.status === "delayed") {
+    return "Deductions preparation is delayed.";
+  }
   if (summary.jobStatus?.status === "processing") {
     return summary.jobStatus?.isStalled
       ? "Deductions preparation appears to be delayed."
       : "Bizzi is classifying your posted QuickBooks transactions.";
+  }
+  if (summary.jobStatus?.status === "stalled") {
+    return "Deductions preparation appears to be stalled.";
   }
   if (summary.jobStatus?.status === "failed") {
     return "Deductions preparation needs attention.";
@@ -1167,10 +1184,10 @@ function normalizeRows(value) {
 function classificationBucket(row) {
   const status = String(row?.status || row?.classificationStatus || row?.classification_status || "").trim().toLowerCase();
   const treatment = String(row?.taxTreatment || row?.deductibilityStatus || "").trim().toLowerCase();
+  if (status === "unclassified" || status === "unsupported" || !status) return "unclassified";
   if (status === "auto_classified" || status === "system_confirmed") return "auto_classified";
   if (status === "excluded" || treatment === "excluded") return "excluded";
   if (row?.requiresReview === true || status === "needs_review" || status === "review_required" || treatment === "needs_review") return "needs_review";
-  if (status === "unclassified" || !status) return "unclassified";
   return "auto_classified";
 }
 
@@ -1189,6 +1206,7 @@ function classificationStatusLabel(bucket, row) {
 }
 
 function deductibilityLabel(row) {
+  if (classificationBucket(row) === "unclassified") return "Pending classification";
   const value = String(row?.taxTreatmentLabel || row?.deductibilityStatus || row?.taxTreatment || "").toLowerCase();
   if (value.includes("full")) return "Fully deductible";
   if (value.includes("partial")) return "Partially deductible";
@@ -1199,13 +1217,14 @@ function deductibilityLabel(row) {
 }
 
 function deductiblePercentLabel(row) {
+  if (classificationBucket(row) === "unclassified") return "";
   if (row?.deductiblePercent == null || Number.isNaN(Number(row.deductiblePercent))) return "Percent pending";
   return `${Math.round(Number(row.deductiblePercent))}% deductible`;
 }
 
 function classificationSourceLabel(row) {
   const source = safeText(firstValue(row.classificationSource, row.classification_source, row.raw?.classification?.source), "");
-  if (!source) return row.status === "unclassified" ? "Not classified" : "Rule";
+  if (!source) return classificationBucket(row) === "unclassified" ? "Not classified" : "Rule";
   return formatTaxCategoryLabel(source);
 }
 
@@ -1631,17 +1650,17 @@ function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
     amount: absoluteAmount,
     signedAmount,
     direction: row.direction || (signedAmount < 0 ? "OUTFLOW" : "INFLOW"),
-    taxCategory: classified?.taxCategory || "unclassified",
-    taxCategoryLabel: classified?.taxCategoryLabel || "Unclassified",
-    taxTreatment: classified?.taxTreatment || "needs_review",
-    taxTreatmentLabel: classified?.taxTreatmentLabel || "Needs review",
+    taxCategory: classified?.taxCategory || "pending",
+    taxCategoryLabel: classified?.taxCategoryLabel || "Pending",
+    taxTreatment: classified?.taxTreatment || "pending_classification",
+    taxTreatmentLabel: classified?.taxTreatmentLabel || "Pending classification",
     deductiblePercent: classified?.deductiblePercent ?? null,
     deductibleAmount: classified?.deductibleAmount ?? null,
     confidenceScore: classified?.confidenceScore ?? null,
     confidenceLevel: classified?.confidenceLevel || "unavailable",
     status: classified?.status || "unclassified",
-    statusLabel: classified?.statusLabel || "Needs review",
-    requiresReview: classified ? classified.requiresReview === true : true,
+    statusLabel: classified?.statusLabel || "Unclassified",
+    requiresReview: classified ? classified.requiresReview === true : false,
     warnings: classified?.warnings || row.sourceWarnings || [],
     raw: { ...row, classification: classified?.raw || null },
   };

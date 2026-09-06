@@ -82,6 +82,30 @@ test("transaction rows map backend statuses to user-facing labels", () => {
   assert.equal(row.amount, 240);
 });
 
+test("unclassified posted rows are not shown as authoritative needs-review classifications", () => {
+  const row = mapDeductionTransactionRow({
+    transactionId: "txn-pending",
+    date: "2026-09-03",
+    merchantName: "Chipotle Mexican Grill",
+    qboAccountName: "Meals",
+    signedAmount: -12,
+    absoluteAmount: 12,
+    taxCategory: "unclassified",
+    deductibilityStatus: "needs_review",
+    deductiblePercent: null,
+    classificationStatus: null,
+    requiresReview: true,
+  });
+
+  assert.equal(row.taxCategory, "pending");
+  assert.equal(row.taxCategoryLabel, "Pending");
+  assert.equal(row.taxTreatment, "pending_classification");
+  assert.equal(row.taxTreatmentLabel, "Pending classification");
+  assert.equal(row.status, "unclassified");
+  assert.equal(row.statusLabel, "Unclassified");
+  assert.equal(row.requiresReview, false);
+});
+
 test("standalone deductions workspace page has been removed", () => {
   assert.equal(fs.existsSync("src/pages/Tax/DeductionsPage.jsx"), false);
   assert.equal(fs.existsSync("src/components/Tax/Deductions/DeductionsWorkspace.jsx"), false);
@@ -138,6 +162,8 @@ test("Tax Dashboard uses authoritative classification job progress instead of in
   assert.doesNotMatch(hook, /setInterval\(\(\) => \{\s*load\(\)/);
   assert.match(dashboard, /ClassificationProgressSummary/);
   assert.match(dashboard, /Deductions preparation is queued\./);
+  assert.match(dashboard, /Deductions preparation is delayed\./);
+  assert.match(dashboard, /Deductions preparation appears to be stalled\./);
   assert.match(dashboard, /Bizzi is classifying your posted QuickBooks transactions\./);
   assert.match(dashboard, /Deductions preparation appears to be delayed\./);
   assert.match(dashboard, /label=\{classificationSummary\.isActiveJob \? "Remaining" : "Processing"\}/);

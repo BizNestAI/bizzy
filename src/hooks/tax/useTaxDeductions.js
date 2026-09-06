@@ -273,7 +273,7 @@ export function useTaxDeductions({
 }
 
 function isActiveClassificationStatus(status) {
-  return ["queued", "processing", "classification_queued", "classifying"].includes(status);
+  return ["queued", "processing", "delayed", "stalled", "classification_queued", "classifying"].includes(status);
 }
 
 function isTerminalJobStatus(status) {
@@ -282,7 +282,9 @@ function isTerminalJobStatus(status) {
 
 function mapJobStatusToLifecycle(status, fallback = null) {
   if (status === "queued") return "classification_queued";
+  if (status === "delayed") return "classification_queued";
   if (status === "processing") return "classifying";
+  if (status === "stalled") return "classifying";
   if (status === "completed") return "classification_complete";
   if (status === "completed_with_review") return "classification_review_required";
   if (status === "failed") return "classification_failed";

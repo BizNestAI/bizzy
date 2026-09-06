@@ -6,6 +6,7 @@ import {
   buildTaxClassificationJobStatus,
   claimTaxClassificationRuns,
   enqueueTaxClassificationRun,
+  failExhaustedActiveTaxClassificationRuns,
   getTaxClassificationJobStatus,
   getTaxClassificationLifecycleStatus,
 } from "../src/services/tax/taxClassificationRun.service.js";
@@ -151,6 +152,99 @@ test("prepare creates an authoritative queued job without marking all remaining 
   assert.equal(lifecycle.classificationStatus, "classification_queued");
   assert.equal(lifecycle.processingCount, 0);
   assert.equal(lifecycle.remainingCount, 207);
+});
+
+test("classification job status separates queued, delayed, processing, and stalled timing states", () => {
+  const now = new Date("2026-09-04T12:10:00Z");
+  const queued = buildTaxClassificationJobStatus({
+    run: {
+      id: "run-queued",
+      status: TAX_CLASSIFICATION_RUN_STATUSES.QUEUED,
+      queued_count: 207,
+      total_eligible: 207,
+      created_at: "2026-09-04T12:09:50Z",
+      queued_at: "2026-09-04T12:09:50Z",
+    },
+    now,
+  });
+  const delayed = buildTaxClassificationJobStatus({
+    run: {
+      id: "run-delayed",
+      status: TAX_CLASSIFICATION_RUN_STATUSES.QUEUED,
+      queued_count: 207,
+      total_eligible: 207,
+      created_at: "2026-09-04T12:00:00Z",
+      queued_at: "2026-09-04T12:00:00Z",
+    },
+    now,
+  });
+  const stalled = buildTaxClassificationJobStatus({
+    run: {
+      id: "run-stalled",
+      status: TAX_CLASSIFICATION_RUN_STATUSES.RUNNING,
+      queued_count: 157,
+      processed_count: 50,
+      total_eligible: 207,
+      started_at: "2026-09-04T12:00:00Z",
+      heartbeat_at: "2026-09-04T12:00:10Z",
+    },
+    now,
+  });
+
+  assert.equal(queued.status, "queued");
+  assert.equal(queued.isDelayed, false);
+  assert.equal(delayed.status, "delayed");
+  assert.equal(delayed.isDelayed, true);
+  assert.equal(stalled.status, "stalled");
+  assert.equal(stalled.isStalled, true);
+  assert.equal(stalled.canRetry, true);
+});
+
+test("exhausted queued runs are surfaced as failed and removed from active recovery blocking", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 207 }));
+  supabase.store.tax_classification_runs.push({
+    id: "run-exhausted",
+    business_id: BUSINESS_ID,
+    tax_year: 2026,
+    trigger_source: TAX_CLASSIFICATION_TRIGGER_SOURCES.QBO_TRANSACTION_POSTED,
+    status: TAX_CLASSIFICATION_RUN_STATUSES.QUEUED,
+    total_eligible: 207,
+    queued_count: 207,
+    processed_count: 0,
+    auto_classified_count: 0,
+    review_required_count: 0,
+    excluded_count: 0,
+    failed_count: 0,
+    source_fingerprint: "sha256:exhausted",
+    rules_version: "tax-classification-v1",
+    attempt_count: 5,
+    max_attempts: 5,
+    process_after: "2026-09-04T12:00:00Z",
+    queued_at: "2026-09-04T12:00:00Z",
+    started_at: "2026-09-04T12:01:00Z",
+    heartbeat_at: "2026-09-04T12:05:00Z",
+    created_at: "2026-09-04T12:00:00Z",
+    updated_at: "2026-09-04T12:05:00Z",
+    metadata: {},
+  });
+
+  const status = buildTaxClassificationJobStatus({
+    run: supabase.store.tax_classification_runs[0],
+    now: new Date("2026-09-04T12:10:00Z"),
+  });
+  const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+  const failed = await failExhaustedActiveTaxClassificationRuns({
+    supabase,
+    now: new Date("2026-09-04T12:10:00Z"),
+  });
+
+  assert.equal(status.status, "failed");
+  assert.equal(status.errorCode, "classification_attempts_exhausted");
+  assert.equal(status.canRetry, false);
+  assert.equal(lifecycle.classificationStatus, "classification_failed");
+  assert.equal(lifecycle.processingCount, 0);
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].status, TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER);
 });
 
 test("duplicate prepare clicks reuse the active durable classification job", async () => {
