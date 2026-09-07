@@ -1,7 +1,7 @@
 {
   "status": "skipped",
   "runtimeExecuted": false,
-  "generatedAt": "2026-09-06T17:37:34.857Z",
+  "generatedAt": "2026-09-06T22:23:20.730Z",
   "reason": "TAX_OUTPUT_SAFETY_ENABLED is not true.",
   "missingEnvironment": [
     "TEST_SUPABASE_URL",
@@ -17,7 +17,7 @@
   },
   "staticScan": {
     "status": "pass",
-    "findingCount": 9,
+    "findingCount": 10,
     "findings": [
       {
         "file": "src/api/tax/calculateTaxLiability.js",
@@ -74,6 +74,14 @@
         "severity": "medium",
         "message": "Tax code references error details; runtime scanner verifies exposure.",
         "preview": "missing.push({ ruleType, code: err.code || \"unsupported_state_tax_rule\", details: err.details });"
+      },
+      {
+        "file": "src/services/tax/taxClassificationWorker.service.js",
+        "line": 338,
+        "category": "error_details_rendering",
+        "severity": "medium",
+        "message": "Tax code references error details; runtime scanner verifies exposure.",
+        "preview": "error.details = details;"
       },
       {
         "file": "src/services/tax/taxRuleConfig.repository.js",
