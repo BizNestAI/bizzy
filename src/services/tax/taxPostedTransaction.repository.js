@@ -2,6 +2,7 @@
 import { normalizeTaxYear } from "./taxDomain.js";
 import { dataUnavailableError, notFoundError, validationError } from "./taxErrors.js";
 import { TAX_CLASSIFICATION_ENGINE_VERSION } from "./taxEngineVersions.js";
+import { hasCompletedClassificationEvaluation, hasMeaningfulClassificationOutcome, isUnresolvedFallbackClassification } from "./taxClassification.repository.js";
 import { getTaxEligibilityReason } from "./taxTransactionEligibility.js";
 import { normalizePostedTransactionForTax } from "./taxTransactionNormalizer.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../bookkeeping/bookkeepingScope.js";
@@ -33,6 +34,10 @@ const QBO_SELECT = [
   "qbo_sync_token", "status", "posted_at", "error", "payload", "response",
 ].join(",");
 
+const QBO_ACCOUNT_CACHE_SELECT = [
+  "business_id", "qbo_env", "realm_id", "qbo_account_id", "qbo_account_name", "qbo_account_type", "qbo_account_subtype", "status",
+].join(",");
+
 export async function getPostedTransactionForTax({ supabase, businessId, transactionId } = {}) {
   if (!supabase) throw new Error("Supabase client required");
   if (!businessId) throw validationError("missing_business_id", "businessId is required.");
@@ -59,6 +64,7 @@ export async function getPostedTransactionForTax({ supabase, businessId, transac
     bankTransaction,
     categorization: related.catMap.get(String(transactionId)),
     qboPostedTransaction: related.qboMap.get(String(transactionId)),
+    qboAccount: related.accountMap.get(String(transactionId)),
     businessId,
   });
   if (!row.isEligible) {
@@ -158,12 +164,20 @@ export async function getTaxClassificationSourceSnapshot({ supabase, businessId,
     const classification = classificationMap.get(String(row.transactionId));
     return !classification || isMachineClassificationStaleForSource(classification, row);
   });
+  const currentClassifications = fingerprintedRows
+    .map((row) => classificationMap.get(String(row.transactionId)))
+    .filter((row) => row && hasCompletedClassificationEvaluation(row));
+  const meaningfulClassifications = currentClassifications.filter(hasMeaningfulClassificationOutcome);
+  const unresolvedFallbackCount = currentClassifications.filter(isUnresolvedFallbackClassification).length;
   return {
     rows: unclassified,
     transactionIds: unclassified.map((row) => String(row.transactionId)).filter(Boolean),
     eligiblePostedCount: fingerprintedRows.length,
-    classifiedCount: Math.max(0, fingerprintedRows.length - unclassified.length),
-    unclassifiedCount: unclassified.length,
+    classifiedCount: meaningfulClassifications.length,
+    evaluatedCount: currentClassifications.length,
+    unresolvedCount: unresolvedFallbackCount,
+    candidateCount: unclassified.length,
+    unclassifiedCount: unclassified.length + unresolvedFallbackCount,
   };
 }
 
@@ -255,11 +269,12 @@ async function fetchBankRows({ supabase, businessId, range, accountId, direction
 
 async function hydrateRows({ supabase, businessId, bankRows }) {
   const ids = [...new Set(bankRows.map((row) => row.id).filter(Boolean).map(String))];
-  const { catMap, qboMap } = await fetchRelatedRows({ supabase, businessId, transactionIds: ids });
+  const { catMap, qboMap, accountMap } = await fetchRelatedRows({ supabase, businessId, transactionIds: ids });
   return bankRows.map((bankTransaction) => buildTaxRow({
     bankTransaction,
     categorization: catMap.get(String(bankTransaction.id)),
     qboPostedTransaction: qboMap.get(String(bankTransaction.id)),
+    qboAccount: accountMap.get(String(bankTransaction.id)),
     businessId,
   }));
 }
@@ -273,9 +288,11 @@ async function fetchRelatedRows({ supabase, businessId, transactionIds }) {
     catRows.push(...result.catRows);
     qboRows.push(...result.qboRows);
   });
+  const accountMap = await fetchQboAccountMap({ supabase, businessId, catRows, qboRows });
   return {
     catMap: latestByTransaction(catRows),
     qboMap: latestByTransaction(qboRows),
+    accountMap,
   };
 }
 
@@ -313,12 +330,46 @@ async function fetchRelatedChunk({ supabase, businessId, chunk }) {
   return { catRows, qboRows };
 }
 
+async function fetchQboAccountMap({ supabase, businessId, catRows = [], qboRows = [] }) {
+  const accountIds = [...new Set(catRows
+    .map((row) => row.final_qbo_account_id || row.suggested_qbo_account_id)
+    .filter(Boolean)
+    .map(String))];
+  if (!accountIds.length) return new Map();
+  const rows = [];
+  for (const chunk of chunks(accountIds, CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from("qbo_accounts_cache")
+      .select(QBO_ACCOUNT_CACHE_SELECT)
+      .eq("business_id", businessId)
+      .in("qbo_account_id", chunk);
+    if (error) {
+      if (["42P01", "42703"].includes(String(error.code || "").toUpperCase())) return new Map();
+      throw error;
+    }
+    rows.push(...(data || []));
+  }
+  const byAccountId = new Map(rows.map((row) => [String(row.qbo_account_id), row]));
+  const qboByTxn = latestByTransaction(qboRows);
+  const out = new Map();
+  for (const cat of catRows) {
+    const accountId = cat.final_qbo_account_id || cat.suggested_qbo_account_id;
+    const account = byAccountId.get(String(accountId));
+    if (!account) continue;
+    const qbo = qboByTxn.get(String(cat.transaction_id));
+    if (qbo?.realm_id && account.realm_id && String(qbo.realm_id) !== String(account.realm_id)) continue;
+    if (qbo?.qbo_env && account.qbo_env && String(qbo.qbo_env) !== String(account.qbo_env)) continue;
+    out.set(String(cat.transaction_id), account);
+  }
+  return out;
+}
+
 async function fetchClassificationMap({ supabase, businessId, taxYear, transactionIds }) {
   const out = new Map();
   for (const chunk of chunks([...new Set((transactionIds || []).filter(Boolean).map(String))], CHUNK_SIZE)) {
     const { data, error } = await supabase
       .from("transaction_tax_classifications")
-      .select("transaction_id,classification_status,source,metadata")
+      .select("transaction_id,classification_status,tax_category,deductibility_status,deductible_percent,book_amount,deductible_amount,nondeductible_amount,capitalizable_amount,source,metadata")
       .eq("business_id", businessId)
       .eq("tax_year", taxYear)
       .in("transaction_id", chunk);
@@ -329,6 +380,7 @@ async function fetchClassificationMap({ supabase, businessId, taxYear, transacti
 }
 
 function isMachineClassificationStaleForSource(classification, transaction) {
+  if (!hasCompletedClassificationEvaluation(classification)) return true;
   const status = String(classification?.classification_status || "").toLowerCase();
   if (["user_confirmed", "cpa_confirmed"].includes(status)) return false;
   const metadata = classification?.metadata || {};
@@ -369,8 +421,8 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildTaxRow({ bankTransaction, categorization, qboPostedTransaction, businessId }) {
-  const normalized = normalizePostedTransactionForTax({ bankTransaction, categorization, qboPostedTransaction });
+function buildTaxRow({ bankTransaction, categorization, qboPostedTransaction, qboAccount, businessId }) {
+  const normalized = normalizePostedTransactionForTax({ bankTransaction, categorization, qboPostedTransaction, qboAccount });
   const eligibilityReason = getTaxEligibilityReason({ bankTransaction, categorization, qboPostedTransaction, businessId });
   return {
     ...normalized,

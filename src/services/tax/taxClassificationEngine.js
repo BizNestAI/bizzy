@@ -11,7 +11,7 @@ import { validationError } from "./taxErrors.js";
 import { computeTaxTransactionFingerprint, getPostedTransactionForTax, listUnclassifiedPostedTransactions } from "./taxPostedTransaction.repository.js";
 import { getTaxProfile } from "./taxProfile.service.js";
 import { getActiveTaxMemories } from "./taxProfileMemory.service.js";
-import { evaluateDeductionRules, findMatchingDeductionRules, explainDeductionRuleMatch } from "./taxDeductionRule.repository.js";
+import { evaluateDeductionRules, findMatchingDeductionRules, explainDeductionRuleMatch, listDeductionRules } from "./taxDeductionRule.repository.js";
 import { getTaxClassification, isConfirmed, upsertTaxClassification } from "./taxClassification.repository.js";
 import { scoreTaxClassification, shouldAutoClassify } from "./taxClassificationConfidence.js";
 import { TAX_CLASSIFICATION_ENGINE_VERSION } from "./taxEngineVersions.js";
@@ -27,13 +27,18 @@ export async function classifyPostedTransaction({
   force = false,
   source = TAX_CLASSIFICATION_SOURCES.RULE_ENGINE,
   actorUserId = null,
+  profile: providedProfile = null,
+  memories: providedMemories = null,
+  rules: providedRules = null,
 } = {}) {
   const year = requireTaxYear(taxYear);
-  const [transaction, profile, memories] = await Promise.all([
+  const [transaction, loadedProfile, loadedMemories] = await Promise.all([
     getPostedTransactionForTax({ supabase, businessId, transactionId }),
-    getTaxProfile({ supabase, businessId, taxYear: year, includeBusinessDefaults: false }),
-    getActiveTaxMemories({ supabase, businessId }),
+    providedProfile ? Promise.resolve(providedProfile) : getTaxProfile({ supabase, businessId, taxYear: year, includeBusinessDefaults: false }),
+    providedMemories ? Promise.resolve(providedMemories) : getActiveTaxMemories({ supabase, businessId }),
   ]);
+  const profile = loadedProfile;
+  const memories = loadedMemories;
   const existing = await getTaxClassification({ supabase, businessId, transactionId, taxYear: year });
   if (existing && isConfirmed(existing) && !force) {
     return { classification: existing, skipped: true, reason: "confirmed_classification_preserved" };
@@ -46,6 +51,7 @@ export async function classifyPostedTransaction({
     transaction,
     profile,
     memories,
+    rules: providedRules,
     force,
     source,
   });
@@ -93,9 +99,32 @@ export async function classifyNormalizedTransaction({
   const match = rules
     ? evaluateDeductionRules({ rules, transactionContext, businessId })
     : await findMatchingDeductionRules({ supabase, businessId, taxYear: year, transactionContext, entityType });
+  if (match.conflict) {
+    return buildClassification({
+      businessId,
+      taxYear: year,
+      transaction,
+      profile,
+      source,
+      taxCategory: "rule_conflict",
+      deductibilityStatus: DEDUCTIBILITY_STATUSES.NEEDS_REVIEW,
+      deductiblePercent: 0,
+      taxTreatment: { type: "rule_conflict", ordinaryExpense: false },
+      rule: null,
+      reason: `Conflicting deduction rules matched: ${(match.conflict.ruleCodes || []).join(", ")}.`,
+      explanationSteps: [
+        "Evaluated active verified deduction rules.",
+        "Multiple equally ranked rules matched with conflicting tax treatment.",
+        "Review is required before tax treatment can be determined.",
+      ],
+      requiresReview: true,
+      matchDiagnostics: match,
+      confidenceOverride: { score: 20, level: TAX_CONFIDENCE_LEVELS.LOW, factors: [], penalties: ["conflicting_deduction_rules"] },
+    });
+  }
   const rule = match.selected || null;
   if (!rule) {
-    return buildFallbackClassification({ businessId, taxYear: year, transaction, profile, memories, source });
+    return buildFallbackClassification({ businessId, taxYear: year, transaction, profile, memories, source, match });
   }
 
   const adjusted = applyMemoryAdjustments({ rule, transaction, memories });
@@ -134,10 +163,20 @@ export async function classifyPostedTransactionsBatch({
 } = {}) {
   const ids = Array.from(new Set(transactionIds)).slice(0, SAFE_BATCH_LIMIT);
   const summary = emptyBatchSummary();
+  const [profile, memories] = await Promise.all([
+    getTaxProfile({ supabase, businessId, taxYear: requireTaxYear(taxYear), includeBusinessDefaults: false }),
+    getActiveTaxMemories({ supabase, businessId }),
+  ]);
+  const rules = await listDeductionRules({
+    supabase,
+    businessId,
+    taxYear: requireTaxYear(taxYear),
+    entityType: profile?.entity_type,
+  });
   for (const transactionId of ids) {
     try {
       summary.attempted += 1;
-      const out = await classifyPostedTransaction({ supabase, businessId, taxYear, transactionId, force, source, actorUserId });
+      const out = await classifyPostedTransaction({ supabase, businessId, taxYear, transactionId, force, source, actorUserId, profile, memories, rules });
       if (out.skipped) {
         summary.skippedConfirmed += 1;
         continue;
@@ -175,7 +214,7 @@ export async function previewTaxClassification({ supabase, businessId, taxYear, 
   return classifyNormalizedTransaction({ supabase, businessId, taxYear: year, transaction, profile, memories });
 }
 
-function buildFallbackClassification({ businessId, taxYear, transaction, profile, memories, source }) {
+function buildFallbackClassification({ businessId, taxYear, transaction, profile, memories, source, match = null }) {
   return buildClassification({
     businessId,
     taxYear,
@@ -191,6 +230,7 @@ function buildFallbackClassification({ businessId, taxYear, transaction, profile
     explanationSteps: ["Evaluated active verified deduction rules.", "No matching deduction rule found.", "Marked needs_review."],
     requiresReview: true,
     fallback: true,
+    matchDiagnostics: match?.diagnostics || null,
   });
 }
 
@@ -211,6 +251,7 @@ function buildClassification({
   requiresReview = false,
   structural = false,
   fallback = false,
+  matchDiagnostics = null,
   confidenceOverride = null,
   memoryKeysUsed = [],
 }) {
@@ -230,7 +271,12 @@ function buildClassification({
     warnings,
   });
   const auto = shouldAutoClassify({ score: confidence.score, rule, structural, warnings, partialDeduction: normalizedPercent > 0 && normalizedPercent < 100 });
-  const classificationStatus = requiresReview || !auto ? TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW : TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED;
+  const excluded = !requiresReview && isExcludedTaxTreatment({ taxTreatment, deductibilityStatus, taxCategory });
+  const classificationStatus = excluded
+    ? TAX_CLASSIFICATION_STATUSES.EXCLUDED
+    : requiresReview || !auto
+      ? TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW
+      : TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED;
   const amounts = computeAmounts({ transaction, deductiblePercent: normalizedPercent, deductibilityStatus, taxTreatment, taxCategory });
 
   return {
@@ -261,6 +307,9 @@ function buildClassification({
       rule_scope: rule?.scope || (rule?.business_id ? "business_override" : rule ? "global" : null),
       match_reason: rule?.__match?.reasons || [],
       match_specificity: rule?.__match?.specificity ?? null,
+      fallback,
+      fallback_reason: fallback ? "no_matching_deduction_rule" : null,
+      match_diagnostics: matchDiagnostics,
       explanation_steps: explanationSteps,
       warnings,
       confidence_factors: confidence.factors,
@@ -277,11 +326,23 @@ function buildClassification({
       source_qbo_txn_type: transaction.qboTxnType,
       source_qbo_account_id: transaction.qboAccountId,
       source_qbo_account_name: transaction.qboAccountName,
+      source_qbo_account_type: transaction.qboAccountType || transaction.metadata?.qbo_account_type || null,
+      source_qbo_account_subtype: transaction.qboAccountSubtype || transaction.metadata?.qbo_account_subtype || null,
+      normalized_qbo_account_name: transaction.normalizedQboAccountName || transaction.metadata?.normalized_qbo_account_name || null,
+      normalized_qbo_account_type: transaction.normalizedQboAccountType || transaction.metadata?.normalized_qbo_account_type || null,
+      normalized_qbo_account_subtype: transaction.normalizedQboAccountSubtype || transaction.metadata?.normalized_qbo_account_subtype || null,
       merchant_name: transaction.merchantName,
       description: transaction.description,
       book_amount_signed: transaction.signedAmount,
     },
   };
+}
+
+function isExcludedTaxTreatment({ taxTreatment, deductibilityStatus, taxCategory }) {
+  const type = String(taxTreatment?.type || "").toLowerCase();
+  return type === "balance_sheet" ||
+    deductibilityStatus === DEDUCTIBILITY_STATUSES.BALANCE_SHEET ||
+    ["transfer", "credit_card_payment", "owner_draw", "owner_contribution", "loan_principal"].includes(String(taxCategory || ""));
 }
 
 function computeAmounts({ transaction, deductiblePercent, deductibilityStatus, taxTreatment, taxCategory }) {
@@ -330,8 +391,11 @@ function buildRuleTransactionContext(transaction, entityType) {
     merchant: transaction.merchantName,
     qbo_account_id: transaction.qboAccountId,
     qbo_account_name: transaction.qboAccountName,
-    qbo_account_type: transaction.metadata?.qbo_account_type || null,
-    qbo_account_subtype: transaction.metadata?.qbo_account_subtype || null,
+    qbo_account_type: transaction.qboAccountType || transaction.metadata?.qbo_account_type || null,
+    qbo_account_subtype: transaction.qboAccountSubtype || transaction.metadata?.qbo_account_subtype || null,
+    normalized_qbo_account_name: transaction.normalizedQboAccountName || transaction.metadata?.normalized_qbo_account_name || null,
+    normalized_qbo_account_type: transaction.normalizedQboAccountType || transaction.metadata?.normalized_qbo_account_type || null,
+    normalized_qbo_account_subtype: transaction.normalizedQboAccountSubtype || transaction.metadata?.normalized_qbo_account_subtype || null,
     bookkeeping_category: transaction.bookkeepingCategory,
     memo: transaction.description,
     description: transaction.description,

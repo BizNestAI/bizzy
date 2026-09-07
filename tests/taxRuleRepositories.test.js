@@ -6,7 +6,7 @@ import { dirname, resolve } from "node:path";
 
 import { getTaxRuleConfig, validateTaxRuleConfigRow } from "../src/services/tax/taxRuleConfig.repository.js";
 import { getStateTaxConfigSet, getStateTaxRuleConfig } from "../src/services/tax/stateTaxRule.repository.js";
-import { assertConsistentDeductionPercentUnits, findMatchingDeductionRules, validateDeductionRuleRow, explainDeductionRuleMatch } from "../src/services/tax/taxDeductionRule.repository.js";
+import { assertConsistentDeductionPercentUnits, evaluateDeductionRules, findMatchingDeductionRules, validateDeductionRuleRow, explainDeductionRuleMatch } from "../src/services/tax/taxDeductionRule.repository.js";
 import { getStateRule } from "../src/services/tax/stateTaxRules.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -208,6 +208,146 @@ test("deduction repository rejects out-of-range deductible percent and excludes 
   assert.deepEqual(result.rules.map((rule) => rule.id), ["current"]);
 });
 
+test("deduction match_conditions contract rejects malformed or unknown JSON", () => {
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ match_conditions: { unknown_key: ["software"] } })), /Unsupported deduction match condition/);
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ match_conditions: { qbo_account_name_keys: "software" } })), /must be an array/);
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ match_conditions: { qbo_account_name_keys: [] } })), /non-empty array/);
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ match_conditions: { qbo_account_name_keys: [null] } })), /non-empty strings/);
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ match_conditions: { qbo_account_name_keys: [42] } })), /non-empty strings/);
+  assert.throws(() => validateDeductionRuleRow(deductionRow({ match_conditions: { qbo_account_name_keys: ["Software"] } })), /canonical normalized GL keys/);
+  assert.throws(() => validateDeductionRuleRow(deductionRow({
+    bookkeeping_category: "Utilities",
+    match_conditions: { qbo_account_name_keys: ["phone bill"] },
+  })), /conflicts with qbo_account_name_keys/);
+});
+
+test("actual SQL-seeded GL rule JSON parses and matches through repository contract", () => {
+  const rules = parseAutomaticFirstSqlSeedRows();
+  assert.ok(rules.length >= 16);
+  for (const row of rules) {
+    assert.equal(row.business_id, null);
+    assert.equal(row.scope, "global");
+    assert.equal(row.tax_year, 2026);
+    assert.equal(row.jurisdiction, "federal");
+    assert.equal(row.bookkeeping_category, null);
+    assert.equal(row.qbo_account_type, null);
+    assert.equal(row.qbo_account_subtype, null);
+    assert.equal(row.verified_at, null);
+    assert.equal(row.is_active, false);
+    validateDeductionRuleRow(row);
+  }
+
+  const activeApprovedRules = rules.map((row) => ({
+    ...row,
+    is_active: true,
+    verified_at: "2026-01-01",
+    source_reference: row.source_reference.replace("Pending accountant review; proposed source: ", "Accountant approved; source: "),
+  }));
+  const software = evaluateDeductionRules({
+    rules: activeApprovedRules,
+    transactionContext: { qbo_account_name: "Software", normalized_qbo_account_name: "software", date: "2026-04-01" },
+  });
+  assert.equal(software.selected.rule_code, "software_subscriptions_gl");
+
+  const subtype = evaluateDeductionRules({
+    rules: [
+      deductionRow({
+        id: "subtype-rule",
+        rule_code: "subtype_rule",
+        bookkeeping_category: null,
+        qbo_account_subtype: null,
+        match_conditions: { qbo_account_subtype_keys: ["dues and subscriptions"] },
+        tax_year: 2026,
+      }),
+    ],
+    transactionContext: { qbo_account_subtype: "Dues & Subscriptions", normalized_qbo_account_subtype: "dues and subscriptions", date: "2026-04-01" },
+  });
+  assert.equal(subtype.selected.rule_code, "subtype_rule");
+});
+
+test("SQL seed idempotency avoids partial-index ON CONFLICT inference and only remediates prior draft rows", () => {
+  const migration = readFileSync(resolve(__dirname, "../supabase/migrations/20260929_tax_classification_automatic_first_gl_rules.sql"), "utf8");
+  assert.doesNotMatch(migration, /on conflict/i);
+  assert.match(migration, /tax_deduction_rules_seed_conflict_20260929/);
+  assert.match(migration, /where not exists/);
+  assert.match(migration, /where \(\s+existing\.scope is distinct from seed\.scope/);
+  assert.match(migration, /remediated_prior_draft/);
+  assert.match(migration, /update public\.tax_deduction_rules existing/i);
+  assert.match(migration, /source_reference ilike 'Bizzi accountant-approved deterministic GL mapping policy 2026%'/);
+  assert.doesNotMatch(migration, /update public\.transaction_tax_classifications/i);
+  assert.doesNotMatch(migration, /set is_active = false/i);
+});
+
+test("overlapping deduction rules use deterministic precedence and surface equal-rank conflicts", () => {
+  const business = deductionRow({ id: "biz", business_id: BUSINESS_ID, scope: "business_override", rule_code: "z_business", tax_category: "business_specific", bookkeeping_category: "Software", priority: 999 });
+  const globalA = deductionRow({ id: "a", rule_code: "a_global", tax_category: "software", bookkeeping_category: "Software", priority: 10 });
+  const globalB = deductionRow({ id: "b", rule_code: "b_global", tax_category: "software", bookkeeping_category: "Software", priority: 10 });
+  const selected = evaluateDeductionRules({
+    rules: [globalB, business, globalA],
+    businessId: BUSINESS_ID,
+    transactionContext: { bookkeeping_category: "Software", date: "2025-04-01" },
+  });
+  assert.equal(selected.selected.rule_code, "z_business");
+
+  const conflict = evaluateDeductionRules({
+    rules: [
+      deductionRow({ id: "conflict-a", rule_code: "conflict_a", tax_category: "software", bookkeeping_category: "Software", priority: 10 }),
+      deductionRow({ id: "conflict-b", rule_code: "conflict_b", tax_category: "office", bookkeeping_category: "Software", priority: 10 }),
+    ],
+    transactionContext: { bookkeeping_category: "Software", date: "2025-04-01" },
+  });
+  assert.equal(conflict.selected, null);
+  assert.equal(conflict.conflict.code, "conflicting_deduction_rules");
+});
+
+test("SQL-seeded proposed rules produce a reconciled 207-row dry-run shape after approval", () => {
+  const rules = parseAutomaticFirstSqlSeedRows().map((row) => ({
+    ...row,
+    is_active: true,
+    verified_at: "2026-01-01",
+    source_reference: row.source_reference.replace("Pending accountant review; proposed source: ", "Accountant approved; source: "),
+  }));
+  const productionShape = [
+    ["Meals", 106, 2432.57],
+    ["Gas", 30, 497.9],
+    ["Parking", 25, 81.13],
+    ["Equipment Rental", 17, 834.38],
+    ["Lyft/Uber", 10, 99.29],
+    ["Insurance", 5, 1119.11],
+    ["Software", 5, 225.08],
+    ["Electric", 4, 292.04],
+    ["Phone Bill", 3, 165.56],
+    ["Supplies", 1, 18.49],
+    ["Transportation", 1, 3.64],
+  ];
+  const buckets = { auto: { count: 0, amount: 0 }, review: { count: 0, amount: 0 }, unresolved: { count: 0, amount: 0 }, excluded: { count: 0, amount: 0 }, conflicts: { count: 0, amount: 0 }, invalid: { count: 0, amount: 0 } };
+  for (const [name, count, amount] of productionShape) {
+    const result = evaluateDeductionRules({
+      rules,
+      transactionContext: { qbo_account_name: name, date: "2026-04-01" },
+    });
+    const bucket = result.conflict
+      ? "conflicts"
+      : !result.selected
+        ? "unresolved"
+        : result.selected.requires_review
+          ? "review"
+          : result.selected.deductibility_status === "balance_sheet"
+            ? "excluded"
+            : "auto";
+    buckets[bucket].count += count;
+    buckets[bucket].amount = Math.round((buckets[bucket].amount + amount + Number.EPSILON) * 100) / 100;
+  }
+  assert.deepEqual(buckets, {
+    auto: { count: 18, amount: 1820.28 },
+    review: { count: 189, amount: 3948.91 },
+    unresolved: { count: 0, amount: 0 },
+    excluded: { count: 0, amount: 0 },
+    conflicts: { count: 0, amount: 0 },
+    invalid: { count: 0, amount: 0 },
+  });
+});
+
 test("diagnostics route is read-only and central tax router mounts it behind authenticated router", () => {
   const routes = readFileSync(resolve(__dirname, "../src/api/tax/taxRuleConfig.routes.js"), "utf8");
   assert.match(routes, /router\.get\("\/rule-support"/);
@@ -302,6 +442,40 @@ function deductionRow(overrides = {}) {
     updated_at: "2025-01-01",
     ...overrides,
   };
+}
+
+function parseAutomaticFirstSqlSeedRows() {
+  const sql = readFileSync(resolve(__dirname, "../supabase/migrations/20260929_tax_classification_automatic_first_gl_rules.sql"), "utf8");
+  const re = /\('global', null::uuid, '([^']+)', 2026, 'federal', null, null, null, null,\s*'([^']+)'::jsonb,\s*'([^']+)', '([^']+)', ([0-9.]+), '([^']+)'::jsonb, (true|false), ([0-9]+),\s*'([^']+)',\s*'([^']+)',\s*'([^']+)', null, date '2026-01-01', date '2026-12-31', false, 'bizzi-gl-2026-v1'\)/g;
+  return [...sql.matchAll(re)].map((match, index) => ({
+    id: `sql-seed-${index}`,
+    business_id: null,
+    scope: "global",
+    rule_code: match[1],
+    tax_year: 2026,
+    jurisdiction: "federal",
+    entity_type: null,
+    bookkeeping_category: null,
+    qbo_account_type: null,
+    qbo_account_subtype: null,
+    match_conditions: JSON.parse(match[2]),
+    tax_category: match[3],
+    deductibility_status: match[4],
+    default_deductible_percent: Number(match[5]),
+    treatment: JSON.parse(match[6]),
+    requires_review: match[7] === "true",
+    priority: Number(match[8]),
+    explanation: match[9],
+    source_reference: match[10],
+    source_url: match[11],
+    verified_at: null,
+    effective_from: "2026-01-01",
+    effective_to: "2026-12-31",
+    is_active: false,
+    version: "bizzi-gl-2026-v1",
+    created_at: "2026-01-01",
+    updated_at: "2026-01-01",
+  }));
 }
 
 function makeSupabase(tables) {

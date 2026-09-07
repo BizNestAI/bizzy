@@ -43,16 +43,24 @@ export async function enqueueTaxClassificationRun({
   const sourceFingerprint = computeTaxClassificationSnapshotFingerprint({ businessId, taxYear: year, snapshot });
   const rulesVersion = getTaxClassificationRulesVersion();
   const eligiblePostedCount = Number(snapshot.eligiblePostedCount || 0);
-  const unclassifiedCount = Number(snapshot.unclassifiedCount || 0);
+  const candidateCount = Number(snapshot.candidateCount ?? snapshot.transactionIds?.length ?? 0);
+  const unclassifiedCount = Number(snapshot.unclassifiedCount ?? candidateCount ?? 0);
+  const unresolvedCount = Number(snapshot.unresolvedCount || 0);
 
-  if (eligiblePostedCount <= 0 || unclassifiedCount <= 0) {
+  if (eligiblePostedCount <= 0 || candidateCount <= 0) {
     return {
       queued: false,
-      outcome: "skip_no_unclassified_transactions",
+      outcome: unresolvedCount > 0 ? "skip_unresolved_fallback_rows_require_reclassification" : "skip_no_unclassified_transactions",
       run: null,
-      status: eligiblePostedCount <= 0 ? "no_posted_transactions" : "classification_complete",
+      status: eligiblePostedCount <= 0
+        ? "no_posted_transactions"
+        : unresolvedCount > 0
+          ? "classifications_required"
+          : "classification_complete",
       eligiblePostedCount,
       unclassifiedCount,
+      candidateCount,
+      unresolvedCount,
     };
   }
 
@@ -87,7 +95,7 @@ export async function enqueueTaxClassificationRun({
       sourceFingerprint,
       rulesVersion,
       eligiblePostedCount,
-      unclassifiedCount,
+      unclassifiedCount: candidateCount,
     });
   }
 
@@ -102,7 +110,7 @@ export async function enqueueTaxClassificationRun({
     sourceFingerprint,
     rulesVersion,
     eligiblePostedCount,
-    unclassifiedCount,
+    unclassifiedCount: candidateCount,
   });
   const { data, error } = await supabase
     .from("tax_classification_runs")
@@ -291,6 +299,8 @@ export async function getTaxClassificationLifecycleStatus({ supabase, businessId
     ...coverage,
     classifiedCount: sourceSnapshot.classifiedCount,
     unclassifiedCount: sourceSnapshot.unclassifiedCount,
+    unresolvedCount: sourceSnapshot.unresolvedCount ?? coverage.unresolvedCount ?? 0,
+    missingEvaluationCount: sourceSnapshot.candidateCount ?? coverage.missingEvaluationCount ?? 0,
   };
   const job = buildTaxClassificationJobStatus({ run: activeRun || latestRun, coverage: staleAwareCoverage, now: new Date() });
   const processingCount = activeRun?.status === TAX_CLASSIFICATION_RUN_STATUSES.RUNNING && !hasExhaustedAttempts(activeRun)
@@ -301,7 +311,7 @@ export async function getTaxClassificationLifecycleStatus({ supabase, businessId
     ...staleAwareCoverage,
     eligiblePostedCount,
     processingCount,
-    remainingCount: activeRun ? job.remaining : sourceSnapshot.unclassifiedCount,
+    remainingCount: activeRun ? job.remaining : sourceSnapshot.candidateCount,
     failedCount,
     jobStatus: job,
     latestRun: latestRun ? normalizeRun(latestRun) : null,
@@ -319,7 +329,21 @@ export async function getTaxClassificationJobStatus({ supabase, businessId, taxY
     getActiveTaxClassificationRun({ supabase, businessId, taxYear: year }),
     getLatestTaxClassificationRun({ supabase, businessId, taxYear: year }),
   ]);
-  if (activeRun || latestRun) return buildTaxClassificationJobStatus({ run: activeRun || latestRun });
+  if (activeRun || latestRun) {
+    const sourceSnapshot = await getTaxClassificationSourceSnapshot({ supabase, businessId, taxYear: year });
+    const coverage = await getClassificationCoverage({
+      supabase,
+      businessId,
+      taxYear: year,
+      eligiblePostedCount: Number(sourceSnapshot.eligiblePostedCount || 0),
+    });
+    const reconciledCoverage = {
+      ...coverage,
+      classifiedCount: sourceSnapshot.classifiedCount,
+      unclassifiedCount: sourceSnapshot.unclassifiedCount,
+    };
+    return buildTaxClassificationJobStatus({ run: activeRun || latestRun, coverage: reconciledCoverage });
+  }
   const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear: year });
   return lifecycle.jobStatus || buildTaxClassificationJobStatus({ run: null, coverage: lifecycle });
 }
@@ -342,6 +366,14 @@ export async function requeueTaxClassificationRun({ supabase, runId, progress = 
     locked_by: null,
     heartbeat_at: now.toISOString(),
     process_after: processAfter.toISOString(),
+    ...progressPatch(progress),
+  } });
+}
+
+export async function heartbeatTaxClassificationRun({ supabase, runId, progress = {}, now = new Date() } = {}) {
+  return updateRun({ supabase, runId, patch: {
+    status: TAX_CLASSIFICATION_RUN_STATUSES.RUNNING,
+    heartbeat_at: now.toISOString(),
     ...progressPatch(progress),
   } });
 }
@@ -405,16 +437,16 @@ export function buildTaxClassificationJobStatus({ run, coverage = {}, now = new 
     ?? coverage.eligible_posted_count
     ?? 0
   ));
-  const coverageProcessed = Number(coverage.classifiedCount || 0) + Number(coverage.excludedCount || 0) + Number(coverage.failedCount || 0);
+  const coverageProcessed = Number(coverage.evaluatedCount ?? coverage.classifiedCount ?? 0) + Number(coverage.failedCount || 0);
+  const runProcessed = normalizedRun?.processedCount ?? normalizedRun?.processed_count ?? null;
+  const hasCoverageAuthority = Number.isFinite(Number(coverage.eligiblePostedCount ?? coverage.eligible_posted_count));
   const processed = Math.min(total, Math.max(0, Number(
-    normalizedRun?.processedCount
-    ?? normalizedRun?.processed_count
-    ?? coverageProcessed
+    hasCoverageAuthority ? coverageProcessed : runProcessed ?? 0
   )));
   const remaining = Math.max(0, Number(
-    normalizedRun?.queuedCount
-    ?? normalizedRun?.queued_count
-    ?? (total - processed)
+    hasCoverageAuthority
+      ? coverage.missingEvaluationCount ?? coverage.missing_evaluation_count ?? coverage.remainingCount ?? coverage.remaining_count ?? coverage.unclassifiedCount ?? coverage.unclassified_count ?? (total - processed)
+      : normalizedRun?.queuedCount ?? normalizedRun?.queued_count ?? (total - processed)
   ));
   const rawStatus = normalizedRun?.status || null;
   const isRunning = rawStatus === TAX_CLASSIFICATION_RUN_STATUSES.RUNNING;
@@ -436,6 +468,7 @@ export function buildTaxClassificationJobStatus({ run, coverage = {}, now = new 
     remaining,
     autoClassified: Math.max(0, Number(normalizedRun?.autoClassifiedCount ?? normalizedRun?.auto_classified_count ?? coverage.autoClassifiedCount ?? 0)),
     needsReview: Math.max(0, Number(normalizedRun?.reviewRequiredCount ?? normalizedRun?.review_required_count ?? coverage.needsReviewCount ?? 0)),
+    unresolved: Math.max(0, Number(coverage.unresolvedCount ?? coverage.unresolved_count ?? 0)),
     excluded: Math.max(0, Number(normalizedRun?.excludedCount ?? normalizedRun?.excluded_count ?? coverage.excludedCount ?? 0)),
     failed: Math.max(0, Number(normalizedRun?.failedCount ?? normalizedRun?.failed_count ?? coverage.failedCount ?? 0)),
     queuedAt: normalizedRun?.queuedAt || normalizedRun?.queued_at || null,
@@ -459,7 +492,7 @@ function publicJobStatus(rawStatus, coverage = {}, timing = {}) {
   if (timing.isDelayed) return "delayed";
   if (rawStatus === TAX_CLASSIFICATION_RUN_STATUSES.QUEUED) return "queued";
   if (rawStatus === TAX_CLASSIFICATION_RUN_STATUSES.RUNNING) return "processing";
-  if (Number(coverage.unclassifiedCount || 0) > 0) return "not_started";
+  if (Number(coverage.missingEvaluationCount ?? coverage.missing_evaluation_count ?? coverage.unclassifiedCount ?? 0) > 0) return "not_started";
   if (rawStatus === TAX_CLASSIFICATION_RUN_STATUSES.REVIEW_REQUIRED) return "completed_with_review";
   if (rawStatus === TAX_CLASSIFICATION_RUN_STATUSES.COMPLETED) return "completed";
   if ([TAX_CLASSIFICATION_RUN_STATUSES.FAILED, TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER].includes(rawStatus)) return "failed";

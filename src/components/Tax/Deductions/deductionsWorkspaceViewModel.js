@@ -65,9 +65,13 @@ export function buildDeductionsWorkspaceViewModel({ overview, filters = {}, curr
 }
 
 export function mapDeductionTransactionRow(row = {}) {
-  const hasClassificationAuthority = Boolean(row.classificationStatus) && !["unclassified", "unsupported"].includes(String(row.classificationStatus));
-  const taxCategory = hasClassificationAuthority ? row.taxCategory || "unclassified" : "pending";
-  const taxTreatment = hasClassificationAuthority ? row.deductibilityStatus || row.taxTreatment || null : "pending_classification";
+  const isUnresolvedFallback = String(row.classificationStatus || "").toLowerCase() === "needs_review" &&
+    String(row.taxCategory || "").toLowerCase() === "unclassified";
+  const hasClassificationAuthority = Boolean(row.classificationStatus) &&
+    !isUnresolvedFallback &&
+    !["unclassified", "unsupported"].includes(String(row.classificationStatus));
+  const taxCategory = isUnresolvedFallback ? "unresolved" : hasClassificationAuthority ? row.taxCategory || "unclassified" : "pending";
+  const taxTreatment = isUnresolvedFallback ? "not_determined" : hasClassificationAuthority ? row.deductibilityStatus || row.taxTreatment || null : "pending_classification";
   return {
     id: row.transactionId,
     date: row.date || null,
@@ -81,17 +85,19 @@ export function mapDeductionTransactionRow(row = {}) {
     amount: nullableNumber(row.absoluteAmount ?? Math.abs(Number(row.signedAmount))),
     signedAmount: nullableNumber(row.signedAmount),
     taxCategory,
-    taxCategoryLabel: hasClassificationAuthority ? labelize(row.taxCategory || "unclassified") : "Pending",
+    taxCategoryLabel: isUnresolvedFallback ? "Unresolved" : hasClassificationAuthority ? labelize(row.taxCategory || "unclassified") : "Pending",
     taxTreatment,
     taxTreatmentLabel: hasClassificationAuthority
       ? TREATMENT_LABELS[row.deductibilityStatus] || TREATMENT_LABELS[row.taxTreatment] || labelize(row.deductibilityStatus || row.taxTreatment)
+      : isUnresolvedFallback
+        ? "Not determined"
       : "Pending classification",
     deductiblePercent: nullableNumber(row.deductiblePercent),
     deductibleAmount: nullableNumber(row.deductibleAmount),
     confidenceScore: nullableNumber(row.confidenceScore),
     confidenceLevel: row.confidenceLevel || "unavailable",
-    status: row.override?.hasOverride ? "overridden" : hasClassificationAuthority ? row.classificationStatus : "unclassified",
-    statusLabel: row.override?.hasOverride ? "Overridden" : hasClassificationAuthority ? STATUS_LABELS[row.classificationStatus] || labelize(row.classificationStatus) : "Unclassified",
+    status: row.override?.hasOverride ? "overridden" : isUnresolvedFallback ? "unclassified" : hasClassificationAuthority ? row.classificationStatus : "unclassified",
+    statusLabel: row.override?.hasOverride ? "Overridden" : isUnresolvedFallback ? "Needs classification" : hasClassificationAuthority ? STATUS_LABELS[row.classificationStatus] || labelize(row.classificationStatus) : "Unclassified",
     requiresReview: hasClassificationAuthority && row.requiresReview === true,
     warnings: normalizeList(row.warnings),
     raw: row,

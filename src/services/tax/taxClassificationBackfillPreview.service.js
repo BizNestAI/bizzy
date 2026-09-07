@@ -1,4 +1,5 @@
 import { listUnclassifiedPostedTransactions } from "./taxPostedTransaction.repository.js";
+import { listUnresolvedFallbackClassifications } from "./taxClassification.repository.js";
 import { normalizeTaxYear } from "./taxDomain.js";
 import { validationError } from "./taxErrors.js";
 
@@ -12,8 +13,25 @@ export async function previewTaxClassificationBackfill({ supabase, businessId, t
   const year = normalizeTaxYear(taxYear);
   if (!year) throw validationError("invalid_tax_year", "Tax year must be between 2000 and 2100.", { field: "year" });
   const boundedLimit = Math.min(Math.max(Number(limit || DEFAULT_LIMIT), 1), DEFAULT_LIMIT);
-  const rows = [];
+  const fallbackRows = await listUnresolvedFallbackClassifications({
+    supabase,
+    businessId,
+    taxYear: year,
+    limit: boundedLimit,
+    offset: 0,
+  });
+  if ((fallbackRows.rows || []).length > 0) {
+    return summarizeTaxClassificationBackfillPreviewRows(fallbackRows.rows.map(mapFallbackClassificationToPreviewInput), {
+      businessId,
+      taxYear: year,
+      capped: (fallbackRows.rows || []).length >= boundedLimit,
+      limit: boundedLimit,
+      target: "unresolved_fallback_rows",
+      sourceRows: fallbackRows.pagination?.total ?? fallbackRows.rows.length,
+    });
+  }
 
+  const rows = [];
   for (let offset = 0; rows.length < boundedLimit; offset += PAGE_SIZE) {
     const page = await listUnclassifiedPostedTransactions({
       supabase,
@@ -31,6 +49,8 @@ export async function previewTaxClassificationBackfill({ supabase, businessId, t
     taxYear: year,
     capped: rows.length >= boundedLimit,
     limit: boundedLimit,
+    target: "missing_evaluation_rows",
+    sourceRows: rows.length,
   });
 }
 
@@ -59,6 +79,11 @@ export function summarizeTaxClassificationBackfillPreviewRows(rows = [], context
       readOnly: true,
       capped: context.capped === true,
       limit: context.limit ?? DEFAULT_LIMIT,
+      target: context.target || "missing_evaluation_rows",
+      sourceRows: context.sourceRows ?? summaries.length,
+      repairStrategy: context.target === "unresolved_fallback_rows"
+        ? "dry_run_only_supersede_unresolved_fallback_rows_after_explicit_authorization"
+        : "dry_run_only_no_mutation",
     },
     counts: {
       eligible: summaries.length,
@@ -74,7 +99,7 @@ export function summarizeTaxClassificationBackfillPreviewRows(rows = [], context
 }
 
 export function classifyTaxBackfillPreviewRow(row = {}) {
-  const account = displayText(row.qboAccountName || row.bookAccount || row.qboAccount || "Unmapped QuickBooks account");
+  const account = displayText(row.qboAccountName || row.source_qbo_account_name || row.metadata?.source_qbo_account_name || row.bookAccount || row.qboAccount || "Unmapped QuickBooks account");
   const accountText = account.toLowerCase();
   const txnType = displayText(row.qboTxnType || row.transactionType || row.type).toLowerCase();
   const direction = displayText(row.direction).toLowerCase();
@@ -95,14 +120,24 @@ export function classifyTaxBackfillPreviewRow(row = {}) {
 
 function previewRow(row, bucket, taxCategory, deductibilityStatus, deductiblePercent, reason, amount) {
   return {
-    transactionId: row.transactionId || row.id || null,
+    transactionId: row.transactionId || row.transaction_id || row.id || null,
     bucket,
     taxCategory,
     deductibilityStatus,
     deductiblePercent,
     reason,
     amount,
-    qboAccountName: displayText(row.qboAccountName || row.bookAccount || "Unmapped QuickBooks account"),
+    qboAccountName: displayText(row.qboAccountName || row.source_qbo_account_name || row.metadata?.source_qbo_account_name || row.bookAccount || "Unmapped QuickBooks account"),
+  };
+}
+
+function mapFallbackClassificationToPreviewInput(row = {}) {
+  return {
+    transactionId: row.transaction_id || row.transactionId || null,
+    qboAccountName: row.source_qbo_account_name || row.metadata?.source_qbo_account_name || null,
+    qboTxnType: row.source_qbo_txn_type || row.metadata?.source_qbo_txn_type || null,
+    absoluteAmount: Math.abs(Number(row.book_amount || 0)) || 0,
+    direction: row.metadata?.source_direction || row.metadata?.direction || null,
   };
 }
 

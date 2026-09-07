@@ -1,7 +1,8 @@
 // /src/services/tax/taxTransactionNormalizer.js
 import { hasPostedCategorization, hasPostedQboRecord, normalizeStatus } from "./taxTransactionEligibility.js";
+import { buildQboGlAccountEvidence } from "./taxQboGlNormalizer.js";
 
-export function normalizePostedTransactionForTax({ bankTransaction, categorization, qboPostedTransaction } = {}) {
+export function normalizePostedTransactionForTax({ bankTransaction, categorization, qboPostedTransaction, qboAccount } = {}) {
   const bank = bankTransaction || {};
   const cat = categorization || {};
   const qbo = qboPostedTransaction || {};
@@ -13,10 +14,11 @@ export function normalizePostedTransactionForTax({ bankTransaction, categorizati
   const qboTypeMismatch = Boolean(cat.qbo_txn_type && qbo.qbo_txn_type && String(cat.qbo_txn_type) !== String(qbo.qbo_txn_type));
   const qboStatus = normalizeStatus(qbo.status);
   const catStatus = normalizeStatus(cat.status);
+  const gl = buildQboGlAccountEvidence({ categorization: cat, qboPostedTransaction: qbo, qboAccount });
   const sourceWarnings = [];
 
   if (qboIdMismatch || qboTypeMismatch) sourceWarnings.push("qbo_id_mismatch");
-  if (!cat.final_qbo_account_id && !cat.suggested_qbo_account_id) sourceWarnings.push("missing_qbo_account");
+  if (!gl.qboAccountId && !gl.qboAccountName) sourceWarnings.push("missing_qbo_account");
   if (!bank.counterparty_name && !bank.merchant_name) sourceWarnings.push("missing_counterparty");
   if (!bank.direction) sourceWarnings.push("missing_direction");
   if (qboStatus && catStatus === "posted" && !["posted", ""].includes(qboStatus)) sourceWarnings.push("conflicting_post_status");
@@ -44,15 +46,20 @@ export function normalizePostedTransactionForTax({ bankTransaction, categorizati
     paymentChannel: bank.payment_channel || null,
     transactionType: bank.transaction_type || null,
     checkNumber: bank.check_number || cat.meta?.check_number || null,
-    bookkeepingCategory: cat.final_qbo_account_name || cat.suggested_qbo_account_name || null,
+    bookkeepingCategory: gl.qboAccountName,
     categoryPrimary: bank.category_primary || null,
     categoryDetailed: bank.category_detailed || null,
     qboTxnId,
     qboTxnType,
     qboPostStatus: qbo.status || cat.status || null,
     qboPostedTransactionId: qbo.id || null,
-    qboAccountId: cat.final_qbo_account_id || cat.suggested_qbo_account_id || null,
-    qboAccountName: cat.final_qbo_account_name || cat.suggested_qbo_account_name || null,
+    qboAccountId: gl.qboAccountId,
+    qboAccountName: gl.qboAccountName,
+    qboAccountType: gl.qboAccountType,
+    qboAccountSubtype: gl.qboAccountSubtype,
+    normalizedQboAccountName: gl.normalizedQboAccountName,
+    normalizedQboAccountType: gl.normalizedQboAccountType,
+    normalizedQboAccountSubtype: gl.normalizedQboAccountSubtype,
     qboEntityType: bank.qbo_entity_type || null,
     qboEntityId: bank.qbo_entity_id || null,
     categorizationStatus: cat.status || null,
@@ -74,6 +81,13 @@ export function normalizePostedTransactionForTax({ bankTransaction, categorizati
       matchedQboIds: cat.qbo_txn_id && qbo.qbo_txn_id ? !qboIdMismatch : null,
     },
     sourceWarnings,
+    metadata: {
+      qbo_account_type: gl.qboAccountType,
+      qbo_account_subtype: gl.qboAccountSubtype,
+      normalized_qbo_account_name: gl.normalizedQboAccountName,
+      normalized_qbo_account_type: gl.normalizedQboAccountType,
+      normalized_qbo_account_subtype: gl.normalizedQboAccountSubtype,
+    },
     rawRefs: {
       bankTransactionId: bank.id || null,
       categorizationId: cat.id || null,

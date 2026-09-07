@@ -2,6 +2,7 @@
 import { TAX_ENTITY_TYPES, TAX_JURISDICTIONS, TAX_RULE_SUPPORT_LEVELS, normalizeEntityType, normalizeTaxYear } from "./taxDomain.js";
 import { taxConfigurationError, validationError } from "./taxErrors.js";
 import { validateDeductionRuleShape } from "./rules/deductionRuleSchemas.js";
+import { normalizeQboGlAccountKey } from "./taxQboGlNormalizer.js";
 
 export async function listDeductionRules({
   supabase,
@@ -53,6 +54,7 @@ export function selectBestDeductionRule({ globalRules = [], businessRules = [], 
 export function evaluateDeductionRules({ rules = [], transactionContext = {}, businessId } = {}) {
   const matched = (rules || [])
     .map(normalizeDeductionRule)
+    .map(validateDeductionRuleRow)
     .filter((rule) => !businessId || rule.business_id == null || String(rule.business_id) === String(businessId))
     .filter((rule) => rule.is_active !== false)
     .filter((rule) => isEffective(rule, transactionContext.date))
@@ -60,10 +62,12 @@ export function evaluateDeductionRules({ rules = [], transactionContext = {}, bu
     .map((rule) => ({ rule, match: ruleMatchDetails(rule, transactionContext) }))
     .filter((item) => item.match.matched)
     .sort((a, b) => compareDeductionRules(a.rule, b.rule, transactionContext, a.match, b.match));
+  const conflict = findTopRankConflict(matched, transactionContext);
   const selected = matched[0] || null;
   return {
     rules: matched.map((item) => attachMatch(item.rule, item.match)),
-    selected: selected ? attachMatch(selected.rule, selected.match) : null,
+    selected: conflict ? null : selected ? attachMatch(selected.rule, selected.match) : null,
+    conflict,
   };
 }
 
@@ -94,6 +98,11 @@ export function explainDeductionRuleMatch(rule, transactionContext = {}) {
 }
 
 function compareDeductionRules(a, b, ctx, aMatch = null, bMatch = null) {
+  return compareDeductionRuleRank(a, b, ctx, aMatch, bMatch) ||
+    stableRuleTieBreak(a, b);
+}
+
+function compareDeductionRuleRank(a, b, ctx, aMatch = null, bMatch = null) {
   const am = aMatch || ruleMatchDetails(a, ctx);
   const bm = bMatch || ruleMatchDetails(b, ctx);
   return (
@@ -102,9 +111,33 @@ function compareDeductionRules(a, b, ctx, aMatch = null, bMatch = null) {
     bm.specificity - am.specificity ||
     bm.conditionSpecificity - am.conditionSpecificity ||
     Date.parse(b.verified_at || 0) - Date.parse(a.verified_at || 0) ||
-    String(b.version || "").localeCompare(String(a.version || ""), undefined, { numeric: true, sensitivity: "base" }) ||
-    Date.parse(b.updated_at || b.created_at || 0) - Date.parse(a.updated_at || a.created_at || 0)
+    String(b.version || "").localeCompare(String(a.version || ""), undefined, { numeric: true, sensitivity: "base" })
   );
+}
+
+function stableRuleTieBreak(a, b) {
+  return String(a.rule_code || "").localeCompare(String(b.rule_code || ""), undefined, { numeric: true, sensitivity: "base" }) ||
+    String(a.id || "").localeCompare(String(b.id || ""), undefined, { numeric: true, sensitivity: "base" });
+}
+
+function findTopRankConflict(matched, ctx) {
+  if (matched.length < 2) return null;
+  const top = matched[0];
+  const tied = matched.filter((item) => compareDeductionRuleRank(top.rule, item.rule, ctx, top.match, item.match) === 0);
+  const conflicts = tied.filter((item) => item === top || conflictsWithRule(top.rule, item.rule));
+  if (conflicts.length < 2) return null;
+  return {
+    code: "conflicting_deduction_rules",
+    ruleCodes: conflicts.map((item) => item.rule.rule_code).filter(Boolean),
+    ruleIds: conflicts.map((item) => item.rule.id).filter(Boolean),
+  };
+}
+
+function conflictsWithRule(a, b) {
+  return String(a.tax_category || "") !== String(b.tax_category || "") ||
+    String(a.deductibility_status || "") !== String(b.deductibility_status || "") ||
+    Number(a.default_deductible_percent) !== Number(b.default_deductible_percent) ||
+    JSON.stringify(a.treatment || {}) !== JSON.stringify(b.treatment || {});
 }
 
 function ruleMatches(rule, ctx) {
@@ -120,17 +153,17 @@ function ruleMatchDetails(rule, ctx = {}) {
     reasons.push(`entity_type=${rule.entity_type}`);
   }
   if (rule.bookkeeping_category) {
-    if (!sameText(rule.bookkeeping_category, ctx.bookkeeping_category)) return noMatch();
+    if (!sameTaxGlText(rule.bookkeeping_category, ctx.bookkeeping_category || ctx.qbo_account_name || ctx.normalized_qbo_account_name)) return noMatch();
     spec += 40;
     reasons.push(`bookkeeping_category=${rule.bookkeeping_category}`);
   }
   if (rule.qbo_account_type) {
-    if (!sameText(rule.qbo_account_type, ctx.qbo_account_type)) return noMatch();
+    if (!sameTaxGlText(rule.qbo_account_type, ctx.qbo_account_type || ctx.normalized_qbo_account_type)) return noMatch();
     spec += 20;
     reasons.push(`qbo_account_type=${rule.qbo_account_type}`);
   }
   if (rule.qbo_account_subtype) {
-    if (!sameText(rule.qbo_account_subtype, ctx.qbo_account_subtype)) return noMatch();
+    if (!sameTaxGlText(rule.qbo_account_subtype, ctx.qbo_account_subtype || ctx.normalized_qbo_account_subtype)) return noMatch();
     spec += 30;
     reasons.push(`qbo_account_subtype=${rule.qbo_account_subtype}`);
   }
@@ -173,6 +206,8 @@ function matchCondition(key, expected, ctx) {
   if (key === "requires_inventory") return matchBoolean(expected, ctx.has_inventory || ctx.inventory_item_id, "requires_inventory");
   if (key === "assigned_job_required") return matchBoolean(expected, ctx.job_id || ctx.assigned_job_id, "assigned_job_required");
   if (key === "qbo_account_names") return matchAnyText(expected, [ctx.qbo_account_name], "qbo_account_name");
+  if (key === "qbo_account_name_keys") return matchArray(expected, ctx.normalized_qbo_account_name || normalizeQboGlAccountKey(ctx.qbo_account_name), "qbo_account_name_key");
+  if (key === "qbo_account_subtype_keys") return matchArray(expected, ctx.normalized_qbo_account_subtype || normalizeQboGlAccountKey(ctx.qbo_account_subtype), "qbo_account_subtype_key");
   if (key === "direction") return matchArray(Array.isArray(expected) ? expected : [expected], ctx.direction, "direction");
   if (key === "merchant_entity_id") return matchScalar(expected, ctx.merchant_entity_id, key);
   if (key.endsWith("_regex")) return matchRegex(expected, [actual], key);
@@ -263,16 +298,16 @@ function isNonMatchingMetadataKey(key) {
   ].includes(key);
 }
 
-function sameText(a, b) {
-  return normalizeComparable(a) === normalizeComparable(b);
-}
-
 function textIncludes(actual, expected) {
-  return String(actual || "").toLowerCase().includes(String(expected || "").toLowerCase());
+  return normalizeComparable(actual).includes(normalizeComparable(expected));
 }
 
 function normalizeComparable(value) {
-  return String(value ?? "").trim().toLowerCase();
+  return normalizeQboGlAccountKey(value);
+}
+
+function sameTaxGlText(a, b) {
+  return normalizeQboGlAccountKey(a) === normalizeQboGlAccountKey(b);
 }
 
 function isEffective(row, asOfDate = new Date().toISOString().slice(0, 10)) {
@@ -285,4 +320,5 @@ export const __testables = {
   ruleMatches,
   ruleMatchDetails,
   compareDeductionRules,
+  compareDeductionRuleRank,
 };

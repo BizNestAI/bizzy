@@ -18,6 +18,7 @@
     "tax:validate-rules:json": "node scripts/tax/validate-rules.js --json",
     "tax:qa-business": "node scripts/tax/run-business-qa.js",
     "tax:production-audit": "node scripts/tax/production-audit.js",
+    "tax:classification-quality-audit": "node scripts/tax/classification-quality-audit.js",
     "test:tax-rls": "node --test --test-concurrency=1 tests/integration/tax/*.integration.test.js",
     "test:tax-output-safety": "node --test --test-concurrency=1 tests/security/tax/taxSensitiveOutput.integration.test.js"
   },

@@ -1,7 +1,7 @@
 // File: /components/Tax/TaxDashboard.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AlertTriangle, CheckCircle2, ChevronDown, Info, RefreshCcw, Settings2, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, Info, Loader2, RefreshCcw, Settings2, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import TaxTrendCard from "../../components/Tax/TaxTrendCard";
@@ -508,7 +508,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const classificationsRequired = !deductions.isDemo && classificationSummary.requiresClassification;
   const classificationActive = classificationSummary.isActiveJob;
   const canPrepareDeductions = !readOnly && !classificationActive && !deductions.loading && (
-    (classificationSummary.unclassifiedTotal ?? 0) > 0 ||
+    (classificationSummary.missingEvaluationTotal ?? classificationSummary.unclassifiedTotal ?? 0) > 0 ||
     classificationSummary.jobStatus?.canRetry === true ||
     classificationSummary.classificationStatus === "classification_failed"
   );
@@ -652,15 +652,14 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
           </div>
         </div>
         <ClassificationProgressSummary summary={classificationSummary} />
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">
-          <ClassificationStat label="Eligible posted" value={classificationSummary.postedTotal} />
-          <ClassificationStat label="Classified" value={classificationSummary.classifiedTotal} />
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+          <ClassificationStat label="Eligible" value={classificationSummary.postedTotal} />
           <ClassificationStat label="Auto-classified" value={classificationSummary.autoClassifiedTotal} />
           <ClassificationStat label="Needs review" value={classificationSummary.reviewRequiredTotal} tone={classificationSummary.reviewRequiredTotal ? "amber" : "default"} />
-          <ClassificationStat label="Unclassified" value={classificationSummary.unclassifiedTotal} tone={classificationSummary.unclassifiedTotal ? "amber" : "default"} />
+          <ClassificationStat label="Unresolved" value={classificationSummary.unresolvedTotal} tone={classificationSummary.unresolvedTotal ? "amber" : "default"} />
           <ClassificationStat label="Excluded" value={classificationSummary.excludedTotal} />
           <ClassificationStat
-            label={classificationSummary.isActiveJob ? "Remaining" : "Processing"}
+            label="Processing"
             value={classificationSummary.isActiveJob ? classificationSummary.remainingTotal : classificationSummary.processingTotal}
           />
           <ClassificationStat label="Failed" value={classificationSummary.failedTotal} tone={classificationSummary.failedTotal ? "rose" : "default"} />
@@ -803,6 +802,7 @@ function ClassificationProgressSummary({ summary }) {
   const total = Number(job.total || summary.postedTotal || 0);
   const processed = Math.min(total, Math.max(0, Number(job.processed || 0)));
   const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
+  const active = ["queued", "processing", "delayed"].includes(job.status) || (job.status === "stalled" && !job.isStalled);
   const heading = job.status === "queued"
     ? "Deductions preparation is queued."
     : job.status === "delayed"
@@ -811,13 +811,15 @@ function ClassificationProgressSummary({ summary }) {
       ? "Deductions preparation needs attention."
       : job.status === "stalled"
         ? "Deductions preparation appears to be stalled."
-        : "Bizzi is classifying your posted QuickBooks transactions.";
+        : "Bizzi is classifying your transactions.";
   const detail = job.status === "failed"
     ? "The run stopped before all eligible transactions were classified. Any completed classifications are preserved."
     : job.status === "stalled"
       ? "No recent worker heartbeat was recorded. Retry is available when the backend marks it safe."
       : job.status === "delayed"
         ? "No worker has claimed this job yet. Bizzi will keep checking automatically."
+      : job.status === "queued"
+        ? "Bizzi will begin classifying your posted transactions shortly."
       : job.isSlow
         ? "Still working. You can leave this page and check back shortly."
         : "This usually takes a few minutes. You can leave this page while Bizzi continues.";
@@ -826,13 +828,15 @@ function ClassificationProgressSummary({ summary }) {
       job.status === "failed" || job.status === "stalled" || job.status === "delayed"
         ? "border-amber-300/18 bg-amber-300/[0.07]"
         : "border-emerald-300/18 bg-black/18"
-    }`}>
+    }`} aria-busy={active ? "true" : "false"} aria-live="polite" role="status">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           {job.status === "failed" || job.status === "stalled" || job.status === "delayed" ? (
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" aria-hidden="true" />
           ) : (
-            <span className="mt-1 inline-flex h-3 w-3 shrink-0 rounded-full bg-emerald-300 motion-safe:animate-pulse" aria-hidden="true" />
+            <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-emerald-300/20 bg-emerald-300/10" aria-hidden="true">
+              <Loader2 className="h-3.5 w-3.5 text-emerald-200 motion-safe:animate-spin" />
+            </span>
           )}
           <div className="min-w-0">
             <div className="text-sm font-semibold text-white">{heading}</div>
@@ -846,7 +850,7 @@ function ClassificationProgressSummary({ summary }) {
       {total > 0 ? (
         <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/[0.08]" aria-label={`Classification progress ${percent}%`}>
           <div
-            className="h-full rounded-full bg-emerald-300 transition-[width] duration-500"
+            className={`h-full rounded-full bg-emerald-300 transition-[width] duration-500 ${active ? "bizzi-progress-fill" : ""}`}
             style={{ width: `${Math.max(2, percent)}%` }}
           />
         </div>
@@ -930,7 +934,8 @@ function ClassificationWorkspaceTable({ rows, loading }) {
 }
 
 function ClassificationProgressCount({ job, total, processed }) {
-  if (job.status === "queued") return `0 of ${total} queued`;
+  if (job.status === "queued" && processed <= 0) return `0 of ${total} queued`;
+  if (job.status === "processing" || processed > 0) return `${processed} of ${total} processed`;
   if (job.status === "delayed") return `${total} awaiting worker`;
   if (job.status === "stalled") return `${processed} of ${total} complete`;
   return `${processed} of ${total} complete`;
@@ -992,8 +997,21 @@ function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfi
         </div>
         <footer className="shrink-0 flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
           <button type="button" onClick={onClose} disabled={loading} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/10 disabled:opacity-50">Cancel</button>
-          <button type="button" onClick={onConfirm} disabled={loading} className="rounded-full bg-emerald-300 px-5 py-2 text-sm font-semibold text-[#05110d] hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-60">
-            {loading ? "Starting deductions preparation..." : "Confirm preparation"}
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={loading}
+            aria-busy={loading ? "true" : "false"}
+            className="inline-flex items-center justify-center gap-2 rounded-full bg-emerald-300 px-5 py-2 text-sm font-semibold text-[#05110d] hover:bg-emerald-200 disabled:cursor-default disabled:opacity-70"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                <span>Starting deductions preparation...</span>
+              </>
+            ) : (
+              "Confirm preparation"
+            )}
           </button>
         </footer>
       </section>
@@ -1027,6 +1045,7 @@ function buildDeductionClassificationSummary(deductions) {
   const coverage = deductions.classificationCoverage || deductions.overview?.coverage || {};
   const jobStatus = deductions.classificationJobStatus || coverage.jobStatus || coverage.job_status || null;
   const classificationStatus = coverage.classificationStatus || coverage.classification_status || null;
+  const activeOrRecentJob = ["queued", "delayed", "processing", "stalled", "completed", "completed_with_review", "failed"].includes(jobStatus?.status);
   const postedTotal = nullableNumber(
     coverage.postedTransactionCount
     ?? coverage.posted_transaction_count
@@ -1043,38 +1062,57 @@ function buildDeductionClassificationSummary(deductions) {
     ?? deductions.allTransactions?.pagination?.total
     ?? deductions.transactions?.pagination?.total
   );
-  const reviewRequiredTotal = nullableNumber(
+  const jobAutoClassified = nullableNumber(jobStatus?.autoClassified);
+  const jobNeedsReview = nullableNumber(jobStatus?.needsReview);
+  const jobExcluded = nullableNumber(jobStatus?.excluded);
+  const jobRemaining = nullableNumber(jobStatus?.remaining);
+  const jobFailed = nullableNumber(jobStatus?.failed);
+  const unresolvedTotal = nullableNumber(coverage.unresolvedTransactionCount ?? coverage.unresolved_transaction_count ?? coverage.unresolvedCount ?? coverage.unresolved_count) ?? 0;
+  const missingEvaluationTotal = nullableNumber(
+    coverage.missingEvaluationTransactionCount
+    ?? coverage.missing_evaluation_transaction_count
+    ?? coverage.missingEvaluationCount
+    ?? coverage.missing_evaluation_count
+  ) ?? null;
+  const reviewRequiredTotal = (activeOrRecentJob && jobNeedsReview != null ? jobNeedsReview : null) ?? nullableNumber(
     coverage.reviewRequiredTransactionCount
     ?? coverage.review_required_transaction_count
     ?? coverage.reviewRequiredCount
     ?? coverage.requiresReviewCount
   ) ?? 0;
-  const unclassifiedTotal = nullableNumber(
+  const unclassifiedTotal = (activeOrRecentJob && jobRemaining != null ? jobRemaining : null) ?? nullableNumber(
     coverage.unclassifiedTransactionCount
     ?? coverage.unclassified_transaction_count
     ?? coverage.unclassifiedCount
     ?? coverage.unclassified_count
   ) ?? (postedTotal != null && classifiedTotal != null ? Math.max(0, postedTotal - classifiedTotal) : null);
-  const autoClassifiedTotal = nullableNumber(
+  const autoClassifiedTotal = (activeOrRecentJob && jobAutoClassified != null ? jobAutoClassified : null) ?? nullableNumber(
     coverage.autoClassifiedTransactionCount
     ?? coverage.auto_classified_transaction_count
     ?? coverage.autoClassifiedCount
     ?? coverage.auto_classified_count
   );
-  const excludedTotal = nullableNumber(coverage.excludedTransactionCount ?? coverage.excluded_transaction_count ?? coverage.excludedCount);
+  const excludedTotal = (activeOrRecentJob && jobExcluded != null ? jobExcluded : null) ?? nullableNumber(coverage.excludedTransactionCount ?? coverage.excluded_transaction_count ?? coverage.excludedCount);
   const processingTotal = nullableNumber(coverage.processingTransactionCount ?? coverage.processing_transaction_count ?? coverage.processingCount) ?? 0;
-  const remainingTotal = nullableNumber(jobStatus?.remaining ?? coverage.remainingTransactionCount ?? coverage.remaining_transaction_count ?? coverage.remainingCount) ?? 0;
-  const failedTotal = nullableNumber(coverage.failedTransactionCount ?? coverage.failed_transaction_count ?? coverage.failedCount) ?? 0;
+  const remainingTotal = jobRemaining ?? nullableNumber(coverage.remainingTransactionCount ?? coverage.remaining_transaction_count ?? coverage.remainingCount) ?? 0;
+  const failedTotal = (activeOrRecentJob && jobFailed != null ? jobFailed : null) ?? nullableNumber(coverage.failedTransactionCount ?? coverage.failed_transaction_count ?? coverage.failedCount) ?? 0;
   const lastRunAt = jobStatus?.completedAt || jobStatus?.failedAt || jobStatus?.heartbeatAt || jobStatus?.queuedAt || coverage.lastRunAt || coverage.last_run_at || deductions.classificationReviewSummary?.lastRunAt || null;
   const jobProcessed = nullableNumber(jobStatus?.processed);
-  const effectiveClassified = jobProcessed ?? classifiedTotal ?? (postedTotal != null && unclassifiedTotal != null ? Math.max(0, postedTotal - unclassifiedTotal) : null);
-  const requiresClassification = (postedTotal ?? 0) > 0 && ((unclassifiedTotal ?? 0) > 0 || reviewRequiredTotal > 0 || (effectiveClassified ?? 0) === 0);
-  const isActiveJob = ["queued", "delayed", "processing"].includes(jobStatus?.status);
+  const bucketClassified = [autoClassifiedTotal, reviewRequiredTotal, excludedTotal]
+    .some((value) => value != null)
+    ? Number(autoClassifiedTotal || 0) + Number(reviewRequiredTotal || 0) + Number(excludedTotal || 0)
+    : null;
+  const effectiveClassified = bucketClassified ?? classifiedTotal ?? (postedTotal != null && unclassifiedTotal != null ? Math.max(0, postedTotal - unclassifiedTotal) : null);
+  const requiresClassification = (postedTotal ?? 0) > 0 && ((unclassifiedTotal ?? 0) > 0 || unresolvedTotal > 0 || reviewRequiredTotal > 0 || (effectiveClassified ?? 0) === 0);
+  const isActiveJob = ["queued", "delayed", "processing", "stalled"].includes(jobStatus?.status);
   return {
     postedTotal,
     classifiedTotal: effectiveClassified,
+    processedTotal: jobProcessed,
     autoClassifiedTotal,
     unclassifiedTotal,
+    missingEvaluationTotal,
+    unresolvedTotal,
     reviewRequiredTotal,
     excludedTotal,
     processingTotal,
@@ -1161,6 +1199,9 @@ function classificationWorkspaceMessage(summary) {
   if ((summary.reviewRequiredTotal ?? 0) > 0 && (summary.unclassifiedTotal ?? 0) <= 0) {
     return "Most transactions were classified automatically. Review the items that need more context.";
   }
+  if ((summary.postedTotal ?? 0) > 0 && (summary.unresolvedTotal ?? 0) > 0 && (summary.autoClassifiedTotal ?? 0) <= 0 && (summary.excludedTotal ?? 0) <= 0) {
+    return `Bizzi reviewed ${summary.postedTotal} transactions, but additional classification rules are needed before their tax treatment can be determined.`;
+  }
   if ((summary.postedTotal ?? 0) > 0 && (summary.unclassifiedTotal ?? 0) > 0) {
     return `${summary.postedTotal} posted QuickBooks transactions are ready for automatic tax classification.`;
   }
@@ -1206,7 +1247,9 @@ function classificationStatusLabel(bucket, row) {
 }
 
 function deductibilityLabel(row) {
-  if (classificationBucket(row) === "unclassified") return "Pending classification";
+  if (classificationBucket(row) === "unclassified") {
+    return row.taxTreatment === "not_determined" ? "Not determined" : "Pending classification";
+  }
   const value = String(row?.taxTreatmentLabel || row?.deductibilityStatus || row?.taxTreatment || "").toLowerCase();
   if (value.includes("full")) return "Fully deductible";
   if (value.includes("partial")) return "Partially deductible";
@@ -1224,6 +1267,7 @@ function deductiblePercentLabel(row) {
 
 function classificationSourceLabel(row) {
   const source = safeText(firstValue(row.classificationSource, row.classification_source, row.raw?.classification?.source), "");
+  if (row.taxTreatment === "not_determined" || row.taxCategory === "unresolved") return "No matching rule";
   if (!source) return classificationBucket(row) === "unclassified" ? "Not classified" : "Rule";
   return formatTaxCategoryLabel(source);
 }
@@ -1258,8 +1302,8 @@ function humanizeTaxField(value) {
 function formatClassificationSummaryLine(summary) {
   const parts = [];
   if (summary.postedTotal != null) parts.push(`${summary.postedTotal} posted`);
-  if (summary.classifiedTotal != null) parts.push(`${summary.classifiedTotal} classified`);
-  if (summary.unclassifiedTotal != null) parts.push(`${summary.unclassifiedTotal} unclassified`);
+  if (summary.autoClassifiedTotal != null) parts.push(`${summary.autoClassifiedTotal} auto-classified`);
+  if (summary.unresolvedTotal != null) parts.push(`${summary.unresolvedTotal} unresolved`);
   if (summary.reviewRequiredTotal) parts.push(`${summary.reviewRequiredTotal} review required`);
   return parts.length ? parts.join(" · ") : "Classification counts unavailable.";
 }

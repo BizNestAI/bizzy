@@ -3,6 +3,19 @@ import { TAX_CLASSIFICATION_STATUSES, normalizeTaxYear } from "./taxDomain.js";
 import { validationError } from "./taxErrors.js";
 
 const CLASSIFICATION_SELECT = "*";
+const AUTHORITATIVE_OUTCOME_STATUSES = new Set([
+  TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED,
+  TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
+  TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED,
+  TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED,
+  TAX_CLASSIFICATION_STATUSES.EXCLUDED,
+]);
+
+const MEANINGFUL_REVIEW_TAX_CATEGORY = new Set([
+  TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
+  TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED,
+  TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED,
+]);
 
 export async function getTaxClassification({ supabase, businessId, transactionId, taxYear } = {}) {
   const year = requireTaxYear(taxYear);
@@ -218,15 +231,42 @@ export async function countClassificationsByStatus({ supabase, businessId, taxYe
   }, {});
 }
 
+export async function listUnresolvedFallbackClassifications({
+  supabase,
+  businessId,
+  taxYear,
+  limit = 1000,
+  offset = 0,
+} = {}) {
+  const listed = await listTaxClassifications({ supabase, businessId, taxYear, limit: 10000, offset: 0 });
+  const start = Math.max(0, Number(offset || 0));
+  const boundedLimit = Math.max(1, Number(limit || 1000));
+  const rows = listed.rows
+    .filter(isUnresolvedFallbackClassification)
+    .slice(start, start + boundedLimit);
+  return {
+    rows,
+    pagination: {
+      limit: boundedLimit,
+      offset: start,
+      returned: rows.length,
+      total: listed.rows.filter(isUnresolvedFallbackClassification).length,
+    },
+  };
+}
+
 export async function getClassificationCoverage({ supabase, businessId, taxYear, eligiblePostedCount = 0 } = {}) {
   const listed = await listTaxClassifications({ supabase, businessId, taxYear, limit: 10000, offset: 0 });
-  const rows = listed.rows;
-  const classifiedCount = rows.length;
+  const evaluatedRows = listed.rows.filter(hasCompletedClassificationEvaluation);
+  const rows = evaluatedRows.filter(hasMeaningfulClassificationOutcome);
   const confirmedCount = rows.filter(isConfirmed).length;
   const autoClassifiedCount = rows.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED).length;
-  const needsReviewCount = rows.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW).length;
+  const needsReviewCount = rows.filter(isReviewWithProposal).length;
+  const unresolvedCount = evaluatedRows.filter(isUnresolvedFallbackClassification).length;
   const excludedCount = rows.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.EXCLUDED).length;
-  const unclassifiedCount = Math.max(0, Number(eligiblePostedCount || 0) - classifiedCount);
+  const classifiedCount = autoClassifiedCount + needsReviewCount + excludedCount + confirmedCount;
+  const missingEvaluationCount = Math.max(0, Number(eligiblePostedCount || 0) - evaluatedRows.length);
+  const unclassifiedCount = missingEvaluationCount + unresolvedCount;
   const classificationStatus = unclassifiedCount > 0
     ? "classifications_required"
     : needsReviewCount > 0
@@ -241,10 +281,25 @@ export async function getClassificationCoverage({ supabase, businessId, taxYear,
     confirmedCount,
     autoClassifiedCount,
     needsReviewCount,
+    reviewRequiredWithProposalCount: needsReviewCount,
+    unresolvedCount,
+    evaluatedCount: evaluatedRows.length,
     excludedCount,
     unclassifiedCount,
+    missingEvaluationCount,
     processingCount: 0,
     failedCount: 0,
+    outcomeReconciliation: {
+      eligible: Number(eligiblePostedCount || 0),
+      autoClassified: autoClassifiedCount,
+      needsReview: needsReviewCount,
+      unresolved: unresolvedCount,
+      excluded: excludedCount,
+      failed: 0,
+      processing: 0,
+      missingEvaluation: missingEvaluationCount,
+      reconciled: Number(eligiblePostedCount || 0) === autoClassifiedCount + needsReviewCount + unresolvedCount + excludedCount + confirmedCount + missingEvaluationCount,
+    },
     classificationStatus,
     lastRunAt: rows.reduce((latest, row) => {
       const value = row.updated_at || row.created_at || null;
@@ -254,13 +309,72 @@ export async function getClassificationCoverage({ supabase, businessId, taxYear,
     deductibleAmount: sum("deductible_amount"),
     nondeductibleAmount: sum("nondeductible_amount"),
     capitalizableAmount: sum("capitalizable_amount"),
-    unclassifiedBookAmount: 0,
+    unresolvedBookAmount: round2(evaluatedRows.filter(isUnresolvedFallbackClassification).reduce((acc, row) => acc + Math.abs(Number(row.book_amount || 0)), 0)),
+    unclassifiedBookAmount: round2(evaluatedRows.filter(isUnresolvedFallbackClassification).reduce((acc, row) => acc + Math.abs(Number(row.book_amount || 0)), 0)),
     warnings: [],
   };
 }
 
 export function isConfirmed(row) {
   return [TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED, TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED].includes(row?.classification_status);
+}
+
+export function hasAuthoritativeClassificationOutcome(row) {
+  return hasMeaningfulClassificationOutcome(row);
+}
+
+export function hasCompletedClassificationEvaluation(row) {
+  if (!row || row.metadata?.tax_classification_stale === true) return false;
+  const status = String(row.classification_status || "").trim();
+  if (!AUTHORITATIVE_OUTCOME_STATUSES.has(status)) return false;
+  if (!row.transaction_id) return false;
+  if (!nonEmpty(row.tax_category)) return false;
+  if (!nonEmpty(row.deductibility_status)) return false;
+  if (!finitePercent(row.deductible_percent)) return false;
+  if (!finiteMoney(row.book_amount)) return false;
+  if (!finiteMoney(row.deductible_amount)) return false;
+  if (!finiteMoney(row.nondeductible_amount)) return false;
+  if (!finiteMoney(row.capitalizable_amount)) return false;
+  return true;
+}
+
+export function hasMeaningfulClassificationOutcome(row) {
+  if (!hasCompletedClassificationEvaluation(row)) return false;
+  return !isUnresolvedFallbackClassification(row);
+}
+
+export function isUnresolvedFallbackClassification(row) {
+  if (!row) return false;
+  const status = String(row.classification_status || "").trim();
+  const taxCategory = String(row.tax_category || "").trim().toLowerCase();
+  const treatmentType = String(row.tax_treatment?.type || row.metadata?.tax_treatment_type || "").trim().toLowerCase();
+  return status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW &&
+    taxCategory === "unclassified" &&
+    (row.metadata?.fallback === true || treatmentType === "unclassified" || !row.rule_id && !row.rule_code);
+}
+
+export function isReviewWithProposal(row) {
+  if (!hasCompletedClassificationEvaluation(row)) return false;
+  const status = String(row.classification_status || "").trim();
+  const taxCategory = String(row.tax_category || "").trim().toLowerCase();
+  return MEANINGFUL_REVIEW_TAX_CATEGORY.has(status) &&
+    status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW &&
+    taxCategory !== "unclassified";
+}
+
+function nonEmpty(value) {
+  return String(value || "").trim().length > 0;
+}
+
+function finitePercent(value) {
+  if (value == null || value === "") return false;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 && n <= 100;
+}
+
+function finiteMoney(value) {
+  if (value == null || value === "") return false;
+  return Number.isFinite(Number(value));
 }
 
 function toDbRow(c, existing) {

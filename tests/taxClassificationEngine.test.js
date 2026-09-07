@@ -19,7 +19,7 @@ test("deduction rules classify transfer, credit-card payment, owner draw, owner 
   assert.equal(transfer.taxCategory, "transfer");
   assert.equal(transfer.deductibilityStatus, "balance_sheet");
   assert.equal(transfer.deductibleAmount, 0);
-  assert.equal(transfer.classificationStatus, "auto_classified");
+  assert.equal(transfer.classificationStatus, "excluded");
   assert.equal(transfer.metadata.rule_priority, 5);
 
   const cc = await classifyNormalizedTransaction(baseArgs({ transaction: txn({ bookkeepingCategory: "credit_card_payments", taxonomyType: "cc_payment" }), rules }));
@@ -201,6 +201,65 @@ test("business rule beats global rule through repository-backed matching", async
   assert.equal(result.ruleId, "business");
   assert.equal(result.taxCategory, "office_expense");
   assert.equal(result.metadata.rule_scope, "business_override");
+});
+
+test("equal-rank conflicting deduction rules produce review-required conflict classification", async () => {
+  const result = await classifyNormalizedTransaction(baseArgs({
+    transaction: txn({ bookkeepingCategory: "Software" }),
+    rules: [
+      rule({ id: "conflict-a", rule_code: "conflict_a", tax_category: "software", bookkeeping_category: "Software", priority: 10 }),
+      rule({ id: "conflict-b", rule_code: "conflict_b", tax_category: "office", bookkeeping_category: "Software", priority: 10 }),
+    ],
+  }));
+
+  assert.equal(result.classificationStatus, "needs_review");
+  assert.equal(result.taxCategory, "rule_conflict");
+  assert.equal(result.metadata.match_diagnostics.conflict.code, "conflicting_deduction_rules");
+});
+
+test("posted QBO GL account cache type and subtype feed deterministic rule matching", async () => {
+  const supabase = makeSupabase({
+    bank_transactions: [bankTxn({ id: "txn-meal", name: "Chipotle Mexican Grill", merchant_name: "Chipotle Mexican Grill", signed_amount: -12, amount: 12 })],
+    transaction_categorizations: [cat({
+      transaction_id: "txn-meal",
+      final_qbo_account_id: "acct-meals",
+      final_qbo_account_name: " Meals ",
+      qbo_txn_id: "qbo-meal",
+      meta: {},
+    })],
+    qbo_posted_transactions: [qboPosted({ transaction_id: "txn-meal", qbo_txn_id: "qbo-meal", realm_id: "realm-1", qbo_env: "production" })],
+    qbo_accounts_cache: [{
+      business_id: BUSINESS_ID,
+      qbo_env: "production",
+      realm_id: "realm-1",
+      qbo_account_id: "acct-meals",
+      qbo_account_name: "Meals",
+      qbo_account_type: "Expense",
+      qbo_account_subtype: "Meals",
+      status: "active",
+    }],
+    tax_profiles: [profile()],
+    tax_deduction_rules: [rule({
+      id: "meals-by-subtype",
+      rule_code: "meals_by_qbo_subtype",
+      tax_category: "meals",
+      bookkeeping_category: "meals",
+      qbo_account_type: "expense",
+      qbo_account_subtype: "meals",
+      deductibility_status: "partially_deductible",
+      default_deductible_percent: 50,
+      requires_review: true,
+      match_conditions: { merchant_regex: "chipotle|restaurant|grill" },
+    })],
+  });
+
+  const out = await classifyPostedTransaction({ supabase, businessId: BUSINESS_ID, taxYear: 2026, transactionId: "txn-meal" });
+
+  assert.equal(out.result.taxCategory, "meals");
+  assert.equal(out.result.classificationStatus, "needs_review");
+  assert.equal(out.result.deductiblePercent, 50);
+  assert.equal(out.result.metadata.source_qbo_account_id, "acct-meals");
+  assert.equal(out.result.metadata.normalized_qbo_account_subtype, "meals");
 });
 
 test("rule engine ignores inactive, expired, future, and unverified in-memory rules", async () => {
@@ -416,6 +475,23 @@ function cat(overrides = {}) {
     qbo_txn_id: "qbo-1",
     qbo_txn_type: "Expense",
     posted_at: "2026-03-16T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function qboPosted(overrides = {}) {
+  return {
+    id: "qbo-row-1",
+    business_id: BUSINESS_ID,
+    transaction_id: "txn-1",
+    qbo_txn_type: "Purchase",
+    qbo_txn_id: "qbo-1",
+    qbo_env: "production",
+    realm_id: "realm-1",
+    status: "posted",
+    posted_at: "2026-03-16T00:00:00Z",
+    payload: {},
+    response: {},
     ...overrides,
   };
 }

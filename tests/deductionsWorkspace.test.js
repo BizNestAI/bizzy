@@ -106,6 +106,31 @@ test("unclassified posted rows are not shown as authoritative needs-review class
   assert.equal(row.requiresReview, false);
 });
 
+test("persisted review-required fallback rows display as unresolved items", () => {
+  const row = mapDeductionTransactionRow({
+    transactionId: "txn-review",
+    date: "2026-09-03",
+    merchantName: "Vendor",
+    qboAccountName: "Unmapped",
+    signedAmount: -53,
+    absoluteAmount: 53,
+    taxCategory: "unclassified",
+    deductibilityStatus: "needs_review",
+    deductiblePercent: 0,
+    deductibleAmount: 0,
+    classificationStatus: "needs_review",
+    requiresReview: true,
+  });
+
+  assert.equal(row.taxCategory, "unresolved");
+  assert.equal(row.taxCategoryLabel, "Unresolved");
+  assert.equal(row.taxTreatment, "not_determined");
+  assert.equal(row.taxTreatmentLabel, "Not determined");
+  assert.equal(row.status, "unclassified");
+  assert.equal(row.statusLabel, "Needs classification");
+  assert.equal(row.requiresReview, false);
+});
+
 test("standalone deductions workspace page has been removed", () => {
   assert.equal(fs.existsSync("src/pages/Tax/DeductionsPage.jsx"), false);
   assert.equal(fs.existsSync("src/components/Tax/Deductions/DeductionsWorkspace.jsx"), false);
@@ -164,9 +189,18 @@ test("Tax Dashboard uses authoritative classification job progress instead of in
   assert.match(dashboard, /Deductions preparation is queued\./);
   assert.match(dashboard, /Deductions preparation is delayed\./);
   assert.match(dashboard, /Deductions preparation appears to be stalled\./);
-  assert.match(dashboard, /Bizzi is classifying your posted QuickBooks transactions\./);
+  assert.match(dashboard, /Bizzi is classifying your transactions\./);
   assert.match(dashboard, /Deductions preparation appears to be delayed\./);
-  assert.match(dashboard, /label=\{classificationSummary\.isActiveJob \? "Remaining" : "Processing"\}/);
+  assert.match(dashboard, /label="Processing"/);
+  assert.match(dashboard, /bizzi-progress-fill/);
+  assert.match(dashboard, /aria-live="polite"/);
+});
+
+test("Tax Dashboard does not let processed job count masquerade as classified count", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /processedTotal: jobProcessed/);
+  assert.doesNotMatch(dashboard, /classifiedTotal: jobProcessed/);
+  assert.match(dashboard, /bucketClassified/);
 });
 
 test("Prepare deductions accepts quickly and refreshes via polling, not a blocking full reload", () => {
@@ -177,6 +211,18 @@ test("Prepare deductions accepts quickly and refreshes via polling, not a blocki
   assert.match(dashboard, /Deductions preparation started\./);
   assert.match(dashboard, /Starting deductions preparation\.\.\./);
   assert.match(dashboard, /Deductions preparation complete\./);
+});
+
+test("Prepare deductions modal uses Bizzi loading treatment instead of native wait cursor", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /Loader2/);
+  assert.match(dashboard, /aria-busy=\{loading \? "true" : "false"\}/);
+  assert.match(dashboard, /<Loader2 className="h-3\.5 w-3\.5 animate-spin" aria-hidden="true" \/>/);
+  assert.match(dashboard, /disabled:cursor-default disabled:opacity-70/);
+  assert.doesNotMatch(
+    dashboard,
+    /Starting deductions preparation[\s\S]{0,500}disabled:cursor-wait|disabled:cursor-wait[\s\S]{0,500}Starting deductions preparation/
+  );
 });
 
 test("Tax Dashboard does not present missing classification authority as zero deductible", () => {

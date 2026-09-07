@@ -595,6 +595,94 @@ test("worker processes a 205-row production-shaped run in bounded batches and bl
   assert.ok(durationMs < 5000, `local 205-row fixture should process quickly; observed ${durationMs}ms`);
 });
 
+test("review-required fallback outcomes reconcile as evaluated unresolved rows, not classified rows", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 207, taxDeductionRules: [] }));
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+    now: new Date("2026-09-07T16:14:01Z"),
+  });
+
+  await processPendingTaxClassificationRuns({
+    supabase,
+    workerId: "test-worker",
+    runBatchSize: 1,
+    transactionBatchSize: 100,
+    now: new Date("2026-09-07T16:14:10Z"),
+  });
+
+  const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+  const finalRun = supabase.store.tax_classification_runs.find((row) => row.id === queued.run.id);
+
+  assert.equal(finalRun.status, TAX_CLASSIFICATION_RUN_STATUSES.REVIEW_REQUIRED);
+  assert.equal(finalRun.processed_count, 207);
+  assert.equal(finalRun.review_required_count, 0);
+  assert.equal(finalRun.queued_count, 0);
+  assert.equal(lifecycle.evaluatedCount, 207);
+  assert.equal(lifecycle.classifiedCount, 0);
+  assert.equal(lifecycle.needsReviewCount, 0);
+  assert.equal(lifecycle.unresolvedCount, 207);
+  assert.equal(lifecycle.autoClassifiedCount, 0);
+  assert.equal(lifecycle.excludedCount, 0);
+  assert.equal(lifecycle.unclassifiedCount, 207);
+  assert.equal(lifecycle.missingEvaluationCount, 0);
+  assert.equal(lifecycle.classificationStatus, "ready_to_classify");
+});
+
+test("incomplete classification rows cannot make coverage or status appear complete", async () => {
+  const store = baseStore({ transactionCount: 3 });
+  store.transaction_tax_classifications = store.bank_transactions.map((row) => ({
+    id: `bad-${row.id}`,
+    business_id: BUSINESS_ID,
+    transaction_id: row.id,
+    tax_year: 2026,
+    transaction_date: row.date,
+    tax_category: null,
+    deductibility_status: null,
+    deductible_percent: null,
+    book_amount: null,
+    deductible_amount: null,
+    nondeductible_amount: null,
+    capitalizable_amount: null,
+    classification_status: TAX_CLASSIFICATION_RUN_STATUSES.COMPLETED,
+    metadata: { tax_classification_stale: false },
+    created_at: "2026-09-07T16:00:00Z",
+    updated_at: "2026-09-07T16:00:00Z",
+  }));
+  store.tax_classification_runs.push({
+    id: "run-processed-without-outcomes",
+    business_id: BUSINESS_ID,
+    tax_year: 2026,
+    status: TAX_CLASSIFICATION_RUN_STATUSES.COMPLETED,
+    total_eligible: 3,
+    queued_count: 0,
+    processed_count: 3,
+    auto_classified_count: 0,
+    review_required_count: 0,
+    excluded_count: 0,
+    failed_count: 0,
+    attempt_count: 1,
+    max_attempts: 5,
+    created_at: "2026-09-07T16:00:00Z",
+    queued_at: "2026-09-07T16:00:00Z",
+    completed_at: "2026-09-07T16:01:00Z",
+    updated_at: "2026-09-07T16:01:00Z",
+  });
+  const supabase = makeSupabase(store);
+
+  const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+  const job = await getTaxClassificationJobStatus({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+
+  assert.equal(lifecycle.classifiedCount, 0);
+  assert.equal(lifecycle.unclassifiedCount, 3);
+  assert.equal(lifecycle.classificationStatus, "ready_to_classify");
+  assert.equal(job.status, "not_started");
+  assert.equal(job.processed, 0);
+  assert.equal(job.remaining, 3);
+});
+
 test("new QBO-confirmed posting event enqueues classification and calculation prerequisites expose missing standard deduction rule", async () => {
   const supabase = makeSupabase(baseStore({ transactionCount: 1, includeOtherTenantTransaction: true }));
 
@@ -876,7 +964,7 @@ async function processPendingRunFromEvent({ supabase, changeType, transactionId 
   });
 }
 
-function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false, taxProfiles = [completeProfile()] } = {}) {
+function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false, taxProfiles = [completeProfile()], taxDeductionRules = [softwareRule(), mealsRule()] } = {}) {
   const store = {
     business_profiles: [{ id: BUSINESS_ID, bookkeeping_start_date: null }],
     bank_transactions: [],
@@ -886,7 +974,7 @@ function baseStore({ transactionCount = 0, includeOtherTenantTransaction = false
     tax_classification_runs: [],
     tax_recalculation_requests: [],
     tax_profiles: taxProfiles,
-    tax_deduction_rules: [softwareRule(), mealsRule()],
+    tax_deduction_rules: taxDeductionRules,
     tax_rule_configs: [],
   };
   for (let i = 0; i < transactionCount; i += 1) {

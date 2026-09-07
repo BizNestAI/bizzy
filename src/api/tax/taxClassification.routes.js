@@ -93,6 +93,8 @@ router.post("/classifications/prepare", async (req, res) => {
       coverage: {
         eligiblePostedCount: queued.eligiblePostedCount,
         unclassifiedCount: queued.unclassifiedCount,
+        missingEvaluationCount: queued.candidateCount,
+        unresolvedCount: queued.unresolvedCount,
       },
     });
     if (job.jobId && ["queued", "processing"].includes(job.status)) {
