@@ -200,19 +200,19 @@ export async function expireTaxProfileMemory({ businessId, memoryKey, effectiveT
   return result;
 }
 
-export async function getTaxDeductionsOverview({ businessId, year, asOfDate, signal } = {}) {
+export async function getTaxDeductionsOverview({ businessId, year, asOfDate, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/deductions/overview?${query({ businessId, year, asOfDate })}`, { signal }));
+  return unwrap(await cachedGet(`/api/tax/deductions/overview?${query({ businessId, year, asOfDate })}`, { signal, bypassCache: refresh }));
 }
 
-export async function getTaxDeductionTransactions({ businessId, year, asOfDate, filters = {}, limit, offset, signal } = {}) {
+export async function getTaxDeductionTransactions({ businessId, year, asOfDate, filters = {}, limit, offset, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/deductions/transactions?${query({ businessId, year, asOfDate, limit: clampTaxDetailLimit(limit), offset, ...filters })}`, { signal }));
+  return unwrap(await cachedGet(`/api/tax/deductions/transactions?${query({ businessId, year, asOfDate, limit: clampTaxDetailLimit(limit), offset, ...filters })}`, { signal, bypassCache: refresh }));
 }
 
-export async function getTaxPostedTransactions({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit, offset, signal } = {}) {
+export async function getTaxPostedTransactions({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit, offset, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/transactions/posted?${query({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit: clampTaxDetailLimit(limit), offset })}`, { signal }));
+  return unwrap(await cachedGet(`/api/tax/transactions/posted?${query({ businessId, year, dateFrom, dateTo, accountId, qboAccountId, direction, search, limit: clampTaxDetailLimit(limit), offset })}`, { signal, bypassCache: refresh }));
 }
 
 export async function getTaxDeductionTransactionDetail({ businessId, year, transactionId, signal } = {}) {
@@ -233,9 +233,9 @@ export async function getTaxClassificationHistory({ businessId, year, transactio
   return unwrap(await cachedGet(`/api/tax/classifications/${encodeURIComponent(transactionId)}/history?${query({ businessId, year })}`, { signal }));
 }
 
-export async function getTaxClassificationCoverage({ businessId, year, signal } = {}) {
+export async function getTaxClassificationCoverage({ businessId, year, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/classifications/coverage?${query({ businessId, year })}`, { signal }));
+  return unwrap(await cachedGet(`/api/tax/classifications/coverage?${query({ businessId, year })}`, { signal, bypassCache: refresh }));
 }
 
 export async function getTaxClassificationStatus({ businessId, year, signal } = {}) {
@@ -256,6 +256,7 @@ export async function getTaxClassifications({
   search,
   limit,
   offset,
+  refresh = false,
   signal,
 } = {}) {
   requireBusinessId(businessId);
@@ -269,12 +270,12 @@ export async function getTaxClassifications({
     search,
     limit: clampTaxDetailLimit(limit),
     offset,
-  })}`, { signal }));
+  })}`, { signal, bypassCache: refresh }));
 }
 
-export async function getTaxClassificationReviewSummary({ businessId, year, signal } = {}) {
+export async function getTaxClassificationReviewSummary({ businessId, year, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/classifications/review/summary?${query({ businessId, year })}`, { signal }));
+  return unwrap(await cachedGet(`/api/tax/classifications/review/summary?${query({ businessId, year })}`, { signal, bypassCache: refresh }));
 }
 
 export async function previewTaxClassificationBackfill({ businessId, year, limit, signal } = {}) {

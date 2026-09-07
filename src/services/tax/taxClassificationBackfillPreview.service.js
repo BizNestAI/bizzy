@@ -1,5 +1,6 @@
 import { listUnclassifiedPostedTransactions } from "./taxPostedTransaction.repository.js";
 import { listUnresolvedFallbackClassifications } from "./taxClassification.repository.js";
+import { evaluateDeductionRules, listDeductionRules } from "./taxDeductionRule.repository.js";
 import { normalizeTaxYear } from "./taxDomain.js";
 import { validationError } from "./taxErrors.js";
 
@@ -13,6 +14,7 @@ export async function previewTaxClassificationBackfill({ supabase, businessId, t
   const year = normalizeTaxYear(taxYear);
   if (!year) throw validationError("invalid_tax_year", "Tax year must be between 2000 and 2100.", { field: "year" });
   const boundedLimit = Math.min(Math.max(Number(limit || DEFAULT_LIMIT), 1), DEFAULT_LIMIT);
+  const rules = await listDeductionRules({ supabase, businessId, taxYear: year, includeInactive: false });
   const fallbackRows = await listUnresolvedFallbackClassifications({
     supabase,
     businessId,
@@ -24,6 +26,7 @@ export async function previewTaxClassificationBackfill({ supabase, businessId, t
     return summarizeTaxClassificationBackfillPreviewRows(fallbackRows.rows.map(mapFallbackClassificationToPreviewInput), {
       businessId,
       taxYear: year,
+      rules,
       capped: (fallbackRows.rows || []).length >= boundedLimit,
       limit: boundedLimit,
       target: "unresolved_fallback_rows",
@@ -47,6 +50,7 @@ export async function previewTaxClassificationBackfill({ supabase, businessId, t
   return summarizeTaxClassificationBackfillPreviewRows(rows, {
     businessId,
     taxYear: year,
+    rules,
     capped: rows.length >= boundedLimit,
     limit: boundedLimit,
     target: "missing_evaluation_rows",
@@ -55,7 +59,8 @@ export async function previewTaxClassificationBackfill({ supabase, businessId, t
 }
 
 export function summarizeTaxClassificationBackfillPreviewRows(rows = [], context = {}) {
-  const summaries = rows.map(classifyTaxBackfillPreviewRow);
+  const rules = Array.isArray(context.rules) ? context.rules : [];
+  const summaries = rows.map((row) => classifyTaxBackfillPreviewRow(row, { rules, businessId: context.businessId }));
   const counts = summaries.reduce((acc, item) => {
     acc.previewed += 1;
     acc[item.bucket] = (acc[item.bucket] || 0) + 1;
@@ -65,10 +70,16 @@ export function summarizeTaxClassificationBackfillPreviewRows(rows = [], context
     estimatedAutomaticClassifications: 0,
     estimatedExclusions: 0,
     estimatedReviewRequired: 0,
+    unresolved: 0,
+    ruleConflicts: 0,
+    invalidRules: 0,
   });
   counts.estimatedAutomaticClassifications = summaries.filter((row) => row.bucket === "estimatedAutomaticClassifications").length;
   counts.estimatedExclusions = summaries.filter((row) => row.bucket === "estimatedExclusions").length;
   counts.estimatedReviewRequired = summaries.filter((row) => row.bucket === "estimatedReviewRequired").length;
+  counts.unresolved = summaries.filter((row) => row.bucket === "unresolved").length;
+  counts.ruleConflicts = summaries.filter((row) => row.bucket === "ruleConflicts").length;
+  counts.invalidRules = summaries.filter((row) => row.bucket === "invalidRules").length;
 
   return {
     meta: {
@@ -91,6 +102,11 @@ export function summarizeTaxClassificationBackfillPreviewRows(rows = [], context
       estimatedAutomaticClassifications: counts.estimatedAutomaticClassifications,
       estimatedExclusions: counts.estimatedExclusions,
       estimatedReviewRequired: counts.estimatedReviewRequired,
+      unresolved: counts.unresolved,
+      ruleConflicts: counts.ruleConflicts,
+      invalidRules: counts.invalidRules,
+      preservedRows: 0,
+      targetedRows: summaries.length,
     },
     totalsByTaxCategory: rollup(summaries, "taxCategory"),
     totalsByGlAccount: rollup(summaries, "qboAccountName"),
@@ -98,27 +114,52 @@ export function summarizeTaxClassificationBackfillPreviewRows(rows = [], context
   };
 }
 
-export function classifyTaxBackfillPreviewRow(row = {}) {
+export function classifyTaxBackfillPreviewRow(row = {}, { rules = [], businessId = null } = {}) {
   const account = displayText(row.qboAccountName || row.source_qbo_account_name || row.metadata?.source_qbo_account_name || row.bookAccount || row.qboAccount || "Unmapped QuickBooks account");
-  const accountText = account.toLowerCase();
-  const txnType = displayText(row.qboTxnType || row.transactionType || row.type).toLowerCase();
-  const direction = displayText(row.direction).toLowerCase();
   const amount = Math.abs(Number(row.absoluteAmount ?? row.amount ?? row.signedAmount ?? 0)) || 0;
-
-  if (isExcluded(accountText, txnType, direction)) {
-    return previewRow(row, "estimatedExclusions", "excluded", "excluded", 0, "Known non-deduction or duplicate representation.", amount);
+  const evaluation = evaluateDeductionRules({
+    rules,
+    businessId,
+    transactionContext: {
+      date: row.date || row.transactionDate || row.transaction_date,
+      direction: row.direction,
+      taxonomy_type: row.taxonomyType || row.taxonomy_type,
+      transaction_type: row.qboTxnType || row.transactionType || row.type,
+      bookkeeping_category: account,
+      qbo_account_id: row.qboAccountId || row.source_qbo_account_id,
+      qbo_account_name: account,
+      qbo_account_type: row.qboAccountType || row.source_qbo_account_type,
+      qbo_account_subtype: row.qboAccountSubtype || row.source_qbo_account_subtype,
+      normalized_qbo_account_name: row.normalizedQboAccountName || row.normalized_qbo_account_name,
+      normalized_qbo_account_type: row.normalizedQboAccountType || row.normalized_qbo_account_type,
+      normalized_qbo_account_subtype: row.normalizedQboAccountSubtype || row.normalized_qbo_account_subtype,
+    },
+  });
+  if (evaluation.conflict) {
+    return previewRow(row, "ruleConflicts", "unclassified", "needs_review", null, "Conflicting approved deduction rules matched.", amount, {
+      ruleCodes: evaluation.conflict.ruleCodes || [],
+    });
   }
-  if (requiresReview(accountText)) {
-    return previewRow(row, "estimatedReviewRequired", suggestedReviewCategory(accountText), "needs_review", null, "Requires tax review or substantiation before becoming authoritative.", amount);
+  const rule = evaluation.selected;
+  if (!rule) {
+    return previewRow(row, "unresolved", "unclassified", "needs_review", null, "No approved deterministic tax rule matched.", amount);
   }
-  const automaticCategory = automaticCategoryFor(accountText);
-  if (automaticCategory) {
-    return previewRow(row, "estimatedAutomaticClassifications", automaticCategory, "fully_deductible", 100, "Matched a deterministic tax category pattern.", amount);
+  if (rule.requires_review === true || rule.deductibility_status === "needs_review") {
+    return previewRow(row, "estimatedReviewRequired", rule.tax_category, rule.deductibility_status, rule.default_deductible_percent, "Approved rule proposes treatment but requires review.", amount, {
+      ruleCode: rule.rule_code,
+    });
   }
-  return previewRow(row, "estimatedReviewRequired", "unclassified", "needs_review", null, "No approved deterministic tax rule matched.", amount);
+  if (rule.deductibility_status === "balance_sheet" || rule.tax_category === "excluded") {
+    return previewRow(row, "estimatedExclusions", rule.tax_category, rule.deductibility_status, rule.default_deductible_percent, "Approved exclusion or balance-sheet rule matched.", amount, {
+      ruleCode: rule.rule_code,
+    });
+  }
+  return previewRow(row, "estimatedAutomaticClassifications", rule.tax_category, rule.deductibility_status, rule.default_deductible_percent, "Approved deterministic tax rule matched.", amount, {
+    ruleCode: rule.rule_code,
+  });
 }
 
-function previewRow(row, bucket, taxCategory, deductibilityStatus, deductiblePercent, reason, amount) {
+function previewRow(row, bucket, taxCategory, deductibilityStatus, deductiblePercent, reason, amount, extras = {}) {
   return {
     transactionId: row.transactionId || row.transaction_id || row.id || null,
     bucket,
@@ -128,6 +169,7 @@ function previewRow(row, bucket, taxCategory, deductibilityStatus, deductiblePer
     reason,
     amount,
     qboAccountName: displayText(row.qboAccountName || row.source_qbo_account_name || row.metadata?.source_qbo_account_name || row.bookAccount || "Unmapped QuickBooks account"),
+    ...extras,
   };
 }
 
@@ -139,64 +181,6 @@ function mapFallbackClassificationToPreviewInput(row = {}) {
     absoluteAmount: Math.abs(Number(row.book_amount || 0)) || 0,
     direction: row.metadata?.source_direction || row.metadata?.direction || null,
   };
-}
-
-function isExcluded(accountText, txnType, direction) {
-  const text = `${accountText} ${txnType} ${direction}`;
-  return [
-    "transfer",
-    "credit card payment",
-    "card payment",
-    "loan principal",
-    "loan proceeds",
-    "owner draw",
-    "owner contribution",
-    "equity",
-    "duplicate",
-  ].some((needle) => text.includes(needle));
-}
-
-function requiresReview(accountText) {
-  return [
-    "meal",
-    "restaurant",
-    "fuel",
-    "gas",
-    "vehicle",
-    "parking",
-    "rideshare",
-    "travel",
-    "equipment",
-    "asset",
-    "depreciation",
-    "charit",
-    "uncategorized",
-    "unmapped",
-    "personal",
-  ].some((needle) => accountText.includes(needle));
-}
-
-function automaticCategoryFor(accountText) {
-  if (accountText.includes("software")) return "software";
-  if (accountText.includes("payment") && accountText.includes("fee")) return "payment_processing_fees";
-  if (accountText.includes("bank fee") || accountText.includes("merchant fee") || accountText.includes("processing fee")) return "payment_processing_fees";
-  if (accountText.includes("office") || accountText.includes("supplies")) return "office_expense";
-  if (accountText.includes("insurance")) return "insurance";
-  if (accountText.includes("electric") || accountText.includes("utility") || accountText.includes("utilities")) return "utilities";
-  if (accountText.includes("professional") || accountText.includes("legal") || accountText.includes("accounting")) return "legal_professional";
-  if (accountText.includes("rent")) return "rent";
-  if (accountText.includes("contractor") || accountText.includes("subcontractor") || accountText.includes("contract labor")) return "contract_labor";
-  return null;
-}
-
-function suggestedReviewCategory(accountText) {
-  if (accountText.includes("meal") || accountText.includes("restaurant")) return "meals";
-  if (accountText.includes("gas") || accountText.includes("fuel") || accountText.includes("vehicle")) return "vehicle";
-  if (accountText.includes("equipment") || accountText.includes("asset")) return "equipment_asset";
-  if (accountText.includes("personal")) return "personal_expense";
-  if (accountText.includes("travel") || accountText.includes("parking") || accountText.includes("rideshare")) return "travel";
-  if (accountText.includes("charit")) return "charitable_contribution";
-  return "unclassified";
 }
 
 function rollup(rows, field) {
@@ -217,7 +201,8 @@ function previewWarnings(rows) {
   if (categories.has("meals")) warnings.push({ code: "meals_require_review", message: "Meals require substantiation and are not auto-approved as fully deductible." });
   if (categories.has("vehicle")) warnings.push({ code: "vehicle_requires_business_use", message: "Vehicle and gas expenses require business-use context." });
   if (categories.has("equipment_asset")) warnings.push({ code: "assets_require_review", message: "Equipment may require capitalization or depreciation review." });
-  if (categories.has("unclassified")) warnings.push({ code: "unmapped_requires_review", message: "Unmapped activity remains review-required." });
+  if (rows.some((row) => row.bucket === "unresolved")) warnings.push({ code: "unmapped_requires_approved_rules", message: "Rows without an approved matching rule remain unresolved." });
+  if (rows.some((row) => row.bucket === "ruleConflicts")) warnings.push({ code: "rule_conflicts_require_review", message: "Conflicting approved rules require review before repair can run." });
   return warnings;
 }
 

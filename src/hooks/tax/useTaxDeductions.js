@@ -42,6 +42,9 @@ export function useTaxDeductions({
   const [classificationRows, setClassificationRows] = useState(null);
   const [classificationReviewSummary, setClassificationReviewSummary] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
+  const [refreshError, setRefreshError] = useState(null);
   const [error, setError] = useState(null);
   const [resourceErrors, setResourceErrors] = useState({});
   const seq = useRef(0);
@@ -51,7 +54,7 @@ export function useTaxDeductions({
     classificationJobStatus?.status || classificationCoverage?.jobStatus?.status || classificationCoverage?.classificationStatus
   );
 
-  const load = useCallback(async ({ signal } = {}) => {
+  const load = useCallback(async ({ signal, refresh = false } = {}) => {
     if (isDemo) {
       const fixture = buildMockTaxFixture({ year });
       setOverview(fixture.deductions);
@@ -76,7 +79,7 @@ export function useTaxDeductions({
       const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
       const parsedPagination = paginationKey ? JSON.parse(paginationKey) : {};
       const [overviewResult, transactionsResult, allTransactionsResult, postedTransactionsResult, coverageResult, classificationRowsResult, reviewSummaryResult] = await Promise.allSettled([
-        getTaxDeductionsOverview({ businessId, year, asOfDate, signal }),
+        getTaxDeductionsOverview({ businessId, year, asOfDate, refresh, signal }),
         getTaxDeductionTransactions({
           businessId,
           year,
@@ -84,13 +87,14 @@ export function useTaxDeductions({
           filters: parsedFilters,
           limit: parsedPagination.limit,
           offset: parsedPagination.offset,
+          refresh,
           signal,
         }),
-        fetchAllDeductionTransactions({ businessId, year, asOfDate, filters: parsedFilters, signal }),
-        fetchAllPostedTransactions({ businessId, year, signal }),
-        getTaxClassificationCoverage({ businessId, year, signal }),
-        getTaxClassifications({ businessId, year, limit: 200, offset: 0, signal }),
-        getTaxClassificationReviewSummary({ businessId, year, signal }),
+        fetchAllDeductionTransactions({ businessId, year, asOfDate, filters: parsedFilters, refresh, signal }),
+        fetchAllPostedTransactions({ businessId, year, refresh, signal }),
+        getTaxClassificationCoverage({ businessId, year, refresh, signal }),
+        getTaxClassifications({ businessId, year, limit: 200, offset: 0, refresh, signal }),
+        getTaxClassificationReviewSummary({ businessId, year, refresh, signal }),
       ]);
       if (request === seq.current) {
         if (overviewResult.status === "fulfilled") setOverview(overviewResult.value);
@@ -114,6 +118,10 @@ export function useTaxDeductions({
         });
         setResourceErrors(errors);
         setError(Object.values(errors)[0] || null);
+        if (refresh && !Object.keys(errors).length) {
+          setLastRefreshedAt(new Date().toISOString());
+          setRefreshError(null);
+        }
       }
       return {
         overview: valueOrNull(overviewResult),
@@ -126,6 +134,7 @@ export function useTaxDeductions({
       };
     } catch (err) {
       if (err?.code !== "request_aborted" && request === seq.current) setError(err);
+      if (refresh && err?.code !== "request_aborted" && request === seq.current) setRefreshError(err);
       return null;
     } finally {
       if (request === seq.current) setLoading(false);
@@ -194,8 +203,23 @@ export function useTaxDeductions({
     loading,
     error,
     resourceErrors,
+    refreshing,
+    refreshError,
+    lastRefreshedAt,
     isDemo,
     refetch: load,
+    refresh: async (options = {}) => {
+      setRefreshing(true);
+      setRefreshError(null);
+      try {
+        return await load({ ...options, refresh: true });
+      } catch (err) {
+        setRefreshError(err);
+        throw err;
+      } finally {
+        setRefreshing(false);
+      }
+    },
     getTransactionDetail: (transactionId, options = {}) =>
       getTaxDeductionTransactionDetail({ businessId, year, transactionId, ...options }),
     getCategoryDetail: (taxCategory, options = {}) =>
@@ -291,12 +315,12 @@ function mapJobStatusToLifecycle(status, fallback = null) {
   return fallback;
 }
 
-async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filters, signal }) {
+async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filters, refresh = false, signal }) {
   const limit = 200;
   const rows = [];
   let latestPage = null;
   for (let offset = 0; ; offset += limit) {
-    const page = await getTaxDeductionTransactions({ businessId, year, asOfDate, filters, limit, offset, signal });
+    const page = await getTaxDeductionTransactions({ businessId, year, asOfDate, filters, limit, offset, refresh, signal });
     const pageRows = Array.isArray(page?.rows) ? page.rows : [];
     rows.push(...pageRows);
     latestPage = page;
@@ -316,12 +340,12 @@ async function fetchAllDeductionTransactions({ businessId, year, asOfDate, filte
   };
 }
 
-async function fetchAllPostedTransactions({ businessId, year, signal }) {
+async function fetchAllPostedTransactions({ businessId, year, refresh = false, signal }) {
   const limit = 200;
   const rows = [];
   let latestPage = null;
   for (let offset = 0; ; offset += limit) {
-    const page = await getTaxPostedTransactions({ businessId, year, limit, offset, signal });
+    const page = await getTaxPostedTransactions({ businessId, year, limit, offset, refresh, signal });
     const pageRows = Array.isArray(page?.rows) ? page.rows : [];
     rows.push(...pageRows);
     latestPage = page;

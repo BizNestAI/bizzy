@@ -462,7 +462,7 @@ function resolveOverviewStatus(model, isDemo) {
     return {
       tone: "partial",
       label: "Tax review needed",
-      sentence: "Most transactions were classified automatically. Review the items that need more context.",
+      sentence: "Some tax classifications need review before deductible totals can be calculated.",
     };
   }
   if (setupCode === "classification_failed" || setupCode === "failed") {
@@ -507,11 +507,11 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const classificationSummary = useMemo(() => buildDeductionClassificationSummary(deductions), [deductions]);
   const classificationsRequired = !deductions.isDemo && classificationSummary.requiresClassification;
   const classificationActive = classificationSummary.isActiveJob;
-  const canPrepareDeductions = !readOnly && !classificationActive && !deductions.loading && (
-    (classificationSummary.missingEvaluationTotal ?? classificationSummary.unclassifiedTotal ?? 0) > 0 ||
-    classificationSummary.jobStatus?.canRetry === true ||
-    classificationSummary.classificationStatus === "classification_failed"
+  const prepareEligibility = useMemo(
+    () => buildPrepareDeductionsEligibility({ summary: classificationSummary, readOnly, loading: deductions.loading }),
+    [classificationSummary, deductions.loading, readOnly]
   );
+  const canPrepareDeductions = prepareEligibility.enabled;
   const workspaceRows = useMemo(() => buildClassificationWorkspaceRows(deductions), [deductions]);
   const filteredWorkspaceRows = useMemo(() => filterClassificationWorkspaceRows(workspaceRows, classificationTab), [workspaceRows, classificationTab]);
   const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
@@ -539,6 +539,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
     }
     if (classificationActive) {
       setBackfillError("Deductions preparation is already running.");
+      return;
+    }
+    if (!prepareEligibility.enabled) {
+      setBackfillError(prepareEligibility.reason);
       return;
     }
     setBackfillLoading(true);
@@ -612,17 +616,19 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
             type="button"
             onClick={openBackfillPreview}
             disabled={!canPrepareDeductions || backfillLoading}
+            title={!canPrepareDeductions ? prepareEligibility.reason : undefined}
             className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/24 bg-emerald-300/[0.10] px-3 py-1.5 text-[12px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.16] disabled:cursor-not-allowed disabled:opacity-55 focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           >
             {classificationActive ? "Preparing deductions" : backfillLoading ? "Preparing..." : classificationSummary.jobStatus?.canRetry ? "Retry preparation" : "Prepare deductions"}
           </button>
           <button
             type="button"
-            onClick={deductions.refetch}
+            onClick={deductions.refresh}
+            disabled={deductions.refreshing}
             className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-[12px] text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           >
-            <RefreshCcw className={`h-3.5 w-3.5 ${deductions.loading ? "animate-spin" : ""}`} />
-            Refresh
+            <RefreshCcw className={`h-3.5 w-3.5 ${deductions.refreshing ? "animate-spin" : ""}`} />
+            {deductions.refreshing ? "Refreshing" : "Refresh"}
           </button>
         </div>
       </div>
@@ -635,6 +641,20 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       {backfillError ? (
         <div className="mt-4 rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
           {backfillError}
+        </div>
+      ) : null}
+      {deductions.refreshError ? (
+        <div className="mt-4 rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
+          {deductions.refreshError.message || "Refresh failed."}
+        </div>
+      ) : deductions.lastRefreshedAt ? (
+        <div className="mt-3 text-xs text-white/42">
+          Updated {formatRelativeRefreshTime(deductions.lastRefreshedAt)}
+        </div>
+      ) : null}
+      {!canPrepareDeductions && prepareEligibility.reason ? (
+        <div className="mt-3 rounded-xl border border-amber-300/18 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-50/78">
+          {prepareEligibility.reason}
         </div>
       ) : null}
 
@@ -802,7 +822,7 @@ function ClassificationProgressSummary({ summary }) {
   const total = Number(job.total || summary.postedTotal || 0);
   const processed = Math.min(total, Math.max(0, Number(job.processed || 0)));
   const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
-  const active = ["queued", "processing", "delayed"].includes(job.status) || (job.status === "stalled" && !job.isStalled);
+  const active = ["queued", "processing", "delayed", "stalled"].includes(job.status);
   const heading = job.status === "queued"
     ? "Deductions preparation is queued."
     : job.status === "delayed"
@@ -831,7 +851,7 @@ function ClassificationProgressSummary({ summary }) {
     }`} aria-busy={active ? "true" : "false"} aria-live="polite" role="status">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
-          {job.status === "failed" || job.status === "stalled" || job.status === "delayed" ? (
+          {job.status === "failed" ? (
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-200" aria-hidden="true" />
           ) : (
             <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-emerald-300/20 bg-emerald-300/10" aria-hidden="true">
@@ -856,10 +876,13 @@ function ClassificationProgressSummary({ summary }) {
         </div>
       ) : null}
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-white/54 sm:grid-cols-4">
+        <span>Processed <b className="font-semibold text-white/82">{job.processed ?? summary.processedTotal ?? 0}</b></span>
         <span>Remaining <b className="font-semibold text-white/82">{job.remaining ?? summary.remainingTotal ?? 0}</b></span>
         <span>Auto-classified <b className="font-semibold text-white/82">{job.autoClassified ?? summary.autoClassifiedTotal ?? 0}</b></span>
         <span>Needs review <b className="font-semibold text-white/82">{job.needsReview ?? summary.reviewRequiredTotal ?? 0}</b></span>
+        <span>Unresolved <b className="font-semibold text-white/82">{job.unresolved ?? summary.unresolvedTotal ?? 0}</b></span>
         <span>Excluded <b className="font-semibold text-white/82">{job.excluded ?? summary.excludedTotal ?? 0}</b></span>
+        <span>Failed <b className="font-semibold text-white/82">{job.failed ?? summary.failedTotal ?? 0}</b></span>
       </div>
     </div>
   );
@@ -976,6 +999,9 @@ function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfi
             <ClassificationStat label="Estimated auto" value={counts.estimatedAutomaticClassifications} />
             <ClassificationStat label="Estimated review" value={counts.estimatedReviewRequired} tone="amber" />
             <ClassificationStat label="Estimated excluded" value={counts.estimatedExclusions} />
+            <ClassificationStat label="Unresolved" value={counts.unresolved} tone={counts.unresolved ? "amber" : "default"} />
+            <ClassificationStat label="Conflicts" value={counts.ruleConflicts} tone={counts.ruleConflicts ? "rose" : "default"} />
+            <ClassificationStat label="Invalid rules" value={counts.invalidRules} tone={counts.invalidRules ? "rose" : "default"} />
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <PreviewSummaryList title="By tax category" rows={totalsByCategory.slice(0, 8)} nameKey="taxCategory" />
@@ -1045,7 +1071,7 @@ function buildDeductionClassificationSummary(deductions) {
   const coverage = deductions.classificationCoverage || deductions.overview?.coverage || {};
   const jobStatus = deductions.classificationJobStatus || coverage.jobStatus || coverage.job_status || null;
   const classificationStatus = coverage.classificationStatus || coverage.classification_status || null;
-  const activeOrRecentJob = ["queued", "delayed", "processing", "stalled", "completed", "completed_with_review", "failed"].includes(jobStatus?.status);
+  const activeJob = ["queued", "delayed", "processing", "stalled"].includes(jobStatus?.status);
   const postedTotal = nullableNumber(
     coverage.postedTransactionCount
     ?? coverage.posted_transaction_count
@@ -1074,28 +1100,28 @@ function buildDeductionClassificationSummary(deductions) {
     ?? coverage.missingEvaluationCount
     ?? coverage.missing_evaluation_count
   ) ?? null;
-  const reviewRequiredTotal = (activeOrRecentJob && jobNeedsReview != null ? jobNeedsReview : null) ?? nullableNumber(
+  const reviewRequiredTotal = (activeJob && jobNeedsReview != null ? jobNeedsReview : null) ?? nullableNumber(
     coverage.reviewRequiredTransactionCount
     ?? coverage.review_required_transaction_count
     ?? coverage.reviewRequiredCount
     ?? coverage.requiresReviewCount
   ) ?? 0;
-  const unclassifiedTotal = (activeOrRecentJob && jobRemaining != null ? jobRemaining : null) ?? nullableNumber(
+  const unclassifiedTotal = (activeJob && jobRemaining != null ? jobRemaining : null) ?? nullableNumber(
     coverage.unclassifiedTransactionCount
     ?? coverage.unclassified_transaction_count
     ?? coverage.unclassifiedCount
     ?? coverage.unclassified_count
   ) ?? (postedTotal != null && classifiedTotal != null ? Math.max(0, postedTotal - classifiedTotal) : null);
-  const autoClassifiedTotal = (activeOrRecentJob && jobAutoClassified != null ? jobAutoClassified : null) ?? nullableNumber(
+  const autoClassifiedTotal = (activeJob && jobAutoClassified != null ? jobAutoClassified : null) ?? nullableNumber(
     coverage.autoClassifiedTransactionCount
     ?? coverage.auto_classified_transaction_count
     ?? coverage.autoClassifiedCount
     ?? coverage.auto_classified_count
   );
-  const excludedTotal = (activeOrRecentJob && jobExcluded != null ? jobExcluded : null) ?? nullableNumber(coverage.excludedTransactionCount ?? coverage.excluded_transaction_count ?? coverage.excludedCount);
+  const excludedTotal = (activeJob && jobExcluded != null ? jobExcluded : null) ?? nullableNumber(coverage.excludedTransactionCount ?? coverage.excluded_transaction_count ?? coverage.excludedCount);
   const processingTotal = nullableNumber(coverage.processingTransactionCount ?? coverage.processing_transaction_count ?? coverage.processingCount) ?? 0;
   const remainingTotal = jobRemaining ?? nullableNumber(coverage.remainingTransactionCount ?? coverage.remaining_transaction_count ?? coverage.remainingCount) ?? 0;
-  const failedTotal = (activeOrRecentJob && jobFailed != null ? jobFailed : null) ?? nullableNumber(coverage.failedTransactionCount ?? coverage.failed_transaction_count ?? coverage.failedCount) ?? 0;
+  const failedTotal = (activeJob && jobFailed != null ? jobFailed : null) ?? nullableNumber(coverage.failedTransactionCount ?? coverage.failed_transaction_count ?? coverage.failedCount) ?? 0;
   const lastRunAt = jobStatus?.completedAt || jobStatus?.failedAt || jobStatus?.heartbeatAt || jobStatus?.queuedAt || coverage.lastRunAt || coverage.last_run_at || deductions.classificationReviewSummary?.lastRunAt || null;
   const jobProcessed = nullableNumber(jobStatus?.processed);
   const bucketClassified = [autoClassifiedTotal, reviewRequiredTotal, excludedTotal]
@@ -1122,8 +1148,61 @@ function buildDeductionClassificationSummary(deductions) {
     classificationStatus,
     jobStatus,
     isActiveJob,
+    hasApprovedApplicableRules: coverage.hasApprovedApplicableRules ?? coverage.has_approved_applicable_rules ?? coverage.ruleReadiness?.hasApprovedApplicableRules ?? null,
+    ruleReadiness: coverage.ruleReadiness || coverage.rule_readiness || null,
     rulesVersion: coverage.rulesVersion || coverage.rules_version || null,
     requiresClassification,
+  };
+}
+
+function buildPrepareDeductionsEligibility({ summary = {}, readOnly = false, loading = false } = {}) {
+  const hasActiveRun = summary.isActiveJob === true;
+  const hasEligibleUnclassifiedRows = Number(summary.missingEvaluationTotal ?? summary.unclassifiedTotal ?? 0) > 0;
+  const hasUnresolvedFallbackRows = Number(summary.unresolvedTotal || 0) > 0;
+  const hasApprovedApplicableRules = summary.hasApprovedApplicableRules;
+  const canRetry = summary.jobStatus?.canRetry === true || summary.classificationStatus === "classification_failed";
+  const canPrepareInitial = hasEligibleUnclassifiedRows && !hasUnresolvedFallbackRows;
+  const canRepairUnresolved = hasUnresolvedFallbackRows;
+  if (readOnly) return disabled("Tax classification changes are unavailable in read-only Admin View.");
+  if (loading) return disabled("Deductions data is still loading.");
+  if (hasActiveRun) return disabled("Deductions preparation is already running.");
+  if ((canPrepareInitial || canRepairUnresolved || canRetry) && hasApprovedApplicableRules === false) {
+    return disabled("Approved classification rules are unavailable for these rows. Accountant-approved GL rules must be activated before preparation can improve them.", {
+      hasActiveRun,
+      hasEligibleUnclassifiedRows,
+      hasUnresolvedFallbackRows,
+      hasApprovedApplicableRules,
+      canPrepareInitial,
+      canRepairUnresolved,
+      isPreparing: false,
+    });
+  }
+  const enabled = canPrepareInitial || canRepairUnresolved || canRetry;
+  return {
+    enabled,
+    reason: enabled ? "" : "No eligible or unresolved posted transactions are available for preparation.",
+    hasActiveRun,
+    hasEligibleUnclassifiedRows,
+    hasUnresolvedFallbackRows,
+    hasApprovedApplicableRules,
+    canPrepareInitial,
+    canRepairUnresolved,
+    isPreparing: false,
+  };
+}
+
+function disabled(reason, flags = {}) {
+  return {
+    enabled: false,
+    reason,
+    hasActiveRun: false,
+    hasEligibleUnclassifiedRows: false,
+    hasUnresolvedFallbackRows: false,
+    hasApprovedApplicableRules: null,
+    canPrepareInitial: false,
+    canRepairUnresolved: false,
+    isPreparing: false,
+    ...flags,
   };
 }
 
@@ -1196,11 +1275,16 @@ function classificationWorkspaceMessage(summary) {
   if ((summary.processingTotal ?? 0) > 0) {
     return "Bizzi is classifying your posted QuickBooks transactions.";
   }
-  if ((summary.reviewRequiredTotal ?? 0) > 0 && (summary.unclassifiedTotal ?? 0) <= 0) {
+  const meaningfulAutoMajority = (summary.postedTotal ?? 0) > 0 &&
+    (summary.autoClassifiedTotal ?? 0) > (summary.postedTotal / 2);
+  if ((summary.postedTotal ?? 0) > 0 && (summary.unresolvedTotal ?? 0) > 0 && (summary.autoClassifiedTotal ?? 0) <= 0 && (summary.excludedTotal ?? 0) <= 0) {
+    return `${summary.unresolvedTotal} transactions still need classification rules or additional context.`;
+  }
+  if ((summary.reviewRequiredTotal ?? 0) > 0 && meaningfulAutoMajority) {
     return "Most transactions were classified automatically. Review the items that need more context.";
   }
-  if ((summary.postedTotal ?? 0) > 0 && (summary.unresolvedTotal ?? 0) > 0 && (summary.autoClassifiedTotal ?? 0) <= 0 && (summary.excludedTotal ?? 0) <= 0) {
-    return `Bizzi reviewed ${summary.postedTotal} transactions, but additional classification rules are needed before their tax treatment can be determined.`;
+  if ((summary.reviewRequiredTotal ?? 0) > 0) {
+    return `${summary.reviewRequiredTotal} transactions have proposed tax treatment and need review.`;
   }
   if ((summary.postedTotal ?? 0) > 0 && (summary.unclassifiedTotal ?? 0) > 0) {
     return `${summary.postedTotal} posted QuickBooks transactions are ready for automatic tax classification.`;
@@ -1209,6 +1293,13 @@ function classificationWorkspaceMessage(summary) {
     return "No QBO-confirmed posted transactions are available for tax classification yet.";
   }
   return "Tax classifications are up to date.";
+}
+
+function formatRelativeRefreshTime(value) {
+  const ms = Date.now() - Date.parse(value || "");
+  if (!Number.isFinite(ms) || ms < 60_000) return "just now";
+  const minutes = Math.max(1, Math.round(ms / 60_000));
+  return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
 }
 
 function dispatchBizziToast(title, body) {

@@ -131,6 +131,96 @@ test("persisted review-required fallback rows display as unresolved items", () =
   assert.equal(row.requiresReview, false);
 });
 
+test("fallback-only production state does not present automatic-majority copy", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /summary\.unresolvedTotal/);
+  assert.match(dashboard, /transactions still need classification rules or additional context/);
+  assert.match(dashboard, /meaningfulAutoMajority/);
+  assert.doesNotMatch(dashboard, /Bizzi classified most transactions automatically/);
+});
+
+test("unresolved fallback rows remain a distinct controlled repair eligibility signal", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /function buildPrepareDeductionsEligibility/);
+  assert.match(dashboard, /hasUnresolvedFallbackRows = Number\(summary\.unresolvedTotal \|\| 0\) > 0/);
+  assert.match(dashboard, /canRepairUnresolved = hasUnresolvedFallbackRows/);
+  assert.match(dashboard, /hasApprovedApplicableRules === false/);
+  assert.match(dashboard, /Accountant-approved GL rules must be activated before preparation can improve them/);
+});
+
+test("active classification run disables Prepare and terminal fallback-only run does not permanently disable repair", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /if \(hasActiveRun\) return disabled\("Deductions preparation is already running\."\)/);
+  assert.match(dashboard, /const enabled = canPrepareInitial \|\| canRepairUnresolved \|\| canRetry/);
+  assert.doesNotMatch(dashboard, /completed_with_review[\s\S]{0,80}hasActiveRun/);
+});
+
+test("manual Refresh bypasses cached read-only tax resources and exposes result state", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  const client = fs.readFileSync("src/services/tax/taxApiClient.js", "utf8");
+  assert.match(dashboard, /onClick=\{deductions\.refresh\}/);
+  assert.match(dashboard, /deductions\.refreshing \? "Refreshing" : "Refresh"/);
+  assert.match(dashboard, /deductions\.refreshError/);
+  assert.match(dashboard, /Updated \{formatRelativeRefreshTime\(deductions\.lastRefreshedAt\)\}/);
+  assert.match(hook, /load\(\{ \.\.\.options, refresh: true \}\)/);
+  assert.match(hook, /setLastRefreshedAt\(new Date\(\)\.toISOString\(\)\)/);
+  assert.match(client, /getTaxClassificationCoverage\(\{ businessId, year, refresh = false, signal \}/);
+  assert.match(client, /bypassCache: refresh/);
+  assert.doesNotMatch(hook, /refresh:[\s\S]{0,240}prepareTaxClassifications/);
+});
+
+test("meaningful proposed-category needs review rows render proposed category and source while unresolved fallback stays pending-style", () => {
+  const proposed = mapDeductionTransactionRow({
+    transactionId: "txn-meal",
+    date: "2026-09-03",
+    merchantName: "Restaurant",
+    qboAccountName: "Meals",
+    signedAmount: -53,
+    absoluteAmount: 53,
+    taxCategory: "meals",
+    deductibilityStatus: "partially_deductible",
+    deductiblePercent: 50,
+    deductibleAmount: 26.5,
+    classificationStatus: "needs_review",
+    requiresReview: true,
+    rule: { ruleCode: "meals_gl_review" },
+  });
+  const unresolved = mapDeductionTransactionRow({
+    transactionId: "txn-review",
+    taxCategory: "unclassified",
+    deductibilityStatus: "needs_review",
+    deductiblePercent: 0,
+    classificationStatus: "needs_review",
+    requiresReview: true,
+  });
+
+  assert.equal(proposed.taxCategoryLabel, "Meals");
+  assert.equal(proposed.taxTreatmentLabel, "Partially deductible");
+  assert.equal(proposed.requiresReview, true);
+  assert.equal(unresolved.taxCategoryLabel, "Unresolved");
+  assert.equal(unresolved.taxTreatmentLabel, "Not determined");
+  assert.equal(unresolved.statusLabel, "Needs classification");
+});
+
+test("migration seed is dashboard-runner compatible and uses explicit PostgreSQL casts", () => {
+  const migration = fs.readFileSync("supabase/migrations/20260929_tax_classification_automatic_first_gl_rules.sql", "utf8");
+  assert.match(migration, /^do \$\$/);
+  assert.doesNotMatch(migration, /^begin;/m);
+  assert.doesNotMatch(migration, /^commit;/m);
+  assert.match(migration, /business_id::uuid as business_id/);
+  assert.match(migration, /tax_year::integer as tax_year/);
+  assert.match(migration, /priority::integer as priority/);
+  assert.match(migration, /match_conditions::jsonb as match_conditions/);
+  assert.match(migration, /treatment::jsonb as treatment/);
+  assert.match(migration, /default_deductible_percent::numeric as default_deductible_percent/);
+  assert.match(migration, /requires_review::boolean as requires_review/);
+  assert.match(migration, /is_active::boolean as is_active/);
+  assert.match(migration, /verified_at::timestamptz as verified_at/);
+  assert.match(migration, /effective_from::date as effective_from/);
+  assert.match(migration, /effective_to::date as effective_to/);
+});
+
 test("standalone deductions workspace page has been removed", () => {
   assert.equal(fs.existsSync("src/pages/Tax/DeductionsPage.jsx"), false);
   assert.equal(fs.existsSync("src/components/Tax/Deductions/DeductionsWorkspace.jsx"), false);

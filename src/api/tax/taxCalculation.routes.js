@@ -739,7 +739,7 @@ function lifecycleMessage(status) {
     ready_to_classify: "Transactions are ready for automatic tax classification.",
     classification_queued: "Deductions preparation is queued.",
     classifying: "Bizzi is classifying your posted QuickBooks transactions.",
-    classification_review_required: "Bizzi classified most transactions automatically. Review the items that need more context.",
+    classification_review_required: "Some tax classifications need review before deductible totals can be calculated.",
     classification_failed: "Tax classification needs attention before an estimate can be calculated.",
     failed: "Tax classification needs attention before an estimate can be calculated.",
     calculation_required: "A tax estimate has not been generated yet.",
@@ -779,7 +779,7 @@ function classificationLifecycleMessage(status, summary = {}) {
       : "Bizzi is classifying your posted QuickBooks transactions.";
   }
   if (status === "classification_review_required") {
-    return "Bizzi classified most transactions automatically. Review the items that need more context.";
+    return "Some tax classifications need review before deductible totals can be calculated.";
   }
   if (status === "failed") return "Tax classification needs attention before an estimate can be calculated.";
   return "Your Tax Profile is complete. Prepare your posted QuickBooks transactions for tax treatment.";

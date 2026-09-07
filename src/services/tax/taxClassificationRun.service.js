@@ -6,6 +6,8 @@ import {
 } from "./taxDomain.js";
 import { TAX_CLASSIFICATION_ENGINE_VERSION } from "./taxEngineVersions.js";
 import { getClassificationCoverage } from "./taxClassification.repository.js";
+import { listUnresolvedFallbackClassifications } from "./taxClassification.repository.js";
+import { evaluateDeductionRules, listDeductionRules } from "./taxDeductionRule.repository.js";
 import {
   getTaxClassificationSourceSnapshot,
 } from "./taxPostedTransaction.repository.js";
@@ -303,6 +305,12 @@ export async function getTaxClassificationLifecycleStatus({ supabase, businessId
     missingEvaluationCount: sourceSnapshot.candidateCount ?? coverage.missingEvaluationCount ?? 0,
   };
   const job = buildTaxClassificationJobStatus({ run: activeRun || latestRun, coverage: staleAwareCoverage, now: new Date() });
+  const ruleReadiness = await getClassificationRuleReadiness({
+    supabase,
+    businessId,
+    taxYear: year,
+    sourceSnapshot,
+  });
   const processingCount = activeRun?.status === TAX_CLASSIFICATION_RUN_STATUSES.RUNNING && !hasExhaustedAttempts(activeRun)
     ? Math.max(0, Number(activeRun.queued_count || 0))
     : 0;
@@ -318,6 +326,9 @@ export async function getTaxClassificationLifecycleStatus({ supabase, businessId
     activeRun: activeRun ? normalizeRun(activeRun) : null,
     lastRunAt: latestRun?.completed_at || latestRun?.failed_at || latestRun?.heartbeat_at || latestRun?.created_at || coverage.lastRunAt || null,
     rulesVersion: latestRun?.rules_version || getTaxClassificationRulesVersion(),
+    ruleReadiness,
+    hasApprovedApplicableRules: ruleReadiness.hasApprovedApplicableRules,
+    approvedApplicableRuleCount: ruleReadiness.approvedApplicableRuleCount,
   };
   normalizedCoverage.classificationStatus = deriveLifecycleStatus({ coverage: normalizedCoverage, latestRun, activeRun });
   return normalizedCoverage;
@@ -417,14 +428,82 @@ export function mapClassificationStatusToCalculationBlocker(classificationStatus
   return "classifications_required";
 }
 
+async function getClassificationRuleReadiness({ supabase, businessId, taxYear, sourceSnapshot = {} } = {}) {
+  try {
+    const [rules, unresolved] = await Promise.all([
+      listDeductionRules({ supabase, businessId, taxYear, includeInactive: false }),
+      listUnresolvedFallbackClassifications({ supabase, businessId, taxYear, limit: 1000, offset: 0 }),
+    ]);
+    const contexts = [
+      ...(sourceSnapshot.rows || []).map((row) => ({
+        date: row.transactionDate || row.date,
+        direction: row.direction,
+        taxonomy_type: row.taxonomyType || row.taxonomy_type,
+        transaction_type: row.transactionType || row.transaction_type,
+        bookkeeping_category: row.qboAccountName || row.bookkeepingCategory,
+        qbo_account_id: row.qboAccountId,
+        qbo_account_name: row.qboAccountName,
+        qbo_account_type: row.qboAccountType,
+        qbo_account_subtype: row.qboAccountSubtype,
+        normalized_qbo_account_name: row.normalizedQboAccountName,
+        normalized_qbo_account_type: row.normalizedQboAccountType,
+        normalized_qbo_account_subtype: row.normalizedQboAccountSubtype,
+      })),
+      ...(unresolved.rows || []).map((row) => ({
+        date: row.transaction_date,
+        bookkeeping_category: row.source_qbo_account_name || row.metadata?.source_qbo_account_name || row.metadata?.bookkeeping_category,
+        qbo_account_id: row.source_qbo_account_id || row.metadata?.source_qbo_account_id,
+        qbo_account_name: row.source_qbo_account_name || row.metadata?.source_qbo_account_name || row.metadata?.bookkeeping_category,
+        qbo_account_type: row.metadata?.source_qbo_account_type,
+        qbo_account_subtype: row.metadata?.source_qbo_account_subtype,
+        normalized_qbo_account_name: row.metadata?.normalized_qbo_account_name,
+        normalized_qbo_account_type: row.metadata?.normalized_qbo_account_type,
+        normalized_qbo_account_subtype: row.metadata?.normalized_qbo_account_subtype,
+        taxonomy_type: row.metadata?.taxonomy_type,
+        transaction_type: row.source_qbo_txn_type || row.metadata?.source_qbo_txn_type,
+      })),
+    ];
+    const matchedRuleCodes = new Set();
+    let matchingRows = 0;
+    for (const context of contexts) {
+      const evaluation = evaluateDeductionRules({ rules, transactionContext: context, businessId });
+      if (evaluation.selected || evaluation.rules.length) {
+        matchingRows += 1;
+        for (const rule of evaluation.rules) matchedRuleCodes.add(rule.rule_code);
+      }
+    }
+    return {
+      status: rules.length > 0
+        ? matchingRows > 0
+          ? "approved_applicable_rules_available"
+          : "approved_rules_do_not_match_current_rows"
+        : "approved_rules_unavailable",
+      activeApprovedRuleCount: rules.length,
+      approvedApplicableRuleCount: matchedRuleCodes.size,
+      matchingCandidateCount: matchingRows,
+      hasApprovedApplicableRules: matchedRuleCodes.size > 0,
+      matchedRuleCodes: [...matchedRuleCodes].sort(),
+    };
+  } catch (err) {
+    return {
+      status: "rule_readiness_unavailable",
+      activeApprovedRuleCount: null,
+      approvedApplicableRuleCount: null,
+      matchingCandidateCount: null,
+      hasApprovedApplicableRules: null,
+      errorCode: err?.code || "rule_readiness_failed",
+    };
+  }
+}
+
 function deriveLifecycleStatus({ coverage, latestRun, activeRun }) {
   if (coverage.eligiblePostedCount <= 0) return "no_posted_transactions";
   if (activeRun && hasExhaustedAttempts(activeRun)) return "classification_failed";
   if (activeRun?.status === TAX_CLASSIFICATION_RUN_STATUSES.QUEUED) return "classification_queued";
   if (activeRun?.status === TAX_CLASSIFICATION_RUN_STATUSES.RUNNING) return "classifying";
   if ([TAX_CLASSIFICATION_RUN_STATUSES.FAILED, TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER].includes(latestRun?.status) || coverage.failedCount > 0) return "classification_failed";
-  if (coverage.needsReviewCount > 0) return "classification_review_required";
   if (coverage.unclassifiedCount > 0) return "ready_to_classify";
+  if (coverage.needsReviewCount > 0) return "classification_review_required";
   return "classification_complete";
 }
 
