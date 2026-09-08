@@ -58,10 +58,10 @@ select
   seed.is_active::boolean as is_active,
   seed.version::text as version
 from (values
-  ('global', null::uuid, 'generic_supplies_review_gl_v3', 2026, 'federal', null, null, null, null, array['supplies']::text[], 'supplies', 'fully_deductible', 100.0, '{"type":"supplies_review","classification_review_required":true}'::jsonb, true, 42, 'Confirm whether these are office supplies, job supplies, or materials.', 'Bizzi approved deterministic GL-to-tax mapping policy 2026', 'internal://bizzi/tax/gl-alias-rules/2026-v3', '2026-10-01T00:00:00Z'::timestamptz, date '2026-01-01', date '2026-12-31', true, 'bizzi-gl-2026-v3'),
-  ('global', null::uuid, 'parking_tolls_transportation_review_gl_v3', 2026, 'federal', null, null, null, null, array['parking','parking fees','tolls','road tolls','rideshare','uber','lyft','uber and lyft','lyft uber','local transportation','transportation']::text[], 'travel_transportation', 'needs_review', 0.0, '{"type":"travel_transportation","business_purpose_required":true}'::jsonb, true, 34, 'Approved deterministic GL alias mapping for travel_transportation.', 'Bizzi approved deterministic GL-to-tax mapping policy 2026', 'internal://bizzi/tax/gl-alias-rules/2026-v3', '2026-10-01T00:00:00Z'::timestamptz, date '2026-01-01', date '2026-12-31', true, 'bizzi-gl-2026-v3'),
-  ('global', null::uuid, 'mixed_utilities_review_gl_v3', 2026, 'federal', null, null, null, null, array['utilities','electric','electricity','water','internet','internet expense','phone','phone bill','telephone','cell phone','mobile phone']::text[], 'utilities', 'needs_review', 0.0, '{"type":"utilities_review","business_use_required":true}'::jsonb, true, 36, 'Approved deterministic GL alias mapping for utilities.', 'Bizzi approved deterministic GL-to-tax mapping policy 2026', 'internal://bizzi/tax/gl-alias-rules/2026-v3', '2026-10-01T00:00:00Z'::timestamptz, date '2026-01-01', date '2026-12-31', true, 'bizzi-gl-2026-v3'),
-  ('global', null::uuid, 'generic_loan_payment_review_gl_v3', 2026, 'federal', null, null, null, null, array['loan payment','business loan payment','debt payment']::text[], 'debt_payment', 'needs_review', 0.0, '{"type":"debt_payment_review","principal_interest_split_required":true}'::jsonb, true, 44, 'Separate principal from potentially deductible interest.', 'Bizzi approved deterministic GL-to-tax mapping policy 2026', 'internal://bizzi/tax/gl-alias-rules/2026-v3', '2026-10-01T00:00:00Z'::timestamptz, date '2026-01-01', date '2026-12-31', true, 'bizzi-gl-2026-v3')
+  ('global', null::uuid, 'generic_supplies_review_gl_v3', 2026, 'federal', null, null, null, null, array['supplies']::text[], 'supplies', 'fully_deductible', 100.0, '{"type":"supplies_review","classification_review_required":true}'::jsonb, true, 42, 'Confirm whether these are office supplies, job supplies, or materials.', 'Bizzi approved deterministic GL-to-tax mapping policy 2026', 'internal://bizzi/tax/gl-alias-rules/2026-v3', '2026-09-08T00:00:00Z'::timestamptz, date '2026-01-01', date '2026-12-31', true, 'bizzi-gl-2026-v3'),
+  ('global', null::uuid, 'parking_tolls_transportation_review_gl_v3', 2026, 'federal', null, null, null, null, array['parking','parking fees','tolls','road tolls','rideshare','uber','lyft','uber and lyft','lyft uber','local transportation','transportation']::text[], 'travel_transportation', 'needs_review', 0.0, '{"type":"travel_transportation","business_purpose_required":true}'::jsonb, true, 34, 'Approved deterministic GL alias mapping for travel_transportation.', 'Bizzi approved deterministic GL-to-tax mapping policy 2026', 'internal://bizzi/tax/gl-alias-rules/2026-v3', '2026-09-08T00:00:00Z'::timestamptz, date '2026-01-01', date '2026-12-31', true, 'bizzi-gl-2026-v3'),
+  ('global', null::uuid, 'mixed_utilities_review_gl_v3', 2026, 'federal', null, null, null, null, array['utilities','electric','electricity','water','internet','internet expense','phone','phone bill','telephone','cell phone','mobile phone']::text[], 'utilities', 'needs_review', 0.0, '{"type":"utilities_review","business_use_required":true}'::jsonb, true, 36, 'Approved deterministic GL alias mapping for utilities.', 'Bizzi approved deterministic GL-to-tax mapping policy 2026', 'internal://bizzi/tax/gl-alias-rules/2026-v3', '2026-09-08T00:00:00Z'::timestamptz, date '2026-01-01', date '2026-12-31', true, 'bizzi-gl-2026-v3'),
+  ('global', null::uuid, 'generic_loan_payment_review_gl_v3', 2026, 'federal', null, null, null, null, array['loan payment','business loan payment','debt payment']::text[], 'debt_payment', 'needs_review', 0.0, '{"type":"debt_payment_review","principal_interest_split_required":true}'::jsonb, true, 44, 'Separate principal from potentially deductible interest.', 'Bizzi approved deterministic GL-to-tax mapping policy 2026', 'internal://bizzi/tax/gl-alias-rules/2026-v3', '2026-09-08T00:00:00Z'::timestamptz, date '2026-01-01', date '2026-12-31', true, 'bizzi-gl-2026-v3')
 ) as seed (
   scope, business_id, rule_code, tax_year, jurisdiction, entity_type,
   bookkeeping_category, qbo_account_type, qbo_account_subtype, qbo_account_name_keys,
@@ -252,12 +252,17 @@ begin
     raise exception 'invalid_tax_classification_repair_source';
   end if;
 
+  if p_classification_status in ('auto_classified', 'needs_review')
+     and btrim(coalesce(p_tax_category, '')) = '' then
+    raise exception 'invalid_tax_classification_repair_tax_category';
+  end if;
+
   if p_classification_status = 'needs_review'
-     and lower(coalesce(p_tax_category, '')) = 'unclassified' then
+     and lower(btrim(coalesce(p_tax_category, ''))) = 'unclassified' then
     raise exception 'invalid_tax_classification_repair_unresolved_fallback';
   end if;
 
-  if p_classification_status = 'auto_classified'
+  if p_classification_status in ('auto_classified', 'needs_review')
      and (p_rule_id is null or p_rule_code is null or p_rule_version is null) then
     raise exception 'invalid_tax_classification_repair_rule_identity';
   end if;
@@ -366,6 +371,16 @@ revoke all on function public.apply_tax_classification_repair(
   text, text, numeric, jsonb, text, jsonb, numeric, numeric, numeric, numeric,
   numeric, text, text, boolean, text
 ) from public;
+revoke all on function public.apply_tax_classification_repair(
+  uuid, integer, uuid, uuid, text, timestamptz, uuid, text, text, integer,
+  text, text, numeric, jsonb, text, jsonb, numeric, numeric, numeric, numeric,
+  numeric, text, text, boolean, text
+) from anon;
+revoke all on function public.apply_tax_classification_repair(
+  uuid, integer, uuid, uuid, text, timestamptz, uuid, text, text, integer,
+  text, text, numeric, jsonb, text, jsonb, numeric, numeric, numeric, numeric,
+  numeric, text, text, boolean, text
+) from authenticated;
 grant execute on function public.apply_tax_classification_repair(
   uuid, integer, uuid, uuid, text, timestamptz, uuid, text, text, integer,
   text, text, numeric, jsonb, text, jsonb, numeric, numeric, numeric, numeric,
@@ -525,6 +540,12 @@ $$;
 revoke all on function public.apply_tax_classification_neutralization(
   uuid, integer, uuid, uuid, text, timestamptz, jsonb, timestamptz
 ) from public;
+revoke all on function public.apply_tax_classification_neutralization(
+  uuid, integer, uuid, uuid, text, timestamptz, jsonb, timestamptz
+) from anon;
+revoke all on function public.apply_tax_classification_neutralization(
+  uuid, integer, uuid, uuid, text, timestamptz, jsonb, timestamptz
+) from authenticated;
 grant execute on function public.apply_tax_classification_neutralization(
   uuid, integer, uuid, uuid, text, timestamptz, jsonb, timestamptz
 ) to service_role;

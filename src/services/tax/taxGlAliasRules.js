@@ -48,7 +48,7 @@ export const TAX_GL_ALIAS_RULES = Object.freeze([
   rule("liability_balance_sheet_exclusion_gl_v3", ["Sales Tax Payable", "Payroll Liabilities", "Credit Card Payable", "Accounts Payable", "Loans Payable"], "balance_sheet_movement", "balance_sheet", 0, false, 2, { type: "balance_sheet", component: "liability_movement" }),
 ]);
 
-export function buildTaxGlAliasDeductionRules({ taxYear = 2026, verifiedAt = "2026-09-30T00:00:00Z" } = {}) {
+export function buildTaxGlAliasDeductionRules({ taxYear = 2026, verifiedAt = "2026-09-08T00:00:00Z" } = {}) {
   return TAX_GL_ALIAS_RULES.map((item) => ({
     id: item.rule_code,
     business_id: null,

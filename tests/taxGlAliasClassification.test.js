@@ -147,6 +147,70 @@ test("unresolved fallback repair targets only fallback rows and is idempotent", 
   assert.equal(supabase.store.tax_classification_overrides.length, 2);
 });
 
+test("repair RPC rejects missing rule identity for meaningful outcomes", () => {
+  const store = baseStore();
+  const baseParams = repairParams({
+    classificationStatus: "auto_classified",
+    taxCategory: "software_subscriptions",
+    ruleId: "software_subscriptions_gl_v3",
+    ruleCode: "software_subscriptions_gl_v3",
+    ruleVersion: "bizzi-gl-2026-v3",
+  });
+
+  assert.equal(applyRepairRpc(store, { ...baseParams, p_rule_id: null }).error?.message, "invalid_tax_classification_repair_rule_identity");
+  assert.equal(applyRepairRpc(store, { ...baseParams, p_rule_code: null }).error?.message, "invalid_tax_classification_repair_rule_identity");
+  assert.equal(applyRepairRpc(store, { ...baseParams, p_rule_version: null }).error?.message, "invalid_tax_classification_repair_rule_identity");
+
+  const reviewMissingRule = applyRepairRpc(store, repairParams({
+    classificationStatus: "needs_review",
+    taxCategory: "vehicle_expense",
+    ruleId: null,
+    ruleCode: "vehicle_fuel_review_gl_v3",
+    ruleVersion: "bizzi-gl-2026-v3",
+  }));
+  assert.equal(reviewMissingRule.error?.message, "invalid_tax_classification_repair_rule_identity");
+
+  const blankCategory = applyRepairRpc(store, repairParams({
+    classificationStatus: "needs_review",
+    taxCategory: " ",
+    ruleId: "vehicle_fuel_review_gl_v3",
+    ruleCode: "vehicle_fuel_review_gl_v3",
+    ruleVersion: "bizzi-gl-2026-v3",
+  }));
+  assert.equal(blankCategory.error?.message, "invalid_tax_classification_repair_tax_category");
+
+  const unclassified = applyRepairRpc(store, repairParams({
+    classificationStatus: "needs_review",
+    taxCategory: "unclassified",
+    ruleId: "vehicle_fuel_review_gl_v3",
+    ruleCode: "vehicle_fuel_review_gl_v3",
+    ruleVersion: "bizzi-gl-2026-v3",
+  }));
+  assert.equal(unclassified.error?.message, "invalid_tax_classification_repair_unresolved_fallback");
+
+  const reviewSuccess = applyRepairRpc(store, repairParams({
+    classificationStatus: "needs_review",
+    taxCategory: "vehicle_expense",
+    ruleId: "vehicle_fuel_review_gl_v3",
+    ruleCode: "vehicle_fuel_review_gl_v3",
+    ruleVersion: "bizzi-gl-2026-v3",
+  }));
+  assert.equal(reviewSuccess.error, null);
+  assert.equal(reviewSuccess.data.tax_category, "vehicle_expense");
+  assert.equal(reviewSuccess.data.classification_status, "needs_review");
+
+  const excludedStore = baseStore();
+  const excluded = applyRepairRpc(excludedStore, repairParams({
+    classificationStatus: "excluded",
+    taxCategory: "transfer",
+    ruleId: null,
+    ruleCode: null,
+    ruleVersion: null,
+  }));
+  assert.equal(excluded.error, null);
+  assert.equal(excluded.data.classification_status, "excluded");
+});
+
 test("future QBO-posted transaction classifies automatically through posted source hydration", async () => {
   const supabase = makeSupabase(baseStore({ classifications: [] }));
   const out = await classifyPostedTransaction({ supabase, businessId: BUSINESS_ID, taxYear: 2026, transactionId: "txn-fallback" });
@@ -291,6 +355,8 @@ test("amount signs, refunds, and neutralized reversals do not create artificial 
 
 test("v3 migration is typed, idempotent, and service-role-only for repair RPC", () => {
   const sql = readFileSync(MIGRATION_PATH, "utf8");
+  assert.match(sql, /'2026-09-08T00:00:00Z'::timestamptz/);
+  assert.doesNotMatch(sql, /'2026-10-01T00:00:00Z'::timestamptz/);
   assert.doesNotMatch(sql, /create\s+temporary\s+table/i);
   assert.doesNotMatch(sql, /\bon\s+conflict\b/i);
   assert.match(sql, /verified_at::timestamptz/);
@@ -302,10 +368,17 @@ test("v3 migration is typed, idempotent, and service-role-only for repair RPC", 
   assert.match(sql, /effective_from::date/);
   assert.match(sql, /security invoker/i);
   assert.match(sql, /set search_path = public/i);
+  assert.match(sql, /p_classification_status in \('auto_classified', 'needs_review'\)[\s\S]*p_rule_id is null or p_rule_code is null or p_rule_version is null/);
   assert.match(sql, /grant execute on function public\.apply_tax_classification_repair[\s\S]*\) to service_role;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_repair[\s\S]*\) from public;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_repair[\s\S]*\) from anon;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_repair[\s\S]*\) from authenticated;/);
   assert.doesNotMatch(sql, /grant execute on function public\.apply_tax_classification_repair[\s\S]*\) to authenticated/);
   assert.doesNotMatch(sql, /grant execute on function public\.apply_tax_classification_repair[\s\S]*\) to anon/);
   assert.match(sql, /grant execute on function public\.apply_tax_classification_neutralization[\s\S]*\) to service_role;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_neutralization[\s\S]*\) from public;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_neutralization[\s\S]*\) from anon;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_neutralization[\s\S]*\) from authenticated;/);
   assert.doesNotMatch(sql, /grant execute on function public\.apply_tax_classification_neutralization[\s\S]*\) to authenticated/);
   assert.doesNotMatch(sql, /grant execute on function public\.apply_tax_classification_neutralization[\s\S]*\) to anon/);
 });
@@ -580,6 +653,42 @@ function makeSupabase(store) {
   };
 }
 
+function repairParams({
+  classificationStatus,
+  taxCategory,
+  ruleId,
+  ruleCode,
+  ruleVersion,
+}) {
+  return {
+    p_business_id: BUSINESS_ID,
+    p_tax_year: 2026,
+    p_transaction_id: "txn-fallback",
+    p_actor_user_id: null,
+    p_repair_reason: "test",
+    p_expected_updated_at: null,
+    p_rule_id: ruleId,
+    p_rule_code: ruleCode,
+    p_rule_version: ruleVersion,
+    p_rule_priority: 10,
+    p_tax_category: taxCategory,
+    p_deductibility_status: classificationStatus === "excluded" ? "balance_sheet" : "fully_deductible",
+    p_deductible_percent: classificationStatus === "excluded" ? 0 : 100,
+    p_tax_treatment: {},
+    p_classification_status: classificationStatus,
+    p_metadata: { repaired: true },
+    p_book_amount: -100,
+    p_deductible_amount: classificationStatus === "excluded" ? 0 : 100,
+    p_nondeductible_amount: 0,
+    p_capitalizable_amount: 0,
+    p_confidence_score: 1,
+    p_confidence_level: "high",
+    p_source: "rule_engine",
+    p_requires_review: classificationStatus === "needs_review",
+    p_reason: "test repair",
+  };
+}
+
 function applyRepairRpc(store, params) {
   const rows = store.transaction_tax_classifications;
   const idx = rows.findIndex((row) =>
@@ -588,6 +697,24 @@ function applyRepairRpc(store, params) {
     row.tax_year === params.p_tax_year
   );
   if (idx < 0) return { data: null, error: { code: "P0002", message: "classification_not_found" } };
+  if (!["auto_classified", "needs_review", "excluded"].includes(params.p_classification_status)) {
+    return { data: null, error: { code: "P0001", message: "invalid_tax_classification_repair_status" } };
+  }
+  if (params.p_source !== "rule_engine") {
+    return { data: null, error: { code: "P0001", message: "invalid_tax_classification_repair_source" } };
+  }
+  if (["auto_classified", "needs_review"].includes(params.p_classification_status) && String(params.p_tax_category || "").trim() === "") {
+    return { data: null, error: { code: "P0001", message: "invalid_tax_classification_repair_tax_category" } };
+  }
+  if (params.p_classification_status === "needs_review" && String(params.p_tax_category || "").trim().toLowerCase() === "unclassified") {
+    return { data: null, error: { code: "P0001", message: "invalid_tax_classification_repair_unresolved_fallback" } };
+  }
+  if (
+    ["auto_classified", "needs_review"].includes(params.p_classification_status) &&
+    (!params.p_rule_id || !params.p_rule_code || !params.p_rule_version)
+  ) {
+    return { data: null, error: { code: "P0001", message: "invalid_tax_classification_repair_rule_identity" } };
+  }
   const current = rows[idx];
   const previous = snapshot(current);
   const updated = {

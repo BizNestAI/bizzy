@@ -186,12 +186,27 @@ select 'repair_function_grants' as check_name, coalesce(jsonb_agg(row_to_json(t)
 from (
   select
     f.proname,
-    r.rolname as grantee,
-    has_function_privilege(r.oid, f.oid, 'EXECUTE') as can_execute
+    grants.grantee,
+    grants.can_execute
   from function_oids f
-  cross join pg_roles r
-  where r.rolname in ('anon', 'authenticated', 'service_role')
-  order by f.proname, r.rolname
+  cross join lateral (
+    select
+      'PUBLIC'::text as grantee,
+      exists (
+        select 1
+        from aclexplode(coalesce(
+          (select p.proacl from pg_proc p where p.oid = f.oid),
+          acldefault('f', (select p.proowner from pg_proc p where p.oid = f.oid))
+        )) acl
+        where acl.grantee = 0
+          and acl.privilege_type = 'EXECUTE'
+      ) as can_execute
+    union all
+    select r.rolname::text as grantee, has_function_privilege(r.oid, f.oid, 'EXECUTE') as can_execute
+    from pg_roles r
+    where r.rolname in ('anon', 'authenticated', 'service_role')
+  ) grants
+  order by f.proname, grants.grantee
 ) t
 union all
 select 'classification_authority_counts' as check_name, jsonb_agg(row_to_json(t)) as result
