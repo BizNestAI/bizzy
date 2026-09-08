@@ -12,6 +12,10 @@ import { normalizeQboGlAccountKey } from "../src/services/tax/taxQboGlNormalizer
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_BUSINESS_ID = "22222222-2222-4222-8222-222222222222";
 const MIGRATION_PATH = "supabase/migrations/20261001_tax_classification_gl_alias_rules_v3.sql";
+const PREFLIGHT_PATH = "scripts/tax/gl_alias_v3_preflight.sql";
+const V4_MIGRATION_PATH = "supabase/migrations/20261002_tax_classification_gl_alias_rules_v4_reconciliation.sql";
+const V4_PREFLIGHT_PATH = "scripts/tax/gl_alias_v4_preflight.sql";
+const V4_POST_VERIFY_PATH = "scripts/tax/gl_alias_v4_post_migration_verification.sql";
 
 test("every approved GL alias normalizes and matches its intended v3 rule", () => {
   const rules = buildTaxGlAliasDeductionRules();
@@ -381,6 +385,98 @@ test("v3 migration is typed, idempotent, and service-role-only for repair RPC", 
   assert.match(sql, /revoke all on function public\.apply_tax_classification_neutralization[\s\S]*\) from authenticated;/);
   assert.doesNotMatch(sql, /grant execute on function public\.apply_tax_classification_neutralization[\s\S]*\) to authenticated/);
   assert.doesNotMatch(sql, /grant execute on function public\.apply_tax_classification_neutralization[\s\S]*\) to anon/);
+});
+
+test("v3 preflight is read-only, parse-portable, and verifies restored v2 content", () => {
+  const sql = readFileSync(PREFLIGHT_PATH, "utf8");
+  assert.doesNotMatch(sql, /^\s*(insert|update|delete|merge|create|alter|drop|grant|revoke|call|do)\b/im);
+  assert.doesNotMatch(sql, /\bfrom\s+supabase_migrations\.schema_migrations\b/i);
+  assert.doesNotMatch(sql, /\bjoin\s+supabase_migrations\.schema_migrations\b/i);
+  assert.doesNotMatch(sql, /metadata\s*->>\s*'fallback'\s*\)::boolean/i);
+  assert.match(sql, /cffc2183-e77c-4148-a206-d5192e090925/);
+  assert.match(sql, /v2_compatibility_summary/);
+  assert.match(sql, /v2_missing_expected_rows/);
+  assert.match(sql, /v2_unexpected_additional_rows/);
+  assert.match(sql, /v2_same_key_content_mismatches/);
+  assert.match(sql, /v2_rows_differing_only_in_is_active/);
+  assert.match(sql, /v2_rows_differing_only_in_timestamps/);
+  assert.match(sql, /v2_materially_different_rule_rows/);
+  assert.match(sql, /v2_dependency_rows_for_v3/);
+  assert.match(sql, /v3_preexisting_rule_codes/);
+  assert.match(sql, /target_business_classification_counts/);
+  assert.match(sql, /target_business_eligible_posted_transactions/);
+  assert.match(sql, /global_classification_counts/);
+  assert.match(sql, /jsonb_build_object\('qbo_account_name_keys'/);
+  assert.match(sql, /'2026-09-30T00:00:00Z'::timestamptz/);
+  assert.match(sql, /lower\(btrim\(coalesce\(c\.metadata->>'fallback', ''\)\)\) in \('true', 't', '1', 'yes', 'y'\)/);
+});
+
+test("v4 reconciliation migration is forward-only and hardens repair RPC security", () => {
+  const sql = readFileSync(V4_MIGRATION_PATH, "utf8");
+  assert.match(sql, /tax_gl_alias_v4_v3_baseline_mismatch/);
+  assert.match(sql, /v_expected_count <> 41/);
+  assert.match(sql, /v_actual_count <> 41 or v_active_verified_count <> 41/);
+  assert.match(sql, /expected_immutable_json is distinct from actual_immutable_json/);
+  assert.doesNotMatch(sql, /\bmd5\s*\(/i);
+  assert.doesNotMatch(sql, /aggregate_fingerprint/i);
+  assert.match(sql, /update public\.tax_deduction_rules r[\s\S]*version = 'bizzi-gl-2026-v2'[\s\S]*exists \(/);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.tax_deduction_rules/i);
+  assert.doesNotMatch(sql, /delete\s+from\s+public\.tax_deduction_rules/i);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.transaction_tax_classifications/i);
+  assert.doesNotMatch(sql, /delete\s+from\s+public\.transaction_tax_classifications/i);
+  assert.doesNotMatch(sql, /tax_recalc_queue|tax_classification_jobs|qbo_posted_transactions|plaid_/i);
+  assert.match(sql, /create or replace function public\.apply_tax_classification_repair/);
+  assert.match(sql, /security invoker/i);
+  assert.match(sql, /set search_path = public/i);
+  assert.match(sql, /lower\(btrim\(coalesce\(v_current\.metadata->>'fallback', ''\)\)\) in \('true', 't', '1', 'yes', 'y'\)/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_repair[\s\S]*\) from public;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_repair[\s\S]*\) from anon;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_repair[\s\S]*\) from authenticated;/);
+  assert.match(sql, /grant execute on function public\.apply_tax_classification_repair[\s\S]*\) to service_role;/);
+});
+
+test("v4 validation scripts are read-only and expose canonical v3 reconciliation checks", () => {
+  for (const path of [V4_PREFLIGHT_PATH, V4_POST_VERIFY_PATH]) {
+    const sql = readFileSync(path, "utf8");
+    assert.doesNotMatch(sql, /^\s*(insert|update|delete|merge|create|alter|drop|grant|revoke|call|do)\b/im, path);
+    assert.match(sql, /v3_canonical_comparison_summary/, path);
+    assert.match(sql, /v3_rule_inventory/, path);
+    assert.match(sql, /duplicate_active_aliases_with_deterministic_winner/, path);
+    assert.match(sql, /equal_rank_alias_conflicts/, path);
+    assert.match(sql, /repair_function_security/, path);
+    assert.match(sql, /repair_function_grants/, path);
+    assert.match(sql, /target_business_classification_counts/, path);
+    assert.match(sql, /expected_immutable_json is distinct from actual_immutable_json/, path);
+    assert.doesNotMatch(sql, /aggregate_fingerprint/i, path);
+    assert.doesNotMatch(sql, /\bmd5\s*\(/i, path);
+  }
+
+  const preflightSql = readFileSync(V4_PREFLIGHT_PATH, "utf8");
+  assert.doesNotMatch(
+    preflightSql,
+    /actual_v3_fingerprints\s+as\s*\(\s*select\s+rule_code\s*,\s*jsonb_build_object/i,
+    "actual_v3_fingerprints must not project rule_code separately before a.*",
+  );
+
+  const postVerifySql = readFileSync(V4_POST_VERIFY_PATH, "utf8");
+  assert.doesNotMatch(
+    postVerifySql,
+    /actual_v3_fingerprints\s+as\s*\(\s*select\s+rule_code\s*,\s*jsonb_build_object/i,
+    "post-migration actual_v3_fingerprints must not project rule_code separately before a.*",
+  );
+});
+
+test("v4 baseline validation does not use text fingerprints that can disagree on numeric scale", () => {
+  const migrationSql = readFileSync(V4_MIGRATION_PATH, "utf8");
+  const preflightSql = readFileSync(V4_PREFLIGHT_PATH, "utf8");
+  const postVerifySql = readFileSync(V4_POST_VERIFY_PATH, "utf8");
+
+  for (const sql of [migrationSql, preflightSql, postVerifySql]) {
+    assert.match(sql, /default_deductible_percent\s+numeric/i);
+    assert.match(sql, /expected_immutable_json is distinct from actual_immutable_json/);
+    assert.doesNotMatch(sql, /jsonb_agg\(immutable_json[\s\S]*::text/i);
+    assert.doesNotMatch(sql, /\bmd5\s*\(/i);
+  }
 });
 
 function assertNoMatch(rules, accountName) {
