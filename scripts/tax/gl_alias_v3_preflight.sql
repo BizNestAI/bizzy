@@ -4,6 +4,9 @@
 with target_versions(version) as (
   values ('bizzi-gl-2026-v1'::text), ('bizzi-gl-2026-v2'::text), ('bizzi-gl-2026-v3'::text)
 ),
+target_migrations(version) as (
+  values ('20260929'::text), ('20260930'::text), ('20261001'::text)
+),
 target_v1_rule_codes(rule_code) as (
   values
     ('software_subscriptions_gl'),
@@ -35,7 +38,28 @@ function_oids as (
   join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'public'
     and p.proname in ('apply_tax_classification_repair', 'apply_tax_classification_neutralization')
+),
+migration_history as (
+  select
+    t.version,
+    to_regclass('supabase_migrations.schema_migrations') is not null as migration_table_exists,
+    exists (
+      select 1
+      from supabase_migrations.schema_migrations sm
+      where sm.version = t.version
+    ) as recorded
+  from target_migrations t
+  where to_regclass('supabase_migrations.schema_migrations') is not null
+  union all
+  select t.version, false, false
+  from target_migrations t
+  where to_regclass('supabase_migrations.schema_migrations') is null
 )
+select 'migration_history' as check_name, jsonb_agg(row_to_json(t)) as result
+from (
+  select * from migration_history order by version
+) t
+union all
 select 'gl_rule_counts_by_version' as check_name, jsonb_agg(row_to_json(t)) as result
 from (
   select v.version, count(r.*)::integer as rule_count
@@ -147,7 +171,7 @@ from (
     and rule_code in (select rule_code from target_v1_rule_codes)
 ) t
 union all
-select 'repair_functions' as check_name, jsonb_agg(row_to_json(t)) as result
+select 'repair_functions' as check_name, coalesce(jsonb_agg(row_to_json(t)), '[]'::jsonb) as result
 from (
   select
     proname,
@@ -186,6 +210,8 @@ from (
       where classification_status in ('user_confirmed', 'accountant_reviewed', 'cpa_confirmed')
          or coalesce(user_override, false)
          or coalesce(cpa_override, false)
-    )::integer as confirmed_manual_cpa_authoritative_count
+    )::integer as confirmed_manual_cpa_authoritative_count,
+    count(*)::integer as total_classification_rows,
+    max(updated_at) as max_classification_updated_at
   from public.transaction_tax_classifications
 ) t;
