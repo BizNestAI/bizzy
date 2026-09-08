@@ -247,6 +247,63 @@ test("exhausted queued runs are surfaced as failed and removed from active recov
   assert.equal(failed[0].status, TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER);
 });
 
+test("unresolved fallback repair keeps original RPC error and does not retry deterministic zero-progress failures", async () => {
+  const store = baseStore({ transactionCount: 1 });
+  store.transaction_tax_classifications.push(fallbackClassification({
+    transaction_id: "txn-001",
+    source_qbo_account_name: "Software",
+    book_amount: -25,
+  }));
+  const supabase = makeSupabase(store);
+  supabase.rpc = (name) => {
+    if (name !== "apply_tax_classification_repair") {
+      return Promise.resolve({ data: null, error: { code: "rpc_not_found", message: "Unknown RPC" } });
+    }
+    return Promise.resolve({
+      data: null,
+      error: {
+        code: "23514",
+        message: "new row for relation tax_classification_overrides violates check constraint tax_classification_overrides_source_check",
+      },
+    });
+  };
+
+  const queued = await enqueueTaxClassificationRun({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+    metadata: { repairMode: "unresolved_fallback" },
+    now: new Date("2026-09-08T12:00:00Z"),
+  });
+  const first = await processPendingTaxClassificationRuns({
+    supabase,
+    workerId: "test-worker",
+    runBatchSize: 1,
+    transactionBatchSize: 100,
+    now: new Date("2026-09-08T12:01:00Z"),
+  });
+  const second = await processPendingTaxClassificationRuns({
+    supabase,
+    workerId: "test-worker",
+    runBatchSize: 1,
+    transactionBatchSize: 100,
+    now: new Date("2026-09-08T12:02:00Z"),
+  });
+  const run = store.tax_classification_runs.find((row) => row.id === queued.run.id);
+  const classification = store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-001");
+
+  assert.equal(first.failed, 1);
+  assert.equal(second.processed, 0);
+  assert.equal(run.status, TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER);
+  assert.equal(run.attempt_count, 1);
+  assert.equal(run.failed_count, 1);
+  assert.equal(run.last_error_code, "23514");
+  assert.match(run.last_error_message, /tax_classification_overrides_source_check/);
+  assert.equal(classification.tax_category, "unclassified");
+  assert.equal(store.tax_classification_overrides?.length || 0, 0);
+});
+
 test("duplicate prepare clicks reuse the active durable classification job", async () => {
   const supabase = makeSupabase(baseStore({ transactionCount: 3 }));
 
@@ -1072,6 +1129,45 @@ function qboPosted(overrides = {}) {
     qbo_txn_id: "qbo-txn-001",
     status: "posted",
     posted_at: "2026-08-15T12:00:00Z",
+    ...overrides,
+  };
+}
+
+function fallbackClassification(overrides = {}) {
+  return {
+    id: `fallback-${overrides.transaction_id || "txn-001"}`,
+    business_id: BUSINESS_ID,
+    transaction_id: "txn-001",
+    tax_year: 2026,
+    transaction_date: "2026-08-15",
+    tax_category: "unclassified",
+    deductibility_status: "needs_review",
+    deductible_percent: 0,
+    book_amount: -25,
+    deductible_amount: 0,
+    nondeductible_amount: 0,
+    capitalizable_amount: 0,
+    tax_treatment: { type: "unclassified" },
+    classification_status: "needs_review",
+    confidence_score: 20,
+    confidence_level: "low",
+    rule_id: null,
+    rule_code: null,
+    rule_version: null,
+    rule_priority: null,
+    source: "rule_engine",
+    requires_review: true,
+    user_override: false,
+    cpa_override: false,
+    reason: "No reliable tax deduction rule matched this posted transaction.",
+    metadata: {
+      fallback: true,
+      source_qbo_account_name: "Software",
+      normalized_qbo_account_name: "software",
+      tax_classification_stale: false,
+    },
+    created_at: "2026-09-07T16:14:07.304Z",
+    updated_at: "2026-09-07T16:14:07.304Z",
     ...overrides,
   };
 }

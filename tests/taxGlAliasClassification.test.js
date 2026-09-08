@@ -466,6 +466,14 @@ test("v4 validation scripts are read-only and expose canonical v3 reconciliation
   );
 });
 
+test("fallback repair persistence forensics script is read-only", () => {
+  const sql = readFileSync("scripts/tax/fallback_repair_persistence_forensics.sql", "utf8");
+  assert.doesNotMatch(sql, /^\s*(insert|update|delete|merge|create|alter|drop|grant|revoke|call|do|truncate)\b/im);
+  assert.match(sql, /pg_get_functiondef/);
+  assert.match(sql, /target_classification_counts/);
+  assert.match(sql, /repair_history_after_run/);
+});
+
 test("v4 baseline validation does not use text fingerprints that can disagree on numeric scale", () => {
   const migrationSql = readFileSync(V4_MIGRATION_PATH, "utf8");
   const preflightSql = readFileSync(V4_PREFLIGHT_PATH, "utf8");

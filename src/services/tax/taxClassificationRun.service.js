@@ -411,7 +411,8 @@ export async function completeTaxClassificationRun({ supabase, runId, status, pr
 
 export async function failTaxClassificationRun({ supabase, runId, error, retryAt = null, now = new Date() } = {}) {
   const run = await findRun({ supabase, runId });
-  const exhausted = Number(run?.attempt_count || 0) >= Number(run?.max_attempts || DEFAULT_MAX_ATTEMPTS);
+  const retryable = error?.retryable !== false;
+  const exhausted = !retryable || Number(run?.attempt_count || 0) >= Number(run?.max_attempts || DEFAULT_MAX_ATTEMPTS);
   const status = exhausted ? TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER : TAX_CLASSIFICATION_RUN_STATUSES.FAILED;
   return updateRun({ supabase, runId, patch: {
     status,
@@ -421,8 +422,9 @@ export async function failTaxClassificationRun({ supabase, runId, error, retryAt
     failed_at: now.toISOString(),
     dead_lettered_at: exhausted ? now.toISOString() : null,
     process_after: retryAt ? retryAt.toISOString() : now.toISOString(),
+    ...progressPatch(error?.details?.progress || {}),
     last_error_code: sanitizeErrorCode(error),
-    last_error_message: "Tax classification run failed.",
+    last_error_message: sanitizeErrorMessage(error),
   } });
 }
 
@@ -675,6 +677,12 @@ function progressPatch(progress = {}) {
     if (Number.isFinite(Number(progress[input]))) out[column] = Number(progress[input]);
   }
   return out;
+}
+
+function sanitizeErrorMessage(error) {
+  const raw = error?.message || error?.details?.firstError?.message || "Tax classification run failed.";
+  const message = String(raw || "").replace(/\s+/g, " ").trim();
+  return message ? message.slice(0, 500) : "Tax classification run failed.";
 }
 
 async function updateRun({ supabase, runId, patch }) {

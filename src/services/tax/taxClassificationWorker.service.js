@@ -219,6 +219,23 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
         failedCount: repaired.failures,
         queuedCount: remaining,
       };
+      if (repaired.failures > 0) {
+        const madeProgress = repaired.calculated + repaired.meaningfulNeedsReview + repaired.excluded > 0;
+        throw classificationWorkerInvariantError(
+          repaired.firstError?.code || "fallback_repair_failed",
+          repaired.firstError?.message || "Fallback repair failed before any classification updates committed.",
+          {
+            repairMode: "unresolved_fallback",
+            attempted: repaired.attempted,
+            failedCount: repaired.failures,
+            madeProgress,
+            progress,
+            firstError: repaired.firstError || null,
+            latestError: repaired.latestError || null,
+          },
+          { retryable: false }
+        );
+      }
       if (remaining > 0 && repaired.attempted > 0 && repaired.calculated + repaired.meaningfulNeedsReview + repaired.excluded + repaired.failures > 0) {
         return requeueTaxClassificationRun({
           supabase,
@@ -387,10 +404,11 @@ function assertBatchMadeProgress({ batch, selectedCount, run }) {
   }
 }
 
-function classificationWorkerInvariantError(code, message, details = {}) {
+function classificationWorkerInvariantError(code, message, details = {}, options = {}) {
   const error = new Error(message);
   error.code = code;
   error.details = details;
+  if (options.retryable === false) error.retryable = false;
   return error;
 }
 

@@ -76,12 +76,11 @@ export async function repairUnresolvedFallbackClassifications({
       countUpdated(summary, updated);
       addPreviewTotals(summary, { current, transaction, next: updated, ruleCode: updated.rule_code });
     } catch (err) {
+      const sanitized = sanitizeRepairError(err, current);
       summary.failures += 1;
-      summary.errors.push({
-        transactionId: current.transaction_id || null,
-        code: err?.code || "fallback_repair_failed",
-        message: err?.message || "Fallback repair failed.",
-      });
+      summary.firstError ||= sanitized;
+      summary.latestError = sanitized;
+      summary.errors.push(sanitized);
     }
   }
 
@@ -276,8 +275,26 @@ function emptySummary(targetCount) {
     proposedDeductibleAmount: 0,
     groupedByNormalizedQboGlAccount: [],
     errors: [],
+    firstError: null,
+    latestError: null,
     _groups: new Map(),
   };
+}
+
+function sanitizeRepairError(err, current = {}) {
+  return {
+    transactionId: current.transaction_id || null,
+    classificationId: current.id || null,
+    code: String(err?.code || err?.name || "fallback_repair_failed").slice(0, 120),
+    message: sanitizeRepairMessage(err?.message),
+    details: sanitizeRepairMessage(err?.details),
+    hint: sanitizeRepairMessage(err?.hint),
+  };
+}
+
+function sanitizeRepairMessage(value) {
+  if (!value) return null;
+  return String(value).replace(/\s+/g, " ").trim().slice(0, 500) || null;
 }
 
 function requireTaxYear(value) {
