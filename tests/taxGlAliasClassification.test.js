@@ -16,6 +16,9 @@ const PREFLIGHT_PATH = "scripts/tax/gl_alias_v3_preflight.sql";
 const V4_MIGRATION_PATH = "supabase/migrations/20261002_tax_classification_gl_alias_rules_v4_reconciliation.sql";
 const V4_PREFLIGHT_PATH = "scripts/tax/gl_alias_v4_preflight.sql";
 const V4_POST_VERIFY_PATH = "scripts/tax/gl_alias_v4_post_migration_verification.sql";
+const SYSTEM_REPAIR_SOURCE_MIGRATION_PATH = "supabase/migrations/20261003_tax_classification_system_repair_source.sql";
+const SYSTEM_REPAIR_SOURCE_PREFLIGHT_PATH = "scripts/tax/system_repair_source_preflight.sql";
+const SYSTEM_REPAIR_SOURCE_POST_VERIFY_PATH = "scripts/tax/system_repair_source_post_migration_verification.sql";
 
 test("every approved GL alias normalizes and matches its intended v3 rule", () => {
   const rules = buildTaxGlAliasDeductionRules();
@@ -213,6 +216,81 @@ test("repair RPC rejects missing rule identity for meaningful outcomes", () => {
   }));
   assert.equal(excluded.error, null);
   assert.equal(excluded.data.classification_status, "excluded");
+});
+
+test("system_repair override source is accepted without becoming manual authority", async () => {
+  const supabase = makeSupabase(baseStore());
+
+  const result = await repairUnresolvedFallbackClassifications({ supabase, businessId: BUSINESS_ID, taxYear: 2026, limit: 10 });
+  const repaired = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-fallback");
+  const history = supabase.store.tax_classification_overrides[0];
+
+  assert.equal(result.calculated, 1);
+  assert.equal(history.override_source, "system_repair");
+  assert.equal(repaired.classification_status, "auto_classified");
+  assert.equal(repaired.user_override, false);
+  assert.equal(repaired.cpa_override, false);
+  assert.equal(isManualOverrideSource(history.override_source), false);
+});
+
+test("unknown override source is rejected atomically by the repaired source constraint", () => {
+  const store = baseStore();
+  const before = JSON.stringify(store.transaction_tax_classifications);
+  const result = applyRepairRpc(store, {
+    ...repairParams({
+      classificationStatus: "auto_classified",
+      taxCategory: "software_subscriptions",
+      ruleId: "software_subscriptions_gl_v3",
+      ruleCode: "software_subscriptions_gl_v3",
+      ruleVersion: "bizzi-gl-2026-v3",
+    }),
+    p_override_source_for_test: "worker",
+  });
+
+  assert.equal(result.error?.code, "23514");
+  assert.match(result.error?.message, /tax_classification_overrides_source_check/);
+  assert.equal(JSON.stringify(store.transaction_tax_classifications), before);
+  assert.equal(store.tax_classification_overrides.length, 0);
+});
+
+test("production-shaped system_repair RPC persists auto and meaningful review outcomes atomically", () => {
+  const store = baseStore();
+  store.bank_transactions.push(bankTxn("txn-review-fallback", "Gas", -44));
+  store.transaction_categorizations.push(categorization("txn-review-fallback", "Gas"));
+  store.qbo_posted_transactions.push(qboPosted("txn-review-fallback"));
+  store.transaction_tax_classifications.push(fallbackClassification("txn-review-fallback", "Gas", -44));
+
+  const auto = applyRepairRpc(store, repairParams({
+    classificationStatus: "auto_classified",
+    taxCategory: "software_subscriptions",
+    ruleId: "software-rule-id",
+    ruleCode: "software_subscriptions_gl_v3",
+    ruleVersion: "bizzi-gl-2026-v3",
+  }));
+  const review = applyRepairRpc(store, {
+    ...repairParams({
+      classificationStatus: "needs_review",
+      taxCategory: "vehicle_expense",
+      ruleId: "vehicle-rule-id",
+      ruleCode: "vehicle_fuel_review_gl_v3",
+      ruleVersion: "bizzi-gl-2026-v3",
+    }),
+    p_transaction_id: "txn-review-fallback",
+    p_deductibility_status: "needs_review",
+    p_deductible_percent: 0,
+    p_deductible_amount: 0,
+    p_nondeductible_amount: 0,
+    p_requires_review: true,
+  });
+
+  assert.equal(auto.error, null);
+  assert.equal(review.error, null);
+  assert.equal(auto.data.tax_category, "software_subscriptions");
+  assert.equal(auto.data.classification_status, "auto_classified");
+  assert.equal(review.data.tax_category, "vehicle_expense");
+  assert.equal(review.data.classification_status, "needs_review");
+  assert.equal(store.tax_classification_overrides.length, 2);
+  assert.deepEqual(new Set(store.tax_classification_overrides.map((row) => row.override_source)), new Set(["system_repair"]));
 });
 
 test("future QBO-posted transaction classifies automatically through posted source hydration", async () => {
@@ -464,6 +542,32 @@ test("v4 validation scripts are read-only and expose canonical v3 reconciliation
     /actual_v3_fingerprints\s+as\s*\(\s*select\s+rule_code\s*,\s*jsonb_build_object/i,
     "post-migration actual_v3_fingerprints must not project rule_code separately before a.*",
   );
+});
+
+test("system_repair source migration only widens the override source check constraint", () => {
+  const sql = readFileSync(SYSTEM_REPAIR_SOURCE_MIGRATION_PATH, "utf8");
+  assert.match(sql, /^begin;/i);
+  assert.match(sql, /tax_classification_overrides_source_check_unexpected/);
+  assert.match(sql, /override_source is null\s+or override_source not in \('user', 'cpa', 'admin', 'system_correction'\)/);
+  assert.match(sql, /drop constraint tax_classification_overrides_source_check/);
+  assert.match(sql, /add constraint tax_classification_overrides_source_check\s+check \(override_source in \('user', 'cpa', 'admin', 'system_correction', 'system_repair'\)\)/);
+  assert.doesNotMatch(sql, /transaction_tax_classifications\s+(set|values|where)/i);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.tax_classification_overrides/i);
+  assert.doesNotMatch(sql, /tax_classification_runs[\s\S]*(insert|update|delete)/i);
+  assert.doesNotMatch(sql, /tax_deduction_rules[\s\S]*(insert|update|delete)/i);
+});
+
+test("system_repair source validation scripts are read-only", () => {
+  for (const path of [SYSTEM_REPAIR_SOURCE_PREFLIGHT_PATH, SYSTEM_REPAIR_SOURCE_POST_VERIFY_PATH]) {
+    const sql = readFileSync(path, "utf8");
+    assert.doesNotMatch(sql, /^\s*(insert|update|delete|merge|create|alter|drop|grant|revoke|call|do|truncate)\b/im, path);
+    assert.match(sql, /tax_classification_overrides_source_check/, path);
+    assert.match(sql, /override_source_counts/, path);
+    assert.match(sql, /override_row_count/, path);
+    assert.match(sql, /classification_/, path);
+    assert.match(sql, /active_runs/, path);
+    assert.match(sql, /classification_run_row_count/, path);
+  }
 });
 
 test("fallback repair persistence forensics script is read-only", () => {
@@ -819,6 +923,16 @@ function applyRepairRpc(store, params) {
   ) {
     return { data: null, error: { code: "P0001", message: "invalid_tax_classification_repair_rule_identity" } };
   }
+  const overrideSource = params.p_override_source_for_test || "system_repair";
+  if (!isAcceptedOverrideSource(overrideSource)) {
+    return {
+      data: null,
+      error: {
+        code: "23514",
+        message: "new row for relation tax_classification_overrides violates check constraint tax_classification_overrides_source_check",
+      },
+    };
+  }
   const current = rows[idx];
   const previous = snapshot(current);
   const updated = {
@@ -855,12 +969,20 @@ function applyRepairRpc(store, params) {
     classification_id: current.id,
     previous_values: previous,
     new_values: snapshot(updated),
-    override_source: "system_repair",
+    override_source: overrideSource,
     override_reason: params.p_repair_reason,
     overridden_by: params.p_actor_user_id,
     created_at: new Date().toISOString(),
   });
   return { data: updated, error: null };
+}
+
+function isAcceptedOverrideSource(value) {
+  return ["user", "cpa", "admin", "system_correction", "system_repair"].includes(value);
+}
+
+function isManualOverrideSource(value) {
+  return Boolean(value) && !["system_repair", "rule_engine", "system", "worker"].includes(String(value).toLowerCase());
 }
 
 function snapshot(row) {
