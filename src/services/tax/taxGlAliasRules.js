@@ -1,0 +1,95 @@
+import { normalizeQboGlAccountKey } from "./taxQboGlNormalizer.js";
+
+export const TAX_GL_RULE_VERSION = "bizzi-gl-2026-v3";
+export const TAX_GL_RULE_SOURCE_REFERENCE = "Bizzi approved deterministic GL-to-tax mapping policy 2026";
+export const TAX_GL_RULE_SOURCE_URL = "internal://bizzi/tax/gl-alias-rules/2026-v3";
+
+export const TAX_GL_ALIAS_RULES = Object.freeze([
+  rule("software_subscriptions_gl_v3", ["Software", "Software & Apps", "Subscriptions", "Computer Software", "SaaS", "Software Subscriptions", "Online Services"], "software_subscriptions", "fully_deductible", 100, false, 10, { type: "ordinary_expense", irs_category: "other_business_expense" }),
+  rule("business_insurance_gl_v3", ["Insurance", "Business Insurance", "General Liability", "General Liability Insurance", "Commercial Insurance", "Workers Comp", "Workers Compensation", "Workers Compensation Insurance", "Contractor Insurance"], "business_insurance", "fully_deductible", 100, false, 12, { type: "ordinary_expense", irs_category: "insurance" }),
+  rule("office_supplies_gl_v3", ["Office Supplies", "Office Expense", "Administrative Supplies", "Office Materials"], "office_supplies", "fully_deductible", 100, false, 20, { type: "ordinary_expense", irs_category: "office_expense" }),
+  rule("job_materials_gl_v3", ["Materials", "Job Materials", "Construction Materials", "Building Materials", "Supplies & Materials", "Materials & Supplies", "Job Supplies", "Project Materials", "Direct Materials"], "job_materials", "fully_deductible", 100, false, 18, { type: "job_cost_materials", irs_category: "supplies" }),
+  rule("generic_supplies_review_gl_v3", ["Supplies"], "supplies", "fully_deductible", 100, true, 42, { type: "supplies_review", classification_review_required: true }, "Confirm whether these are office supplies, job supplies, or materials."),
+  rule("contract_labor_gl_v3", ["Subcontractors", "Subcontractor", "Subcontractor Expense", "Contract Labor", "Outside Labor", "Independent Contractors", "1099 Contractors", "Trade Partners"], "contract_labor", "fully_deductible", 100, false, 16, { type: "ordinary_expense", irs_category: "contract_labor" }),
+  rule("small_consumable_tools_gl_v3", ["Small Tools", "Hand Tools", "Consumable Tools", "Tool Expense"], "small_tools", "fully_deductible", 100, false, 24, { type: "ordinary_expense", irs_category: "tools" }),
+  rule("tools_small_equipment_review_gl_v3", ["Tools", "Small Equipment"], "small_tools", "needs_review", 0, true, 26, { type: "small_tools_review", capitalization_review_required: true }),
+  rule("equipment_rental_gl_v3", ["Equipment Rental", "Equipment Rentals", "Tool Rental", "Tool Rentals", "Machinery Rental", "Rental Equipment"], "equipment_rental", "fully_deductible", 100, false, 22, { type: "rental_expense", irs_category: "rent" }),
+  rule("vehicle_fuel_review_gl_v3", ["Fuel", "Gas", "Vehicle Fuel", "Auto Fuel", "Fuel Expense", "Gas & Fuel", "Automobile Expense", "Auto Expense"], "vehicle_expense", "needs_review", 0, true, 30, { type: "vehicle_expense", business_use_required: true }),
+  rule("vehicle_repairs_review_gl_v3", ["Vehicle Maintenance", "Auto Maintenance", "Vehicle Repairs", "Auto Repairs", "Truck Repairs", "Truck Maintenance", "Fleet Maintenance", "Vehicle Repairs & Maintenance"], "vehicle_expense", "needs_review", 0, true, 30, { type: "vehicle_expense", business_use_required: true }),
+  rule("parking_tolls_transportation_review_gl_v3", ["Parking", "Parking Fees", "Tolls", "Road Tolls", "Rideshare", "Uber", "Lyft", "Uber & Lyft", "Lyft Uber", "Local Transportation", "Transportation"], "travel_transportation", "needs_review", 0, true, 34, { type: "travel_transportation", business_purpose_required: true }),
+  rule("repairs_maintenance_review_gl_v3", ["Repairs", "Repairs & Maintenance", "Equipment Repairs", "Equipment Maintenance", "Machinery Repairs", "Property Repairs", "Maintenance Expense"], "repairs_maintenance", "fully_deductible", 100, true, 32, { type: "ordinary_expense", capitalization_review_required: true }),
+  rule("licenses_permits_inspections_gl_v3", ["Permits", "Business Licenses", "Licenses", "Licenses & Permits", "Inspection Fees", "Permit Fees", "Building Permits", "Contractor Licenses"], "licenses_permits", "fully_deductible", 100, false, 22, { type: "ordinary_expense", irs_category: "taxes_and_licenses" }),
+  rule("waste_disposal_job_costs_gl_v3", ["Dump Fees", "Waste Disposal", "Debris Removal", "Trash Removal", "Hauling", "Disposal Fees", "Landfill Fees", "Jobsite Cleanup"], "waste_disposal_job_costs", "fully_deductible", 100, false, 22, { type: "job_cost", irs_category: "disposal_fees" }),
+  rule("payment_processing_fees_gl_v3", ["Merchant Fees", "Merchant Processing Fees", "Processing Fees", "Credit Card Fees", "Credit Card Processing Fees", "Payment Processing Fees", "Stripe Fees", "Square Fees"], "payment_processing_fees", "fully_deductible", 100, false, 14, { type: "ordinary_expense", irs_category: "commissions_and_fees" }),
+  rule("bank_service_fees_gl_v3", ["Bank Fees", "Bank Charges", "Service Charges", "Bank Service Charges", "Monthly Bank Fees"], "bank_fees", "fully_deductible", 100, false, 14, { type: "ordinary_expense", irs_category: "bank_fees" }),
+  rule("legal_services_gl_v3", ["Legal", "Legal Fees", "Attorney Fees", "Legal Services"], "legal_professional", "fully_deductible", 100, false, 18, { type: "ordinary_expense", irs_category: "legal_and_professional_fees" }),
+  rule("accounting_services_gl_v3", ["Accounting", "Accounting Fees", "Bookkeeping", "Bookkeeping Fees", "Tax Preparation", "CPA Fees"], "legal_professional", "fully_deductible", 100, false, 18, { type: "ordinary_expense", irs_category: "legal_and_professional_fees" }),
+  rule("professional_services_review_gl_v3", ["Professional Fees", "Professional Services", "Consulting Fees", "Consultants"], "legal_professional", "fully_deductible", 100, true, 28, { type: "ordinary_expense", review_required: true }),
+  rule("advertising_marketing_gl_v3", ["Advertising", "Marketing", "Advertising & Marketing", "Digital Advertising", "Online Advertising", "Website Advertising", "Lead Generation", "Promotional Expense"], "advertising_marketing", "fully_deductible", 100, false, 20, { type: "ordinary_expense", irs_category: "advertising" }),
+  rule("business_rent_gl_v3", ["Office Rent", "Shop Rent", "Warehouse Rent", "Business Rent", "Yard Rent", "Storage Rent", "Commercial Rent"], "rent_lease", "fully_deductible", 100, false, 20, { type: "ordinary_expense", irs_category: "rent" }),
+  rule("generic_rent_review_gl_v3", ["Rent", "Rent Expense", "Lease Expense"], "rent_lease", "needs_review", 0, true, 34, { type: "rent_review", business_use_required: true }),
+  rule("business_premises_utilities_gl_v3", ["Shop Utilities", "Office Utilities", "Warehouse Utilities", "Jobsite Utilities", "Commercial Utilities"], "utilities", "fully_deductible", 100, false, 22, { type: "ordinary_expense", irs_category: "utilities" }),
+  rule("mixed_utilities_review_gl_v3", ["Utilities", "Electric", "Electricity", "Water", "Internet", "Internet Expense", "Phone", "Phone Bill", "Telephone", "Cell Phone", "Mobile Phone"], "utilities", "needs_review", 0, true, 36, { type: "utilities_review", business_use_required: true }),
+  rule("safety_supplies_gl_v3", ["Safety Equipment", "PPE", "Personal Protective Equipment", "Safety Supplies", "Protective Gear", "Jobsite Safety"], "safety_supplies", "fully_deductible", 100, false, 20, { type: "ordinary_expense", irs_category: "safety_supplies" }),
+  rule("uniforms_work_clothing_review_gl_v3", ["Uniforms", "Work Uniforms", "Branded Apparel", "Protective Clothing", "Work Clothing", "Workwear"], "uniforms_work_clothing", "needs_review", 0, true, 38, { type: "uniforms_review", substantiation_required: true }),
+  rule("education_training_review_gl_v3", ["Training", "Employee Training", "Continuing Education", "Certifications", "Professional Development", "Safety Training"], "education_training", "needs_review", 0, true, 38, { type: "education_training_review", business_purpose_required: true }),
+  rule("business_travel_review_gl_v3", ["Travel", "Business Travel", "Lodging", "Hotels", "Hotel", "Airfare", "Flights"], "business_travel", "needs_review", 0, true, 36, { type: "business_travel", business_purpose_required: true }),
+  rule("business_meals_review_gl_v3", ["Meals", "Business Meals", "Client Meals", "Travel Meals", "Meals & Entertainment", "Meals and Entertainment"], "business_meals", "partially_deductible", 50, true, 32, { type: "ordinary_expense", limitation: "50_percent_meals", substantiation_required: true }),
+  rule("depreciation_review_gl_v3", ["Depreciation Expense", "Accumulated Depreciation Expense", "Depreciation"], "depreciation", "fully_deductible", 100, true, 40, { type: "depreciation_expense", fixed_asset_reconciliation_required: true }),
+  rule("fixed_asset_capitalizable_gl_v3", ["Equipment Purchase", "Equipment Purchases", "Machinery Purchase", "Machinery", "Vehicles", "Vehicle Purchase", "Construction Equipment", "Fixed Assets", "Furniture & Equipment"], "fixed_asset_capitalizable", "capitalizable", 0, true, 12, { type: "capitalizable", depreciation_required: true }),
+  rule("loan_interest_review_gl_v3", ["Interest Expense", "Loan Interest", "Business Loan Interest", "Equipment Loan Interest", "Vehicle Loan Interest"], "interest_expense", "fully_deductible", 100, true, 34, { type: "ordinary_expense", irs_category: "interest", limitations_review_required: true }),
+  rule("loan_principal_exclusion_gl_v3", ["Loan Principal", "Principal Payment", "Loan Payment Principal", "Debt Principal", "Note Payable Payment"], "liability_payment", "balance_sheet", 0, false, 4, { type: "balance_sheet", component: "loan_principal" }),
+  rule("generic_loan_payment_review_gl_v3", ["Loan Payment", "Business Loan Payment", "Debt Payment"], "debt_payment", "needs_review", 0, true, 44, { type: "debt_payment_review", principal_interest_split_required: true }, "Separate principal from potentially deductible interest."),
+  rule("owner_activity_exclusion_gl_v3", ["Owner Draw", "Owner Draws", "Owner Distribution", "Owner Distributions", "Partner Distribution", "Shareholder Distribution", "Personal Expense", "Personal Expenses", "Owner Contribution", "Owner Contributions"], "owner_activity", "balance_sheet", 0, false, 4, { type: "balance_sheet", component: "owner_activity" }),
+  rule("transfer_credit_card_payment_exclusion_gl_v3", ["Transfer", "Transfers", "Bank Transfer", "Account Transfer", "Credit Card Payment", "Credit Card Payments", "Payment to Credit Card"], "transfer", "balance_sheet", 0, false, 4, { type: "balance_sheet", component: "transfer_or_credit_card_payment" }),
+  rule("payroll_wages_gl_v3", ["Wages", "Payroll", "Gross Wages", "Employee Wages", "Salaries"], "wages_payroll", "fully_deductible", 100, false, 24, { type: "ordinary_expense", irs_category: "wages" }),
+  rule("employer_payroll_taxes_gl_v3", ["Payroll Taxes", "Employer Payroll Taxes"], "payroll_taxes", "fully_deductible", 100, false, 24, { type: "ordinary_expense", irs_category: "employer_payroll_taxes" }),
+  rule("revenue_exclusion_gl_v3", ["Income", "Sales", "Sales Income", "Service Revenue", "Contract Revenue", "Construction Income", "Job Revenue"], "revenue", "balance_sheet", 0, false, 2, { type: "revenue", ordinaryExpense: false }),
+  rule("liability_balance_sheet_exclusion_gl_v3", ["Sales Tax Payable", "Payroll Liabilities", "Credit Card Payable", "Accounts Payable", "Loans Payable"], "balance_sheet_movement", "balance_sheet", 0, false, 2, { type: "balance_sheet", component: "liability_movement" }),
+]);
+
+export function buildTaxGlAliasDeductionRules({ taxYear = 2026, verifiedAt = "2026-09-30T00:00:00Z" } = {}) {
+  return TAX_GL_ALIAS_RULES.map((item) => ({
+    id: item.rule_code,
+    business_id: null,
+    scope: "global",
+    rule_code: item.rule_code,
+    tax_year: taxYear,
+    jurisdiction: "federal",
+    entity_type: null,
+    bookkeeping_category: null,
+    qbo_account_type: null,
+    qbo_account_subtype: null,
+    match_conditions: { qbo_account_name_keys: item.aliasKeys },
+    tax_category: item.tax_category,
+    deductibility_status: item.deductibility_status,
+    default_deductible_percent: item.default_deductible_percent,
+    treatment: item.treatment,
+    requires_review: item.requires_review,
+    priority: item.priority,
+    explanation: item.explanation,
+    source_reference: TAX_GL_RULE_SOURCE_REFERENCE,
+    source_url: TAX_GL_RULE_SOURCE_URL,
+    verified_at: verifiedAt,
+    effective_from: `${taxYear}-01-01`,
+    effective_to: `${taxYear}-12-31`,
+    is_active: true,
+    version: TAX_GL_RULE_VERSION,
+    support_level: "verified",
+  }));
+}
+
+function rule(ruleCode, aliases, taxCategory, deductibilityStatus, percent, requiresReview, priority, treatment, explanation = null) {
+  return Object.freeze({
+    rule_code: ruleCode,
+    aliases: Object.freeze([...aliases]),
+    aliasKeys: Object.freeze([...new Set(aliases.map(normalizeQboGlAccountKey))]),
+    tax_category: taxCategory,
+    deductibility_status: deductibilityStatus,
+    default_deductible_percent: percent,
+    requires_review: requiresReview,
+    priority,
+    treatment: Object.freeze(treatment),
+    explanation: explanation || `Approved deterministic GL alias mapping for ${taxCategory}.`,
+  });
+}

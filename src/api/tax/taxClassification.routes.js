@@ -80,14 +80,39 @@ router.post("/classifications/prepare", async (req, res) => {
     const businessId = validateBusinessIdInput(req);
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const taxYear = optionalTaxYear(req.query.year ?? req.query.taxYear ?? req.body?.year ?? req.body?.taxYear, new Date().getFullYear());
-    const queued = await enqueueTaxClassificationRun({
-      supabase,
-      businessId,
-      taxYear,
-      triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
-      actorUserId: req.user?.id || null,
-      metadata: { source: "deductions_workspace_prepare" },
-    });
+    const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear });
+    const hasMissingEvaluation = Number(lifecycle.missingEvaluationCount ?? 0) > 0;
+    const hasUnresolvedFallback = Number(lifecycle.unresolvedCount ?? 0) > 0;
+    const runs = [];
+    if (hasMissingEvaluation) {
+      runs.push(await enqueueTaxClassificationRun({
+        supabase,
+        businessId,
+        taxYear,
+        triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+        actorUserId: req.user?.id || null,
+        metadata: { source: "deductions_workspace_prepare", prepareMode: "missing_evaluation" },
+      }));
+    }
+    if (hasUnresolvedFallback) {
+      runs.push(await enqueueTaxClassificationRun({
+        supabase,
+        businessId,
+        taxYear,
+        triggerSource: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+        actorUserId: req.user?.id || null,
+        metadata: { source: "deductions_workspace_prepare", repairMode: "unresolved_fallback" },
+      }));
+    }
+    const queued = runs.find((item) => item.queued) || runs[0] || {
+      queued: false,
+      outcome: "skip_no_unclassified_transactions",
+      run: null,
+      eligiblePostedCount: lifecycle.eligiblePostedCount,
+      unclassifiedCount: lifecycle.unclassifiedCount,
+      candidateCount: lifecycle.missingEvaluationCount,
+      unresolvedCount: lifecycle.unresolvedCount,
+    };
     const job = buildTaxClassificationJobStatus({
       run: queued.run,
       coverage: {
@@ -105,6 +130,7 @@ router.post("/classifications/prepare", async (req, res) => {
     }
     return sendTaxSuccess(res, {
       ...queued,
+      runs,
       job,
       jobId: job.jobId,
       status: job.status,

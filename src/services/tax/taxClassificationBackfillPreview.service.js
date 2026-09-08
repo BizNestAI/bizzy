@@ -1,6 +1,7 @@
 import { listUnclassifiedPostedTransactions } from "./taxPostedTransaction.repository.js";
 import { listUnresolvedFallbackClassifications } from "./taxClassification.repository.js";
 import { evaluateDeductionRules, listDeductionRules } from "./taxDeductionRule.repository.js";
+import { summarizeFallbackRepairPreviewRows } from "./taxClassificationFallbackRepair.service.js";
 import { normalizeTaxYear } from "./taxDomain.js";
 import { validationError } from "./taxErrors.js";
 
@@ -23,7 +24,7 @@ export async function previewTaxClassificationBackfill({ supabase, businessId, t
     offset: 0,
   });
   if ((fallbackRows.rows || []).length > 0) {
-    return summarizeTaxClassificationBackfillPreviewRows(fallbackRows.rows.map(mapFallbackClassificationToPreviewInput), {
+    const preview = summarizeTaxClassificationBackfillPreviewRows(fallbackRows.rows.map(mapFallbackClassificationToPreviewInput), {
       businessId,
       taxYear: year,
       rules,
@@ -32,6 +33,10 @@ export async function previewTaxClassificationBackfill({ supabase, businessId, t
       target: "unresolved_fallback_rows",
       sourceRows: fallbackRows.pagination?.total ?? fallbackRows.rows.length,
     });
+    return {
+      ...preview,
+      repair: summarizeFallbackRepairPreviewRows(fallbackRows.rows, { rules, businessId }),
+    };
   }
 
   const rows = [];

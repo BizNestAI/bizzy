@@ -53,6 +53,43 @@ test("transaction detail includes safe source trace and override history", async
   assert.equal(JSON.stringify(detail).includes("raw_secret"), false);
 });
 
+test("system repair history does not masquerade as manual authority", async () => {
+  const store = baseStore();
+  store.transaction_tax_classifications[1] = {
+    ...store.transaction_tax_classifications[1],
+    tax_category: "business_meals",
+    deductibility_status: "partially_deductible",
+    deductible_percent: 50,
+    deductible_amount: 25,
+    rule_code: "business_meals_review_gl_v3",
+    rule_version: "bizzi-gl-2026-v3",
+    requires_review: true,
+    user_override: false,
+    cpa_override: false,
+    metadata: { normalized_qbo_account_name: "meals", source_qbo_account_name: "Meals" },
+  };
+  store.tax_classification_overrides.push({
+    id: "repair-history-1",
+    business_id: BUSINESS_ID,
+    transaction_id: "txn-2",
+    tax_year: 2026,
+    classification_id: "class-2",
+    previous_values: { tax_category: "unclassified" },
+    new_values: { tax_category: "business_meals" },
+    override_source: "system_repair",
+    override_reason: "Targeted unresolved fallback repair.",
+    overridden_by: null,
+    created_at: "2026-02-16T00:00:00Z",
+  });
+  const detail = await getDeductionTransactionDetail({ supabase: makeSupabase(store), businessId: BUSINESS_ID, taxYear: 2026, transactionId: "txn-2" });
+  assert.equal(detail.transaction.authority, "proposed_needs_review");
+  assert.equal(detail.transaction.override.hasOverride, false);
+  assert.equal(detail.overrideHistory.length, 1);
+  assert.equal(detail.overrideHistory[0].overrideSource, "system_repair");
+  assert.equal(detail.transaction.taxCategory, "business_meals");
+  assert.notEqual(detail.transaction.taxCategory, "unclassified");
+});
+
 test("wrong-business transaction cannot be fetched", async () => {
   await assert.rejects(
     () => getDeductionTransactionDetail({ supabase: makeSupabase(baseStore()), businessId: BUSINESS_ID, taxYear: 2026, transactionId: "other-business-txn" }),

@@ -16,6 +16,7 @@ import {
   requeueTaxClassificationRun,
 } from "./taxClassificationRun.service.js";
 import { classifyPostedTransactionsBatch } from "./taxClassificationEngine.js";
+import { repairUnresolvedFallbackClassifications } from "./taxClassificationFallbackRepair.service.js";
 import { listUnclassifiedPostedTransactions } from "./taxPostedTransaction.repository.js";
 import { listDeductionRules } from "./taxDeductionRule.repository.js";
 import { getTaxProfile } from "./taxProfile.service.js";
@@ -199,6 +200,39 @@ export async function processOneTaxClassificationRun({ supabase, run, transactio
   const taxYear = run.tax_year || run.taxYear;
   try {
     await validateDeductionRuleConfiguration({ supabase, businessId, taxYear });
+    if ((run.metadata || run.meta)?.repairMode === "unresolved_fallback") {
+      const repaired = await repairUnresolvedFallbackClassifications({
+        supabase,
+        businessId,
+        taxYear,
+        limit: Math.min(Math.max(Number(transactionBatchSize || DEFAULT_TRANSACTION_BATCH_SIZE), 1), DEFAULT_TRANSACTION_BATCH_SIZE),
+        actorUserId: run.metadata?.actor_user_id || null,
+      });
+      const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId, taxYear });
+      const remaining = Number(lifecycle.unresolvedCount || 0);
+      const progress = {
+        totalEligible: lifecycle.eligiblePostedCount,
+        processedCount: Math.max(0, Number(lifecycle.evaluatedCount ?? lifecycle.classifiedCount ?? 0) + Number(lifecycle.failedCount || 0)),
+        autoClassifiedCount: lifecycle.autoClassifiedCount,
+        reviewRequiredCount: lifecycle.needsReviewCount,
+        excludedCount: lifecycle.excludedCount,
+        failedCount: repaired.failures,
+        queuedCount: remaining,
+      };
+      if (remaining > 0 && repaired.attempted > 0 && repaired.calculated + repaired.meaningfulNeedsReview + repaired.excluded + repaired.failures > 0) {
+        return requeueTaxClassificationRun({
+          supabase,
+          runId: run.id,
+          progress,
+          now,
+          processAfter: new Date(now.getTime() + DEFAULT_REQUEUE_DELAY_MS),
+        });
+      }
+      const terminalStatus = remaining > 0 || Number(lifecycle.needsReviewCount || 0) > 0 || repaired.failures > 0
+        ? TAX_CLASSIFICATION_RUN_STATUSES.REVIEW_REQUIRED
+        : TAX_CLASSIFICATION_RUN_STATUSES.COMPLETED;
+      return completeTaxClassificationRun({ supabase, runId: run.id, status: terminalStatus, progress, now });
+    }
     const batchLimit = Math.min(Math.max(Number(transactionBatchSize || DEFAULT_TRANSACTION_BATCH_SIZE), 1), DEFAULT_TRANSACTION_BATCH_SIZE);
     let selectedTotal = 0;
     for (let batchIndex = 0; batchIndex < DEFAULT_MAX_BATCHES_PER_CLAIM; batchIndex += 1) {

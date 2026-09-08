@@ -162,6 +162,8 @@ export async function neutralizeTaxClassificationForTransaction({
     nondeductible_amount: 0,
     capitalizable_amount: 0,
     requires_review: false,
+    user_override: false,
+    cpa_override: false,
     reason: "Posted transaction was voided, deleted, or reversed and no longer contributes to deductions.",
     metadata: mergeMetadata(existing.metadata, {
       neutralized_at: now.toISOString(),
@@ -175,9 +177,39 @@ export async function neutralizeTaxClassificationForTransaction({
     updated_at: now.toISOString(),
   };
   if (isMemorySupabase(supabase)) {
+    appendSystemClassificationHistory({
+      supabase,
+      current: existing,
+      patch,
+      source: "system_neutralize",
+      reason,
+      now,
+    });
     Object.assign(existing, patch);
     return { changed: true, classification: existing };
   }
+  if (typeof supabase.rpc === "function") {
+    const rpcResult = await supabase.rpc("apply_tax_classification_neutralization", {
+      p_business_id: businessId,
+      p_tax_year: year,
+      p_transaction_id: transactionId,
+      p_actor_user_id: null,
+      p_reason: reason,
+      p_expected_updated_at: existing.updated_at || null,
+      p_metadata: patch.metadata,
+      p_neutralized_at: now.toISOString(),
+    });
+    if (!rpcResult.error) return { changed: true, classification: rpcResult.data };
+    if (!isMissingRpcError(rpcResult.error)) throw rpcResult.error;
+  }
+  await insertSystemClassificationHistory({
+    supabase,
+    current: existing,
+    patch,
+    source: "system_neutralize",
+    reason,
+    now,
+  });
   const { data, error } = await supabase
     .from("transaction_tax_classifications")
     .update(patch)
@@ -418,8 +450,66 @@ function mergeMetadata(previous, next) {
   return { ...(previous || {}), ...(next || {}) };
 }
 
+async function insertSystemClassificationHistory({ supabase, current, patch, source, reason, now }) {
+  const { error } = await supabase
+    .from("tax_classification_overrides")
+    .insert(systemHistoryRow({ current, patch, source, reason, now }));
+  if (error) throw error;
+}
+
+function appendSystemClassificationHistory({ supabase, current, patch, source, reason, now }) {
+  supabase.store.tax_classification_overrides ||= [];
+  supabase.store.tax_classification_overrides.push(systemHistoryRow({ current, patch, source, reason, now }));
+}
+
+function systemHistoryRow({ current, patch, source, reason, now }) {
+  return {
+    business_id: current.business_id,
+    tax_year: current.tax_year,
+    transaction_id: current.transaction_id,
+    classification_id: current.id,
+    previous_values: systemHistorySnapshot(current),
+    new_values: systemHistorySnapshot({ ...current, ...patch }),
+    override_source: source,
+    override_reason: reason,
+    overridden_by: null,
+    created_at: now.toISOString(),
+  };
+}
+
+function systemHistorySnapshot(row) {
+  return {
+    tax_category: row.tax_category,
+    deductibility_status: row.deductibility_status,
+    deductible_percent: row.deductible_percent,
+    book_amount: row.book_amount,
+    deductible_amount: row.deductible_amount,
+    nondeductible_amount: row.nondeductible_amount,
+    capitalizable_amount: row.capitalizable_amount,
+    tax_treatment: row.tax_treatment,
+    classification_status: row.classification_status,
+    confidence_score: row.confidence_score,
+    confidence_level: row.confidence_level,
+    rule_id: row.rule_id,
+    rule_code: row.rule_code,
+    rule_version: row.rule_version,
+    rule_priority: row.rule_priority,
+    source: row.source,
+    requires_review: row.requires_review,
+    reason: row.reason,
+    user_override: row.user_override,
+    cpa_override: row.cpa_override,
+    metadata: row.metadata,
+  };
+}
+
 function isMemorySupabase(supabase) {
   return Boolean(supabase?.store);
+}
+
+function isMissingRpcError(error) {
+  const text = `${error?.code || ""} ${error?.message || ""}`.toLowerCase();
+  return text.includes("rpc_not_found") || text.includes("function") || text.includes("not found") || text.includes("does not exist");
 }
 
 function requireTaxYear(value) {

@@ -42,14 +42,20 @@ export async function enqueueTaxClassificationRun({
 } = {}) {
   const year = requireTaxYear(taxYear);
   const snapshot = await getTaxClassificationSourceSnapshot({ supabase, businessId, taxYear: year });
-  const sourceFingerprint = computeTaxClassificationSnapshotFingerprint({ businessId, taxYear: year, snapshot });
+  const repairUnresolvedFallback = metadata?.repairMode === "unresolved_fallback";
+  const sourceFingerprint = repairUnresolvedFallback
+    ? sha256(`${computeTaxClassificationSnapshotFingerprint({ businessId, taxYear: year, snapshot })}:repair_unresolved:${Number(snapshot.unresolvedCount || 0)}`)
+    : computeTaxClassificationSnapshotFingerprint({ businessId, taxYear: year, snapshot });
   const rulesVersion = getTaxClassificationRulesVersion();
   const eligiblePostedCount = Number(snapshot.eligiblePostedCount || 0);
   const candidateCount = Number(snapshot.candidateCount ?? snapshot.transactionIds?.length ?? 0);
   const unclassifiedCount = Number(snapshot.unclassifiedCount ?? candidateCount ?? 0);
   const unresolvedCount = Number(snapshot.unresolvedCount || 0);
+  const queuedCandidateCount = repairUnresolvedFallback && unresolvedCount > 0
+    ? unresolvedCount
+    : candidateCount;
 
-  if (eligiblePostedCount <= 0 || candidateCount <= 0) {
+  if (eligiblePostedCount <= 0 || queuedCandidateCount <= 0) {
     return {
       queued: false,
       outcome: unresolvedCount > 0 ? "skip_unresolved_fallback_rows_require_reclassification" : "skip_no_unclassified_transactions",
@@ -61,7 +67,7 @@ export async function enqueueTaxClassificationRun({
           : "classification_complete",
       eligiblePostedCount,
       unclassifiedCount,
-      candidateCount,
+      candidateCount: queuedCandidateCount,
       unresolvedCount,
     };
   }
@@ -97,7 +103,7 @@ export async function enqueueTaxClassificationRun({
       sourceFingerprint,
       rulesVersion,
       eligiblePostedCount,
-      unclassifiedCount: candidateCount,
+      unclassifiedCount: queuedCandidateCount,
     });
   }
 
@@ -112,7 +118,7 @@ export async function enqueueTaxClassificationRun({
     sourceFingerprint,
     rulesVersion,
     eligiblePostedCount,
-    unclassifiedCount: candidateCount,
+    unclassifiedCount: queuedCandidateCount,
   });
   const { data, error } = await supabase
     .from("tax_classification_runs")

@@ -441,6 +441,9 @@ function toTransactionRow(row) {
     direction: b.direction || c.metadata?.direction || (signedAmount >= 0 ? "INFLOW" : "OUTFLOW"),
     qboAccountId: sourceQboAccountId(c),
     qboAccountName: sourceQboAccountName(c),
+    transaction_id: c.transaction_id,
+    qbo_gl_account_name: sourceQboAccountName(c),
+    normalized_qbo_gl_account_key: c.metadata?.normalized_qbo_account_name || null,
     qboTxnId: c.source_qbo_txn_id || c.metadata?.source_qbo_txn_id || null,
     qboTxnType: c.source_qbo_txn_type || c.metadata?.source_qbo_txn_type || null,
     taxCategory: c.tax_category,
@@ -454,17 +457,24 @@ function toTransactionRow(row) {
     confidenceScore: c.confidence_score ?? null,
     confidenceLevel: c.confidence_level || "unavailable",
     rule: safeRuleSummary(c),
+    matched_rule_id: c.rule_id || null,
+    matched_rule_code: c.rule_code || null,
+    rule_version: c.rule_version || c.metadata?.rule_version || null,
+    source_type: c.source || null,
+    authority: authorityState(c, row.override),
     reason: c.reason || null,
+    explanation: c.reason || null,
     warnings,
     requiresReview: c.requires_review === true || c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
     override: {
-      hasOverride: Boolean(c.user_override || c.cpa_override || row.override),
+      hasOverride: Boolean(c.user_override || c.cpa_override || isManualOverrideHistory(row.override)),
       source: row.override?.override_source || c.source || null,
       lastChangedAt: row.override?.created_at || null,
     },
     sourceTruth: c.metadata?.source_truth || null,
     postedAt: c.metadata?.posted_at || null,
     classifiedAt: c.metadata?.classified_at || c.created_at || null,
+    classified_at: c.metadata?.classified_at || c.created_at || null,
     updatedAt: c.updated_at || null,
   };
 }
@@ -538,6 +548,21 @@ function safeRuleSummary(c) {
     explanation: c.reason || null,
     supportLevel: c.metadata?.rule_support_level || null,
   };
+}
+
+function authorityState(c, override) {
+  if (c.classification_status === TAX_CLASSIFICATION_STATUSES.EXCLUDED) return "excluded";
+  if (c.cpa_override || c.classification_status === TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED) return "cpa_confirmed";
+  if (c.user_override || c.classification_status === TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED) return "user_confirmed";
+  if (isManualOverrideHistory(override)) return "manual_override";
+  if (c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW && c.tax_category !== "unclassified") return "proposed_needs_review";
+  if (c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW) return "unresolved";
+  return "rule_engine";
+}
+
+function isManualOverrideHistory(override) {
+  const source = String(override?.override_source || "").toLowerCase();
+  return Boolean(override) && !["system_repair", "rule_engine", "system", "worker"].includes(source);
 }
 
 function availableActions(c) {

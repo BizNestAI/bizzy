@@ -15,7 +15,7 @@ import { evaluateDeductionRules, findMatchingDeductionRules, explainDeductionRul
 import { getTaxClassification, isConfirmed, upsertTaxClassification } from "./taxClassification.repository.js";
 import { scoreTaxClassification, shouldAutoClassify } from "./taxClassificationConfidence.js";
 import { TAX_CLASSIFICATION_ENGINE_VERSION } from "./taxEngineVersions.js";
-import { computeClassificationAmounts } from "./taxClassificationAmounts.js";
+import { computeClassificationAmounts, normalizeDeductiblePercent } from "./taxClassificationAmounts.js";
 
 const SAFE_BATCH_LIMIT = 100;
 
@@ -257,14 +257,14 @@ function buildClassification({
 }) {
   void memories;
   const warnings = [...(transaction.sourceWarnings || [])];
-  const normalizedPercent = normalizeDeductiblePercent(deductiblePercent);
+  const normalizedPercent = normalizeDeductiblePercent({ deductibilityStatus, deductiblePercent });
   const confidence = confidenceOverride || scoreTaxClassification({
     source,
     rule,
     structural,
     fallback,
     businessRule: Boolean(rule?.business_id),
-    exactQboAccount: Boolean(rule?.qbo_account_type || rule?.bookkeeping_category),
+    exactQboAccount: Boolean(rule?.qbo_account_type || rule?.bookkeeping_category || rule?.__match?.exactGlAliasRank || rule?.__match?.reasons?.includes("qbo_account_name_key matched")),
     exactQboSubtype: Boolean(rule?.qbo_account_subtype),
     broadCategory: Boolean(rule?.bookkeeping_category),
     partialDeduction: normalizedPercent > 0 && normalizedPercent < 100,
@@ -360,7 +360,10 @@ function applyMemoryAdjustments({ rule, memories = [] }) {
   const memoryMap = new Map((memories || []).map((m) => [m.memory_key, m.value_json]));
   const explanationSteps = [];
   const memoryKeysUsed = [];
-  let deductiblePercent = normalizeDeductiblePercent(rule.default_deductible_percent);
+  let deductiblePercent = normalizeDeductiblePercent({
+    deductibilityStatus: rule.deductibility_status,
+    deductiblePercent: rule.default_deductible_percent,
+  });
   let requiresReview = false;
 
   if (["vehicle", "vehicle_fuel"].includes(rule.tax_category) && memoryMap.has("vehicle_business_use_percent")) {
@@ -415,18 +418,6 @@ function buildRuleTransactionContext(transaction, entityType) {
   };
 }
 
-function normalizeDeductiblePercent(value) {
-  if (value == null || value === "") return 0;
-  if (typeof value === "string") {
-    throw validationError("invalid_deductible_percent", "deductiblePercent must be a numeric whole percentage from 0 to 100.", { field: "deductiblePercent" });
-  }
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0 || n > 100) {
-    throw validationError("invalid_deductible_percent", "deductiblePercent must be between 0 and 100.", { field: "deductiblePercent" });
-  }
-  return round2(n);
-}
-
 function requireTaxYear(value) {
   const year = normalizeTaxYear(value);
   if (!year) throw validationError("invalid_tax_year", "Tax year must be between 2000 and 2100.", { field: "year" });
@@ -445,8 +436,4 @@ function countOutcome(summary, classification) {
   if (classification.classificationStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW || classification.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW) {
     summary.needsReview += 1;
   }
-}
-
-function round2(n) {
-  return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
 }

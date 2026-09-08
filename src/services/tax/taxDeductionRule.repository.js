@@ -94,7 +94,8 @@ export function explainDeductionRuleMatch(rule, transactionContext = {}) {
   const scope = rule.scope === "business_override" || rule.business_id ? "business override" : "global";
   const details = rule.__match || ruleMatchDetails(rule, transactionContext);
   const reason = details.reasons?.length ? ` ${details.reasons.join("; ")}.` : "";
-  return `Matched ${scope} rule ${rule.rule_code} at priority ${Number(rule.priority ?? 1000)}.${reason}`;
+  const explanation = rule.explanation ? ` ${rule.explanation}` : "";
+  return `Matched ${scope} rule ${rule.rule_code} at priority ${Number(rule.priority ?? 1000)}.${reason}${explanation}`;
 }
 
 function compareDeductionRules(a, b, ctx, aMatch = null, bMatch = null) {
@@ -107,6 +108,7 @@ function compareDeductionRuleRank(a, b, ctx, aMatch = null, bMatch = null) {
   const bm = bMatch || ruleMatchDetails(b, ctx);
   return (
     scopeRank(a) - scopeRank(b) ||
+    bm.exactGlAliasRank - am.exactGlAliasRank ||
     Number(a.priority ?? 1000) - Number(b.priority ?? 1000) ||
     bm.specificity - am.specificity ||
     bm.conditionSpecificity - am.conditionSpecificity ||
@@ -173,22 +175,25 @@ function ruleMatchDetails(rule, ctx = {}) {
     matched: true,
     specificity: spec + conditionMatch.specificity,
     conditionSpecificity: conditionMatch.specificity,
+    exactGlAliasRank: conditionMatch.exactGlAlias ? 1 : 0,
     reasons: [...reasons, ...conditionMatch.reasons],
   };
 }
 
 function matchConditions(conditions, ctx) {
-  if (!conditions || !Object.keys(conditions).length) return { matched: true, specificity: 0, reasons: [] };
+  if (!conditions || !Object.keys(conditions).length) return { matched: true, specificity: 0, reasons: [], exactGlAlias: false };
   let specificityScore = 0;
   const reasons = [];
+  let exactGlAlias = false;
   for (const [key, expected] of Object.entries(conditions)) {
     if (isNonMatchingMetadataKey(key)) continue;
     const result = matchCondition(key, expected, ctx);
     if (!result.matched) return { matched: false, specificity: 0, reasons: [] };
     specificityScore += result.specificity;
+    if (result.exactGlAlias) exactGlAlias = true;
     if (result.reason) reasons.push(result.reason);
   }
-  return { matched: true, specificity: specificityScore, reasons };
+  return { matched: true, specificity: specificityScore, reasons, exactGlAlias };
 }
 
 function matchCondition(key, expected, ctx) {
@@ -206,7 +211,10 @@ function matchCondition(key, expected, ctx) {
   if (key === "requires_inventory") return matchBoolean(expected, ctx.has_inventory || ctx.inventory_item_id, "requires_inventory");
   if (key === "assigned_job_required") return matchBoolean(expected, ctx.job_id || ctx.assigned_job_id, "assigned_job_required");
   if (key === "qbo_account_names") return matchAnyText(expected, [ctx.qbo_account_name], "qbo_account_name");
-  if (key === "qbo_account_name_keys") return matchArray(expected, ctx.normalized_qbo_account_name || normalizeQboGlAccountKey(ctx.qbo_account_name), "qbo_account_name_key");
+  if (key === "qbo_account_name_keys") {
+    const result = matchArray(expected, ctx.normalized_qbo_account_name || normalizeQboGlAccountKey(ctx.qbo_account_name), "qbo_account_name_key");
+    return result.matched ? { ...result, exactGlAlias: true, specificity: 80 } : result;
+  }
   if (key === "qbo_account_subtype_keys") return matchArray(expected, ctx.normalized_qbo_account_subtype || normalizeQboGlAccountKey(ctx.qbo_account_subtype), "qbo_account_subtype_key");
   if (key === "direction") return matchArray(Array.isArray(expected) ? expected : [expected], ctx.direction, "direction");
   if (key === "merchant_entity_id") return matchScalar(expected, ctx.merchant_entity_id, key);
@@ -281,11 +289,11 @@ function isRuleVerified(row) {
 }
 
 function attachMatch(rule, match) {
-  return { ...rule, __match: match };
+  return { ...rule, __match: match, exact_gl_alias_match: match.exactGlAliasRank > 0 };
 }
 
 function noMatch() {
-  return { matched: false, specificity: 0, reason: null, reasons: [] };
+  return { matched: false, specificity: 0, reason: null, reasons: [], exactGlAliasRank: 0 };
 }
 
 function isNonMatchingMetadataKey(key) {

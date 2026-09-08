@@ -11,6 +11,7 @@ import { TaxEngineError, conflictError, forbiddenBusinessError, notFoundError, v
 import { getTaxClassification, isConfirmed } from "./taxClassification.repository.js";
 import { getPostedTransactionForTax } from "./taxPostedTransaction.repository.js";
 import { computeClassificationAmounts, normalizeDeductiblePercent } from "./taxClassificationAmounts.js";
+import { normalizeQboGlAccountKey } from "./taxQboGlNormalizer.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "./taxChangeEvents.js";
 import { createOrUpdateReviewTaskForClassification, resolveReviewTaskForClassification } from "./taxClassificationReview.service.js";
 
@@ -255,7 +256,14 @@ function buildBusinessRule({ businessId, taxYear, transaction, classification, o
   };
   if (options.matchType === "qbo_account") {
     if (!transaction.qboAccountId && !transaction.qboAccountName) throw validationError("unsafe_business_rule", "QBO account rule requires a QBO account.");
-    return { ...base, qbo_account_type: null, qbo_account_subtype: null, bookkeeping_category: transaction.qboAccountName || transaction.bookkeepingCategory };
+    const accountName = transaction.qboAccountName || transaction.bookkeepingCategory;
+    return {
+      ...base,
+      qbo_account_type: null,
+      qbo_account_subtype: null,
+      bookkeeping_category: null,
+      match_conditions: { qbo_account_name_keys: [normalizeQboGlAccountKey(accountName)] },
+    };
   }
   if (options.matchType === "bookkeeping_category") {
     if (!transaction.bookkeepingCategory) throw validationError("unsafe_business_rule", "Bookkeeping category rule requires a category.");
