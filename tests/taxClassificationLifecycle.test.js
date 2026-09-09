@@ -247,6 +247,71 @@ test("exhausted queued runs are surfaced as failed and removed from active recov
   assert.equal(failed[0].status, TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER);
 });
 
+test("latest lifecycle status prefers newer terminal review run over older dead-letter run", async () => {
+  const supabase = makeSupabase(baseStore({ transactionCount: 0 }));
+  supabase.store.transaction_tax_classifications.push(fallbackClassification({
+    transaction_id: "txn-review",
+    tax_category: "business_meals",
+    deductibility_status: "partially_deductible",
+    deductible_percent: 50,
+    deductible_amount: 25,
+    classification_status: "needs_review",
+    requires_review: true,
+  }));
+  supabase.store.tax_classification_runs.push(
+    {
+      id: "sep-8-dead-letter",
+      business_id: BUSINESS_ID,
+      tax_year: 2026,
+      trigger_source: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+      status: TAX_CLASSIFICATION_RUN_STATUSES.DEAD_LETTER,
+      total_eligible: 208,
+      queued_count: 207,
+      processed_count: 0,
+      auto_classified_count: 0,
+      review_required_count: 0,
+      excluded_count: 0,
+      failed_count: 100,
+      attempt_count: 5,
+      max_attempts: 5,
+      queued_at: "2026-09-08T20:48:04.860Z",
+      started_at: "2026-09-08T20:48:26.965Z",
+      dead_lettered_at: "2026-09-08T20:59:37.299Z",
+      created_at: "2026-09-08T20:48:04.860Z",
+      updated_at: "2026-09-08T20:59:37.299Z",
+    },
+    {
+      id: "sep-9-review-required",
+      business_id: BUSINESS_ID,
+      tax_year: 2026,
+      trigger_source: TAX_CLASSIFICATION_TRIGGER_SOURCES.USER_PREPARE,
+      status: TAX_CLASSIFICATION_RUN_STATUSES.REVIEW_REQUIRED,
+      total_eligible: 208,
+      queued_count: 0,
+      processed_count: 208,
+      auto_classified_count: 27,
+      review_required_count: 181,
+      excluded_count: 0,
+      failed_count: 0,
+      attempt_count: 3,
+      max_attempts: 5,
+      queued_at: "2026-09-09T01:34:25.967Z",
+      started_at: "2026-09-09T01:34:27.388Z",
+      completed_at: "2026-09-09T01:35:36.546Z",
+      created_at: "2026-09-09T01:34:25.967Z",
+      updated_at: "2026-09-09T01:35:40.607Z",
+    },
+  );
+
+  const lifecycle = await getTaxClassificationLifecycleStatus({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+
+  assert.equal(lifecycle.latestRun.id, "sep-9-review-required");
+  assert.equal(lifecycle.jobStatus.jobId, "sep-9-review-required");
+  assert.equal(lifecycle.jobStatus.status, "completed_with_review");
+  assert.equal(lifecycle.jobStatus.failed, 0);
+  assert.equal(lifecycle.latestRun.processedCount, 208);
+});
+
 test("unresolved fallback repair keeps original RPC error and does not retry deterministic zero-progress failures", async () => {
   const store = baseStore({ transactionCount: 1 });
   store.transaction_tax_classifications.push(fallbackClassification({

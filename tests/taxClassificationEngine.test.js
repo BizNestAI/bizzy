@@ -296,6 +296,76 @@ test("verified exact rule can auto-classify while unverified rule and source con
   assert.equal(conflict.classificationStatus, "needs_review");
 });
 
+test("exact verified GL alias ignores missing taxonomy hint for auto classification but keeps blocking source warnings", async () => {
+  const exactGlRule = rule({
+    id: "equipment-rental-gl",
+    rule_code: "equipment_rental_gl_v3",
+    tax_category: "equipment_rental",
+    bookkeeping_category: null,
+    match_conditions: { qbo_account_name_keys: ["equipment rental"] },
+    default_deductible_percent: 100,
+    requires_review: false,
+    version: "bizzi-gl-2026-v3",
+  });
+
+  const deterministic = await classifyNormalizedTransaction(baseArgs({
+    transaction: txn({
+      bookkeepingCategory: null,
+      qboAccountName: "Equipment Rental",
+      normalizedQboAccountName: "equipment rental",
+      sourceWarnings: ["missing_taxonomy_hint"],
+    }),
+    rules: [exactGlRule],
+  }));
+  assert.equal(deterministic.classificationStatus, "auto_classified");
+  assert.equal(deterministic.requiresReview, false);
+  assert.equal(deterministic.confidenceScore, 90);
+  assert.deepEqual(deterministic.metadata.warnings, ["missing_taxonomy_hint"]);
+  assert.deepEqual(deterministic.metadata.auto_blocking_warnings, []);
+
+  const blocked = await classifyNormalizedTransaction(baseArgs({
+    transaction: txn({
+      bookkeepingCategory: null,
+      qboAccountName: "Equipment Rental",
+      normalizedQboAccountName: "equipment rental",
+      sourceWarnings: ["missing_taxonomy_hint", "qbo_id_mismatch"],
+    }),
+    rules: [exactGlRule],
+  }));
+  assert.equal(blocked.classificationStatus, "needs_review");
+  assert.equal(blocked.requiresReview, true);
+  assert.deepEqual(blocked.metadata.auto_blocking_warnings, ["qbo_id_mismatch"]);
+});
+
+test("review-required exact GL alias remains meaningful needs review with missing taxonomy hint", async () => {
+  const meals = await classifyNormalizedTransaction(baseArgs({
+    transaction: txn({
+      signedAmount: -53,
+      absoluteAmount: 53,
+      bookkeepingCategory: null,
+      qboAccountName: "Meals",
+      normalizedQboAccountName: "meals",
+      sourceWarnings: ["missing_taxonomy_hint"],
+    }),
+    rules: [rule({
+      id: "meals-gl",
+      rule_code: "business_meals_review_gl_v3",
+      tax_category: "business_meals",
+      bookkeeping_category: null,
+      match_conditions: { qbo_account_name_keys: ["meals"] },
+      deductibility_status: "partially_deductible",
+      default_deductible_percent: 50,
+      requires_review: true,
+      version: "bizzi-gl-2026-v3",
+    })],
+  }));
+
+  assert.equal(meals.classificationStatus, "needs_review");
+  assert.equal(meals.taxCategory, "business_meals");
+  assert.equal(meals.requiresReview, true);
+  assert.equal(meals.deductibleAmount, 26.5);
+});
+
 test("user-confirmed and CPA-confirmed classifications are preserved", async () => {
   for (const status of ["user_confirmed", "cpa_confirmed"]) {
     const supabase = makeSupabase({

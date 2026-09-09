@@ -18,6 +18,7 @@ import { TAX_CLASSIFICATION_ENGINE_VERSION } from "./taxEngineVersions.js";
 import { computeClassificationAmounts, normalizeDeductiblePercent } from "./taxClassificationAmounts.js";
 
 const SAFE_BATCH_LIMIT = 100;
+const NON_BLOCKING_EXACT_GL_ALIAS_WARNINGS = new Set(["missing_taxonomy_hint"]);
 
 export async function classifyPostedTransaction({
   supabase,
@@ -257,6 +258,7 @@ function buildClassification({
 }) {
   void memories;
   const warnings = [...(transaction.sourceWarnings || [])];
+  const autoBlockingWarnings = sourceWarningsBlockingAutoClassification({ warnings, rule });
   const normalizedPercent = normalizeDeductiblePercent({ deductibilityStatus, deductiblePercent });
   const confidence = confidenceOverride || scoreTaxClassification({
     source,
@@ -268,9 +270,15 @@ function buildClassification({
     exactQboSubtype: Boolean(rule?.qbo_account_subtype),
     broadCategory: Boolean(rule?.bookkeeping_category),
     partialDeduction: normalizedPercent > 0 && normalizedPercent < 100,
-    warnings,
+    warnings: autoBlockingWarnings,
   });
-  const auto = shouldAutoClassify({ score: confidence.score, rule, structural, warnings, partialDeduction: normalizedPercent > 0 && normalizedPercent < 100 });
+  const auto = shouldAutoClassify({
+    score: confidence.score,
+    rule,
+    structural,
+    warnings: autoBlockingWarnings,
+    partialDeduction: normalizedPercent > 0 && normalizedPercent < 100,
+  });
   const excluded = !requiresReview && isExcludedTaxTreatment({ taxTreatment, deductibilityStatus, taxCategory });
   const classificationStatus = excluded
     ? TAX_CLASSIFICATION_STATUSES.EXCLUDED
@@ -312,6 +320,7 @@ function buildClassification({
       match_diagnostics: matchDiagnostics,
       explanation_steps: explanationSteps,
       warnings,
+      auto_blocking_warnings: autoBlockingWarnings,
       confidence_factors: confidence.factors,
       confidence_penalties: confidence.penalties,
       source_truth: transaction.sourceTruth,
@@ -336,6 +345,21 @@ function buildClassification({
       book_amount_signed: transaction.signedAmount,
     },
   };
+}
+
+function sourceWarningsBlockingAutoClassification({ warnings = [], rule = null } = {}) {
+  const list = [...(warnings || [])]
+    .map((warning) => String(warning || "").trim())
+    .filter(Boolean);
+  if (!isExactGlAliasRuleMatch(rule)) return list;
+  return list.filter((warning) => !NON_BLOCKING_EXACT_GL_ALIAS_WARNINGS.has(warning));
+}
+
+function isExactGlAliasRuleMatch(rule = null) {
+  if (!rule) return false;
+  if (Number(rule.__match?.exactGlAliasRank || 0) > 0) return true;
+  if (rule.exact_gl_alias_match === true) return true;
+  return Array.isArray(rule.__match?.reasons) && rule.__match.reasons.includes("qbo_account_name_key matched");
 }
 
 function isExcludedTaxTreatment({ taxTreatment, deductibilityStatus, taxCategory }) {

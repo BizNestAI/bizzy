@@ -19,6 +19,8 @@ const V4_POST_VERIFY_PATH = "scripts/tax/gl_alias_v4_post_migration_verification
 const SYSTEM_REPAIR_SOURCE_MIGRATION_PATH = "supabase/migrations/20261003_tax_classification_system_repair_source.sql";
 const SYSTEM_REPAIR_SOURCE_PREFLIGHT_PATH = "scripts/tax/system_repair_source_preflight.sql";
 const SYSTEM_REPAIR_SOURCE_POST_VERIFY_PATH = "scripts/tax/system_repair_source_post_migration_verification.sql";
+const STATUS_PROMOTION_MIGRATION_PATH = "supabase/migrations/20261004_tax_classification_system_repair_status_promotion.sql";
+const STATUS_PROMOTION_PREFLIGHT_PATH = "scripts/tax/system_repair_status_promotion_preview.sql";
 
 test("every approved GL alias normalizes and matches its intended v3 rule", () => {
   const rules = buildTaxGlAliasDeductionRules();
@@ -576,6 +578,40 @@ test("fallback repair persistence forensics script is read-only", () => {
   assert.match(sql, /pg_get_functiondef/);
   assert.match(sql, /target_classification_counts/);
   assert.match(sql, /repair_history_after_run/);
+});
+
+test("system-repaired status promotion migration is a narrow service-role-only RPC", () => {
+  const sql = readFileSync(STATUS_PROMOTION_MIGRATION_PATH, "utf8");
+  assert.match(sql, /^begin;/i);
+  assert.match(sql, /create or replace function public\.apply_tax_classification_status_promotion/);
+  assert.match(sql, /security invoker/i);
+  assert.match(sql, /set search_path = public/i);
+  assert.match(sql, /classification_status_promotion_target_invalid/);
+  assert.match(sql, /classification_status_promotion_rule_mismatch/);
+  assert.match(sql, /classification_status_promotion_repair_history_missing/);
+  assert.match(sql, /h\.override_source = 'system_repair'/);
+  assert.match(sql, /v_rule\.requires_review, false\) is distinct from false/);
+  assert.match(sql, /classification_status = 'auto_classified'/);
+  assert.match(sql, /requires_review = false/);
+  assert.match(sql, /override_source,[\s\S]*'system_repair'/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_status_promotion[\s\S]*\) from public;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_status_promotion[\s\S]*\) from anon;/);
+  assert.match(sql, /revoke all on function public\.apply_tax_classification_status_promotion[\s\S]*\) from authenticated;/);
+  assert.match(sql, /grant execute on function public\.apply_tax_classification_status_promotion[\s\S]*\) to service_role;/);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.tax_classification_runs/i);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.tax_deduction_rules/i);
+});
+
+test("system-repaired status promotion preview is read-only and targets deterministic no-review rows", () => {
+  const sql = readFileSync(STATUS_PROMOTION_PREFLIGHT_PATH, "utf8");
+  assert.doesNotMatch(sql, /^\s*(insert|update|delete|merge|create|alter|drop|grant|revoke|call|do|truncate)\b/im);
+  assert.match(sql, /status_promotion_preview_summary/);
+  assert.match(sql, /status_promotion_targets_grouped/);
+  assert.match(sql, /o\.override_source = 'system_repair'/);
+  assert.match(sql, /r\.requires_review = false/);
+  assert.match(sql, /coalesce\(c\.user_override, false\) = false/);
+  assert.match(sql, /coalesce\(c\.cpa_override, false\) = false/);
+  assert.match(sql, /c\.deductible_percent = r\.default_deductible_percent/);
 });
 
 test("v4 baseline validation does not use text fingerprints that can disagree on numeric scale", () => {

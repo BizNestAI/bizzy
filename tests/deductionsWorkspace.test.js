@@ -170,6 +170,11 @@ test("manual Refresh bypasses cached read-only tax resources and exposes result 
   assert.doesNotMatch(hook, /refresh:[\s\S]{0,240}prepareTaxClassifications/);
 });
 
+test("terminal classification polling refreshes all Deductions resources without using stale cache", () => {
+  const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  assert.match(hook, /if \(isTerminalJobStatus\(status\?\.status\)\) \{\s*await load\(\{ refresh: true \}\);\s*return;\s*\}/);
+});
+
 test("meaningful proposed-category needs review rows render proposed category and source while unresolved fallback stays pending-style", () => {
   const proposed = mapDeductionTransactionRow({
     transactionId: "txn-meal",

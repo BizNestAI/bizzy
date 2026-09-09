@@ -173,7 +173,7 @@ export function useTaxDeductions({
           lastRunAt: status?.completedAt || status?.failedAt || status?.heartbeatAt || status?.queuedAt || current?.lastRunAt || null,
         }));
         if (isTerminalJobStatus(status?.status)) {
-          await load();
+          await load({ refresh: true });
           return;
         }
         delayMs = Math.min(8000, Math.max(delayMs + 1000, Number(status?.pollAfterMs || 2000)));
