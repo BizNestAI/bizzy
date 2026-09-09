@@ -200,6 +200,38 @@ test("classification job status separates queued, delayed, processing, and stall
   assert.equal(stalled.canRetry, true);
 });
 
+test("targeted classification job status uses run-scoped progress instead of year coverage counts", () => {
+  const job = buildTaxClassificationJobStatus({
+    run: {
+      id: "run-targeted",
+      status: TAX_CLASSIFICATION_RUN_STATUSES.RUNNING,
+      total_eligible: 210,
+      queued_count: 1,
+      processed_count: 0,
+      auto_classified_count: 0,
+      review_required_count: 0,
+      excluded_count: 0,
+      failed_count: 0,
+      started_at: "2026-09-09T12:00:00Z",
+      heartbeat_at: "2026-09-09T12:00:10Z",
+    },
+    coverage: {
+      eligiblePostedCount: 210,
+      classifiedCount: 209,
+      autoClassifiedCount: 26,
+      needsReviewCount: 184,
+      missingEvaluationCount: 1,
+    },
+    now: new Date("2026-09-09T12:00:15Z"),
+  });
+
+  assert.equal(job.total, 1);
+  assert.equal(job.processed, 0);
+  assert.equal(job.remaining, 1);
+  assert.equal(job.autoClassified, 0);
+  assert.equal(job.needsReview, 0);
+});
+
 test("exhausted queued runs are surfaced as failed and removed from active recovery blocking", async () => {
   const supabase = makeSupabase(baseStore({ transactionCount: 207 }));
   supabase.store.tax_classification_runs.push({

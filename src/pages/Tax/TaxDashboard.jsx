@@ -517,6 +517,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const [prepareLoading, setPrepareLoading] = useState(false);
   const lastTerminalJobRef = useRef(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 } });
+  const refreshDeductions = deductions.refresh;
   const classificationSummary = useMemo(() => buildDeductionClassificationSummary(deductions), [deductions]);
   const classificationsRequired = !deductions.isDemo && classificationSummary.requiresClassification;
   const classificationActive = classificationSummary.isActiveJob;
@@ -614,8 +615,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
     lastTerminalJobRef.current = key;
     if (job.status === "failed") return;
     onNotice?.("Deductions preparation complete.");
+    refreshDeductions?.();
     onClassificationComplete?.();
-  }, [classificationSummary.jobStatus, onClassificationComplete, onNotice]);
+  }, [classificationSummary.jobStatus, onClassificationComplete, onNotice, refreshDeductions]);
 
   return (
     <div className="relative max-w-full overflow-hidden rounded-[24px] border border-white/10 bg-white/[0.045] p-4 text-white shadow-[0_18px_50px_rgba(0,0,0,0.35)] sm:p-5">
@@ -641,7 +643,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
           </span>
           <button
             type="button"
-            onClick={deductions.refresh}
+              onClick={refreshDeductions}
             disabled={deductions.refreshing}
             className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-[12px] text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           >
@@ -810,7 +812,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
             onAssignTaxClassification={deductions.assignTaxClassification}
             onOverrideClassification={deductions.overrideClassification}
             onBulkUpdateClassifications={deductions.bulkUpdateClassifications}
-            onRefresh={deductions.refresh}
+            onRefresh={refreshDeductions}
             readOnly={readOnly}
           />
         ) : null}
@@ -1311,19 +1313,23 @@ function ClassificationStat({ label, value, tone = "default" }) {
 function ClassificationProgressSummary({ summary }) {
   const job = summary.jobStatus;
   if (!job || !["queued", "delayed", "processing", "stalled", "failed"].includes(job.status)) return null;
-  const total = Number(job.total || summary.postedTotal || 0);
+  const total = Number(job.total || job.queuedCount || 0);
   const processed = Math.min(total, Math.max(0, Number(job.processed || 0)));
+  const remaining = Math.max(0, Number(job.remaining ?? Math.max(0, total - processed)));
   const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
   const active = ["queued", "processing", "delayed", "stalled"].includes(job.status);
-  const heading = job.status === "queued"
-    ? "Deductions preparation is queued."
-    : job.status === "delayed"
-      ? "Deductions preparation is delayed."
-      : job.status === "failed"
-      ? "Deductions preparation needs attention."
-      : job.status === "stalled"
-        ? "Deductions preparation appears to be stalled."
-        : "Bizzi is classifying your transactions.";
+  const isTargetedRun = total > 0 && total < Number(summary.postedTotal || 0);
+  const heading = isTargetedRun && active
+    ? `Updating ${total === 1 ? "one changed transaction" : `${total} changed transactions`}.`
+    : job.status === "queued"
+      ? "Deductions preparation is queued."
+      : job.status === "delayed"
+        ? "Deductions preparation is delayed."
+        : job.status === "failed"
+        ? "Deductions preparation needs attention."
+        : job.status === "stalled"
+          ? "Deductions preparation appears to be stalled."
+          : "Bizzi is classifying your transactions.";
   const detail = job.status === "failed"
     ? "The run stopped before all eligible transactions were classified. Any completed classifications are preserved."
     : job.status === "stalled"
@@ -1331,10 +1337,14 @@ function ClassificationProgressSummary({ summary }) {
       : job.status === "delayed"
         ? "No worker has claimed this job yet. Bizzi will keep checking automatically."
       : job.status === "queued"
-        ? "Bizzi will begin classifying your posted transactions shortly."
+        ? isTargetedRun
+          ? "The full deductions matrix stays visible while Bizzi refreshes the changed row."
+          : "Bizzi will begin classifying your posted transactions shortly."
       : job.isSlow
         ? "Still working. You can leave this page and check back shortly."
-        : "This usually takes a few minutes. You can leave this page while Bizzi continues.";
+        : isTargetedRun
+          ? "The full deductions matrix stays visible while Bizzi refreshes the changed row."
+          : "This usually takes a few minutes. You can leave this page while Bizzi continues.";
   return (
     <div className={`mt-3 rounded-2xl border px-3 py-3 ${
       job.status === "failed" || job.status === "stalled" || job.status === "delayed"
@@ -1368,13 +1378,13 @@ function ClassificationProgressSummary({ summary }) {
         </div>
       ) : null}
       <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-white/54 sm:grid-cols-4">
-        <span>Processed <b className="font-semibold text-white/82">{job.processed ?? summary.processedTotal ?? 0}</b></span>
-        <span>Remaining <b className="font-semibold text-white/82">{job.remaining ?? summary.remainingTotal ?? 0}</b></span>
-        <span>Auto-classified <b className="font-semibold text-white/82">{job.autoClassified ?? summary.autoClassifiedTotal ?? 0}</b></span>
-        <span>Needs review <b className="font-semibold text-white/82">{job.needsReview ?? summary.reviewRequiredTotal ?? 0}</b></span>
-        <span>Unresolved <b className="font-semibold text-white/82">{job.unresolved ?? summary.unresolvedTotal ?? 0}</b></span>
-        <span>Excluded <b className="font-semibold text-white/82">{job.excluded ?? summary.excludedTotal ?? 0}</b></span>
-        <span>Failed <b className="font-semibold text-white/82">{job.failed ?? summary.failedTotal ?? 0}</b></span>
+        <span>Run processed <b className="font-semibold text-white/82">{job.processed ?? 0}</b></span>
+        <span>Run remaining <b className="font-semibold text-white/82">{remaining}</b></span>
+        <span>Run auto-classified <b className="font-semibold text-white/82">{job.autoClassified ?? 0}</b></span>
+        <span>Run needs review <b className="font-semibold text-white/82">{job.needsReview ?? 0}</b></span>
+        <span>Run unresolved <b className="font-semibold text-white/82">{job.unresolved ?? 0}</b></span>
+        <span>Run excluded <b className="font-semibold text-white/82">{job.excluded ?? 0}</b></span>
+        <span>Run failed <b className="font-semibold text-white/82">{job.failed ?? 0}</b></span>
       </div>
     </div>
   );
@@ -1563,7 +1573,6 @@ function buildDeductionClassificationSummary(deductions) {
   const coverage = deductions.classificationCoverage || deductions.overview?.coverage || {};
   const jobStatus = deductions.classificationJobStatus || coverage.jobStatus || coverage.job_status || null;
   const classificationStatus = coverage.classificationStatus || coverage.classification_status || null;
-  const activeJob = ["queued", "delayed", "processing", "stalled"].includes(jobStatus?.status);
   const postedTotal = nullableNumber(
     coverage.postedTransactionCount
     ?? coverage.posted_transaction_count
@@ -1580,11 +1589,7 @@ function buildDeductionClassificationSummary(deductions) {
     ?? deductions.allTransactions?.pagination?.total
     ?? deductions.transactions?.pagination?.total
   );
-  const jobAutoClassified = nullableNumber(jobStatus?.autoClassified);
-  const jobNeedsReview = nullableNumber(jobStatus?.needsReview);
-  const jobExcluded = nullableNumber(jobStatus?.excluded);
   const jobRemaining = nullableNumber(jobStatus?.remaining);
-  const jobFailed = nullableNumber(jobStatus?.failed);
   const unresolvedTotal = nullableNumber(coverage.unresolvedTransactionCount ?? coverage.unresolved_transaction_count ?? coverage.unresolvedCount ?? coverage.unresolved_count) ?? 0;
   const missingEvaluationTotal = nullableNumber(
     coverage.missingEvaluationTransactionCount
@@ -1592,7 +1597,7 @@ function buildDeductionClassificationSummary(deductions) {
     ?? coverage.missingEvaluationCount
     ?? coverage.missing_evaluation_count
   ) ?? null;
-  const reviewRequiredTotal = (activeJob && jobNeedsReview != null ? jobNeedsReview : null) ?? nullableNumber(
+  const reviewRequiredTotal = nullableNumber(
     coverage.reviewRequiredTransactionCount
     ?? coverage.review_required_transaction_count
     ?? coverage.reviewRequiredCount
@@ -1600,22 +1605,22 @@ function buildDeductionClassificationSummary(deductions) {
     ?? coverage.needs_review_count
     ?? coverage.requiresReviewCount
   ) ?? 0;
-  const unclassifiedTotal = (activeJob && jobRemaining != null ? jobRemaining : null) ?? nullableNumber(
+  const unclassifiedTotal = nullableNumber(
     coverage.unclassifiedTransactionCount
     ?? coverage.unclassified_transaction_count
     ?? coverage.unclassifiedCount
     ?? coverage.unclassified_count
   ) ?? (postedTotal != null && classifiedTotal != null ? Math.max(0, postedTotal - classifiedTotal) : null);
-  const autoClassifiedTotal = (activeJob && jobAutoClassified != null ? jobAutoClassified : null) ?? nullableNumber(
+  const autoClassifiedTotal = nullableNumber(
     coverage.autoClassifiedTransactionCount
     ?? coverage.auto_classified_transaction_count
     ?? coverage.autoClassifiedCount
     ?? coverage.auto_classified_count
   );
-  const excludedTotal = (activeJob && jobExcluded != null ? jobExcluded : null) ?? nullableNumber(coverage.excludedTransactionCount ?? coverage.excluded_transaction_count ?? coverage.excludedCount);
+  const excludedTotal = nullableNumber(coverage.excludedTransactionCount ?? coverage.excluded_transaction_count ?? coverage.excludedCount);
   const processingTotal = nullableNumber(coverage.processingTransactionCount ?? coverage.processing_transaction_count ?? coverage.processingCount) ?? 0;
   const remainingTotal = jobRemaining ?? nullableNumber(coverage.remainingTransactionCount ?? coverage.remaining_transaction_count ?? coverage.remainingCount) ?? 0;
-  const failedTotal = (activeJob && jobFailed != null ? jobFailed : null) ?? nullableNumber(coverage.failedTransactionCount ?? coverage.failed_transaction_count ?? coverage.failedCount) ?? 0;
+  const failedTotal = nullableNumber(coverage.failedTransactionCount ?? coverage.failed_transaction_count ?? coverage.failedCount) ?? 0;
   const lastRunAt = jobStatus?.completedAt || jobStatus?.failedAt || jobStatus?.heartbeatAt || jobStatus?.queuedAt || coverage.lastRunAt || coverage.last_run_at || deductions.classificationReviewSummary?.lastRunAt || null;
   const jobProcessed = nullableNumber(jobStatus?.processed);
   const bucketClassified = [autoClassifiedTotal, reviewRequiredTotal, excludedTotal]
@@ -1957,9 +1962,22 @@ function classificationBucket(row) {
 function classificationStatusClass(bucket) {
   if (bucket === "failed") return "border-rose-300/20 bg-rose-400/[0.08] text-rose-100";
   if (bucket === "needs_review") return "border-amber-300/20 bg-amber-300/[0.08] text-amber-50";
+  if (bucket === "mixed") return "border-sky-300/18 bg-sky-300/[0.08] text-sky-50";
   if (bucket === "excluded") return "border-white/12 bg-white/[0.055] text-white/58";
   if (bucket === "unclassified") return "border-white/12 bg-white/[0.045] text-white/62";
   return "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-50";
+}
+
+function aggregateClassificationStatus(rows = []) {
+  const buckets = [...new Set(rows.map(classificationBucket).filter(Boolean))];
+  if (!buckets.length) return { bucket: "unclassified", label: "Unclassified", tone: "neutral" };
+  if (buckets.length > 1) return { bucket: "mixed", label: "Mixed", tone: "neutral" };
+  const bucket = buckets[0];
+  if (bucket === "auto_classified") return { bucket, label: "Auto-classified", tone: "green" };
+  if (bucket === "needs_review") return { bucket, label: "Needs review", tone: "amber" };
+  if (bucket === "failed") return { bucket, label: "Failed", tone: "red" };
+  if (bucket === "excluded") return { bucket, label: "Excluded", tone: "neutral" };
+  return { bucket: "unclassified", label: "Unclassified", tone: "neutral" };
 }
 
 function classificationStatusLabel(bucket, row) {
@@ -2074,7 +2092,8 @@ function DeductionMonthDetailModal({
   const account = useMemo(() => selection?.account || {}, [selection?.account]);
   const month = useMemo(() => selection?.month || {}, [selection?.month]);
   const cell = useMemo(() => selection?.cell || { transactions: [] }, [selection?.cell]);
-  const transactions = Array.isArray(cell.transactions) ? cell.transactions : [];
+  const transactions = useMemo(() => Array.isArray(cell.transactions) ? cell.transactions : [], [cell]);
+  const aggregateStatus = useMemo(() => aggregateClassificationStatus(transactions), [transactions]);
   const reviewContext = useMemo(() => detailReviewContextForSelection(selection), [selection]);
   const accountYearReviewRows = useMemo(() => collectAccountYearReviewRows(account, cell.selectedAuthority), [account, cell.selectedAuthority]);
   const [assignmentByTxn, setAssignmentByTxn] = useState({});
@@ -2288,8 +2307,8 @@ function DeductionMonthDetailModal({
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <h2 id="deduction-detail-title" className="truncate text-xl font-semibold leading-tight">{account.name}</h2>
               <DetailPill tone="neutral">{account.sourceLabel}</DetailPill>
-              <DetailPill tone={cell.selectedAuthority === "proposed" ? "amber" : "green"}>
-                {cell.selectedAuthority === "proposed" ? "Needs review" : "Auto-classified"}
+              <DetailPill tone={aggregateStatus.tone}>
+                {aggregateStatus.label}
               </DetailPill>
             </div>
             <p id="deduction-detail-description" className="mt-2 max-w-2xl text-sm leading-relaxed text-white/56">
@@ -3172,11 +3191,20 @@ function getTransactionMonthKey(value, year) {
 }
 
 function resolveDeductibleAmount(row) {
+  if (classificationBucket(row) === "needs_review") {
+    const percent = Number(row?.deductiblePercent);
+    if (!Number.isFinite(percent) || percent <= 0) return 0;
+    return roundCurrency(Math.abs(normalizeMoney(row.amount)) * (percent / 100));
+  }
   if (row?.deductibleAmount != null && !Number.isNaN(Number(row.deductibleAmount))) return Number(row.deductibleAmount);
   if (row?.deductiblePercent != null && !Number.isNaN(Number(row.deductiblePercent))) {
-    return normalizeMoney(row.amount) * (Number(row.deductiblePercent) / 100);
+    return roundCurrency(Math.abs(normalizeMoney(row.amount)) * (Number(row.deductiblePercent) / 100));
   }
   return 0;
+}
+
+function roundCurrency(value) {
+  return Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
 }
 
 function needsTaxClassificationReview(row) {

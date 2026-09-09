@@ -517,9 +517,12 @@ function deriveLifecycleStatus({ coverage, latestRun, activeRun }) {
 
 export function buildTaxClassificationJobStatus({ run, coverage = {}, now = new Date() } = {}) {
   const normalizedRun = normalizeRun(run);
+  const queuedTarget = numberOrNull(normalizedRun?.queuedCount ?? normalizedRun?.queued_count);
+  const progressTarget = queuedTarget != null && queuedTarget > 0 ? queuedTarget : null;
+  const totalEligible = numberOrNull(normalizedRun?.totalEligible ?? normalizedRun?.total_eligible);
   const total = Math.max(0, Number(
-    normalizedRun?.totalEligible
-    ?? normalizedRun?.total_eligible
+    progressTarget
+    ?? totalEligible
     ?? coverage.eligiblePostedCount
     ?? coverage.eligible_posted_count
     ?? 0
@@ -528,10 +531,14 @@ export function buildTaxClassificationJobStatus({ run, coverage = {}, now = new 
   const runProcessed = normalizedRun?.processedCount ?? normalizedRun?.processed_count ?? null;
   const hasCoverageAuthority = Number.isFinite(Number(coverage.eligiblePostedCount ?? coverage.eligible_posted_count));
   const processed = Math.min(total, Math.max(0, Number(
-    hasCoverageAuthority ? coverageProcessed : runProcessed ?? 0
+    normalizedRun ? runProcessed ?? 0 : hasCoverageAuthority ? coverageProcessed : 0
   )));
   const remaining = Math.max(0, Number(
-    hasCoverageAuthority
+    normalizedRun
+      ? progressTarget != null
+        ? progressTarget - processed
+        : total - processed
+      : hasCoverageAuthority
       ? coverage.missingEvaluationCount ?? coverage.missing_evaluation_count ?? coverage.remainingCount ?? coverage.remaining_count ?? coverage.unclassifiedCount ?? coverage.unclassified_count ?? (total - processed)
       : normalizedRun?.queuedCount ?? normalizedRun?.queued_count ?? (total - processed)
   ));
@@ -546,13 +553,22 @@ export function buildTaxClassificationJobStatus({ run, coverage = {}, now = new 
   const isStalled = isRunning && Number.isFinite(heartbeatAgeMs) && heartbeatAgeMs >= STALE_RUN_MS;
   const isDelayed = isQueued && isSlow && !isExhausted;
   const status = publicJobStatus(rawStatus, coverage, { isDelayed, isStalled, isExhausted });
+  const coverageRemaining = Math.max(0, Number(
+    coverage.missingEvaluationCount
+    ?? coverage.missing_evaluation_count
+    ?? coverage.unclassifiedCount
+    ?? coverage.unclassified_count
+    ?? 0
+  ));
+  const displayProcessed = status === "not_started" ? 0 : processed;
+  const displayRemaining = status === "not_started" ? coverageRemaining : remaining;
   return {
     jobId: normalizedRun?.id || null,
     status,
     rawStatus,
     total,
-    processed,
-    remaining,
+    processed: displayProcessed,
+    remaining: displayRemaining,
     autoClassified: Math.max(0, Number(normalizedRun?.autoClassifiedCount ?? normalizedRun?.auto_classified_count ?? coverage.autoClassifiedCount ?? 0)),
     needsReview: Math.max(0, Number(normalizedRun?.reviewRequiredCount ?? normalizedRun?.review_required_count ?? coverage.needsReviewCount ?? 0)),
     unresolved: Math.max(0, Number(coverage.unresolvedCount ?? coverage.unresolved_count ?? 0)),
@@ -571,6 +587,12 @@ export function buildTaxClassificationJobStatus({ run, coverage = {}, now = new 
     isStalled,
     pollAfterMs: status === "queued" ? DEFAULT_POLL_AFTER_MS : ["processing", "delayed", "stalled"].includes(status) ? 3000 : null,
   };
+}
+
+function numberOrNull(value) {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function publicJobStatus(rawStatus, coverage = {}, timing = {}) {

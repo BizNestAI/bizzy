@@ -226,7 +226,8 @@ test("manual Refresh bypasses cached read-only tax resources and exposes result 
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
   const client = fs.readFileSync("src/services/tax/taxApiClient.js", "utf8");
-  assert.match(dashboard, /onClick=\{deductions\.refresh\}/);
+  assert.match(dashboard, /const refreshDeductions = deductions\.refresh/);
+  assert.match(dashboard, /onClick=\{refreshDeductions\}/);
   assert.match(dashboard, /deductions\.refreshing \? "Refreshing" : "Refresh"/);
   assert.match(dashboard, /deductions\.refreshError/);
   assert.match(dashboard, /Updated \{formatRelativeRefreshTime\(deductions\.lastRefreshedAt\)\}/);
@@ -378,6 +379,16 @@ test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and auth
   assert.match(dashboard, /transactions\.filter\(\(row\) => classificationBucket\(row\) === "needs_review"\)/);
 });
 
+test("Tax Dashboard derives modal aggregate status from selected cell rows", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /function aggregateClassificationStatus\(rows = \[\]\)/);
+  assert.match(dashboard, /const aggregateStatus = useMemo\(\(\) => aggregateClassificationStatus\(transactions\), \[transactions\]\)/);
+  assert.match(dashboard, /buckets\.length > 1[\s\S]{0,100}label: "Mixed"/);
+  assert.match(dashboard, /bucket === "needs_review"[\s\S]{0,100}label: "Needs review"/);
+  assert.match(dashboard, /<DetailPill tone=\{aggregateStatus\.tone\}>/);
+  assert.doesNotMatch(dashboard, /cell\.selectedAuthority === "proposed" \? "Needs review" : "Auto-classified"/);
+});
+
 test("Tax Dashboard row semantics distinguish auto-classified and review-required treatment", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.doesNotMatch(dashboard, /Treatment pending/);
@@ -423,6 +434,9 @@ test("Tax Dashboard uses authoritative classification job progress instead of in
   assert.match(dashboard, /Deductions preparation appears to be stalled\./);
   assert.match(dashboard, /Bizzi is classifying your transactions\./);
   assert.match(dashboard, /Deductions preparation appears to be delayed\./);
+  assert.match(dashboard, /Updating \$\{total === 1 \? "one changed transaction"/);
+  assert.match(dashboard, /The full deductions matrix stays visible while Bizzi refreshes the changed row/);
+  assert.match(dashboard, /Run processed/);
   assert.match(dashboard, /label="Processing"/);
   assert.match(dashboard, /bizzi-progress-fill/);
   assert.match(dashboard, /aria-live="polite"/);
@@ -433,6 +447,9 @@ test("Tax Dashboard does not let processed job count masquerade as classified co
   assert.match(dashboard, /processedTotal: jobProcessed/);
   assert.doesNotMatch(dashboard, /classifiedTotal: jobProcessed/);
   assert.match(dashboard, /bucketClassified/);
+  assert.doesNotMatch(dashboard, /activeJob && jobNeedsReview/);
+  assert.doesNotMatch(dashboard, /activeJob && jobAutoClassified/);
+  assert.doesNotMatch(dashboard, /activeJob && jobFailed/);
 });
 
 test("Prepare deductions accepts quickly and refreshes via polling, not a blocking full reload", () => {
@@ -485,6 +502,13 @@ test("Tax Dashboard displays specific missing tax-review actions instead of gene
   assert.match(dashboard, /Vehicle expenses need a vehicle-method workflow before they can become authoritative/);
   assert.match(dashboard, /reviewDecisionForRow\(row\)\.actionLabel/);
   assert.match(dashboard, /cell\.proposedDeductibleTotal > 0 \? `\$\{formatCurrencyLocal\(cell\.proposedDeductibleTotal\)\} proposed` : cell\.reviewActionLabel/);
+});
+
+test("Tax Dashboard recomputes review-required proposed amounts from percent instead of trusting gross stored totals", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /classificationBucket\(row\) === "needs_review"[\s\S]{0,220}Math\.abs\(normalizeMoney\(row\.amount\)\) \* \(percent \/ 100\)/);
+  assert.match(dashboard, /function roundCurrency/);
+  assert.doesNotMatch(dashboard, /const proposedAmount = bucket === "needs_review" \? row\.deductibleAmount/);
 });
 
 test("Tax Dashboard review decisions reuse existing override authority and avoid going-forward persistence", () => {
