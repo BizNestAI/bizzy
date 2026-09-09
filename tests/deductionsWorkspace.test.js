@@ -109,6 +109,46 @@ test("snake_case persisted classification rows hydrate into authoritative transa
   assert.equal(row.matchedRuleCode, "software_subscriptions_gl_v3");
 });
 
+test("system repair history does not make auto-classified rows look manually overridden", () => {
+  const row = mapDeductionTransactionRow({
+    transactionId: "txn-insurance",
+    merchantName: "Progressive Insurance",
+    qboAccountName: "Insurance",
+    signedAmount: -273,
+    absoluteAmount: 273,
+    taxCategory: "business_insurance",
+    deductibilityStatus: "fully_deductible",
+    deductiblePercent: 100,
+    deductibleAmount: 273,
+    classificationStatus: "auto_classified",
+    source_type: "rule_engine",
+    matched_rule_code: "business_insurance_gl_v3",
+    override: { hasOverride: true, source: "system_repair", lastChangedAt: "2026-09-09T00:00:00Z" },
+  });
+
+  assert.equal(row.status, "auto_classified");
+  assert.equal(row.statusLabel, "Auto-classified");
+});
+
+test("manual override history still displays as overridden authority", () => {
+  const row = mapDeductionTransactionRow({
+    transactionId: "txn-manual",
+    merchantName: "Vendor",
+    qboAccountName: "Supplies",
+    signedAmount: -18.49,
+    absoluteAmount: 18.49,
+    taxCategory: "supplies",
+    deductibilityStatus: "fully_deductible",
+    deductiblePercent: 100,
+    deductibleAmount: 18.49,
+    classificationStatus: "user_confirmed",
+    override: { hasOverride: true, source: "user", lastChangedAt: "2026-09-09T00:00:00Z" },
+  });
+
+  assert.equal(row.status, "overridden");
+  assert.equal(row.statusLabel, "Overridden");
+});
+
 test("unclassified posted rows are not shown as authoritative needs-review classifications", () => {
   const row = mapDeductionTransactionRow({
     transactionId: "txn-pending",
@@ -308,7 +348,7 @@ test("Tax Dashboard uses hydrated posted transactions and keeps matrix layout se
   assert.match(dashboard, /QBO GL account/);
   assert.match(dashboard, /authoritativeDeductibleTotal/);
   assert.match(dashboard, /proposedDeductibleTotal/);
-  assert.match(dashboard, /Proposed · needs review/);
+  assert.match(dashboard, /Proposed — needs review/);
   assert.doesNotMatch(dashboard, /cell\.deductibleTotal/);
 });
 
@@ -461,4 +501,69 @@ test("Tax Dashboard review decisions reuse existing override authority and avoid
   assert.match(hook, /bulkUpdateTaxClassifications/);
   assert.match(service, /apply_tax_classification_override/);
   assert.match(service, /tax_classification_overrides/);
+});
+
+test("Deduction detail modal uses polished animated dialog accessibility", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /import \{ AnimatePresence, motion as Motion, useReducedMotion \} from "framer-motion"/);
+  assert.match(dashboard, /role="dialog"/);
+  assert.match(dashboard, /aria-modal="true"/);
+  assert.match(dashboard, /aria-labelledby="deduction-detail-title"/);
+  assert.match(dashboard, /aria-describedby="deduction-detail-description"/);
+  assert.match(dashboard, /event\.key === "Escape"/);
+  assert.match(dashboard, /getFocusableElements/);
+  assert.match(dashboard, /document\.body\.style\.overflow = "hidden"/);
+  assert.match(dashboard, /previousFocusRef\.current\?\.focus/);
+  assert.match(dashboard, /scale: 0\.98/);
+  assert.match(dashboard, /y: 10/);
+});
+
+test("Deduction detail modal explains proposed treatment and avoids automatic copy for review cells", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /Total expenses/);
+  assert.match(dashboard, /Confirmed deductions/);
+  assert.match(dashboard, /Estimated deductions/);
+  assert.match(dashboard, /Estimated deductions are not included in confirmed totals until the required information is provided/);
+  assert.match(dashboard, /Proposed means Bizzi calculated an estimate/);
+  assert.match(dashboard, /Not calculated/);
+  assert.doesNotMatch(dashboard, /cell\.selectedAuthority === "proposed" \? "Proposed needs-review amounts" : "Automatic deductions"/);
+  assert.match(dashboard, /cell\.selectedAuthority === "proposed"[\s\S]{0,180}Proposed means Bizzi calculated an estimate/);
+  assert.match(dashboard, /selectedAuthority === "proposed" \? "Why this needs review" : "Classification evidence"/);
+  assert.match(dashboard, /Bizzi matched this posted QuickBooks GL account to an active tax rule and calculated the confirmed deduction/);
+});
+
+test("Deduction detail modal renders specific review explanations and resolution workflows", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /QuickBooks categorized these expenses as Meals/);
+  assert.match(dashboard, /Enter the business-use percentage to calculate an estimated deduction/);
+  assert.match(dashboard, /Personal travel and commuting should not be included/);
+  assert.match(dashboard, /Gas is not separately deducted when the standard-mileage method is used/);
+  assert.match(dashboard, /Confirm whether these are office supplies, job supplies, or materials/);
+  assert.match(dashboard, /Resolve this review/);
+  assert.match(dashboard, /Selected transactions/);
+  assert.match(dashboard, /This QBO GL account for this tax year/);
+  assert.match(dashboard, /This GL account going forward/);
+  assert.match(dashboard, /Requires a schema-backed account-level authority record before it can be saved/);
+});
+
+test("Deduction detail modal validates business-use and vehicle method resolution", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /function parseBusinessUsePercent/);
+  assert.match(dashboard, /number < 0 \|\| number > 100/);
+  assert.match(dashboard, /vehicleMethod === "standard_mileage"/);
+  assert.match(dashboard, /vehicle_standard_mileage_no_separate_gas/);
+  assert.match(dashboard, /vehicleMethod === "actual_expenses"/);
+  assert.match(dashboard, /vehicle_actual_expense_business_use/);
+  assert.match(dashboard, /Gas not deducted separately/);
+  assert.match(dashboard, /normalizeMoney\(row\.amount\) \* \(Number\(percent\) \/ 100\)/);
+});
+
+test("Deduction detail modal preserves exceptions and refreshes after confirmations", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /selectedReviewTransactionIds/);
+  assert.match(dashboard, /Preserve selected exceptions by leaving them unchecked/);
+  assert.match(dashboard, /hasManualClassificationAuthority\(row\)/);
+  assert.match(dashboard, /onBulkUpdateClassifications\(chunk, changes, \{ reason \}\)/);
+  assert.match(dashboard, /await onRefresh\?\.\(\)/);
+  assert.match(dashboard, /User confirmed \$\{count\} deduction review/);
 });

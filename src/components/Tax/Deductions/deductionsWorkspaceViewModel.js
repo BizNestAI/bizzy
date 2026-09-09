@@ -76,6 +76,7 @@ export function mapDeductionTransactionRow(row = {}) {
   const hasClassificationAuthority = Boolean(classificationStatus) &&
     !isUnresolvedFallback &&
     !["unclassified", "unsupported"].includes(String(classificationStatus));
+  const hasManualOverrideAuthority = hasManualTaxOverrideAuthority(row);
   const taxCategory = isUnresolvedFallback ? "unresolved" : hasClassificationAuthority ? taxCategoryValue || "unclassified" : "pending";
   const taxTreatment = isUnresolvedFallback ? "not_determined" : hasClassificationAuthority ? deductibilityStatus || row.taxTreatment || row.tax_treatment || null : "pending_classification";
   return {
@@ -105,12 +106,18 @@ export function mapDeductionTransactionRow(row = {}) {
     classificationSource: firstValue(row.classificationSource, row.classification_source, row.sourceType, row.source_type, row.source) || null,
     matchedRuleCode: firstValue(row.matchedRuleCode, row.matched_rule_code, row.ruleCode, row.rule_code) || null,
     ruleVersion: firstValue(row.ruleVersion, row.rule_version) || null,
-    status: row.override?.hasOverride ? "overridden" : isUnresolvedFallback ? "unclassified" : hasClassificationAuthority ? classificationStatus : "unclassified",
-    statusLabel: row.override?.hasOverride ? "Overridden" : isUnresolvedFallback ? "Needs classification" : hasClassificationAuthority ? STATUS_LABELS[classificationStatus] || labelize(classificationStatus) : "Unclassified",
+    status: hasManualOverrideAuthority ? "overridden" : isUnresolvedFallback ? "unclassified" : hasClassificationAuthority ? classificationStatus : "unclassified",
+    statusLabel: hasManualOverrideAuthority ? "Overridden" : isUnresolvedFallback ? "Needs classification" : hasClassificationAuthority ? STATUS_LABELS[classificationStatus] || labelize(classificationStatus) : "Unclassified",
     requiresReview: hasClassificationAuthority && (row.requiresReview === true || row.requires_review === true),
     warnings: normalizeList(row.warnings),
     raw: row,
   };
+}
+
+function hasManualTaxOverrideAuthority(row = {}) {
+  if (row.user_override === true || row.userOverride === true || row.cpa_override === true || row.cpaOverride === true) return true;
+  const source = String(firstValue(row.override?.source, row.override_source, row.overrideSource) || "").toLowerCase();
+  return ["user", "cpa", "admin"].includes(source);
 }
 
 function normalizeCategories(categories) {

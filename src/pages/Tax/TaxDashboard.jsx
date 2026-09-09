@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AlertTriangle, CheckCircle2, ChevronDown, Info, Loader2, RefreshCcw, Settings2, X } from "lucide-react";
+import { AnimatePresence, motion as Motion, useReducedMotion } from "framer-motion";
 import { useNavigate } from "react-router-dom";
 
 import TaxTrendCard from "../../components/Tax/TaxTrendCard";
@@ -791,12 +792,20 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
         <span>{classificationsRequired ? formatClassificationSummaryLine(classificationSummary) : matrix.transactionCount ? `${matrix.transactionCount} posted expense transactions loaded` : "Transaction detail loads from posted QuickBooks expense data."}</span>
       </div>
 
-      <DeductionMonthDetailModal
-        selection={selectedCell}
-        onClose={() => setSelectedCell(null)}
-        onAssignTaxClassification={deductions.assignTaxClassification}
-        readOnly={readOnly}
-      />
+      <AnimatePresence>
+        {selectedCell ? (
+          <DeductionMonthDetailModal
+            key={`${selectedCell.account?.key || "account"}:${selectedCell.month?.key || "month"}:${selectedCell.cell?.selectedAuthority || "all"}`}
+            selection={selectedCell}
+            onClose={() => setSelectedCell(null)}
+            onAssignTaxClassification={deductions.assignTaxClassification}
+            onOverrideClassification={deductions.overrideClassification}
+            onBulkUpdateClassifications={deductions.bulkUpdateClassifications}
+            onRefresh={deductions.refresh}
+            readOnly={readOnly}
+          />
+        ) : null}
+      </AnimatePresence>
         </>
       )}
     </div>
@@ -2040,19 +2049,97 @@ function formatClassificationSummaryLine(summary) {
   return parts.length ? parts.join(" · ") : "Classification counts unavailable.";
 }
 
-function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassification, readOnly = false }) {
+function DeductionMonthDetailModal({
+  selection,
+  onClose,
+  onAssignTaxClassification,
+  onOverrideClassification,
+  onBulkUpdateClassifications,
+  onRefresh,
+  readOnly = false,
+}) {
+  const prefersReducedMotion = useReducedMotion();
+  const closeButtonRef = useRef(null);
+  const modalRef = useRef(null);
+  const previousFocusRef = useRef(null);
+  const account = useMemo(() => selection?.account || {}, [selection?.account]);
+  const month = useMemo(() => selection?.month || {}, [selection?.month]);
+  const cell = useMemo(() => selection?.cell || { transactions: [] }, [selection?.cell]);
+  const transactions = Array.isArray(cell.transactions) ? cell.transactions : [];
+  const reviewContext = useMemo(() => detailReviewContextForSelection(selection), [selection]);
+  const accountYearReviewRows = useMemo(() => collectAccountYearReviewRows(account, cell.selectedAuthority), [account, cell.selectedAuthority]);
   const [assignmentByTxn, setAssignmentByTxn] = useState({});
   const [savingChanges, setSavingChanges] = useState(false);
   const [assignmentError, setAssignmentError] = useState("");
+  const [selectedReviewTransactionIds, setSelectedReviewTransactionIds] = useState(() => new Set());
+  const [reviewScope, setReviewScope] = useState("selected_transactions");
+  const [businessUsePercent, setBusinessUsePercent] = useState("");
+  const [vehicleMethod, setVehicleMethod] = useState("");
+  const [resolutionCategory, setResolutionCategory] = useState("");
+
   useEffect(() => {
     setAssignmentByTxn({});
     setAssignmentError("");
     setSavingChanges(false);
-  }, [selection?.account?.key, selection?.month?.key]);
-  if (!selection) return null;
-  const { account, month, cell } = selection;
+    setSelectedReviewTransactionIds(new Set());
+    setReviewScope("selected_transactions");
+    setBusinessUsePercent("");
+    setVehicleMethod("");
+    setResolutionCategory(reviewContext.defaultTaxCategory || "");
+  }, [selection?.account?.key, selection?.month?.key, cell.selectedAuthority, reviewContext.defaultTaxCategory]);
 
-  const pendingChanges = cell.transactions
+  useEffect(() => {
+    if (!selection || typeof document === "undefined") return undefined;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose?.();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = getFocusableElements(modalRef.current);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previousFocusRef.current?.focus?.();
+    };
+  }, [selection, onClose]);
+
+  if (!selection) return null;
+
+  const scopeRows = reviewScope === "account_year" ? accountYearReviewRows : transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
+  const selectedReviewRows = scopeRows.filter((row) => selectedReviewTransactionIds.has(String(row.id || row.raw?.transactionId)));
+  const selectedCount = selectedReviewRows.length;
+  const percentNumber = parseBusinessUsePercent(businessUsePercent);
+  const percentValid = businessUsePercent === "" ? false : percentNumber != null;
+  const estimatedEffect = estimateResolutionDeduction(selectedReviewRows, reviewContext, {
+    businessUsePercent: percentNumber,
+    vehicleMethod,
+    resolutionCategory,
+  });
+  const canResolve = !readOnly && selectedCount > 0 && reviewScope !== "going_forward" && reviewContext.supported &&
+    (!reviewContext.requiresBusinessUsePercent || percentValid) &&
+    (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expenses" && percentValid));
+
+  const pendingChanges = transactions
     .map((row) => {
       const transactionId = row.id || row.raw?.transactionId;
       const nextTaxCategory = transactionId ? assignmentByTxn[transactionId] : null;
@@ -2063,6 +2150,23 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
     })
     .filter(Boolean);
   const pendingCount = pendingChanges.length;
+
+  const toggleReviewRow = (row) => {
+    const transactionId = String(row.id || row.raw?.transactionId || "");
+    if (!transactionId) return;
+    setSelectedReviewTransactionIds((current) => {
+      const next = new Set(current);
+      if (next.has(transactionId)) next.delete(transactionId);
+      else next.add(transactionId);
+      return next;
+    });
+  };
+
+  const setAllReviewRowsSelected = (selected) => {
+    setSelectedReviewTransactionIds(selected
+      ? new Set(scopeRows.map((row) => String(row.id || row.raw?.transactionId)).filter(Boolean))
+      : new Set());
+  };
 
   const stageAssignment = (row, nextTaxCategory) => {
     if (readOnly) {
@@ -2104,6 +2208,7 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
         });
       }
       setAssignmentByTxn({});
+      await onRefresh?.();
     } catch (err) {
       setAssignmentError(err?.message || "Could not assign tax classification.");
     } finally {
@@ -2111,133 +2216,227 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
     }
   };
 
+  const saveReviewResolution = async () => {
+    if (!canResolve || typeof onOverrideClassification !== "function") return;
+    const transactionIds = selectedReviewRows.map((row) => row.id || row.raw?.transactionId).filter(Boolean);
+    const changes = buildDetailResolutionChanges(reviewContext, selectedReviewRows, {
+      businessUsePercent: percentNumber,
+      vehicleMethod,
+      resolutionCategory,
+    });
+    if (!transactionIds.length || !changes) return;
+    setSavingChanges(true);
+    setAssignmentError("");
+    try {
+      const reason = detailResolutionReason(reviewContext, reviewScope, selectedCount);
+      if (transactionIds.length === 1 || typeof onBulkUpdateClassifications !== "function") {
+        for (const transactionId of transactionIds) {
+          await onOverrideClassification(transactionId, { ...changes, reason });
+        }
+      } else {
+        for (let index = 0; index < transactionIds.length; index += 100) {
+          const chunk = transactionIds.slice(index, index + 100);
+          await onBulkUpdateClassifications(chunk, changes, { reason });
+        }
+      }
+      setSelectedReviewTransactionIds(new Set());
+      await onRefresh?.();
+    } catch (err) {
+      setAssignmentError(err?.message || "Could not resolve this review.");
+    } finally {
+      setSavingChanges(false);
+    }
+  };
+
+  const backdropTransition = prefersReducedMotion ? { duration: 0 } : { duration: 0.16, ease: "easeOut" };
+  const panelTransition = prefersReducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" };
   const modal = (
-    <div className="pointer-events-none fixed bottom-0 left-0 right-0 top-0 z-[90] flex items-center justify-center overflow-visible bg-black/20 px-4 py-8 md:left-[var(--nav-w,0px)]" role="dialog" aria-modal="true" aria-label={`${account.name} ${month.longLabel} deductions`}>
-      <section className="pointer-events-auto flex max-h-[min(760px,calc(100vh-96px))] w-full max-w-[900px] -translate-y-8 flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] font-sans text-white shadow-[0_24px_90px_rgba(0,0,0,0.68)]">
-        <header className="flex items-start justify-between gap-4 border-b border-white/10 px-4 py-3.5">
+    <Motion.div
+      className="pointer-events-auto fixed bottom-0 left-0 right-0 top-0 z-[90] flex items-center justify-center overflow-visible bg-black/42 px-3 py-5 md:left-[var(--nav-w,0px)] sm:px-4 sm:py-8"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={backdropTransition}
+      onMouseDown={onClose}
+    >
+      <Motion.section
+        ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="deduction-detail-title"
+        aria-describedby="deduction-detail-description"
+        tabIndex={-1}
+        className="flex max-h-[min(820px,calc(100vh-64px))] w-full max-w-[980px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] font-sans text-white shadow-[0_28px_100px_rgba(0,0,0,0.72)]"
+        initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: 10 }}
+        animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+        exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: 8 }}
+        transition={panelTransition}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="flex items-start justify-between gap-4 border-b border-white/10 px-4 py-4 sm:px-5">
           <div className="min-w-0">
             <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-100/62">Deduction detail</div>
             <div className="mt-1 flex flex-wrap items-center gap-2">
-              <h2 className="truncate text-lg font-semibold">{account.name}</h2>
-              <span className="rounded-full border border-emerald-300/15 bg-emerald-300/[0.07] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-emerald-50/72">
-                {account.sourceLabel}
-              </span>
+              <h2 id="deduction-detail-title" className="truncate text-xl font-semibold leading-tight">{account.name}</h2>
+              <DetailPill tone="neutral">{account.sourceLabel}</DetailPill>
+              <DetailPill tone={cell.selectedAuthority === "proposed" ? "amber" : "green"}>
+                {cell.selectedAuthority === "proposed" ? "Needs review" : "Auto-classified"}
+              </DetailPill>
             </div>
-            <div className="mt-1 text-xs text-white/54">
-              {month.longLabel} · {cell.selectedAuthority === "proposed" ? "Proposed needs-review amounts" : "Automatic deductions"} · QBO GL account from posted QuickBooks expenses
-            </div>
-            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/54">
-              Sourced from posted QuickBooks GL accounts and Plaid transaction detail. Deductible amounts come from Bizzi deduction rules and tax classification logic.
+            <p id="deduction-detail-description" className="mt-2 max-w-2xl text-sm leading-relaxed text-white/56">
+              {month.longLabel} · {transactions.length} {transactions.length === 1 ? "transaction" : "transactions"} · QBO GL rule evidence
+            </p>
+            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/46">
+              {cell.selectedAuthority === "proposed"
+                ? "Proposed means Bizzi calculated an estimate from your QuickBooks category and tax rules, but needs information from you before treating it as confirmed."
+                : "Sourced from posted QuickBooks GL accounts and Plaid transaction detail. Deductible amounts come from Bizzi deduction rules and tax classification logic."}
             </p>
           </div>
           <button
+            ref={closeButtonRef}
             type="button"
             onClick={onClose}
-            className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] p-1.5 text-white/70 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/40"
+            className="shrink-0 rounded-full border border-white/10 bg-white/[0.04] p-2 text-white/70 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/40"
             aria-label="Close deduction detail"
           >
             <X className="h-4 w-4" />
           </button>
         </header>
 
-        <div className="border-b border-white/10 px-4 py-3">
-          <div className="inline-flex max-w-full rounded-[14px] border border-white/10 bg-white/[0.03] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <DeductionDetailAmount label="Expense total" value={cell.expenseTotal} />
-              <div className="hidden h-9 w-px bg-white/10 sm:block" aria-hidden="true" />
-              <DeductionDetailAmount label="Authoritative amount" value={cell.authoritativeDeductibleTotal} />
-              <div className="hidden h-9 w-px bg-white/10 sm:block" aria-hidden="true" />
-              <DeductionDetailAmount label="Proposed amount" value={cell.proposedDeductibleTotal} />
-            </div>
+        <div className="border-b border-white/10 px-4 py-3 sm:px-5">
+          <div className="grid gap-2 md:grid-cols-3">
+            <DeductionDetailAmount label="Total expenses" value={cell.expenseTotal} />
+            <DeductionDetailAmount label="Confirmed deductions" value={cell.authoritativeDeductibleTotal} tone="green" />
+            <DeductionDetailAmount
+              label="Estimated deductions"
+              value={cell.proposedDeductibleTotal}
+              tone="amber"
+              fallback={cell.selectedAuthority === "proposed" && cell.proposedDeductibleTotal <= 0 ? "Not calculated" : null}
+            />
           </div>
+          {cell.selectedAuthority === "proposed" ? (
+            <p className="mt-2 text-xs leading-relaxed text-white/48">
+              Estimated deductions are not included in confirmed totals until the required information is provided.
+            </p>
+          ) : null}
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-4 sm:px-5">
           {assignmentError ? (
             <div className="mb-3 rounded-[14px] border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-xs text-rose-100">
               {assignmentError}
             </div>
           ) : null}
-          {cell.transactions.length ? (
-            <table className="w-full min-w-[920px] border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
-                  <th className="py-2 pr-3 text-left font-semibold">Date</th>
-                  <th className="px-3 py-2 text-left font-semibold">Vendor</th>
-                  <th className="px-3 py-2 text-right font-semibold">Expense total</th>
-                  <th className="px-3 py-2 text-right font-semibold">Deductible amount</th>
-                  <th className="px-3 py-2 text-left font-semibold">Percent</th>
-                  <th className="px-3 py-2 text-left font-semibold">Status</th>
-                  <th className="py-2 pl-3 text-left font-semibold">Tax category</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cell.transactions.map((row, index) => {
-                  const needsReview = needsTaxClassificationReview(row);
-                  return (
-                    <tr key={row.id || row.raw?.id || `${row.date}-${index}`} className="border-b border-white/[0.06] transition hover:bg-white/[0.025] last:border-b-0">
-                      <td className="py-2.5 pr-3 whitespace-nowrap text-white/58">{formatDateLocal(row.date)}</td>
-                      <td className="min-w-0 px-3 py-2.5">
-                        <div className="truncate font-semibold text-white/84">{row.vendor}</div>
-                        <div className="truncate text-xs text-white/42">{deductionTransactionSubtext(row)}</div>
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-semibold tabular-nums text-white/78">{formatCurrencyLocal(row.amount)}</td>
-                      <td className="px-3 py-2.5 text-right tabular-nums">
-                        {needsReview ? (
-                          <>
-                            <div className="font-semibold text-amber-200">{formatCurrencyLocal(resolveDeductibleAmount(row))}</div>
-                            <div className="text-xs font-semibold text-amber-100/55">Proposed · needs review</div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="font-semibold text-emerald-50">{formatCurrencyLocal(resolveDeductibleAmount(row))}</div>
-                            <div className="text-xs text-white/38">{formatDeductiblePercent(row.deductiblePercent)}</div>
-                          </>
-                        )}
-                      </td>
-                      <td className="px-3 py-2.5 text-white/62">{deductiblePercentLabel(row)}</td>
-                      <td className="px-3 py-2.5">
-                        <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold ${classificationStatusClass(row.classificationBucket)}`}>
-                          {row.statusLabel}
-                        </span>
-                      </td>
-                      <td className="py-2.5 pl-3">
-                        {needsReview ? (
-                          <div className="flex min-w-[220px] items-center gap-2">
+          <DetailContextCard context={reviewContext} selectedAuthority={cell.selectedAuthority} />
+          {cell.selectedAuthority === "proposed" ? (
+            <DetailResolutionPanel
+              context={reviewContext}
+              rows={scopeRows}
+              selectedRows={selectedReviewRows}
+              selectedIds={selectedReviewTransactionIds}
+              reviewScope={reviewScope}
+              businessUsePercent={businessUsePercent}
+              businessUsePercentValid={percentValid}
+              vehicleMethod={vehicleMethod}
+              resolutionCategory={resolutionCategory}
+              estimatedEffect={estimatedEffect}
+              canResolve={canResolve}
+              saving={savingChanges}
+              readOnly={readOnly}
+              onSelectAll={setAllReviewRowsSelected}
+              onScopeChange={(scope) => {
+                setReviewScope(scope);
+                setSelectedReviewTransactionIds(new Set());
+              }}
+              onBusinessUsePercentChange={setBusinessUsePercent}
+              onVehicleMethodChange={setVehicleMethod}
+              onResolutionCategoryChange={setResolutionCategory}
+              onSave={saveReviewResolution}
+            />
+          ) : null}
+          {transactions.length ? (
+            <div className="overflow-x-auto rounded-[16px] border border-white/[0.08]">
+              <table className="w-full min-w-[760px] border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-white/[0.08] bg-white/[0.025] text-[10px] uppercase tracking-[0.11em] text-white/42">
+                    {cell.selectedAuthority === "proposed" ? <th className="w-10 px-3 py-2 text-left font-semibold">Pick</th> : null}
+                    <th className="px-3 py-2 text-left font-semibold">Date</th>
+                    <th className="px-3 py-2 text-left font-semibold">Vendor</th>
+                    <th className="px-3 py-2 text-right font-semibold">Expense</th>
+                    <th className="px-3 py-2 text-right font-semibold">Deduction</th>
+                    <th className="px-3 py-2 text-left font-semibold">Percent</th>
+                    <th className="px-3 py-2 text-left font-semibold">Status</th>
+                    <th className="px-3 py-2 text-left font-semibold">Tax category</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {transactions.map((row, index) => {
+                    const transactionId = String(row.id || row.raw?.transactionId || "");
+                    const needsReview = needsTaxClassificationReview(row);
+                    const selected = selectedReviewTransactionIds.has(transactionId);
+                    return (
+                      <tr key={row.id || row.raw?.id || `${row.date}-${index}`} className="border-b border-white/[0.06] transition hover:bg-white/[0.025] last:border-b-0">
+                        {cell.selectedAuthority === "proposed" ? (
+                          <td className="px-3 py-3">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              disabled={!needsReview || hasManualClassificationAuthority(row)}
+                              onChange={() => toggleReviewRow(row)}
+                              className="h-4 w-4 rounded border-white/20 bg-black accent-emerald-300"
+                              aria-label={`Select ${row.vendor}`}
+                            />
+                          </td>
+                        ) : null}
+                        <td className="px-3 py-3 whitespace-nowrap text-white/58">{formatDateLocal(row.date)}</td>
+                        <td className="min-w-0 px-3 py-3">
+                          <div className="truncate font-semibold text-white/84">{row.vendor}</div>
+                          <div className="truncate text-xs text-white/42">{deductionTransactionSubtext(row)}</div>
+                        </td>
+                        <td className="px-3 py-3 text-right font-semibold tabular-nums text-white/78">{formatCurrencyLocal(row.amount)}</td>
+                        <td className="px-3 py-3 text-right tabular-nums">
+                          {needsReview ? (
+                            <DetailDeductionValue row={row} />
+                          ) : (
+                            <>
+                              <div className="font-semibold text-emerald-50">{formatCurrencyLocal(resolveDeductibleAmount(row))}</div>
+                              <div className="text-xs text-white/38">{formatDeductiblePercent(row.deductiblePercent)}</div>
+                            </>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-white/62">{deductiblePercentLabel(row)}</td>
+                        <td className="px-3 py-3">
+                          <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold ${classificationStatusClass(row.classificationBucket)}`}>
+                            {row.statusLabel}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex min-w-[190px] items-center gap-2">
                             <TaxCategorySelect
                               value={assignmentByTxn[row.id] ?? taxCategorySelectValue(row)}
                               currentLabel={row.taxCategoryLabel}
                               disabled={readOnly || savingChanges}
-                              tone="review"
+                              tone={needsReview ? "review" : "default"}
                               onChange={(value) => stageAssignment(row, value)}
                             />
                           </div>
-                        ) : (
-                          <div className="flex min-w-[220px] items-center gap-2">
-                            <TaxCategorySelect
-                              value={assignmentByTxn[row.id] ?? taxCategorySelectValue(row)}
-                              currentLabel={row.taxCategoryLabel}
-                              disabled={readOnly || savingChanges}
-                              onChange={(value) => stageAssignment(row, value)}
-                            />
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           ) : (
             <div className="rounded-[14px] border border-white/[0.08] bg-white/[0.03] px-4 py-6 text-center text-xs text-white/54">
               No transaction detail is available for this account and month.
             </div>
           )}
         </div>
-        <footer className="flex flex-col gap-2 border-t border-white/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <footer className="flex flex-col gap-2 border-t border-white/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <div className="text-xs font-semibold text-white/46">
-            {cell.transactions.length} {cell.transactions.length === 1 ? "transaction" : "transactions"} loaded
-            {pendingCount ? <span className="ml-2 text-emerald-100/62">{pendingCount} unsaved {pendingCount === 1 ? "change" : "changes"}</span> : null}
+            {transactions.length} {transactions.length === 1 ? "transaction" : "transactions"} loaded
+            {pendingCount ? <span className="ml-2 text-emerald-100/62">{pendingCount} unsaved {pendingCount === 1 ? "category change" : "category changes"}</span> : null}
           </div>
           {pendingCount ? (
             <div className="flex items-center justify-end gap-2">
@@ -2248,7 +2447,7 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
                   setAssignmentError("");
                 }}
                 disabled={readOnly || savingChanges}
-                className="rounded-full border border-white/10 bg-black/18 px-3 py-1.5 text-xs font-semibold text-white/64 transition hover:bg-white/10 hover:text-white disabled:cursor-wait disabled:opacity-55"
+                className="rounded-full border border-white/10 bg-black/18 px-3 py-1.5 text-xs font-semibold text-white/64 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-55"
               >
                 Cancel
               </button>
@@ -2256,18 +2455,401 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
                 type="button"
                 onClick={saveAssignments}
                 disabled={readOnly || savingChanges}
-                className="rounded-full bg-emerald-300 px-4 py-1.5 text-xs font-semibold text-[#06100c] transition hover:bg-emerald-200 disabled:cursor-wait disabled:opacity-55"
+                className="rounded-full bg-emerald-300 px-4 py-1.5 text-xs font-semibold text-[#06100c] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-55"
               >
-                {savingChanges ? "Saving..." : "Save Changes"}
+                {savingChanges ? "Saving..." : "Save category changes"}
               </button>
             </div>
           ) : null}
         </footer>
-      </section>
-    </div>
+      </Motion.section>
+    </Motion.div>
   );
 
   return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
+}
+
+function DetailPill({ children, tone = "neutral" }) {
+  const classes = tone === "green"
+    ? "border-emerald-300/18 bg-emerald-300/[0.09] text-emerald-50"
+    : tone === "amber"
+      ? "border-amber-300/25 bg-amber-300/[0.10] text-amber-50"
+      : tone === "red"
+        ? "border-rose-300/25 bg-rose-400/[0.10] text-rose-50"
+        : "border-white/10 bg-white/[0.05] text-white/62";
+  return (
+    <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.1em] ${classes}`}>
+      {children}
+    </span>
+  );
+}
+
+function DetailContextCard({ context, selectedAuthority }) {
+  const tone = selectedAuthority === "proposed" ? "amber" : "green";
+  return (
+    <div className={`mb-3 rounded-[16px] border px-3 py-3 ${tone === "amber" ? "border-amber-300/16 bg-amber-300/[0.055]" : "border-emerald-300/14 bg-emerald-300/[0.045]"}`}>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/46">
+        {selectedAuthority === "proposed" ? "Why this needs review" : "Classification evidence"}
+      </div>
+      <p className="mt-1 text-sm leading-relaxed text-white/76">
+        {selectedAuthority === "proposed"
+          ? context.explanation
+          : "Bizzi matched this posted QuickBooks GL account to an active tax rule and calculated the confirmed deduction."}
+      </p>
+      {selectedAuthority === "proposed" ? (
+        <p className="mt-2 text-xs leading-relaxed text-white/52">
+          Proposed means Bizzi calculated an estimate from your QuickBooks category and tax rules, but needs information from you before treating it as confirmed.
+        </p>
+      ) : (
+        <p className="mt-2 text-xs leading-relaxed text-white/52">This row already has confirmed rule-engine treatment.</p>
+      )}
+    </div>
+  );
+}
+
+function DetailResolutionPanel({
+  context,
+  rows,
+  selectedRows,
+  selectedIds,
+  reviewScope,
+  businessUsePercent,
+  businessUsePercentValid,
+  vehicleMethod,
+  resolutionCategory,
+  estimatedEffect,
+  canResolve,
+  saving,
+  readOnly,
+  onSelectAll,
+  onScopeChange,
+  onBusinessUsePercentChange,
+  onVehicleMethodChange,
+  onResolutionCategoryChange,
+  onSave,
+}) {
+  const allSelected = rows.length > 0 && rows.every((row) => selectedIds.has(String(row.id || row.raw?.transactionId)));
+  const selectedCount = selectedRows.length;
+  return (
+    <section className="mb-4 rounded-[18px] border border-white/10 bg-white/[0.035] p-3">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/58">Resolve this review</div>
+          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-white/72">{context.actionHelp}</p>
+          <p className="mt-1 text-xs text-white/44">This confirmation affects only the selected current classifications and writes through the existing override audit mechanism.</p>
+        </div>
+        <div className="rounded-[14px] border border-white/10 bg-black/18 px-3 py-2 text-right">
+          <div className="text-[10px] uppercase tracking-[0.12em] text-white/38">Estimated effect</div>
+          <div className="mt-1 text-base font-semibold tabular-nums text-amber-100">{estimatedEffect.label}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
+        <div className="space-y-2">
+          <ReviewScopeRadio value="selected_transactions" current={reviewScope} onChange={onScopeChange} label="Selected transactions" description="Apply only to the checked rows below." />
+          <ReviewScopeRadio value="account_year" current={reviewScope} onChange={onScopeChange} label="This QBO GL account for this tax year" description="Apply to matching review rows already loaded for this account and year." />
+          <ReviewScopeRadio value="going_forward" current={reviewScope} onChange={onScopeChange} label="This GL account going forward" description="Requires a schema-backed account-level authority record before it can be saved." disabled />
+        </div>
+
+        <div className="space-y-3 rounded-[14px] border border-white/[0.08] bg-black/16 p-3">
+          {context.kind === "business_use_percent" ? (
+            <BusinessUsePercentInput
+              value={businessUsePercent}
+              valid={businessUsePercentValid}
+              onChange={onBusinessUsePercentChange}
+            />
+          ) : null}
+          {context.kind === "vehicle_method" ? (
+            <VehicleMethodControls
+              vehicleMethod={vehicleMethod}
+              businessUsePercent={businessUsePercent}
+              businessUsePercentValid={businessUsePercentValid}
+              onVehicleMethodChange={onVehicleMethodChange}
+              onBusinessUsePercentChange={onBusinessUsePercentChange}
+            />
+          ) : null}
+          {context.kind === "category_confirmation" ? (
+            <div>
+              <label className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Confirm category</label>
+              <div className="mt-1">
+                <TaxCategorySelect
+                  value={resolutionCategory}
+                  currentLabel={formatTaxCategoryLabel(resolutionCategory || context.defaultTaxCategory)}
+                  disabled={readOnly || saving}
+                  tone="review"
+                  onChange={onResolutionCategoryChange}
+                />
+              </div>
+            </div>
+          ) : null}
+          {context.kind === "business_purpose" ? (
+            <div className="rounded-[12px] border border-amber-300/12 bg-amber-300/[0.05] px-3 py-2 text-xs leading-relaxed text-amber-50/72">
+              Confirm that the selected expenses had a business purpose. Leave personal or commuting exceptions unchecked.
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="mt-3 flex flex-col gap-2 border-t border-white/[0.08] pt-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onSelectAll(!allSelected)}
+            disabled={readOnly || saving || rows.length === 0}
+            className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-1.5 text-xs font-semibold text-white/64 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            {allSelected ? "Clear selection" : "Select all"}
+          </button>
+          <span className="text-xs text-white/46">{selectedCount} of {rows.length} selected</span>
+          <span className="text-xs text-white/32">Preserve selected exceptions by leaving them unchecked.</span>
+        </div>
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={!canResolve || saving}
+          className="rounded-full bg-emerald-300 px-4 py-2 text-xs font-semibold text-[#06100c] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {saving ? "Saving..." : `Save ${selectedCount || 0} ${selectedCount === 1 ? "decision" : "decisions"}`}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function ReviewScopeRadio({ value, current, onChange, label, description, disabled = false }) {
+  return (
+    <label className={`flex gap-2 rounded-[13px] border px-3 py-2 ${current === value ? "border-emerald-300/20 bg-emerald-300/[0.07]" : "border-white/[0.08] bg-black/12"} ${disabled ? "opacity-45" : "cursor-pointer"}`}>
+      <input
+        type="radio"
+        name="deduction-review-scope"
+        value={value}
+        checked={current === value}
+        disabled={disabled}
+        onChange={() => onChange(value)}
+        className="mt-1 accent-emerald-300"
+      />
+      <span>
+        <span className="block text-xs font-semibold text-white/78">{label}</span>
+        <span className="block text-xs leading-relaxed text-white/42">{description}</span>
+      </span>
+    </label>
+  );
+}
+
+function BusinessUsePercentInput({ value, valid, onChange }) {
+  return (
+    <div>
+      <label className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Business-use percentage</label>
+      <div className="mt-1 flex items-center gap-2">
+        <input
+          type="number"
+          min="0"
+          max="100"
+          step="1"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className={`h-9 w-24 rounded-[11px] border bg-black/22 px-3 text-sm font-semibold text-white outline-none focus:ring-2 ${value && !valid ? "border-rose-300/35 focus:ring-rose-300/20" : "border-white/10 focus:ring-emerald-300/22"}`}
+          placeholder="0-100"
+        />
+        <span className="text-sm text-white/54">%</span>
+      </div>
+      <p className="mt-1 text-xs leading-relaxed text-white/42">Enter the factual business portion. Bizzi does not invent an allocation.</p>
+    </div>
+  );
+}
+
+function VehicleMethodControls({ vehicleMethod, businessUsePercent, businessUsePercentValid, onVehicleMethodChange, onBusinessUsePercentChange }) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Vehicle method</div>
+        <div className="mt-2 grid gap-2">
+          <ReviewScopeRadio value="standard_mileage" current={vehicleMethod} onChange={onVehicleMethodChange} label="Standard mileage" description="Gas is not separately deducted. Mileage records are required to calculate the deduction." />
+          <ReviewScopeRadio value="actual_expenses" current={vehicleMethod} onChange={onVehicleMethodChange} label="Actual vehicle expenses" description="Deduct only the business-use portion of eligible vehicle costs." />
+        </div>
+      </div>
+      {vehicleMethod === "actual_expenses" ? (
+        <BusinessUsePercentInput value={businessUsePercent} valid={businessUsePercentValid} onChange={onBusinessUsePercentChange} />
+      ) : null}
+    </div>
+  );
+}
+
+function DetailDeductionValue({ row }) {
+  const amount = resolveDeductibleAmount(row);
+  if (Number(row?.deductiblePercent) === 0 && amount === 0) {
+    return <div className="font-semibold text-amber-100/72">Not calculated</div>;
+  }
+  return (
+    <>
+      <div className="font-semibold text-amber-200">{formatCurrencyLocal(amount)}</div>
+      <div className="text-xs font-semibold text-amber-100/55">Estimated</div>
+    </>
+  );
+}
+
+function detailReviewContextForSelection(selection) {
+  const row = selection?.cell?.transactions?.[0] || {};
+  const category = String(taxCategorySelectValue(row) || row.taxCategory || "").toLowerCase();
+  const accountName = String(selection?.account?.name || row.qboAccountName || "").toLowerCase();
+  if (category.includes("meal") || accountName.includes("meal")) {
+    return {
+      kind: "business_purpose",
+      supported: true,
+      defaultTaxCategory: taxCategorySelectValue(row) || "meals",
+      confirmationPercent: 50,
+      deductibilityStatus: "partially_deductible",
+      taxTreatment: "business_meals_business_purpose_confirmed",
+      explanation: "QuickBooks categorized these expenses as Meals. Bizzi estimates that 50% may be deductible, but you must confirm they had a business purpose.",
+      actionHelp: "Confirm selected transactions as business meals. Personal meals and undocumented exceptions should stay unchecked.",
+    };
+  }
+  if (category.includes("vehicle") || accountName.includes("gas") || accountName.includes("fuel")) {
+    return {
+      kind: "vehicle_method",
+      supported: true,
+      defaultTaxCategory: taxCategorySelectValue(row) || "vehicle",
+      explanation: "Choose your vehicle deduction method. Gas is not separately deducted when the standard-mileage method is used.",
+      actionHelp: "Choose a vehicle method for the selected gas transactions before Bizzi treats them as confirmed.",
+    };
+  }
+  if (category.includes("utilities") || accountName.includes("phone") || accountName.includes("electric") || accountName.includes("internet") || accountName.includes("utility")) {
+    return {
+      kind: "business_use_percent",
+      supported: true,
+      requiresBusinessUsePercent: true,
+      defaultTaxCategory: taxCategorySelectValue(row) || "utilities",
+      explanation: "This account may contain both business and personal use. Enter the business-use percentage to calculate an estimated deduction.",
+      actionHelp: "Enter the factual business-use percentage for selected phone or utility expenses.",
+    };
+  }
+  if (category.includes("transportation") || accountName.includes("parking") || accountName.includes("lyft") || accountName.includes("uber") || accountName.includes("transportation")) {
+    return {
+      kind: "business_purpose",
+      supported: true,
+      defaultTaxCategory: taxCategorySelectValue(row) || "travel",
+      confirmationPercent: 100,
+      deductibilityStatus: "fully_deductible",
+      taxTreatment: "travel_transportation_business_purpose_confirmed",
+      explanation: "Confirm that these trips had a business purpose. Personal travel and commuting should not be included.",
+      actionHelp: "Confirm selected trips as business transportation and leave personal or commuting exceptions unchecked.",
+    };
+  }
+  if (category.includes("suppl") || accountName.includes("suppl")) {
+    return {
+      kind: "category_confirmation",
+      supported: true,
+      defaultTaxCategory: taxCategorySelectValue(row) || "supplies",
+      confirmationPercent: 100,
+      deductibilityStatus: "fully_deductible",
+      taxTreatment: "supplies_category_confirmed",
+      explanation: "Confirm whether these are office supplies, job supplies, or materials.",
+      actionHelp: "Confirm the proposed category or choose a more specific supported tax category for selected transactions.",
+    };
+  }
+  return {
+    kind: "category_confirmation",
+    supported: true,
+    defaultTaxCategory: taxCategorySelectValue(row) || "other",
+    confirmationPercent: Number(row?.deductiblePercent || 0),
+    deductibilityStatus: row?.deductibilityStatus || "needs_review",
+    taxTreatment: row?.taxTreatment || "ordinary_expense",
+    explanation: "Review the proposed tax treatment before it becomes confirmed.",
+    actionHelp: "Confirm the proposed category or choose another supported tax category for selected transactions.",
+  };
+}
+
+function collectAccountYearReviewRows(account = {}, selectedAuthority = "proposed") {
+  if (selectedAuthority !== "proposed") return [];
+  const months = Object.values(account.months || {});
+  const rows = [];
+  for (const month of months) {
+    for (const row of month.transactions || []) {
+      if (needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row)) rows.push(row);
+    }
+  }
+  const seen = new Set();
+  return rows.filter((row) => {
+    const id = String(row.id || row.raw?.transactionId || "");
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function parseBusinessUsePercent(value) {
+  if (value === "" || value == null) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || number > 100) return null;
+  return number;
+}
+
+function estimateResolutionDeduction(rows, context, options = {}) {
+  if (!rows.length) return { amount: 0, label: "Select transactions" };
+  if (context.kind === "vehicle_method" && options.vehicleMethod === "standard_mileage") {
+    return { amount: 0, label: "Gas not deducted separately" };
+  }
+  const percent = context.kind === "business_use_percent" || (context.kind === "vehicle_method" && options.vehicleMethod === "actual_expenses")
+    ? options.businessUsePercent
+    : context.confirmationPercent;
+  if (percent == null || Number.isNaN(Number(percent))) return { amount: 0, label: "Not calculated" };
+  const amount = rows.reduce((sum, row) => sum + normalizeMoney(row.amount) * (Number(percent) / 100), 0);
+  return { amount, label: formatCurrencyLocal(amount) };
+}
+
+function buildDetailResolutionChanges(context, rows, options = {}) {
+  const first = rows[0] || {};
+  const category = context.kind === "category_confirmation"
+    ? options.resolutionCategory || context.defaultTaxCategory
+    : taxCategorySelectValue(first) || context.defaultTaxCategory;
+  if (!category) return null;
+  if (context.kind === "vehicle_method" && options.vehicleMethod === "standard_mileage") {
+    return {
+      taxCategory: category,
+      deductibilityStatus: "nondeductible",
+      deductiblePercent: 0,
+      taxTreatment: "vehicle_standard_mileage_no_separate_gas",
+    };
+  }
+  if (context.kind === "vehicle_method" && options.vehicleMethod === "actual_expenses") {
+    return {
+      taxCategory: category,
+      deductibilityStatus: options.businessUsePercent === 100 ? "fully_deductible" : options.businessUsePercent === 0 ? "nondeductible" : "partially_deductible",
+      deductiblePercent: options.businessUsePercent,
+      taxTreatment: "vehicle_actual_expense_business_use",
+    };
+  }
+  if (context.kind === "business_use_percent") {
+    return {
+      taxCategory: category,
+      deductibilityStatus: options.businessUsePercent === 100 ? "fully_deductible" : options.businessUsePercent === 0 ? "nondeductible" : "partially_deductible",
+      deductiblePercent: options.businessUsePercent,
+      taxTreatment: "mixed_use_business_percentage",
+    };
+  }
+  return {
+    taxCategory: category,
+    deductibilityStatus: context.deductibilityStatus || first.deductibilityStatus || "fully_deductible",
+    deductiblePercent: context.confirmationPercent ?? first.deductiblePercent ?? 100,
+    taxTreatment: context.taxTreatment || first.taxTreatment || "ordinary_expense",
+  };
+}
+
+function detailResolutionReason(context, scope, count) {
+  const scopeLabel = scope === "account_year" ? "QBO GL account tax-year scope" : "selected transaction scope";
+  return `User confirmed ${count} deduction review ${count === 1 ? "item" : "items"} from the detail modal (${context.kind}, ${scopeLabel}).`;
+}
+
+function getFocusableElements(root) {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll([
+    "a[href]",
+    "button:not([disabled])",
+    "textarea:not([disabled])",
+    "input:not([disabled])",
+    "select:not([disabled])",
+    "[tabindex]:not([tabindex='-1'])",
+  ].join(","))).filter((element) => !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true");
 }
 
 function TaxCategorySelect({ value, currentLabel, onChange, disabled = false, tone = "default" }) {
@@ -2412,11 +2994,12 @@ function assignment(deductibilityStatus, deductiblePercent, taxTreatment) {
   return { deductibilityStatus, deductiblePercent, taxTreatment };
 }
 
-function DeductionDetailAmount({ label, value }) {
+function DeductionDetailAmount({ label, value, tone = "neutral", fallback = null }) {
+  const valueClass = tone === "green" ? "text-emerald-50" : tone === "amber" ? "text-amber-100" : "text-white";
   return (
-    <div className="min-w-[138px]">
+    <div className="rounded-[14px] border border-white/10 bg-white/[0.03] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
       <div className="text-[10px] uppercase tracking-[0.12em] text-white/42">{label}</div>
-      <div className="mt-1 text-base font-semibold tabular-nums text-white">{formatCurrencyLocal(value)}</div>
+      <div className={`mt-1 text-base font-semibold tabular-nums ${valueClass}`}>{fallback || formatCurrencyLocal(value)}</div>
     </div>
   );
 }
