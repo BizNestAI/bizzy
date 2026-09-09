@@ -6,6 +6,7 @@ import { AnimatePresence, motion as Motion, useReducedMotion } from "framer-moti
 import { useNavigate } from "react-router-dom";
 
 import TaxTrendCard from "../../components/Tax/TaxTrendCard";
+import TaxLiabilityComingSoonCard from "../../components/Tax/TaxLiabilityComingSoonCard.jsx";
 import TaxProfileModal from "../../components/Tax/TaxProfileModal.jsx";
 import TaxSetupWorkflow from "../../components/Tax/Setup/TaxSetupWorkflow.jsx";
 import RecordTaxPaymentModal from "../../components/Tax/Planning/RecordTaxPaymentModal.jsx";
@@ -17,6 +18,7 @@ import { useTaxDeductions } from "../../hooks/tax/useTaxDeductions.js";
 import { useTaxPayments } from "../../hooks/tax/useTaxPayments.js";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader";
 import { mapDeductionTransactionRow } from "../../components/Tax/Deductions/deductionsWorkspaceViewModel.js";
+import { isTaxLiabilityEstimateEnabled } from "../../config/taxFeatures.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
 
@@ -29,18 +31,19 @@ export default function TaxDashboard() {
   const businessId = adminView.active ? adminView.businessId : (currentBusiness?.id || getStoredBusinessId());
   const navigate = useNavigate();
   const taxYear = CURRENT_YEAR;
+  const taxLiabilityEstimateEnabled = isTaxLiabilityEstimateEnabled();
   const [setupWorkflow, setSetupWorkflow] = useState({ open: false, initialStepId: "business_structure" });
   const [setupNotice, setSetupNotice] = useState(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [slowInitialLoad, setSlowInitialLoad] = useState(false);
 
-  const tax = useTaxOverview({ businessId, year: taxYear });
-  const payments = useTaxPayments({ businessId, year: taxYear, enabled: Boolean(businessId) });
+  const tax = useTaxOverview({ businessId, year: taxYear, enabled: taxLiabilityEstimateEnabled });
+  const payments = useTaxPayments({ businessId, year: taxYear, enabled: taxLiabilityEstimateEnabled && Boolean(businessId) });
   const model = useMemo(() => buildTaxDashboardViewModel(tax.data), [tax.data]);
   const hasPreviousData = !!tax.data;
-  const initialLoading = tax.loading && !hasPreviousData;
-  const initialRequestFailed = Boolean(tax.error && !hasPreviousData && !tax.loading);
+  const initialLoading = taxLiabilityEstimateEnabled && tax.loading && !hasPreviousData;
+  const initialRequestFailed = taxLiabilityEstimateEnabled && Boolean(tax.error && !hasPreviousData && !tax.loading);
 
   useEffect(() => {
     if (typeof document === "undefined") return undefined;
@@ -109,7 +112,7 @@ export default function TaxDashboard() {
     navigate(`/dashboard/tax/calculation?${query.toString()}`);
   };
 
-  const headerControls = (
+  const headerControls = taxLiabilityEstimateEnabled ? (
     <div className="flex flex-wrap items-center gap-2">
       <TaxProfileButton
         model={model}
@@ -122,7 +125,7 @@ export default function TaxDashboard() {
       />
       <NextDeadlineText deadline={model.primaryMetrics.nextDeadline} fallbackDate={model.primaryMetrics.nextPaymentDate} generatedAt={model.header.generatedAt} status={model.status} deadlineReadiness={model.surfaceReadiness.deadline} onViewCalculation={() => viewCalculation("reserve_bridge")} />
     </div>
-  );
+  ) : null;
 
   const voidPayment = async (row) => {
     if (readOnly) {
@@ -139,8 +142,8 @@ export default function TaxDashboard() {
       <div className="bizzy-page-width bizzy-page-width--workspace min-w-0 pt-0 pb-2">
         <ModuleHeader
           module="tax"
-          title="Tax"
-          subtitle="Track your projected tax obligation, upcoming deadlines, payments, and deductions in one place."
+          title="Tax deductions"
+          subtitle="Review QBO GL-driven deductions now. Quarterly tax estimates are coming soon."
           className="flex-1"
         />
       </div>
@@ -162,31 +165,9 @@ export default function TaxDashboard() {
                 </div>
               </div>
             ) : null}
-            {tax.error ? (
+            {taxLiabilityEstimateEnabled && tax.error ? (
               <ErrorPanel error={tax.error} onRetry={tax.refetch} hasPreviousData={hasPreviousData} />
             ) : null}
-
-            <TaxTrendCard
-              data={model.trend}
-              summary={trendSummary}
-              taxYear={model.header.taxYear || taxYear}
-              asOfDate={model.header.asOfDate}
-              payments={tax.payments}
-              reserve={tax.reserve}
-              deadlines={tax.deadlines}
-              explanation={tax.explanationSummary?.primarySummary || tax.explanationSummary?.summary || null}
-              loading={tax.refreshing}
-              error={tax.error && hasPreviousData ? tax.error.message : ""}
-              source={tax.isDemo ? "demo" : "live"}
-              surfaceReadiness={model.surfaceReadiness}
-              onRecordPayment={() => {
-                if (readOnly) setSetupNotice("Tax payment changes are unavailable in read-only Admin View.");
-                else setPaymentModalOpen(true);
-              }}
-              onViewCalculation={viewCalculation}
-              headerActions={headerControls}
-            />
-            <CalculationPreview workpaper={tax.data?.workpaper} onViewCalculation={() => viewCalculation("total_tax_components")} />
 
             <section id="tax-deductions-matrix">
               <TaxDashboardDeductions
@@ -194,9 +175,37 @@ export default function TaxDashboard() {
                 year={taxYear}
                 readOnly={readOnly}
                 onNotice={setSetupNotice}
-                onClassificationComplete={tax.refetch}
+                onClassificationComplete={taxLiabilityEstimateEnabled ? tax.refetch : null}
               />
             </section>
+
+            {taxLiabilityEstimateEnabled ? (
+              <>
+                <TaxTrendCard
+                  data={model.trend}
+                  summary={trendSummary}
+                  taxYear={model.header.taxYear || taxYear}
+                  asOfDate={model.header.asOfDate}
+                  payments={tax.payments}
+                  reserve={tax.reserve}
+                  deadlines={tax.deadlines}
+                  explanation={tax.explanationSummary?.primarySummary || tax.explanationSummary?.summary || null}
+                  loading={tax.refreshing}
+                  error={tax.error && hasPreviousData ? tax.error.message : ""}
+                  source={tax.isDemo ? "demo" : "live"}
+                  surfaceReadiness={model.surfaceReadiness}
+                  onRecordPayment={() => {
+                    if (readOnly) setSetupNotice("Tax payment changes are unavailable in read-only Admin View.");
+                    else setPaymentModalOpen(true);
+                  }}
+                  onViewCalculation={viewCalculation}
+                  headerActions={headerControls}
+                />
+                <CalculationPreview workpaper={tax.data?.workpaper} onViewCalculation={() => viewCalculation("total_tax_components")} />
+              </>
+            ) : (
+              <TaxLiabilityComingSoonCard />
+            )}
           </>
         )}
       </main>
@@ -209,7 +218,7 @@ export default function TaxDashboard() {
         overview={tax.data}
         initialStepId={setupWorkflow.initialStepId}
         onSaved={tax.refetch}
-        onSaveAndCalculate={tax.refreshCalculation}
+        onSaveAndCalculate={taxLiabilityEstimateEnabled ? tax.refreshCalculation : undefined}
       /> : null}
       {!readOnly ? <TaxProfileModal
         open={profileOpen}
@@ -3235,7 +3244,7 @@ function DashboardSkeleton({ slow = false }) {
               <p className="mt-1 text-sm leading-6 text-white/56">
                 {slow
                   ? "This is taking longer than expected. You can stay here or return shortly."
-                  : "Fetching your profile, transactions, deductions, and estimate."}
+                  : "Fetching your profile, transactions, and deductions."}
               </p>
             </div>
           </div>
@@ -3289,7 +3298,7 @@ function ErrorPanel({ error, onRetry, hasPreviousData }) {
         <div className="inline-flex items-start gap-2">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
-            {hasPreviousData ? "Refresh failed. Keeping the last calculation on screen." : "We couldn’t load your tax overview."} {error?.message || ""}
+            {hasPreviousData ? "Refresh failed. Keeping the last Tax view on screen." : "We couldn’t load your tax workspace."} {error?.message || ""}
           </span>
         </div>
         <button type="button" onClick={onRetry} className="rounded-full border border-white/12 bg-black/18 px-3 py-1.5 font-semibold text-white/82 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-rose-200/40">

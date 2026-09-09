@@ -15,6 +15,7 @@ import AccountingDashboard from "./pages/accounting/AccountingDashboard";
 import MarketingDashboard from "./pages/Marketing/MarketingDashboard";
 import TaxDashboard from "./pages/Tax/TaxDashboard";
 import TaxCalculationWorkpaper from "./pages/Tax/TaxCalculationWorkpaper.jsx";
+import TaxLiabilityComingSoonCard from "./components/Tax/TaxLiabilityComingSoonCard.jsx";
 import BizzyPanel from "./pages/Bizzy/BizzyPanel";
 import ChatHome from "./pages/Bizzy/ChatHome.jsx";
 
@@ -54,6 +55,7 @@ import AdminLogin from "./pages/Admin/AdminLogin.jsx";
 import AdminViewRedeem from "./pages/AdminView/AdminViewRedeem.jsx";
 import AdminProtectedRoute from "./components/Admin/AdminProtectedRoute.jsx";
 import { getAdminRoutePath, getCurrentApplicationSurface } from "./utils/applicationSurface.js";
+import { isTaxLiabilityEstimateEnabled } from "./config/taxFeatures.js";
 
 const AffordabilityPage = React.lazy(() => import("./pages/accounting/Affordability.jsx"));
 const ScenariosPage = React.lazy(() => import("./pages/accounting/Scenarios.jsx"));
@@ -184,6 +186,19 @@ function ScenariosPageWrapper() {
     <React.Suspense fallback={<div className="p-6 text-white/70">Loading…</div>}>
       <ScenariosPage businessId={businessId} userId={userId} />
     </React.Suspense>
+  );
+}
+
+function TaxCalculationRouteBoundary() {
+  if (isTaxLiabilityEstimateEnabled()) {
+    return <TaxCalculationWorkpaper />;
+  }
+  return (
+    <div className="min-h-screen bg-app text-primary">
+      <div className="bizzy-page-width bizzy-page-width--workspace flex min-h-screen items-center py-10">
+        <TaxLiabilityComingSoonCard className="w-full" />
+      </div>
+    </div>
   );
 }
 
@@ -321,7 +336,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 
               {/* Tax */}
               <Route path="tax" element={<TaxDashboard />} />
-              <Route path="tax/calculation" element={<TaxCalculationWorkpaper />} />
+              <Route path="tax/calculation" element={<TaxCalculationRouteBoundary />} />
               <Route path="tax/deductions" element={<Navigate to="/dashboard/tax" replace />} />
 
               {/* Calendar */}

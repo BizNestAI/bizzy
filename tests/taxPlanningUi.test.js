@@ -203,12 +203,13 @@ test("Tax Dashboard deductions preview renders a QuickBooks account by month mat
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /buildDeductionAccountMatrix/);
   assert.match(dashboard, /QuickBooks account/);
-  assert.match(dashboard, /Deductible totals by tax category from posted QuickBooks expense transactions/);
+  assert.match(dashboard, /Deductible totals by QBO GL account from posted QuickBooks expense transactions/);
   assert.match(dashboard, /Plaid transaction/);
-  assert.match(dashboard, /Expense total/);
+  assert.match(dashboard, /Total expenses/);
   assert.match(dashboard, /Deductible amount/);
   assert.match(dashboard, /posted QuickBooks GL accounts/);
-  assert.match(dashboard, /Cells show deductible amount, not gross spend/);
+  assert.match(dashboard, /Automatic deductions/);
+  assert.match(dashboard, /Proposed — needs review/);
   assert.match(dashboard, /fixed bottom-0 left-0 right-0 top-0 z-\[90\]/);
   assert.match(dashboard, /accountKey/);
   assert.match(dashboard, /qboAccountId/);
