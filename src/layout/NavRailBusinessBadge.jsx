@@ -1,5 +1,6 @@
 // src/layout/NavRailBusinessBadge.jsx
 import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "../services/supabaseClient";
 import { useBusiness } from "../context/BusinessContext";
 import { useAdminView } from "../context/AdminViewContext.jsx";
@@ -130,7 +131,7 @@ export default function NavRailBusinessBadge() {
       top: clampTop,
       maxHeight,
       transform: "none",
-      zIndex: 20,
+      zIndex: 100000,
     });
   }, []);
 
@@ -146,16 +147,6 @@ export default function NavRailBusinessBadge() {
     };
   }, [open, updateTooltipPos]);
 
-  // Keep a stable top across re-enters if already measured
-  useEffect(() => {
-    if (!open || !tooltipRef.current || !tooltipPos) return;
-    const measuredTop = tooltipPos.top;
-    setTooltipPos((prev) => {
-      if (!prev) return prev;
-      return { ...prev, top: measuredTop };
-    });
-  }, [open]);
-
   return (
     <div className="relative bizzy-business-badge" style={{ pointerEvents: "auto" }}>
       <button
@@ -167,7 +158,6 @@ export default function NavRailBusinessBadge() {
         }}
         disabled={adminView.active}
         className="w-8 h-8 rounded-full backdrop-blur-sm text-[11px] font-semibold tracking-wide flex items-center justify-center transition hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/30"
-        title={adminView.active ? `${label} · Admin View business is fixed` : label}
         aria-label={adminView.active ? `${label} Admin View business is fixed` : label}
         style={{
           backgroundColor: "var(--input-bg)",
@@ -181,21 +171,24 @@ export default function NavRailBusinessBadge() {
       >
         {initials}
       </button>
-      <div
-        role="tooltip"
-        className="absolute left-full bottom-0 ml-3 transition bizzy-business-badge-tooltip"
-        ref={tooltipRef}
-        style={{
-          transform: tooltipPos?.transform || "translateY(-8px) translateX(-6px)",
-          zIndex: tooltipPos?.zIndex || 20,
-          maxHeight: tooltipPos?.maxHeight || "70vh",
-          opacity: open ? 1 : 0,
-          pointerEvents: open ? "auto" : "none",
-          left: tooltipPos?.left,
-          top: tooltipPos?.top,
-          position: tooltipPos?.position || "absolute",
-        }}
-      >
+      {typeof document !== "undefined" ? createPortal(
+        <div
+          role="tooltip"
+          className="bizzy-business-badge-tooltip"
+          ref={tooltipRef}
+          onMouseEnter={openTooltip}
+          onMouseLeave={closeTooltip}
+          style={{
+            transform: tooltipPos?.transform || "translateY(-8px) translateX(-6px)",
+            zIndex: tooltipPos?.zIndex || 100000,
+            maxHeight: tooltipPos?.maxHeight || "70vh",
+            opacity: open ? 1 : 0,
+            pointerEvents: open ? "auto" : "none",
+            left: tooltipPos?.left,
+            top: tooltipPos?.top,
+            position: tooltipPos?.position || "fixed",
+          }}
+        >
         <div
           className="min-w-[240px] max-w-[280px] rounded-2xl border backdrop-blur-lg shadow-[0_14px_38px_rgba(0,0,0,0.50)] px-3.5 py-3 pointer-events-auto space-y-2.5"
           style={{
@@ -240,7 +233,9 @@ export default function NavRailBusinessBadge() {
             </div>
           </div>
         </div>
-      </div>
+        </div>,
+        document.body
+      ) : null}
     </div>
   );
 }

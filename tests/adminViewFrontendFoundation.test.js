@@ -103,6 +103,16 @@ test("customer business switch affordance is fixed in Admin View", () => {
   assert.match(navRailBusinessBadgeSource, /Admin View business is fixed/);
 });
 
+test("business badge tooltip is portaled above the dashboard chat dock", () => {
+  const globalCss = read("src/index.css");
+  assert.match(navRailBusinessBadgeSource, /import \{ createPortal \} from "react-dom"/);
+  assert.match(navRailBusinessBadgeSource, /createPortal\(/);
+  assert.match(navRailBusinessBadgeSource, /document\.body/);
+  assert.match(navRailBusinessBadgeSource, /zIndex: 100000/);
+  assert.doesNotMatch(navRailBusinessBadgeSource, /title=\{adminView\.active \?/);
+  assert.match(globalCss, /\.bizzy-business-badge-tooltip[\s\S]*z-index: 100000/);
+});
+
 test("normal customer paths remain present when Admin View is inactive", () => {
   assert.match(businessContextSource, /localStorage\.getItem\("currentBusinessId"\)/);
   assert.match(businessContextSource, /\.from\("business_profiles"\)/);
