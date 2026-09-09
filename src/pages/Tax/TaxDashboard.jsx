@@ -497,7 +497,9 @@ function resolveOverviewStatus(model, isDemo) {
 
 function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice = null, onClassificationComplete = null }) {
   const [selectedCell, setSelectedCell] = useState(null);
+  const [workspaceView, setWorkspaceView] = useState("overview");
   const [classificationTab, setClassificationTab] = useState("all");
+  const [attentionTab, setAttentionTab] = useState("needs_review");
   const [backfillPreview, setBackfillPreview] = useState(null);
   const [backfillLoading, setBackfillLoading] = useState(false);
   const [backfillError, setBackfillError] = useState("");
@@ -514,18 +516,25 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const canPrepareDeductions = prepareEligibility.enabled;
   const workspaceRows = useMemo(() => buildClassificationWorkspaceRows(deductions), [deductions]);
   const filteredWorkspaceRows = useMemo(() => filterClassificationWorkspaceRows(workspaceRows, classificationTab), [workspaceRows, classificationTab]);
+  const attentionCounts = useMemo(() => buildAttentionCounts(workspaceRows), [workspaceRows]);
+  const attentionRows = useMemo(() => filterAttentionWorkspaceRows(workspaceRows, attentionTab), [workspaceRows, attentionTab]);
   const initialDeductionsLoading = deductions.loading && !deductions.overview && !deductions.postedTransactions && !deductions.classificationCoverage;
   const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
   const matrix = useMemo(
     () => {
-      if (classificationsRequired || initialDeductionsLoading) return buildDeductionAccountMatrix([], year, { isDemo: deductions.isDemo });
-      const rows = classificationTab === "all" ? workspaceRows : filteredWorkspaceRows;
-      return buildDeductionAccountMatrix(rows, year, { isDemo: deductions.isDemo, scope: classificationTab });
+      if (initialDeductionsLoading) return buildDeductionAccountMatrix([], year, { isDemo: deductions.isDemo });
+      return buildDeductionAccountMatrix(workspaceRows, year, { isDemo: deductions.isDemo, scope: "overview" });
     },
-    [classificationTab, classificationsRequired, deductions.isDemo, filteredWorkspaceRows, initialDeductionsLoading, workspaceRows, year]
+    [deductions.isDemo, initialDeductionsLoading, workspaceRows, year]
   );
+  const matrixTotals = useMemo(() => buildMatrixAuthorityTotals(matrix), [matrix]);
   const deductionsMessage = initialDeductionsLoading
-    ? "Loading posted QuickBooks transactions, GL mappings, and classification status."
+    ? (
+      <span className="inline-flex items-baseline gap-1">
+        <span>Loading posted QuickBooks transactions, GL mappings, and classification status</span>
+        <LoadingEllipsis />
+      </span>
+    )
     : classificationsRequired
     ? previewStatusMessage
     : "Deductible totals by QBO GL account from posted QuickBooks expense transactions. Click a month amount to inspect the Plaid transactions behind it.";
@@ -567,7 +576,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       await deductions.prepareDeductions({ limit: 100 });
       setBackfillPreview(null);
       onNotice?.("Deductions preparation started.");
-      dispatchBizziToast("Deductions preparation started.", "Bizzi is classifying your posted QuickBooks transactions.");
     } catch (err) {
       setBackfillError(err?.message || "Could not start tax classification.");
     } finally {
@@ -594,7 +602,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
     lastTerminalJobRef.current = key;
     if (job.status === "failed") return;
     onNotice?.("Deductions preparation complete.");
-    dispatchBizziToast("Deductions preparation complete.", job.needsReview > 0 ? "Review tax items that need more context." : "Your deductions are organized.");
     onClassificationComplete?.();
   }, [classificationSummary.jobStatus, onClassificationComplete, onNotice]);
 
@@ -683,89 +690,57 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
         </div>
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
-        {matrix.accounts.length ? (
-          <div className="max-w-full overflow-x-auto">
-            <table className="min-w-[1040px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
-                  <th className="sticky left-0 z-10 w-[260px] bg-[#111614] px-3 py-3 text-left font-semibold">QBO GL account</th>
-                  {matrix.months.map((month) => (
-                    <th key={month.key} className="w-[68px] px-2 py-3 text-right font-semibold">{month.shortLabel}</th>
-                  ))}
-                  <th className="w-[104px] px-3 py-3 text-right font-semibold">YTD</th>
-                </tr>
-              </thead>
-              <tbody>
-                {matrix.accounts.map((account) => (
-                  <tr key={account.key} className="border-b border-white/[0.06] last:border-b-0">
-                    <th className="sticky left-0 z-10 bg-[#111614] px-3 py-3 text-left align-middle">
-                      <div className="truncate text-sm font-semibold text-white/82">{account.name}</div>
-                      <div className="mt-0.5 text-xs font-normal text-white/42">{account.transactionCount} transactions · {account.sourceLabel}</div>
-                    </th>
-                    {matrix.months.map((month) => {
-                      const cell = account.months[month.key];
-                      const hasTransactions = cell.transactions.length > 0;
-                      return (
-                        <td key={month.key} className="px-1.5 py-2 text-right align-middle">
-                          {hasTransactions ? (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedCell({ account, month, cell })}
-                              className="w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50 transition hover:border-emerald-200/30 hover:bg-emerald-300/[0.11] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
-                              title={`${account.name}, ${month.longLabel}${cell.proposedDeductibleTotal > 0 ? `, ${formatCurrencyLocal(cell.proposedDeductibleTotal)} proposed` : ""}`}
-                            >
-                              {formatCurrencyLocal(cell.displayDeductibleTotal)}
-                            </button>
-                          ) : (
-                            <span className="block px-2 py-1.5 text-[12px] text-white/22">—</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                    <td className="px-3 py-3 text-right align-middle text-sm font-semibold tabular-nums text-white">
-                      {formatCurrencyLocal(account.displayDeductibleTotal)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="px-4 py-8 text-center text-sm text-white/54">
-            {classificationsRequired
-              ? "Deductible totals stay unavailable until transaction tax treatment is reviewed."
-              : "No posted QuickBooks expense category totals are available yet."}
-          </div>
-        )}
-      </div>
+      <WorkspaceViewTabs value={workspaceView} onChange={setWorkspaceView} />
 
-      <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
-        <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Tax classification filters">
-            {CLASSIFICATION_TABS.map((tab) => (
-              <button
-                key={tab.value}
-                type="button"
-                role="tab"
-                aria-selected={classificationTab === tab.value}
-                onClick={() => setClassificationTab(tab.value)}
-                className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-emerald-300/35 ${
-                  classificationTab === tab.value
-                    ? "border-emerald-300/28 bg-emerald-300/[0.13] text-emerald-50"
-                    : "border-white/10 bg-white/[0.035] text-white/58 hover:bg-white/[0.07] hover:text-white/78"
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
+      {workspaceView === "overview" ? (
+        <>
+          <MatrixAuthoritySummary totals={matrixTotals} transactionCount={matrix.transactionCount} />
+          <DeductionAccountMatrix
+            matrix={matrix}
+            classificationsRequired={classificationsRequired}
+            onSelectCell={setSelectedCell}
+          />
+        </>
+      ) : workspaceView === "needs_attention" ? (
+        <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
+          <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Needs attention filters">
+              {ATTENTION_TABS.map((tab) => (
+                <FilterTabButton
+                  key={tab.value}
+                  tab={tab}
+                  selected={attentionTab === tab.value}
+                  count={attentionCounts[tab.value] || 0}
+                  onClick={() => setAttentionTab(tab.value)}
+                />
+              ))}
+            </div>
+            <div className="text-xs text-white/40">
+              {attentionRows.length} of {attentionCounts.all} attention rows shown
+            </div>
           </div>
-          <div className="text-xs text-white/40">
-            {filteredWorkspaceRows.length} of {workspaceRows.length} transaction rows shown
-          </div>
+          <ClassificationWorkspaceTable rows={attentionRows} loading={deductions.loading} emptyMessage={attentionEmptyMessage(attentionTab)} />
         </div>
-        <ClassificationWorkspaceTable rows={filteredWorkspaceRows} loading={deductions.loading} />
-      </div>
+      ) : (
+        <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
+          <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Tax classification filters">
+              {CLASSIFICATION_TABS.map((tab) => (
+                <FilterTabButton
+                  key={tab.value}
+                  tab={tab}
+                  selected={classificationTab === tab.value}
+                  onClick={() => setClassificationTab(tab.value)}
+                />
+              ))}
+            </div>
+            <div className="text-xs text-white/40">
+              {filteredWorkspaceRows.length} of {workspaceRows.length} transaction rows shown
+            </div>
+          </div>
+          <ClassificationWorkspaceTable rows={filteredWorkspaceRows} loading={deductions.loading} />
+        </div>
+      )}
 
       <ClassificationBackfillPreviewModal
         preview={backfillPreview}
@@ -777,7 +752,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       />
 
       <div className="mt-3 flex flex-col gap-2 text-xs text-white/45 sm:flex-row sm:items-center sm:justify-between">
-        <span>{classificationsRequired ? "No deduction total is shown until classification authority exists." : "Cells show deductible amount, not gross spend."}</span>
+        <span>{workspaceView === "overview" ? "Automatic deduction totals exclude proposed review-required amounts." : "No deduction total is shown until classification authority exists."}</span>
         <span>{classificationsRequired ? formatClassificationSummaryLine(classificationSummary) : matrix.transactionCount ? `${matrix.transactionCount} posted expense transactions loaded` : "Transaction detail loads from posted QuickBooks expense data."}</span>
       </div>
 
@@ -800,6 +775,180 @@ const CLASSIFICATION_TABS = [
   { value: "excluded", label: "Excluded" },
   { value: "unclassified", label: "Unclassified" },
 ];
+
+const WORKSPACE_VIEW_TABS = [
+  { value: "overview", label: "Deductions overview" },
+  { value: "needs_attention", label: "Needs attention" },
+  { value: "all_transactions", label: "All transactions" },
+];
+
+const ATTENTION_TABS = [
+  { value: "needs_review", label: "Needs review" },
+  { value: "unclassified", label: "Unclassified" },
+  { value: "failed", label: "Failed" },
+];
+
+function WorkspaceViewTabs({ value, onChange }) {
+  return (
+    <div className="mt-5 flex flex-wrap gap-1.5" role="tablist" aria-label="Deductions workspace views">
+      {WORKSPACE_VIEW_TABS.map((tab) => (
+        <button
+          key={tab.value}
+          type="button"
+          role="tab"
+          aria-selected={value === tab.value}
+          onClick={() => onChange(tab.value)}
+          className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-emerald-300/35 ${
+            value === tab.value
+              ? "border-emerald-300/28 bg-emerald-300/[0.13] text-emerald-50"
+              : "border-white/10 bg-white/[0.035] text-white/58 hover:bg-white/[0.07] hover:text-white/78"
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FilterTabButton({ tab, selected, count = null, onClick }) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1.5 text-[12px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-emerald-300/35 ${
+        selected
+          ? "border-emerald-300/28 bg-emerald-300/[0.13] text-emerald-50"
+          : "border-white/10 bg-white/[0.035] text-white/58 hover:bg-white/[0.07] hover:text-white/78"
+      }`}
+    >
+      {tab.label}{count != null ? <span className="ml-1.5 text-white/42">{count}</span> : null}
+    </button>
+  );
+}
+
+function MatrixAuthoritySummary({ totals, transactionCount }) {
+  return (
+    <div className="mt-4 grid gap-2 md:grid-cols-3">
+      <div className="rounded-2xl border border-emerald-300/12 bg-emerald-300/[0.045] px-3 py-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-emerald-100/54">Automatic deductions</div>
+        <div className="mt-1 text-xl font-semibold tabular-nums text-emerald-50">{formatCurrencyLocal(totals.authoritativeDeductibleTotal)}</div>
+        <div className="mt-0.5 text-xs text-white/42">{totals.autoTransactionCount} auto-classified transactions</div>
+      </div>
+      <div className="rounded-2xl border border-amber-300/14 bg-amber-300/[0.045] px-3 py-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-amber-100/58">Proposed — needs review</div>
+        <div className="mt-1 text-xl font-semibold tabular-nums text-amber-100">{formatCurrencyLocal(totals.proposedDeductibleTotal)}</div>
+        <div className="mt-0.5 text-xs text-white/42">{totals.reviewTransactionCount} review-required transactions</div>
+      </div>
+      <div className="rounded-2xl border border-white/[0.08] bg-black/16 px-3 py-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-white/42">Matrix scope</div>
+        <div className="mt-1 text-xl font-semibold tabular-nums text-white">{transactionCount}</div>
+        <div className="mt-0.5 text-xs text-white/42">posted expense rows grouped by QBO GL account</div>
+      </div>
+    </div>
+  );
+}
+
+function DeductionAccountMatrix({ matrix, classificationsRequired, onSelectCell }) {
+  return (
+    <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
+      {matrix.accounts.length ? (
+        <div className="max-w-full overflow-x-auto">
+          <table className="min-w-[1120px] border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
+                <th className="sticky left-0 z-10 w-[282px] bg-[#111614] px-3 py-3 text-left font-semibold">QBO GL account</th>
+                {matrix.months.map((month) => (
+                  <th key={month.key} className="w-[68px] px-2 py-3 text-right font-semibold">{month.shortLabel}</th>
+                ))}
+                <th className="w-[128px] px-3 py-3 text-right font-semibold">YTD</th>
+              </tr>
+            </thead>
+            <tbody>
+              {matrix.accounts.map((account) => (
+                <tr key={account.key} className="border-b border-white/[0.06] last:border-b-0">
+                  <th className="sticky left-0 z-10 bg-[#111614] px-3 py-3 text-left align-middle">
+                    <div className="truncate text-sm font-semibold text-white/82">{account.name}</div>
+                    <div className="mt-0.5 truncate text-xs font-normal text-white/42">{account.transactionCount} transactions · {account.sourceLabel}</div>
+                  </th>
+                  {matrix.months.map((month) => (
+                    <td key={month.key} className="px-1.5 py-2 text-right align-middle">
+                      <MatrixCell account={account} month={month} cell={account.months[month.key]} onSelectCell={onSelectCell} />
+                    </td>
+                  ))}
+                  <td className="px-3 py-3 text-right align-middle text-sm tabular-nums">
+                    <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.authoritativeDeductibleTotal)}</div>
+                    {account.reviewTransactionCount > 0 ? (
+                      <div className="mt-1 text-[11px] font-semibold text-amber-100/76">
+                        {account.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(account.proposedDeductibleTotal)} proposed` : "Review"}
+                      </div>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="px-4 py-8 text-center text-sm text-white/54">
+          {classificationsRequired
+            ? "Deduction totals stay unavailable until transaction tax treatment is reviewed."
+            : "No posted QuickBooks expense category totals are available yet."}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MatrixCell({ account, month, cell, onSelectCell }) {
+  if (!cell?.transactions?.length) {
+    return <span className="block px-2 py-1.5 text-[12px] text-white/22">—</span>;
+  }
+  const openCell = (authority) => {
+    const transactions = authority === "automatic"
+      ? cell.transactions.filter((row) => classificationBucket(row) === "auto_classified")
+      : cell.transactions.filter((row) => classificationBucket(row) === "needs_review");
+    if (!transactions.length) return;
+    onSelectCell({
+      account,
+      month,
+      cell: {
+        ...cell,
+        transactions,
+        selectedAuthority: authority,
+        expenseTotal: transactions.reduce((sum, row) => sum + normalizeMoney(row.amount), 0),
+        authoritativeDeductibleTotal: authority === "automatic" ? transactions.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0) : 0,
+        proposedDeductibleTotal: authority === "proposed" ? transactions.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0) : 0,
+      },
+    });
+  };
+  return (
+    <div className="flex flex-col items-stretch gap-1">
+      {cell.autoTransactionCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => openCell("automatic")}
+          className="w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50 transition hover:border-emerald-200/30 hover:bg-emerald-300/[0.11] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
+          title={`${account.name}, ${month.longLabel}, automatic deductions`}
+        >
+          {formatCurrencyLocal(cell.authoritativeDeductibleTotal)}
+        </button>
+      ) : null}
+      {cell.reviewTransactionCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => openCell("proposed")}
+          className="w-full rounded-lg border border-amber-300/10 bg-amber-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-amber-100 transition hover:border-amber-200/30 hover:bg-amber-300/[0.11] focus:outline-none focus:ring-2 focus:ring-amber-300/30"
+          title={`${account.name}, ${month.longLabel}, proposed needs-review amounts`}
+        >
+          {cell.proposedDeductibleTotal > 0 ? formatCurrencyLocal(cell.proposedDeductibleTotal) : "Review"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 function DeductionsLoadingState() {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug"];
@@ -885,6 +1034,16 @@ function DeductionsLoadingState() {
         </div>
       </div>
     </div>
+  );
+}
+
+function LoadingEllipsis() {
+  return (
+    <span className="inline-flex w-5 items-baseline justify-start gap-[1px] text-emerald-200" aria-hidden="true">
+      <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "0ms" }}>.</span>
+      <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "120ms" }}>.</span>
+      <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "240ms" }}>.</span>
+    </span>
   );
 }
 
@@ -974,7 +1133,7 @@ function ClassificationProgressSummary({ summary }) {
   );
 }
 
-function ClassificationWorkspaceTable({ rows, loading }) {
+function ClassificationWorkspaceTable({ rows, loading, emptyMessage = "No transactions match this classification view." }) {
   if (loading && !rows.length) {
     return (
       <div className="px-4 py-7 text-center text-sm text-white/50">
@@ -985,7 +1144,7 @@ function ClassificationWorkspaceTable({ rows, loading }) {
   if (!rows.length) {
     return (
       <div className="px-4 py-7 text-center text-sm text-white/50">
-        No transactions match this classification view.
+        {emptyMessage}
       </div>
     );
   }
@@ -1334,6 +1493,33 @@ function filterClassificationWorkspaceRows(rows, tab) {
   return rows.filter((row) => row.classificationBucket === tab);
 }
 
+function buildAttentionCounts(rows) {
+  const counts = { all: 0, needs_review: 0, unclassified: 0, failed: 0 };
+  for (const row of rows) {
+    if (row.classificationBucket === "needs_review") {
+      counts.needs_review += 1;
+      counts.all += 1;
+    } else if (row.classificationBucket === "unclassified") {
+      counts.unclassified += 1;
+      counts.all += 1;
+    } else if (row.classificationBucket === "failed") {
+      counts.failed += 1;
+      counts.all += 1;
+    }
+  }
+  return counts;
+}
+
+function filterAttentionWorkspaceRows(rows, tab) {
+  return rows.filter((row) => row.classificationBucket === tab);
+}
+
+function attentionEmptyMessage(tab) {
+  if (tab === "unclassified") return "No unclassified transactions need attention.";
+  if (tab === "failed") return "No failed classification rows need attention.";
+  return "No review-required transactions need attention.";
+}
+
 function classificationWorkspaceMessage(summary) {
   if (summary.jobStatus?.status === "queued") {
     return "Deductions preparation is queued.";
@@ -1395,13 +1581,6 @@ function formatRelativeRefreshTime(value) {
   return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
 }
 
-function dispatchBizziToast(title, body) {
-  if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
-  window.dispatchEvent(new CustomEvent("bizzy:toast", {
-    detail: { title, body, module: "tax", severity: "info" },
-  }));
-}
-
 function normalizeRows(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -1409,6 +1588,7 @@ function normalizeRows(value) {
 function classificationBucket(row) {
   const status = String(row?.status || row?.classificationStatus || row?.classification_status || "").trim().toLowerCase();
   const treatment = String(row?.taxTreatment || row?.deductibilityStatus || "").trim().toLowerCase();
+  if (status === "failed" || status === "classification_failed") return "failed";
   if (status === "unclassified" || status === "unsupported" || !status) return "unclassified";
   if (status === "auto_classified" || status === "system_confirmed") return "auto_classified";
   if (status === "excluded" || treatment === "excluded") return "excluded";
@@ -1417,6 +1597,7 @@ function classificationBucket(row) {
 }
 
 function classificationStatusClass(bucket) {
+  if (bucket === "failed") return "border-rose-300/20 bg-rose-400/[0.08] text-rose-100";
   if (bucket === "needs_review") return "border-amber-300/20 bg-amber-300/[0.08] text-amber-50";
   if (bucket === "excluded") return "border-white/12 bg-white/[0.055] text-white/58";
   if (bucket === "unclassified") return "border-white/12 bg-white/[0.045] text-white/62";
@@ -1424,6 +1605,7 @@ function classificationStatusClass(bucket) {
 }
 
 function classificationStatusLabel(bucket, row) {
+  if (bucket === "failed") return "Failed";
   if (bucket === "needs_review") return "Needs review";
   if (bucket === "excluded") return "Excluded";
   if (bucket === "unclassified") return "Unclassified";
@@ -1434,18 +1616,24 @@ function deductibilityLabel(row) {
   if (classificationBucket(row) === "unclassified") {
     return row.taxTreatment === "not_determined" ? "Not determined" : "Pending classification";
   }
-  const value = String(row?.taxTreatmentLabel || row?.deductibilityStatus || row?.taxTreatment || "").toLowerCase();
-  if (value.includes("full")) return "Fully deductible";
-  if (value.includes("partial")) return "Partially deductible";
-  if (value.includes("non")) return "Nondeductible";
-  if (value.includes("capital")) return "Capitalization review";
-  if (value.includes("exclude")) return "Excluded";
-  return row?.requiresReview ? "Needs review" : "Treatment pending";
+  const bucket = classificationBucket(row);
+  const status = String(row?.deductibilityStatus || row?.taxTreatment || "").toLowerCase();
+  const label = String(row?.taxTreatmentLabel || "").toLowerCase();
+  const percent = row?.deductiblePercent == null || Number.isNaN(Number(row.deductiblePercent)) ? null : Number(row.deductiblePercent);
+  if (bucket === "needs_review" && percent === 0) return "Depends on business use";
+  if (status === "fully_deductible" || label === "deductible" || label.includes("fully deductible") || (bucket === "auto_classified" && percent === 100)) return "Fully deductible";
+  if (status === "partially_deductible" || label.includes("partial")) return "Partially deductible";
+  if (status.includes("non") || label.includes("non")) return "Nondeductible";
+  if (status.includes("capital") || label.includes("capital")) return "Capitalization review";
+  if (status.includes("exclude") || label.includes("exclude")) return "Excluded";
+  return row?.requiresReview ? "Review" : "Fully deductible";
 }
 
 function deductiblePercentLabel(row) {
   if (classificationBucket(row) === "unclassified") return "";
   if (row?.deductiblePercent == null || Number.isNaN(Number(row.deductiblePercent))) return "Percent pending";
+  if (classificationBucket(row) === "needs_review" && Number(row.deductiblePercent) === 0) return "Review required";
+  if (classificationBucket(row) === "needs_review") return `${Math.round(Number(row.deductiblePercent))}% proposed`;
   return `${Math.round(Number(row.deductiblePercent))}% deductible`;
 }
 
@@ -1595,7 +1783,9 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
                 {account.sourceLabel}
               </span>
             </div>
-            <div className="mt-1 text-xs text-white/54">{month.longLabel} · QBO GL account from posted QuickBooks expenses</div>
+            <div className="mt-1 text-xs text-white/54">
+              {month.longLabel} · {cell.selectedAuthority === "proposed" ? "Proposed needs-review amounts" : "Automatic deductions"} · QBO GL account from posted QuickBooks expenses
+            </div>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/54">
               Sourced from posted QuickBooks GL accounts and Plaid transaction detail. Deductible amounts come from Bizzi deduction rules and tax classification logic.
             </p>
@@ -1629,13 +1819,15 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
             </div>
           ) : null}
           {cell.transactions.length ? (
-            <table className="w-full min-w-[780px] border-collapse text-xs">
+            <table className="w-full min-w-[920px] border-collapse text-xs">
               <thead>
                 <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
                   <th className="py-2 pr-3 text-left font-semibold">Date</th>
                   <th className="px-3 py-2 text-left font-semibold">Vendor</th>
                   <th className="px-3 py-2 text-right font-semibold">Expense total</th>
                   <th className="px-3 py-2 text-right font-semibold">Deductible amount</th>
+                  <th className="px-3 py-2 text-left font-semibold">Percent</th>
+                  <th className="px-3 py-2 text-left font-semibold">Status</th>
                   <th className="py-2 pl-3 text-left font-semibold">Tax category</th>
                 </tr>
               </thead>
@@ -1662,6 +1854,12 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
                             <div className="text-xs text-white/38">{formatDeductiblePercent(row.deductiblePercent)}</div>
                           </>
                         )}
+                      </td>
+                      <td className="px-3 py-2.5 text-white/62">{deductiblePercentLabel(row)}</td>
+                      <td className="px-3 py-2.5">
+                        <span className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-semibold ${classificationStatusClass(row.classificationBucket)}`}>
+                          {row.statusLabel}
+                        </span>
                       </td>
                       <td className="py-2.5 pl-3">
                         {needsReview ? (
@@ -1933,6 +2131,8 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     authoritativeDeductibleTotal: 0,
     proposedDeductibleTotal: 0,
     displayDeductibleTotal: 0,
+    autoTransactionCount: 0,
+    reviewTransactionCount: 0,
     transactions: [],
   }]));
   const accountMap = new Map();
@@ -1962,6 +2162,8 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
         proposedDeductibleTotal: 0,
         displayDeductibleTotal: 0,
         transactionCount: 0,
+        autoTransactionCount: 0,
+        reviewTransactionCount: 0,
       });
     }
     const account = accountMap.get(accountKey);
@@ -1976,21 +2178,42 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     month.authoritativeDeductibleTotal += authoritativeAmount;
     month.proposedDeductibleTotal += proposedAmount;
     month.displayDeductibleTotal += displayAmount;
+    if (bucket === "auto_classified") month.autoTransactionCount += 1;
+    if (bucket === "needs_review") month.reviewTransactionCount += 1;
     month.transactions.push(row);
     account.expenseTotal += expenseAmount;
     account.authoritativeDeductibleTotal += authoritativeAmount;
     account.proposedDeductibleTotal += proposedAmount;
     account.displayDeductibleTotal += displayAmount;
     account.transactionCount += 1;
+    if (bucket === "auto_classified") account.autoTransactionCount += 1;
+    if (bucket === "needs_review") account.reviewTransactionCount += 1;
   }
 
   return {
     months,
     accounts: Array.from(accountMap.values())
       .filter((account) => account.expenseTotal > 0)
-      .sort((a, b) => b.displayDeductibleTotal - a.displayDeductibleTotal || a.name.localeCompare(b.name)),
+      .sort((a, b) => (
+        (b.authoritativeDeductibleTotal + b.proposedDeductibleTotal) -
+        (a.authoritativeDeductibleTotal + a.proposedDeductibleTotal)
+      ) || a.name.localeCompare(b.name)),
     transactionCount: Array.from(accountMap.values()).reduce((sum, account) => sum + account.transactionCount, 0),
   };
+}
+
+function buildMatrixAuthorityTotals(matrix) {
+  return matrix.accounts.reduce((totals, account) => ({
+    authoritativeDeductibleTotal: totals.authoritativeDeductibleTotal + normalizeMoney(account.authoritativeDeductibleTotal),
+    proposedDeductibleTotal: totals.proposedDeductibleTotal + normalizeMoney(account.proposedDeductibleTotal),
+    autoTransactionCount: totals.autoTransactionCount + Number(account.autoTransactionCount || 0),
+    reviewTransactionCount: totals.reviewTransactionCount + Number(account.reviewTransactionCount || 0),
+  }), {
+    authoritativeDeductibleTotal: 0,
+    proposedDeductibleTotal: 0,
+    autoTransactionCount: 0,
+    reviewTransactionCount: 0,
+  });
 }
 
 function deductionTransactionSubtext(row) {

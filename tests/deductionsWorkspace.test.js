@@ -102,7 +102,7 @@ test("snake_case persisted classification rows hydrate into authoritative transa
 
   assert.equal(row.id, "txn-software");
   assert.equal(row.taxCategoryLabel, "Software Subscriptions");
-  assert.equal(row.taxTreatmentLabel, "Deductible");
+  assert.equal(row.taxTreatmentLabel, "Fully deductible");
   assert.equal(row.statusLabel, "Auto-classified");
   assert.equal(row.requiresReview, false);
   assert.equal(row.classificationSource, "rule_engine");
@@ -298,11 +298,13 @@ test("Tax Dashboard embeds classification workspace controls in Deductions", () 
   assert.match(hook, /prepareDeductions/);
 });
 
-test("Tax Dashboard uses hydrated posted transactions for rows and scopes the matrix by selected filter", () => {
+test("Tax Dashboard uses hydrated posted transactions and keeps matrix layout separate from classification filters", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /deductions\.allTransactions\?\.rows \|\| deductions\.transactions\?\.rows \|\| deductions\.classificationRows\?\.rows/);
-  assert.match(dashboard, /const rows = classificationTab === "all" \? workspaceRows : filteredWorkspaceRows/);
-  assert.match(dashboard, /buildDeductionAccountMatrix\(rows, year, \{ isDemo: deductions\.isDemo, scope: classificationTab \}\)/);
+  assert.match(dashboard, /const \[workspaceView, setWorkspaceView\] = useState\("overview"\)/);
+  assert.match(dashboard, /buildDeductionAccountMatrix\(workspaceRows, year, \{ isDemo: deductions\.isDemo, scope: "overview" \}\)/);
+  assert.doesNotMatch(dashboard, /const rows = classificationTab === "all" \? workspaceRows : filteredWorkspaceRows/);
+  assert.doesNotMatch(dashboard, /buildDeductionAccountMatrix\(rows, year, \{ isDemo: deductions\.isDemo, scope: classificationTab \}\)/);
   assert.match(dashboard, /QBO GL account/);
   assert.match(dashboard, /authoritativeDeductibleTotal/);
   assert.match(dashboard, /proposedDeductibleTotal/);
@@ -310,9 +312,48 @@ test("Tax Dashboard uses hydrated posted transactions for rows and scopes the ma
   assert.doesNotMatch(dashboard, /cell\.deductibleTotal/);
 });
 
+test("Tax Dashboard renders matrix-first Deductions workspace views with separate authority totals", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /Deductions overview/);
+  assert.match(dashboard, /Needs attention/);
+  assert.match(dashboard, /All transactions/);
+  assert.match(dashboard, /workspaceView === "overview"/);
+  assert.match(dashboard, /workspaceView === "needs_attention"/);
+  assert.match(dashboard, /MatrixAuthoritySummary/);
+  assert.match(dashboard, /DeductionAccountMatrix/);
+  assert.match(dashboard, /Automatic deductions/);
+  assert.match(dashboard, /Proposed — needs review/);
+  assert.match(dashboard, /posted expense rows grouped by QBO GL account/);
+  assert.match(dashboard, /Automatic deduction totals exclude proposed review-required amounts/);
+});
+
+test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and authority", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /function MatrixCell/);
+  assert.match(dashboard, /openCell\("automatic"\)/);
+  assert.match(dashboard, /openCell\("proposed"\)/);
+  assert.match(dashboard, /selectedAuthority: authority/);
+  assert.match(dashboard, /cell\.selectedAuthority === "proposed"/);
+  assert.match(dashboard, /transactions\.filter\(\(row\) => classificationBucket\(row\) === "auto_classified"\)/);
+  assert.match(dashboard, /transactions\.filter\(\(row\) => classificationBucket\(row\) === "needs_review"\)/);
+});
+
+test("Tax Dashboard row semantics distinguish auto-classified and review-required treatment", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.doesNotMatch(dashboard, /Treatment pending/);
+  assert.match(dashboard, /Fully deductible/);
+  assert.match(dashboard, /% deductible/);
+  assert.match(dashboard, /QBO GL rule/);
+  assert.match(dashboard, /Depends on business use/);
+  assert.match(dashboard, /Review required/);
+});
+
 test("Tax Dashboard uses a deductions loading skeleton and keeps disabled Prepare reason in the button tooltip", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /function DeductionsLoadingState/);
+  assert.match(dashboard, /function LoadingEllipsis/);
+  assert.match(dashboard, /Loading posted QuickBooks transactions, GL mappings, and classification status/);
+  assert.match(dashboard, /animate-dot-bounce/);
   assert.match(dashboard, /initialDeductionsLoading \? \(/);
   assert.match(dashboard, /role="status" aria-busy="true" aria-live="polite"/);
   assert.match(dashboard, /title=\{!canPrepareDeductions \? prepareEligibility\.reason : undefined\}/);
@@ -362,6 +403,8 @@ test("Prepare deductions accepts quickly and refreshes via polling, not a blocki
   assert.match(dashboard, /Deductions preparation started\./);
   assert.match(dashboard, /Starting deductions preparation\.\.\./);
   assert.match(dashboard, /Deductions preparation complete\./);
+  assert.doesNotMatch(dashboard, /dispatchBizziToast/);
+  assert.doesNotMatch(dashboard, /bizzy:toast/);
 });
 
 test("Prepare deductions modal uses Bizzi loading treatment instead of native wait cursor", () => {

@@ -1,5 +1,5 @@
 const TREATMENT_LABELS = {
-  fully_deductible: "Deductible",
+  fully_deductible: "Fully deductible",
   partially_deductible: "Partially deductible",
   nondeductible: "Nondeductible",
   capitalizable: "Capitalizable",
