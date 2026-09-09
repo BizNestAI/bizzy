@@ -78,8 +78,35 @@ test("transaction rows map backend statuses to user-facing labels", () => {
   });
   assert.equal(row.vendor, "Supply Co");
   assert.equal(row.taxTreatmentLabel, "Capitalizable");
-  assert.equal(row.statusLabel, "Estimated");
+  assert.equal(row.statusLabel, "Auto-classified");
   assert.equal(row.amount, 240);
+});
+
+test("snake_case persisted classification rows hydrate into authoritative transaction fields", () => {
+  const row = mapDeductionTransactionRow({
+    transaction_id: "txn-software",
+    transaction_date: "2026-09-04",
+    merchant_name: "Software Co",
+    source_qbo_account_name: "Software",
+    book_amount: -100,
+    tax_category: "software_subscriptions",
+    deductibility_status: "fully_deductible",
+    deductible_percent: 100,
+    deductible_amount: 100,
+    classification_status: "auto_classified",
+    source_type: "rule_engine",
+    matched_rule_code: "software_subscriptions_gl_v3",
+    rule_version: "bizzi-gl-2026-v3",
+    requires_review: false,
+  });
+
+  assert.equal(row.id, "txn-software");
+  assert.equal(row.taxCategoryLabel, "Software Subscriptions");
+  assert.equal(row.taxTreatmentLabel, "Deductible");
+  assert.equal(row.statusLabel, "Auto-classified");
+  assert.equal(row.requiresReview, false);
+  assert.equal(row.classificationSource, "rule_engine");
+  assert.equal(row.matchedRuleCode, "software_subscriptions_gl_v3");
 });
 
 test("unclassified posted rows are not shown as authoritative needs-review classifications", () => {
@@ -269,6 +296,26 @@ test("Tax Dashboard embeds classification workspace controls in Deductions", () 
   assert.match(hook, /getTaxClassificationCoverage/);
   assert.match(hook, /previewClassificationBackfill/);
   assert.match(hook, /prepareDeductions/);
+});
+
+test("Tax Dashboard uses hydrated posted transactions for rows and scopes the matrix by selected filter", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /deductions\.allTransactions\?\.rows \|\| deductions\.transactions\?\.rows \|\| deductions\.classificationRows\?\.rows/);
+  assert.match(dashboard, /const rows = classificationTab === "all" \? workspaceRows : filteredWorkspaceRows/);
+  assert.match(dashboard, /buildDeductionAccountMatrix\(rows, year, \{ isDemo: deductions\.isDemo, scope: classificationTab \}\)/);
+  assert.match(dashboard, /QBO GL account/);
+  assert.match(dashboard, /authoritativeDeductibleTotal/);
+  assert.match(dashboard, /proposedDeductibleTotal/);
+  assert.match(dashboard, /Proposed · needs review/);
+  assert.doesNotMatch(dashboard, /cell\.deductibleTotal/);
+});
+
+test("Tax Dashboard counts meaningful needs-review coverage and labels QBO GL rule sources", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /coverage\.needsReviewCount/);
+  assert.match(dashboard, /coverage\.needs_review_count/);
+  assert.match(dashboard, /source === "rule_engine" \|\| hasRuleIdentity/);
+  assert.match(dashboard, /QBO GL rule/);
 });
 
 test("Tax Dashboard uses authoritative classification job progress instead of inferred processing", () => {

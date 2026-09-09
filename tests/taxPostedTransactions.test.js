@@ -172,7 +172,21 @@ test("unclassified query only suppresses classifications for same tax year", asy
       cat({ transaction_id: "other-year-classified", status: "posted", qbo_txn_id: "qbo-2" }),
     ],
     transaction_tax_classifications: [
-      { business_id: BUSINESS_ID, transaction_id: "same-year", tax_year: 2026 },
+      {
+        business_id: BUSINESS_ID,
+        transaction_id: "same-year",
+        tax_year: 2026,
+        classification_status: "auto_classified",
+        tax_category: "software_subscriptions",
+        deductibility_status: "fully_deductible",
+        deductible_percent: 100,
+        book_amount: 100,
+        deductible_amount: 100,
+        nondeductible_amount: 0,
+        capitalizable_amount: 0,
+        source: "rule_engine",
+        metadata: {},
+      },
       { business_id: BUSINESS_ID, transaction_id: "other-year-classified", tax_year: 2025 },
     ],
   });

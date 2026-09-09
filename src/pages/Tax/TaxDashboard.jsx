@@ -518,19 +518,14 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const matrix = useMemo(
     () => {
       if (classificationsRequired) return buildDeductionAccountMatrix([], year, { isDemo: deductions.isDemo });
-      const classifiedRows = (deductions.allTransactions?.rows || deductions.transactions?.rows || []).map(mapDeductionTransactionRow);
-      const classifiedById = new Map(classifiedRows.map((row) => [String(row.id), row]));
-      const postedRows = deductions.postedTransactions?.rows || [];
-      const rows = postedRows.length
-        ? postedRows.map((row) => mapPostedTransactionForDeductionPreview(row, classifiedById.get(String(row.transactionId))))
-        : classifiedRows;
-      return buildDeductionAccountMatrix(rows, year, { isDemo: deductions.isDemo });
+      const rows = classificationTab === "all" ? workspaceRows : filteredWorkspaceRows;
+      return buildDeductionAccountMatrix(rows, year, { isDemo: deductions.isDemo, scope: classificationTab });
     },
-    [classificationsRequired, deductions.allTransactions, deductions.postedTransactions, deductions.transactions, deductions.isDemo, year]
+    [classificationTab, classificationsRequired, deductions.isDemo, filteredWorkspaceRows, workspaceRows, year]
   );
   const deductionsMessage = classificationsRequired
     ? previewStatusMessage
-    : "Deductible totals by tax category from posted QuickBooks expense transactions. Click a month amount to inspect the Plaid transactions behind it.";
+    : "Deductible totals by QBO GL account from posted QuickBooks expense transactions. Click a month amount to inspect the Plaid transactions behind it.";
 
   const openBackfillPreview = async () => {
     if (readOnly) {
@@ -687,6 +682,63 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
       </div>
 
       <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
+        {matrix.accounts.length ? (
+          <div className="max-w-full overflow-x-auto">
+            <table className="min-w-[1040px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
+                  <th className="sticky left-0 z-10 w-[260px] bg-[#111614] px-3 py-3 text-left font-semibold">QBO GL account</th>
+                  {matrix.months.map((month) => (
+                    <th key={month.key} className="w-[68px] px-2 py-3 text-right font-semibold">{month.shortLabel}</th>
+                  ))}
+                  <th className="w-[104px] px-3 py-3 text-right font-semibold">YTD</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matrix.accounts.map((account) => (
+                  <tr key={account.key} className="border-b border-white/[0.06] last:border-b-0">
+                    <th className="sticky left-0 z-10 bg-[#111614] px-3 py-3 text-left align-middle">
+                      <div className="truncate text-sm font-semibold text-white/82">{account.name}</div>
+                      <div className="mt-0.5 text-xs font-normal text-white/42">{account.transactionCount} transactions · {account.sourceLabel}</div>
+                    </th>
+                    {matrix.months.map((month) => {
+                      const cell = account.months[month.key];
+                      const hasTransactions = cell.transactions.length > 0;
+                      return (
+                        <td key={month.key} className="px-1.5 py-2 text-right align-middle">
+                          {hasTransactions ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedCell({ account, month, cell })}
+                              className="w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50 transition hover:border-emerald-200/30 hover:bg-emerald-300/[0.11] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
+                              title={`${account.name}, ${month.longLabel}${cell.proposedDeductibleTotal > 0 ? `, ${formatCurrencyLocal(cell.proposedDeductibleTotal)} proposed` : ""}`}
+                            >
+                              {formatCurrencyLocal(cell.displayDeductibleTotal)}
+                            </button>
+                          ) : (
+                            <span className="block px-2 py-1.5 text-[12px] text-white/22">—</span>
+                          )}
+                        </td>
+                      );
+                    })}
+                    <td className="px-3 py-3 text-right align-middle text-sm font-semibold tabular-nums text-white">
+                      {formatCurrencyLocal(account.displayDeductibleTotal)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="px-4 py-8 text-center text-sm text-white/54">
+            {classificationsRequired
+              ? "Deductible totals stay unavailable until transaction tax treatment is reviewed."
+              : "No posted QuickBooks expense category totals are available yet."}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
         <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-1.5" role="tablist" aria-label="Tax classification filters">
             {CLASSIFICATION_TABS.map((tab) => (
@@ -721,63 +773,6 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
         }}
         onConfirm={confirmPrepareDeductions}
       />
-
-      <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-black/18">
-        {matrix.accounts.length ? (
-          <div className="max-w-full overflow-x-auto">
-            <table className="min-w-[1040px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
-                  <th className="sticky left-0 z-10 w-[240px] bg-[#111614] px-3 py-3 text-left font-semibold">Tax category</th>
-                  {matrix.months.map((month) => (
-                    <th key={month.key} className="w-[68px] px-2 py-3 text-right font-semibold">{month.shortLabel}</th>
-                  ))}
-                  <th className="w-[96px] px-3 py-3 text-right font-semibold">YTD</th>
-                </tr>
-              </thead>
-              <tbody>
-                {matrix.accounts.map((account) => (
-                  <tr key={account.key} className="border-b border-white/[0.06] last:border-b-0">
-                    <th className="sticky left-0 z-10 bg-[#111614] px-3 py-3 text-left align-middle">
-                      <div className="truncate text-sm font-semibold text-white/82">{account.name}</div>
-                      <div className="mt-0.5 text-xs font-normal text-white/42">{account.transactionCount} transactions · {account.sourceLabel}</div>
-                    </th>
-                    {matrix.months.map((month) => {
-                      const cell = account.months[month.key];
-                      const hasTransactions = cell.transactions.length > 0;
-                      return (
-                        <td key={month.key} className="px-1.5 py-2 text-right align-middle">
-                          {hasTransactions ? (
-                            <button
-                              type="button"
-                              onClick={() => setSelectedCell({ account, month, cell })}
-                              className="w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50 transition hover:border-emerald-200/30 hover:bg-emerald-300/[0.11] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
-                              title={`${account.name}, ${month.longLabel}`}
-                            >
-                              {formatCurrencyLocal(cell.deductibleTotal)}
-                            </button>
-                          ) : (
-                            <span className="block px-2 py-1.5 text-[12px] text-white/22">—</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                    <td className="px-3 py-3 text-right align-middle text-sm font-semibold tabular-nums text-white">
-                      {formatCurrencyLocal(account.deductibleTotal)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="px-4 py-8 text-center text-sm text-white/54">
-            {classificationsRequired
-              ? "Deductible totals stay unavailable until transaction tax treatment is reviewed."
-              : "No posted QuickBooks expense category totals are available yet."}
-          </div>
-        )}
-      </div>
 
       <div className="mt-3 flex flex-col gap-2 text-xs text-white/45 sm:flex-row sm:items-center sm:justify-between">
         <span>{classificationsRequired ? "No deduction total is shown until classification authority exists." : "Cells show deductible amount, not gross spend."}</span>
@@ -1104,6 +1099,8 @@ function buildDeductionClassificationSummary(deductions) {
     coverage.reviewRequiredTransactionCount
     ?? coverage.review_required_transaction_count
     ?? coverage.reviewRequiredCount
+    ?? coverage.needsReviewCount
+    ?? coverage.needs_review_count
     ?? coverage.requiresReviewCount
   ) ?? 0;
   const unclassifiedTotal = (activeJob && jobRemaining != null ? jobRemaining : null) ?? nullableNumber(
@@ -1207,8 +1204,13 @@ function disabled(reason, flags = {}) {
 }
 
 function buildClassificationWorkspaceRows(deductions) {
-  const classifiedRows = normalizeRows(deductions.classificationRows?.rows || deductions.allTransactions?.rows || deductions.transactions?.rows).map(mapDeductionTransactionRow);
-  const classifiedById = new Map(classifiedRows.map((row) => [String(row.id), row]));
+  const classifiedSourceRows = normalizeRows(deductions.allTransactions?.rows || deductions.transactions?.rows || deductions.classificationRows?.rows);
+  const classifiedRows = classifiedSourceRows.map(mapDeductionTransactionRow);
+  const classifiedById = new Map();
+  for (const row of classifiedRows) {
+    const rowId = firstValue(row.id, row.transactionId, row.transaction_id);
+    if (rowId) classifiedById.set(String(rowId), row);
+  }
   const postedRows = normalizeRows(deductions.postedTransactions?.rows);
   const rows = postedRows.length
     ? postedRows.map((row) => mapPostedTransactionForDeductionPreview(row, classifiedById.get(String(row.transactionId || row.id))))
@@ -1357,8 +1359,28 @@ function deductiblePercentLabel(row) {
 }
 
 function classificationSourceLabel(row) {
-  const source = safeText(firstValue(row.classificationSource, row.classification_source, row.raw?.classification?.source), "");
+  const source = safeText(firstValue(
+    row.classificationSource,
+    row.classification_source,
+    row.sourceType,
+    row.source_type,
+    row.source,
+    row.raw?.source_type,
+    row.raw?.source,
+    row.raw?.classification?.source_type,
+    row.raw?.classification?.source
+  ), "");
+  const hasRuleIdentity = Boolean(firstValue(
+    row.matchedRuleCode,
+    row.matched_rule_code,
+    row.ruleCode,
+    row.rule_code,
+    row.raw?.matched_rule_code,
+    row.raw?.rule_code,
+    row.raw?.classification?.rule_code
+  ));
   if (row.taxTreatment === "not_determined" || row.taxCategory === "unresolved") return "No matching rule";
+  if (source === "rule_engine" || hasRuleIdentity) return "QBO GL rule";
   if (!source) return classificationBucket(row) === "unclassified" ? "Not classified" : "Rule";
   return formatTaxCategoryLabel(source);
 }
@@ -1482,7 +1504,7 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
                 {account.sourceLabel}
               </span>
             </div>
-            <div className="mt-1 text-xs text-white/54">{month.longLabel} · Tax category from posted QuickBooks expenses</div>
+            <div className="mt-1 text-xs text-white/54">{month.longLabel} · QBO GL account from posted QuickBooks expenses</div>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/54">
               Sourced from posted QuickBooks GL accounts and Plaid transaction detail. Deductible amounts come from Bizzi deduction rules and tax classification logic.
             </p>
@@ -1502,7 +1524,9 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <DeductionDetailAmount label="Expense total" value={cell.expenseTotal} />
               <div className="hidden h-9 w-px bg-white/10 sm:block" aria-hidden="true" />
-              <DeductionDetailAmount label="Deductible amount" value={cell.deductibleTotal} />
+              <DeductionDetailAmount label="Authoritative amount" value={cell.authoritativeDeductibleTotal} />
+              <div className="hidden h-9 w-px bg-white/10 sm:block" aria-hidden="true" />
+              <DeductionDetailAmount label="Proposed amount" value={cell.proposedDeductibleTotal} />
             </div>
           </div>
         </div>
@@ -1538,8 +1562,8 @@ function DeductionMonthDetailModal({ selection, onClose, onAssignTaxClassificati
                       <td className="px-3 py-2.5 text-right tabular-nums">
                         {needsReview ? (
                           <>
-                            <div className="font-semibold text-amber-200">Review</div>
-                            <div className="text-xs font-semibold text-amber-100/55">Needs review</div>
+                            <div className="font-semibold text-amber-200">{formatCurrencyLocal(resolveDeductibleAmount(row))}</div>
+                            <div className="text-xs font-semibold text-amber-100/55">Proposed · needs review</div>
                           </>
                         ) : (
                           <>
@@ -1793,6 +1817,9 @@ function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
     deductibleAmount: classified?.deductibleAmount ?? null,
     confidenceScore: classified?.confidenceScore ?? null,
     confidenceLevel: classified?.confidenceLevel || "unavailable",
+    classificationSource: classified?.classificationSource || classified?.classification_source || classified?.raw?.source_type || classified?.raw?.source || null,
+    matchedRuleCode: classified?.matchedRuleCode || classified?.matched_rule_code || classified?.raw?.matched_rule_code || classified?.raw?.rule_code || null,
+    ruleVersion: classified?.ruleVersion || classified?.rule_version || classified?.raw?.rule_version || null,
     status: classified?.status || "unclassified",
     statusLabel: classified?.statusLabel || "Unclassified",
     requiresReview: classified ? classified.requiresReview === true : false,
@@ -1801,7 +1828,7 @@ function mapPostedTransactionForDeductionPreview(row = {}, classified = null) {
   };
 }
 
-function buildDeductionAccountMatrix(rows, year, { isDemo = false } = {}) {
+function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all" } = {}) {
   const months = Array.from({ length: 12 }, (_, index) => {
     const date = new Date(year, index, 1);
     return {
@@ -1810,7 +1837,13 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false } = {}) {
       longLabel: date.toLocaleDateString(undefined, { month: "long", year: "numeric" }),
     };
   });
-  const emptyMonthMap = () => Object.fromEntries(months.map((month) => [month.key, { expenseTotal: 0, deductibleTotal: 0, transactions: [] }]));
+  const emptyMonthMap = () => Object.fromEntries(months.map((month) => [month.key, {
+    expenseTotal: 0,
+    authoritativeDeductibleTotal: 0,
+    proposedDeductibleTotal: 0,
+    displayDeductibleTotal: 0,
+    transactions: [],
+  }]));
   const accountMap = new Map();
 
   for (const row of rows) {
@@ -1825,16 +1858,18 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false } = {}) {
     const categoryName = taxCategory === "needs_review"
       ? "Needs Review"
       : (row.taxCategoryLabel || TAX_CATEGORY_OPTIONS.find((option) => option.value === taxCategory)?.label || formatTaxCategoryLabel(taxCategory));
-    const accountKey = `tax:${taxCategory}`;
+    const accountKey = `qbo:${accountId || accountName}`;
     if (!accountMap.has(accountKey)) {
       accountMap.set(accountKey, {
         key: accountKey,
-        id: taxCategory,
-        name: categoryName,
-        sourceLabel: isDemo ? "Demo tax category" : "Tax category",
+        id: accountId || accountName,
+        name: accountName,
+        sourceLabel: isDemo ? `Demo · ${categoryName}` : categoryName,
         months: emptyMonthMap(),
         expenseTotal: 0,
-        deductibleTotal: 0,
+        authoritativeDeductibleTotal: 0,
+        proposedDeductibleTotal: 0,
+        displayDeductibleTotal: 0,
         transactionCount: 0,
       });
     }
@@ -1842,11 +1877,19 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false } = {}) {
     const month = account.months[monthKey];
     const expenseAmount = normalizeMoney(row.amount);
     const deductibleAmount = normalizeMoney(resolveDeductibleAmount(row));
+    const bucket = classificationBucket(row);
+    const authoritativeAmount = bucket === "auto_classified" ? deductibleAmount : 0;
+    const proposedAmount = bucket === "needs_review" ? deductibleAmount : 0;
+    const displayAmount = scope === "needs_review" ? proposedAmount : scope === "all" ? authoritativeAmount + proposedAmount : authoritativeAmount;
     month.expenseTotal += expenseAmount;
-    month.deductibleTotal += deductibleAmount;
+    month.authoritativeDeductibleTotal += authoritativeAmount;
+    month.proposedDeductibleTotal += proposedAmount;
+    month.displayDeductibleTotal += displayAmount;
     month.transactions.push(row);
     account.expenseTotal += expenseAmount;
-    account.deductibleTotal += deductibleAmount;
+    account.authoritativeDeductibleTotal += authoritativeAmount;
+    account.proposedDeductibleTotal += proposedAmount;
+    account.displayDeductibleTotal += displayAmount;
     account.transactionCount += 1;
   }
 
@@ -1854,7 +1897,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false } = {}) {
     months,
     accounts: Array.from(accountMap.values())
       .filter((account) => account.expenseTotal > 0)
-      .sort((a, b) => b.deductibleTotal - a.deductibleTotal || a.name.localeCompare(b.name)),
+      .sort((a, b) => b.displayDeductibleTotal - a.displayDeductibleTotal || a.name.localeCompare(b.name)),
     transactionCount: Array.from(accountMap.values()).reduce((sum, account) => sum + account.transactionCount, 0),
   };
 }

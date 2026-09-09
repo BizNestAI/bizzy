@@ -11,7 +11,7 @@ const TREATMENT_LABELS = {
 const STATUS_LABELS = {
   user_confirmed: "Confirmed",
   cpa_confirmed: "CPA confirmed",
-  auto_classified: "Estimated",
+  auto_classified: "Auto-classified",
   needs_review: "Needs review",
   excluded: "Excluded",
   unsupported: "Unsupported",
@@ -65,40 +65,49 @@ export function buildDeductionsWorkspaceViewModel({ overview, filters = {}, curr
 }
 
 export function mapDeductionTransactionRow(row = {}) {
-  const isUnresolvedFallback = String(row.classificationStatus || "").toLowerCase() === "needs_review" &&
-    String(row.taxCategory || "").toLowerCase() === "unclassified";
-  const hasClassificationAuthority = Boolean(row.classificationStatus) &&
+  const transactionId = firstValue(row.transactionId, row.transaction_id, row.id);
+  const classificationStatus = firstValue(row.classificationStatus, row.classification_status);
+  const taxCategoryValue = firstValue(row.taxCategory, row.tax_category);
+  const deductibilityStatus = firstValue(row.deductibilityStatus, row.deductibility_status);
+  const signedAmount = nullableNumber(firstValue(row.signedAmount, row.signed_amount, row.book_amount));
+  const absoluteAmount = nullableNumber(firstValue(row.absoluteAmount, row.absolute_amount)) ?? Math.abs(Number(signedAmount || 0));
+  const isUnresolvedFallback = String(classificationStatus || "").toLowerCase() === "needs_review" &&
+    String(taxCategoryValue || "").toLowerCase() === "unclassified";
+  const hasClassificationAuthority = Boolean(classificationStatus) &&
     !isUnresolvedFallback &&
-    !["unclassified", "unsupported"].includes(String(row.classificationStatus));
-  const taxCategory = isUnresolvedFallback ? "unresolved" : hasClassificationAuthority ? row.taxCategory || "unclassified" : "pending";
-  const taxTreatment = isUnresolvedFallback ? "not_determined" : hasClassificationAuthority ? row.deductibilityStatus || row.taxTreatment || null : "pending_classification";
+    !["unclassified", "unsupported"].includes(String(classificationStatus));
+  const taxCategory = isUnresolvedFallback ? "unresolved" : hasClassificationAuthority ? taxCategoryValue || "unclassified" : "pending";
+  const taxTreatment = isUnresolvedFallback ? "not_determined" : hasClassificationAuthority ? deductibilityStatus || row.taxTreatment || row.tax_treatment || null : "pending_classification";
   return {
-    id: row.transactionId,
-    date: row.date || null,
-    vendor: row.merchantName || row.counterpartyName || row.description || "Unknown",
-    description: row.description || row.merchantName || row.counterpartyName || "",
-    qboAccountId: row.qboAccountId || null,
-    qboAccountName: row.qboAccountName || null,
-    qboTxnId: row.qboTxnId || null,
-    qboTxnType: row.qboTxnType || null,
-    bookAccount: row.qboAccountName || "Unmapped QuickBooks account",
-    amount: nullableNumber(row.absoluteAmount ?? Math.abs(Number(row.signedAmount))),
-    signedAmount: nullableNumber(row.signedAmount),
+    id: transactionId,
+    date: firstValue(row.date, row.transactionDate, row.transaction_date) || null,
+    vendor: firstValue(row.merchantName, row.merchant_name, row.counterpartyName, row.counterparty_name, row.description) || "Unknown",
+    description: firstValue(row.description, row.merchantName, row.merchant_name, row.counterpartyName, row.counterparty_name) || "",
+    qboAccountId: firstValue(row.qboAccountId, row.qbo_account_id, row.source_qbo_account_id, row.metadata?.source_qbo_account_id) || null,
+    qboAccountName: firstValue(row.qboAccountName, row.qbo_account_name, row.source_qbo_account_name, row.metadata?.source_qbo_account_name) || null,
+    qboTxnId: firstValue(row.qboTxnId, row.qbo_txn_id, row.source_qbo_txn_id, row.metadata?.source_qbo_txn_id) || null,
+    qboTxnType: firstValue(row.qboTxnType, row.qbo_txn_type, row.source_qbo_txn_type, row.metadata?.source_qbo_txn_type) || null,
+    bookAccount: firstValue(row.qboAccountName, row.qbo_account_name, row.source_qbo_account_name, row.metadata?.source_qbo_account_name) || "Unmapped QuickBooks account",
+    amount: absoluteAmount,
+    signedAmount,
     taxCategory,
-    taxCategoryLabel: isUnresolvedFallback ? "Unresolved" : hasClassificationAuthority ? labelize(row.taxCategory || "unclassified") : "Pending",
+    taxCategoryLabel: isUnresolvedFallback ? "Unresolved" : hasClassificationAuthority ? labelize(taxCategoryValue || "unclassified") : "Pending",
     taxTreatment,
     taxTreatmentLabel: hasClassificationAuthority
-      ? TREATMENT_LABELS[row.deductibilityStatus] || TREATMENT_LABELS[row.taxTreatment] || labelize(row.deductibilityStatus || row.taxTreatment)
+      ? TREATMENT_LABELS[deductibilityStatus] || TREATMENT_LABELS[row.taxTreatment] || labelize(deductibilityStatus || row.taxTreatment)
       : isUnresolvedFallback
         ? "Not determined"
       : "Pending classification",
-    deductiblePercent: nullableNumber(row.deductiblePercent),
-    deductibleAmount: nullableNumber(row.deductibleAmount),
-    confidenceScore: nullableNumber(row.confidenceScore),
-    confidenceLevel: row.confidenceLevel || "unavailable",
-    status: row.override?.hasOverride ? "overridden" : isUnresolvedFallback ? "unclassified" : hasClassificationAuthority ? row.classificationStatus : "unclassified",
-    statusLabel: row.override?.hasOverride ? "Overridden" : isUnresolvedFallback ? "Needs classification" : hasClassificationAuthority ? STATUS_LABELS[row.classificationStatus] || labelize(row.classificationStatus) : "Unclassified",
-    requiresReview: hasClassificationAuthority && row.requiresReview === true,
+    deductiblePercent: nullableNumber(firstValue(row.deductiblePercent, row.deductible_percent)),
+    deductibleAmount: nullableNumber(firstValue(row.deductibleAmount, row.deductible_amount)),
+    confidenceScore: nullableNumber(firstValue(row.confidenceScore, row.confidence_score)),
+    confidenceLevel: firstValue(row.confidenceLevel, row.confidence_level) || "unavailable",
+    classificationSource: firstValue(row.classificationSource, row.classification_source, row.sourceType, row.source_type, row.source) || null,
+    matchedRuleCode: firstValue(row.matchedRuleCode, row.matched_rule_code, row.ruleCode, row.rule_code) || null,
+    ruleVersion: firstValue(row.ruleVersion, row.rule_version) || null,
+    status: row.override?.hasOverride ? "overridden" : isUnresolvedFallback ? "unclassified" : hasClassificationAuthority ? classificationStatus : "unclassified",
+    statusLabel: row.override?.hasOverride ? "Overridden" : isUnresolvedFallback ? "Needs classification" : hasClassificationAuthority ? STATUS_LABELS[classificationStatus] || labelize(classificationStatus) : "Unclassified",
+    requiresReview: hasClassificationAuthority && (row.requiresReview === true || row.requires_review === true),
     warnings: normalizeList(row.warnings),
     raw: row,
   };
@@ -193,6 +202,10 @@ function percentOf(numerator, denominator) {
 function addNullable(a, b) {
   if (a == null && b == null) return null;
   return Number(a || 0) + Number(b || 0);
+}
+
+function firstValue(...values) {
+  return values.find((value) => value != null && value !== "");
 }
 
 function nullableNumber(value) {
