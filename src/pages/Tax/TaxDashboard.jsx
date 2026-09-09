@@ -514,16 +514,19 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const canPrepareDeductions = prepareEligibility.enabled;
   const workspaceRows = useMemo(() => buildClassificationWorkspaceRows(deductions), [deductions]);
   const filteredWorkspaceRows = useMemo(() => filterClassificationWorkspaceRows(workspaceRows, classificationTab), [workspaceRows, classificationTab]);
+  const initialDeductionsLoading = deductions.loading && !deductions.overview && !deductions.postedTransactions && !deductions.classificationCoverage;
   const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
   const matrix = useMemo(
     () => {
-      if (classificationsRequired) return buildDeductionAccountMatrix([], year, { isDemo: deductions.isDemo });
+      if (classificationsRequired || initialDeductionsLoading) return buildDeductionAccountMatrix([], year, { isDemo: deductions.isDemo });
       const rows = classificationTab === "all" ? workspaceRows : filteredWorkspaceRows;
       return buildDeductionAccountMatrix(rows, year, { isDemo: deductions.isDemo, scope: classificationTab });
     },
-    [classificationTab, classificationsRequired, deductions.isDemo, filteredWorkspaceRows, workspaceRows, year]
+    [classificationTab, classificationsRequired, deductions.isDemo, filteredWorkspaceRows, initialDeductionsLoading, workspaceRows, year]
   );
-  const deductionsMessage = classificationsRequired
+  const deductionsMessage = initialDeductionsLoading
+    ? "Loading posted QuickBooks transactions, GL mappings, and classification status."
+    : classificationsRequired
     ? previewStatusMessage
     : "Deductible totals by QBO GL account from posted QuickBooks expense transactions. Click a month amount to inspect the Plaid transactions behind it.";
 
@@ -607,15 +610,16 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
         </div>
 
         <div className="flex flex-wrap items-center gap-2 whitespace-nowrap">
-          <button
-            type="button"
-            onClick={openBackfillPreview}
-            disabled={!canPrepareDeductions || backfillLoading}
-            title={!canPrepareDeductions ? prepareEligibility.reason : undefined}
-            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/24 bg-emerald-300/[0.10] px-3 py-1.5 text-[12px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.16] disabled:cursor-not-allowed disabled:opacity-55 focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
-          >
-            {classificationActive ? "Preparing deductions" : backfillLoading ? "Preparing..." : classificationSummary.jobStatus?.canRetry ? "Retry preparation" : "Prepare deductions"}
-          </button>
+          <span className="inline-flex" title={!canPrepareDeductions ? prepareEligibility.reason : undefined}>
+            <button
+              type="button"
+              onClick={openBackfillPreview}
+              disabled={!canPrepareDeductions || backfillLoading}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/24 bg-emerald-300/[0.10] px-3 py-1.5 text-[12px] font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.16] disabled:cursor-not-allowed disabled:opacity-55 focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
+            >
+              {classificationActive ? "Preparing deductions" : backfillLoading ? "Preparing..." : classificationSummary.jobStatus?.canRetry ? "Retry preparation" : "Prepare deductions"}
+            </button>
+          </span>
           <button
             type="button"
             onClick={deductions.refresh}
@@ -647,12 +651,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
           Updated {formatRelativeRefreshTime(deductions.lastRefreshedAt)}
         </div>
       ) : null}
-      {!canPrepareDeductions && prepareEligibility.reason ? (
-        <div className="mt-3 rounded-xl border border-amber-300/18 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-50/78">
-          {prepareEligibility.reason}
-        </div>
-      ) : null}
-
+      {initialDeductionsLoading ? (
+        <DeductionsLoadingState />
+      ) : (
+        <>
       <div className="mt-5 rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-3">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -785,6 +787,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
         onAssignTaxClassification={deductions.assignTaxClassification}
         readOnly={readOnly}
       />
+        </>
+      )}
     </div>
   );
 }
@@ -796,6 +800,93 @@ const CLASSIFICATION_TABS = [
   { value: "excluded", label: "Excluded" },
   { value: "unclassified", label: "Unclassified" },
 ];
+
+function DeductionsLoadingState() {
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug"];
+  return (
+    <div className="mt-5 space-y-4" role="status" aria-busy="true" aria-live="polite">
+      <div className="relative overflow-hidden rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-3">
+        <SkeletonSheen />
+        <div className="relative flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-2">
+            <SkeletonLine className="h-3 w-36" />
+            <SkeletonLine className="h-4 w-[min(420px,70vw)]" />
+            <SkeletonLine className="h-3 w-[min(560px,78vw)]" />
+          </div>
+          <SkeletonLine className="h-3 w-28" />
+        </div>
+        <div className="relative mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+          {Array.from({ length: 7 }).map((_, index) => (
+            <div key={index} className="rounded-xl border border-white/[0.08] bg-black/16 px-3 py-2">
+              <SkeletonLine className="h-2.5 w-20" />
+              <SkeletonLine className="mt-3 h-5 w-10" />
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/18">
+        <SkeletonSheen />
+        <div className="max-w-full overflow-hidden">
+          <table className="min-w-[1040px] border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-white/[0.08] text-[10px] uppercase tracking-[0.11em] text-white/42">
+                <th className="w-[260px] px-3 py-3 text-left font-semibold">QBO GL account</th>
+                {months.map((month) => (
+                  <th key={month} className="w-[68px] px-2 py-3 text-right font-semibold">{month}</th>
+                ))}
+                <th className="w-[104px] px-3 py-3 text-right font-semibold">YTD</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: 5 }).map((_, rowIndex) => (
+                <tr key={rowIndex} className="border-b border-white/[0.06] last:border-b-0">
+                  <th className="px-3 py-3 text-left align-middle">
+                    <SkeletonLine className="h-4 w-36" />
+                    <SkeletonLine className="mt-2 h-3 w-48" />
+                  </th>
+                  {months.map((month, monthIndex) => (
+                    <td key={`${month}-${monthIndex}`} className="px-1.5 py-2">
+                      <SkeletonLine className="ml-auto h-8 w-14 rounded-lg" />
+                    </td>
+                  ))}
+                  <td className="px-3 py-3">
+                    <SkeletonLine className="ml-auto h-4 w-16" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-black/18">
+        <SkeletonSheen />
+        <div className="flex flex-col gap-3 border-b border-white/[0.08] px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap gap-1.5">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <SkeletonLine key={index} className="h-9 w-24 rounded-full" />
+            ))}
+          </div>
+          <SkeletonLine className="h-3 w-40" />
+        </div>
+        <div className="space-y-0">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div key={index} className="grid grid-cols-[110px_minmax(180px,1fr)_160px_90px] gap-5 border-b border-white/[0.06] px-3 py-4 last:border-b-0">
+              <SkeletonLine className="h-4 w-16" />
+              <div>
+                <SkeletonLine className="h-4 w-44" />
+                <SkeletonLine className="mt-2 h-3 w-32" />
+              </div>
+              <SkeletonLine className="h-4 w-28" />
+              <SkeletonLine className="ml-auto h-4 w-16" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ClassificationStat({ label, value, tone = "default" }) {
   const toneClass = tone === "amber"

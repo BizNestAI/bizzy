@@ -310,6 +310,15 @@ test("Tax Dashboard uses hydrated posted transactions for rows and scopes the ma
   assert.doesNotMatch(dashboard, /cell\.deductibleTotal/);
 });
 
+test("Tax Dashboard uses a deductions loading skeleton and keeps disabled Prepare reason in the button tooltip", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /function DeductionsLoadingState/);
+  assert.match(dashboard, /initialDeductionsLoading \? \(/);
+  assert.match(dashboard, /role="status" aria-busy="true" aria-live="polite"/);
+  assert.match(dashboard, /title=\{!canPrepareDeductions \? prepareEligibility\.reason : undefined\}/);
+  assert.doesNotMatch(dashboard, /!\s*canPrepareDeductions && prepareEligibility\.reason \? \(/);
+});
+
 test("Tax Dashboard counts meaningful needs-review coverage and labels QBO GL rule sources", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /coverage\.needsReviewCount/);
