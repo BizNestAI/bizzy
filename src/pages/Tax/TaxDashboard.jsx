@@ -516,7 +516,9 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const [backfillLoading, setBackfillLoading] = useState(false);
   const [backfillError, setBackfillError] = useState("");
   const [prepareLoading, setPrepareLoading] = useState(false);
-  const lastTerminalJobRef = useRef(null);
+  const [trackedPrepareRun, setTrackedPrepareRun] = useState(null);
+  const [prepareCompletionNotice, setPrepareCompletionNotice] = useState("");
+  const completionNoticeTimerRef = useRef(null);
   const deductions = useTaxDeductions({ businessId, year, pagination: { limit: 100, offset: 0 } });
   const refreshDeductions = deductions.refresh;
   const classificationSummary = useMemo(() => buildDeductionClassificationSummary(deductions), [deductions]);
@@ -568,6 +570,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
     }
     setBackfillLoading(true);
     setBackfillError("");
+    setPrepareCompletionNotice("");
     try {
       const preview = await deductions.previewClassificationBackfill({ limit: 1000 });
       setBackfillPreview(preview);
@@ -586,8 +589,17 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
     }
     setPrepareLoading(true);
     setBackfillError("");
+    setPrepareCompletionNotice("");
     try {
-      await deductions.prepareDeductions({ limit: 100 });
+      const result = await deductions.prepareDeductions({ limit: 100 });
+      const job = result?.job || result?.run || result;
+      const runId = job?.jobId || job?.id || job?.runId || job?.run_id;
+      if (runId) {
+        setTrackedPrepareRun({
+          jobId: String(runId),
+          triggerSource: job?.triggerSource || job?.trigger_source || "user_prepare",
+        });
+      }
       setBackfillPreview(null);
       onNotice?.("Deductions preparation started.");
     } catch (err) {
@@ -610,15 +622,29 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
 
   useEffect(() => {
     const job = classificationSummary.jobStatus;
-    if (!job?.jobId || !["completed", "completed_with_review", "failed"].includes(job.status)) return;
-    const key = `${job.jobId}:${job.status}`;
-    if (lastTerminalJobRef.current === key) return;
-    lastTerminalJobRef.current = key;
-    if (job.status === "failed") return;
-    onNotice?.("Deductions preparation complete.");
+    if (!trackedPrepareRun?.jobId || !job?.jobId) return;
+    if (String(job.jobId) !== trackedPrepareRun.jobId) return;
+    if (!["completed", "completed_with_review", "failed"].includes(job.status)) return;
+
+    setTrackedPrepareRun(null);
+    if (job.status === "failed") {
+      setBackfillError("Deductions preparation failed. Review the run details and try again when ready.");
+      return;
+    }
+
+    setPrepareCompletionNotice("Deductions preparation complete.");
     refreshDeductions?.();
     onClassificationComplete?.();
-  }, [classificationSummary.jobStatus, onClassificationComplete, onNotice, refreshDeductions]);
+    if (completionNoticeTimerRef.current) clearTimeout(completionNoticeTimerRef.current);
+    completionNoticeTimerRef.current = setTimeout(() => {
+      setPrepareCompletionNotice("");
+      completionNoticeTimerRef.current = null;
+    }, 7000);
+  }, [classificationSummary.jobStatus, onClassificationComplete, refreshDeductions, trackedPrepareRun]);
+
+  useEffect(() => () => {
+    if (completionNoticeTimerRef.current) clearTimeout(completionNoticeTimerRef.current);
+  }, []);
 
   return (
     <div className="relative max-w-full overflow-hidden rounded-[24px] border border-white/10 bg-white/[0.045] p-4 text-white shadow-[0_18px_50px_rgba(0,0,0,0.35)] sm:p-5">
@@ -664,6 +690,18 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
           {backfillError}
         </div>
       ) : null}
+      {prepareCompletionNotice ? (
+        <div className="mt-4 flex flex-col gap-2 rounded-xl border border-emerald-300/20 bg-emerald-300/[0.09] px-3 py-2 text-sm text-emerald-50 sm:flex-row sm:items-center sm:justify-between" role="status" aria-live="polite">
+          <span>{prepareCompletionNotice}</span>
+          <button
+            type="button"
+            onClick={() => setPrepareCompletionNotice("")}
+            className="self-start rounded-full border border-emerald-200/20 px-2 py-0.5 text-[11px] font-semibold text-emerald-50/78 transition hover:bg-emerald-300/10 hover:text-emerald-50 sm:self-auto"
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
       {deductions.refreshError ? (
         <div className="mt-4 rounded-xl border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
           {deductions.refreshError.message || "Refresh failed."}
@@ -690,7 +728,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
             {classificationSummary.lastRunAt ? `Last run ${formatDateLocal(classificationSummary.lastRunAt)}` : "No classification run yet"}
           </div>
         </div>
-        <ClassificationProgressSummary summary={classificationSummary} />
+        <ClassificationProgressSummary summary={classificationSummary} trackedPrepareRun={trackedPrepareRun} />
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
           <ClassificationStat label="Eligible" value={classificationSummary.postedTotal} />
           <ClassificationStat label="Auto-classified" value={classificationSummary.autoClassifiedTotal} />
@@ -1312,7 +1350,7 @@ function ClassificationStat({ label, value, tone = "default" }) {
   );
 }
 
-function ClassificationProgressSummary({ summary }) {
+function ClassificationProgressSummary({ summary, trackedPrepareRun = null }) {
   const job = summary.jobStatus;
   if (!job || !["queued", "delayed", "processing", "stalled", "failed"].includes(job.status)) return null;
   const total = Number(job.total || job.queuedCount || 0);
@@ -1321,7 +1359,10 @@ function ClassificationProgressSummary({ summary }) {
   const percent = total > 0 ? Math.round((processed / total) * 100) : 0;
   const active = ["queued", "processing", "delayed", "stalled"].includes(job.status);
   const isTargetedRun = total > 0 && total < Number(summary.postedTotal || 0);
-  const heading = isTargetedRun && active
+  const isTrackedUserPrepareRun = Boolean(trackedPrepareRun?.jobId && job.jobId && String(job.jobId) === trackedPrepareRun.jobId);
+  const heading = isTrackedUserPrepareRun && active
+    ? "Preparing deductions from your request."
+    : isTargetedRun && active
     ? `Updating ${total === 1 ? "one changed transaction" : `${total} changed transactions`}.`
     : job.status === "queued"
       ? "Deductions preparation is queued."
@@ -1339,11 +1380,15 @@ function ClassificationProgressSummary({ summary }) {
       : job.status === "delayed"
         ? "No worker has claimed this job yet. Bizzi will keep checking automatically."
       : job.status === "queued"
-        ? isTargetedRun
+        ? isTrackedUserPrepareRun
+          ? "This is the preparation run you started in this session."
+          : isTargetedRun
           ? "The full deductions matrix stays visible while Bizzi refreshes the changed row."
           : "Bizzi will begin classifying your posted transactions shortly."
       : job.isSlow
         ? "Still working. You can leave this page and check back shortly."
+        : isTrackedUserPrepareRun
+          ? "This is the preparation run you started in this session. The deductions matrix stays visible while it runs."
         : isTargetedRun
           ? "The full deductions matrix stays visible while Bizzi refreshes the changed row."
           : "This usually takes a few minutes. You can leave this page while Bizzi continues.";

@@ -459,9 +459,26 @@ test("Prepare deductions accepts quickly and refreshes via polling, not a blocki
   assert.match(hook, /setClassificationJobStatus\(job \|\| null\)/);
   assert.match(dashboard, /Deductions preparation started\./);
   assert.match(dashboard, /Starting deductions preparation\.\.\./);
-  assert.match(dashboard, /Deductions preparation complete\./);
+  assert.match(dashboard, /setTrackedPrepareRun/);
+  assert.match(dashboard, /String\(job\.jobId\) !== trackedPrepareRun\.jobId/);
+  assert.match(dashboard, /setPrepareCompletionNotice\("Deductions preparation complete\."\)/);
+  assert.match(dashboard, /Preparing deductions from your request\./);
+  assert.match(dashboard, /Dismiss/);
+  assert.doesNotMatch(dashboard, /onNotice\?\.\("Deductions preparation complete\."\)/);
+  assert.doesNotMatch(dashboard, /lastTerminalJobRef/);
   assert.doesNotMatch(dashboard, /dispatchBizziToast/);
   assert.doesNotMatch(dashboard, /bizzy:toast/);
+});
+
+test("Prepare completion banner is scoped to the current mounted user run only", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /const \[trackedPrepareRun, setTrackedPrepareRun\] = useState\(null\)/);
+  assert.match(dashboard, /const \[prepareCompletionNotice, setPrepareCompletionNotice\] = useState\(""\)/);
+  assert.match(dashboard, /const runId = job\?\.jobId \|\| job\?\.id \|\| job\?\.runId \|\| job\?\.run_id/);
+  assert.match(dashboard, /if \(!trackedPrepareRun\?\.jobId \|\| !job\?\.jobId\) return/);
+  assert.match(dashboard, /setTrackedPrepareRun\(null\)/);
+  assert.match(dashboard, /completionNoticeTimerRef/);
+  assert.doesNotMatch(dashboard, /localStorage\.setItem\([^)]*trackedPrepareRun/);
 });
 
 test("Prepare deductions modal uses Bizzi loading treatment instead of native wait cursor", () => {
