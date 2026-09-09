@@ -424,3 +424,41 @@ test("Tax Dashboard does not present missing classification authority as zero de
   assert.match(dashboard, /No deduction total is shown until classification authority exists/);
   assert.doesNotMatch(dashboard, /0 deductible/);
 });
+
+test("Tax Dashboard groups Needs Attention decisions by QBO GL account and missing action", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /function buildAttentionReviewGroups/);
+  assert.match(dashboard, /const key = `\$\{qboAccountId\}:\$\{decision\.kind\}`/);
+  assert.match(dashboard, /Apply to one transaction/);
+  assert.match(dashboard, /Apply to GL account this year/);
+  assert.match(dashboard, /Apply going forward/);
+  assert.match(dashboard, /Going-forward business-use confirmations require a schema-backed account-level authority record/);
+  assert.match(dashboard, /Preserve selected exceptions/);
+  assert.match(dashboard, /ids\.slice\(index, index \+ 100\)/);
+});
+
+test("Tax Dashboard displays specific missing tax-review actions instead of generic zero-dollar conclusions", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /Set business use %/);
+  assert.match(dashboard, /Confirm business use/);
+  assert.match(dashboard, /Set vehicle method/);
+  assert.match(dashboard, /Vehicle expenses need a vehicle-method workflow before they can become authoritative/);
+  assert.match(dashboard, /reviewDecisionForRow\(row\)\.actionLabel/);
+  assert.match(dashboard, /cell\.proposedDeductibleTotal > 0 \? `\$\{formatCurrencyLocal\(cell\.proposedDeductibleTotal\)\} proposed` : cell\.reviewActionLabel/);
+});
+
+test("Tax Dashboard review decisions reuse existing override authority and avoid going-forward persistence", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  const service = fs.readFileSync("src/services/tax/taxClassificationOverride.service.js", "utf8");
+  assert.match(dashboard, /deductions\.overrideClassification/);
+  assert.match(dashboard, /deductions\.bulkUpdateClassifications/);
+  assert.match(dashboard, /This confirmation affects only the selected current classifications and writes through the existing override audit mechanism/);
+  assert.match(dashboard, /hasManualClassificationAuthority\(row\)/);
+  assert.match(dashboard, /status === "user_confirmed"/);
+  assert.match(dashboard, /status === "cpa_confirmed"/);
+  assert.match(dashboard, /status === "accountant_reviewed"/);
+  assert.match(hook, /bulkUpdateTaxClassifications/);
+  assert.match(service, /apply_tax_classification_override/);
+  assert.match(service, /tax_classification_overrides/);
+});

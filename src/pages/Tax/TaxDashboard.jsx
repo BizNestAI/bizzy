@@ -500,6 +500,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const [workspaceView, setWorkspaceView] = useState("overview");
   const [classificationTab, setClassificationTab] = useState("all");
   const [attentionTab, setAttentionTab] = useState("needs_review");
+  const [reviewDecision, setReviewDecision] = useState(null);
   const [backfillPreview, setBackfillPreview] = useState(null);
   const [backfillLoading, setBackfillLoading] = useState(false);
   const [backfillError, setBackfillError] = useState("");
@@ -518,6 +519,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const filteredWorkspaceRows = useMemo(() => filterClassificationWorkspaceRows(workspaceRows, classificationTab), [workspaceRows, classificationTab]);
   const attentionCounts = useMemo(() => buildAttentionCounts(workspaceRows), [workspaceRows]);
   const attentionRows = useMemo(() => filterAttentionWorkspaceRows(workspaceRows, attentionTab), [workspaceRows, attentionTab]);
+  const attentionGroups = useMemo(() => buildAttentionReviewGroups(attentionRows), [attentionRows]);
   const initialDeductionsLoading = deductions.loading && !deductions.overview && !deductions.postedTransactions && !deductions.classificationCoverage;
   const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
   const matrix = useMemo(
@@ -719,6 +721,13 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
               {attentionRows.length} of {attentionCounts.all} attention rows shown
             </div>
           </div>
+          {attentionTab === "needs_review" ? (
+            <AttentionReviewGroups
+              groups={attentionGroups}
+              readOnly={readOnly}
+              onOpenDecision={setReviewDecision}
+            />
+          ) : null}
           <ClassificationWorkspaceTable rows={attentionRows} loading={deductions.loading} emptyMessage={attentionEmptyMessage(attentionTab)} />
         </div>
       ) : (
@@ -749,6 +758,32 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
           if (!prepareLoading) setBackfillPreview(null);
         }}
         onConfirm={confirmPrepareDeductions}
+      />
+
+      <ReviewDecisionModal
+        decision={reviewDecision}
+        readOnly={readOnly}
+        onClose={() => setReviewDecision(null)}
+        onApply={async ({ transactionIds, changes, reason }) => {
+          if (!reviewDecision || readOnly) return null;
+          const ids = Array.from(new Set(transactionIds.filter(Boolean)));
+          if (!ids.length) return null;
+          if (ids.length === 1) {
+            const result = await deductions.overrideClassification(ids[0], { ...changes, reason });
+            setReviewDecision(null);
+            return result;
+          }
+          const result = { attempted: ids.length, updated: 0, failed: 0, errors: [] };
+          for (let index = 0; index < ids.length; index += 100) {
+            const chunk = ids.slice(index, index + 100);
+            const chunkResult = await deductions.bulkUpdateClassifications(chunk, changes, { reason });
+            result.updated += Number(chunkResult?.updated || 0);
+            result.failed += Number(chunkResult?.failed || 0);
+            if (Array.isArray(chunkResult?.errors)) result.errors.push(...chunkResult.errors);
+          }
+          setReviewDecision(null);
+          return result;
+        }}
       />
 
       <div className="mt-3 flex flex-col gap-2 text-xs text-white/45 sm:flex-row sm:items-center sm:justify-between">
@@ -882,7 +917,7 @@ function DeductionAccountMatrix({ matrix, classificationsRequired, onSelectCell 
                     <div className="font-semibold text-emerald-50">{formatCurrencyLocal(account.authoritativeDeductibleTotal)}</div>
                     {account.reviewTransactionCount > 0 ? (
                       <div className="mt-1 text-[11px] font-semibold text-amber-100/76">
-                        {account.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(account.proposedDeductibleTotal)} proposed` : "Review"}
+                        {account.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(account.proposedDeductibleTotal)} proposed` : account.reviewActionLabel || "Review"}
                       </div>
                     ) : null}
                   </td>
@@ -943,10 +978,204 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
           className="w-full rounded-lg border border-amber-300/10 bg-amber-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-amber-100 transition hover:border-amber-200/30 hover:bg-amber-300/[0.11] focus:outline-none focus:ring-2 focus:ring-amber-300/30"
           title={`${account.name}, ${month.longLabel}, proposed needs-review amounts`}
         >
-          {cell.proposedDeductibleTotal > 0 ? formatCurrencyLocal(cell.proposedDeductibleTotal) : "Review"}
+          {cell.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.proposedDeductibleTotal)} proposed` : cell.reviewActionLabel || "Review"}
         </button>
       ) : null}
     </div>
+  );
+}
+
+function AttentionReviewGroups({ groups, readOnly, onOpenDecision }) {
+  if (!groups.length) return null;
+  return (
+    <div className="border-b border-white/[0.08] px-3 py-3">
+      <div className="grid gap-2 xl:grid-cols-2">
+        {groups.map((group) => (
+          <div key={group.key} className="rounded-2xl border border-amber-300/12 bg-amber-300/[0.035] p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-white/84">{group.qboAccountName}</div>
+                <div className="mt-0.5 text-xs text-white/46">{group.actionLabel} · {group.taxCategoryLabel}</div>
+              </div>
+              <div className="shrink-0 text-right">
+                <div className="text-sm font-semibold tabular-nums text-amber-100">{group.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(group.proposedDeductibleTotal)} proposed` : group.actionLabel}</div>
+                <div className="mt-0.5 text-xs text-white/42">{group.transactionCount} rows · {formatCurrencyLocal(group.grossTotal)} gross</div>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={readOnly || !group.canApply}
+                onClick={() => onOpenDecision({ group, scope: "one_transaction" })}
+                className="rounded-full border border-white/10 bg-white/[0.045] px-3 py-1.5 text-[12px] font-semibold text-white/68 transition hover:bg-white/[0.08] hover:text-white disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-amber-300/25"
+              >
+                Apply to one transaction
+              </button>
+              <button
+                type="button"
+                disabled={readOnly || !group.canApply}
+                onClick={() => onOpenDecision({ group, scope: "account_year" })}
+                className="rounded-full border border-amber-300/18 bg-amber-300/[0.08] px-3 py-1.5 text-[12px] font-semibold text-amber-50 transition hover:bg-amber-300/[0.13] disabled:cursor-not-allowed disabled:opacity-45 focus:outline-none focus:ring-2 focus:ring-amber-300/25"
+              >
+                Apply to GL account this year
+              </button>
+              <button
+                type="button"
+                disabled
+                title="Going-forward business-use confirmations require a schema-backed account-level authority record before they can be safely persisted."
+                className="rounded-full border border-white/10 bg-white/[0.025] px-3 py-1.5 text-[12px] font-semibold text-white/34 disabled:cursor-not-allowed"
+              >
+                Apply going forward
+              </button>
+            </div>
+            {!group.canApply ? (
+              <div className="mt-2 text-xs text-white/42">{group.blockedReason}</div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ReviewDecisionModal({ decision, readOnly, onClose, onApply }) {
+  const [businessUsePercent, setBusinessUsePercent] = useState("");
+  const [dedicatedPremises, setDedicatedPremises] = useState(false);
+  const [exceptionIds, setExceptionIds] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setBusinessUsePercent("");
+    setDedicatedPremises(false);
+    setExceptionIds([]);
+    setSaving(false);
+    setError("");
+  }, [decision?.group?.key, decision?.scope]);
+
+  if (!decision?.group) return null;
+  const { group, scope } = decision;
+  const rows = scope === "one_transaction" ? group.rows.slice(0, 1) : group.rows;
+  const selectedRows = rows.filter((row) => !exceptionIds.includes(row.id));
+  const action = group.decision;
+  const requiresPercent = action.kind === "business_use_percent" || (action.kind === "utility_allocation" && !dedicatedPremises);
+  const hasPercentInput = dedicatedPremises || String(businessUsePercent).trim() !== "";
+  const percentValue = dedicatedPremises ? 100 : Number(businessUsePercent);
+  const canSubmit = !readOnly && group.canApply && selectedRows.length > 0 && (!requiresPercent || (hasPercentInput && Number.isFinite(percentValue) && percentValue >= 0 && percentValue <= 100));
+
+  const submit = async () => {
+    if (!canSubmit) return;
+    setSaving(true);
+    setError("");
+    try {
+      const changes = buildReviewDecisionChanges({ group, businessUsePercent: percentValue, dedicatedPremises });
+      await onApply({
+        transactionIds: selectedRows.map((row) => row.id),
+        changes,
+        reason: reviewDecisionReason({ group, scope, businessUsePercent: percentValue, dedicatedPremises }),
+      });
+    } catch (err) {
+      setError(err?.message || "Could not save this tax review decision.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const modal = (
+    <div className="fixed bottom-0 left-0 right-0 top-0 z-[10000] flex items-center justify-center bg-black/45 px-4 py-6 md:left-[var(--nav-w,0px)]" role="dialog" aria-modal="true" aria-label={`${group.qboAccountName} tax review decision`}>
+      <section className="flex max-h-[min(760px,calc(100vh-80px))] w-full max-w-[760px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] text-white shadow-[0_24px_90px_rgba(0,0,0,0.68)]">
+        <header className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-100/62">Tax review decision</div>
+            <h3 className="mt-1 truncate text-lg font-semibold">{group.qboAccountName}</h3>
+            <p className="mt-1 text-sm text-white/54">{group.actionLabel} for {scope === "one_transaction" ? "one transaction" : "this QBO GL account in the selected tax year"}.</p>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving} className="rounded-full border border-white/10 bg-white/[0.04] p-1.5 text-white/70 hover:bg-white/10 disabled:opacity-50" aria-label="Close tax review decision">
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {error ? <div className="mb-3 rounded-xl border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-sm text-rose-100">{error}</div> : null}
+          {action.kind === "confirm_business_purpose" ? (
+            <div className="rounded-2xl border border-amber-300/12 bg-amber-300/[0.04] px-4 py-3 text-sm text-white/72">
+              Confirm these transactions had a business purpose. Bizzi will preserve the proposed category and percentage, then record a user-confirmed audit history row.
+            </div>
+          ) : action.kind === "business_use_percent" ? (
+            <BusinessUsePercentField value={businessUsePercent} onChange={setBusinessUsePercent} />
+          ) : action.kind === "utility_allocation" ? (
+            <div className="space-y-3">
+              <label className="flex items-start gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 text-sm text-white/72">
+                <input type="checkbox" checked={dedicatedPremises} onChange={(event) => setDedicatedPremises(event.target.checked)} className="mt-1" />
+                <span>Dedicated business premises or business-only utility service</span>
+              </label>
+              {!dedicatedPremises ? <BusinessUsePercentField value={businessUsePercent} onChange={setBusinessUsePercent} label="Business allocation %" /> : null}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3 text-sm text-white/58">
+              Vehicle expenses require a vehicle method and business-use workflow before they can become authoritative.
+            </div>
+          )}
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-black/18">
+            <div className="border-b border-white/[0.08] px-3 py-2 text-xs font-semibold uppercase tracking-[0.12em] text-white/42">
+              Preserve selected exceptions
+            </div>
+            <div className="max-h-56 overflow-y-auto">
+              {rows.map((row) => (
+                <label key={row.id} className="flex items-center gap-3 border-b border-white/[0.06] px-3 py-2 last:border-b-0">
+                  <input
+                    type="checkbox"
+                    checked={exceptionIds.includes(row.id)}
+                    onChange={(event) => {
+                      setExceptionIds((current) => event.target.checked
+                        ? [...current, row.id]
+                        : current.filter((id) => id !== row.id));
+                    }}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-white/78">{row.vendor}</span>
+                    <span className="block truncate text-xs text-white/42">{formatDateLocal(row.date)} · {formatCurrencyLocal(row.amount)} gross · {row.taxCategoryLabel}</span>
+                  </span>
+                  <span className="shrink-0 text-xs text-amber-100/70">{resolveDeductibleAmount(row) > 0 ? `${formatCurrencyLocal(resolveDeductibleAmount(row))} proposed` : group.actionLabel}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <p className="mt-3 text-xs leading-relaxed text-white/42">
+            Going-forward treatment is not saved here. This confirmation affects only the selected current classifications and writes through the existing override audit mechanism.
+          </p>
+        </div>
+        <footer className="flex flex-col gap-2 border-t border-white/10 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-xs text-white/46">{selectedRows.length} of {rows.length} rows selected</div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={onClose} disabled={saving} className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-white/70 hover:bg-white/10 disabled:opacity-50">Cancel</button>
+            <button type="button" onClick={submit} disabled={!canSubmit || saving} className="rounded-full bg-amber-200 px-4 py-2 text-sm font-semibold text-[#120f04] hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
+              {saving ? "Saving..." : "Confirm selected"}
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  );
+  return typeof document !== "undefined" ? createPortal(modal, document.body) : modal;
+}
+
+function BusinessUsePercentField({ value, onChange, label = "Business use %" }) {
+  return (
+    <label className="block rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3">
+      <span className="text-sm font-semibold text-white/78">{label}</span>
+      <span className="mt-1 block text-xs text-white/46">Enter the portion used for business. Personal or commuting use is not included.</span>
+      <input
+        type="number"
+        min="0"
+        max="100"
+        step="1"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-3 h-10 w-32 rounded-xl border border-white/10 bg-black/22 px-3 text-sm font-semibold text-white outline-none focus:border-emerald-300/40"
+        placeholder="0-100"
+      />
+    </label>
   );
 }
 
@@ -1520,6 +1749,117 @@ function attentionEmptyMessage(tab) {
   return "No review-required transactions need attention.";
 }
 
+function buildAttentionReviewGroups(rows) {
+  const groups = new Map();
+  for (const row of rows) {
+    if (classificationBucket(row) !== "needs_review" || hasManualClassificationAuthority(row)) continue;
+    const decision = reviewDecisionForRow(row);
+    const qboAccountName = safeText(row.qboAccountName || row.bookAccount, "Unmapped QuickBooks account");
+    const qboAccountId = firstValue(row.qboAccountId, row.raw?.qboAccountId, row.raw?.source_qbo_account_id, qboAccountName);
+    const key = `${qboAccountId}:${decision.kind}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        qboAccountName,
+        decision,
+        actionLabel: decision.actionLabel,
+        blockedReason: decision.blockedReason,
+        canApply: decision.canApply,
+        taxCategoryLabel: row.taxCategoryLabel || formatTaxCategoryLabel(row.taxCategory),
+        rows: [],
+        grossTotal: 0,
+        proposedDeductibleTotal: 0,
+        transactionCount: 0,
+      });
+    }
+    const group = groups.get(key);
+    group.rows.push(row);
+    group.grossTotal += normalizeMoney(row.amount);
+    group.proposedDeductibleTotal += normalizeMoney(resolveDeductibleAmount(row));
+    group.transactionCount += 1;
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => b.transactionCount - a.transactionCount || a.qboAccountName.localeCompare(b.qboAccountName));
+}
+
+function reviewDecisionForRow(row) {
+  const category = String(row?.taxCategory || row?.tax_category || "").toLowerCase();
+  const glAccount = String(row?.qboAccountName || row?.bookAccount || row?.raw?.qboAccountName || row?.raw?.source_qbo_account_name || "").toLowerCase();
+  const ruleCode = String(row?.matchedRuleCode || row?.ruleCode || row?.raw?.matched_rule_code || row?.raw?.rule_code || row?.raw?.classification?.rule_code || "").toLowerCase();
+  if (category.includes("vehicle") || ruleCode.includes("vehicle") || /\b(gas|fuel|auto)\b/.test(glAccount)) {
+    return {
+      kind: "vehicle_method",
+      actionLabel: "Set vehicle method",
+      canApply: false,
+      blockedReason: "Vehicle expenses need a vehicle-method workflow before they can become authoritative.",
+    };
+  }
+  if (category.includes("utilities") && /\b(phone|telephone|cell|mobile)\b/.test(glAccount)) {
+    return { kind: "business_use_percent", actionLabel: "Set business use %", canApply: true };
+  }
+  if (category.includes("utilities")) {
+    return { kind: "utility_allocation", actionLabel: "Set business use %", canApply: true };
+  }
+  if (category.includes("business_meals") || category.includes("travel_transportation") || /\b(meals?|parking|tolls?|rideshare|uber|lyft|transportation)\b/.test(glAccount)) {
+    return { kind: "confirm_business_purpose", actionLabel: "Confirm business use", canApply: true };
+  }
+  if (category.includes("supplies")) {
+    return { kind: "confirm_business_purpose", actionLabel: "Confirm business use", canApply: true };
+  }
+  return { kind: "confirm_business_purpose", actionLabel: "Confirm business use", canApply: true };
+}
+
+function hasManualClassificationAuthority(row) {
+  const status = String(row?.status || row?.classificationStatus || row?.raw?.classification_status || "").toLowerCase();
+  return status === "user_confirmed" ||
+    status === "cpa_confirmed" ||
+    status === "accountant_reviewed" ||
+    row?.raw?.user_override === true ||
+    row?.raw?.cpa_override === true ||
+    row?.userOverride === true ||
+    row?.cpaOverride === true;
+}
+
+function buildReviewDecisionChanges({ group, businessUsePercent, dedicatedPremises }) {
+  const row = group.rows[0] || {};
+  if (group.decision.kind === "vehicle_method") {
+    throw new Error("Vehicle expenses require a vehicle-method workflow.");
+  }
+  if (group.decision.kind === "business_use_percent" || group.decision.kind === "utility_allocation") {
+    const percent = dedicatedPremises ? 100 : Number(businessUsePercent);
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100) {
+      throw new Error("Business-use percentage must be between 0 and 100.");
+    }
+    return {
+      taxCategory: row.taxCategory,
+      deductibilityStatus: percent >= 100 ? "fully_deductible" : percent <= 0 ? "nondeductible" : "partially_deductible",
+      deductiblePercent: percent,
+      taxTreatment: dedicatedPremises ? "dedicated_business_premises" : "business_use_allocation",
+    };
+  }
+  return {
+    taxCategory: row.taxCategory,
+    deductibilityStatus: row.deductibilityStatus || row.taxTreatment || "needs_review",
+    deductiblePercent: row.deductiblePercent,
+    taxTreatment: typeof row.taxTreatment === "string" && row.taxTreatment !== "not_determined"
+      ? row.taxTreatment
+      : row.deductibilityStatus || "needs_review",
+  };
+}
+
+function reviewDecisionReason({ group, scope, businessUsePercent, dedicatedPremises }) {
+  const scopeLabel = scope === "one_transaction" ? "one transaction" : "matching QBO GL account for this tax year";
+  if (group.decision.kind === "business_use_percent") {
+    return `User supplied ${businessUsePercent}% business use for ${scopeLabel}.`;
+  }
+  if (group.decision.kind === "utility_allocation") {
+    return dedicatedPremises
+      ? `User confirmed dedicated business premises or business-only utility service for ${scopeLabel}.`
+      : `User supplied ${businessUsePercent}% utility business allocation for ${scopeLabel}.`;
+  }
+  return `User confirmed business purpose for ${scopeLabel}.`;
+}
+
 function classificationWorkspaceMessage(summary) {
   if (summary.jobStatus?.status === "queued") {
     return "Deductions preparation is queued.";
@@ -1620,7 +1960,7 @@ function deductibilityLabel(row) {
   const status = String(row?.deductibilityStatus || row?.taxTreatment || "").toLowerCase();
   const label = String(row?.taxTreatmentLabel || "").toLowerCase();
   const percent = row?.deductiblePercent == null || Number.isNaN(Number(row.deductiblePercent)) ? null : Number(row.deductiblePercent);
-  if (bucket === "needs_review" && percent === 0) return "Depends on business use";
+  if (bucket === "needs_review" && percent === 0) return reviewDecisionForRow(row).actionLabel || "Depends on business use";
   if (status === "fully_deductible" || label === "deductible" || label.includes("fully deductible") || (bucket === "auto_classified" && percent === 100)) return "Fully deductible";
   if (status === "partially_deductible" || label.includes("partial")) return "Partially deductible";
   if (status.includes("non") || label.includes("non")) return "Nondeductible";
@@ -1632,7 +1972,7 @@ function deductibilityLabel(row) {
 function deductiblePercentLabel(row) {
   if (classificationBucket(row) === "unclassified") return "";
   if (row?.deductiblePercent == null || Number.isNaN(Number(row.deductiblePercent))) return "Percent pending";
-  if (classificationBucket(row) === "needs_review" && Number(row.deductiblePercent) === 0) return "Review required";
+  if (classificationBucket(row) === "needs_review" && Number(row.deductiblePercent) === 0) return reviewDecisionForRow(row).actionLabel || "Review required";
   if (classificationBucket(row) === "needs_review") return `${Math.round(Number(row.deductiblePercent))}% proposed`;
   return `${Math.round(Number(row.deductiblePercent))}% deductible`;
 }
@@ -2133,6 +2473,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     displayDeductibleTotal: 0,
     autoTransactionCount: 0,
     reviewTransactionCount: 0,
+    reviewActionLabel: null,
     transactions: [],
   }]));
   const accountMap = new Map();
@@ -2164,6 +2505,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
         transactionCount: 0,
         autoTransactionCount: 0,
         reviewTransactionCount: 0,
+        reviewActionLabel: null,
       });
     }
     const account = accountMap.get(accountKey);
@@ -2179,7 +2521,10 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     month.proposedDeductibleTotal += proposedAmount;
     month.displayDeductibleTotal += displayAmount;
     if (bucket === "auto_classified") month.autoTransactionCount += 1;
-    if (bucket === "needs_review") month.reviewTransactionCount += 1;
+    if (bucket === "needs_review") {
+      month.reviewTransactionCount += 1;
+      month.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
+    }
     month.transactions.push(row);
     account.expenseTotal += expenseAmount;
     account.authoritativeDeductibleTotal += authoritativeAmount;
@@ -2187,7 +2532,10 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     account.displayDeductibleTotal += displayAmount;
     account.transactionCount += 1;
     if (bucket === "auto_classified") account.autoTransactionCount += 1;
-    if (bucket === "needs_review") account.reviewTransactionCount += 1;
+    if (bucket === "needs_review") {
+      account.reviewTransactionCount += 1;
+      account.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
+    }
   }
 
   return {
