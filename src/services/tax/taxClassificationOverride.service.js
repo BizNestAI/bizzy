@@ -22,6 +22,12 @@ export async function applyClassificationOverride({ supabase, businessId, taxYea
   const year = requireTaxYear(taxYear);
   const current = await requireClassification({ supabase, businessId, taxYear: year, transactionId });
   assertNoStaleWrite(current, input.expectedUpdatedAt);
+  if (input.protectConfirmedAuthority && hasConfirmedAuthority(current)) {
+    throw conflictError("confirmed_authority_protected", "Confirmed tax classification authority is protected.", {
+      transactionId,
+      taxYear: year,
+    });
+  }
   if (isConfirmed(current) && !input.reason) {
     throw validationError("override_reason_required", "A reason is required to override a confirmed classification.", { field: "reason" });
   }
@@ -146,7 +152,7 @@ export async function bulkApplyClassificationOverrides({ supabase, businessId, t
   const result = { attempted: ids.length, updated: 0, failed: 0, errors: [] };
   for (const transactionId of ids) {
     try {
-      await applyClassificationOverride({ supabase, businessId, taxYear, transactionId, input: { ...input, createBusinessRule: false }, actor });
+      await applyClassificationOverride({ supabase, businessId, taxYear, transactionId, input: { ...input, createBusinessRule: false, protectConfirmedAuthority: input.protectConfirmedAuthority === true }, actor });
       result.updated += 1;
     } catch (err) {
       result.failed += 1;
@@ -154,6 +160,15 @@ export async function bulkApplyClassificationOverrides({ supabase, businessId, t
     }
   }
   return result;
+}
+
+function hasConfirmedAuthority(row = {}) {
+  const status = String(row.classification_status || "").toLowerCase();
+  return status === TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED ||
+    status === TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED ||
+    status === "accountant_reviewed" ||
+    row.user_override === true ||
+    row.cpa_override === true;
 }
 
 function buildUpdatedClassification({ current, input, actor, transaction, status }) {

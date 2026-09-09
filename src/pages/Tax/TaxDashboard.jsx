@@ -19,6 +19,7 @@ import { useTaxPayments } from "../../hooks/tax/useTaxPayments.js";
 import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader";
 import { mapDeductionTransactionRow } from "../../components/Tax/Deductions/deductionsWorkspaceViewModel.js";
 import { isTaxLiabilityEstimateEnabled } from "../../config/taxFeatures.js";
+import { computeClassificationAmounts } from "../../services/tax/taxClassificationAmounts.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
 
@@ -812,6 +813,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
             onAssignTaxClassification={deductions.assignTaxClassification}
             onOverrideClassification={deductions.overrideClassification}
             onBulkUpdateClassifications={deductions.bulkUpdateClassifications}
+            onSetTaxProfileMemory={deductions.setProfileMemory}
             onRefresh={refreshDeductions}
             readOnly={readOnly}
           />
@@ -2082,6 +2084,7 @@ function DeductionMonthDetailModal({
   onAssignTaxClassification,
   onOverrideClassification,
   onBulkUpdateClassifications,
+  onSetTaxProfileMemory,
   onRefresh,
   readOnly = false,
 }) {
@@ -2101,6 +2104,8 @@ function DeductionMonthDetailModal({
   const [assignmentError, setAssignmentError] = useState("");
   const [selectedReviewTransactionIds, setSelectedReviewTransactionIds] = useState(() => new Set());
   const [reviewScope, setReviewScope] = useState("selected_transactions");
+  const [reviewResolutionMode, setReviewResolutionMode] = useState("business");
+  const [businessUseMode, setBusinessUseMode] = useState("");
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [vehicleMethod, setVehicleMethod] = useState("");
   const [resolutionCategory, setResolutionCategory] = useState("");
@@ -2111,6 +2116,8 @@ function DeductionMonthDetailModal({
     setSavingChanges(false);
     setSelectedReviewTransactionIds(new Set());
     setReviewScope("selected_transactions");
+    setReviewResolutionMode("business");
+    setBusinessUseMode("");
     setBusinessUsePercent("");
     setVehicleMethod("");
     setResolutionCategory(reviewContext.defaultTaxCategory || "");
@@ -2158,14 +2165,20 @@ function DeductionMonthDetailModal({
   const selectedCount = selectedReviewRows.length;
   const percentNumber = parseBusinessUsePercent(businessUsePercent);
   const percentValid = businessUsePercent === "" ? false : percentNumber != null;
+  const resolvedBusinessUsePercent = businessUseMode === "dedicated" ? 100 : businessUseMode === "personal" ? 0 : percentNumber;
+  const businessUseSelectionValid = reviewContext.kind !== "business_use_percent"
+    || businessUseMode === "dedicated"
+    || businessUseMode === "personal"
+    || (businessUseMode === "mixed" && percentValid);
   const estimatedEffect = estimateResolutionDeduction(selectedReviewRows, reviewContext, {
-    businessUsePercent: percentNumber,
+    businessUsePercent: resolvedBusinessUsePercent,
     vehicleMethod,
     resolutionCategory,
+    resolutionMode: reviewResolutionMode,
   });
   const canResolve = !readOnly && selectedCount > 0 && reviewScope !== "going_forward" && reviewContext.supported &&
-    (!reviewContext.requiresBusinessUsePercent || percentValid) &&
-    (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expenses" && percentValid));
+    (reviewContext.kind !== "business_use_percent" || businessUseSelectionValid) &&
+    (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && percentValid));
 
   const pendingChanges = transactions
     .map((row) => {
@@ -2248,23 +2261,52 @@ function DeductionMonthDetailModal({
     if (!canResolve || typeof onOverrideClassification !== "function") return;
     const transactionIds = selectedReviewRows.map((row) => row.id || row.raw?.transactionId).filter(Boolean);
     const changes = buildDetailResolutionChanges(reviewContext, selectedReviewRows, {
-      businessUsePercent: percentNumber,
+      businessUsePercent: resolvedBusinessUsePercent,
       vehicleMethod,
       resolutionCategory,
+      resolutionMode: reviewResolutionMode,
     });
     if (!transactionIds.length || !changes) return;
     setSavingChanges(true);
     setAssignmentError("");
     try {
-      const reason = detailResolutionReason(reviewContext, reviewScope, selectedCount);
-      if (transactionIds.length === 1 || typeof onBulkUpdateClassifications !== "function") {
-        for (const transactionId of transactionIds) {
-          await onOverrideClassification(transactionId, { ...changes, reason });
+      if (reviewContext.kind === "vehicle_method" && typeof onSetTaxProfileMemory === "function") {
+        await onSetTaxProfileMemory({
+          memoryKey: "vehicle_deduction_method",
+          value: vehicleMethod === "standard_mileage" ? "standard_mileage" : "actual_expense",
+          source: "user",
+          confidenceScore: 100,
+          notes: "Vehicle method selected from Deductions review.",
+          metadata: {
+            qbo_gl_account: account.name,
+            tax_year: yearFromMonthKey(month.key),
+            selected_transaction_count: selectedCount,
+          },
+        });
+        if (vehicleMethod === "actual_expense") {
+          await onSetTaxProfileMemory({
+            memoryKey: "vehicle_business_use_percent",
+            value: resolvedBusinessUsePercent,
+            source: "user",
+            confidenceScore: 100,
+            notes: "Vehicle business-use percentage supplied from Deductions review.",
+            metadata: {
+              qbo_gl_account: account.name,
+              tax_year: yearFromMonthKey(month.key),
+              selected_transaction_count: selectedCount,
+            },
+          });
         }
-      } else {
+      }
+      const reason = detailResolutionReason(reviewContext, reviewScope, selectedCount);
+      if (typeof onBulkUpdateClassifications === "function") {
         for (let index = 0; index < transactionIds.length; index += 100) {
           const chunk = transactionIds.slice(index, index + 100);
           await onBulkUpdateClassifications(chunk, changes, { reason });
+        }
+      } else {
+        for (const transactionId of transactionIds) {
+          await onOverrideClassification(transactionId, { ...changes, reason });
         }
       }
       setSelectedReviewTransactionIds(new Set());
@@ -2364,8 +2406,10 @@ function DeductionMonthDetailModal({
               selectedIds={selectedReviewTransactionIds}
               reviewScope={reviewScope}
               businessUsePercent={businessUsePercent}
+              businessUseMode={businessUseMode}
               businessUsePercentValid={percentValid}
               vehicleMethod={vehicleMethod}
+              resolutionMode={reviewResolutionMode}
               resolutionCategory={resolutionCategory}
               estimatedEffect={estimatedEffect}
               canResolve={canResolve}
@@ -2376,8 +2420,10 @@ function DeductionMonthDetailModal({
                 setReviewScope(scope);
                 setSelectedReviewTransactionIds(new Set());
               }}
+              onBusinessUseModeChange={setBusinessUseMode}
               onBusinessUsePercentChange={setBusinessUsePercent}
               onVehicleMethodChange={setVehicleMethod}
+              onResolutionModeChange={setReviewResolutionMode}
               onResolutionCategoryChange={setResolutionCategory}
               onSave={saveReviewResolution}
             />
@@ -2542,8 +2588,10 @@ function DetailResolutionPanel({
   selectedIds,
   reviewScope,
   businessUsePercent,
+  businessUseMode,
   businessUsePercentValid,
   vehicleMethod,
+  resolutionMode,
   resolutionCategory,
   estimatedEffect,
   canResolve,
@@ -2551,13 +2599,16 @@ function DetailResolutionPanel({
   readOnly,
   onSelectAll,
   onScopeChange,
+  onBusinessUseModeChange,
   onBusinessUsePercentChange,
   onVehicleMethodChange,
+  onResolutionModeChange,
   onResolutionCategoryChange,
   onSave,
 }) {
   const allSelected = rows.length > 0 && rows.every((row) => selectedIds.has(String(row.id || row.raw?.transactionId)));
   const selectedCount = selectedRows.length;
+  const selectedGrossTotal = selectedRows.reduce((sum, row) => sum + Math.abs(normalizeMoney(row.amount)), 0);
   return (
     <section className="mb-4 rounded-[18px] border border-white/10 bg-white/[0.035] p-3">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -2569,22 +2620,25 @@ function DetailResolutionPanel({
         <div className="rounded-[14px] border border-white/10 bg-black/18 px-3 py-2 text-right">
           <div className="text-[10px] uppercase tracking-[0.12em] text-white/38">Estimated effect</div>
           <div className="mt-1 text-base font-semibold tabular-nums text-amber-100">{estimatedEffect.label}</div>
+          <div className="mt-1 text-[11px] text-white/38">{selectedCount} rows · {formatCurrencyLocal(selectedGrossTotal)} gross</div>
         </div>
       </div>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
         <div className="space-y-2">
-          <ReviewScopeRadio value="selected_transactions" current={reviewScope} onChange={onScopeChange} label="Selected transactions" description="Apply only to the checked rows below." />
-          <ReviewScopeRadio value="account_year" current={reviewScope} onChange={onScopeChange} label="This QBO GL account for this tax year" description="Apply to matching review rows already loaded for this account and year." />
-          <ReviewScopeRadio value="going_forward" current={reviewScope} onChange={onScopeChange} label="This GL account going forward" description="Requires a schema-backed account-level authority record before it can be saved." disabled />
+          <ReviewScopeRadio groupName="deduction-review-scope" value="selected_transactions" current={reviewScope} onChange={onScopeChange} label="Selected transactions" description="Apply only to the checked rows below." />
+          <ReviewScopeRadio groupName="deduction-review-scope" value="account_year" current={reviewScope} onChange={onScopeChange} label="This QBO GL account for this tax year" description="Apply to matching review rows already loaded for this account and year." />
+          <ReviewScopeRadio groupName="deduction-review-scope" value="going_forward" current={reviewScope} onChange={onScopeChange} label="This GL account going forward" description="Requires a schema-backed account-level authority record before it can be saved." disabled />
         </div>
 
         <div className="space-y-3 rounded-[14px] border border-white/[0.08] bg-black/16 p-3">
           {context.kind === "business_use_percent" ? (
-            <BusinessUsePercentInput
-              value={businessUsePercent}
-              valid={businessUsePercentValid}
-              onChange={onBusinessUsePercentChange}
+            <UtilityBusinessUseControls
+              mode={businessUseMode}
+              percent={businessUsePercent}
+              percentValid={businessUsePercentValid}
+              onModeChange={onBusinessUseModeChange}
+              onPercentChange={onBusinessUsePercentChange}
             />
           ) : null}
           {context.kind === "vehicle_method" ? (
@@ -2611,8 +2665,26 @@ function DetailResolutionPanel({
             </div>
           ) : null}
           {context.kind === "business_purpose" ? (
-            <div className="rounded-[12px] border border-amber-300/12 bg-amber-300/[0.05] px-3 py-2 text-xs leading-relaxed text-amber-50/72">
-              Confirm that the selected expenses had a business purpose. Leave personal or commuting exceptions unchecked.
+            <div className="space-y-2">
+              <ReviewScopeRadio
+                value="business"
+                groupName="deduction-review-resolution"
+                current={resolutionMode}
+                onChange={onResolutionModeChange}
+                label={context.businessLabel || "Confirm selected as business"}
+                description="Selected transactions become user-confirmed with the proposed rule treatment."
+              />
+              <ReviewScopeRadio
+                value="personal"
+                groupName="deduction-review-resolution"
+                current={resolutionMode}
+                onChange={onResolutionModeChange}
+                label={context.personalLabel || "Mark selected as personal"}
+                description="Selected transactions are preserved in history and excluded from confirmed deductions."
+              />
+              <div className="rounded-[12px] border border-amber-300/12 bg-amber-300/[0.05] px-3 py-2 text-xs leading-relaxed text-amber-50/72">
+                Leave exceptions unchecked so they stay in Needs review.
+              </div>
             </div>
           ) : null}
         </div>
@@ -2644,12 +2716,33 @@ function DetailResolutionPanel({
   );
 }
 
-function ReviewScopeRadio({ value, current, onChange, label, description, disabled = false }) {
+function UtilityBusinessUseControls({ mode, percent, percentValid, onModeChange, onPercentChange }) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">How much of this account is used for business?</div>
+        <div className="mt-2 grid gap-2">
+          <ReviewScopeRadio groupName="deduction-business-use-mode" value="dedicated" current={mode} onChange={onModeChange} label="Dedicated business location - 100%" description="The account is for a dedicated business location or business-only service." />
+          <ReviewScopeRadio groupName="deduction-business-use-mode" value="mixed" current={mode} onChange={onModeChange} label="Mixed business and personal use" description="Enter the factual business-use percentage." />
+          <ReviewScopeRadio groupName="deduction-business-use-mode" value="personal" current={mode} onChange={onModeChange} label="Personal - 0%" description="No deduction will be confirmed for the selected transactions." />
+        </div>
+      </div>
+      {mode === "mixed" ? (
+        <BusinessUsePercentInput value={percent} valid={percentValid} onChange={onPercentChange} />
+      ) : null}
+      {!mode ? (
+        <p className="text-xs text-amber-100/62">Choose an option before saving. Bizzi will not assume a business-use percentage.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function ReviewScopeRadio({ value, current, onChange, label, description, disabled = false, groupName = "deduction-review-option" }) {
   return (
     <label className={`flex gap-2 rounded-[13px] border px-3 py-2 ${current === value ? "border-emerald-300/20 bg-emerald-300/[0.07]" : "border-white/[0.08] bg-black/12"} ${disabled ? "opacity-45" : "cursor-pointer"}`}>
       <input
         type="radio"
-        name="deduction-review-scope"
+        name={groupName}
         value={value}
         checked={current === value}
         disabled={disabled}
@@ -2692,12 +2785,16 @@ function VehicleMethodControls({ vehicleMethod, businessUsePercent, businessUseP
       <div>
         <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Vehicle method</div>
         <div className="mt-2 grid gap-2">
-          <ReviewScopeRadio value="standard_mileage" current={vehicleMethod} onChange={onVehicleMethodChange} label="Standard mileage" description="Gas is not separately deducted. Mileage records are required to calculate the deduction." />
-          <ReviewScopeRadio value="actual_expenses" current={vehicleMethod} onChange={onVehicleMethodChange} label="Actual vehicle expenses" description="Deduct only the business-use portion of eligible vehicle costs." />
+          <ReviewScopeRadio groupName="deduction-vehicle-method" value="standard_mileage" current={vehicleMethod} onChange={onVehicleMethodChange} label="Standard mileage" description="Gas is not separately deducted. Mileage records are required to calculate the deduction." />
+          <ReviewScopeRadio groupName="deduction-vehicle-method" value="actual_expense" current={vehicleMethod} onChange={onVehicleMethodChange} label="Actual vehicle expenses" description="Deduct only the business-use portion of eligible vehicle costs." />
+          <ReviewScopeRadio groupName="deduction-vehicle-method" value="unsure" current={vehicleMethod} onChange={onVehicleMethodChange} label="I'm not sure" description="Keep these transactions in Needs review. Nothing is saved." />
         </div>
       </div>
-      {vehicleMethod === "actual_expenses" ? (
+      {vehicleMethod === "actual_expense" ? (
         <BusinessUsePercentInput value={businessUsePercent} valid={businessUsePercentValid} onChange={onBusinessUsePercentChange} />
+      ) : null}
+      {vehicleMethod === "unsure" ? (
+        <p className="text-xs leading-relaxed text-white/46">No vehicle method will be saved, and these gas transactions will remain Needs review.</p>
       ) : null}
     </div>
   );
@@ -2730,6 +2827,8 @@ function detailReviewContextForSelection(selection) {
       taxTreatment: "business_meals_business_purpose_confirmed",
       explanation: "QuickBooks categorized these expenses as Meals. Bizzi estimates that 50% may be deductible, but you must confirm they had a business purpose.",
       actionHelp: "Confirm selected transactions as business meals. Personal meals and undocumented exceptions should stay unchecked.",
+      businessLabel: "Confirm selected as business meals",
+      personalLabel: "Mark selected as personal meals",
     };
   }
   if (category.includes("vehicle") || accountName.includes("gas") || accountName.includes("fuel")) {
@@ -2737,7 +2836,7 @@ function detailReviewContextForSelection(selection) {
       kind: "vehicle_method",
       supported: true,
       defaultTaxCategory: taxCategorySelectValue(row) || "vehicle",
-      explanation: "Choose your vehicle deduction method. Gas is not separately deducted when the standard-mileage method is used.",
+      explanation: "Bizzi matched this QuickBooks account to Vehicle Expense, but needs your vehicle deduction method before calculating a deduction.",
       actionHelp: "Choose a vehicle method for the selected gas transactions before Bizzi treats them as confirmed.",
     };
   }
@@ -2747,7 +2846,7 @@ function detailReviewContextForSelection(selection) {
       supported: true,
       requiresBusinessUsePercent: true,
       defaultTaxCategory: taxCategorySelectValue(row) || "utilities",
-      explanation: "This account may contain both business and personal use. Enter the business-use percentage to calculate an estimated deduction.",
+      explanation: "Bizzi matched this QuickBooks account to Utilities, but needs your business-use percentage before calculating a deduction.",
       actionHelp: "Enter the factual business-use percentage for selected phone or utility expenses.",
     };
   }
@@ -2759,8 +2858,10 @@ function detailReviewContextForSelection(selection) {
       confirmationPercent: 100,
       deductibilityStatus: "fully_deductible",
       taxTreatment: "travel_transportation_business_purpose_confirmed",
-      explanation: "Confirm that these trips had a business purpose. Personal travel and commuting should not be included.",
+      explanation: "Bizzi matched these expenses to Business Transportation. Confirm which trips had a business purpose and exclude personal travel or commuting.",
       actionHelp: "Confirm selected trips as business transportation and leave personal or commuting exceptions unchecked.",
+      businessLabel: "Confirm selected as business trips",
+      personalLabel: "Mark selected as personal or commuting",
     };
   }
   if (category.includes("suppl") || accountName.includes("suppl")) {
@@ -2814,14 +2915,29 @@ function parseBusinessUsePercent(value) {
 
 function estimateResolutionDeduction(rows, context, options = {}) {
   if (!rows.length) return { amount: 0, label: "Select transactions" };
+  if (context.kind === "business_purpose" && options.resolutionMode === "personal") {
+    return { amount: 0, label: "No deduction" };
+  }
   if (context.kind === "vehicle_method" && options.vehicleMethod === "standard_mileage") {
     return { amount: 0, label: "Gas not deducted separately" };
   }
-  const percent = context.kind === "business_use_percent" || (context.kind === "vehicle_method" && options.vehicleMethod === "actual_expenses")
+  if (context.kind === "vehicle_method" && options.vehicleMethod === "unsure") {
+    return { amount: 0, label: "Stays in review" };
+  }
+  const percent = context.kind === "business_use_percent" || (context.kind === "vehicle_method" && options.vehicleMethod === "actual_expense")
     ? options.businessUsePercent
     : context.confirmationPercent;
   if (percent == null || Number.isNaN(Number(percent))) return { amount: 0, label: "Not calculated" };
-  const amount = rows.reduce((sum, row) => sum + normalizeMoney(row.amount) * (Number(percent) / 100), 0);
+  const amount = rows.reduce((sum, row) => {
+    const amounts = computeClassificationAmounts({
+      signedAmount: row.amount,
+      direction: row.raw?.direction,
+      deductibilityStatus: Number(percent) >= 100 ? "fully_deductible" : Number(percent) <= 0 ? "nondeductible" : "partially_deductible",
+      deductiblePercent: Number(percent),
+      taxCategory: context.defaultTaxCategory,
+    });
+    return sum + normalizeMoney(amounts.deductibleAmount);
+  }, 0);
   return { amount, label: formatCurrencyLocal(amount) };
 }
 
@@ -2831,6 +2947,14 @@ function buildDetailResolutionChanges(context, rows, options = {}) {
     ? options.resolutionCategory || context.defaultTaxCategory
     : taxCategorySelectValue(first) || context.defaultTaxCategory;
   if (!category) return null;
+  if (context.kind === "business_purpose" && options.resolutionMode === "personal") {
+    return {
+      taxCategory: category,
+      deductibilityStatus: "nondeductible",
+      deductiblePercent: 0,
+      taxTreatment: "personal_or_commuting_expense_excluded",
+    };
+  }
   if (context.kind === "vehicle_method" && options.vehicleMethod === "standard_mileage") {
     return {
       taxCategory: category,
@@ -2839,7 +2963,10 @@ function buildDetailResolutionChanges(context, rows, options = {}) {
       taxTreatment: "vehicle_standard_mileage_no_separate_gas",
     };
   }
-  if (context.kind === "vehicle_method" && options.vehicleMethod === "actual_expenses") {
+  if (context.kind === "vehicle_method" && options.vehicleMethod === "unsure") {
+    return null;
+  }
+  if (context.kind === "vehicle_method" && options.vehicleMethod === "actual_expense") {
     return {
       taxCategory: category,
       deductibilityStatus: options.businessUsePercent === 100 ? "fully_deductible" : options.businessUsePercent === 0 ? "nondeductible" : "partially_deductible",
@@ -2866,6 +2993,11 @@ function buildDetailResolutionChanges(context, rows, options = {}) {
 function detailResolutionReason(context, scope, count) {
   const scopeLabel = scope === "account_year" ? "QBO GL account tax-year scope" : "selected transaction scope";
   return `User confirmed ${count} deduction review ${count === 1 ? "item" : "items"} from the detail modal (${context.kind}, ${scopeLabel}).`;
+}
+
+function yearFromMonthKey(value) {
+  const year = Number(String(value || "").slice(0, 4));
+  return Number.isFinite(year) ? year : null;
 }
 
 function getFocusableElements(root) {

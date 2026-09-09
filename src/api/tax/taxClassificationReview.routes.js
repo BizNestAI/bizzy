@@ -152,7 +152,7 @@ router.post("/classifications/bulk-update", async (req, res) => {
     const data = await bulkApplyClassificationOverrides({
       ...ctx,
       transactionIds: ids.map(String),
-      input: { ...payload, createBusinessRule: false },
+      input: { ...payload, createBusinessRule: false, protectConfirmedAuthority: true },
       actor: actorFromRequest(req),
     });
     return sendTaxSuccess(res, data);

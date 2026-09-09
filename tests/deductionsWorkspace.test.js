@@ -559,9 +559,9 @@ test("Deduction detail modal explains proposed treatment and avoids automatic co
 test("Deduction detail modal renders specific review explanations and resolution workflows", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /QuickBooks categorized these expenses as Meals/);
-  assert.match(dashboard, /Enter the business-use percentage to calculate an estimated deduction/);
-  assert.match(dashboard, /Personal travel and commuting should not be included/);
-  assert.match(dashboard, /Gas is not separately deducted when the standard-mileage method is used/);
+  assert.match(dashboard, /Bizzi matched this QuickBooks account to Utilities, but needs your business-use percentage before calculating a deduction/);
+  assert.match(dashboard, /Bizzi matched these expenses to Business Transportation/);
+  assert.match(dashboard, /Bizzi matched this QuickBooks account to Vehicle Expense, but needs your vehicle deduction method before calculating a deduction/);
   assert.match(dashboard, /Confirm whether these are office supplies, job supplies, or materials/);
   assert.match(dashboard, /Resolve this review/);
   assert.match(dashboard, /Selected transactions/);
@@ -576,18 +576,49 @@ test("Deduction detail modal validates business-use and vehicle method resolutio
   assert.match(dashboard, /number < 0 \|\| number > 100/);
   assert.match(dashboard, /vehicleMethod === "standard_mileage"/);
   assert.match(dashboard, /vehicle_standard_mileage_no_separate_gas/);
-  assert.match(dashboard, /vehicleMethod === "actual_expenses"/);
+  assert.match(dashboard, /vehicleMethod === "actual_expense"/);
   assert.match(dashboard, /vehicle_actual_expense_business_use/);
+  assert.match(dashboard, /vehicleMethod === "unsure"/);
+  assert.match(dashboard, /Stays in review/);
   assert.match(dashboard, /Gas not deducted separately/);
-  assert.match(dashboard, /normalizeMoney\(row\.amount\) \* \(Number\(percent\) \/ 100\)/);
+  assert.match(dashboard, /computeClassificationAmounts/);
+  assert.match(dashboard, /deductiblePercent: Number\(percent\)/);
+});
+
+test("Deduction detail modal exposes concrete utility and business-purpose controls", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /How much of this account is used for business/);
+  assert.match(dashboard, /Dedicated business location - 100%/);
+  assert.match(dashboard, /Mixed business and personal use/);
+  assert.match(dashboard, /Personal - 0%/);
+  assert.match(dashboard, /Confirm selected as business meals/);
+  assert.match(dashboard, /Mark selected as personal meals/);
+  assert.match(dashboard, /Confirm selected as business trips/);
+  assert.match(dashboard, /Mark selected as personal or commuting/);
+  assert.match(dashboard, /Leave exceptions unchecked so they stay in Needs review/);
+});
+
+test("Deduction detail vehicle workflow stores method facts in tax profile memory", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  assert.match(hook, /setTaxProfileMemory/);
+  assert.match(hook, /setProfileMemory/);
+  assert.match(dashboard, /onSetTaxProfileMemory/);
+  assert.match(dashboard, /memoryKey: "vehicle_deduction_method"/);
+  assert.match(dashboard, /value: vehicleMethod === "standard_mileage" \? "standard_mileage" : "actual_expense"/);
+  assert.match(dashboard, /memoryKey: "vehicle_business_use_percent"/);
 });
 
 test("Deduction detail modal preserves exceptions and refreshes after confirmations", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const routes = fs.readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
+  const service = fs.readFileSync("src/services/tax/taxClassificationOverride.service.js", "utf8");
   assert.match(dashboard, /selectedReviewTransactionIds/);
   assert.match(dashboard, /Preserve selected exceptions by leaving them unchecked/);
   assert.match(dashboard, /hasManualClassificationAuthority\(row\)/);
   assert.match(dashboard, /onBulkUpdateClassifications\(chunk, changes, \{ reason \}\)/);
   assert.match(dashboard, /await onRefresh\?\.\(\)/);
   assert.match(dashboard, /User confirmed \$\{count\} deduction review/);
+  assert.match(routes, /protectConfirmedAuthority: true/);
+  assert.match(service, /confirmed_authority_protected/);
 });

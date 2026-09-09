@@ -21,6 +21,7 @@ import {
   rejectTaxClassification,
   restoreTaxClassification,
   runTaxClassification,
+  setTaxProfileMemory,
 } from "../../services/tax/taxApiClient.js";
 
 export function useTaxDeductions({
@@ -273,6 +274,21 @@ export function useTaxDeductions({
     },
     bulkUpdateClassifications: async (transactionIds, changes = {}, options = {}) => {
       const result = await bulkUpdateTaxClassifications({ businessId, year, transactionIds, changes, ...options });
+      await load();
+      return result;
+    },
+    setProfileMemory: async ({ memoryKey, value, source = "user", confidenceScore = 100, effectiveFrom, notes, metadata, signal } = {}) => {
+      const result = await setTaxProfileMemory({
+        businessId,
+        memoryKey,
+        value,
+        source,
+        confidenceScore,
+        effectiveFrom,
+        notes,
+        metadata,
+        signal,
+      });
       await load();
       return result;
     },
