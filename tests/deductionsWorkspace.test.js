@@ -1,10 +1,113 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import fs from "node:fs";
+import process from "node:process";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createServer } from "vite";
 import {
   buildDeductionsWorkspaceViewModel,
   mapDeductionTransactionRow,
 } from "../src/components/Tax/Deductions/deductionsWorkspaceViewModel.js";
+
+let taxDashboardInternalsPromise;
+
+async function loadTaxDashboardInternals() {
+  if (!taxDashboardInternalsPromise) {
+    taxDashboardInternalsPromise = (async () => {
+      const server = await createServer({
+        appType: "custom",
+        server: { middlewareMode: true },
+        logLevel: "silent",
+        resolve: {
+          alias: {
+            "react-router-dom": `${process.cwd()}/tests/fixtures/reactRouterDomSsrStub.js`,
+            "../../services/supabaseClient.js": `${process.cwd()}/tests/fixtures/supabaseClientSsrStub.js`,
+            "../supabaseClient.js": `${process.cwd()}/tests/fixtures/supabaseClientSsrStub.js`,
+            "../supabaseClient": `${process.cwd()}/tests/fixtures/supabaseClientSsrStub.js`,
+          },
+        },
+        ssr: {
+          noExternal: ["react-router-dom"],
+        },
+        plugins: [{
+          name: "deductions-workspace-react-router-ssr-mock",
+          enforce: "pre",
+          resolveId(id) {
+            return id === "react-router-dom" ? "\0react-router-dom-ssr-mock" : null;
+          },
+          load(id) {
+            if (id !== "\0react-router-dom-ssr-mock") return null;
+            return "export function useNavigate() { return () => {}; }";
+          },
+        }, {
+          name: "deductions-workspace-supabase-client-ssr-mock",
+          enforce: "pre",
+          resolveId(id) {
+            return /(^|\/|\\.\\.)supabaseClient(\\.js)?$/.test(id) || id.endsWith("/services/supabaseClient.js")
+              ? "\0supabase-client-ssr-mock"
+              : null;
+          },
+          load(id) {
+            if (id !== "\0supabase-client-ssr-mock") return null;
+            return "export const supabase = { auth: { getSession: async () => ({ data: { session: null }, error: null }) } }; export default supabase;";
+          },
+        }],
+      });
+      try {
+        const mod = await server.ssrLoadModule("/src/pages/Tax/TaxDashboard.jsx");
+        return mod.__TaxDashboardTestInternals;
+      } finally {
+        await server.close();
+      }
+    })();
+  }
+  return taxDashboardInternalsPromise;
+}
+
+function makeReviewSelection({ accountName, taxCategory, monthKey, longLabel, deductiblePercent = 0, amount = 100, id = "txn-1" }) {
+  const row = {
+    id,
+    date: `${monthKey}-15`,
+    vendor: `${accountName} Vendor`,
+    description: `${accountName} test transaction`,
+    qboAccountId: `${accountName.toLowerCase()}-qbo`,
+    qboAccountName: accountName,
+    amount,
+    taxCategory,
+    taxCategoryLabel: taxCategory.split("_").map((part) => part[0].toUpperCase() + part.slice(1)).join(" "),
+    taxTreatment: "needs_review",
+    taxTreatmentLabel: "Needs review",
+    deductiblePercent,
+    deductibleAmount: deductiblePercent > 0 ? Math.round(Math.abs(amount) * deductiblePercent) / 100 : 0,
+    status: "needs_review",
+    statusLabel: "Needs review",
+    requiresReview: true,
+    classificationSource: "rule_engine",
+    matchedRuleCode: `${taxCategory}_review_gl_v3`,
+    ruleVersion: "bizzi-gl-2026-v3",
+    raw: { transactionId: id },
+  };
+  const month = {
+    key: monthKey,
+    longLabel,
+    transactions: [row],
+    expenseTotal: amount,
+    authoritativeDeductibleTotal: 0,
+    proposedDeductibleTotal: row.deductibleAmount,
+    selectedAuthority: "automatic",
+  };
+  return {
+    account: {
+      key: `qbo:${accountName.toLowerCase()}`,
+      name: accountName,
+      sourceLabel: row.taxCategoryLabel,
+      months: { [monthKey]: month },
+    },
+    month: { key: monthKey, longLabel },
+    cell: month,
+  };
+}
 
 test("deductions workspace view model keeps canonical buckets separate and preserves null", () => {
   const model = buildDeductionsWorkspaceViewModel({
@@ -374,7 +477,7 @@ test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and auth
   assert.match(dashboard, /openCell\("automatic"\)/);
   assert.match(dashboard, /openCell\("proposed"\)/);
   assert.match(dashboard, /selectedAuthority: authority/);
-  assert.match(dashboard, /cell\.selectedAuthority === "proposed"/);
+  assert.match(dashboard, /const isReviewDetail = transactions\.some/);
   assert.match(dashboard, /transactions\.filter\(\(row\) => classificationBucket\(row\) === "auto_classified"\)/);
   assert.match(dashboard, /transactions\.filter\(\(row\) => classificationBucket\(row\) === "needs_review"\)/);
 });
@@ -568,8 +671,8 @@ test("Deduction detail modal explains proposed treatment and avoids automatic co
   assert.match(dashboard, /Proposed means Bizzi calculated an estimate/);
   assert.match(dashboard, /Not calculated/);
   assert.doesNotMatch(dashboard, /cell\.selectedAuthority === "proposed" \? "Proposed needs-review amounts" : "Automatic deductions"/);
-  assert.match(dashboard, /cell\.selectedAuthority === "proposed"[\s\S]{0,180}Proposed means Bizzi calculated an estimate/);
-  assert.match(dashboard, /selectedAuthority === "proposed" \? "Why this needs review" : "Classification evidence"/);
+  assert.match(dashboard, /isReviewDetail[\s\S]{0,180}Proposed means Bizzi calculated an estimate/);
+  assert.match(dashboard, /isReviewDetail \? "Why this needs review" : "Classification evidence"/);
   assert.match(dashboard, /Bizzi matched this posted QuickBooks GL account to an active tax rule and calculated the confirmed deduction/);
 });
 
@@ -581,8 +684,8 @@ test("Deduction detail modal renders specific review explanations and resolution
   assert.match(dashboard, /Bizzi matched this QuickBooks account to Vehicle Expense, but needs your vehicle deduction method before calculating a deduction/);
   assert.match(dashboard, /Confirm whether these are office supplies, job supplies, or materials/);
   assert.match(dashboard, /Resolve this review/);
-  assert.match(dashboard, /Selected transactions/);
-  assert.match(dashboard, /This QBO GL account for this tax year/);
+  assert.match(dashboard, /This transaction/);
+  assert.match(dashboard, /This QBO GL account for \$\{taxYear\}/);
   assert.match(dashboard, /This GL account going forward/);
   assert.match(dashboard, /Requires a schema-backed account-level authority record before it can be saved/);
 });
@@ -607,12 +710,79 @@ test("Deduction detail modal exposes concrete utility and business-purpose contr
   assert.match(dashboard, /How much of this account is used for business/);
   assert.match(dashboard, /Dedicated business location - 100%/);
   assert.match(dashboard, /Mixed business and personal use/);
-  assert.match(dashboard, /Personal - 0%/);
+  assert.match(dashboard, /Personal use - 0%/);
+  assert.match(dashboard, /Business-use percentage input/);
+  assert.match(dashboard, /Save business use/);
+  assert.match(dashboard, /Not sure yet/);
+  assert.match(dashboard, /Choose vehicle deduction method/);
+  assert.match(dashboard, /Standard mileage/);
+  assert.match(dashboard, /Actual vehicle expenses/);
+  assert.match(dashboard, /Save vehicle method/);
   assert.match(dashboard, /Confirm selected as business meals/);
   assert.match(dashboard, /Mark selected as personal meals/);
   assert.match(dashboard, /Confirm selected as business trips/);
   assert.match(dashboard, /Mark selected as personal or commuting/);
   assert.match(dashboard, /Leave exceptions unchecked so they stay in Needs review/);
+});
+
+test("Deduction detail modal actually renders Electric business-use controls in the modal path", async () => {
+  const { DeductionMonthDetailModal } = await loadTaxDashboardInternals();
+  const html = renderToStaticMarkup(React.createElement(DeductionMonthDetailModal, {
+    selection: makeReviewSelection({
+      accountName: "Electric",
+      taxCategory: "utilities",
+      monthKey: "2026-05",
+      longLabel: "May 2026",
+      deductiblePercent: 0,
+      amount: 120,
+    }),
+    onClose: () => {},
+    onOverrideClassification: async () => ({}),
+    onBulkUpdateClassifications: async () => ({}),
+    onRefresh: async () => {},
+  }));
+
+  assert.match(html, /Resolve this review/);
+  assert.match(html, /Set business use/);
+  assert.match(html, /How much of this account is used for business/);
+  assert.match(html, /Dedicated business location - 100%/);
+  assert.match(html, /Mixed business and personal use/);
+  assert.match(html, /Personal use - 0%/);
+  assert.match(html, /Business-use percentage input/);
+  assert.match(html, /Scope selector/);
+  assert.match(html, /This QBO GL account for 2026/);
+  assert.match(html, /Save business use/);
+  assert.match(html, /Not sure yet/);
+  assert.match(html, /Bizzi matched this QuickBooks account to Utilities, but needs your business-use percentage before calculating a deduction/);
+  assert.doesNotMatch(html, /calculated the confirmed deduction/);
+});
+
+test("Deduction detail modal actually renders Gas vehicle controls in the modal path", async () => {
+  const { DeductionMonthDetailModal } = await loadTaxDashboardInternals();
+  const html = renderToStaticMarkup(React.createElement(DeductionMonthDetailModal, {
+    selection: makeReviewSelection({
+      accountName: "Gas",
+      taxCategory: "vehicle_expense",
+      monthKey: "2026-06",
+      longLabel: "June 2026",
+      deductiblePercent: 0,
+      amount: 80,
+    }),
+    onClose: () => {},
+    onSetTaxProfileMemory: async () => ({}),
+    onOverrideClassification: async () => ({}),
+    onBulkUpdateClassifications: async () => ({}),
+    onRefresh: async () => {},
+  }));
+
+  assert.match(html, /Resolve this review/);
+  assert.match(html, /Choose vehicle deduction method/);
+  assert.match(html, /Standard mileage/);
+  assert.match(html, /Actual vehicle expenses/);
+  assert.match(html, /I(?:&#x27;|')m not sure/);
+  assert.match(html, /Save vehicle method/);
+  assert.match(html, /Bizzi matched this QuickBooks account to Vehicle Expense, but needs your vehicle deduction method before calculating a deduction/);
+  assert.doesNotMatch(html, /This row already has confirmed rule-engine treatment/);
 });
 
 test("Deduction detail vehicle workflow stores method facts in tax profile memory", () => {

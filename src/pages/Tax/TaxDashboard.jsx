@@ -2136,6 +2136,7 @@ function DeductionMonthDetailModal({
   const prefersReducedMotion = useReducedMotion();
   const closeButtonRef = useRef(null);
   const modalRef = useRef(null);
+  const resolutionPanelRef = useRef(null);
   const previousFocusRef = useRef(null);
   const account = useMemo(() => selection?.account || {}, [selection?.account]);
   const month = useMemo(() => selection?.month || {}, [selection?.month]);
@@ -2143,7 +2144,7 @@ function DeductionMonthDetailModal({
   const transactions = useMemo(() => Array.isArray(cell.transactions) ? cell.transactions : [], [cell]);
   const aggregateStatus = useMemo(() => aggregateClassificationStatus(transactions), [transactions]);
   const reviewContext = useMemo(() => detailReviewContextForSelection(selection), [selection]);
-  const accountYearReviewRows = useMemo(() => collectAccountYearReviewRows(account, cell.selectedAuthority), [account, cell.selectedAuthority]);
+  const accountYearReviewRows = useMemo(() => collectAccountYearReviewRows(account), [account]);
   const [assignmentByTxn, setAssignmentByTxn] = useState({});
   const [savingChanges, setSavingChanges] = useState(false);
   const [assignmentError, setAssignmentError] = useState("");
@@ -2203,8 +2204,17 @@ function DeductionMonthDetailModal({
     };
   }, [selection, onClose]);
 
+  useEffect(() => {
+    if (!selection || !reviewContext.supported) return undefined;
+    const timeout = window.setTimeout(() => {
+      resolutionPanelRef.current?.focus?.();
+    }, 40);
+    return () => window.clearTimeout(timeout);
+  }, [selection, reviewContext.supported]);
+
   if (!selection) return null;
 
+  const isReviewDetail = transactions.some((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
   const scopeRows = reviewScope === "account_year" ? accountYearReviewRows : transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
   const selectedReviewRows = scopeRows.filter((row) => selectedReviewTransactionIds.has(String(row.id || row.raw?.transactionId)));
   const selectedCount = selectedReviewRows.length;
@@ -2402,7 +2412,7 @@ function DeductionMonthDetailModal({
               {month.longLabel} · {transactions.length} {transactions.length === 1 ? "transaction" : "transactions"} · QBO GL rule evidence
             </p>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/46">
-              {cell.selectedAuthority === "proposed"
+              {isReviewDetail
                 ? "Proposed means Bizzi calculated an estimate from your QuickBooks category and tax rules, but needs information from you before treating it as confirmed."
                 : "Sourced from posted QuickBooks GL accounts and Plaid transaction detail. Deductible amounts come from Bizzi deduction rules and tax classification logic."}
             </p>
@@ -2426,10 +2436,10 @@ function DeductionMonthDetailModal({
               label="Estimated deductions"
               value={cell.proposedDeductibleTotal}
               tone="amber"
-              fallback={cell.selectedAuthority === "proposed" && cell.proposedDeductibleTotal <= 0 ? "Not calculated" : null}
+              fallback={isReviewDetail && cell.proposedDeductibleTotal <= 0 ? "Not calculated" : null}
             />
           </div>
-          {cell.selectedAuthority === "proposed" ? (
+          {isReviewDetail ? (
             <p className="mt-2 text-xs leading-relaxed text-white/48">
               Estimated deductions are not included in confirmed totals until the required information is provided.
             </p>
@@ -2442,9 +2452,10 @@ function DeductionMonthDetailModal({
               {assignmentError}
             </div>
           ) : null}
-          <DetailContextCard context={reviewContext} selectedAuthority={cell.selectedAuthority} />
-          {cell.selectedAuthority === "proposed" ? (
+          <DetailContextCard context={reviewContext} isReviewDetail={isReviewDetail} />
+          {isReviewDetail && reviewContext.supported ? (
             <DetailResolutionPanel
+              ref={resolutionPanelRef}
               context={reviewContext}
               rows={scopeRows}
               selectedRows={selectedReviewRows}
@@ -2471,6 +2482,8 @@ function DeductionMonthDetailModal({
               onResolutionModeChange={setReviewResolutionMode}
               onResolutionCategoryChange={setResolutionCategory}
               onSave={saveReviewResolution}
+              onDefer={() => setAssignmentError("")}
+              taxYear={yearFromMonthKey(month.key) || CURRENT_YEAR}
             />
           ) : null}
           {transactions.length ? (
@@ -2478,7 +2491,7 @@ function DeductionMonthDetailModal({
               <table className="w-full min-w-[760px] border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-white/[0.08] bg-white/[0.025] text-[10px] uppercase tracking-[0.11em] text-white/42">
-                    {cell.selectedAuthority === "proposed" ? <th className="w-10 px-3 py-2 text-left font-semibold">Pick</th> : null}
+                    {isReviewDetail ? <th className="w-10 px-3 py-2 text-left font-semibold">Pick</th> : null}
                     <th className="px-3 py-2 text-left font-semibold">Date</th>
                     <th className="px-3 py-2 text-left font-semibold">Vendor</th>
                     <th className="px-3 py-2 text-right font-semibold">Expense</th>
@@ -2495,7 +2508,7 @@ function DeductionMonthDetailModal({
                     const selected = selectedReviewTransactionIds.has(transactionId);
                     return (
                       <tr key={row.id || row.raw?.id || `${row.date}-${index}`} className="border-b border-white/[0.06] transition hover:bg-white/[0.025] last:border-b-0">
-                        {cell.selectedAuthority === "proposed" ? (
+                        {isReviewDetail ? (
                           <td className="px-3 py-3">
                             <input
                               type="checkbox"
@@ -2603,19 +2616,19 @@ function DetailPill({ children, tone = "neutral" }) {
   );
 }
 
-function DetailContextCard({ context, selectedAuthority }) {
-  const tone = selectedAuthority === "proposed" ? "amber" : "green";
+function DetailContextCard({ context, isReviewDetail }) {
+  const tone = isReviewDetail ? "amber" : "green";
   return (
     <div className={`mb-3 rounded-[16px] border px-3 py-3 ${tone === "amber" ? "border-amber-300/16 bg-amber-300/[0.055]" : "border-emerald-300/14 bg-emerald-300/[0.045]"}`}>
       <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/46">
-        {selectedAuthority === "proposed" ? "Why this needs review" : "Classification evidence"}
+        {isReviewDetail ? "Why this needs review" : "Classification evidence"}
       </div>
       <p className="mt-1 text-sm leading-relaxed text-white/76">
-        {selectedAuthority === "proposed"
+        {isReviewDetail
           ? context.explanation
           : "Bizzi matched this posted QuickBooks GL account to an active tax rule and calculated the confirmed deduction."}
       </p>
-      {selectedAuthority === "proposed" ? (
+      {isReviewDetail ? (
         <p className="mt-2 text-xs leading-relaxed text-white/52">
           Proposed means Bizzi calculated an estimate from your QuickBooks category and tax rules, but needs information from you before treating it as confirmed.
         </p>
@@ -2626,7 +2639,30 @@ function DetailContextCard({ context, selectedAuthority }) {
   );
 }
 
-function DetailResolutionPanel({
+function detailResolutionHeading(context = {}) {
+  if (context.kind === "business_use_percent") return "Set business use";
+  if (context.kind === "vehicle_method") return "Choose vehicle deduction method";
+  if (context.kind === "business_purpose" && context.businessLabel?.toLowerCase().includes("meal")) return "Confirm business meals";
+  if (context.kind === "business_purpose") return "Confirm business trips";
+  if (context.kind === "category_confirmation") return "Confirm supplies treatment";
+  return "Resolve this review";
+}
+
+function detailResolutionSaveLabel(context = {}, selectedCount = 0, resolutionMode = "business") {
+  if (context.kind === "business_use_percent") return "Save business use";
+  if (context.kind === "vehicle_method") return "Save vehicle method";
+  if (context.kind === "business_purpose" && resolutionMode === "personal") {
+    return context.personalLabel || "Mark selected as personal";
+  }
+  if (context.kind === "business_purpose" && context.businessLabel?.toLowerCase().includes("meal")) {
+    return selectedCount ? "Confirm selected as business meals" : "Confirm selected as business meals";
+  }
+  if (context.kind === "business_purpose") return "Confirm selected as business trips";
+  if (context.kind === "category_confirmation") return "Save supplies treatment";
+  return `Save ${selectedCount || 0} ${selectedCount === 1 ? "decision" : "decisions"}`;
+}
+
+const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   context,
   rows,
   selectedRows,
@@ -2650,15 +2686,20 @@ function DetailResolutionPanel({
   onResolutionModeChange,
   onResolutionCategoryChange,
   onSave,
-}) {
+  onDefer,
+  taxYear,
+}, ref) {
   const allSelected = rows.length > 0 && rows.every((row) => selectedIds.has(String(row.id || row.raw?.transactionId)));
   const selectedCount = selectedRows.length;
   const selectedGrossTotal = selectedRows.reduce((sum, row) => sum + Math.abs(normalizeMoney(row.amount)), 0);
+  const heading = detailResolutionHeading(context);
+  const saveLabel = detailResolutionSaveLabel(context, selectedCount, resolutionMode);
   return (
-    <section className="mb-4 rounded-[18px] border border-white/10 bg-white/[0.035] p-3">
+    <section ref={ref} tabIndex={-1} className="mb-4 scroll-mt-6 rounded-[18px] border border-emerald-300/16 bg-emerald-300/[0.045] p-3 outline-none focus:ring-2 focus:ring-emerald-300/28">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/58">Resolve this review</div>
+          <h3 className="mt-1 text-lg font-semibold text-white">{heading}</h3>
           <p className="mt-1 max-w-2xl text-sm leading-relaxed text-white/72">{context.actionHelp}</p>
           <p className="mt-1 text-xs text-white/44">This confirmation affects only the selected current classifications and writes through the existing override audit mechanism.</p>
         </div>
@@ -2671,8 +2712,9 @@ function DetailResolutionPanel({
 
       <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
         <div className="space-y-2">
-          <ReviewScopeRadio groupName="deduction-review-scope" value="selected_transactions" current={reviewScope} onChange={onScopeChange} label="Selected transactions" description="Apply only to the checked rows below." />
-          <ReviewScopeRadio groupName="deduction-review-scope" value="account_year" current={reviewScope} onChange={onScopeChange} label="This QBO GL account for this tax year" description="Apply to matching review rows already loaded for this account and year." />
+          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Scope selector</div>
+          <ReviewScopeRadio groupName="deduction-review-scope" value="selected_transactions" current={reviewScope} onChange={onScopeChange} label="This transaction" description="Apply only to the checked rows below." />
+          <ReviewScopeRadio groupName="deduction-review-scope" value="account_year" current={reviewScope} onChange={onScopeChange} label={`This QBO GL account for ${taxYear}`} description="Apply to matching review rows already loaded for this account and year." />
           <ReviewScopeRadio groupName="deduction-review-scope" value="going_forward" current={reviewScope} onChange={onScopeChange} label="This GL account going forward" description="Requires a schema-backed account-level authority record before it can be saved." disabled />
         </div>
 
@@ -2719,7 +2761,7 @@ function DetailResolutionPanel({
                 label={context.businessLabel || "Confirm selected as business"}
                 description="Selected transactions become user-confirmed with the proposed rule treatment."
               />
-              <ReviewScopeRadio
+          <ReviewScopeRadio
                 value="personal"
                 groupName="deduction-review-resolution"
                 current={resolutionMode}
@@ -2748,18 +2790,28 @@ function DetailResolutionPanel({
           <span className="text-xs text-white/46">{selectedCount} of {rows.length} selected</span>
           <span className="text-xs text-white/32">Preserve selected exceptions by leaving them unchecked.</span>
         </div>
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={!canResolve || saving}
-          className="rounded-full bg-emerald-300 px-4 py-2 text-xs font-semibold text-[#06100c] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {saving ? "Saving..." : `Save ${selectedCount || 0} ${selectedCount === 1 ? "decision" : "decisions"}`}
-        </button>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onDefer}
+            disabled={saving}
+            className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-white/64 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Not sure yet
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={!canResolve || saving}
+            className="rounded-full bg-emerald-300 px-4 py-2 text-xs font-semibold text-[#06100c] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? "Saving..." : saveLabel}
+          </button>
+        </div>
       </div>
     </section>
   );
-}
+});
 
 function UtilityBusinessUseControls({ mode, percent, percentValid, onModeChange, onPercentChange }) {
   return (
@@ -2769,12 +2821,15 @@ function UtilityBusinessUseControls({ mode, percent, percentValid, onModeChange,
         <div className="mt-2 grid gap-2">
           <ReviewScopeRadio groupName="deduction-business-use-mode" value="dedicated" current={mode} onChange={onModeChange} label="Dedicated business location - 100%" description="The account is for a dedicated business location or business-only service." />
           <ReviewScopeRadio groupName="deduction-business-use-mode" value="mixed" current={mode} onChange={onModeChange} label="Mixed business and personal use" description="Enter the factual business-use percentage." />
-          <ReviewScopeRadio groupName="deduction-business-use-mode" value="personal" current={mode} onChange={onModeChange} label="Personal - 0%" description="No deduction will be confirmed for the selected transactions." />
+          <ReviewScopeRadio groupName="deduction-business-use-mode" value="personal" current={mode} onChange={onModeChange} label="Personal use - 0%" description="No deduction will be confirmed for the selected transactions." />
         </div>
       </div>
-      {mode === "mixed" ? (
-        <BusinessUsePercentInput value={percent} valid={percentValid} onChange={onPercentChange} />
-      ) : null}
+      <BusinessUsePercentInput
+        value={percent}
+        valid={percentValid}
+        disabled={mode !== "mixed"}
+        onChange={onPercentChange}
+      />
       {!mode ? (
         <p className="text-xs text-amber-100/62">Choose an option before saving. Bizzi will not assume a business-use percentage.</p>
       ) : null}
@@ -2802,7 +2857,7 @@ function ReviewScopeRadio({ value, current, onChange, label, description, disabl
   );
 }
 
-function BusinessUsePercentInput({ value, valid, onChange }) {
+function BusinessUsePercentInput({ value, valid, disabled = false, onChange }) {
   return (
     <div>
       <label className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Business-use percentage</label>
@@ -2813,13 +2868,18 @@ function BusinessUsePercentInput({ value, valid, onChange }) {
           max="100"
           step="1"
           value={value}
+          disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
           className={`h-9 w-24 rounded-[11px] border bg-black/22 px-3 text-sm font-semibold text-white outline-none focus:ring-2 ${value && !valid ? "border-rose-300/35 focus:ring-rose-300/20" : "border-white/10 focus:ring-emerald-300/22"}`}
           placeholder="0-100"
+          aria-label="Business-use percentage input"
         />
         <span className="text-sm text-white/54">%</span>
       </div>
       <p className="mt-1 text-xs leading-relaxed text-white/42">Enter the factual business portion. Bizzi does not invent an allocation.</p>
+      {value && !valid ? (
+        <p className="mt-1 text-xs font-semibold text-rose-100">Enter a percentage from 0 through 100.</p>
+      ) : null}
     </div>
   );
 }
@@ -2836,7 +2896,10 @@ function VehicleMethodControls({ vehicleMethod, businessUsePercent, businessUseP
         </div>
       </div>
       {vehicleMethod === "actual_expense" ? (
-        <BusinessUsePercentInput value={businessUsePercent} valid={businessUsePercentValid} onChange={onBusinessUsePercentChange} />
+        <>
+          <BusinessUsePercentInput value={businessUsePercent} valid={businessUsePercentValid} onChange={onBusinessUsePercentChange} />
+          <p className="text-xs leading-relaxed text-white/46">Bizzi will estimate the eligible expense from the selected gas transactions and your business-use percentage.</p>
+        </>
       ) : null}
       {vehicleMethod === "unsure" ? (
         <p className="text-xs leading-relaxed text-white/46">No vehicle method will be saved, and these gas transactions will remain Needs review.</p>
@@ -2933,8 +2996,7 @@ function detailReviewContextForSelection(selection) {
   };
 }
 
-function collectAccountYearReviewRows(account = {}, selectedAuthority = "proposed") {
-  if (selectedAuthority !== "proposed") return [];
+function collectAccountYearReviewRows(account = {}) {
   const months = Object.values(account.months || {});
   const rows = [];
   for (const month of months) {
@@ -3574,3 +3636,9 @@ function getStoredBusinessId() {
     return null;
   }
 }
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const __TaxDashboardTestInternals = {
+  DeductionMonthDetailModal,
+  buildDeductionAccountMatrix,
+};
