@@ -62,7 +62,7 @@ export default function EmailCampaignGallery({ businessId }) {
       </div>
 
       {editing && (
-        <div className="fixed inset-0 z-50 bg-black bg-opacity-80 flex items-center justify-center px-4">
+        <div className="bizzy-modal-main-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
           <div className="w-full max-w-2xl bg-gray-900 text-white rounded-xl border border-blue-500/30 shadow-2xl p-6 relative overflow-y-auto max-h-[90vh]">
             <button onClick={()=>setEditing(null)} className="absolute top-4 right-4 p-1 text-gray-300 hover:text-red-400" title="Close edit"><X size={20}/></button>
             <h3 className="text-xl font-semibold text-blue-300 mb-4">Edit Campaign</h3>

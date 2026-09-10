@@ -24,7 +24,7 @@ export default function ReplyDrawer({ open, review, onClose, onSent, businessId 
   };
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-full sm:w-[480px] bg-[#0A0B0E] border-l border-white/10 p-4">
         <div className="font-semibold mb-2">Reply to Review</div>

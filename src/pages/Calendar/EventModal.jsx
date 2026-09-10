@@ -73,7 +73,7 @@ export default function EventModal({
 
   return (
     <div
-      className="fixed inset-0 z-[1000] bg-black/70 flex justify-center items-start p-4"
+      className="bizzy-modal-main-backdrop fixed inset-0 z-[1000] flex justify-center items-start p-4"
       style={{ paddingTop: "5vh" }}
     >
       <div

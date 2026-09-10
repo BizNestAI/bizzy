@@ -203,7 +203,7 @@ export default function TaxSetupWorkflow({
   const stepDescription = stepDescriptionFor(stepId, values);
 
   return (
-    <div className="fixed inset-0 z-[70] flex justify-end bg-black/65 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="tax-setup-title">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[70] flex justify-end" role="dialog" aria-modal="true" aria-labelledby="tax-setup-title">
       <div className="flex h-full w-full max-w-5xl flex-col overflow-hidden border-l border-white/10 bg-[#080b0f] text-white shadow-2xl">
         <header className="flex items-start justify-between gap-4 border-b border-white/10 px-4 py-4 sm:px-5">
           <div>

@@ -116,7 +116,7 @@ export function ClarificationModal({ open, onClose, requests = [], businessId, o
     <AnimatePresence>
       {open ? (
         <motion.div
-          className="fixed inset-0 z-[20000] flex items-start justify-center px-4 pb-10 pt-12 md:pt-16"
+          className="bizzy-modal-main-backdrop fixed inset-0 z-[20000] flex items-start justify-center px-4 pb-10 pt-12 md:pt-16"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}

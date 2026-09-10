@@ -161,6 +161,29 @@
 .ui-rail-border   { border-color: var(--accent-line) !important; } /* nav/rail dividers */
 .ui-accent-glow   { box-shadow: 0 0 0 1px var(--accent-line), 0 0 12px var(--accent-soft) !important; }
 
+/* Shared modal backdrop. On desktop it starts after the nav rail so sidebar
+   controls stay crisp and visible while dashboard content behind dialogs blurs. */
+.bizzy-modal-main-backdrop {
+  background: rgba(0, 0, 0, 0.58);
+  backdrop-filter: blur(10px) saturate(120%);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+}
+
+@media (min-width: 768px) {
+  .bizzy-modal-main-backdrop {
+    left: var(--nav-w, 0px) !important;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .bizzy-modal-main-backdrop {
+    background: rgba(0, 0, 0, 0.72);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
 /* Shared component surfaces: match the Books Review graphite panel color. */
 .bizzi-surface,
 .rounded-lg.border[class*="bg-white/5"],

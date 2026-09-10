@@ -2277,7 +2277,7 @@ function BookkeepingCleanup() {
             <AnimatePresence>
               {manualPostTxn && manualPostSummary ? (
                 <motion.div
-                  className="fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
+                  className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
                   role="dialog"
                   aria-modal="true"
                   aria-labelledby="manual-post-confirm-title"
@@ -2361,7 +2361,7 @@ function BookkeepingCleanup() {
             <AnimatePresence>
               {manualPostResult ? (
                 <motion.div
-                  className="fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
+                  className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
                   role="dialog"
                   aria-modal="true"
                   aria-labelledby="manual-post-result-title"
@@ -2456,7 +2456,7 @@ function BookkeepingCleanup() {
             <AnimatePresence>
               {autoPostConfirmOpen ? (
                 <motion.div
-                  className="fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
+                  className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
                   role="dialog"
                   aria-modal="true"
                   aria-labelledby="auto-post-confirm-title"

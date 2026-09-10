@@ -39,7 +39,7 @@ export default function TaxExplanationDrawer({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[85]" role="dialog" aria-modal="true" aria-labelledby="tax-explanation-title">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[85]" role="dialog" aria-modal="true" aria-labelledby="tax-explanation-title">
       <button type="button" aria-label="Close tax explanation drawer" className="absolute inset-0 bg-black/65 backdrop-blur-[2px]" onClick={onClose} />
       <aside ref={panelRef} className="absolute right-0 top-0 flex h-full w-full max-w-[940px] flex-col border-l border-white/10 bg-[#080b0f] text-white shadow-[0_0_48px_rgba(0,0,0,0.55)]">
         <header className="border-b border-white/10 px-4 py-4 sm:px-5">

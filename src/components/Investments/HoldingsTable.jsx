@@ -374,7 +374,7 @@ function PositionDrawer({ row, onClose, onAskBizzy }) {
     .join(" ");
 
   return (
-    <div className="fixed inset-0 z-[2000]">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[2000]">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-full sm:w-[420px] bg-[#0B0E13] ring-1 ring-inset ring-white/12 p-4 sm:p-5 overflow-y-auto">
         <div className="flex items-center justify-between">

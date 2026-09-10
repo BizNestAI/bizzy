@@ -281,7 +281,7 @@ function MoveCard({ move, onPrev, onNext, onLearnMore, onAsk, onApply, index, to
 function Drawer({ open, onClose, title, children }) {
   return (
     <div
-      className={`fixed inset-0 z-[60] transition ${open ? "pointer-events-auto" : "pointer-events-none"}`}
+      className={`bizzy-modal-main-backdrop fixed inset-0 z-[60] transition ${open ? "pointer-events-auto" : "pointer-events-none"}`}
       aria-hidden={!open}
     >
       {/* backdrop */}

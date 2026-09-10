@@ -124,7 +124,7 @@ export default function TaxProfileModal({
 
   const modal = (
     <div
-      className={`fixed right-0 top-0 left-[var(--nav-w,0px)] z-[90] grid place-items-center px-4 pt-5 pb-4 font-sans transition-opacity duration-200 ease-out ${visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
+      className={`bizzy-modal-main-backdrop fixed right-0 top-0 left-[var(--nav-w,0px)] z-[90] grid place-items-center px-4 pt-5 pb-4 font-sans transition-opacity duration-200 ease-out ${visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
       style={{ bottom: "calc(var(--chat-clearance, 156px) + 16px)" }}
       role="dialog"
       aria-modal="true"

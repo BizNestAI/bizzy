@@ -42,7 +42,7 @@ function ConfirmDialog({
 }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-[11000] flex items-center justify-center">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[11000] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60" onClick={onCancel} />
       <div className="relative z-[11010] w-[min(92vw,460px)] rounded-2xl border border-white/10 bg-[#0B0E13] p-4 shadow-[0_10px_30px_rgba(0,0,0,0.6)]">
         <div className="text-sm font-semibold mb-1">{title}</div>

@@ -388,8 +388,8 @@ export default function PNLArchiveViewer() {
       )}
 
       <Dialog open={Boolean(pdfUrl)} onClose={closeModal} className="relative z-50">
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm" aria-hidden="true" />
-        <div className="fixed inset-0 flex items-center justify-center p-4">
+        <div className="bizzy-modal-main-backdrop fixed inset-0" aria-hidden="true" />
+        <div className="fixed inset-0 flex items-center justify-center p-4 md:left-[var(--nav-w,0px)]">
           <Dialog.Panel className="bg-zinc-900 rounded-lg border border-zinc-700 w-full max-w-4xl max-h-[90vh] overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-700">
               <Dialog.Title className="text-lg font-semibold text-white">

@@ -30,7 +30,7 @@ export default function ActivityDrawer({ open, onClose, accountId }) {
   }, [open, accountId]);
 
   return (
-    <div className={`fixed inset-0 z-40 ${open ? "" : "pointer-events-none"}`} aria-hidden={!open}>
+    <div className={`bizzy-modal-main-backdrop fixed inset-0 z-40 ${open ? "" : "pointer-events-none"}`} aria-hidden={!open}>
       {/* backdrop */}
       <div
         className={`absolute inset-0 bg-black/50 transition-opacity ${open ? "opacity-100" : "opacity-0"}`}

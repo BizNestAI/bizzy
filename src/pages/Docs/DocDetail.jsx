@@ -416,7 +416,7 @@ export default function DocDetail() {
                 </button>
 
                 {showDelete && (
-                  <div className="fixed inset-0 z-[999] bg-black/60 backdrop-blur-sm grid place-items-center">
+                  <div className="bizzy-modal-main-backdrop fixed inset-0 z-[999] grid place-items-center">
                     <div className="w-[92vw] max-w-md rounded-2xl p-5 shadow-xl"
                          style={{ border: '1px solid rgba(244,63,94,0.35)', background: '#160e11' }}>
                       <h3 className="text-lg font-semibold" style={{ color: TEXT_MAIN }}>Delete document?</h3>

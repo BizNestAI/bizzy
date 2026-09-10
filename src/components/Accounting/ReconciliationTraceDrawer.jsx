@@ -312,7 +312,7 @@ export default function ReconciliationTraceDrawer({
   const canOpenBooksReview = ["needs_review", "failed_post", "missing_in_qbo", "approved_waiting_post"].includes(row?.status);
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-50">
       <button
         type="button"
         aria-label="Close trace drawer"

@@ -1983,7 +1983,7 @@ function NaturalLanguageAssignmentBar({
           {typeof document !== "undefined" ? createPortal(
             <>
               <div
-                className={`fixed inset-0 z-[110] bg-black/55 backdrop-blur-[2px] transition-opacity duration-200 ${
+                className={`bizzy-modal-main-backdrop fixed inset-0 z-[110] transition-opacity duration-200 ${
                   historyOpen ? "opacity-100" : "pointer-events-none opacity-0"
                 }`}
                 onClick={() => setHistoryOpen(false)}
@@ -3685,7 +3685,7 @@ function JobAssignmentBoard({
 
       {assignmentModalMounted ? (
         <div
-          className={`fixed inset-0 z-[90] flex items-center justify-center bg-black/60 px-3 py-6 backdrop-blur-sm transition-opacity duration-200 ease-out ${
+          className={`bizzy-modal-main-backdrop fixed inset-0 z-[90] flex items-center justify-center px-3 py-6 transition-opacity duration-200 ease-out ${
             assignmentModalVisible ? "opacity-100" : "opacity-0"
           }`}
           onMouseDown={(event) => {
@@ -4270,7 +4270,7 @@ function JobDeepDive({
       </section>
 
       {changeOrderOpen ? (
-        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70 px-3 py-4 backdrop-blur-sm sm:items-center" role="dialog" aria-modal="true" aria-label="Log change order">
+        <div className="bizzy-modal-main-backdrop fixed inset-0 z-[80] flex items-end justify-center px-3 py-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Log change order">
           <form onSubmit={submitChangeOrder} className="custom-scrollbar max-h-[92vh] w-full max-w-[640px] overflow-y-auto rounded-[28px] border border-white/10 bg-[#171d1b] p-4 shadow-[0_28px_80px_rgba(0,0,0,0.55)] sm:p-5">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -5115,7 +5115,7 @@ function BidDetailPanel({
       </section>
 
       {confirmConvert ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 backdrop-blur-sm">
+        <div className="bizzy-modal-main-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
           <div className="w-full max-w-md rounded-[24px] border border-white/10 bg-zinc-950 p-5 shadow-[0_28px_80px_rgba(0,0,0,0.55)]">
             <h2 className="text-lg font-semibold text-white">Create an active job bucket from this bid?</h2>
             <p className="mt-2 text-sm leading-6 text-white/55">
@@ -5779,7 +5779,7 @@ function JobCostingDrawer({ open, title, eyebrow, onClose, children, widthClass 
 
   return createPortal(
     <div
-      className={`fixed inset-0 z-[92] flex justify-end bg-black/55 backdrop-blur-sm transition-opacity duration-200 ease-out ${
+      className={`bizzy-modal-main-backdrop fixed inset-0 z-[92] flex justify-end transition-opacity duration-200 ease-out ${
         visible ? "opacity-100" : "opacity-0"
       }`}
       onMouseDown={(event) => {
@@ -5859,7 +5859,7 @@ function JobCostingModal({ open, title, eyebrow, onClose, children, widthClass =
 
   return createPortal(
     <div
-      className={`fixed bottom-0 left-0 right-0 top-0 z-[96] flex items-center justify-center bg-black/60 px-4 pb-[220px] pt-6 backdrop-blur-sm transition-opacity duration-300 ease-out md:left-[var(--nav-w,0px)] sm:pt-[5vh] ${
+      className={`bizzy-modal-main-backdrop fixed bottom-0 left-0 right-0 top-0 z-[96] flex items-center justify-center px-4 pb-[220px] pt-6 transition-opacity duration-300 ease-out md:left-[var(--nav-w,0px)] sm:pt-[5vh] ${
         visible ? "opacity-100" : "opacity-0"
       }`}
       onMouseDown={(event) => {
@@ -6117,7 +6117,7 @@ function AssignmentImpactModal({ preview, busy, onCancel, onConfirm }) {
     ["Cost", view.costDelta],
   ];
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center bg-black/60 px-3 py-[8vh] backdrop-blur-sm">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[100] flex items-start justify-center px-3 py-[8vh]">
       <div className="w-full max-w-lg rounded-[22px] border border-white/10 bg-[#17211d] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)]">
         <div className="flex items-start justify-between gap-4">
           <div>
@@ -6159,7 +6159,7 @@ function CandidateApprovalImpactModal({ preview, busy, onCancel, onConfirm }) {
   if (!preview) return null;
   const view = normalizeCandidateApprovalImpactView(preview.preview);
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center bg-black/60 px-3 py-[8vh] backdrop-blur-sm">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[100] flex items-start justify-center px-3 py-[8vh]">
       <div className="w-full max-w-lg rounded-[22px] border border-white/10 bg-[#17211d] p-4 shadow-[0_24px_70px_rgba(0,0,0,0.55)]">
         <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-200/70">Candidate approval impact</p>
         <h2 className="mt-1 text-base font-semibold text-white">{view.jobName}</h2>
@@ -8029,7 +8029,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
 
         {assignmentPickerTxn ? (
           <div
-            className={`fixed inset-0 z-[95] flex items-start justify-center bg-black/55 px-3 py-[6vh] backdrop-blur-sm transition-opacity duration-200 ease-out ${
+            className={`bizzy-modal-main-backdrop fixed inset-0 z-[95] flex items-start justify-center px-3 py-[6vh] transition-opacity duration-200 ease-out ${
               assignmentPickerVisible ? "opacity-100" : "opacity-0"
             }`}
             onMouseDown={(event) => {
@@ -8249,7 +8249,7 @@ function AssignedTransactionsModal({ job, onClose, onRemove, removingId }) {
   }, [closeModal]);
   return (
     <div
-      className={`fixed inset-0 z-[90] flex items-start justify-center bg-black/55 px-3 pt-[10vh] backdrop-blur-sm transition-opacity duration-200 ease-out ${
+      className={`bizzy-modal-main-backdrop fixed inset-0 z-[90] flex items-start justify-center px-3 pt-[10vh] transition-opacity duration-200 ease-out ${
         visible ? "opacity-100" : "opacity-0"
       }`}
       onMouseDown={(event) => {

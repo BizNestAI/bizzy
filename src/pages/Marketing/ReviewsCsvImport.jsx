@@ -16,7 +16,7 @@ export default function CSVImportDialog({ open, onClose, businessId }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/50" onClick={onClose}/>
       <div className="absolute left-1/2 -translate-x-1/2 top-20 w-[95%] max-w-2xl bg-[#0A0B0E] border border-white/10 rounded-xl p-4">
         <div className="font-semibold mb-2">Import CSV</div>

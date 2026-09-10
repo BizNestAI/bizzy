@@ -144,7 +144,7 @@ export default function UploadDocModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[999] grid place-items-center bg-black/60 backdrop-blur-sm">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[999] grid place-items-center">
       <div className="w-[92vw] max-w-lg rounded-2xl border border-white/10 bg-[#0B0E13] p-5 shadow-xl">
         <div className="flex items-center justify-between">
           <h3 className="text-white text-lg font-semibold">Upload document</h3>

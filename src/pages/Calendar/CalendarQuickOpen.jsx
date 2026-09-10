@@ -139,8 +139,8 @@ export default function CalendarQuickOpen({ businessId, onClose, onCreated }) {
 
   return (
     <div
-      className="fixed inset-0 z-[999] grid p-4"
-      style={{ background: "rgba(0,0,0,0.68)", placeItems: "start center", paddingTop: "8vh" }}
+      className="bizzy-modal-main-backdrop fixed inset-0 z-[999] grid p-4"
+      style={{ placeItems: "start center", paddingTop: "8vh" }}
       role="dialog"
       aria-modal="true"
       aria-label="Quick calendar create and agenda"

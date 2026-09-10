@@ -335,7 +335,7 @@ export default function CreateQuickBooksAccountModal({
 
   return ReactDOM.createPortal(
     <div
-      className="fixed inset-0 z-[2147483000] flex items-center justify-center overflow-y-auto bg-black/70 px-4 py-6"
+      className="bizzy-modal-main-backdrop fixed inset-0 z-[2147483000] flex items-center justify-center overflow-y-auto px-4 py-6"
       data-qbo-account-modal="true"
       onMouseDown={(event) => {
         event.stopPropagation();

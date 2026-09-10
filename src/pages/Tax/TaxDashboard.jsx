@@ -1142,7 +1142,7 @@ function ReviewDecisionModal({ decision, readOnly, onClose, onApply }) {
   };
 
   const modal = (
-    <div className="fixed bottom-0 left-0 right-0 top-0 z-[10000] flex items-center justify-center bg-black/45 px-4 py-6 md:left-[var(--nav-w,0px)]" role="dialog" aria-modal="true" aria-label={`${group.qboAccountName} tax review decision`}>
+    <div className="bizzy-modal-main-backdrop fixed bottom-0 left-0 right-0 top-0 z-[10000] flex items-center justify-center px-4 py-6 md:left-[var(--nav-w,0px)]" role="dialog" aria-modal="true" aria-label={`${group.qboAccountName} tax review decision`}>
       <section className="flex max-h-[min(760px,calc(100vh-80px))] w-full max-w-[760px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] text-white shadow-[0_24px_90px_rgba(0,0,0,0.68)]">
         <header className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
           <div className="min-w-0">
@@ -1525,7 +1525,7 @@ function ClassificationBackfillPreviewModal({ preview, loading, onClose, onConfi
     : Object.entries(summary.totalsByGlAccount || {}).map(([glAccount, value]) => ({ glAccount, ...value }));
   const modal = (
     <div
-      className="fixed right-0 top-0 left-[var(--nav-w,0px)] z-[10000] flex items-center justify-center bg-black/45 px-4 py-4"
+      className="bizzy-modal-main-backdrop fixed right-0 top-0 left-[var(--nav-w,0px)] z-[10000] flex items-center justify-center px-4 py-4"
       style={{ bottom: "calc(var(--chat-clearance, 156px) + 12px)" }}
       role="dialog"
       aria-modal="true"
@@ -2138,6 +2138,7 @@ function DeductionMonthDetailModal({
   const modalRef = useRef(null);
   const resolutionPanelRef = useRef(null);
   const previousFocusRef = useRef(null);
+  const lastReviewResetKeyRef = useRef("");
   const account = useMemo(() => selection?.account || {}, [selection?.account]);
   const month = useMemo(() => selection?.month || {}, [selection?.month]);
   const cell = useMemo(() => selection?.cell || { transactions: [] }, [selection?.cell]);
@@ -2145,6 +2146,9 @@ function DeductionMonthDetailModal({
   const aggregateStatus = useMemo(() => aggregateClassificationStatus(transactions), [transactions]);
   const reviewContext = useMemo(() => detailReviewContextForSelection(selection), [selection]);
   const accountYearReviewRows = useMemo(() => collectAccountYearReviewRows(account), [account]);
+  const hasSelection = Boolean(selection);
+  const selectionFocusKey = `${selection?.account?.key || "account"}:${selection?.month?.key || "month"}:${cell.selectedAuthority || "all"}`;
+  const reviewResetKey = `${selectionFocusKey}:${reviewContext.kind || "none"}:${reviewContext.defaultTaxCategory || "none"}`;
   const [assignmentByTxn, setAssignmentByTxn] = useState({});
   const [savingChanges, setSavingChanges] = useState(false);
   const [assignmentError, setAssignmentError] = useState("");
@@ -2155,22 +2159,27 @@ function DeductionMonthDetailModal({
   const [businessUsePercent, setBusinessUsePercent] = useState("");
   const [vehicleMethod, setVehicleMethod] = useState("");
   const [resolutionCategory, setResolutionCategory] = useState("");
+  const [transactionsExpanded, setTransactionsExpanded] = useState(false);
 
   useEffect(() => {
+    if (lastReviewResetKeyRef.current === reviewResetKey) return;
+    lastReviewResetKeyRef.current = reviewResetKey;
+    const defaultReviewRows = transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
     setAssignmentByTxn({});
     setAssignmentError("");
     setSavingChanges(false);
-    setSelectedReviewTransactionIds(new Set());
+    setSelectedReviewTransactionIds(new Set(defaultReviewRows.map((row) => String(row.id || row.raw?.transactionId)).filter(Boolean)));
     setReviewScope("selected_transactions");
     setReviewResolutionMode("business");
     setBusinessUseMode("");
     setBusinessUsePercent("");
     setVehicleMethod("");
     setResolutionCategory(reviewContext.defaultTaxCategory || "");
-  }, [selection?.account?.key, selection?.month?.key, cell.selectedAuthority, reviewContext.defaultTaxCategory]);
+    setTransactionsExpanded(!["business_use_percent", "vehicle_method"].includes(reviewContext.kind));
+  }, [reviewResetKey, reviewContext.defaultTaxCategory, reviewContext.kind, transactions]);
 
   useEffect(() => {
-    if (!selection || typeof document === "undefined") return undefined;
+    if (!hasSelection || typeof document === "undefined") return undefined;
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -2202,15 +2211,15 @@ function DeductionMonthDetailModal({
       document.body.style.overflow = previousOverflow;
       previousFocusRef.current?.focus?.();
     };
-  }, [selection, onClose]);
+  }, [hasSelection, selectionFocusKey, onClose]);
 
   useEffect(() => {
-    if (!selection || !reviewContext.supported) return undefined;
+    if (!hasSelection || !reviewContext.supported) return undefined;
     const timeout = window.setTimeout(() => {
       resolutionPanelRef.current?.focus?.();
     }, 40);
     return () => window.clearTimeout(timeout);
-  }, [selection, reviewContext.supported]);
+  }, [hasSelection, selectionFocusKey, reviewContext.supported]);
 
   if (!selection) return null;
 
@@ -2377,7 +2386,7 @@ function DeductionMonthDetailModal({
   const panelTransition = prefersReducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" };
   const modal = (
     <Motion.div
-      className="pointer-events-auto fixed bottom-0 left-0 right-0 top-0 z-[90] flex items-center justify-center overflow-visible bg-black/42 px-3 py-5 md:left-[var(--nav-w,0px)] sm:px-4 sm:py-8"
+      className="bizzy-modal-main-backdrop pointer-events-auto fixed bottom-0 left-0 right-0 top-0 z-[90] flex items-center justify-center overflow-visible px-3 py-5 md:left-[var(--nav-w,0px)] sm:px-4 sm:py-8"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -2412,9 +2421,7 @@ function DeductionMonthDetailModal({
               {month.longLabel} · {transactions.length} {transactions.length === 1 ? "transaction" : "transactions"} · QBO GL rule evidence
             </p>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/46">
-              {isReviewDetail
-                ? "Proposed means Bizzi calculated an estimate from your QuickBooks category and tax rules, but needs information from you before treating it as confirmed."
-                : "Sourced from posted QuickBooks GL accounts and Plaid transaction detail. Deductible amounts come from Bizzi deduction rules and tax classification logic."}
+              Sourced from posted QuickBooks GL accounts and Plaid transaction detail.
             </p>
           </div>
           <button
@@ -2439,11 +2446,6 @@ function DeductionMonthDetailModal({
               fallback={isReviewDetail && cell.proposedDeductibleTotal <= 0 ? "Not calculated" : null}
             />
           </div>
-          {isReviewDetail ? (
-            <p className="mt-2 text-xs leading-relaxed text-white/48">
-              Estimated deductions are not included in confirmed totals until the required information is provided.
-            </p>
-          ) : null}
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto px-4 py-4 sm:px-5">
@@ -2452,7 +2454,7 @@ function DeductionMonthDetailModal({
               {assignmentError}
             </div>
           ) : null}
-          <DetailContextCard context={reviewContext} isReviewDetail={isReviewDetail} />
+          {!isReviewDetail ? <DetailContextCard context={reviewContext} /> : null}
           {isReviewDetail && reviewContext.supported ? (
             <DetailResolutionPanel
               ref={resolutionPanelRef}
@@ -2474,7 +2476,8 @@ function DeductionMonthDetailModal({
               onSelectAll={setAllReviewRowsSelected}
               onScopeChange={(scope) => {
                 setReviewScope(scope);
-                setSelectedReviewTransactionIds(new Set());
+                const nextRows = scope === "account_year" ? accountYearReviewRows : transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
+                setSelectedReviewTransactionIds(new Set(nextRows.map((row) => String(row.id || row.raw?.transactionId)).filter(Boolean)));
               }}
               onBusinessUseModeChange={setBusinessUseMode}
               onBusinessUsePercentChange={setBusinessUsePercent}
@@ -2486,8 +2489,19 @@ function DeductionMonthDetailModal({
               taxYear={yearFromMonthKey(month.key) || CURRENT_YEAR}
             />
           ) : null}
+          <details
+            className="overflow-hidden rounded-[16px] border border-white/[0.08] bg-black/10"
+            open={transactionsExpanded}
+            onToggle={(event) => setTransactionsExpanded(event.currentTarget.open)}
+          >
+            <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold text-white/76 outline-none transition hover:bg-white/[0.035] focus:ring-2 focus:ring-emerald-300/25">
+              Review transactions ({transactions.length})
+              <span className="ml-2 text-xs font-normal text-white/42">
+                {transactionsExpanded ? "Hide details" : "Inspect rows and exceptions"}
+              </span>
+            </summary>
           {transactions.length ? (
-            <div className="overflow-x-auto rounded-[16px] border border-white/[0.08]">
+            <div className="overflow-x-auto border-t border-white/[0.08]">
               <table className="w-full min-w-[760px] border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-white/[0.08] bg-white/[0.025] text-[10px] uppercase tracking-[0.11em] text-white/42">
@@ -2560,10 +2574,11 @@ function DeductionMonthDetailModal({
               </table>
             </div>
           ) : (
-            <div className="rounded-[14px] border border-white/[0.08] bg-white/[0.03] px-4 py-6 text-center text-xs text-white/54">
+            <div className="border-t border-white/[0.08] px-4 py-6 text-center text-xs text-white/54">
               No transaction detail is available for this account and month.
             </div>
           )}
+          </details>
         </div>
         <footer className="flex flex-col gap-2 border-t border-white/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
           <div className="text-xs font-semibold text-white/46">
@@ -2616,25 +2631,14 @@ function DetailPill({ children, tone = "neutral" }) {
   );
 }
 
-function DetailContextCard({ context, isReviewDetail }) {
-  const tone = isReviewDetail ? "amber" : "green";
+function DetailContextCard() {
   return (
-    <div className={`mb-3 rounded-[16px] border px-3 py-3 ${tone === "amber" ? "border-amber-300/16 bg-amber-300/[0.055]" : "border-emerald-300/14 bg-emerald-300/[0.045]"}`}>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/46">
-        {isReviewDetail ? "Why this needs review" : "Classification evidence"}
-      </div>
+    <div className="mb-3 rounded-[16px] border border-emerald-300/14 bg-emerald-300/[0.045] px-3 py-3">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/46">Classification evidence</div>
       <p className="mt-1 text-sm leading-relaxed text-white/76">
-        {isReviewDetail
-          ? context.explanation
-          : "Bizzi matched this posted QuickBooks GL account to an active tax rule and calculated the confirmed deduction."}
+        Bizzi matched this posted QuickBooks GL account to an active tax rule and calculated the confirmed deduction.
       </p>
-      {isReviewDetail ? (
-        <p className="mt-2 text-xs leading-relaxed text-white/52">
-          Proposed means Bizzi calculated an estimate from your QuickBooks category and tax rules, but needs information from you before treating it as confirmed.
-        </p>
-      ) : (
-        <p className="mt-2 text-xs leading-relaxed text-white/52">This row already has confirmed rule-engine treatment.</p>
-      )}
+      <p className="mt-2 text-xs leading-relaxed text-white/52">This row already has confirmed rule-engine treatment.</p>
     </div>
   );
 }
@@ -2649,7 +2653,7 @@ function detailResolutionHeading(context = {}) {
 }
 
 function detailResolutionSaveLabel(context = {}, selectedCount = 0, resolutionMode = "business") {
-  if (context.kind === "business_use_percent") return "Save business use";
+  if (context.kind === "business_use_percent") return "Save and confirm";
   if (context.kind === "vehicle_method") return "Save vehicle method";
   if (context.kind === "business_purpose" && resolutionMode === "personal") {
     return context.personalLabel || "Mark selected as personal";
@@ -2694,31 +2698,30 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   const selectedGrossTotal = selectedRows.reduce((sum, row) => sum + Math.abs(normalizeMoney(row.amount)), 0);
   const heading = detailResolutionHeading(context);
   const saveLabel = detailResolutionSaveLabel(context, selectedCount, resolutionMode);
+  const scopeLabel = reviewScope === "account_year"
+    ? `All matching QBO GL transactions for ${taxYear}`
+    : "Selected transactions";
   return (
-    <section ref={ref} tabIndex={-1} className="mb-4 scroll-mt-6 rounded-[18px] border border-emerald-300/16 bg-emerald-300/[0.045] p-3 outline-none focus:ring-2 focus:ring-emerald-300/28">
+    <section ref={ref} tabIndex={-1} className="mb-4 scroll-mt-6 rounded-[18px] border border-amber-300/18 bg-amber-300/[0.045] p-3 outline-none focus:ring-2 focus:ring-amber-300/24">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-100/58">Resolve this review</div>
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-100/62">Review needed</div>
           <h3 className="mt-1 text-lg font-semibold text-white">{heading}</h3>
-          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-white/72">{context.actionHelp}</p>
-          <p className="mt-1 text-xs text-white/44">This confirmation affects only the selected current classifications and writes through the existing override audit mechanism.</p>
+          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-white/72">{context.explanation}</p>
+          <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/46">
+            Estimated deductions are based on Bizzi's proposed treatment and are not added to confirmed deductions until you review them.
+          </p>
         </div>
-        <div className="rounded-[14px] border border-white/10 bg-black/18 px-3 py-2 text-right">
-          <div className="text-[10px] uppercase tracking-[0.12em] text-white/38">Estimated effect</div>
+        <div className="shrink-0 rounded-[14px] border border-white/10 bg-black/18 px-3 py-2 text-right">
+          <div className="text-[10px] uppercase tracking-[0.12em] text-white/38">Estimated deduction</div>
           <div className="mt-1 text-base font-semibold tabular-nums text-amber-100">{estimatedEffect.label}</div>
-          <div className="mt-1 text-[11px] text-white/38">{selectedCount} rows · {formatCurrencyLocal(selectedGrossTotal)} gross</div>
+          <div className="mt-1 text-[11px] text-white/38">across {selectedCount} of {rows.length} transactions</div>
         </div>
       </div>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
-        <div className="space-y-2">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Scope selector</div>
-          <ReviewScopeRadio groupName="deduction-review-scope" value="selected_transactions" current={reviewScope} onChange={onScopeChange} label="This transaction" description="Apply only to the checked rows below." />
-          <ReviewScopeRadio groupName="deduction-review-scope" value="account_year" current={reviewScope} onChange={onScopeChange} label={`This QBO GL account for ${taxYear}`} description="Apply to matching review rows already loaded for this account and year." />
-          <ReviewScopeRadio groupName="deduction-review-scope" value="going_forward" current={reviewScope} onChange={onScopeChange} label="This GL account going forward" description="Requires a schema-backed account-level authority record before it can be saved." disabled />
-        </div>
-
-        <div className="space-y-3 rounded-[14px] border border-white/[0.08] bg-black/16 p-3">
+      <div className="mt-3 rounded-[14px] border border-white/[0.08] bg-black/14 p-3">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,300px)]">
+          <div className="min-w-0">
           {context.kind === "business_use_percent" ? (
             <UtilityBusinessUseControls
               mode={businessUseMode}
@@ -2752,32 +2755,36 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
             </div>
           ) : null}
           {context.kind === "business_purpose" ? (
-            <div className="space-y-2">
-              <ReviewScopeRadio
-                value="business"
-                groupName="deduction-review-resolution"
-                current={resolutionMode}
-                onChange={onResolutionModeChange}
-                label={context.businessLabel || "Confirm selected as business"}
-                description="Selected transactions become user-confirmed with the proposed rule treatment."
-              />
-          <ReviewScopeRadio
-                value="personal"
-                groupName="deduction-review-resolution"
-                current={resolutionMode}
-                onChange={onResolutionModeChange}
-                label={context.personalLabel || "Mark selected as personal"}
-                description="Selected transactions are preserved in history and excluded from confirmed deductions."
-              />
-              <div className="rounded-[12px] border border-amber-300/12 bg-amber-300/[0.05] px-3 py-2 text-xs leading-relaxed text-amber-50/72">
-                Leave exceptions unchecked so they stay in Needs review.
+            <div>
+              <div className="text-sm font-semibold text-white">{context.actionHelp}</div>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <ReviewChoiceButton groupName="deduction-review-resolution" value="business" current={resolutionMode} onChange={onResolutionModeChange} label={context.businessLabel || "Confirm selected as business"} />
+                <ReviewChoiceButton groupName="deduction-review-resolution" value="personal" current={resolutionMode} onChange={onResolutionModeChange} label={context.personalLabel || "Mark selected as personal"} />
               </div>
+              <p className="mt-2 text-xs leading-relaxed text-amber-50/62">Uncheck personal or undocumented exceptions so they stay in Needs review.</p>
             </div>
           ) : null}
+          </div>
+          <div className="space-y-2">
+            <label className="block text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42" htmlFor="deduction-review-scope-select">Apply to</label>
+            <select
+              id="deduction-review-scope-select"
+              value={reviewScope}
+              onChange={(event) => onScopeChange(event.target.value)}
+              disabled={readOnly || saving}
+              className="h-9 w-full rounded-[11px] border border-white/10 bg-[#0f1311] px-3 text-sm font-semibold text-white outline-none focus:border-emerald-300/40 focus:ring-2 focus:ring-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <option value="selected_transactions">Selected transactions</option>
+              <option value="account_year">All matching QBO GL transactions for {taxYear}</option>
+            </select>
+            <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs text-white/48">
+              {scopeLabel} · {selectedCount} affected · {formatCurrencyLocal(selectedGrossTotal)} expense total
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="mt-3 flex flex-col gap-2 border-t border-white/[0.08] pt-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -2788,7 +2795,6 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
             {allSelected ? "Clear selection" : "Select all"}
           </button>
           <span className="text-xs text-white/46">{selectedCount} of {rows.length} selected</span>
-          <span className="text-xs text-white/32">Preserve selected exceptions by leaving them unchecked.</span>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
@@ -2815,21 +2821,22 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
 
 function UtilityBusinessUseControls({ mode, percent, percentValid, onModeChange, onPercentChange }) {
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div>
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">How much of this account is used for business?</div>
-        <div className="mt-2 grid gap-2">
-          <ReviewScopeRadio groupName="deduction-business-use-mode" value="dedicated" current={mode} onChange={onModeChange} label="Dedicated business location - 100%" description="The account is for a dedicated business location or business-only service." />
-          <ReviewScopeRadio groupName="deduction-business-use-mode" value="mixed" current={mode} onChange={onModeChange} label="Mixed business and personal use" description="Enter the factual business-use percentage." />
-          <ReviewScopeRadio groupName="deduction-business-use-mode" value="personal" current={mode} onChange={onModeChange} label="Personal use - 0%" description="No deduction will be confirmed for the selected transactions." />
+        <div className="text-sm font-semibold text-white">How much of this account is used for business?</div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <ReviewChoiceButton groupName="deduction-business-use-mode" value="dedicated" current={mode} onChange={onModeChange} label="100% business" />
+          <ReviewChoiceButton groupName="deduction-business-use-mode" value="mixed" current={mode} onChange={onModeChange} label="Mixed business and personal use" />
+          <ReviewChoiceButton groupName="deduction-business-use-mode" value="personal" current={mode} onChange={onModeChange} label="Personal - 0%" />
         </div>
       </div>
-      <BusinessUsePercentInput
-        value={percent}
-        valid={percentValid}
-        disabled={mode !== "mixed"}
-        onChange={onPercentChange}
-      />
+      {mode === "mixed" ? (
+        <BusinessUsePercentInput
+          value={percent}
+          valid={percentValid}
+          onChange={onPercentChange}
+        />
+      ) : null}
       {!mode ? (
         <p className="text-xs text-amber-100/62">Choose an option before saving. Bizzi will not assume a business-use percentage.</p>
       ) : null}
@@ -2837,39 +2844,41 @@ function UtilityBusinessUseControls({ mode, percent, percentValid, onModeChange,
   );
 }
 
-function ReviewScopeRadio({ value, current, onChange, label, description, disabled = false, groupName = "deduction-review-option" }) {
+function ReviewChoiceButton({ value, current, onChange, label, disabled = false, groupName = "deduction-review-choice" }) {
+  const selected = current === value;
   return (
-    <label className={`flex gap-2 rounded-[13px] border px-3 py-2 ${current === value ? "border-emerald-300/20 bg-emerald-300/[0.07]" : "border-white/[0.08] bg-black/12"} ${disabled ? "opacity-45" : "cursor-pointer"}`}>
+    <label className={`inline-flex min-h-9 items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition ${selected ? "border-emerald-300/28 bg-emerald-300/[0.10] text-emerald-50" : "border-white/10 bg-white/[0.035] text-white/68 hover:bg-white/[0.07] hover:text-white"} ${disabled ? "cursor-not-allowed opacity-45" : "cursor-pointer"}`}>
       <input
         type="radio"
         name={groupName}
         value={value}
-        checked={current === value}
+        checked={selected}
         disabled={disabled}
         onChange={() => onChange(value)}
-        className="mt-1 accent-emerald-300"
+        className="sr-only"
       />
-      <span>
-        <span className="block text-xs font-semibold text-white/78">{label}</span>
-        <span className="block text-xs leading-relaxed text-white/42">{description}</span>
-      </span>
+      <span aria-hidden="true" className={`h-2 w-2 rounded-full ${selected ? "bg-emerald-300" : "bg-white/24"}`} />
+      {label}
     </label>
   );
 }
 
-function BusinessUsePercentInput({ value, valid, disabled = false, onChange }) {
+function BusinessUsePercentInput({ value, valid, onChange }) {
+  const handleChange = (event) => {
+    const next = event.target.value.trim();
+    if (next === "" || /^\d{0,3}(?:\.\d{0,2})?$/.test(next)) onChange(next);
+  };
   return (
     <div>
-      <label className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Business-use percentage</label>
+      <label htmlFor="deduction-business-use-percent" className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Business-use percentage</label>
       <div className="mt-1 flex items-center gap-2">
         <input
-          type="number"
-          min="0"
-          max="100"
-          step="1"
+          id="deduction-business-use-percent"
+          type="text"
+          inputMode="decimal"
           value={value}
-          disabled={disabled}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={handleChange}
+          onKeyDown={(event) => event.stopPropagation()}
           className={`h-9 w-24 rounded-[11px] border bg-black/22 px-3 text-sm font-semibold text-white outline-none focus:ring-2 ${value && !valid ? "border-rose-300/35 focus:ring-rose-300/20" : "border-white/10 focus:ring-emerald-300/22"}`}
           placeholder="0-100"
           aria-label="Business-use percentage input"
@@ -2886,15 +2895,20 @@ function BusinessUsePercentInput({ value, valid, disabled = false, onChange }) {
 
 function VehicleMethodControls({ vehicleMethod, businessUsePercent, businessUsePercentValid, onVehicleMethodChange, onBusinessUsePercentChange }) {
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div>
-        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Vehicle method</div>
-        <div className="mt-2 grid gap-2">
-          <ReviewScopeRadio groupName="deduction-vehicle-method" value="standard_mileage" current={vehicleMethod} onChange={onVehicleMethodChange} label="Standard mileage" description="Gas is not separately deducted. Mileage records are required to calculate the deduction." />
-          <ReviewScopeRadio groupName="deduction-vehicle-method" value="actual_expense" current={vehicleMethod} onChange={onVehicleMethodChange} label="Actual vehicle expenses" description="Deduct only the business-use portion of eligible vehicle costs." />
-          <ReviewScopeRadio groupName="deduction-vehicle-method" value="unsure" current={vehicleMethod} onChange={onVehicleMethodChange} label="I'm not sure" description="Keep these transactions in Needs review. Nothing is saved." />
+        <div className="text-sm font-semibold text-white">How do you deduct vehicle expenses?</div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <ReviewChoiceButton groupName="deduction-vehicle-method" value="standard_mileage" current={vehicleMethod} onChange={onVehicleMethodChange} label="Standard mileage" />
+          <ReviewChoiceButton groupName="deduction-vehicle-method" value="actual_expense" current={vehicleMethod} onChange={onVehicleMethodChange} label="Actual vehicle expenses" />
+          <ReviewChoiceButton groupName="deduction-vehicle-method" value="unsure" current={vehicleMethod} onChange={onVehicleMethodChange} label="I'm not sure" />
         </div>
       </div>
+      {vehicleMethod === "standard_mileage" ? (
+        <p className="rounded-[12px] border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs leading-relaxed text-white/50">
+          Gas is not separately deducted when using standard mileage. Business mileage records are required.
+        </p>
+      ) : null}
       {vehicleMethod === "actual_expense" ? (
         <>
           <BusinessUsePercentInput value={businessUsePercent} valid={businessUsePercentValid} onChange={onBusinessUsePercentChange} />
@@ -3015,6 +3029,7 @@ function collectAccountYearReviewRows(account = {}) {
 
 function parseBusinessUsePercent(value) {
   if (value === "" || value == null) return null;
+  if (!/^\d{1,3}(?:\.\d{1,2})?$/.test(String(value))) return null;
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0 || number > 100) return null;
   return number;

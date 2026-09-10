@@ -52,7 +52,7 @@ export default function RecordTaxPaymentModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[90] grid place-items-center px-4 py-8" role="dialog" aria-modal="true" aria-labelledby="record-tax-payment-title">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-[90] grid place-items-center px-4 py-8" role="dialog" aria-modal="true" aria-labelledby="record-tax-payment-title">
       <button type="button" aria-label="Close record payment modal" className="absolute inset-0 bg-black/62" onClick={onClose} />
       <section className="relative flex max-h-[min(760px,calc(100vh-96px))] w-full max-w-[720px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] text-white shadow-[0_24px_90px_rgba(0,0,0,0.68)]">
         <header className="border-b border-white/10 px-4 py-3.5">

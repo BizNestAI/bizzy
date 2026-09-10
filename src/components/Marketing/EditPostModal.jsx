@@ -25,7 +25,7 @@ export default function EditPostModal({ post, onClose, onSave }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-70 z-50 flex justify-center items-center p-4">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-50 flex justify-center items-center p-4">
       <div className="w-full max-w-xl bg-gray-900 text-white rounded-xl shadow-lg border border-blue-400 p-6 relative">
         <button className="absolute top-3 right-3 p-1 hover:text-red-400" onClick={onClose} title="Close"><X size={20}/></button>
         <h3 className="text-xl font-semibold text-blue-300 mb-4">Edit Post</h3>

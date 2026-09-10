@@ -2851,7 +2851,7 @@ function ReconciliationTracePanel({ ledger, loading }) {
 function FinalizeConfirmModal({ open, month, businessName, finalizing, onCancel, onConfirm }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 px-4">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
       <div className="w-full max-w-lg rounded-2xl border border-white/12 bg-[#0d0f12] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.55)]">
         <div className="flex items-start gap-3">
           <div className="mt-1 rounded-full border border-emerald-300/20 bg-emerald-300/[0.08] p-2 text-emerald-100">
@@ -3072,7 +3072,7 @@ function TransactionHistoryDrawer({ state, onClose }) {
   if (!state.open) return null;
   const txn = state.transaction || {};
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/55">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-50 flex justify-end">
       <button type="button" className="min-w-0 flex-1 cursor-default" onClick={onClose} aria-label="Close history" />
       <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-white/10 bg-[#0d0f12] p-5 shadow-[-18px_0_50px_rgba(0,0,0,0.35)]">
         <div className="flex items-start justify-between gap-3">

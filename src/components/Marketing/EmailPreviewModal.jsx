@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 
 export default function EmailPreviewModal({ subject, body, cta, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 bg-black bg-opacity-80 flex items-center justify-center px-4">
+    <div className="bizzy-modal-main-backdrop fixed inset-0 z-50 flex items-center justify-center px-4">
       <div className="w-full max-w-2xl bg-gray-900 text-white rounded-xl border border-blue-500/30 shadow-2xl p-6 relative overflow-y-auto max-h-[90vh]">
         {/* Close button */}
         <button
