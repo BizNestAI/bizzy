@@ -342,9 +342,58 @@ test("manual Refresh bypasses cached read-only tax resources and exposes result 
   assert.doesNotMatch(hook, /refresh:[\s\S]{0,240}prepareTaxClassifications/);
 });
 
+test("tax deductions overview prefetch is read-only and mounted after business context resolves", () => {
+  const prefetchHook = fs.readFileSync("src/hooks/tax/useTaxDeductionsPrefetch.js", "utf8");
+  const apiClient = fs.readFileSync("src/services/tax/taxApiClient.js", "utf8");
+  const main = fs.readFileSync("src/main.jsx", "utf8");
+
+  assert.match(prefetchHook, /prefetchTaxDeductionsOverviewBundle\(\{ businessId, year \}\)/);
+  assert.match(prefetchHook, /if \(!enabled \|\| loading \|\| !businessId/);
+  assert.match(prefetchHook, /requestIdleCallback/);
+  assert.match(prefetchHook, /setTimeout\(callback, 0\)/);
+  assert.match(main, /<DashboardTaxPrefetcher \/>/);
+  assert.match(main, /<BusinessProvider>[\s\S]*<DashboardTaxPrefetcher \/>[\s\S]*<FullDashboardLayout \/>/);
+
+  const bundleBody = apiClient.match(/export async function prefetchTaxDeductionsOverviewBundle[\s\S]*?\n}\n\nexport async function prefetchTaxDeductionTransactionPages/)?.[0] || "";
+  assert.match(bundleBody, /getTaxDeductionsOverview/);
+  assert.match(bundleBody, /prefetchTaxDeductionTransactionPages/);
+  assert.match(bundleBody, /getTaxClassificationCoverage/);
+  assert.match(bundleBody, /getTaxClassificationReviewSummary/);
+  assert.doesNotMatch(bundleBody, /prepareTaxClassifications|runTaxClassification|runTaxCalculation|QuickBooks|Plaid|POST|PATCH|DELETE/);
+});
+
+test("tax API cache dedupes in-flight overview requests between prefetch and route load", () => {
+  const apiClient = fs.readFileSync("src/services/tax/taxApiClient.js", "utf8");
+  const cachedGet = apiClient.match(/async function cachedGet[\s\S]*?\n}\n\nfunction getCachedValue/)?.[0] || "";
+  assert.match(cachedGet, /if \(inflight\.has\(cacheKey\)\) return inflight\.get\(cacheKey\)/);
+  assert.match(cachedGet, /inflight\.set\(cacheKey, promise\)/);
+  assert.doesNotMatch(cachedGet, /if \(!signal && inflight\.has/);
+  assert.match(apiClient, /function taxDeductionsOverviewPath/);
+  assert.match(apiClient, /cacheKey: key\("deductionsOverview", params\)/);
+});
+
+test("deductions hook stages cold loading and keeps cached data visible during refresh", () => {
+  const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+
+  const primaryLoad = hook.match(/const \[overviewResult, allTransactionsResult, coverageResult, reviewSummaryResult\][\s\S]*?Promise\.allSettled\(\[[\s\S]*?\]\);/)?.[0] || "";
+  assert.match(primaryLoad, /getTaxDeductionsOverview/);
+  assert.match(primaryLoad, /fetchAllDeductionTransactions/);
+  assert.match(primaryLoad, /getTaxClassificationCoverage/);
+  assert.match(primaryLoad, /getTaxClassificationReviewSummary/);
+  assert.doesNotMatch(primaryLoad, /fetchAllPostedTransactions|getTaxClassifications|getTaxDeductionTransactionDetail/);
+
+  assert.match(hook, /const loadSecondaryDetails = useCallback/);
+  assert.match(hook, /fetchAllPostedTransactions/);
+  assert.match(hook, /getTaxClassifications/);
+  assert.match(hook, /getCachedTaxDeductionsOverview\(\{ businessId, year, asOfDate, allowStale: true \}\)/);
+  assert.match(dashboard, /const initialDeductionsLoading = deductions\.loading && !workspaceRows\.length/);
+  assert.match(dashboard, /disabled=\{deductions\.refreshing \|\| !hasUsableDeductionsData\}/);
+});
+
 test("terminal classification polling refreshes all Deductions resources without using stale cache", () => {
   const hook = fs.readFileSync("src/hooks/tax/useTaxDeductions.js", "utf8");
-  assert.match(hook, /if \(isTerminalJobStatus\(status\?\.status\)\) \{\s*await load\(\{ refresh: true \}\);\s*return;\s*\}/);
+  assert.match(hook, /if \(isTerminalJobStatus\(status\?\.status\)\) \{\s*await load\(\{ refresh: true \}\);\s*await loadSecondaryDetails\(\{ refresh: true \}\);\s*return;\s*\}/);
 });
 
 test("meaningful proposed-category needs review rows render proposed category and source while unresolved fallback stays pending-style", () => {
@@ -476,13 +525,16 @@ test("Tax Dashboard renders matrix-first Deductions workspace views with separat
 test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and authority", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /function MatrixCell/);
-  assert.match(dashboard, /openCell\("confirmed"\)/);
+  assert.match(dashboard, /openCell\(cell\.authoritativeDeductibleTotal > 0 \? "confirmed" : "resolved_zero"\)/);
   assert.match(dashboard, /openCell\("proposed"\)/);
+  assert.match(dashboard, /"confirmed" : "resolved_zero"/);
+  assert.match(dashboard, /openCell\("standard_mileage"\)/);
   assert.match(dashboard, /selectedAuthority: authority/);
   assert.match(dashboard, /const isReviewDetail = transactions\.some/);
   assert.match(dashboard, /isAuthoritativeDeductionBucket\(classificationBucket\(row\)\)/);
-  assert.match(dashboard, /transactions\.filter\(\(row\) => classificationBucket\(row\) === "needs_review"\)/);
-  assert.match(dashboard, /cell\.authoritativeDeductibleTotal > 0/);
+  assert.match(dashboard, /classificationBucket\(row\) === "needs_review" \|\| classificationBucket\(row\) === "unclassified"/);
+  assert.match(dashboard, /cell\.authoritativeDeductibleTotal > 0 \|\| cell\.resolvedZeroTransactionCount > 0/);
+  assert.doesNotMatch(dashboard, /const hasRenderableState = cell\.authoritativeDeductibleTotal > 0/);
   assert.doesNotMatch(dashboard, /cell\.autoTransactionCount > 0/);
   assert.match(dashboard, /return <span className="block px-2 py-1\.5 text-\[12px\] text-white\/22">—<\/span>/);
 });
@@ -1002,6 +1054,120 @@ test("standard mileage gas rows remain visible in the matrix without zero-percen
   const gas = matrix.accounts.find((account) => account.name === "Gas");
   assert.equal(gas.months["2026-06"].standardMileageTransactionCount, 1);
   assert.equal(gas.months["2026-06"].authoritativeDeductibleTotal, 0);
+  assert.equal(gas.months["2026-06"].expenseTotal, 42);
+  assert.equal(gas.months["2026-06"].transactions.length, 1);
+  assert.equal(gas.authoritativeDeductibleTotal, 0);
+});
+
+test("matrix membership comes from source activity, not positive deduction truthiness", async () => {
+  const { buildDeductionAccountMatrix } = await loadTaxDashboardInternals();
+  const base = {
+    qboAccountId: "qbo-supplies",
+    qboAccountName: "Supplies",
+    signedAmount: -18,
+    direction: "OUTFLOW",
+    amount: 18,
+    taxCategory: "supplies",
+    taxCategoryLabel: "Supplies",
+    deductibleAmount: 0,
+    deductiblePercent: 0,
+    requiresReview: false,
+  };
+  const rows = [{
+    ...base,
+    id: "personal-supply",
+    date: "2026-08-08",
+    status: "user_confirmed",
+    statusLabel: "Confirmed by you",
+    deductibilityStatus: "nondeductible",
+    taxTreatment: "personal_purchase",
+  }, {
+    ...base,
+    id: "excluded-supply",
+    date: "2026-09-08",
+    status: "excluded",
+    statusLabel: "Excluded",
+    deductibilityStatus: "excluded",
+    taxTreatment: "excluded",
+  }];
+
+  const matrix = buildDeductionAccountMatrix(rows, 2026, { scope: "overview" });
+  const supplies = matrix.accounts.find((account) => account.name === "Supplies");
+  assert.ok(supplies);
+  assert.equal(supplies.months["2026-08"].expenseTotal, 18);
+  assert.equal(supplies.months["2026-08"].resolvedZeroTransactionCount, 1);
+  assert.equal(supplies.months["2026-08"].authoritativeDeductibleTotal, 0);
+  assert.equal(supplies.months["2026-08"].transactions.length, 1);
+  assert.equal(supplies.months["2026-09"].expenseTotal, 18);
+  assert.equal(supplies.months["2026-09"].excludedTransactionCount, 1);
+  assert.equal(supplies.months["2026-09"].transactions.length, 1);
+  assert.equal(supplies.months["2026-10"].transactions.length, 0);
+});
+
+test("confirmed, proposed, standard-mileage, and zero cells preserve transaction month and reconcile to YTD", async () => {
+  const { buildDeductionAccountMatrix } = await loadTaxDashboardInternals();
+  const rows = [{
+    id: "confirmed-meal",
+    date: "2026-05-10",
+    qboAccountId: "qbo-meals",
+    qboAccountName: "Meals",
+    amount: 40,
+    signedAmount: -40,
+    direction: "OUTFLOW",
+    taxCategory: "business_meals",
+    taxCategoryLabel: "Business Meals",
+    deductiblePercent: 50,
+    deductibleAmount: 20,
+    status: "user_confirmed",
+    statusLabel: "Confirmed by you",
+    requiresReview: false,
+  }, {
+    id: "proposed-meal",
+    date: "2026-05-20",
+    qboAccountId: "qbo-meals",
+    qboAccountName: "Meals",
+    amount: 30,
+    signedAmount: -30,
+    direction: "OUTFLOW",
+    taxCategory: "business_meals",
+    taxCategoryLabel: "Business Meals",
+    deductiblePercent: 50,
+    deductibleAmount: 15,
+    status: "needs_review",
+    statusLabel: "Needs review",
+    requiresReview: true,
+  }, {
+    id: "gas-standard-mileage",
+    date: "2026-06-01",
+    qboAccountId: "qbo-gas",
+    qboAccountName: "Gas",
+    amount: 200,
+    signedAmount: -200,
+    direction: "OUTFLOW",
+    taxCategory: "vehicle_expense",
+    taxCategoryLabel: "Vehicle Expense",
+    taxTreatment: "vehicle_standard_mileage_no_separate_gas",
+    taxTreatmentLabel: "Covered by standard mileage",
+    deductiblePercent: 0,
+    deductibleAmount: 0,
+    status: "user_confirmed",
+    statusLabel: "Confirmed by you",
+    requiresReview: false,
+  }];
+  const matrix = buildDeductionAccountMatrix(rows, 2026, { scope: "overview" });
+  const meals = matrix.accounts.find((account) => account.name === "Meals");
+  const gas = matrix.accounts.find((account) => account.name === "Gas");
+
+  assert.equal(meals.months["2026-05"].authoritativeDeductibleTotal, 20);
+  assert.equal(meals.months["2026-05"].proposedDeductibleTotal, 15);
+  assert.equal(meals.authoritativeDeductibleTotal, 20);
+  assert.equal(meals.proposedDeductibleTotal, 15);
+  assert.equal(meals.months["2026-05"].transactions.length, 2);
+  assert.equal(meals.months["2026-06"].transactions.length, 0);
+  assert.equal(gas.months["2026-06"].expenseTotal, 200);
+  assert.equal(gas.months["2026-06"].standardMileageTransactionCount, 1);
+  assert.equal(gas.months["2026-06"].authoritativeDeductibleTotal, 0);
+  assert.equal(gas.months["2026-06"].transactions.length, 1);
   assert.equal(gas.authoritativeDeductibleTotal, 0);
 });
 

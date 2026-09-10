@@ -14,7 +14,7 @@ const ALLOWED_INCLUDES = new Set([
   "deadlines",
 ]);
 
-const CACHE_TTL_MS = 30_000;
+const CACHE_TTL_MS = 60_000;
 const MAX_CACHE_ENTRIES = 50;
 const TAX_DETAIL_PAGE_LIMIT = 200;
 const cache = new Map();
@@ -202,7 +202,59 @@ export async function expireTaxProfileMemory({ businessId, memoryKey, effectiveT
 
 export async function getTaxDeductionsOverview({ businessId, year, asOfDate, refresh = false, signal } = {}) {
   requireBusinessId(businessId);
-  return unwrap(await cachedGet(`/api/tax/deductions/overview?${query({ businessId, year, asOfDate })}`, { signal, bypassCache: refresh }));
+  const { path, cacheKey } = taxDeductionsOverviewPath({ businessId, year, asOfDate });
+  return unwrap(await cachedGet(path, { signal, cacheKey, bypassCache: refresh }));
+}
+
+export function getCachedTaxDeductionsOverview({ businessId, year, asOfDate, allowStale = true } = {}) {
+  if (!businessId) return null;
+  const { cacheKey } = taxDeductionsOverviewPath({ businessId, year, asOfDate });
+  return getCachedValue(cacheKey, { allowStale });
+}
+
+export async function prefetchTaxDeductionsOverviewBundle({ businessId, year, asOfDate } = {}) {
+  requireBusinessId(businessId);
+  const results = await Promise.allSettled([
+    getTaxDeductionsOverview({ businessId, year, asOfDate }),
+    prefetchTaxDeductionTransactionPages({ businessId, year, asOfDate }),
+    getTaxClassificationCoverage({ businessId, year }),
+    getTaxClassificationReviewSummary({ businessId, year }),
+  ]);
+  return {
+    overview: valueOrNull(results[0]),
+    transactionRows: valueOrNull(results[1]),
+    classificationCoverage: valueOrNull(results[2]),
+    classificationReviewSummary: valueOrNull(results[3]),
+    errors: results
+      .filter((result) => result.status === "rejected")
+      .map((result) => result.reason),
+  };
+}
+
+export async function prefetchTaxDeductionTransactionPages({ businessId, year, asOfDate, filters = {} } = {}) {
+  requireBusinessId(businessId);
+  const limit = TAX_DETAIL_PAGE_LIMIT;
+  const rows = [];
+  let latestPage = null;
+  for (let offset = 0; ; offset += limit) {
+    const page = await getTaxDeductionTransactions({ businessId, year, asOfDate, filters, limit, offset });
+    const pageRows = Array.isArray(page?.rows) ? page.rows : [];
+    rows.push(...pageRows);
+    latestPage = page;
+    if (!page?.pagination?.hasMore || !pageRows.length) break;
+  }
+  return {
+    ...(latestPage || {}),
+    rows,
+    pagination: {
+      ...(latestPage?.pagination || {}),
+      limit,
+      offset: 0,
+      returned: rows.length,
+      total: latestPage?.pagination?.total ?? rows.length,
+      hasMore: false,
+    },
+  };
 }
 
 export async function getTaxDeductionTransactions({ businessId, year, asOfDate, filters = {}, limit, offset, refresh = false, signal } = {}) {
@@ -607,15 +659,36 @@ async function cachedGet(path, { signal, cacheKey = path, bypassCache = false } 
   if (!bypassCache) {
     const hit = cache.get(cacheKey);
     if (hit && now - hit.ts < CACHE_TTL_MS) return hit.value;
-    if (!signal && inflight.has(cacheKey)) return inflight.get(cacheKey);
+    if (inflight.has(cacheKey)) return inflight.get(cacheKey);
   }
   const promise = request(path, { method: "GET", signal }).then((value) => {
     cache.set(cacheKey, { ts: Date.now(), value });
     trimCache();
     return value;
   }).finally(() => inflight.delete(cacheKey));
-  if (!signal) inflight.set(cacheKey, promise);
+  inflight.set(cacheKey, promise);
   return promise;
+}
+
+function getCachedValue(cacheKey, { allowStale = false } = {}) {
+  const hit = cache.get(cacheKey);
+  if (!hit) return null;
+  const ageMs = Date.now() - hit.ts;
+  if (!allowStale && ageMs >= CACHE_TTL_MS) return null;
+  return {
+    value: unwrap(hit.value),
+    ageMs,
+    stale: ageMs >= CACHE_TTL_MS,
+    cacheKey,
+  };
+}
+
+function taxDeductionsOverviewPath({ businessId, year, asOfDate } = {}) {
+  const params = query({ businessId, year, asOfDate });
+  return {
+    path: `/api/tax/deductions/overview?${params}`,
+    cacheKey: key("deductionsOverview", params),
+  };
 }
 
 function request(path, options) {
@@ -690,6 +763,10 @@ function unwrap(payload) {
   return payload?.ok === true && "data" in payload ? payload.data : payload;
 }
 
+function valueOrNull(result) {
+  return result?.status === "fulfilled" ? result.value : null;
+}
+
 function compact(object) {
   return Object.fromEntries(Object.entries(object || {}).filter(([, value]) => value !== undefined));
 }
@@ -734,6 +811,9 @@ export default {
   setTaxProfileMemory,
   expireTaxProfileMemory,
   getTaxDeductionsOverview,
+  getCachedTaxDeductionsOverview,
+  prefetchTaxDeductionsOverviewBundle,
+  prefetchTaxDeductionTransactionPages,
   getTaxDeductionTransactions,
   getTaxPostedTransactions,
   getTaxDeductionTransactionDetail,

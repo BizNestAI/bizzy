@@ -56,6 +56,7 @@ import AdminViewRedeem from "./pages/AdminView/AdminViewRedeem.jsx";
 import AdminProtectedRoute from "./components/Admin/AdminProtectedRoute.jsx";
 import { getAdminRoutePath, getCurrentApplicationSurface } from "./utils/applicationSurface.js";
 import { isTaxLiabilityEstimateEnabled } from "./config/taxFeatures.js";
+import { TaxDeductionsPrefetcher } from "./hooks/tax/useTaxDeductionsPrefetch.js";
 
 const AffordabilityPage = React.lazy(() => import("./pages/accounting/Affordability.jsx"));
 const ScenariosPage = React.lazy(() => import("./pages/accounting/Scenarios.jsx"));
@@ -202,6 +203,11 @@ function TaxCalculationRouteBoundary() {
   );
 }
 
+function DashboardTaxPrefetcher() {
+  const { businessId, loading } = useBusiness();
+  return <TaxDeductionsPrefetcher businessId={businessId} loading={loading} />;
+}
+
 const applicationSurface = getCurrentApplicationSurface();
 const renderCustomerRoutes = applicationSurface !== "admin";
 const renderAdminRoutes = applicationSurface === "admin" || applicationSurface === "development";
@@ -272,7 +278,10 @@ ReactDOM.createRoot(document.getElementById("root")).render(
                   <BusinessProvider>
                     <WithUnreadProvider>
                       <BizzyChatProvider>
-                        <FullDashboardLayout />
+                        <>
+                          <DashboardTaxPrefetcher />
+                          <FullDashboardLayout />
+                        </>
                       </BizzyChatProvider>
                     </WithUnreadProvider>
                   </BusinessProvider>

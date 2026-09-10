@@ -6,6 +6,7 @@ import {
   confirmTaxClassification,
   excludeTaxClassification,
   exportTaxDeductions,
+  getCachedTaxDeductionsOverview,
   getTaxClassificationCoverage,
   getTaxClassificationStatus,
   getTaxClassificationReviewSummary,
@@ -34,7 +35,13 @@ export function useTaxDeductions({
 } = {}) {
   const filterKey = useMemo(() => JSON.stringify(stableObject(filters)), [filters]);
   const paginationKey = useMemo(() => JSON.stringify(stableObject(pagination)), [pagination]);
-  const [overview, setOverview] = useState(null);
+  const initialCachedOverview = useMemo(
+    () => (!shouldUseDemoData() && enabled && businessId
+      ? getCachedTaxDeductionsOverview({ businessId, year, asOfDate, allowStale: true })?.value || null
+      : null),
+    [businessId, year, asOfDate, enabled]
+  );
+  const [overview, setOverview] = useState(initialCachedOverview);
   const [transactions, setTransactions] = useState(null);
   const [allTransactions, setAllTransactions] = useState(null);
   const [postedTransactions, setPostedTransactions] = useState(null);
@@ -51,9 +58,28 @@ export function useTaxDeductions({
   const seq = useRef(0);
   const pollInFlight = useRef(false);
   const isDemo = shouldUseDemoData();
+  const scopeKey = `${businessId || ""}:${year || ""}:${asOfDate || ""}:${enabled ? "enabled" : "disabled"}`;
   const shouldPollClassification = isActiveClassificationStatus(
     classificationJobStatus?.status || classificationCoverage?.jobStatus?.status || classificationCoverage?.classificationStatus
   );
+
+  useEffect(() => {
+    if (isDemo) return;
+    seq.current += 1;
+    const cached = enabled && businessId
+      ? getCachedTaxDeductionsOverview({ businessId, year, asOfDate, allowStale: true })?.value || null
+      : null;
+    setOverview(cached);
+    setTransactions(null);
+    setAllTransactions(null);
+    setPostedTransactions(null);
+    setClassificationCoverage(null);
+    setClassificationJobStatus(null);
+    setClassificationRows(null);
+    setClassificationReviewSummary(null);
+    setError(null);
+    setRefreshError(null);
+  }, [scopeKey, isDemo, businessId, year, asOfDate, enabled]);
 
   const load = useCallback(async ({ signal, refresh = false } = {}) => {
     if (isDemo) {
@@ -78,43 +104,24 @@ export function useTaxDeductions({
     setResourceErrors({});
     try {
       const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
-      const parsedPagination = paginationKey ? JSON.parse(paginationKey) : {};
-      const [overviewResult, transactionsResult, allTransactionsResult, postedTransactionsResult, coverageResult, classificationRowsResult, reviewSummaryResult] = await Promise.allSettled([
+      const [overviewResult, allTransactionsResult, coverageResult, reviewSummaryResult] = await Promise.allSettled([
         getTaxDeductionsOverview({ businessId, year, asOfDate, refresh, signal }),
-        getTaxDeductionTransactions({
-          businessId,
-          year,
-          asOfDate,
-          filters: parsedFilters,
-          limit: parsedPagination.limit,
-          offset: parsedPagination.offset,
-          refresh,
-          signal,
-        }),
         fetchAllDeductionTransactions({ businessId, year, asOfDate, filters: parsedFilters, refresh, signal }),
-        fetchAllPostedTransactions({ businessId, year, refresh, signal }),
         getTaxClassificationCoverage({ businessId, year, refresh, signal }),
-        getTaxClassifications({ businessId, year, limit: 200, offset: 0, refresh, signal }),
         getTaxClassificationReviewSummary({ businessId, year, refresh, signal }),
       ]);
       if (request === seq.current) {
         if (overviewResult.status === "fulfilled") setOverview(overviewResult.value);
-        if (transactionsResult.status === "fulfilled") setTransactions(transactionsResult.value);
         if (allTransactionsResult.status === "fulfilled") setAllTransactions(allTransactionsResult.value);
-        if (postedTransactionsResult.status === "fulfilled") setPostedTransactions(postedTransactionsResult.value);
         if (coverageResult.status === "fulfilled") {
           setClassificationCoverage(coverageResult.value);
           setClassificationJobStatus(coverageResult.value?.jobStatus || null);
         }
-        if (classificationRowsResult.status === "fulfilled") setClassificationRows(classificationRowsResult.value);
         if (reviewSummaryResult.status === "fulfilled") setClassificationReviewSummary(reviewSummaryResult.value);
         const errors = collectResourceErrors({
           overview: overviewResult,
-          transactions: transactionsResult,
           allTransactions: allTransactionsResult,
-          postedTransactions: postedTransactionsResult,
           classificationCoverage: coverageResult,
-          classificationRows: classificationRowsResult,
           classificationReviewSummary: reviewSummaryResult,
         });
         setResourceErrors(errors);
@@ -126,11 +133,11 @@ export function useTaxDeductions({
       }
       return {
         overview: valueOrNull(overviewResult),
-        transactions: valueOrNull(transactionsResult),
+        transactions: null,
         allTransactions: valueOrNull(allTransactionsResult),
-        postedTransactions: valueOrNull(postedTransactionsResult),
+        postedTransactions: null,
         classificationCoverage: valueOrNull(coverageResult),
-        classificationRows: valueOrNull(classificationRowsResult),
+        classificationRows: null,
         classificationReviewSummary: valueOrNull(reviewSummaryResult),
       };
     } catch (err) {
@@ -140,13 +147,54 @@ export function useTaxDeductions({
     } finally {
       if (request === seq.current) setLoading(false);
     }
+  }, [businessId, year, asOfDate, filterKey, enabled, isDemo]);
+
+  const loadSecondaryDetails = useCallback(async ({ signal, refresh = false } = {}) => {
+    if (isDemo || !enabled || !businessId) return null;
+    const request = seq.current;
+    const parsedFilters = filterKey ? JSON.parse(filterKey) : {};
+    const parsedPagination = paginationKey ? JSON.parse(paginationKey) : {};
+    const [transactionsResult, postedTransactionsResult, classificationRowsResult] = await Promise.allSettled([
+      getTaxDeductionTransactions({
+        businessId,
+        year,
+        asOfDate,
+        filters: parsedFilters,
+        limit: parsedPagination.limit,
+        offset: parsedPagination.offset,
+        refresh,
+        signal,
+      }),
+      fetchAllPostedTransactions({ businessId, year, refresh, signal }),
+      getTaxClassifications({ businessId, year, limit: 200, offset: 0, refresh, signal }),
+    ]);
+    if (request !== seq.current) return null;
+    if (transactionsResult.status === "fulfilled") setTransactions(transactionsResult.value);
+    if (postedTransactionsResult.status === "fulfilled") setPostedTransactions(postedTransactionsResult.value);
+    if (classificationRowsResult.status === "fulfilled") setClassificationRows(classificationRowsResult.value);
+    const errors = collectResourceErrors({
+      transactions: transactionsResult,
+      postedTransactions: postedTransactionsResult,
+      classificationRows: classificationRowsResult,
+    });
+    if (Object.keys(errors).length) {
+      setResourceErrors((current) => ({ ...current, ...errors }));
+      setRefreshError(Object.values(errors)[0] || null);
+    }
+    return {
+      transactions: valueOrNull(transactionsResult),
+      postedTransactions: valueOrNull(postedTransactionsResult),
+      classificationRows: valueOrNull(classificationRowsResult),
+    };
   }, [businessId, year, asOfDate, filterKey, paginationKey, enabled, isDemo]);
 
   useEffect(() => {
     const controller = new AbortController();
-    load({ signal: controller.signal });
+    load({ signal: controller.signal }).then(() => {
+      if (!controller.signal.aborted) loadSecondaryDetails({ signal: controller.signal });
+    });
     return () => controller.abort();
-  }, [load]);
+  }, [load, loadSecondaryDetails]);
 
   useEffect(() => {
     if (isDemo || !enabled || !businessId || !shouldPollClassification) return undefined;
@@ -175,6 +223,7 @@ export function useTaxDeductions({
         }));
         if (isTerminalJobStatus(status?.status)) {
           await load({ refresh: true });
+          await loadSecondaryDetails({ refresh: true });
           return;
         }
         delayMs = Math.min(8000, Math.max(delayMs + 1000, Number(status?.pollAfterMs || 2000)));
@@ -190,7 +239,7 @@ export function useTaxDeductions({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [businessId, classificationCoverage?.jobStatus?.pollAfterMs, classificationJobStatus?.pollAfterMs, enabled, isDemo, load, shouldPollClassification, year]);
+  }, [businessId, classificationCoverage?.jobStatus?.pollAfterMs, classificationJobStatus?.pollAfterMs, enabled, isDemo, load, loadSecondaryDetails, shouldPollClassification, year]);
 
   return {
     overview,
@@ -213,7 +262,9 @@ export function useTaxDeductions({
       setRefreshing(true);
       setRefreshError(null);
       try {
-        return await load({ ...options, refresh: true });
+        const primary = await load({ ...options, refresh: true });
+        const secondary = await loadSecondaryDetails({ ...options, refresh: true });
+        return { ...(primary || {}), ...(secondary || {}) };
       } catch (err) {
         setRefreshError(err);
         throw err;

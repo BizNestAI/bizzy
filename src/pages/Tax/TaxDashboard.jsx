@@ -535,7 +535,8 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const attentionCounts = useMemo(() => buildAttentionCounts(workspaceRows), [workspaceRows]);
   const attentionRows = useMemo(() => filterAttentionWorkspaceRows(workspaceRows, attentionTab), [workspaceRows, attentionTab]);
   const attentionGroups = useMemo(() => buildAttentionReviewGroups(attentionRows), [attentionRows]);
-  const initialDeductionsLoading = deductions.loading && !deductions.overview && !deductions.postedTransactions && !deductions.classificationCoverage;
+  const hasUsableDeductionsData = Boolean(deductions.overview || workspaceRows.length || deductions.classificationCoverage);
+  const initialDeductionsLoading = deductions.loading && !workspaceRows.length;
   const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
   const matrix = useMemo(
     () => {
@@ -672,7 +673,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
           <button
             type="button"
               onClick={refreshDeductions}
-            disabled={deductions.refreshing}
+            disabled={deductions.refreshing || !hasUsableDeductionsData}
             className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-[12px] text-white/80 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           >
             <RefreshCcw className={`h-3.5 w-3.5 ${deductions.refreshing ? "animate-spin" : ""}`} />
@@ -1012,7 +1013,13 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
       ? cell.transactions.filter((row) => isAuthoritativeDeductionBucket(classificationBucket(row)) && !isStandardMileageGasRow(row))
       : authority === "standard_mileage"
         ? cell.transactions.filter(isStandardMileageGasRow)
-        : cell.transactions.filter((row) => classificationBucket(row) === "needs_review");
+        : authority === "resolved_zero"
+          ? cell.transactions.filter(isResolvedZeroMatrixRow)
+          : authority === "excluded"
+            ? cell.transactions.filter((row) => classificationBucket(row) === "excluded")
+            : authority === "failed"
+              ? cell.transactions.filter((row) => classificationBucket(row) === "failed")
+              : cell.transactions.filter((row) => classificationBucket(row) === "needs_review" || classificationBucket(row) === "unclassified");
     if (!transactions.length) return;
     onSelectCell({
       account,
@@ -1027,20 +1034,17 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
       },
     });
   };
-  const hasRenderableState = cell.authoritativeDeductibleTotal > 0 || cell.reviewTransactionCount > 0 || cell.standardMileageTransactionCount > 0;
-  if (!hasRenderableState) {
-    return <span className="block px-2 py-1.5 text-[12px] text-white/22">—</span>;
-  }
+  const resolvedZeroLabel = matrixResolvedZeroLabel(cell);
   return (
     <div className="flex flex-col items-stretch gap-1">
-      {cell.authoritativeDeductibleTotal > 0 ? (
+      {cell.authoritativeDeductibleTotal > 0 || cell.resolvedZeroTransactionCount > 0 ? (
         <button
           type="button"
-          onClick={() => openCell("confirmed")}
+          onClick={() => openCell(cell.authoritativeDeductibleTotal > 0 ? "confirmed" : "resolved_zero")}
           className="w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50 transition hover:border-emerald-200/30 hover:bg-emerald-300/[0.11] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
           title={`${account.name}, ${month.longLabel}, confirmed deductions`}
         >
-          {formatCurrencyLocal(cell.authoritativeDeductibleTotal)} confirmed
+          {cell.authoritativeDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.authoritativeDeductibleTotal)} confirmed` : resolvedZeroLabel}
         </button>
       ) : null}
       {cell.standardMileageTransactionCount > 0 ? (
@@ -1063,8 +1067,52 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
           {cell.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.proposedDeductibleTotal)} proposed` : cell.reviewActionLabel || "Review"}
         </button>
       ) : null}
+      {cell.excludedTransactionCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => openCell("excluded")}
+          className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1.5 text-right text-[12px] font-semibold text-white/68 transition hover:border-white/20 hover:bg-white/[0.07] focus:outline-none focus:ring-2 focus:ring-white/20"
+          title={`${account.name}, ${month.longLabel}, excluded transactions`}
+        >
+          Excluded
+        </button>
+      ) : null}
+      {cell.failedTransactionCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => openCell("failed")}
+          className="w-full rounded-lg border border-rose-300/12 bg-rose-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold text-rose-100 transition hover:border-rose-200/30 hover:bg-rose-300/[0.11] focus:outline-none focus:ring-2 focus:ring-rose-300/30"
+          title={`${account.name}, ${month.longLabel}, failed classifications`}
+        >
+          Needs attention
+        </button>
+      ) : null}
     </div>
   );
+}
+
+function isResolvedZeroMatrixRow(row) {
+  if (isStandardMileageGasRow(row)) return false;
+  const bucket = classificationBucket(row);
+  if (!isAuthoritativeDeductionBucket(bucket)) return false;
+  return normalizeMoney(resolveDeductibleAmount(row)) === 0;
+}
+
+function matrixResolvedZeroLabel(cell) {
+  const rows = (cell?.transactions || []).filter(isResolvedZeroMatrixRow);
+  const labels = [...new Set(rows.map(matrixZeroTreatmentLabel).filter(Boolean))];
+  const suffix = labels.length === 1 ? labels[0] : labels.length > 1 ? "Mixed" : "Confirmed";
+  return `$0 confirmed${suffix ? ` · ${suffix}` : ""}`;
+}
+
+function matrixZeroTreatmentLabel(row) {
+  const status = String(firstValue(row?.deductibilityStatus, row?.taxTreatment, row?.taxTreatmentLabel) || "").toLowerCase();
+  const category = String(firstValue(row?.taxCategory, row?.taxCategoryLabel) || "").toLowerCase();
+  if (status.includes("non") || category.includes("personal")) return "Personal";
+  if (status.includes("exclude")) return "Excluded";
+  if (status.includes("capital")) return "Capitalized";
+  if (status.includes("balance")) return "Balance sheet";
+  return "Not deductible";
 }
 
 function AttentionReviewGroups({ groups, readOnly, onOpenDecision }) {
@@ -3511,6 +3559,10 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     userConfirmedTransactionCount: 0,
     accountantConfirmedTransactionCount: 0,
     standardMileageTransactionCount: 0,
+    resolvedZeroTransactionCount: 0,
+    excludedTransactionCount: 0,
+    failedTransactionCount: 0,
+    unclassifiedTransactionCount: 0,
     reviewTransactionCount: 0,
     reviewActionLabel: null,
     transactions: [],
@@ -3546,6 +3598,10 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
         userConfirmedTransactionCount: 0,
         accountantConfirmedTransactionCount: 0,
         standardMileageTransactionCount: 0,
+        resolvedZeroTransactionCount: 0,
+        excludedTransactionCount: 0,
+        failedTransactionCount: 0,
+        unclassifiedTransactionCount: 0,
         reviewTransactionCount: 0,
         reviewActionLabel: null,
       });
@@ -3567,6 +3623,10 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     if (bucket === "user_confirmed") month.userConfirmedTransactionCount += 1;
     if (bucket === "accountant_confirmed") month.accountantConfirmedTransactionCount += 1;
     if (standardMileageGas) month.standardMileageTransactionCount += 1;
+    if (isResolvedZeroMatrixRow(row)) month.resolvedZeroTransactionCount += 1;
+    if (bucket === "excluded") month.excludedTransactionCount += 1;
+    if (bucket === "failed") month.failedTransactionCount += 1;
+    if (bucket === "unclassified") month.unclassifiedTransactionCount += 1;
     if (bucket === "needs_review") {
       month.reviewTransactionCount += 1;
       month.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
@@ -3581,6 +3641,10 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     if (bucket === "user_confirmed") account.userConfirmedTransactionCount += 1;
     if (bucket === "accountant_confirmed") account.accountantConfirmedTransactionCount += 1;
     if (standardMileageGas) account.standardMileageTransactionCount += 1;
+    if (isResolvedZeroMatrixRow(row)) account.resolvedZeroTransactionCount += 1;
+    if (bucket === "excluded") account.excludedTransactionCount += 1;
+    if (bucket === "failed") account.failedTransactionCount += 1;
+    if (bucket === "unclassified") account.unclassifiedTransactionCount += 1;
     if (bucket === "needs_review") {
       account.reviewTransactionCount += 1;
       account.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
