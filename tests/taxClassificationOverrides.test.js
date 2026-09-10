@@ -344,6 +344,120 @@ test("bulk override rejects missing selected rows atomically", async () => {
   assert.equal(supabase.store.transaction_tax_classifications[0].tax_category, "unclassified");
 });
 
+test("user-confirmed decisions can be edited through the bounded batch path", async () => {
+  const supabase = makeSupabase(baseStore({
+    transaction_tax_classifications: [
+      classification({
+        classification_status: "user_confirmed",
+        user_override: true,
+        tax_category: "meals",
+        deductibility_status: "partially_deductible",
+        deductible_percent: 50,
+        deductible_amount: 50,
+        nondeductible_amount: 50,
+        requires_review: false,
+      }),
+    ],
+  }));
+  const result = await bulkApplyClassificationOverrides({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    transactionIds: ["txn-1"],
+    input: {
+      taxCategory: "meals",
+      deductibilityStatus: "nondeductible",
+      deductiblePercent: 0,
+      reason: "Changed meal to personal.",
+      allowUserConfirmedEdit: true,
+      protectConfirmedAuthority: true,
+    },
+    actor: actor(),
+  });
+
+  assert.equal(result.updated, 1);
+  assert.equal(supabase.store.rpcCalls.apply_tax_classification_override_batch, 1);
+  assert.equal(supabase.store.transaction_tax_classifications[0].classification_status, "user_confirmed");
+  assert.equal(supabase.store.transaction_tax_classifications[0].user_override, true);
+  assert.equal(supabase.store.transaction_tax_classifications[0].deductible_amount, 0);
+  assert.equal(supabase.store.tax_classification_overrides.length, 1);
+});
+
+test("user-confirmed decisions can be explicitly returned to needs review", async () => {
+  const supabase = makeSupabase(baseStore({
+    transaction_tax_classifications: [
+      classification({
+        classification_status: "user_confirmed",
+        user_override: true,
+        tax_category: "utilities",
+        deductibility_status: "fully_deductible",
+        deductible_percent: 100,
+        deductible_amount: 100,
+        requires_review: false,
+      }),
+    ],
+  }));
+  const result = await bulkApplyClassificationOverrides({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    transactionIds: ["txn-1"],
+    input: {
+      taxCategory: "utilities",
+      deductibilityStatus: "needs_review",
+      deductiblePercent: 0,
+      classificationStatus: "needs_review",
+      clearUserOverride: true,
+      reason: "Return to review.",
+      allowUserConfirmedEdit: true,
+      protectConfirmedAuthority: true,
+    },
+    actor: actor(),
+  });
+
+  assert.equal(result.updated, 1);
+  assert.equal(supabase.store.transaction_tax_classifications[0].classification_status, "needs_review");
+  assert.equal(supabase.store.transaction_tax_classifications[0].requires_review, true);
+  assert.equal(supabase.store.transaction_tax_classifications[0].user_override, false);
+  assert.equal(supabase.store.tax_classification_overrides.length, 1);
+  assert.equal(supabase.store.tax_classification_overrides[0].previous_values.classification_status, "user_confirmed");
+  assert.equal(supabase.store.tax_classification_overrides[0].new_values.classification_status, "needs_review");
+});
+
+test("ordinary user batch edits still protect CPA authority", async () => {
+  const supabase = makeSupabase(baseStore({
+    transaction_tax_classifications: [
+      classification({
+        classification_status: "cpa_confirmed",
+        cpa_override: true,
+        tax_category: "meals",
+        deductibility_status: "partially_deductible",
+        deductible_percent: 50,
+      }),
+    ],
+  }));
+  await assert.rejects(
+    () => bulkApplyClassificationOverrides({
+      supabase,
+      businessId: BUSINESS_ID,
+      taxYear: 2026,
+      transactionIds: ["txn-1"],
+      input: {
+        taxCategory: "meals",
+        deductibilityStatus: "nondeductible",
+        deductiblePercent: 0,
+        reason: "User attempted CPA edit.",
+        allowUserConfirmedEdit: true,
+        protectConfirmedAuthority: true,
+      },
+      actor: actor(),
+    }),
+    (err) => err.code === "confirmed_authority_protected"
+  );
+  assert.equal(supabase.store.tax_classification_overrides.length, 0);
+  assert.equal(supabase.store.transaction_tax_classifications[0].classification_status, "cpa_confirmed");
+});
+
 function actor(overrides = {}) {
   return { userId: "user-1", role: "user", source: "user", ...overrides };
 }
@@ -551,8 +665,8 @@ function applyOverrideRpc(store, params) {
     source: params.p_source,
     requires_review: params.p_requires_review,
     reason: params.p_reason,
-    user_override: params.p_user_override || current.user_override || params.p_classification_status === "user_confirmed",
-    cpa_override: params.p_cpa_override || current.cpa_override || params.p_classification_status === "cpa_confirmed",
+    user_override: params.p_user_override === true,
+    cpa_override: params.p_cpa_override === true,
     metadata,
     updated_at: new Date().toISOString(),
   };

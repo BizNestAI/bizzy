@@ -745,7 +745,8 @@ test("Prepare deductions modal uses Bizzi loading treatment instead of native wa
 test("Tax Dashboard does not present missing classification authority as zero deductible", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /No deduction total is shown until classification authority exists/);
-  assert.doesNotMatch(dashboard, /0 deductible/);
+  assert.match(dashboard, /\$0 deductible/);
+  assert.match(dashboard, /classificationBucket\(row\) === "unclassified"/);
 });
 
 test("Tax Dashboard groups Needs Attention decisions by QBO GL account and missing action", () => {
@@ -892,7 +893,7 @@ test("Deduction detail business-use input keeps stable focus and string draft se
   assert.doesNotMatch(dashboard, /}, \[selection, onClose\]\)/);
   assert.match(dashboard, /}, \[hasSelection, selectionFocusKey, onClose\]\)/);
   assert.doesNotMatch(dashboard, /window\.setTimeout\(\(\) => closeButtonRef\.current\?\.focus/);
-  assert.doesNotMatch(dashboard, /resolutionPanelRef\.current\?\.focus/);
+  assert.match(dashboard, /requestAnimationFrameSafe\(\(\) => resolutionPanelRef\.current\?\.focus/);
   assert.ok(dashboard.includes("closeButtonRef.current?.focus?.({ preventScroll: true });"));
   assert.match(dashboard, /type="text"/);
   assert.match(dashboard, /inputMode="decimal"/);
@@ -1177,8 +1178,8 @@ test("standard mileage workflow exposes business-mile entry and avoids gas zero-
   assert.match(dashboard, /Based on mileage records/);
   assert.match(dashboard, /estimated mileage deduction/);
   assert.match(dashboard, /Gas is covered by the standard-mileage method instead of deducted separately/);
-  assert.match(dashboard, /return null/);
-  assert.doesNotMatch(dashboard, /taxTreatment: "vehicle_standard_mileage_no_separate_gas"/);
+  assert.match(dashboard, /taxTreatment: "vehicle_standard_mileage_no_separate_gas"/);
+  assert.match(dashboard, /direct_vehicle_expense_deduction: false/);
 });
 
 test("vehicle mileage persistence requires a dedicated forward migration", () => {
@@ -1213,11 +1214,70 @@ test("Deduction detail modal preserves exceptions and refreshes after confirmati
   assert.match(dashboard, /selectedReviewTransactionIds/);
   assert.match(dashboard, /Uncheck personal or undocumented exceptions so they stay in Needs review/);
   assert.match(dashboard, /hasManualClassificationAuthority\(row\)/);
-  assert.match(dashboard, /onBulkUpdateClassifications\(transactionIds, changes, \{ reason, skipReload: true \}\)/);
+  assert.match(dashboard, /onBulkUpdateClassifications\(transactionIds, changes, \{/);
+  assert.match(dashboard, /skipReload: true/);
+  assert.match(dashboard, /allowUserConfirmedEdit: editingConfirmation/);
   assert.doesNotMatch(dashboard, /onBulkUpdateClassifications\(chunk, changes, \{ reason \}\)/);
   assert.match(dashboard, /Confirming \$\{selectedCount\}/);
   assert.match(dashboard, /await onRefresh\?\.\(\)/);
   assert.match(dashboard, /User confirmed \$\{count\} deduction review/);
   assert.match(routes, /protectConfirmedAuthority: true/);
   assert.match(service, /confirmed_authority_protected/);
+});
+
+test("Deduction detail modal renders edit confirmation summary for user-confirmed rows", async () => {
+  const { DeductionMonthDetailModal } = await loadTaxDashboardInternals();
+  const selection = makeReviewSelection({
+    accountName: "Meals",
+    taxCategory: "business_meals",
+    monthKey: "2026-05",
+    longLabel: "May 2026",
+    deductiblePercent: 50,
+    amount: 40,
+  });
+  selection.cell.transactions[0] = {
+    ...selection.cell.transactions[0],
+    status: "user_confirmed",
+    statusLabel: "Confirmed by you",
+    requiresReview: false,
+    deductibleAmount: 20,
+    raw: {
+      transactionId: "txn-1",
+      override: { lastChangedAt: "2026-09-10T12:00:00Z" },
+    },
+  };
+  selection.cell.authoritativeDeductibleTotal = 20;
+  selection.cell.proposedDeductibleTotal = 0;
+
+  const html = renderToStaticMarkup(React.createElement(DeductionMonthDetailModal, {
+    selection,
+    onClose: () => {},
+    onBulkUpdateClassifications: async () => ({}),
+    onRefresh: async () => {},
+  }));
+
+  assert.match(html, /Confirmed by you/);
+  assert.match(html, /1 transaction/);
+  assert.match(html, /50% business use/);
+  assert.match(html, /Edit confirmation/);
+  assert.match(html, /You confirmed this treatment based on your business use/);
+  assert.doesNotMatch(html, /Bizzi automatically determined/);
+});
+
+test("user-confirmed edit path reuses the atomic batch override with explicit edit authorization", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const routes = fs.readFileSync("src/api/tax/taxClassificationReview.routes.js", "utf8");
+  const service = fs.readFileSync("src/services/tax/taxClassificationOverride.service.js", "utf8");
+  const migration = fs.readFileSync("supabase/migrations/20261005_tax_classification_bulk_override_rpc.sql", "utf8");
+
+  assert.match(dashboard, /const \[editingConfirmation, setEditingConfirmation\] = useState\(false\)/);
+  assert.match(dashboard, /function preloadConfirmationDraft/);
+  assert.match(dashboard, /setEditingConfirmation\(true\)/);
+  assert.match(dashboard, /Save changes/);
+  assert.match(dashboard, /Return to Needs review/);
+  assert.match(dashboard, /clearUserOverride: true/);
+  assert.match(routes, /allowUserConfirmedEdit/);
+  assert.match(service, /hasProtectedConfirmedAuthority/);
+  assert.match(service, /input\.allowUserConfirmedEdit/);
+  assert.match(migration, /when v_item \? 'user_override'/);
 });

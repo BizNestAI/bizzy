@@ -422,12 +422,12 @@ export async function restoreTaxClassification({ businessId, year, transactionId
   return result;
 }
 
-export async function bulkUpdateTaxClassifications({ businessId, year, transactionIds = [], changes = {}, reason, signal } = {}) {
+export async function bulkUpdateTaxClassifications({ businessId, year, transactionIds = [], changes = {}, reason, allowUserConfirmedEdit = false, signal } = {}) {
   requireBusinessId(businessId);
   if (!Array.isArray(transactionIds) || !transactionIds.length) throw new Error("transactionIds are required");
   const result = unwrap(await request(`/api/tax/classifications/bulk-update?${query({ businessId, year })}`, {
     method: "POST",
-    body: { businessId, year, transactionIds, changes, reason },
+    body: { businessId, year, transactionIds, changes, reason, allowUserConfirmedEdit },
     signal,
   }));
   clearBusinessCache(businessId);

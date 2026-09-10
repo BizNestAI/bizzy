@@ -208,12 +208,24 @@ export function validateTaxClassificationOverridePayload(req) {
     deductibilityStatus,
     deductiblePercent,
     taxTreatment,
+    classificationStatus: normalizeClassificationStatus(body.classificationStatus ?? body.classification_status),
+    clearUserOverride: body.clearUserOverride === true || body.clear_user_override === true,
+    metadata: validateClassificationOverrideMetadata(body.metadata),
     reason,
     confirmationType: normalizeConfirmationType(body.confirmationType ?? body.confirmation_type),
     createBusinessRule: body.createBusinessRule === true || body.create_business_rule === true,
     businessRuleOptions: validateBusinessRuleOptions(body.businessRuleOptions ?? body.business_rule_options),
     expectedUpdatedAt: optionalString(body.expectedUpdatedAt ?? body.expected_updated_at, "expectedUpdatedAt"),
   };
+}
+
+function normalizeClassificationStatus(value) {
+  if (value == null || value === "") return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (!Object.values(TAX_CLASSIFICATION_STATUSES).includes(normalized)) {
+    throw validationError("invalid_classification_status", "Classification status is not supported.", { field: "classificationStatus" });
+  }
+  return normalized;
 }
 
 function normalizeDeductibilityStatus(value) {
@@ -256,6 +268,14 @@ function normalizeConfirmationType(value) {
     throw validationError("invalid_confirmation_type", "confirmationType must be user or cpa.", { field: "confirmationType" });
   }
   return normalized;
+}
+
+function validateClassificationOverrideMetadata(value) {
+  if (value == null) return null;
+  if (Array.isArray(value) || typeof value !== "object") {
+    throw validationError("invalid_metadata", "metadata must be an object.", { field: "metadata" });
+  }
+  return value;
 }
 
 function optionalReason(value, field) {

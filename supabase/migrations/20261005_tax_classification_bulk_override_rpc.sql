@@ -122,10 +122,14 @@ begin
         using errcode = '40001';
     end if;
 
-    v_effective_user_override :=
-      coalesce((v_item->>'user_override')::boolean, false)
-      or coalesce(v_current.user_override, false)
-      or (v_item->>'classification_status') = 'user_confirmed';
+    v_effective_user_override := case
+      when v_item ? 'user_override' then
+        coalesce((v_item->>'user_override')::boolean, false)
+        or (v_item->>'classification_status') = 'user_confirmed'
+      else
+        coalesce(v_current.user_override, false)
+        or (v_item->>'classification_status') = 'user_confirmed'
+    end;
 
     v_effective_cpa_override :=
       coalesce((v_item->>'cpa_override')::boolean, false)

@@ -2255,6 +2255,7 @@ function DeductionMonthDetailModal({
   const [resolutionCategory, setResolutionCategory] = useState("");
   const [showCategoryChange, setShowCategoryChange] = useState(false);
   const [transactionsExpanded, setTransactionsExpanded] = useState(false);
+  const [editingConfirmation, setEditingConfirmation] = useState(false);
 
   useEffect(() => {
     if (lastReviewResetKeyRef.current === reviewResetKey) return;
@@ -2274,6 +2275,7 @@ function DeductionMonthDetailModal({
     setResolutionCategory(reviewContext.defaultTaxCategory || "");
     setShowCategoryChange(false);
     setTransactionsExpanded(!["business_use_percent", "vehicle_method"].includes(reviewContext.kind));
+    setEditingConfirmation(false);
   }, [reviewResetKey, reviewContext.defaultTaxCategory, reviewContext.kind, transactions]);
 
   useEffect(() => {
@@ -2313,26 +2315,61 @@ function DeductionMonthDetailModal({
 
   if (!selection) return null;
 
+  const editableConfirmedRows = transactions.filter((row) => classificationBucket(row) === "user_confirmed");
+  const protectedConfirmedRows = transactions.filter((row) => classificationBucket(row) === "accountant_confirmed");
+  const confirmationSummary = userConfirmationSummary(editableConfirmedRows);
   const isReviewDetail = transactions.some((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
-  const scopeRows = transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
+  const canEditConfirmation = editableConfirmedRows.length > 0 && !protectedConfirmedRows.length && !readOnly;
+  const showResolutionPanel = isReviewDetail || editingConfirmation;
+  const scopeRows = editingConfirmation
+    ? editableConfirmedRows
+    : transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
   const selectedReviewRows = scopeRows.filter((row) => selectedReviewTransactionIds.has(String(row.id || row.raw?.transactionId)));
   const selectedCount = selectedReviewRows.length;
   const percentNumber = parseBusinessUsePercent(businessUsePercent);
   const percentValid = businessUsePercent === "" ? false : percentNumber != null;
   const resolvedBusinessUsePercent = businessUseMode === "dedicated" ? 100 : businessUseMode === "personal" ? 0 : percentNumber;
   const businessUseSelectionValid = reviewContext.kind !== "business_use_percent"
+    || (editingConfirmation && businessUseMode === "unsure")
     || businessUseMode === "dedicated"
     || businessUseMode === "personal"
     || (businessUseMode === "mixed" && percentValid);
   const estimatedEffect = estimateResolutionDeduction(selectedReviewRows, reviewContext, {
     businessUsePercent: resolvedBusinessUsePercent,
+    businessUseMode,
     vehicleMethod,
     resolutionCategory,
     resolutionMode: reviewResolutionMode,
   });
   const canResolve = !readOnly && selectedCount > 0 && reviewContext.supported &&
     (reviewContext.kind !== "business_use_percent" || businessUseSelectionValid) &&
-    (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && percentValid));
+    (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && percentValid) || (editingConfirmation && vehicleMethod === "unsure"));
+
+  const enterEditConfirmation = () => {
+    if (!canEditConfirmation) return;
+    const editableIds = editableConfirmedRows.map((row) => String(row.id || row.raw?.transactionId)).filter(Boolean);
+    const preload = preloadConfirmationDraft(editableConfirmedRows, reviewContext);
+    setAssignmentError("");
+    setResolutionSuccess("");
+    setEditingConfirmation(true);
+    setSelectedReviewTransactionIds(new Set(editableIds));
+    setReviewResolutionMode(preload.resolutionMode);
+    setBusinessUseMode(preload.businessUseMode);
+    setBusinessUsePercent(preload.businessUsePercent);
+    setVehicleMethod(preload.vehicleMethod);
+    setResolutionCategory(preload.resolutionCategory);
+    setTransactionsExpanded(true);
+    requestAnimationFrameSafe(() => resolutionPanelRef.current?.focus?.({ preventScroll: true }));
+  };
+
+  const cancelEditConfirmation = () => {
+    const editableIds = editableConfirmedRows.map((row) => String(row.id || row.raw?.transactionId)).filter(Boolean);
+    setEditingConfirmation(false);
+    setAssignmentError("");
+    setResolutionSuccess("");
+    setSelectedReviewTransactionIds(new Set(editableIds));
+    setTransactionsExpanded(!["business_use_percent", "vehicle_method"].includes(reviewContext.kind));
+  };
 
   const pendingChanges = transactions
     .map((row) => {
@@ -2417,6 +2454,7 @@ function DeductionMonthDetailModal({
     const transactionIds = selectedReviewRows.map((row) => row.id || row.raw?.transactionId).filter(Boolean);
     const changes = buildDetailResolutionChanges(reviewContext, selectedReviewRows, {
       businessUsePercent: resolvedBusinessUsePercent,
+      businessUseMode,
       vehicleMethod,
       resolutionCategory,
       allowCategoryChange: reviewContext.allowCategoryChange,
@@ -2464,14 +2502,19 @@ function DeductionMonthDetailModal({
       }
       const reason = detailResolutionReason(reviewContext, "selected_transactions", selectedCount);
       if (changes && typeof onBulkUpdateClassifications === "function") {
-        await onBulkUpdateClassifications(transactionIds, changes, { reason, skipReload: true });
+        await onBulkUpdateClassifications(transactionIds, changes, {
+          reason,
+          skipReload: true,
+          allowUserConfirmedEdit: editingConfirmation,
+        });
       } else if (changes) {
         throw new Error("Batch confirmation service is unavailable. Try again after the latest update is deployed.");
       }
       await onRefresh?.();
       setResolutionSuccess(standardMileageOnly
         ? "Vehicle method saved. Add business miles to calculate the mileage deduction."
-        : `${transactionIds.length} ${transactionIds.length === 1 ? "transaction" : "transactions"} confirmed`);
+        : `${transactionIds.length} ${transactionIds.length === 1 ? "transaction" : "transactions"} ${editingConfirmation ? "updated" : "confirmed"}`);
+      setEditingConfirmation(false);
     } catch (err) {
       setAssignmentError(err?.message || "Could not resolve this review.");
     } finally {
@@ -2552,8 +2595,15 @@ function DeductionMonthDetailModal({
               {assignmentError}
             </div>
           ) : null}
-          {!isReviewDetail ? <DetailContextCard context={reviewContext} /> : null}
-          {isReviewDetail && reviewContext.supported ? (
+          {!showResolutionPanel ? (
+            <DetailContextCard
+              confirmationSummary={confirmationSummary}
+              canEditConfirmation={canEditConfirmation}
+              protectedConfirmedRows={protectedConfirmedRows}
+              onEditConfirmation={enterEditConfirmation}
+            />
+          ) : null}
+          {showResolutionPanel && reviewContext.supported ? (
             <DetailResolutionPanel
               ref={resolutionPanelRef}
               context={reviewContext}
@@ -2575,6 +2625,7 @@ function DeductionMonthDetailModal({
               saving={savingChanges}
               successMessage={resolutionSuccess}
               readOnly={readOnly}
+              editingConfirmation={editingConfirmation}
               onSelectAll={setAllReviewRowsSelected}
               onBusinessUseModeChange={setBusinessUseMode}
               onBusinessUsePercentChange={setBusinessUsePercent}
@@ -2585,7 +2636,11 @@ function DeductionMonthDetailModal({
               onResolutionCategoryChange={setResolutionCategory}
               onToggleCategoryChange={() => setShowCategoryChange((current) => !current)}
               onSave={saveReviewResolution}
-              onDefer={() => setAssignmentError("")}
+              onCancelEdit={cancelEditConfirmation}
+              onDefer={() => {
+                if (editingConfirmation) cancelEditConfirmation();
+                else setAssignmentError("");
+              }}
             />
           ) : null}
           <details
@@ -2626,7 +2681,7 @@ function DeductionMonthDetailModal({
                             <input
                               type="checkbox"
                               checked={selected}
-                              disabled={savingChanges || !needsReview || hasManualClassificationAuthority(row)}
+                              disabled={savingChanges || (!needsReview && !editingConfirmation) || classificationBucket(row) === "accountant_confirmed"}
                               onChange={() => toggleReviewRow(row)}
                               className="h-4 w-4 rounded border-white/20 bg-black accent-emerald-300"
                               aria-label={`Select ${row.vendor}`}
@@ -2730,16 +2785,133 @@ function DetailPill({ children, tone = "neutral" }) {
   );
 }
 
-function DetailContextCard() {
+function DetailContextCard({ confirmationSummary, canEditConfirmation = false, protectedConfirmedRows = [], onEditConfirmation }) {
   return (
     <div className="mb-3 rounded-[16px] border border-emerald-300/14 bg-emerald-300/[0.045] px-3 py-3">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/46">Classification evidence</div>
-      <p className="mt-1 text-sm leading-relaxed text-white/76">
-        Bizzi categorized these transactions using their posted QuickBooks GL account and an active verified deduction rule.
-      </p>
-      <p className="mt-2 text-xs leading-relaxed text-white/52">No additional information is currently required.</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/46">
+            {confirmationSummary ? confirmationSummary.heading : "Classification evidence"}
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-white/76">
+            {confirmationSummary?.copy || "Bizzi categorized these transactions using their posted QuickBooks GL account and an active verified deduction rule."}
+          </p>
+          {confirmationSummary ? (
+            <p className="mt-2 text-xs leading-relaxed text-white/52">
+              {confirmationSummary.line}
+            </p>
+          ) : (
+            <p className="mt-2 text-xs leading-relaxed text-white/52">No additional information is currently required.</p>
+          )}
+          {protectedConfirmedRows.length ? (
+            <p className="mt-2 text-xs leading-relaxed text-white/46">Contact your accountant to change accountant-confirmed tax treatment.</p>
+          ) : null}
+        </div>
+        {canEditConfirmation ? (
+          <button
+            type="button"
+            onClick={onEditConfirmation}
+            className="shrink-0 rounded-full border border-emerald-300/18 bg-emerald-300/[0.08] px-3 py-1.5 text-xs font-semibold text-emerald-50 transition hover:bg-emerald-300/[0.14] focus:outline-none focus:ring-2 focus:ring-emerald-200/24"
+          >
+            Edit confirmation
+          </button>
+        ) : null}
+      </div>
     </div>
   );
+}
+
+function userConfirmationSummary(rows = []) {
+  if (!rows.length) return null;
+  const buckets = new Set(rows.map((row) => {
+    if (isStandardMileageGasRow(row)) return "standard_mileage";
+    const percent = Number(row?.deductiblePercent);
+    const deductible = normalizeMoney(resolveDeductibleAmount(row));
+    if (Number.isFinite(percent) && percent === 0 && deductible === 0) return "personal";
+    if (Number.isFinite(percent) && percent > 0 && percent < 100) return "mixed";
+    return "business";
+  }));
+  const count = rows.length;
+  const latest = latestUserConfirmationDate(rows);
+  const dateLabel = latest ? ` · Confirmed ${formatDateLocal(latest)}` : "";
+  if (buckets.size > 1) {
+    return {
+      heading: "Confirmed by you",
+      line: `${count} ${count === 1 ? "transaction" : "transactions"} · Mixed treatment${dateLabel}`,
+      copy: "You confirmed these treatments based on your business use. Some transactions use different saved decisions.",
+    };
+  }
+  const [bucket] = buckets;
+  if (bucket === "standard_mileage") {
+    return {
+      heading: "Confirmed by you",
+      line: `${count} ${count === 1 ? "transaction" : "transactions"} · Standard Mileage · Direct vehicle-expense deduction: $0${dateLabel}`,
+      copy: "You selected Standard Mileage for these vehicle expenses. The expenses remain visible, but they are not deducted separately from the mileage deduction.",
+    };
+  }
+  if (bucket === "personal") {
+    return {
+      heading: "Confirmed by you",
+      line: `${count} ${count === 1 ? "transaction" : "transactions"} · Personal · $0 deductible${dateLabel}`,
+      copy: "You confirmed this treatment based on your business use.",
+    };
+  }
+  const percent = commonDeductiblePercent(rows);
+  return {
+    heading: "Confirmed by you",
+    line: `${count} ${count === 1 ? "transaction" : "transactions"} · ${percent == null ? "Confirmed treatment" : `${percent}% business use`}${dateLabel}`,
+    copy: "You confirmed this treatment based on your business use.",
+  };
+}
+
+function latestUserConfirmationDate(rows = []) {
+  const timestamps = rows
+    .map((row) => firstValue(
+      row?.raw?.override?.lastChangedAt,
+      row?.raw?.overrideHistory?.[0]?.createdAt,
+      row?.raw?.updatedAt,
+      row?.raw?.updated_at,
+      row?.updatedAt,
+      row?.updated_at
+    ))
+    .filter(Boolean)
+    .map((value) => Date.parse(value))
+    .filter(Number.isFinite);
+  return timestamps.length ? new Date(Math.max(...timestamps)).toISOString() : null;
+}
+
+function commonDeductiblePercent(rows = []) {
+  const values = [...new Set(rows
+    .map((row) => row?.deductiblePercent)
+    .filter((value) => value != null && !Number.isNaN(Number(value)))
+    .map((value) => Number(value)))];
+  return values.length === 1 ? values[0] : null;
+}
+
+function preloadConfirmationDraft(rows = [], context = {}) {
+  const first = rows[0] || {};
+  const percent = commonDeductiblePercent(rows);
+  const mixedPercent = percent != null && percent > 0 && percent < 100 ? String(percent) : "";
+  const vehicleMethod = rows.some(isStandardMileageGasRow)
+    ? "standard_mileage"
+    : context.kind === "vehicle_method" && percent != null
+      ? "actual_expense"
+      : "";
+  return {
+    resolutionMode: percent === 0 ? "personal" : "business",
+    businessUseMode: percent === 100 ? "dedicated" : percent === 0 ? "personal" : percent != null ? "mixed" : "",
+    businessUsePercent: mixedPercent,
+    vehicleMethod,
+    resolutionCategory: taxCategorySelectValue(first) || context.defaultTaxCategory || "",
+  };
+}
+
+function requestAnimationFrameSafe(callback) {
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(callback);
+    return;
+  }
+  callback();
 }
 
 function detailResolutionHeading(context = {}) {
@@ -2786,6 +2958,7 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   saving,
   successMessage,
   readOnly,
+  editingConfirmation = false,
   onSelectAll,
   onBusinessUseModeChange,
   onBusinessUsePercentChange,
@@ -2796,13 +2969,14 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   onResolutionCategoryChange,
   onToggleCategoryChange,
   onSave,
+  onCancelEdit,
   onDefer,
 }, ref) {
   const allSelected = rows.length > 0 && rows.every((row) => selectedIds.has(String(row.id || row.raw?.transactionId)));
   const selectedCount = selectedRows.length;
   const selectedGrossTotal = selectedRows.reduce((sum, row) => sum + Math.abs(normalizeMoney(row.amount)), 0);
   const heading = detailResolutionHeading(context);
-  const saveLabel = detailResolutionSaveLabel(context, selectedCount, resolutionMode);
+  const saveLabel = editingConfirmation ? "Save changes" : detailResolutionSaveLabel(context, selectedCount, resolutionMode);
   return (
     <section ref={ref} tabIndex={-1} aria-busy={saving ? "true" : "false"} className="mb-4 scroll-mt-6 rounded-[18px] border border-amber-300/18 bg-amber-300/[0.045] p-3 outline-none focus:ring-2 focus:ring-amber-300/24">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -2829,6 +3003,7 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
               mode={businessUseMode}
               percent={businessUsePercent}
               percentValid={businessUsePercentValid}
+              allowReturnToReview={editingConfirmation}
               onModeChange={onBusinessUseModeChange}
               onPercentChange={onBusinessUsePercentChange}
             />
@@ -2867,6 +3042,9 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <ReviewChoiceButton groupName="deduction-review-resolution" value="business" current={resolutionMode} onChange={onResolutionModeChange} label={context.businessLabel || "Confirm selected as business"} />
                 <ReviewChoiceButton groupName="deduction-review-resolution" value="personal" current={resolutionMode} onChange={onResolutionModeChange} label={context.personalLabel || "Mark selected as personal"} />
+                {editingConfirmation ? (
+                  <ReviewChoiceButton groupName="deduction-review-resolution" value="unsure" current={resolutionMode} onChange={onResolutionModeChange} label="Return to Needs review" />
+                ) : null}
               </div>
               <p className="mt-2 text-xs leading-relaxed text-amber-50/62">Uncheck personal or undocumented exceptions so they stay in Needs review.</p>
               {context.allowCategoryChange ? (
@@ -2929,11 +3107,11 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
-            onClick={onDefer}
+            onClick={editingConfirmation ? onCancelEdit : onDefer}
             disabled={saving}
             className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-xs font-semibold text-white/64 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Not sure yet
+            {editingConfirmation ? "Cancel" : "Not sure yet"}
           </button>
           <button
             type="button"
@@ -2951,7 +3129,7 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   );
 });
 
-function UtilityBusinessUseControls({ mode, percent, percentValid, onModeChange, onPercentChange }) {
+function UtilityBusinessUseControls({ mode, percent, percentValid, allowReturnToReview = false, onModeChange, onPercentChange }) {
   return (
     <div className="space-y-2">
       <div>
@@ -2960,6 +3138,9 @@ function UtilityBusinessUseControls({ mode, percent, percentValid, onModeChange,
           <ReviewChoiceButton groupName="deduction-business-use-mode" value="dedicated" current={mode} onChange={onModeChange} label="100% business" />
           <ReviewChoiceButton groupName="deduction-business-use-mode" value="mixed" current={mode} onChange={onModeChange} label="Mixed business and personal use" />
           <ReviewChoiceButton groupName="deduction-business-use-mode" value="personal" current={mode} onChange={onModeChange} label="Personal - 0%" />
+          {allowReturnToReview ? (
+            <ReviewChoiceButton groupName="deduction-business-use-mode" value="unsure" current={mode} onChange={onModeChange} label="Return to Needs review" />
+          ) : null}
         </div>
       </div>
       {mode === "mixed" ? (
@@ -2969,6 +3150,9 @@ function UtilityBusinessUseControls({ mode, percent, percentValid, onModeChange,
           onChange={onPercentChange}
           autoFocusOnMount
         />
+      ) : null}
+      {mode === "unsure" ? (
+        <p className="text-xs leading-relaxed text-white/46">These transactions will return to Needs review until you provide business-use information.</p>
       ) : null}
       {!mode ? (
         <p className="text-xs text-amber-100/62">Choose an option before saving. Bizzi will not assume a business-use percentage.</p>
@@ -3228,6 +3412,9 @@ function parseBusinessUsePercent(value) {
 
 function estimateResolutionDeduction(rows, context, options = {}) {
   if (!rows.length) return { amount: 0, label: "Select transactions" };
+  if (options.resolutionMode === "unsure" || options.businessUseMode === "unsure") {
+    return { amount: 0, label: "Stays in review" };
+  }
   if (context.kind === "business_purpose" && options.resolutionMode === "personal") {
     return { amount: 0, label: "No deduction" };
   }
@@ -3260,6 +3447,19 @@ function buildDetailResolutionChanges(context, rows, options = {}) {
     ? options.resolutionCategory || context.defaultTaxCategory
     : taxCategorySelectValue(first) || context.defaultTaxCategory;
   if (!category) return null;
+  if (options.resolutionMode === "unsure" || options.businessUseMode === "unsure") {
+    return {
+      taxCategory: category,
+      deductibilityStatus: "needs_review",
+      deductiblePercent: 0,
+      taxTreatment: "needs_review",
+      classificationStatus: "needs_review",
+      clearUserOverride: true,
+      metadata: {
+        user_confirmation_returned_to_review_at: new Date().toISOString(),
+      },
+    };
+  }
   if (context.kind === "business_purpose" && options.resolutionMode === "personal") {
     return {
       taxCategory: category,
@@ -3269,10 +3469,29 @@ function buildDetailResolutionChanges(context, rows, options = {}) {
     };
   }
   if (context.kind === "vehicle_method" && options.vehicleMethod === "standard_mileage") {
-    return null;
+    return {
+      taxCategory: category,
+      deductibilityStatus: "nondeductible",
+      deductiblePercent: 0,
+      taxTreatment: "vehicle_standard_mileage_no_separate_gas",
+      metadata: {
+        vehicle_deduction_method: "standard_mileage",
+        direct_vehicle_expense_deduction: false,
+      },
+    };
   }
   if (context.kind === "vehicle_method" && options.vehicleMethod === "unsure") {
-    return null;
+    return {
+      taxCategory: category,
+      deductibilityStatus: "needs_review",
+      deductiblePercent: 0,
+      taxTreatment: "needs_review",
+      classificationStatus: "needs_review",
+      clearUserOverride: true,
+      metadata: {
+        vehicle_method_returned_to_review_at: new Date().toISOString(),
+      },
+    };
   }
   if (context.kind === "vehicle_method" && options.vehicleMethod === "actual_expense") {
     return {
