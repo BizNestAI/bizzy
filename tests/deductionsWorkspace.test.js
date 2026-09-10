@@ -465,21 +465,114 @@ test("Tax Dashboard renders matrix-first Deductions workspace views with separat
   assert.match(dashboard, /workspaceView === "needs_attention"/);
   assert.match(dashboard, /MatrixAuthoritySummary/);
   assert.match(dashboard, /DeductionAccountMatrix/);
-  assert.match(dashboard, /Automatic deductions/);
+  assert.match(dashboard, /Confirmed deductions/);
+  assert.match(dashboard, /Bizzi-classified/);
+  assert.match(dashboard, /confirmed by you/);
   assert.match(dashboard, /Proposed — needs review/);
   assert.match(dashboard, /posted expense rows grouped by QBO GL account/);
-  assert.match(dashboard, /Automatic deduction totals exclude proposed review-required amounts/);
 });
 
 test("Tax Dashboard matrix drilldown scopes cells by GL account, month, and authority", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /function MatrixCell/);
-  assert.match(dashboard, /openCell\("automatic"\)/);
+  assert.match(dashboard, /openCell\("confirmed"\)/);
   assert.match(dashboard, /openCell\("proposed"\)/);
   assert.match(dashboard, /selectedAuthority: authority/);
   assert.match(dashboard, /const isReviewDetail = transactions\.some/);
-  assert.match(dashboard, /transactions\.filter\(\(row\) => classificationBucket\(row\) === "auto_classified"\)/);
+  assert.match(dashboard, /isAuthoritativeDeductionBucket\(classificationBucket\(row\)\)/);
   assert.match(dashboard, /transactions\.filter\(\(row\) => classificationBucket\(row\) === "needs_review"\)/);
+  assert.match(dashboard, /cell\.authoritativeDeductibleTotal > 0/);
+  assert.doesNotMatch(dashboard, /cell\.autoTransactionCount > 0/);
+  assert.match(dashboard, /return <span className="block px-2 py-1\.5 text-\[12px\] text-white\/22">—<\/span>/);
+});
+
+test("Deduction matrix keeps user-confirmed May Meals in the May confirmed cell", async () => {
+  const { buildDeductionAccountMatrix } = await loadTaxDashboardInternals();
+  const base = {
+    date: "2026-05-27",
+    vendor: "Publix",
+    qboAccountId: "qbo-meals",
+    qboAccountName: "Meals",
+    amount: 346,
+    signedAmount: -346,
+    direction: "OUTFLOW",
+    taxCategory: "business_meals",
+    taxCategoryLabel: "Business Meals",
+    taxTreatment: "partially_deductible",
+    taxTreatmentLabel: "Partially deductible",
+    deductiblePercent: 50,
+    deductibleAmount: 173,
+    classificationSource: "rule_engine",
+    matchedRuleCode: "business_meals_review_gl_v3",
+    ruleVersion: "bizzi-gl-2026-v3",
+    requiresReview: true,
+    raw: { transactionId: "meal-may-1" },
+  };
+  const proposedMatrix = buildDeductionAccountMatrix([{ ...base, id: "meal-may-1", status: "needs_review", statusLabel: "Needs review" }], 2026, { scope: "overview" });
+  const proposedMay = proposedMatrix.accounts[0].months["2026-05"];
+  assert.equal(proposedMay.authoritativeDeductibleTotal, 0);
+  assert.equal(proposedMay.proposedDeductibleTotal, 173);
+  assert.equal(proposedMay.reviewTransactionCount, 1);
+
+  const confirmedMatrix = buildDeductionAccountMatrix([{ ...base, id: "meal-may-1", status: "user_confirmed", statusLabel: "Confirmed by you", requiresReview: false }], 2026, { scope: "overview" });
+  const meals = confirmedMatrix.accounts[0];
+  const confirmedMay = meals.months["2026-05"];
+  assert.equal(confirmedMay.authoritativeDeductibleTotal, 173);
+  assert.equal(confirmedMay.proposedDeductibleTotal, 0);
+  assert.equal(confirmedMay.autoTransactionCount, 0);
+  assert.equal(confirmedMay.userConfirmedTransactionCount, 1);
+  assert.equal(meals.authoritativeDeductibleTotal, 173);
+  assert.equal(meals.proposedDeductibleTotal, 0);
+  assert.equal(meals.userConfirmedTransactionCount, 1);
+  assert.equal(meals.months["2026-06"].authoritativeDeductibleTotal, 0);
+});
+
+test("Deduction matrix renders mixed confirmed and proposed monthly authority separately", async () => {
+  const { buildDeductionAccountMatrix } = await loadTaxDashboardInternals();
+  const rows = [{
+    id: "meal-confirmed",
+    date: "2026-05-10",
+    vendor: "Confirmed Meal",
+    qboAccountId: "qbo-meals",
+    qboAccountName: "Meals",
+    amount: 346,
+    signedAmount: -346,
+    direction: "OUTFLOW",
+    taxCategory: "business_meals",
+    taxCategoryLabel: "Business Meals",
+    deductiblePercent: 50,
+    deductibleAmount: 173,
+    status: "user_confirmed",
+    statusLabel: "Confirmed by you",
+    requiresReview: false,
+    raw: { transactionId: "meal-confirmed" },
+  }, {
+    id: "meal-proposed",
+    date: "2026-05-12",
+    vendor: "Proposed Meal",
+    qboAccountId: "qbo-meals",
+    qboAccountName: "Meals",
+    amount: 48,
+    signedAmount: -48,
+    direction: "OUTFLOW",
+    taxCategory: "business_meals",
+    taxCategoryLabel: "Business Meals",
+    deductiblePercent: 50,
+    deductibleAmount: 24,
+    status: "needs_review",
+    statusLabel: "Needs review",
+    requiresReview: true,
+    raw: { transactionId: "meal-proposed" },
+  }];
+  const matrix = buildDeductionAccountMatrix(rows, 2026, { scope: "overview" });
+  const may = matrix.accounts[0].months["2026-05"];
+  assert.equal(may.authoritativeDeductibleTotal, 173);
+  assert.equal(may.proposedDeductibleTotal, 24);
+  assert.equal(may.userConfirmedTransactionCount, 1);
+  assert.equal(may.reviewTransactionCount, 1);
+  assert.equal(may.transactions.length, 2);
+  assert.equal(matrix.accounts[0].authoritativeDeductibleTotal, 173);
+  assert.equal(matrix.accounts[0].proposedDeductibleTotal, 24);
 });
 
 test("Tax Dashboard derives modal aggregate status from selected cell rows", () => {

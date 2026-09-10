@@ -195,7 +195,8 @@ test("Tax Dashboard deductions preview renders a QuickBooks account by month mat
   assert.match(dashboard, /Confirmed deductions/);
   assert.match(dashboard, /Estimated deductions/);
   assert.match(dashboard, /Bizzi used the posted QuickBooks GL account and available transaction details to determine this tax treatment/);
-  assert.match(dashboard, /Automatic deductions/);
+  assert.match(dashboard, /Confirmed deductions/);
+  assert.match(dashboard, /Bizzi-classified/);
   assert.match(dashboard, /Proposed — needs review/);
   assert.match(dashboard, /data-bizzy-tax-deduction-dialog/);
   assert.match(dashboard, /fixed inset-0 z-\[200000\]/);

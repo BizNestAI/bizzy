@@ -925,12 +925,17 @@ function FilterTabButton({ tab, selected, count = null, onClick }) {
 }
 
 function MatrixAuthoritySummary({ totals, transactionCount }) {
+  const confirmedBreakdown = [
+    `${totals.autoTransactionCount} Bizzi-classified`,
+    totals.userConfirmedTransactionCount ? `${totals.userConfirmedTransactionCount} confirmed by you` : null,
+    totals.accountantConfirmedTransactionCount ? `${totals.accountantConfirmedTransactionCount} confirmed by accountant` : null,
+  ].filter(Boolean).join(" · ");
   return (
     <div className="mt-4 grid gap-2 md:grid-cols-3">
       <div className="rounded-2xl border border-emerald-300/12 bg-emerald-300/[0.045] px-3 py-3">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-emerald-100/54">Automatic deductions</div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-emerald-100/54">Confirmed deductions</div>
         <div className="mt-1 text-xl font-semibold tabular-nums text-emerald-50">{formatCurrencyLocal(totals.authoritativeDeductibleTotal)}</div>
-        <div className="mt-0.5 text-xs text-white/42">{totals.autoTransactionCount} auto-classified transactions</div>
+        <div className="mt-0.5 text-xs text-white/42">{confirmedBreakdown || "0 confirmed transactions"}</div>
       </div>
       <div className="rounded-2xl border border-amber-300/14 bg-amber-300/[0.045] px-3 py-3">
         <div className="text-[10px] font-semibold uppercase tracking-[0.13em] text-amber-100/58">Proposed — needs review</div>
@@ -1002,8 +1007,8 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
     return <span className="block px-2 py-1.5 text-[12px] text-white/22">—</span>;
   }
   const openCell = (authority) => {
-    const transactions = authority === "automatic"
-      ? cell.transactions.filter((row) => classificationBucket(row) === "auto_classified")
+    const transactions = authority === "confirmed"
+      ? cell.transactions.filter((row) => isAuthoritativeDeductionBucket(classificationBucket(row)))
       : cell.transactions.filter((row) => classificationBucket(row) === "needs_review");
     if (!transactions.length) return;
     onSelectCell({
@@ -1014,21 +1019,21 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
         transactions,
         selectedAuthority: authority,
         expenseTotal: transactions.reduce((sum, row) => sum + normalizeMoney(row.amount), 0),
-        authoritativeDeductibleTotal: authority === "automatic" ? transactions.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0) : 0,
+        authoritativeDeductibleTotal: authority === "confirmed" ? transactions.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0) : 0,
         proposedDeductibleTotal: authority === "proposed" ? transactions.reduce((sum, row) => sum + normalizeMoney(resolveDeductibleAmount(row)), 0) : 0,
       },
     });
   };
   return (
     <div className="flex flex-col items-stretch gap-1">
-      {cell.autoTransactionCount > 0 ? (
+      {cell.authoritativeDeductibleTotal > 0 ? (
         <button
           type="button"
-          onClick={() => openCell("automatic")}
+          onClick={() => openCell("confirmed")}
           className="w-full rounded-lg border border-emerald-300/10 bg-emerald-300/[0.055] px-2 py-1.5 text-right text-[12px] font-semibold tabular-nums text-emerald-50 transition hover:border-emerald-200/30 hover:bg-emerald-300/[0.11] focus:outline-none focus:ring-2 focus:ring-emerald-300/35"
-          title={`${account.name}, ${month.longLabel}, automatic deductions`}
+          title={`${account.name}, ${month.longLabel}, confirmed deductions`}
         >
-          {formatCurrencyLocal(cell.authoritativeDeductibleTotal)}
+          {formatCurrencyLocal(cell.authoritativeDeductibleTotal)} confirmed
         </button>
       ) : null}
       {cell.reviewTransactionCount > 0 ? (
@@ -2040,6 +2045,10 @@ function classificationStatusLabel(bucket, row) {
   if (bucket === "excluded") return "Excluded";
   if (bucket === "unclassified") return "Unclassified";
   return safeText(row.statusLabel, "Auto-classified");
+}
+
+function isAuthoritativeDeductionBucket(bucket) {
+  return bucket === "auto_classified" || bucket === "user_confirmed" || bucket === "accountant_confirmed";
 }
 
 function deductibilityLabel(row) {
@@ -3348,6 +3357,8 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     proposedDeductibleTotal: 0,
     displayDeductibleTotal: 0,
     autoTransactionCount: 0,
+    userConfirmedTransactionCount: 0,
+    accountantConfirmedTransactionCount: 0,
     reviewTransactionCount: 0,
     reviewActionLabel: null,
     transactions: [],
@@ -3380,6 +3391,8 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
         displayDeductibleTotal: 0,
         transactionCount: 0,
         autoTransactionCount: 0,
+        userConfirmedTransactionCount: 0,
+        accountantConfirmedTransactionCount: 0,
         reviewTransactionCount: 0,
         reviewActionLabel: null,
       });
@@ -3397,6 +3410,8 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     month.proposedDeductibleTotal += proposedAmount;
     month.displayDeductibleTotal += displayAmount;
     if (bucket === "auto_classified") month.autoTransactionCount += 1;
+    if (bucket === "user_confirmed") month.userConfirmedTransactionCount += 1;
+    if (bucket === "accountant_confirmed") month.accountantConfirmedTransactionCount += 1;
     if (bucket === "needs_review") {
       month.reviewTransactionCount += 1;
       month.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
@@ -3408,6 +3423,8 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     account.displayDeductibleTotal += displayAmount;
     account.transactionCount += 1;
     if (bucket === "auto_classified") account.autoTransactionCount += 1;
+    if (bucket === "user_confirmed") account.userConfirmedTransactionCount += 1;
+    if (bucket === "accountant_confirmed") account.accountantConfirmedTransactionCount += 1;
     if (bucket === "needs_review") {
       account.reviewTransactionCount += 1;
       account.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
@@ -3431,11 +3448,15 @@ function buildMatrixAuthorityTotals(matrix) {
     authoritativeDeductibleTotal: totals.authoritativeDeductibleTotal + normalizeMoney(account.authoritativeDeductibleTotal),
     proposedDeductibleTotal: totals.proposedDeductibleTotal + normalizeMoney(account.proposedDeductibleTotal),
     autoTransactionCount: totals.autoTransactionCount + Number(account.autoTransactionCount || 0),
+    userConfirmedTransactionCount: totals.userConfirmedTransactionCount + Number(account.userConfirmedTransactionCount || 0),
+    accountantConfirmedTransactionCount: totals.accountantConfirmedTransactionCount + Number(account.accountantConfirmedTransactionCount || 0),
     reviewTransactionCount: totals.reviewTransactionCount + Number(account.reviewTransactionCount || 0),
   }), {
     authoritativeDeductibleTotal: 0,
     proposedDeductibleTotal: 0,
     autoTransactionCount: 0,
+    userConfirmedTransactionCount: 0,
+    accountantConfirmedTransactionCount: 0,
     reviewTransactionCount: 0,
   });
 }
