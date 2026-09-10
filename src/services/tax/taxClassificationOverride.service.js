@@ -8,7 +8,7 @@ import {
   normalizeTaxYear,
 } from "./taxDomain.js";
 import { TaxEngineError, conflictError, forbiddenBusinessError, notFoundError, validationError } from "./taxErrors.js";
-import { getTaxClassification, isConfirmed } from "./taxClassification.repository.js";
+import { getTaxClassification, isConfirmed, listTaxClassifications } from "./taxClassification.repository.js";
 import { getPostedTransactionForTax } from "./taxPostedTransaction.repository.js";
 import { computeClassificationAmounts, normalizeDeductiblePercent } from "./taxClassificationAmounts.js";
 import { normalizeQboGlAccountKey } from "./taxQboGlNormalizer.js";
@@ -149,15 +149,43 @@ export async function getClassificationHistory({ supabase, businessId, taxYear, 
 
 export async function bulkApplyClassificationOverrides({ supabase, businessId, taxYear, transactionIds = [], input = {}, actor = {} } = {}) {
   const ids = Array.from(new Set(transactionIds)).slice(0, 100);
-  const result = { attempted: ids.length, updated: 0, failed: 0, errors: [] };
-  for (const transactionId of ids) {
-    try {
-      await applyClassificationOverride({ supabase, businessId, taxYear, transactionId, input: { ...input, createBusinessRule: false, protectConfirmedAuthority: input.protectConfirmedAuthority === true }, actor });
-      result.updated += 1;
-    } catch (err) {
-      result.failed += 1;
-      result.errors.push({ transactionId, code: err.code || "override_failed", message: err.message || "Override failed." });
+  const result = { attempted: ids.length, updated: 0, unchanged: 0, failed: 0, errors: [], classifications: [] };
+  if (!ids.length) return result;
+  const year = requireTaxYear(taxYear);
+  const inputForBatch = { ...input, createBusinessRule: false, protectConfirmedAuthority: input.protectConfirmedAuthority === true };
+  const currentRows = await requireBatchClassifications({ supabase, businessId, taxYear: year, transactionIds: ids });
+  const byTransactionId = new Map(currentRows.map((row) => [String(row.transaction_id), row]));
+  const missing = ids.filter((id) => !byTransactionId.has(String(id)));
+  if (missing.length) {
+    throw notFoundError("classification_not_found", "One or more tax classifications were not found.", { transactionIds: missing, taxYear: year });
+  }
+  const roleStatus = statusForActor(actor);
+  const items = ids.map((transactionId) => {
+    const current = byTransactionId.get(String(transactionId));
+    if (inputForBatch.protectConfirmedAuthority && hasConfirmedAuthority(current)) {
+      throw conflictError("confirmed_authority_protected", "Confirmed tax classification authority is protected.", { transactionId, taxYear: year });
     }
+    if (isConfirmed(current) && !inputForBatch.reason) {
+      throw validationError("override_reason_required", "A reason is required to override a confirmed classification.", { field: "reason" });
+    }
+    const transaction = transactionFromClassification(current);
+    const next = buildUpdatedClassification({ current, input: inputForBatch, actor, transaction, status: roleStatus });
+    return buildBatchOverrideItem({ transactionId, current, next });
+  });
+  const updated = await applyBatchOverrideAtomically({
+    supabase,
+    businessId,
+    taxYear: year,
+    items,
+    actor,
+    reason: inputForBatch.reason || "Classification override.",
+  });
+  result.updated = updated.length;
+  result.classifications = updated;
+  for (const row of updated) {
+    const before = byTransactionId.get(String(row.transaction_id));
+    emitTaxDataChanged({ businessId, taxYear: year, changeType: TAX_CHANGE_TYPES.CLASSIFICATION_OVERRIDDEN, entityId: row.transaction_id, userId: actor.userId, metadata: classificationEventMetadata(before, row, inputForBatch.reason) });
+    await resolveReviewTaskForClassification({ supabase, businessId, taxYear: year, transactionId: row.transaction_id, actor });
   }
   return result;
 }
@@ -234,6 +262,59 @@ async function applyOverrideAtomically({ supabase, businessId, taxYear, transact
   });
   if (error) throw mapOverrideRpcError(error, { transactionId, taxYear });
   return data || next;
+}
+
+async function applyBatchOverrideAtomically({ supabase, businessId, taxYear, items, actor, reason }) {
+  const { data, error } = await supabase.rpc("apply_tax_classification_override_batch", {
+    p_business_id: businessId,
+    p_tax_year: taxYear,
+    p_actor_user_id: actor.userId || null,
+    p_override_source: actor.source || actor.role || TAX_CLASSIFICATION_SOURCES.USER,
+    p_override_reason: reason || null,
+    p_items: items,
+  });
+  if (error) throw mapOverrideRpcError(error, { taxYear, transactionCount: items.length });
+  return Array.isArray(data) ? data : [];
+}
+
+function buildBatchOverrideItem({ transactionId, current, next }) {
+  return {
+    classification_id: current.id,
+    transaction_id: transactionId,
+    expected_updated_at: current.updated_at || null,
+    tax_category: next.tax_category,
+    deductibility_status: next.deductibility_status,
+    deductible_percent: next.deductible_percent,
+    tax_treatment: next.tax_treatment || null,
+    classification_status: next.classification_status,
+    metadata: next.metadata || {},
+    book_amount: next.book_amount,
+    deductible_amount: next.deductible_amount,
+    nondeductible_amount: next.nondeductible_amount,
+    capitalizable_amount: next.capitalizable_amount,
+    confidence_score: next.confidence_score,
+    confidence_level: next.confidence_level,
+    source: next.source,
+    requires_review: next.requires_review,
+    reason: next.reason,
+    user_override: next.user_override,
+    cpa_override: next.cpa_override,
+  };
+}
+
+function transactionFromClassification(current = {}) {
+  return {
+    signedAmount: current.book_amount,
+    direction: current.metadata?.direction,
+    qboAccountName: current.source_qbo_account_name || current.metadata?.source_qbo_account_name,
+    bookkeepingCategory: current.source_qbo_account_name || current.metadata?.source_qbo_account_name,
+  };
+}
+
+async function requireBatchClassifications({ supabase, businessId, taxYear, transactionIds }) {
+  const { rows } = await listTaxClassifications({ supabase, businessId, taxYear, limit: 10000 });
+  const wanted = new Set(transactionIds.map(String));
+  return rows.filter((row) => wanted.has(String(row.transaction_id)));
 }
 
 async function createBusinessOverrideRule({ supabase, businessId, taxYear, transaction, classification, input, actor }) {

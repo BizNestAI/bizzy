@@ -268,19 +268,47 @@ test("concurrent stale override is rejected without a second history row", async
   assert.equal(supabase.store.transaction_tax_classifications[0].tax_category, "meals");
 });
 
-test("bulk override reports partial failures", async () => {
-  const supabase = makeSupabase(baseStore());
+test("bulk override uses one atomic RPC for selected rows", async () => {
+  const supabase = makeSupabase(baseStore({
+    bank_transactions: [bankTxn({ id: "txn-1" }), bankTxn({ id: "txn-2" })],
+    transaction_categorizations: [cat({ transaction_id: "txn-1" }), cat({ transaction_id: "txn-2" })],
+    transaction_tax_classifications: [
+      classification({ id: "class-1", transaction_id: "txn-1", book_amount: -100 }),
+      classification({ id: "class-2", transaction_id: "txn-2", book_amount: -246 }),
+      classification({ id: "class-3", transaction_id: "txn-3", book_amount: -50 }),
+    ],
+  }));
   const result = await bulkApplyClassificationOverrides({
     supabase,
     businessId: BUSINESS_ID,
     taxYear: 2026,
-    transactionIds: ["txn-1", "missing"],
-    input: { taxCategory: "office_expense", deductibilityStatus: "fully_deductible", reason: "Bulk update." },
+    transactionIds: ["txn-1", "txn-2"],
+    input: { taxCategory: "meals", deductibilityStatus: "partially_deductible", deductiblePercent: 50, reason: "Bulk meal confirmation." },
     actor: actor(),
   });
-  assert.equal(result.updated, 1);
-  assert.equal(result.failed, 1);
-  assert.equal(result.errors[0].transactionId, "missing");
+  assert.equal(supabase.store.rpcCalls.apply_tax_classification_override_batch, 1);
+  assert.equal(supabase.store.rpcCalls.apply_tax_classification_override || 0, 0);
+  assert.equal(result.updated, 2);
+  assert.equal(result.failed, 0);
+  assert.equal(supabase.store.tax_classification_overrides.length, 2);
+  assert.equal(supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-3").tax_category, "unclassified");
+});
+
+test("bulk override rejects missing selected rows atomically", async () => {
+  const supabase = makeSupabase(baseStore());
+  await assert.rejects(
+    () => bulkApplyClassificationOverrides({
+      supabase,
+      businessId: BUSINESS_ID,
+      taxYear: 2026,
+      transactionIds: ["txn-1", "missing"],
+      input: { taxCategory: "office_expense", deductibilityStatus: "fully_deductible", reason: "Bulk update." },
+      actor: actor(),
+    }),
+    (err) => err.code === "classification_not_found"
+  );
+  assert.equal(supabase.store.tax_classification_overrides.length, 0);
+  assert.equal(supabase.store.transaction_tax_classifications[0].tax_category, "unclassified");
 });
 
 function actor(overrides = {}) {
@@ -298,6 +326,7 @@ function baseStore(overrides = {}) {
     tax_deduction_rules: [],
     tax_profiles: [],
     tax_profile_memory: [],
+    rpcCalls: {},
     ...overrides,
   };
 }
@@ -392,12 +421,57 @@ function makeSupabase(store) {
       return new Query(table, store);
     },
     rpc(name, params) {
+      store.rpcCalls[name] = (store.rpcCalls[name] || 0) + 1;
+      if (name === "apply_tax_classification_override_batch") {
+        return Promise.resolve(applyOverrideBatchRpc(store, params));
+      }
       if (name !== "apply_tax_classification_override") {
         return Promise.resolve({ data: null, error: { code: "rpc_not_found", message: "Unknown RPC" } });
       }
       return Promise.resolve(applyOverrideRpc(store, params));
     },
   };
+}
+
+function applyOverrideBatchRpc(store, params) {
+  const snapshotRows = store.transaction_tax_classifications.map((row) => ({ ...row, metadata: { ...(row.metadata || {}) } }));
+  const snapshotHistory = [...store.tax_classification_overrides];
+  const updated = [];
+  for (const item of params.p_items || []) {
+    const result = applyOverrideRpc(store, {
+      p_business_id: params.p_business_id,
+      p_tax_year: params.p_tax_year,
+      p_transaction_id: item.transaction_id,
+      p_actor_user_id: params.p_actor_user_id,
+      p_override_source: params.p_override_source,
+      p_override_reason: params.p_override_reason,
+      p_tax_category: item.tax_category,
+      p_deductibility_status: item.deductibility_status,
+      p_deductible_percent: item.deductible_percent,
+      p_tax_treatment: item.tax_treatment,
+      p_classification_status: item.classification_status,
+      p_expected_updated_at: item.expected_updated_at,
+      p_metadata: item.metadata,
+      p_book_amount: item.book_amount,
+      p_deductible_amount: item.deductible_amount,
+      p_nondeductible_amount: item.nondeductible_amount,
+      p_capitalizable_amount: item.capitalizable_amount,
+      p_confidence_score: item.confidence_score,
+      p_confidence_level: item.confidence_level,
+      p_source: item.source,
+      p_requires_review: item.requires_review,
+      p_reason: item.reason,
+      p_user_override: item.user_override,
+      p_cpa_override: item.cpa_override,
+    });
+    if (result.error) {
+      store.transaction_tax_classifications = snapshotRows;
+      store.tax_classification_overrides = snapshotHistory;
+      return result;
+    }
+    updated.push(result.data);
+  }
+  return { data: updated, error: null };
 }
 
 function applyOverrideRpc(store, params) {

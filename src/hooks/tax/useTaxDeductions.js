@@ -274,7 +274,7 @@ export function useTaxDeductions({
     },
     bulkUpdateClassifications: async (transactionIds, changes = {}, options = {}) => {
       const result = await bulkUpdateTaxClassifications({ businessId, year, transactionIds, changes, ...options });
-      await load();
+      if (options.skipReload !== true) await load();
       return result;
     },
     setProfileMemory: async ({ memoryKey, value, source = "user", confidenceScore = 100, effectiveFrom, notes, metadata, signal } = {}) => {

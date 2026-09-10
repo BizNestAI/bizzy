@@ -9,8 +9,9 @@ const TREATMENT_LABELS = {
 };
 
 const STATUS_LABELS = {
-  user_confirmed: "Confirmed",
-  cpa_confirmed: "CPA confirmed",
+  user_confirmed: "Confirmed by you",
+  cpa_confirmed: "Confirmed by accountant",
+  accountant_reviewed: "Confirmed by accountant",
   auto_classified: "Auto-classified",
   needs_review: "Needs review",
   excluded: "Excluded",
@@ -76,9 +77,15 @@ export function mapDeductionTransactionRow(row = {}) {
   const hasClassificationAuthority = Boolean(classificationStatus) &&
     !isUnresolvedFallback &&
     !["unclassified", "unsupported"].includes(String(classificationStatus));
+  const normalizedStatus = String(classificationStatus || "").toLowerCase();
   const hasManualOverrideAuthority = hasManualTaxOverrideAuthority(row);
   const taxCategory = isUnresolvedFallback ? "unresolved" : hasClassificationAuthority ? taxCategoryValue || "unclassified" : "pending";
   const taxTreatment = isUnresolvedFallback ? "not_determined" : hasClassificationAuthority ? deductibilityStatus || row.taxTreatment || row.tax_treatment || null : "pending_classification";
+  const authorityStatus = hasClassificationAuthority
+    ? normalizedStatus
+    : hasManualOverrideAuthority
+      ? "user_confirmed"
+      : null;
   return {
     id: transactionId,
     date: firstValue(row.date, row.transactionDate, row.transaction_date) || null,
@@ -106,8 +113,8 @@ export function mapDeductionTransactionRow(row = {}) {
     classificationSource: firstValue(row.classificationSource, row.classification_source, row.sourceType, row.source_type, row.source) || null,
     matchedRuleCode: firstValue(row.matchedRuleCode, row.matched_rule_code, row.ruleCode, row.rule_code) || null,
     ruleVersion: firstValue(row.ruleVersion, row.rule_version) || null,
-    status: hasManualOverrideAuthority ? "overridden" : isUnresolvedFallback ? "unclassified" : hasClassificationAuthority ? classificationStatus : "unclassified",
-    statusLabel: hasManualOverrideAuthority ? "Overridden" : isUnresolvedFallback ? "Needs classification" : hasClassificationAuthority ? STATUS_LABELS[classificationStatus] || labelize(classificationStatus) : "Unclassified",
+    status: isUnresolvedFallback ? "unclassified" : authorityStatus || "unclassified",
+    statusLabel: isUnresolvedFallback ? "Needs classification" : authorityStatus ? STATUS_LABELS[authorityStatus] || labelize(authorityStatus) : "Unclassified",
     requiresReview: hasClassificationAuthority && (row.requiresReview === true || row.requires_review === true),
     warnings: normalizeList(row.warnings),
     raw: row,

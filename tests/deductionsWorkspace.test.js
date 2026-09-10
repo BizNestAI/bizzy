@@ -233,7 +233,7 @@ test("system repair history does not make auto-classified rows look manually ove
   assert.equal(row.statusLabel, "Auto-classified");
 });
 
-test("manual override history still displays as overridden authority", () => {
+test("user confirmation displays specific customer-facing authority", () => {
   const row = mapDeductionTransactionRow({
     transactionId: "txn-manual",
     merchantName: "Vendor",
@@ -248,8 +248,8 @@ test("manual override history still displays as overridden authority", () => {
     override: { hasOverride: true, source: "user", lastChangedAt: "2026-09-09T00:00:00Z" },
   });
 
-  assert.equal(row.status, "overridden");
-  assert.equal(row.statusLabel, "Overridden");
+  assert.equal(row.status, "user_confirmed");
+  assert.equal(row.statusLabel, "Confirmed by you");
 });
 
 test("unclassified posted rows are not shown as authoritative needs-review classifications", () => {
@@ -649,6 +649,7 @@ test("Tax Dashboard review decisions reuse existing override authority and avoid
 
 test("Deduction detail modal uses polished animated dialog accessibility", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  const css = fs.readFileSync("src/index.css", "utf8");
   assert.match(dashboard, /import \{ AnimatePresence, motion as Motion, useReducedMotion \} from "framer-motion"/);
   assert.match(dashboard, /role="dialog"/);
   assert.match(dashboard, /aria-modal="true"/);
@@ -660,6 +661,13 @@ test("Deduction detail modal uses polished animated dialog accessibility", () =>
   assert.match(dashboard, /previousFocusRef\.current\?\.focus/);
   assert.match(dashboard, /scale: 0\.98/);
   assert.match(dashboard, /y: 10/);
+  assert.match(dashboard, /data-bizzy-tax-deduction-dialog/);
+  assert.match(dashboard, /z-\[200000\]/);
+  assert.match(dashboard, /max-h-\[calc\(100dvh-32px\)\]/);
+  assert.match(dashboard, /min-h-0 flex-1 overflow-y-auto/);
+  assert.match(css, /\[data-bizzy-tax-deduction-dialog\]\.bizzy-modal-main-backdrop/);
+  assert.match(css, /left: 0 !important/);
+  assert.match(css, /width: 100vw/);
 });
 
 test("Deduction detail modal explains proposed treatment and avoids automatic copy for review cells", () => {
@@ -671,19 +679,26 @@ test("Deduction detail modal explains proposed treatment and avoids automatic co
   assert.match(dashboard, /Not calculated/);
   assert.doesNotMatch(dashboard, /cell\.selectedAuthority === "proposed" \? "Proposed needs-review amounts" : "Automatic deductions"/);
   assert.doesNotMatch(dashboard, /Why this needs review/);
-  assert.match(dashboard, /Bizzi matched this posted QuickBooks GL account to an active tax rule and calculated the confirmed deduction/);
+  assert.match(dashboard, /Bizzi categorized these transactions using their posted QuickBooks GL account and an active verified deduction rule/);
+  assert.match(dashboard, /No additional information is currently required/);
+  assert.doesNotMatch(dashboard, /QuickBooks categorized/);
+  assert.doesNotMatch(dashboard, /Sourced from posted QuickBooks/);
+  assert.doesNotMatch(dashboard, /This row already has confirmed rule-engine treatment/);
 });
 
 test("Deduction detail modal renders specific review explanations and resolution workflows", () => {
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
-  assert.match(dashboard, /QuickBooks categorized these expenses as Meals/);
-  assert.match(dashboard, /Bizzi matched this QuickBooks account to Utilities, but needs your business-use percentage before calculating a deduction/);
-  assert.match(dashboard, /Bizzi matched these expenses to Business Transportation/);
-  assert.match(dashboard, /Bizzi matched this QuickBooks account to Vehicle Expense, but needs your vehicle deduction method before calculating a deduction/);
-  assert.match(dashboard, /Confirm whether these are office supplies, job supplies, or materials/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Business Meals based on their posted QuickBooks GL account/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Utilities based on their posted QuickBooks GL account/);
+  assert.match(dashboard, /Tell us how much of this account is used for business so Bizzi can calculate the deductible amount/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Business Transportation based on their posted QuickBooks GL account/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Vehicle Expenses based on their posted QuickBooks GL account/);
+  assert.match(dashboard, /Choose your vehicle deduction method before Bizzi calculates the deductible amount/);
+  assert.match(dashboard, /Bizzi categorized these transactions as Supplies based on their posted QuickBooks GL account/);
   assert.match(dashboard, /Review needed/);
-  assert.match(dashboard, /Selected transactions/);
-  assert.match(dashboard, /All matching QBO GL transactions for \{taxYear\}/);
+  assert.match(dashboard, /selected · \{formatCurrencyLocal\(selectedGrossTotal\)\} in expenses/);
+  assert.doesNotMatch(dashboard, /id="deduction-review-scope-select"/);
+  assert.doesNotMatch(dashboard, /All matching QBO GL transactions for \{taxYear\}/);
   assert.doesNotMatch(dashboard, /This GL account going forward/);
   assert.doesNotMatch(dashboard, /Requires a schema-backed account-level authority record before it can be saved/);
 });
@@ -730,11 +745,16 @@ test("Deduction detail business-use input keeps stable focus and string draft se
   assert.match(dashboard, /if \(lastReviewResetKeyRef\.current === reviewResetKey\) return/);
   assert.doesNotMatch(dashboard, /}, \[selection, onClose\]\)/);
   assert.match(dashboard, /}, \[hasSelection, selectionFocusKey, onClose\]\)/);
-  assert.match(dashboard, /}, \[hasSelection, selectionFocusKey, reviewContext\.supported\]\)/);
+  assert.doesNotMatch(dashboard, /window\.setTimeout\(\(\) => closeButtonRef\.current\?\.focus/);
+  assert.doesNotMatch(dashboard, /resolutionPanelRef\.current\?\.focus/);
+  assert.ok(dashboard.includes("closeButtonRef.current?.focus?.({ preventScroll: true });"));
   assert.match(dashboard, /type="text"/);
   assert.match(dashboard, /inputMode="decimal"/);
-  assert.ok(dashboard.includes('next === "" || /^\\d{0,3}(?:\\.\\d{0,2})?$/.test(next)'));
-  assert.match(dashboard, /onKeyDown=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(dashboard, /autoComplete="off"/);
+  assert.ok(dashboard.includes('next === "" || /^(?:\\d{0,3}|\\d{1,3}\\.\\d{0,2})$/.test(next)'));
+  assert.match(dashboard, /if \(event\.key === "Enter"\) event\.preventDefault\(\)/);
+  assert.match(dashboard, /event\.stopPropagation\(\)/);
+  assert.doesNotMatch(dashboard, /event\.target\.value\.trim\(\)/);
   assert.match(dashboard, /if \(value === "" \|\| value == null\) return null/);
 });
 
@@ -761,12 +781,16 @@ test("Deduction detail modal actually renders Electric business-use controls in 
   assert.match(html, /100% business/);
   assert.match(html, /Mixed business and personal use/);
   assert.match(html, /Personal - 0%/);
-  assert.match(html, /Apply to/);
-  assert.match(html, /All matching QBO GL transactions for 2026/);
+  assert.match(html, /selected/);
+  assert.match(html, /in expenses/);
+  assert.doesNotMatch(html, /Apply to/);
+  assert.doesNotMatch(html, /All matching QBO GL transactions for 2026/);
   assert.match(html, /Save and confirm/);
   assert.match(html, /Not sure yet/);
-  assert.match(html, /Bizzi matched this QuickBooks account to Utilities, but needs your business-use percentage before calculating a deduction/);
+  assert.match(html, /Bizzi categorized these transactions as Utilities based on their posted QuickBooks GL account/);
+  assert.match(html, /Tell us how much of this account is used for business so Bizzi can calculate the deductible amount/);
   assert.doesNotMatch(html, /calculated the confirmed deduction/);
+  assert.doesNotMatch(html, /QuickBooks categorized/);
   assert.doesNotMatch(html, /Why this needs review/);
   assert.doesNotMatch(html, /This GL account going forward/);
 });
@@ -796,7 +820,9 @@ test("Deduction detail modal actually renders Gas vehicle controls in the modal 
   assert.match(html, /Actual vehicle expenses/);
   assert.match(html, /I(?:&#x27;|')m not sure/);
   assert.match(html, /Save vehicle method/);
-  assert.match(html, /Bizzi matched this QuickBooks account to Vehicle Expense, but needs your vehicle deduction method before calculating a deduction/);
+  assert.match(html, /Bizzi categorized these transactions as Vehicle Expenses based on their posted QuickBooks GL account/);
+  assert.match(html, /Choose your vehicle deduction method before Bizzi calculates the deductible amount/);
+  assert.doesNotMatch(html, /QuickBooks categorized/);
   assert.doesNotMatch(html, /This row already has confirmed rule-engine treatment/);
 });
 
@@ -818,7 +844,9 @@ test("Deduction detail modal preserves exceptions and refreshes after confirmati
   assert.match(dashboard, /selectedReviewTransactionIds/);
   assert.match(dashboard, /Uncheck personal or undocumented exceptions so they stay in Needs review/);
   assert.match(dashboard, /hasManualClassificationAuthority\(row\)/);
-  assert.match(dashboard, /onBulkUpdateClassifications\(chunk, changes, \{ reason \}\)/);
+  assert.match(dashboard, /onBulkUpdateClassifications\(transactionIds, changes, \{ reason, skipReload: true \}\)/);
+  assert.doesNotMatch(dashboard, /onBulkUpdateClassifications\(chunk, changes, \{ reason \}\)/);
+  assert.match(dashboard, /Confirming \$\{selectedCount\}/);
   assert.match(dashboard, /await onRefresh\?\.\(\)/);
   assert.match(dashboard, /User confirmed \$\{count\} deduction review/);
   assert.match(routes, /protectConfirmedAuthority: true/);

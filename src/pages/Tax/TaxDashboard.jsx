@@ -553,7 +553,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
     )
     : classificationsRequired
     ? previewStatusMessage
-    : "Deductible totals by QBO GL account from posted QuickBooks expense transactions. Click a month amount to inspect the Plaid transactions behind it.";
+    : "Deductible totals by QBO GL account from posted QuickBooks expense transactions. Click a month amount to inspect the linked transaction details behind it.";
 
   const openBackfillPreview = async () => {
     if (readOnly) {
@@ -2000,6 +2000,8 @@ function classificationBucket(row) {
   const treatment = String(row?.taxTreatment || row?.deductibilityStatus || "").trim().toLowerCase();
   if (status === "failed" || status === "classification_failed") return "failed";
   if (status === "unclassified" || status === "unsupported" || !status) return "unclassified";
+  if (status === "user_confirmed" || row?.userOverride === true || row?.user_override === true) return "user_confirmed";
+  if (status === "cpa_confirmed" || status === "accountant_reviewed" || row?.cpaOverride === true || row?.cpa_override === true) return "accountant_confirmed";
   if (status === "auto_classified" || status === "system_confirmed") return "auto_classified";
   if (status === "excluded" || treatment === "excluded") return "excluded";
   if (row?.requiresReview === true || status === "needs_review" || status === "review_required" || treatment === "needs_review") return "needs_review";
@@ -2010,6 +2012,7 @@ function classificationStatusClass(bucket) {
   if (bucket === "failed") return "border-rose-300/20 bg-rose-400/[0.08] text-rose-100";
   if (bucket === "needs_review") return "border-amber-300/20 bg-amber-300/[0.08] text-amber-50";
   if (bucket === "mixed") return "border-sky-300/18 bg-sky-300/[0.08] text-sky-50";
+  if (bucket === "user_confirmed" || bucket === "accountant_confirmed") return "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-50";
   if (bucket === "excluded") return "border-white/12 bg-white/[0.055] text-white/58";
   if (bucket === "unclassified") return "border-white/12 bg-white/[0.045] text-white/62";
   return "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-50";
@@ -2021,6 +2024,8 @@ function aggregateClassificationStatus(rows = []) {
   if (buckets.length > 1) return { bucket: "mixed", label: "Mixed", tone: "neutral" };
   const bucket = buckets[0];
   if (bucket === "auto_classified") return { bucket, label: "Auto-classified", tone: "green" };
+  if (bucket === "user_confirmed") return { bucket, label: "Confirmed by you", tone: "green" };
+  if (bucket === "accountant_confirmed") return { bucket, label: "Confirmed by accountant", tone: "green" };
   if (bucket === "needs_review") return { bucket, label: "Needs review", tone: "amber" };
   if (bucket === "failed") return { bucket, label: "Failed", tone: "red" };
   if (bucket === "excluded") return { bucket, label: "Excluded", tone: "neutral" };
@@ -2030,6 +2035,8 @@ function aggregateClassificationStatus(rows = []) {
 function classificationStatusLabel(bucket, row) {
   if (bucket === "failed") return "Failed";
   if (bucket === "needs_review") return "Needs review";
+  if (bucket === "user_confirmed") return "Confirmed by you";
+  if (bucket === "accountant_confirmed") return "Confirmed by accountant";
   if (bucket === "excluded") return "Excluded";
   if (bucket === "unclassified") return "Unclassified";
   return safeText(row.statusLabel, "Auto-classified");
@@ -2145,15 +2152,14 @@ function DeductionMonthDetailModal({
   const transactions = useMemo(() => Array.isArray(cell.transactions) ? cell.transactions : [], [cell]);
   const aggregateStatus = useMemo(() => aggregateClassificationStatus(transactions), [transactions]);
   const reviewContext = useMemo(() => detailReviewContextForSelection(selection), [selection]);
-  const accountYearReviewRows = useMemo(() => collectAccountYearReviewRows(account), [account]);
   const hasSelection = Boolean(selection);
   const selectionFocusKey = `${selection?.account?.key || "account"}:${selection?.month?.key || "month"}:${cell.selectedAuthority || "all"}`;
   const reviewResetKey = `${selectionFocusKey}:${reviewContext.kind || "none"}:${reviewContext.defaultTaxCategory || "none"}`;
   const [assignmentByTxn, setAssignmentByTxn] = useState({});
   const [savingChanges, setSavingChanges] = useState(false);
   const [assignmentError, setAssignmentError] = useState("");
+  const [resolutionSuccess, setResolutionSuccess] = useState("");
   const [selectedReviewTransactionIds, setSelectedReviewTransactionIds] = useState(() => new Set());
-  const [reviewScope, setReviewScope] = useState("selected_transactions");
   const [reviewResolutionMode, setReviewResolutionMode] = useState("business");
   const [businessUseMode, setBusinessUseMode] = useState("");
   const [businessUsePercent, setBusinessUsePercent] = useState("");
@@ -2167,9 +2173,9 @@ function DeductionMonthDetailModal({
     const defaultReviewRows = transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
     setAssignmentByTxn({});
     setAssignmentError("");
+    setResolutionSuccess("");
     setSavingChanges(false);
     setSelectedReviewTransactionIds(new Set(defaultReviewRows.map((row) => String(row.id || row.raw?.transactionId)).filter(Boolean)));
-    setReviewScope("selected_transactions");
     setReviewResolutionMode("business");
     setBusinessUseMode("");
     setBusinessUsePercent("");
@@ -2183,7 +2189,7 @@ function DeductionMonthDetailModal({
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    window.setTimeout(() => closeButtonRef.current?.focus(), 0);
+    closeButtonRef.current?.focus?.({ preventScroll: true });
 
     const handleKeyDown = (event) => {
       if (event.key === "Escape") {
@@ -2213,18 +2219,10 @@ function DeductionMonthDetailModal({
     };
   }, [hasSelection, selectionFocusKey, onClose]);
 
-  useEffect(() => {
-    if (!hasSelection || !reviewContext.supported) return undefined;
-    const timeout = window.setTimeout(() => {
-      resolutionPanelRef.current?.focus?.();
-    }, 40);
-    return () => window.clearTimeout(timeout);
-  }, [hasSelection, selectionFocusKey, reviewContext.supported]);
-
   if (!selection) return null;
 
   const isReviewDetail = transactions.some((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
-  const scopeRows = reviewScope === "account_year" ? accountYearReviewRows : transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
+  const scopeRows = transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
   const selectedReviewRows = scopeRows.filter((row) => selectedReviewTransactionIds.has(String(row.id || row.raw?.transactionId)));
   const selectedCount = selectedReviewRows.length;
   const percentNumber = parseBusinessUsePercent(businessUsePercent);
@@ -2240,7 +2238,7 @@ function DeductionMonthDetailModal({
     resolutionCategory,
     resolutionMode: reviewResolutionMode,
   });
-  const canResolve = !readOnly && selectedCount > 0 && reviewScope !== "going_forward" && reviewContext.supported &&
+  const canResolve = !readOnly && selectedCount > 0 && reviewContext.supported &&
     (reviewContext.kind !== "business_use_percent" || businessUseSelectionValid) &&
     (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && percentValid));
 
@@ -2301,6 +2299,7 @@ function DeductionMonthDetailModal({
     if (!pendingChanges.length || typeof onAssignTaxClassification !== "function") return;
     setSavingChanges(true);
     setAssignmentError("");
+    setResolutionSuccess("");
     try {
       for (const change of pendingChanges) {
         const treatment = TAX_CATEGORY_ASSIGNMENTS[change.taxCategory] || TAX_CATEGORY_ASSIGNMENTS.other;
@@ -2362,19 +2361,16 @@ function DeductionMonthDetailModal({
           });
         }
       }
-      const reason = detailResolutionReason(reviewContext, reviewScope, selectedCount);
+      const reason = detailResolutionReason(reviewContext, "selected_transactions", selectedCount);
       if (typeof onBulkUpdateClassifications === "function") {
-        for (let index = 0; index < transactionIds.length; index += 100) {
-          const chunk = transactionIds.slice(index, index + 100);
-          await onBulkUpdateClassifications(chunk, changes, { reason });
-        }
+        await onBulkUpdateClassifications(transactionIds, changes, { reason, skipReload: true });
       } else {
         for (const transactionId of transactionIds) {
           await onOverrideClassification(transactionId, { ...changes, reason });
         }
       }
-      setSelectedReviewTransactionIds(new Set());
       await onRefresh?.();
+      setResolutionSuccess(`${transactionIds.length} ${transactionIds.length === 1 ? "transaction" : "transactions"} confirmed`);
     } catch (err) {
       setAssignmentError(err?.message || "Could not resolve this review.");
     } finally {
@@ -2386,7 +2382,8 @@ function DeductionMonthDetailModal({
   const panelTransition = prefersReducedMotion ? { duration: 0 } : { duration: 0.18, ease: "easeOut" };
   const modal = (
     <Motion.div
-      className="bizzy-modal-main-backdrop pointer-events-auto fixed bottom-0 left-0 right-0 top-0 z-[90] flex items-center justify-center overflow-visible px-3 py-5 md:left-[var(--nav-w,0px)] sm:px-4 sm:py-8"
+      data-bizzy-tax-deduction-dialog
+      className="bizzy-modal-main-backdrop pointer-events-auto fixed inset-0 z-[200000] flex h-[100dvh] min-h-screen items-center justify-center overflow-hidden px-3 py-4 sm:px-4 sm:py-6"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -2400,7 +2397,7 @@ function DeductionMonthDetailModal({
         aria-labelledby="deduction-detail-title"
         aria-describedby="deduction-detail-description"
         tabIndex={-1}
-        className="flex max-h-[min(820px,calc(100vh-64px))] w-full max-w-[980px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] font-sans text-white shadow-[0_28px_100px_rgba(0,0,0,0.72)]"
+        className="flex max-h-[calc(100dvh-32px)] min-h-0 w-full max-w-[980px] flex-col overflow-hidden rounded-[22px] border border-white/10 bg-[#080b0f] font-sans text-white shadow-[0_28px_100px_rgba(0,0,0,0.72)] sm:max-h-[calc(100dvh-48px)]"
         initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: 10 }}
         animate={prefersReducedMotion ? { opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
         exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: 8 }}
@@ -2421,7 +2418,7 @@ function DeductionMonthDetailModal({
               {month.longLabel} · {transactions.length} {transactions.length === 1 ? "transaction" : "transactions"} · QBO GL rule evidence
             </p>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-white/46">
-              Sourced from posted QuickBooks GL accounts and Plaid transaction detail.
+              Bizzi used the posted QuickBooks GL account and available transaction details to determine this tax treatment.
             </p>
           </div>
           <button
@@ -2448,7 +2445,7 @@ function DeductionMonthDetailModal({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-4 py-4 sm:px-5">
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 pb-8 sm:px-5 sm:pb-10">
           {assignmentError ? (
             <div className="mb-3 rounded-[14px] border border-rose-300/20 bg-rose-400/[0.08] px-3 py-2 text-xs text-rose-100">
               {assignmentError}
@@ -2462,7 +2459,6 @@ function DeductionMonthDetailModal({
               rows={scopeRows}
               selectedRows={selectedReviewRows}
               selectedIds={selectedReviewTransactionIds}
-              reviewScope={reviewScope}
               businessUsePercent={businessUsePercent}
               businessUseMode={businessUseMode}
               businessUsePercentValid={percentValid}
@@ -2472,13 +2468,9 @@ function DeductionMonthDetailModal({
               estimatedEffect={estimatedEffect}
               canResolve={canResolve}
               saving={savingChanges}
+              successMessage={resolutionSuccess}
               readOnly={readOnly}
               onSelectAll={setAllReviewRowsSelected}
-              onScopeChange={(scope) => {
-                setReviewScope(scope);
-                const nextRows = scope === "account_year" ? accountYearReviewRows : transactions.filter((row) => needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row));
-                setSelectedReviewTransactionIds(new Set(nextRows.map((row) => String(row.id || row.raw?.transactionId)).filter(Boolean)));
-              }}
               onBusinessUseModeChange={setBusinessUseMode}
               onBusinessUsePercentChange={setBusinessUsePercent}
               onVehicleMethodChange={setVehicleMethod}
@@ -2486,7 +2478,6 @@ function DeductionMonthDetailModal({
               onResolutionCategoryChange={setResolutionCategory}
               onSave={saveReviewResolution}
               onDefer={() => setAssignmentError("")}
-              taxYear={yearFromMonthKey(month.key) || CURRENT_YEAR}
             />
           ) : null}
           <details
@@ -2527,7 +2518,7 @@ function DeductionMonthDetailModal({
                             <input
                               type="checkbox"
                               checked={selected}
-                              disabled={!needsReview || hasManualClassificationAuthority(row)}
+                              disabled={savingChanges || !needsReview || hasManualClassificationAuthority(row)}
                               onChange={() => toggleReviewRow(row)}
                               className="h-4 w-4 rounded border-white/20 bg-black accent-emerald-300"
                               aria-label={`Select ${row.vendor}`}
@@ -2636,9 +2627,9 @@ function DetailContextCard() {
     <div className="mb-3 rounded-[16px] border border-emerald-300/14 bg-emerald-300/[0.045] px-3 py-3">
       <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/46">Classification evidence</div>
       <p className="mt-1 text-sm leading-relaxed text-white/76">
-        Bizzi matched this posted QuickBooks GL account to an active tax rule and calculated the confirmed deduction.
+        Bizzi categorized these transactions using their posted QuickBooks GL account and an active verified deduction rule.
       </p>
-      <p className="mt-2 text-xs leading-relaxed text-white/52">This row already has confirmed rule-engine treatment.</p>
+      <p className="mt-2 text-xs leading-relaxed text-white/52">No additional information is currently required.</p>
     </div>
   );
 }
@@ -2671,7 +2662,6 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   rows,
   selectedRows,
   selectedIds,
-  reviewScope,
   businessUsePercent,
   businessUseMode,
   businessUsePercentValid,
@@ -2681,9 +2671,9 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   estimatedEffect,
   canResolve,
   saving,
+  successMessage,
   readOnly,
   onSelectAll,
-  onScopeChange,
   onBusinessUseModeChange,
   onBusinessUsePercentChange,
   onVehicleMethodChange,
@@ -2691,18 +2681,14 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   onResolutionCategoryChange,
   onSave,
   onDefer,
-  taxYear,
 }, ref) {
   const allSelected = rows.length > 0 && rows.every((row) => selectedIds.has(String(row.id || row.raw?.transactionId)));
   const selectedCount = selectedRows.length;
   const selectedGrossTotal = selectedRows.reduce((sum, row) => sum + Math.abs(normalizeMoney(row.amount)), 0);
   const heading = detailResolutionHeading(context);
   const saveLabel = detailResolutionSaveLabel(context, selectedCount, resolutionMode);
-  const scopeLabel = reviewScope === "account_year"
-    ? `All matching QBO GL transactions for ${taxYear}`
-    : "Selected transactions";
   return (
-    <section ref={ref} tabIndex={-1} className="mb-4 scroll-mt-6 rounded-[18px] border border-amber-300/18 bg-amber-300/[0.045] p-3 outline-none focus:ring-2 focus:ring-amber-300/24">
+    <section ref={ref} tabIndex={-1} aria-busy={saving ? "true" : "false"} className="mb-4 scroll-mt-6 rounded-[18px] border border-amber-300/18 bg-amber-300/[0.045] p-3 outline-none focus:ring-2 focus:ring-amber-300/24">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
           <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-100/62">Review needed</div>
@@ -2766,23 +2752,23 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
           ) : null}
           </div>
           <div className="space-y-2">
-            <label className="block text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42" htmlFor="deduction-review-scope-select">Apply to</label>
-            <select
-              id="deduction-review-scope-select"
-              value={reviewScope}
-              onChange={(event) => onScopeChange(event.target.value)}
-              disabled={readOnly || saving}
-              className="h-9 w-full rounded-[11px] border border-white/10 bg-[#0f1311] px-3 text-sm font-semibold text-white outline-none focus:border-emerald-300/40 focus:ring-2 focus:ring-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <option value="selected_transactions">Selected transactions</option>
-              <option value="account_year">All matching QBO GL transactions for {taxYear}</option>
-            </select>
             <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs text-white/48">
-              {scopeLabel} · {selectedCount} affected · {formatCurrencyLocal(selectedGrossTotal)} expense total
+              {selectedCount} selected · {formatCurrencyLocal(selectedGrossTotal)} in expenses · {estimatedEffect.label === "Not calculated" ? "not calculated" : `${estimatedEffect.label} deduction`}
+            </div>
+            {successMessage ? (
+              <div className="rounded-[12px] border border-emerald-300/18 bg-emerald-300/[0.07] px-3 py-2 text-xs font-semibold text-emerald-50">
+                {successMessage}
+              </div>
+            ) : null}
+            {saving ? (
+              <div className="flex items-center gap-2 rounded-[12px] border border-emerald-300/14 bg-emerald-300/[0.055] px-3 py-2 text-xs font-semibold text-emerald-50">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                Confirming {selectedCount} {selectedCount === 1 ? "transaction" : "transactions"}...
+              </div>
+            ) : null}
             </div>
           </div>
         </div>
-      </div>
 
       <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-2">
@@ -2809,9 +2795,11 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
             type="button"
             onClick={onSave}
             disabled={!canResolve || saving}
-            className="rounded-full bg-emerald-300 px-4 py-2 text-xs font-semibold text-[#06100c] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+            aria-busy={saving ? "true" : "false"}
+            className="inline-flex items-center gap-2 rounded-full bg-emerald-300 px-4 py-2 text-xs font-semibold text-[#06100c] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {saving ? "Saving..." : saveLabel}
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+            {saving ? `Confirming ${selectedCount} ${selectedCount === 1 ? "transaction" : "transactions"}...` : saveLabel}
           </button>
         </div>
       </div>
@@ -2865,8 +2853,12 @@ function ReviewChoiceButton({ value, current, onChange, label, disabled = false,
 
 function BusinessUsePercentInput({ value, valid, onChange }) {
   const handleChange = (event) => {
-    const next = event.target.value.trim();
-    if (next === "" || /^\d{0,3}(?:\.\d{0,2})?$/.test(next)) onChange(next);
+    const next = event.target.value;
+    if (next === "" || /^(?:\d{0,3}|\d{1,3}\.\d{0,2})$/.test(next)) onChange(next);
+  };
+  const handleKeyDown = (event) => {
+    if (event.key === "Enter") event.preventDefault();
+    event.stopPropagation();
   };
   return (
     <div>
@@ -2874,14 +2866,17 @@ function BusinessUsePercentInput({ value, valid, onChange }) {
       <div className="mt-1 flex items-center gap-2">
         <input
           id="deduction-business-use-percent"
+          data-testid="business-use-percent-input"
           type="text"
           inputMode="decimal"
+          autoComplete="off"
           value={value}
           onChange={handleChange}
-          onKeyDown={(event) => event.stopPropagation()}
+          onKeyDown={handleKeyDown}
           className={`h-9 w-24 rounded-[11px] border bg-black/22 px-3 text-sm font-semibold text-white outline-none focus:ring-2 ${value && !valid ? "border-rose-300/35 focus:ring-rose-300/20" : "border-white/10 focus:ring-emerald-300/22"}`}
           placeholder="0-100"
           aria-label="Business-use percentage input"
+          aria-invalid={value && !valid ? "true" : "false"}
         />
         <span className="text-sm text-white/54">%</span>
       </div>
@@ -2947,7 +2942,7 @@ function detailReviewContextForSelection(selection) {
       confirmationPercent: 50,
       deductibilityStatus: "partially_deductible",
       taxTreatment: "business_meals_business_purpose_confirmed",
-      explanation: "QuickBooks categorized these expenses as Meals. Bizzi estimates that 50% may be deductible, but you must confirm they had a business purpose.",
+      explanation: "Bizzi categorized these transactions as Business Meals based on their posted QuickBooks GL account. Bizzi estimates that 50% may be deductible, but you must confirm they had a business purpose.",
       actionHelp: "Confirm selected transactions as business meals. Personal meals and undocumented exceptions should stay unchecked.",
       businessLabel: "Confirm selected as business meals",
       personalLabel: "Mark selected as personal meals",
@@ -2958,7 +2953,7 @@ function detailReviewContextForSelection(selection) {
       kind: "vehicle_method",
       supported: true,
       defaultTaxCategory: taxCategorySelectValue(row) || "vehicle",
-      explanation: "Bizzi matched this QuickBooks account to Vehicle Expense, but needs your vehicle deduction method before calculating a deduction.",
+      explanation: "Bizzi categorized these transactions as Vehicle Expenses based on their posted QuickBooks GL account. Choose your vehicle deduction method before Bizzi calculates the deductible amount.",
       actionHelp: "Choose a vehicle method for the selected gas transactions before Bizzi treats them as confirmed.",
     };
   }
@@ -2968,7 +2963,7 @@ function detailReviewContextForSelection(selection) {
       supported: true,
       requiresBusinessUsePercent: true,
       defaultTaxCategory: taxCategorySelectValue(row) || "utilities",
-      explanation: "Bizzi matched this QuickBooks account to Utilities, but needs your business-use percentage before calculating a deduction.",
+      explanation: "Bizzi categorized these transactions as Utilities based on their posted QuickBooks GL account. Tell us how much of this account is used for business so Bizzi can calculate the deductible amount.",
       actionHelp: "Enter the factual business-use percentage for selected phone or utility expenses.",
     };
   }
@@ -2980,7 +2975,7 @@ function detailReviewContextForSelection(selection) {
       confirmationPercent: 100,
       deductibilityStatus: "fully_deductible",
       taxTreatment: "travel_transportation_business_purpose_confirmed",
-      explanation: "Bizzi matched these expenses to Business Transportation. Confirm which trips had a business purpose and exclude personal travel or commuting.",
+      explanation: "Bizzi categorized these transactions as Business Transportation based on their posted QuickBooks GL account. Confirm which trips had a business purpose and exclude personal travel or commuting.",
       actionHelp: "Confirm selected trips as business transportation and leave personal or commuting exceptions unchecked.",
       businessLabel: "Confirm selected as business trips",
       personalLabel: "Mark selected as personal or commuting",
@@ -2994,7 +2989,7 @@ function detailReviewContextForSelection(selection) {
       confirmationPercent: 100,
       deductibilityStatus: "fully_deductible",
       taxTreatment: "supplies_category_confirmed",
-      explanation: "Confirm whether these are office supplies, job supplies, or materials.",
+      explanation: "Bizzi categorized these transactions as Supplies based on their posted QuickBooks GL account. Confirm the proposed treatment or choose a more specific tax category.",
       actionHelp: "Confirm the proposed category or choose a more specific supported tax category for selected transactions.",
     };
   }
@@ -3008,23 +3003,6 @@ function detailReviewContextForSelection(selection) {
     explanation: "Review the proposed tax treatment before it becomes confirmed.",
     actionHelp: "Confirm the proposed category or choose another supported tax category for selected transactions.",
   };
-}
-
-function collectAccountYearReviewRows(account = {}) {
-  const months = Object.values(account.months || {});
-  const rows = [];
-  for (const month of months) {
-    for (const row of month.transactions || []) {
-      if (needsTaxClassificationReview(row) && !hasManualClassificationAuthority(row)) rows.push(row);
-    }
-  }
-  const seen = new Set();
-  return rows.filter((row) => {
-    const id = String(row.id || row.raw?.transactionId || "");
-    if (!id || seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
 }
 
 function parseBusinessUsePercent(value) {
@@ -3141,6 +3119,7 @@ function TaxCategorySelect({ value, currentLabel, onChange, disabled = false, to
   const selected = options.find((option) => option.value === value);
   const isReview = tone === "review";
   const buttonRef = React.useRef(null);
+  const menuRef = React.useRef(null);
 
   const choose = (nextValue) => {
     setOpen(false);
@@ -3169,14 +3148,38 @@ function TaxCategorySelect({ value, currentLabel, onChange, disabled = false, to
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open || typeof document === "undefined") return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      buttonRef.current?.focus?.();
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown, true);
+      document.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [open]);
+
   return (
     <div className="relative min-w-0 flex-1">
       <button
         ref={buttonRef}
         type="button"
         disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-        onBlur={() => setTimeout(() => setOpen(false), 120)}
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          setOpen((current) => !current);
+        }}
         className={`flex h-8 w-full items-center justify-between gap-2 rounded-[11px] border px-3 text-left text-xs font-semibold outline-none transition disabled:cursor-wait disabled:opacity-55 ${
           isReview
             ? "border-amber-300/20 bg-amber-300/[0.07] text-amber-50 hover:bg-amber-300/[0.11] focus:ring-2 focus:ring-amber-200/20"
@@ -3188,15 +3191,20 @@ function TaxCategorySelect({ value, currentLabel, onChange, disabled = false, to
       </button>
       {open && menuRect && typeof document !== "undefined" ? createPortal(
         <div
+          ref={menuRef}
           className="fixed z-[30000] overflow-auto rounded-xl border border-emerald-300/18 bg-[#0b0f0e] py-1 text-sm text-white shadow-[0_22px_55px_rgba(0,0,0,0.72)] ring-1 ring-emerald-300/10"
           style={{ top: menuRect.top, left: menuRect.left, width: menuRect.width, maxHeight: menuRect.maxHeight }}
+          onPointerDown={(event) => event.stopPropagation()}
         >
           {!value ? (
             <button
               type="button"
               className="flex w-full items-center gap-2 px-3 py-2 text-left text-white/44"
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => choose("")}
+              onClick={(event) => {
+                event.stopPropagation();
+                choose("");
+              }}
             >
               Choose category
             </button>
@@ -3207,7 +3215,10 @@ function TaxCategorySelect({ value, currentLabel, onChange, disabled = false, to
               type="button"
               className={`flex w-full items-center gap-2 px-3 py-2 text-left transition hover:bg-emerald-300/[0.08] ${option.value === value ? "text-emerald-50" : "text-white/76"}`}
               onMouseDown={(event) => event.preventDefault()}
-              onClick={() => choose(option.value)}
+              onClick={(event) => {
+                event.stopPropagation();
+                choose(option.value);
+              }}
             >
               <span className={`h-2 w-2 rounded-full ${option.value === value ? "bg-emerald-300" : "bg-white/18"}`} />
               <span className="min-w-0 flex-1 truncate">{option.label}</span>
@@ -3378,7 +3389,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     const expenseAmount = normalizeMoney(row.amount);
     const deductibleAmount = normalizeMoney(resolveDeductibleAmount(row));
     const bucket = classificationBucket(row);
-    const authoritativeAmount = bucket === "auto_classified" ? deductibleAmount : 0;
+    const authoritativeAmount = ["auto_classified", "user_confirmed", "accountant_confirmed"].includes(bucket) ? deductibleAmount : 0;
     const proposedAmount = bucket === "needs_review" ? deductibleAmount : 0;
     const displayAmount = scope === "needs_review" ? proposedAmount : scope === "all" ? authoritativeAmount + proposedAmount : authoritativeAmount;
     month.expenseTotal += expenseAmount;

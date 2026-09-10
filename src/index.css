@@ -176,6 +176,11 @@
   }
 }
 
+[data-bizzy-tax-deduction-dialog].bizzy-modal-main-backdrop {
+  left: 0 !important;
+  width: 100vw;
+}
+
 @media (prefers-reduced-transparency: reduce) {
   .bizzy-modal-main-backdrop {
     background: rgba(0, 0, 0, 0.72);

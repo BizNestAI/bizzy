@@ -112,6 +112,7 @@ test("Tax Dashboard keeps payment logging in the trajectory modal without a stan
 
 test("tax profile editor is a centered compact modal without a page-blur overlay", () => {
   const modal = fs.readFileSync("src/components/Tax/TaxProfileModal.jsx", "utf8");
+  const selectField = fs.readFileSync("src/components/Tax/Setup/TaxProfileSelectField.jsx", "utf8");
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /Edit Tax Profile/);
   assert.doesNotMatch(dashboard, /TaxDataFreshnessBadge/);
@@ -129,7 +130,7 @@ test("tax profile editor is a centered compact modal without a page-blur overlay
   assert.match(modal, /createPortal\(modal, document\.body\)/);
   assert.match(modal, /setRendered/);
   assert.match(modal, /transition-all duration-200/);
-  assert.match(modal, /dark-dropdown/);
+  assert.match(selectField, /dark-dropdown/);
   assert.doesNotMatch(modal, /backdrop-blur/);
   assert.doesNotMatch(modal, /fixed right-4 top-24/);
 });
@@ -188,18 +189,22 @@ test("Tax Dashboard deductions preview renders a QuickBooks account by month mat
   const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
   assert.match(dashboard, /buildDeductionAccountMatrix/);
   assert.match(dashboard, /QuickBooks account/);
-  assert.match(dashboard, /Deductible totals by tax category from posted QuickBooks expense transactions/);
-  assert.match(dashboard, /Plaid transaction/);
-  assert.match(dashboard, /Expense total/);
-  assert.match(dashboard, /Deductible amount/);
-  assert.match(dashboard, /Sourced from posted QuickBooks GL accounts and Plaid transaction detail/);
-  assert.match(dashboard, /Cells show deductible amount, not gross spend/);
-  assert.match(dashboard, /fixed bottom-0 left-0 right-0 top-0 z-\[90\]/);
+  assert.match(dashboard, /Deductible totals by QBO GL account from posted QuickBooks expense transactions/);
+  assert.match(dashboard, /linked transaction details/);
+  assert.match(dashboard, /Total expenses/);
+  assert.match(dashboard, /Confirmed deductions/);
+  assert.match(dashboard, /Estimated deductions/);
+  assert.match(dashboard, /Bizzi used the posted QuickBooks GL account and available transaction details to determine this tax treatment/);
+  assert.match(dashboard, /Automatic deductions/);
+  assert.match(dashboard, /Proposed — needs review/);
+  assert.match(dashboard, /data-bizzy-tax-deduction-dialog/);
+  assert.match(dashboard, /fixed inset-0 z-\[200000\]/);
+  assert.match(dashboard, /min-h-0 flex-1 overflow-y-auto/);
   assert.match(dashboard, /accountKey/);
   assert.match(dashboard, /qboAccountId/);
   assert.match(dashboard, /Unmapped QuickBooks account/);
   assert.match(dashboard, /account\.expenseTotal > 0/);
-  assert.match(dashboard, /limit: 250/);
+  assert.match(dashboard, /limit: 100/);
   assert.doesNotMatch(dashboard, /Confirmed deductible/);
   assert.doesNotMatch(dashboard, /Estimated deductible/);
   assert.doesNotMatch(dashboard, /Top categories/);
