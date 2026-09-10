@@ -117,6 +117,27 @@ export async function resolveReviewTaskForClassification({ supabase, businessId,
   return data || [];
 }
 
+export async function resolveReviewTasksForClassifications({ supabase, businessId, taxYear, transactionIds = [], actor = {} } = {}) {
+  const year = requireTaxYear(taxYear);
+  const ids = Array.from(new Set(transactionIds.map(String).filter(Boolean)));
+  if (!ids.length) return [];
+  const now = new Date().toISOString();
+  const dedupeKeys = ids.map((transactionId) => `tax_classification:${year}:${transactionId}`);
+  const { data, error } = await supabase
+    .from("tax_review_tasks")
+    .update({
+      status: TAX_REVIEW_TASK_STATUSES.RESOLVED,
+      resolved_by: actor.userId || null,
+      resolved_at: now,
+      updated_at: now,
+    })
+    .eq("business_id", businessId)
+    .in("dedupe_key", dedupeKeys)
+    .select("*");
+  if (error) throw error;
+  return data || [];
+}
+
 export function deriveReviewReasons(classification = {}) {
   const warnings = classification.metadata?.warnings || classification.metadata?.source_warnings || [];
   const reasons = [];

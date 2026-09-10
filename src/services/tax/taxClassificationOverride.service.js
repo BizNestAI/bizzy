@@ -13,7 +13,7 @@ import { getPostedTransactionForTax } from "./taxPostedTransaction.repository.js
 import { computeClassificationAmounts, normalizeDeductiblePercent } from "./taxClassificationAmounts.js";
 import { normalizeQboGlAccountKey } from "./taxQboGlNormalizer.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "./taxChangeEvents.js";
-import { createOrUpdateReviewTaskForClassification, resolveReviewTaskForClassification } from "./taxClassificationReview.service.js";
+import { createOrUpdateReviewTaskForClassification, resolveReviewTaskForClassification, resolveReviewTasksForClassifications } from "./taxClassificationReview.service.js";
 
 const OVERRIDE_VERSION = "tax-classification-override-v1";
 const BUSINESS_RULE_VERSION = "business-rule-v1";
@@ -185,8 +185,14 @@ export async function bulkApplyClassificationOverrides({ supabase, businessId, t
   for (const row of updated) {
     const before = byTransactionId.get(String(row.transaction_id));
     emitTaxDataChanged({ businessId, taxYear: year, changeType: TAX_CHANGE_TYPES.CLASSIFICATION_OVERRIDDEN, entityId: row.transaction_id, userId: actor.userId, metadata: classificationEventMetadata(before, row, inputForBatch.reason) });
-    await resolveReviewTaskForClassification({ supabase, businessId, taxYear: year, transactionId: row.transaction_id, actor });
   }
+  await resolveReviewTasksForClassifications({
+    supabase,
+    businessId,
+    taxYear: year,
+    transactionIds: updated.map((row) => row.transaction_id),
+    actor,
+  });
   return result;
 }
 

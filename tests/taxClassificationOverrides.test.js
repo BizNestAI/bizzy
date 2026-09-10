@@ -278,6 +278,10 @@ test("bulk override uses one atomic RPC for selected rows", async () => {
       classification({ id: "class-2", transaction_id: "txn-2", book_amount: -246 }),
       classification({ id: "class-3", transaction_id: "txn-3", book_amount: -50 }),
     ],
+    tax_review_tasks: [
+      { id: "task-1", business_id: BUSINESS_ID, dedupe_key: "tax_classification:2026:txn-1", status: "open" },
+      { id: "task-2", business_id: BUSINESS_ID, dedupe_key: "tax_classification:2026:txn-2", status: "open" },
+    ],
   }));
   const result = await bulkApplyClassificationOverrides({
     supabase,
@@ -289,10 +293,38 @@ test("bulk override uses one atomic RPC for selected rows", async () => {
   });
   assert.equal(supabase.store.rpcCalls.apply_tax_classification_override_batch, 1);
   assert.equal(supabase.store.rpcCalls.apply_tax_classification_override || 0, 0);
+  assert.equal(supabase.store.queryCalls.tax_review_tasks_update, 1);
   assert.equal(result.updated, 2);
   assert.equal(result.failed, 0);
   assert.equal(supabase.store.tax_classification_overrides.length, 2);
   assert.equal(supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-3").tax_category, "unclassified");
+});
+
+test("bulk override operation count does not scale frontend work by selection size", async () => {
+  for (const count of [1, 3, 9, 25]) {
+    const transactionIds = Array.from({ length: count }, (_, index) => `txn-${index + 1}`);
+    const supabase = makeSupabase(baseStore({
+      bank_transactions: transactionIds.map((id) => bankTxn({ id })),
+      transaction_categorizations: transactionIds.map((id) => cat({ transaction_id: id })),
+      transaction_tax_classifications: transactionIds.map((id, index) => classification({ id: `class-${index + 1}`, transaction_id: id, book_amount: -20 })),
+      tax_review_tasks: transactionIds.map((id, index) => ({ id: `task-${index + 1}`, business_id: BUSINESS_ID, dedupe_key: `tax_classification:2026:${id}`, status: "open" })),
+    }));
+    const started = performance.now();
+    const result = await bulkApplyClassificationOverrides({
+      supabase,
+      businessId: BUSINESS_ID,
+      taxYear: 2026,
+      transactionIds,
+      input: { taxCategory: "meals", deductibilityStatus: "partially_deductible", deductiblePercent: 50, reason: "Bulk meal confirmation." },
+      actor: actor(),
+    });
+    const elapsedMs = performance.now() - started;
+    assert.equal(result.updated, count);
+    assert.equal(supabase.store.rpcCalls.apply_tax_classification_override_batch, 1);
+    assert.equal(supabase.store.rpcCalls.apply_tax_classification_override || 0, 0);
+    assert.equal(supabase.store.queryCalls.tax_review_tasks_update, 1);
+    assert.ok(elapsedMs < 50, `local mocked batch should not scale materially, got ${elapsedMs}ms for ${count}`);
+  }
 });
 
 test("bulk override rejects missing selected rows atomically", async () => {
@@ -328,6 +360,7 @@ function baseStore(overrides = {}) {
     tax_profiles: [],
     tax_profile_memory: [],
     rpcCalls: {},
+    queryCalls: {},
     ...overrides,
   };
 }
@@ -612,6 +645,7 @@ class Query {
   }
   update(patch) {
     this.patch = patch;
+    this.store.queryCalls[`${this.table}_update`] = (this.store.queryCalls[`${this.table}_update`] || 0) + 1;
     return this;
   }
   maybeSingle() {

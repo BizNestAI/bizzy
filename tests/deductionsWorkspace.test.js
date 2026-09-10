@@ -9,6 +9,7 @@ import {
   buildDeductionsWorkspaceViewModel,
   mapDeductionTransactionRow,
 } from "../src/components/Tax/Deductions/deductionsWorkspaceViewModel.js";
+import { calculateVehicleMileageDeduction } from "../src/services/tax/vehicleMileageRates.js";
 
 let taxDashboardInternalsPromise;
 
@@ -801,7 +802,7 @@ test("Deduction detail modal validates business-use and vehicle method resolutio
   assert.match(dashboard, /function parseBusinessUsePercent/);
   assert.match(dashboard, /number < 0 \|\| number > 100/);
   assert.match(dashboard, /vehicleMethod === "standard_mileage"/);
-  assert.match(dashboard, /vehicle_standard_mileage_no_separate_gas/);
+  assert.match(dashboard, /Gas not deducted separately/);
   assert.match(dashboard, /vehicleMethod === "actual_expense"/);
   assert.match(dashboard, /vehicle_actual_expense_business_use/);
   assert.match(dashboard, /vehicleMethod === "unsure"/);
@@ -917,6 +918,115 @@ test("Deduction detail modal actually renders Gas vehicle controls in the modal 
   assert.match(html, /Choose your vehicle deduction method before Bizzi calculates the deductible amount/);
   assert.doesNotMatch(html, /QuickBooks categorized/);
   assert.doesNotMatch(html, /This row already has confirmed rule-engine treatment/);
+});
+
+test("Deduction detail modal renders Supplies as business purchase review without requiring category dropdown", async () => {
+  const { DeductionMonthDetailModal } = await loadTaxDashboardInternals();
+  const html = renderToStaticMarkup(React.createElement(DeductionMonthDetailModal, {
+    selection: makeReviewSelection({
+      accountName: "Supplies",
+      taxCategory: "supplies",
+      monthKey: "2026-08",
+      longLabel: "August 2026",
+      deductiblePercent: 100,
+      amount: 18,
+    }),
+    onClose: () => {},
+    onOverrideClassification: async () => ({}),
+    onBulkUpdateClassifications: async () => ({}),
+    onRefresh: async () => {},
+  }));
+
+  assert.match(html, /Was this purchase for your business/);
+  assert.match(html, /Business purchase - 100% deductible/);
+  assert.match(html, /Personal purchase - not deductible/);
+  assert.match(html, /Change tax category/);
+  assert.match(html, /Save purchase decision/);
+  assert.doesNotMatch(html, /Confirm category/);
+  assert.doesNotMatch(html, /Save supplies treatment/);
+});
+
+test("Deduction detail business-use field is a stable decimal text input in the actual modal path", async () => {
+  const { DeductionMonthDetailModal } = await loadTaxDashboardInternals();
+  const html = renderToStaticMarkup(React.createElement(DeductionMonthDetailModal, {
+    selection: makeReviewSelection({
+      accountName: "Electric",
+      taxCategory: "utilities",
+      monthKey: "2026-05",
+      longLabel: "May 2026",
+      deductiblePercent: 0,
+      amount: 120,
+    }),
+    onClose: () => {},
+    onOverrideClassification: async () => ({}),
+    onBulkUpdateClassifications: async () => ({}),
+    onRefresh: async () => {},
+  }));
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+
+  assert.match(dashboard, /function BusinessUsePercentInput/);
+  assert.match(dashboard, /useRef\(null\)/);
+  assert.match(dashboard, /autoFocusOnMount/);
+  assert.match(dashboard, /type="text"/);
+  assert.match(dashboard, /inputMode="decimal"/);
+  assert.match(dashboard, /value=\{value\}/);
+  assert.match(dashboard, /next === ""/);
+  assert.ok(dashboard.includes("\\d{1,3}\\.\\d{0,2}"));
+  const inputSource = dashboard.slice(dashboard.indexOf("function BusinessUsePercentInput"), dashboard.indexOf("function VehicleMethodControls"));
+  assert.doesNotMatch(inputSource, /type="number"/);
+  assert.match(html, /Mixed business and personal use/);
+});
+
+test("standard mileage gas rows remain visible in the matrix without zero-percent gas deduction", async () => {
+  const { buildDeductionAccountMatrix } = await loadTaxDashboardInternals();
+  const row = {
+    id: "gas-1",
+    date: "2026-06-15",
+    vendor: "Fuel",
+    qboAccountId: "gas-qbo",
+    qboAccountName: "Gas",
+    amount: 42,
+    signedAmount: -42,
+    direction: "OUTFLOW",
+    taxCategory: "vehicle_expense",
+    taxCategoryLabel: "Vehicle Expense",
+    taxTreatment: "vehicle_standard_mileage_no_separate_gas",
+    taxTreatmentLabel: "Covered by standard mileage",
+    deductiblePercent: 0,
+    deductibleAmount: 0,
+    status: "user_confirmed",
+    statusLabel: "Confirmed by you",
+    requiresReview: false,
+  };
+  const matrix = buildDeductionAccountMatrix([row], 2026, { scope: "overview" });
+  const gas = matrix.accounts.find((account) => account.name === "Gas");
+  assert.equal(gas.months["2026-06"].standardMileageTransactionCount, 1);
+  assert.equal(gas.months["2026-06"].authoritativeDeductibleTotal, 0);
+  assert.equal(gas.authoritativeDeductibleTotal, 0);
+});
+
+test("standard mileage workflow exposes business-mile entry and avoids gas zero-percent override", () => {
+  const dashboard = fs.readFileSync("src/pages/Tax/TaxDashboard.jsx", "utf8");
+  assert.match(dashboard, /Business miles/);
+  assert.match(dashboard, /Based on mileage records/);
+  assert.match(dashboard, /estimated mileage deduction/);
+  assert.match(dashboard, /Gas is covered by the standard-mileage method instead of deducted separately/);
+  assert.match(dashboard, /return null/);
+  assert.doesNotMatch(dashboard, /taxTreatment: "vehicle_standard_mileage_no_separate_gas"/);
+});
+
+test("vehicle mileage persistence requires a dedicated forward migration", () => {
+  const migration = fs.readFileSync("supabase/migrations/20261006_tax_vehicle_mileage_inputs.sql", "utf8");
+  assert.match(migration, /create table if not exists public\.tax_vehicle_mileage_inputs/);
+  assert.match(migration, /business_miles numeric not null/);
+  assert.match(migration, /mileage_basis in \('records', 'estimate'\)/);
+  assert.match(migration, /revoke all on table public\.tax_vehicle_mileage_inputs from authenticated/);
+  assert.match(migration, /grant all on table public\.tax_vehicle_mileage_inputs to service_role/);
+});
+
+test("vehicle mileage helper uses 2026 effective-dated rates", () => {
+  assert.equal(calculateVehicleMileageDeduction({ date: "2026-06-30", miles: 100 }).amount, 72.5);
+  assert.equal(calculateVehicleMileageDeduction({ date: "2026-07-01", miles: 100 }).amount, 76);
 });
 
 test("Deduction detail vehicle workflow stores method facts in tax profile memory", () => {

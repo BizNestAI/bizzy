@@ -20,6 +20,7 @@ import ModuleHeader from "../../components/layout/ModuleHeader/ModuleHeader";
 import { mapDeductionTransactionRow } from "../../components/Tax/Deductions/deductionsWorkspaceViewModel.js";
 import { isTaxLiabilityEstimateEnabled } from "../../config/taxFeatures.js";
 import { computeClassificationAmounts } from "../../services/tax/taxClassificationAmounts.js";
+import { calculateVehicleMileageDeduction } from "../../services/tax/vehicleMileageRates.js";
 
 // TaxSummaryGrid was replaced by the answer-first TaxHeroSection.
 
@@ -1008,8 +1009,10 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
   }
   const openCell = (authority) => {
     const transactions = authority === "confirmed"
-      ? cell.transactions.filter((row) => isAuthoritativeDeductionBucket(classificationBucket(row)))
-      : cell.transactions.filter((row) => classificationBucket(row) === "needs_review");
+      ? cell.transactions.filter((row) => isAuthoritativeDeductionBucket(classificationBucket(row)) && !isStandardMileageGasRow(row))
+      : authority === "standard_mileage"
+        ? cell.transactions.filter(isStandardMileageGasRow)
+        : cell.transactions.filter((row) => classificationBucket(row) === "needs_review");
     if (!transactions.length) return;
     onSelectCell({
       account,
@@ -1024,6 +1027,10 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
       },
     });
   };
+  const hasRenderableState = cell.authoritativeDeductibleTotal > 0 || cell.reviewTransactionCount > 0 || cell.standardMileageTransactionCount > 0;
+  if (!hasRenderableState) {
+    return <span className="block px-2 py-1.5 text-[12px] text-white/22">—</span>;
+  }
   return (
     <div className="flex flex-col items-stretch gap-1">
       {cell.authoritativeDeductibleTotal > 0 ? (
@@ -1034,6 +1041,16 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
           title={`${account.name}, ${month.longLabel}, confirmed deductions`}
         >
           {formatCurrencyLocal(cell.authoritativeDeductibleTotal)} confirmed
+        </button>
+      ) : null}
+      {cell.standardMileageTransactionCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => openCell("standard_mileage")}
+          className="w-full rounded-lg border border-sky-300/10 bg-sky-300/[0.05] px-2 py-1.5 text-right text-[12px] font-semibold text-sky-100 transition hover:border-sky-200/30 hover:bg-sky-300/[0.10] focus:outline-none focus:ring-2 focus:ring-sky-300/30"
+          title={`${account.name}, ${month.longLabel}, gas covered by standard mileage`}
+        >
+          Covered by standard mileage
         </button>
       ) : null}
       {cell.reviewTransactionCount > 0 ? (
@@ -2051,10 +2068,22 @@ function isAuthoritativeDeductionBucket(bucket) {
   return bucket === "auto_classified" || bucket === "user_confirmed" || bucket === "accountant_confirmed";
 }
 
+function isStandardMileageGasRow(row) {
+  const treatment = String(firstValue(
+    row?.taxTreatment,
+    row?.taxTreatmentLabel,
+    row?.raw?.tax_treatment?.type,
+    row?.raw?.classification?.tax_treatment?.type
+  ) || "").toLowerCase();
+  const category = String(firstValue(row?.taxCategory, row?.raw?.tax_category, row?.raw?.classification?.tax_category) || "").toLowerCase();
+  return treatment.includes("standard_mileage") && (category.includes("vehicle") || /\b(gas|fuel|auto)\b/i.test(String(row?.qboAccountName || "")));
+}
+
 function deductibilityLabel(row) {
   if (classificationBucket(row) === "unclassified") {
     return row.taxTreatment === "not_determined" ? "Not determined" : "Pending classification";
   }
+  if (isStandardMileageGasRow(row)) return "Covered by standard mileage";
   const bucket = classificationBucket(row);
   const status = String(row?.deductibilityStatus || row?.taxTreatment || "").toLowerCase();
   const label = String(row?.taxTreatmentLabel || "").toLowerCase();
@@ -2070,6 +2099,7 @@ function deductibilityLabel(row) {
 
 function deductiblePercentLabel(row) {
   if (classificationBucket(row) === "unclassified") return "";
+  if (isStandardMileageGasRow(row)) return "Covered by standard mileage";
   if (row?.deductiblePercent == null || Number.isNaN(Number(row.deductiblePercent))) return "Percent pending";
   if (classificationBucket(row) === "needs_review" && Number(row.deductiblePercent) === 0) return reviewDecisionForRow(row).actionLabel || "Review required";
   if (classificationBucket(row) === "needs_review") return `${Math.round(Number(row.deductiblePercent))}% proposed`;
@@ -2143,7 +2173,6 @@ function DeductionMonthDetailModal({
   selection,
   onClose,
   onAssignTaxClassification,
-  onOverrideClassification,
   onBulkUpdateClassifications,
   onSetTaxProfileMemory,
   onRefresh,
@@ -2172,8 +2201,11 @@ function DeductionMonthDetailModal({
   const [reviewResolutionMode, setReviewResolutionMode] = useState("business");
   const [businessUseMode, setBusinessUseMode] = useState("");
   const [businessUsePercent, setBusinessUsePercent] = useState("");
+  const [standardMileageMiles, setStandardMileageMiles] = useState("");
+  const [standardMileageBasis, setStandardMileageBasis] = useState("records");
   const [vehicleMethod, setVehicleMethod] = useState("");
   const [resolutionCategory, setResolutionCategory] = useState("");
+  const [showCategoryChange, setShowCategoryChange] = useState(false);
   const [transactionsExpanded, setTransactionsExpanded] = useState(false);
 
   useEffect(() => {
@@ -2188,8 +2220,11 @@ function DeductionMonthDetailModal({
     setReviewResolutionMode("business");
     setBusinessUseMode("");
     setBusinessUsePercent("");
+    setStandardMileageMiles("");
+    setStandardMileageBasis("records");
     setVehicleMethod("");
     setResolutionCategory(reviewContext.defaultTaxCategory || "");
+    setShowCategoryChange(false);
     setTransactionsExpanded(!["business_use_percent", "vehicle_method"].includes(reviewContext.kind));
   }, [reviewResetKey, reviewContext.defaultTaxCategory, reviewContext.kind, transactions]);
 
@@ -2330,15 +2365,17 @@ function DeductionMonthDetailModal({
   };
 
   const saveReviewResolution = async () => {
-    if (!canResolve || typeof onOverrideClassification !== "function") return;
+    if (!canResolve) return;
     const transactionIds = selectedReviewRows.map((row) => row.id || row.raw?.transactionId).filter(Boolean);
     const changes = buildDetailResolutionChanges(reviewContext, selectedReviewRows, {
       businessUsePercent: resolvedBusinessUsePercent,
       vehicleMethod,
       resolutionCategory,
+      allowCategoryChange: reviewContext.allowCategoryChange,
       resolutionMode: reviewResolutionMode,
     });
-    if (!transactionIds.length || !changes) return;
+    const standardMileageOnly = reviewContext.kind === "vehicle_method" && vehicleMethod === "standard_mileage";
+    if (!transactionIds.length || (!changes && !standardMileageOnly)) return;
     setSavingChanges(true);
     setAssignmentError("");
     try {
@@ -2353,6 +2390,13 @@ function DeductionMonthDetailModal({
             qbo_gl_account: account.name,
             tax_year: yearFromMonthKey(month.key),
             selected_transaction_count: selectedCount,
+            ...(vehicleMethod === "standard_mileage" && standardMileageMiles
+              ? {
+                  business_miles: Number(standardMileageMiles),
+                  mileage_basis: standardMileageBasis,
+                  mileage_period_month: month.key,
+                }
+              : {}),
           },
         });
         if (vehicleMethod === "actual_expense") {
@@ -2371,15 +2415,15 @@ function DeductionMonthDetailModal({
         }
       }
       const reason = detailResolutionReason(reviewContext, "selected_transactions", selectedCount);
-      if (typeof onBulkUpdateClassifications === "function") {
+      if (changes && typeof onBulkUpdateClassifications === "function") {
         await onBulkUpdateClassifications(transactionIds, changes, { reason, skipReload: true });
-      } else {
-        for (const transactionId of transactionIds) {
-          await onOverrideClassification(transactionId, { ...changes, reason });
-        }
+      } else if (changes) {
+        throw new Error("Batch confirmation service is unavailable. Try again after the latest update is deployed.");
       }
       await onRefresh?.();
-      setResolutionSuccess(`${transactionIds.length} ${transactionIds.length === 1 ? "transaction" : "transactions"} confirmed`);
+      setResolutionSuccess(standardMileageOnly
+        ? "Vehicle method saved. Add business miles to calculate the mileage deduction."
+        : `${transactionIds.length} ${transactionIds.length === 1 ? "transaction" : "transactions"} confirmed`);
     } catch (err) {
       setAssignmentError(err?.message || "Could not resolve this review.");
     } finally {
@@ -2472,8 +2516,12 @@ function DeductionMonthDetailModal({
               businessUseMode={businessUseMode}
               businessUsePercentValid={percentValid}
               vehicleMethod={vehicleMethod}
+              standardMileageMiles={standardMileageMiles}
+              standardMileageBasis={standardMileageBasis}
+              monthKey={month.key}
               resolutionMode={reviewResolutionMode}
               resolutionCategory={resolutionCategory}
+              showCategoryChange={showCategoryChange}
               estimatedEffect={estimatedEffect}
               canResolve={canResolve}
               saving={savingChanges}
@@ -2483,8 +2531,11 @@ function DeductionMonthDetailModal({
               onBusinessUseModeChange={setBusinessUseMode}
               onBusinessUsePercentChange={setBusinessUsePercent}
               onVehicleMethodChange={setVehicleMethod}
+              onStandardMileageMilesChange={setStandardMileageMiles}
+              onStandardMileageBasisChange={setStandardMileageBasis}
               onResolutionModeChange={setReviewResolutionMode}
               onResolutionCategoryChange={setResolutionCategory}
+              onToggleCategoryChange={() => setShowCategoryChange((current) => !current)}
               onSave={saveReviewResolution}
               onDefer={() => setAssignmentError("")}
             />
@@ -2658,6 +2709,7 @@ function detailResolutionSaveLabel(context = {}, selectedCount = 0, resolutionMo
   if (context.kind === "business_purpose" && resolutionMode === "personal") {
     return context.personalLabel || "Mark selected as personal";
   }
+  if (context.kind === "business_purpose" && context.allowCategoryChange) return "Save purchase decision";
   if (context.kind === "business_purpose" && context.businessLabel?.toLowerCase().includes("meal")) {
     return selectedCount ? "Confirm selected as business meals" : "Confirm selected as business meals";
   }
@@ -2675,8 +2727,12 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   businessUseMode,
   businessUsePercentValid,
   vehicleMethod,
+  standardMileageMiles,
+  standardMileageBasis,
+  monthKey,
   resolutionMode,
   resolutionCategory,
+  showCategoryChange,
   estimatedEffect,
   canResolve,
   saving,
@@ -2686,8 +2742,11 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   onBusinessUseModeChange,
   onBusinessUsePercentChange,
   onVehicleMethodChange,
+  onStandardMileageMilesChange,
+  onStandardMileageBasisChange,
   onResolutionModeChange,
   onResolutionCategoryChange,
+  onToggleCategoryChange,
   onSave,
   onDefer,
 }, ref) {
@@ -2729,9 +2788,14 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
           {context.kind === "vehicle_method" ? (
             <VehicleMethodControls
               vehicleMethod={vehicleMethod}
+              standardMileageMiles={standardMileageMiles}
+              standardMileageBasis={standardMileageBasis}
+              monthKey={monthKey}
               businessUsePercent={businessUsePercent}
               businessUsePercentValid={businessUsePercentValid}
               onVehicleMethodChange={onVehicleMethodChange}
+              onStandardMileageMilesChange={onStandardMileageMilesChange}
+              onStandardMileageBasisChange={onStandardMileageBasisChange}
               onBusinessUsePercentChange={onBusinessUsePercentChange}
             />
           ) : null}
@@ -2751,12 +2815,35 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
           ) : null}
           {context.kind === "business_purpose" ? (
             <div>
-              <div className="text-sm font-semibold text-white">{context.actionHelp}</div>
+              <div className="text-sm font-semibold text-white">{context.question || context.actionHelp}</div>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <ReviewChoiceButton groupName="deduction-review-resolution" value="business" current={resolutionMode} onChange={onResolutionModeChange} label={context.businessLabel || "Confirm selected as business"} />
                 <ReviewChoiceButton groupName="deduction-review-resolution" value="personal" current={resolutionMode} onChange={onResolutionModeChange} label={context.personalLabel || "Mark selected as personal"} />
               </div>
               <p className="mt-2 text-xs leading-relaxed text-amber-50/62">Uncheck personal or undocumented exceptions so they stay in Needs review.</p>
+              {context.allowCategoryChange ? (
+                <div className="mt-3 border-t border-white/[0.08] pt-3">
+                  <button
+                    type="button"
+                    onClick={onToggleCategoryChange}
+                    disabled={readOnly || saving}
+                    className="text-xs font-semibold text-white/58 underline-offset-4 transition hover:text-white hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Change tax category
+                  </button>
+                  {showCategoryChange ? (
+                    <div className="mt-2 max-w-xs">
+                      <TaxCategorySelect
+                        value={resolutionCategory}
+                        currentLabel={formatTaxCategoryLabel(resolutionCategory || context.defaultTaxCategory)}
+                        disabled={readOnly || saving}
+                        tone="review"
+                        onChange={onResolutionCategoryChange}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
           </div>
@@ -2832,6 +2919,7 @@ function UtilityBusinessUseControls({ mode, percent, percentValid, onModeChange,
           value={percent}
           valid={percentValid}
           onChange={onPercentChange}
+          autoFocusOnMount
         />
       ) : null}
       {!mode ? (
@@ -2860,7 +2948,12 @@ function ReviewChoiceButton({ value, current, onChange, label, disabled = false,
   );
 }
 
-function BusinessUsePercentInput({ value, valid, onChange }) {
+function BusinessUsePercentInput({ value, valid, onChange, autoFocusOnMount = false }) {
+  const inputRef = useRef(null);
+  useEffect(() => {
+    if (!autoFocusOnMount) return;
+    inputRef.current?.focus?.({ preventScroll: true });
+  }, [autoFocusOnMount]);
   const handleChange = (event) => {
     const next = event.target.value;
     if (next === "" || /^(?:\d{0,3}|\d{1,3}\.\d{0,2})$/.test(next)) onChange(next);
@@ -2874,6 +2967,7 @@ function BusinessUsePercentInput({ value, valid, onChange }) {
       <label htmlFor="deduction-business-use-percent" className="text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">Business-use percentage</label>
       <div className="mt-1 flex items-center gap-2">
         <input
+          ref={inputRef}
           id="deduction-business-use-percent"
           data-testid="business-use-percent-input"
           type="text"
@@ -2897,7 +2991,27 @@ function BusinessUsePercentInput({ value, valid, onChange }) {
   );
 }
 
-function VehicleMethodControls({ vehicleMethod, businessUsePercent, businessUsePercentValid, onVehicleMethodChange, onBusinessUsePercentChange }) {
+function VehicleMethodControls({
+  vehicleMethod,
+  businessUsePercent,
+  businessUsePercentValid,
+  standardMileageMiles,
+  standardMileageBasis,
+  monthKey,
+  onVehicleMethodChange,
+  onBusinessUsePercentChange,
+  onStandardMileageMilesChange,
+  onStandardMileageBasisChange,
+}) {
+  const mileagePreview = calculateVehicleMileageDeduction({
+    date: `${String(monthKey || "").slice(0, 7)}-15`,
+    miles: standardMileageMiles,
+    estimate: standardMileageBasis === "estimate",
+  });
+  const handleMileageChange = (event) => {
+    const next = event.target.value;
+    if (next === "" || /^\d{0,6}(?:\.\d{0,2})?$/.test(next)) onStandardMileageMilesChange?.(next);
+  };
   return (
     <div className="space-y-2">
       <div>
@@ -2909,13 +3023,48 @@ function VehicleMethodControls({ vehicleMethod, businessUsePercent, businessUseP
         </div>
       </div>
       {vehicleMethod === "standard_mileage" ? (
-        <p className="rounded-[12px] border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs leading-relaxed text-white/50">
-          Gas is not separately deducted when using standard mileage. Business mileage records are required.
-        </p>
+        <div className="space-y-2 rounded-[12px] border border-white/[0.07] bg-white/[0.025] px-3 py-2">
+          <p className="text-xs leading-relaxed text-white/52">
+            Gas is covered by the standard-mileage method instead of deducted separately. Enter business miles to preview the mileage deduction.
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="min-w-[150px] text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">
+              Business miles
+              <input
+                type="text"
+                inputMode="decimal"
+                autoComplete="off"
+                value={standardMileageMiles}
+                onChange={handleMileageChange}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.preventDefault();
+                  event.stopPropagation();
+                }}
+                className="mt-1 h-9 w-full rounded-[11px] border border-white/10 bg-black/22 px-3 text-sm font-semibold text-white outline-none focus:ring-2 focus:ring-emerald-300/22"
+                placeholder="Miles"
+                aria-label="Business miles"
+              />
+            </label>
+            <label className="min-w-[170px] text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">
+              Basis
+              <select
+                value={standardMileageBasis}
+                onChange={(event) => onStandardMileageBasisChange?.(event.target.value)}
+                className="mt-1 h-9 w-full rounded-[11px] border border-white/10 bg-black/22 px-3 text-sm font-semibold text-white outline-none focus:ring-2 focus:ring-emerald-300/22"
+              >
+                <option value="records">Based on mileage records</option>
+                <option value="estimate">Estimate</option>
+              </select>
+            </label>
+            <div className="rounded-[11px] border border-sky-300/12 bg-sky-300/[0.06] px-3 py-2 text-xs text-sky-50">
+              {standardMileageMiles ? `${mileagePreview.label} ${standardMileageBasis === "estimate" ? "estimated mileage deduction" : "mileage deduction"}` : "Add business miles"}
+            </div>
+          </div>
+        </div>
       ) : null}
       {vehicleMethod === "actual_expense" ? (
         <>
-          <BusinessUsePercentInput value={businessUsePercent} valid={businessUsePercentValid} onChange={onBusinessUsePercentChange} />
+          <BusinessUsePercentInput value={businessUsePercent} valid={businessUsePercentValid} onChange={onBusinessUsePercentChange} autoFocusOnMount />
           <p className="text-xs leading-relaxed text-white/46">Bizzi will estimate the eligible expense from the selected gas transactions and your business-use percentage.</p>
         </>
       ) : null}
@@ -2927,6 +3076,9 @@ function VehicleMethodControls({ vehicleMethod, businessUsePercent, businessUseP
 }
 
 function DetailDeductionValue({ row }) {
+  if (isStandardMileageGasRow(row)) {
+    return <div className="font-semibold text-sky-100/78">Covered by standard mileage</div>;
+  }
   const amount = resolveDeductibleAmount(row);
   if (Number(row?.deductiblePercent) === 0 && amount === 0) {
     return <div className="font-semibold text-amber-100/72">Not calculated</div>;
@@ -2992,14 +3144,18 @@ function detailReviewContextForSelection(selection) {
   }
   if (category.includes("suppl") || accountName.includes("suppl")) {
     return {
-      kind: "category_confirmation",
+      kind: "business_purpose",
       supported: true,
       defaultTaxCategory: taxCategorySelectValue(row) || "supplies",
       confirmationPercent: 100,
       deductibilityStatus: "fully_deductible",
-      taxTreatment: "supplies_category_confirmed",
-      explanation: "Bizzi categorized these transactions as Supplies based on their posted QuickBooks GL account. Confirm the proposed treatment or choose a more specific tax category.",
-      actionHelp: "Confirm the proposed category or choose a more specific supported tax category for selected transactions.",
+      taxTreatment: "supplies_business_purchase_confirmed",
+      explanation: "Bizzi categorized these transactions as Supplies based on their posted QuickBooks GL account. Confirm whether each selected purchase was for your business.",
+      actionHelp: "Confirm selected supplies as business purchases. Personal purchases should stay unchecked or be marked personal.",
+      question: "Was this purchase for your business?",
+      businessLabel: "Business purchase - 100% deductible",
+      personalLabel: "Personal purchase - not deductible",
+      allowCategoryChange: true,
     };
   }
   return {
@@ -3052,7 +3208,7 @@ function estimateResolutionDeduction(rows, context, options = {}) {
 
 function buildDetailResolutionChanges(context, rows, options = {}) {
   const first = rows[0] || {};
-  const category = context.kind === "category_confirmation"
+  const category = context.kind === "category_confirmation" || context.allowCategoryChange
     ? options.resolutionCategory || context.defaultTaxCategory
     : taxCategorySelectValue(first) || context.defaultTaxCategory;
   if (!category) return null;
@@ -3065,12 +3221,7 @@ function buildDetailResolutionChanges(context, rows, options = {}) {
     };
   }
   if (context.kind === "vehicle_method" && options.vehicleMethod === "standard_mileage") {
-    return {
-      taxCategory: category,
-      deductibilityStatus: "nondeductible",
-      deductiblePercent: 0,
-      taxTreatment: "vehicle_standard_mileage_no_separate_gas",
-    };
+    return null;
   }
   if (context.kind === "vehicle_method" && options.vehicleMethod === "unsure") {
     return null;
@@ -3359,6 +3510,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     autoTransactionCount: 0,
     userConfirmedTransactionCount: 0,
     accountantConfirmedTransactionCount: 0,
+    standardMileageTransactionCount: 0,
     reviewTransactionCount: 0,
     reviewActionLabel: null,
     transactions: [],
@@ -3393,6 +3545,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
         autoTransactionCount: 0,
         userConfirmedTransactionCount: 0,
         accountantConfirmedTransactionCount: 0,
+        standardMileageTransactionCount: 0,
         reviewTransactionCount: 0,
         reviewActionLabel: null,
       });
@@ -3402,7 +3555,8 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     const expenseAmount = normalizeMoney(row.amount);
     const deductibleAmount = normalizeMoney(resolveDeductibleAmount(row));
     const bucket = classificationBucket(row);
-    const authoritativeAmount = ["auto_classified", "user_confirmed", "accountant_confirmed"].includes(bucket) ? deductibleAmount : 0;
+    const standardMileageGas = isStandardMileageGasRow(row);
+    const authoritativeAmount = ["auto_classified", "user_confirmed", "accountant_confirmed"].includes(bucket) && !standardMileageGas ? deductibleAmount : 0;
     const proposedAmount = bucket === "needs_review" ? deductibleAmount : 0;
     const displayAmount = scope === "needs_review" ? proposedAmount : scope === "all" ? authoritativeAmount + proposedAmount : authoritativeAmount;
     month.expenseTotal += expenseAmount;
@@ -3412,6 +3566,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     if (bucket === "auto_classified") month.autoTransactionCount += 1;
     if (bucket === "user_confirmed") month.userConfirmedTransactionCount += 1;
     if (bucket === "accountant_confirmed") month.accountantConfirmedTransactionCount += 1;
+    if (standardMileageGas) month.standardMileageTransactionCount += 1;
     if (bucket === "needs_review") {
       month.reviewTransactionCount += 1;
       month.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
@@ -3425,6 +3580,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     if (bucket === "auto_classified") account.autoTransactionCount += 1;
     if (bucket === "user_confirmed") account.userConfirmedTransactionCount += 1;
     if (bucket === "accountant_confirmed") account.accountantConfirmedTransactionCount += 1;
+    if (standardMileageGas) account.standardMileageTransactionCount += 1;
     if (bucket === "needs_review") {
       account.reviewTransactionCount += 1;
       account.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
