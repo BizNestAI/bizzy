@@ -215,6 +215,7 @@ function matchCondition(key, expected, ctx) {
     const result = matchArray(expected, ctx.normalized_qbo_account_name || normalizeQboGlAccountKey(ctx.qbo_account_name), "qbo_account_name_key");
     return result.matched ? { ...result, exactGlAlias: true, specificity: 80 } : result;
   }
+  if (key === "qbo_account_type_keys") return matchArray(expected, ctx.normalized_qbo_account_type || normalizeQboGlAccountKey(ctx.qbo_account_type), "qbo_account_type_key");
   if (key === "qbo_account_subtype_keys") return matchArray(expected, ctx.normalized_qbo_account_subtype || normalizeQboGlAccountKey(ctx.qbo_account_subtype), "qbo_account_subtype_key");
   if (key === "direction") return matchArray(Array.isArray(expected) ? expected : [expected], ctx.direction, "direction");
   if (key === "merchant_entity_id") return matchScalar(expected, ctx.merchant_entity_id, key);

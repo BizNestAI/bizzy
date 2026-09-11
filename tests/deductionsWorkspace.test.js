@@ -165,6 +165,39 @@ test("deductions workspace view model keeps canonical buckets separate and prese
   assert.equal(model.categories[0].status, "needs_review");
 });
 
+test("deductions workspace labels v4 trades-focused tax categories", () => {
+  const row = mapDeductionTransactionRow({
+    transaction_id: "txn-equipment-fuel",
+    transaction_date: "2026-08-15",
+    tax_category: "equipment_fuel",
+    deductibility_status: "fully_deductible",
+    classification_status: "auto_classified",
+    signed_amount: -40,
+    deductible_percent: 100,
+    deductible_amount: 40,
+    source: "rule_engine",
+    requires_review: false,
+  });
+  assert.equal(row.taxCategoryLabel, "Equipment Fuel");
+
+  const model = buildDeductionsWorkspaceViewModel({
+    overview: {
+      coverage: { classifiedCount: 1 },
+      totals: {},
+      categories: [
+        { taxCategory: "shipping_freight_delivery", transactionCount: 1 },
+        { taxCategory: "commissions_referral_fees", transactionCount: 1 },
+        { taxCategory: "retirement_contributions", transactionCount: 1 },
+      ],
+    },
+  });
+  assert.deepEqual(model.categories.map((category) => category.categoryLabel), [
+    "Shipping, Freight & Delivery",
+    "Commissions & Referral Fees",
+    "Retirement Contributions",
+  ]);
+});
+
 test("transaction rows map backend statuses to user-facing labels", () => {
   const row = mapDeductionTransactionRow({
     transactionId: "txn-1",
@@ -184,6 +217,79 @@ test("transaction rows map backend statuses to user-facing labels", () => {
   assert.equal(row.taxTreatmentLabel, "Capitalizable");
   assert.equal(row.statusLabel, "Auto-classified");
   assert.equal(row.amount, 240);
+});
+
+test("transaction rows preserve Needs Tax Review null deduction semantics", () => {
+  const row = mapDeductionTransactionRow({
+    transactionId: "txn-holding",
+    date: "2026-07-01",
+    merchantName: "Supply Co",
+    qboAccountName: "Supplies",
+    signedAmount: -2450,
+    absoluteAmount: 2450,
+    taxCategory: "tax_review_holding",
+    deductibilityStatus: "not_yet_determined",
+    deductiblePercent: null,
+    deductibleAmount: null,
+    classificationStatus: "needs_tax_review",
+    requiresReview: true,
+    metadata: { is_holding: true },
+  });
+  assert.equal(row.taxCategoryLabel, "Needs Tax Review");
+  assert.equal(row.taxTreatmentLabel, "Not yet determined");
+  assert.equal(row.statusLabel, "Needs tax review");
+  assert.equal(row.deductiblePercent, null);
+  assert.equal(row.deductibleAmount, null);
+});
+
+test("deduction detail modal renders Needs Tax Review holding option and copy", async () => {
+  const { DeductionMonthDetailModal } = await loadTaxDashboardInternals();
+  const selection = makeReviewSelection({
+    accountName: "Supplies",
+    taxCategory: "supplies_materials",
+    monthKey: "2026-03",
+    longLabel: "March 2026",
+    amount: 2450,
+  });
+  const html = renderToStaticMarkup(React.createElement(DeductionMonthDetailModal, {
+    selection,
+    onClose: () => {},
+    onSendToTaxReview: async () => {},
+    onBulkUpdateClassifications: async () => {},
+    onAssignTaxClassification: async () => {},
+    onRefresh: async () => {},
+    readOnly: false,
+  }));
+  assert.match(html, /None of these fit - Needs tax review/);
+  assert.match(html, /will remain visible and will not affect deduction totals until it is reviewed/);
+  assert.match(html, /Bookkeeping category may be wrong/);
+});
+
+test("deductions matrix keeps holding-only account month clickable and non-deductible", async () => {
+  const { buildDeductionAccountMatrix } = await loadTaxDashboardInternals();
+  const row = mapDeductionTransactionRow({
+    transactionId: "txn-holding",
+    date: "2026-03-15",
+    merchantName: "Supply Co",
+    qboAccountId: "acct-supplies",
+    qboAccountName: "Supplies",
+    signedAmount: -2450,
+    absoluteAmount: 2450,
+    taxCategory: "tax_review_holding",
+    deductibilityStatus: "not_yet_determined",
+    deductiblePercent: null,
+    deductibleAmount: null,
+    classificationStatus: "needs_tax_review",
+    requiresReview: true,
+    metadata: { is_holding: true },
+  });
+  const matrix = buildDeductionAccountMatrix([row], 2026);
+  const cell = matrix.accounts[0].months["2026-03"];
+  assert.equal(cell.transactions.length, 1);
+  assert.equal(cell.authoritativeDeductibleTotal, 0);
+  assert.equal(cell.proposedDeductibleTotal, 0);
+  assert.equal(cell.needsTaxReviewTransactionCount, 1);
+  assert.equal(cell.needsTaxReviewGrossExpense, 2450);
 });
 
 test("snake_case persisted classification rows hydrate into authoritative transaction fields", () => {

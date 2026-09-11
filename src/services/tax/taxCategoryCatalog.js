@@ -35,6 +35,7 @@ const CATALOG = Object.freeze({
   refund_or_reversal: entry("Refunds & Reversals", 750, false, { reviewSensitive: true }),
   income: entry("Income", 800, false),
   other: entry("Other", 900, false, { reviewSensitive: true }),
+  tax_review_holding: entry("Needs Tax Review", 940, false, { defaultTone: "review", reviewSensitive: true, nonReportable: true }),
   unclassified: entry("Needs Review", 950, false, { defaultTone: "review", reviewSensitive: true }),
   excluded: entry("Excluded", 990, false),
 });
@@ -71,6 +72,7 @@ function entry(displayName, sortOrder, currentDeductionCategory, options = {}) {
     defaultTone: options.defaultTone || "default",
     currentDeductionCategory,
     reviewSensitive: options.reviewSensitive === true,
+    nonReportable: options.nonReportable === true,
   });
 }
 

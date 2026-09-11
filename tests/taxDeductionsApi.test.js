@@ -186,6 +186,9 @@ test("deductions routes preserve auth/business authorization and CSV export safe
   assert.match(exportHandler, /transactions_csv/);
   assert.match(exportHandler, /review_csv/);
   assert.match(exportHandler, /cpa_package_json/);
+  assert.match(exportHandler, /Needs Tax Review Count/);
+  assert.match(exportHandler, /Needs tax review/);
+  assert.match(exportHandler, /Not yet determined/);
   assert.match(exportHandler, /\^\[=\+\\-@\]/);
 });
 

@@ -38,6 +38,18 @@ const SYSTEMIC_FAILURE_THRESHOLD = Number(process.env.BOOKS_POST_SYSTEMIC_FAILUR
 const BACKOFF_SCHEDULE_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000, 6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000];
 const BIZZI_POSTED_LABEL = "Posted by Bizzi";
 const QBO_RECOVERY_REF_LENGTH = 10;
+const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
+  "cc_payment",
+  "transfer_internal",
+  "bank_transfer",
+  "owner_draw",
+  "owner_contribution",
+  "owner_distribution",
+  "refund",
+  "loan_movement",
+  "tax_payment",
+  "payroll",
+]);
 
 let postAttemptsTableAvailable = true;
 
@@ -196,6 +208,32 @@ function summarizePayload(item, bankTxn, mapping) {
     amount: bankTxn?.amount ?? null,
     date: bankTxn?.date || null,
   };
+}
+
+export function taxonomyRequiresBookkeepingPostingReview(item = {}) {
+  const meta = item?.meta || {};
+  const taxonomyType = String(meta.taxonomy_type || "").toLowerCase();
+  if (!taxonomyType || taxonomyType === "cc_payment") return false;
+  if (!TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW.has(taxonomyType)) return false;
+  return true;
+}
+
+function clearResolvedPostingTaxonomyMeta(meta = {}) {
+  const taxonomyType = String(meta?.taxonomy_type || "").toLowerCase();
+  if (!taxonomyType || TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW.has(taxonomyType)) return meta || {};
+  const next = {
+    ...(meta || {}),
+    resolved_taxonomy_type: meta.taxonomy_type,
+    resolved_taxonomy_subtype: meta.taxonomy_subtype || null,
+    taxonomy_resolved_by: meta.taxonomy_resolved_by || "manual_qbo_account_selection",
+    taxonomy_override: meta.taxonomy_override || "manual_qbo_account_selection",
+  };
+  delete next.taxonomy_type;
+  delete next.taxonomy_subtype;
+  delete next.taxonomy_confidence;
+  if (next.post_block_reason === "taxonomy_requires_review") delete next.post_block_reason;
+  if (next.auto_post_block_reason === "taxonomy_requires_review") delete next.auto_post_block_reason;
+  return next;
 }
 
 function summarizeResponse(result) {
@@ -1439,8 +1477,6 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
   const mappedType = (mapping?.qbo_account_type || "").toLowerCase();
   const isBank = mappedType === "bank";
   const isCreditCard = mappedType === "creditcard" || mappedType === "credit_card" || mappedType === "credit card";
-  const taxonomyType = item?.meta?.taxonomy_type || null;
-
   const looksCcMeta =
     item?.meta?.taxonomy_type === "cc_payment" ||
     item?.meta?.cc_payment_bank_qbo_account_id ||
@@ -1450,7 +1486,7 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
   if (looksCcMeta) {
     return postCcPaymentToQbo(item, bankTxn, qbo, mapping, requestId);
   }
-  if (taxonomyType && taxonomyType !== "cc_payment") {
+  if (taxonomyRequiresBookkeepingPostingReview(item)) {
     await supabase
       .from("transaction_categorizations")
       .update({
@@ -1471,6 +1507,7 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
     return null;
   }
   if (!categoryAccountId) throw new Error("missing_final_account");
+  item.meta = clearResolvedPostingTaxonomyMeta(item.meta || {});
 
   const amount = Number(bankTxn.amount || 0);
   if (!Number.isFinite(amount) || amount === 0) {

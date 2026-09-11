@@ -65,6 +65,8 @@ function summaryCsv(summary) {
     "Nondeductible Amount",
     "Capitalizable Amount",
     "Needs Review Amount",
+    "Needs Tax Review Count",
+    "Needs Tax Review Gross Expense",
     "Transaction Count",
     "Review Count",
     "Average Deductible Percent",
@@ -81,6 +83,8 @@ function summaryCsv(summary) {
       row.nondeductibleAmount,
       row.capitalizableAmount,
       row.needsReviewAmount,
+      row.needsTaxReviewCount,
+      row.needsTaxReviewGrossExpense,
       row.transactionCount,
       row.reviewCount,
       row.averageDeductiblePercent,
@@ -97,10 +101,13 @@ function transactionsCsv(rows, { reviewOnly = false } = {}) {
   const lines = [header];
   for (const row of rows) {
     const reviewReason = (row.warnings || []).join("; ");
+    const holding = row.classificationStatus === "needs_tax_review" || row.taxCategory === "tax_review_holding";
+    const taxCategory = holding ? "Needs tax review" : row.taxCategory;
+    const deductibilityStatus = holding ? "Not yet determined" : row.deductibilityStatus;
     if (reviewOnly) {
-      lines.push([row.date, row.description, row.merchantName || row.counterpartyName, row.signedAmount, row.taxCategory, reviewReason, row.taxTreatment?.type || "", row.confidenceLevel, (row.warnings || []).join("; "), sourceConflicts(row), row.updatedAt]);
+      lines.push([row.date, row.description, row.merchantName || row.counterpartyName, row.signedAmount, taxCategory, reviewReason, holding ? "Needs tax review" : row.taxTreatment?.type || "", row.confidenceLevel, (row.warnings || []).join("; "), sourceConflicts(row), row.updatedAt]);
     } else {
-      lines.push([row.date, row.description, row.merchantName || row.counterpartyName, row.signedAmount, row.direction, row.qboAccountName, row.qboTxnType, row.qboTxnId, row.taxCategory, row.deductibilityStatus, row.deductiblePercent, row.deductibleAmount, row.nondeductibleAmount, row.capitalizableAmount, row.classificationStatus, row.confidenceScore, row.rule?.code, row.rule?.explanation, row.override?.hasOverride ? row.override.source || "yes" : "no", row.requiresReview ? "yes" : "no", reviewReason, row.updatedAt]);
+      lines.push([row.date, row.description, row.merchantName || row.counterpartyName, row.signedAmount, row.direction, row.qboAccountName, row.qboTxnType, row.qboTxnId, taxCategory, deductibilityStatus, row.deductiblePercent, row.deductibleAmount, row.nondeductibleAmount, row.capitalizableAmount, holding ? "Needs tax review" : row.classificationStatus, row.confidenceScore, row.rule?.code, row.rule?.explanation, row.override?.hasOverride ? row.override.source || "yes" : "no", row.requiresReview ? "yes" : "no", reviewReason, row.updatedAt]);
     }
   }
   return lines.map((row) => row.map(toCsvCell).join(",")).join("\n") + "\n";

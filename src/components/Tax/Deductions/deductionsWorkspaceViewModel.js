@@ -5,6 +5,7 @@ const TREATMENT_LABELS = {
   capitalizable: "Capitalizable",
   balance_sheet: "Balance sheet",
   needs_review: "Needs review",
+  not_yet_determined: "Not yet determined",
   excluded: "Excluded",
 };
 
@@ -14,8 +15,21 @@ const STATUS_LABELS = {
   accountant_reviewed: "Confirmed by accountant",
   auto_classified: "Auto-classified",
   needs_review: "Needs review",
+  needs_tax_review: "Needs tax review",
   excluded: "Excluded",
   unsupported: "Unsupported",
+};
+
+const TAX_CATEGORY_LABELS = {
+  cost_of_goods_sold: "Cost of Goods Sold",
+  inventory_purchases: "Inventory Purchases",
+  equipment_fuel: "Equipment Fuel",
+  shipping_freight_delivery: "Shipping, Freight & Delivery",
+  other_business_taxes: "Other Business Taxes",
+  commissions_referral_fees: "Commissions & Referral Fees",
+  employee_benefits: "Employee Benefits",
+  retirement_contributions: "Retirement Contributions",
+  tax_review_holding: "Needs Tax Review",
 };
 
 export function buildDeductionsWorkspaceViewModel({ overview, filters = {}, currentYear = new Date().getFullYear() } = {}) {
@@ -48,6 +62,8 @@ export function buildDeductionsWorkspaceViewModel({ overview, filters = {}, curr
       excludedAmount: nullableNumber(totals.excludedAmount),
       needsReviewAmount: nullableNumber(totals.needsReviewAmount),
       needsReviewCount: nullableNumber(coverage.needsReviewCount),
+      needsTaxReviewCount: nullableNumber(coverage.needsTaxReviewCount ?? totals.needsTaxReviewCount),
+      needsTaxReviewGrossExpense: nullableNumber(coverage.needsTaxReviewGrossExpense ?? totals.needsTaxReviewGrossExpense),
     },
     coverage: {
       amountCoveragePercent: percentOf(bookAmountCovered, addNullable(bookAmountCovered, needsReviewBookAmount)),
@@ -74,13 +90,16 @@ export function mapDeductionTransactionRow(row = {}) {
   const absoluteAmount = nullableNumber(firstValue(row.absoluteAmount, row.absolute_amount)) ?? Math.abs(Number(signedAmount || 0));
   const isUnresolvedFallback = String(classificationStatus || "").toLowerCase() === "needs_review" &&
     String(taxCategoryValue || "").toLowerCase() === "unclassified";
+  const isTaxReviewHolding = String(classificationStatus || "").toLowerCase() === "needs_tax_review" ||
+    String(taxCategoryValue || "").toLowerCase() === "tax_review_holding" ||
+    row.metadata?.is_holding === true;
   const hasClassificationAuthority = Boolean(classificationStatus) &&
     !isUnresolvedFallback &&
     !["unclassified", "unsupported"].includes(String(classificationStatus));
   const normalizedStatus = String(classificationStatus || "").toLowerCase();
   const hasManualOverrideAuthority = hasManualTaxOverrideAuthority(row);
-  const taxCategory = isUnresolvedFallback ? "unresolved" : hasClassificationAuthority ? taxCategoryValue || "unclassified" : "pending";
-  const taxTreatment = isUnresolvedFallback ? "not_determined" : hasClassificationAuthority ? deductibilityStatus || row.taxTreatment || row.tax_treatment || null : "pending_classification";
+  const taxCategory = isTaxReviewHolding ? "tax_review_holding" : isUnresolvedFallback ? "unresolved" : hasClassificationAuthority ? taxCategoryValue || "unclassified" : "pending";
+  const taxTreatment = isTaxReviewHolding ? "not_yet_determined" : isUnresolvedFallback ? "not_determined" : hasClassificationAuthority ? deductibilityStatus || row.taxTreatment || row.tax_treatment || null : "pending_classification";
   const authorityStatus = hasClassificationAuthority
     ? normalizedStatus
     : hasManualOverrideAuthority
@@ -99,7 +118,7 @@ export function mapDeductionTransactionRow(row = {}) {
     amount: absoluteAmount,
     signedAmount,
     taxCategory,
-    taxCategoryLabel: isUnresolvedFallback ? "Unresolved" : hasClassificationAuthority ? labelize(taxCategoryValue || "unclassified") : "Pending",
+    taxCategoryLabel: isTaxReviewHolding ? "Needs Tax Review" : isUnresolvedFallback ? "Unresolved" : hasClassificationAuthority ? labelizeTaxCategory(taxCategoryValue || "unclassified") : "Pending",
     taxTreatment,
     taxTreatmentLabel: hasClassificationAuthority
       ? TREATMENT_LABELS[deductibilityStatus] || TREATMENT_LABELS[row.taxTreatment] || labelize(deductibilityStatus || row.taxTreatment)
@@ -113,8 +132,8 @@ export function mapDeductionTransactionRow(row = {}) {
     classificationSource: firstValue(row.classificationSource, row.classification_source, row.sourceType, row.source_type, row.source) || null,
     matchedRuleCode: firstValue(row.matchedRuleCode, row.matched_rule_code, row.ruleCode, row.rule_code) || null,
     ruleVersion: firstValue(row.ruleVersion, row.rule_version) || null,
-    status: isUnresolvedFallback ? "unclassified" : authorityStatus || "unclassified",
-    statusLabel: isUnresolvedFallback ? "Needs classification" : authorityStatus ? STATUS_LABELS[authorityStatus] || labelize(authorityStatus) : "Unclassified",
+    status: isTaxReviewHolding ? "needs_tax_review" : isUnresolvedFallback ? "unclassified" : authorityStatus || "unclassified",
+    statusLabel: isTaxReviewHolding ? "Needs tax review" : isUnresolvedFallback ? "Needs classification" : authorityStatus ? STATUS_LABELS[authorityStatus] || labelize(authorityStatus) : "Unclassified",
     requiresReview: hasClassificationAuthority && (row.requiresReview === true || row.requires_review === true),
     warnings: normalizeList(row.warnings),
     raw: row,
@@ -135,7 +154,7 @@ function normalizeCategories(categories) {
     const auto = nullableNumber(category.autoClassifiedDeductibleAmount);
     return {
       categoryKey: category.taxCategory || category.categoryKey || "unclassified",
-      categoryLabel: category.displayName || labelize(category.taxCategory || category.categoryKey || "unclassified"),
+      categoryLabel: category.displayName || labelizeTaxCategory(category.taxCategory || category.categoryKey || "unclassified"),
       transactionCount: nullableNumber(category.transactionCount),
       confirmedDeductibleAmount: confirmed,
       autoClassifiedDeductibleAmount: auto,
@@ -146,6 +165,8 @@ function normalizeCategories(categories) {
       excludedAmount: nullableNumber(category.excludedAmount),
       needsReviewAmount,
       needsReviewCount: nullableNumber(category.reviewCount),
+      needsTaxReviewCount: nullableNumber(category.needsTaxReviewCount),
+      needsTaxReviewGrossExpense: nullableNumber(category.needsTaxReviewGrossExpense),
       confidenceLevel: category.confidenceLevel || confidenceFromCategory(category),
       status: categoryStatus({ needsReviewAmount, estimated, confirmed }),
       topRules: normalizeList(category.topRules),
@@ -235,6 +256,10 @@ function normalizeList(value) {
 function labelize(value) {
   if (!value) return "Unavailable";
   return String(value).replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function labelizeTaxCategory(value) {
+  return TAX_CATEGORY_LABELS[value] || labelize(value);
 }
 
 export default buildDeductionsWorkspaceViewModel;

@@ -178,6 +178,23 @@ test("manual posting uses in-app confirmation and mapping guidance modals", () =
   assert.match(page, /navigate\("\/dashboard\/settings\?tab=integrations"\)/);
 });
 
+test("manual account selection clears stale generic taxonomy without weakening special workflows", () => {
+  const approval = readFileSync(join(root, "src/services/bookkeeping/bookkeepingApprovalService.js"), "utf8");
+  const posting = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+
+  assert.match(approval, /function resolveManualApprovalBookkeepingMeta/);
+  assert.match(approval, /next\.resolved_taxonomy_type = next\.taxonomy_type/);
+  assert.match(approval, /taxonomy_resolved_by = "manual_qbo_account_selection"/);
+  assert.match(approval, /delete next\.taxonomy_type/);
+  assert.match(approval, /delete next\.taxonomy_subtype/);
+  assert.match(approval, /if \(next\.post_block_reason === "taxonomy_requires_review"\) delete next\.post_block_reason/);
+  assert.match(approval, /TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW\.has\(taxonomyType\)/);
+  assert.match(approval, /resolveManualApprovalBookkeepingMeta\(mergedMeta, \{ explicitFinalAccountId: explicitFinalId \}\)/);
+  assert.match(posting, /taxonomyRequiresBookkeepingPostingReview\(item\)/);
+  assert.match(posting, /clearResolvedPostingTaxonomyMeta\(item\.meta \|\| \{\}\)/);
+  assert.doesNotMatch(posting, /if \(taxonomyType && taxonomyType !== "cc_payment"\)/);
+});
+
 test("Books Review exposes a compact Auto-post On Off control next to Rules", () => {
   const source = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
 

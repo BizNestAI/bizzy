@@ -1,3 +1,4 @@
+/* global process */
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { learnVendorRuleFromTransaction } from "./vendorRuleLearner.js";
 import { isCheck } from "./checkDetector.js";
@@ -36,6 +37,37 @@ function finalNameFromItem(item = {}) {
 
 function canonicalKeyFromItem(item = {}) {
   return item?.final_canonical_account_key || item?.canonical_account_key || item?.canonicalAccountKey || null;
+}
+
+const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
+  "cc_payment",
+  "transfer_internal",
+  "bank_transfer",
+  "owner_draw",
+  "owner_contribution",
+  "owner_distribution",
+  "refund",
+  "loan_movement",
+  "tax_payment",
+  "payroll",
+]);
+
+export function resolveManualApprovalBookkeepingMeta(meta = {}, { explicitFinalAccountId = null } = {}) {
+  const next = { ...(meta || {}) };
+  const taxonomyType = String(next.taxonomy_type || "").toLowerCase();
+  if (!explicitFinalAccountId || !taxonomyType || TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW.has(taxonomyType)) {
+    return next;
+  }
+  next.resolved_taxonomy_type = next.taxonomy_type;
+  next.resolved_taxonomy_subtype = next.taxonomy_subtype || null;
+  next.taxonomy_resolved_by = "manual_qbo_account_selection";
+  next.taxonomy_override = next.taxonomy_override || "manual_qbo_account_selection";
+  delete next.taxonomy_type;
+  delete next.taxonomy_subtype;
+  delete next.taxonomy_confidence;
+  if (next.post_block_reason === "taxonomy_requires_review") delete next.post_block_reason;
+  if (next.auto_post_block_reason === "taxonomy_requires_review") delete next.auto_post_block_reason;
+  return next;
 }
 
 async function validateSelectedAccounts({ businessId, items, explicitFinalByTxn }) {
@@ -321,6 +353,7 @@ export async function approveBookkeepingTransactions({
         mergedMeta.safe_to_auto_post = true;
         mergedMeta.auto_approve_reason = "manual_user";
       }
+      const postingMeta = resolveManualApprovalBookkeepingMeta(mergedMeta, { explicitFinalAccountId: explicitFinalId });
 
       const effectiveFinalId = checkHit.is_check ? explicitFinalId : explicitFinalId || suggestedIdMap[txnId] || null;
       const effectiveFinalName = checkHit.is_check ? explicitFinalName : explicitFinalName || suggestedNameMap[txnId] || null;
@@ -340,7 +373,7 @@ export async function approveBookkeepingTransactions({
           isRefund
             ? null
             : postAfter,
-        meta: mergedMeta,
+        meta: postingMeta,
         is_check: checkHit.is_check === true,
       };
     })

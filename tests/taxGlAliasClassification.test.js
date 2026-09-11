@@ -21,6 +21,9 @@ const SYSTEM_REPAIR_SOURCE_PREFLIGHT_PATH = "scripts/tax/system_repair_source_pr
 const SYSTEM_REPAIR_SOURCE_POST_VERIFY_PATH = "scripts/tax/system_repair_source_post_migration_verification.sql";
 const STATUS_PROMOTION_MIGRATION_PATH = "supabase/migrations/20261004_tax_classification_system_repair_status_promotion.sql";
 const STATUS_PROMOTION_PREFLIGHT_PATH = "scripts/tax/system_repair_status_promotion_preview.sql";
+const TRADES_V4_MIGRATION_PATH = "supabase/migrations/20261007_tax_classification_trades_gl_rules_v4.sql";
+const TRADES_V4_PREFLIGHT_PATH = "scripts/tax/gl_alias_trades_v4_preflight.sql";
+const TRADES_V4_POST_VERIFY_PATH = "scripts/tax/gl_alias_trades_v4_post_migration_verification.sql";
 
 test("every approved GL alias normalizes and matches its intended v3 rule", () => {
   const rules = buildTaxGlAliasDeductionRules();
@@ -32,6 +35,8 @@ test("every approved GL alias normalizes and matches its intended v3 rule", () =
         transactionContext: {
           qbo_account_name: alias,
           normalized_qbo_account_name: normalizeQboGlAccountKey(alias),
+          qbo_account_type: group.qboAccountTypeKeys?.[0] || null,
+          normalized_qbo_account_type: group.qboAccountTypeKeys?.[0] || null,
           direction: "OUTFLOW",
           date: "2026-08-15",
         },
@@ -304,10 +309,10 @@ test("future QBO-posted transaction classifies automatically through posted sour
 
 test("v3 rule inventory has no duplicate aliases and ambiguous aliases resolve deliberately", () => {
   const rules = buildTaxGlAliasDeductionRules();
-  assert.equal(rules.length, 41);
+  assert.equal(rules.length, 54);
   const aliasOwners = new Map();
   for (const rule of rules) {
-    assert.equal(rule.version, "bizzi-gl-2026-v3");
+    assert.equal(rule.version, "bizzi-gl-2026-v4");
     assert.equal(rule.is_active, true);
     assert.ok(rule.verified_at);
     for (const alias of rule.match_conditions.qbo_account_name_keys) {
@@ -333,11 +338,121 @@ test("v3 rule inventory has no duplicate aliases and ambiguous aliases resolve d
     ["Debt Payment", "generic_loan_payment_review_gl_v3"],
     ["Credit Card Fees", "payment_processing_fees_gl_v3"],
     ["Service Charges", "bank_service_fees_gl_v3"],
+    ["Inventory Purchases", "inventory_purchases_review_gl_v4"],
+    ["Equipment Fuel", "equipment_fuel_gl_v4"],
+    ["Postage", "shipping_postage_operating_gl_v4"],
+    ["Freight", "shipping_generic_freight_review_gl_v4"],
+    ["Business Taxes", "other_business_taxes_review_gl_v4"],
+    ["Referral Fees", "commissions_referral_fees_gl_v4"],
+    ["Employee Benefits", "employee_benefits_gl_v4"],
+    ["Employer 401k Contributions", "retirement_contributions_review_gl_v4"],
   ]);
   for (const [alias, ruleCode] of expected) {
     const evaluation = evaluateAlias(rules, alias);
     assert.equal(evaluation.conflict, null, alias);
     assert.equal(evaluation.selected?.rule_code || null, ruleCode, alias);
+  }
+});
+
+test("v4 trades-focused aliases classify conservatively and preserve negative safeguards", async () => {
+  const rules = buildTaxGlAliasDeductionRules();
+  const cogs = await classify("Cost of Goods Sold", -1000, rules, { qboAccountType: "Cost of Goods Sold" });
+  assert.equal(cogs.taxCategory, "cost_of_goods_sold");
+  assert.equal(cogs.classificationStatus, "auto_classified");
+  assert.equal(cogs.taxTreatment.type, "cogs_candidate");
+  assert.equal(cogs.deductiblePercent, 100);
+
+  assertNoMatch(rules, "Cost of Goods Sold");
+  assertNoMatch(rules, "Cost Reimbursement");
+
+  const inventory = await classify("Inventory Purchases", -450, rules);
+  assert.equal(inventory.taxCategory, "inventory_purchases");
+  assert.equal(inventory.classificationStatus, "needs_review");
+  assert.equal(inventory.deductibleAmount, 0);
+  assert.match(inventory.reason, /Purchases that may need to remain in inventory/);
+
+  assert.equal((await classify("Office Supplies", -20, rules)).taxCategory, "office_supplies");
+  assert.equal((await classify("Job Materials", -20, rules)).taxCategory, "job_materials");
+  assert.equal((await classify("Equipment Purchase", -20, rules)).taxCategory, "fixed_asset_capitalizable");
+  assert.equal((await classify("Purchase Returns and Allowances", 20, rules)).taxCategory, "income");
+
+  assert.equal((await classify("Equipment Fuel", -75, rules)).taxCategory, "equipment_fuel");
+  assert.equal((await classify("Generator Fuel", -75, rules)).taxCategory, "equipment_fuel");
+  assert.equal((await classify("Gas", -75, rules)).taxCategory, "vehicle_expense");
+  assert.equal((await classify("Vehicle Fuel", -75, rules)).taxCategory, "vehicle_expense");
+  assert.equal((await classify("Natural Gas Utility", -75, rules)).taxCategory, "unclassified");
+  assertNoMatch(rules, "Fuel Reimbursement");
+
+  assert.equal((await classify("Postage", -12, rules)).taxTreatment.type, "postage_operating");
+  assert.equal((await classify("Freight-In", -120, rules)).taxTreatment.type, "inbound_freight_cogs");
+  assert.equal((await classify("Equipment Delivery", -120, rules)).taxTreatment.type, "equipment_delivery_capitalization_review");
+  assertNoMatch(rules, "Shipping Income");
+  assertNoMatch(rules, "Customer Shipping Reimbursement");
+
+  assert.equal((await classify("Business Taxes", -99, rules)).taxCategory, "other_business_taxes");
+  assert.equal((await classify("Business Taxes", -99, rules)).classificationStatus, "needs_review");
+  assert.equal((await classify("Payroll Taxes", -99, rules)).taxCategory, "payroll_taxes");
+  assert.equal((await classify("Sales Tax Payable", -99, rules)).taxCategory, "balance_sheet_movement");
+  assertNoMatch(rules, "Federal Income Tax");
+  assertNoMatch(rules, "Owner Tax Payment");
+  assertNoMatch(rules, "Tax Refund");
+  assertNoMatch(rules, "Tax Penalty");
+
+  assert.equal((await classify("Sales Commissions", -50, rules)).taxCategory, "commissions_referral_fees");
+  assert.equal((await classify("Referral Fees", -50, rules)).taxCategory, "commissions_referral_fees");
+  assertNoMatch(rules, "Commission Income");
+  assertNoMatch(rules, "Employee Commission Wages");
+  assertNoMatch(rules, "Asset Acquisition Commission");
+  assertNoMatch(rules, "Fees");
+
+  assert.equal((await classify("Employee Benefits", -200, rules)).taxCategory, "employee_benefits");
+  assert.equal((await classify("Benefits", -200, rules)).classificationStatus, "needs_review");
+  assertNoMatch(rules, "Owner Health Insurance");
+  assertNoMatch(rules, "Shareholder Health Insurance");
+  assert.equal((await classify("Workers Compensation", -200, rules)).taxCategory, "business_insurance");
+  assertNoMatch(rules, "Employee Withholding");
+
+  const retirement = await classify("Employer Retirement Contributions", -300, rules);
+  assert.equal(retirement.taxCategory, "retirement_contributions");
+  assert.equal(retirement.classificationStatus, "needs_review");
+  assertNoMatch(rules, "Employee 401k Withholding");
+  assertNoMatch(rules, "Retirement Plan Liability");
+  assert.equal((await classify("Owner Contributions", -300, rules)).taxCategory, "owner_activity");
+  assertNoMatch(rules, "Pension Income");
+  assertNoMatch(rules, "401k Loan");
+  assertNoMatch(rules, "Plan Administration Fees");
+});
+
+test("trades-focused v4 migration and verification scripts are bounded and forward-only", () => {
+  const migration = readFileSync(TRADES_V4_MIGRATION_PATH, "utf8");
+  assert.match(migration, /^begin;/i);
+  assert.match(migration, /tax_gl_alias_v4_requires_active_verified_v3_count_41/);
+  assert.match(migration, /with seed_tax_gl_alias_v4_new_rules as/i);
+  assert.doesNotMatch(migration, /create\s+temporary/i);
+  assert.match(migration, /version = 'bizzi-gl-2026-v3'/);
+  assert.match(migration, /version = 'bizzi-gl-2026-v4'/);
+  assert.match(migration, /where \(select present_count from verified_v4\) = 54/);
+  assert.match(migration, /qbo_account_type_keys/);
+  assert.match(migration, /negative_aliases/);
+  assert.match(migration, /cost_of_goods_sold/);
+  assert.match(migration, /inventory_purchases/);
+  assert.match(migration, /equipment_fuel/);
+  assert.match(migration, /shipping_freight_delivery/);
+  assert.match(migration, /other_business_taxes/);
+  assert.match(migration, /commissions_referral_fees/);
+  assert.match(migration, /employee_benefits/);
+  assert.match(migration, /retirement_contributions/);
+  assert.doesNotMatch(migration, /insert\s+into\s+public\.transaction_tax_classifications/i);
+  assert.doesNotMatch(migration, /tax_classification_runs[\s\S]*(insert|update|delete)/i);
+  assert.doesNotMatch(migration, /tax_recalculation_requests[\s\S]*(insert|update|delete)/i);
+  assert.doesNotMatch(migration, /qbo_posted_transactions|plaid_/i);
+
+  for (const path of [TRADES_V4_PREFLIGHT_PATH, TRADES_V4_POST_VERIFY_PATH]) {
+    const sql = readFileSync(path, "utf8");
+    assert.doesNotMatch(sql, /^\s*(insert|update|delete|merge|create|alter|drop|grant|revoke|call|do|truncate)\b/im, path);
+    assert.match(sql, /duplicate_active_aliases_with_deterministic_winner/, path);
+    assert.match(sql, /equal_rank_alias_conflicts/, path);
+    assert.match(sql, /new_category_dry_run_zero_write/, path);
   }
 });
 
@@ -720,19 +835,21 @@ function round2(n) {
   return Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
 }
 
-function classify(accountName, signedAmount, rules) {
+function classify(accountName, signedAmount, rules, options = {}) {
   return classifyNormalizedTransaction({
     supabase: makeSupabase(baseStore({ classifications: [] })),
     businessId: BUSINESS_ID,
     taxYear: 2026,
-    transaction: transaction(accountName, signedAmount),
+    transaction: transaction(accountName, signedAmount, options),
     profile: profile(),
     memories: [],
     rules,
   });
 }
 
-function transaction(accountName, signedAmount) {
+function transaction(accountName, signedAmount, options = {}) {
+  const qboAccountType = options.qboAccountType || null;
+  const normalizedQboAccountType = normalizeQboGlAccountKey(qboAccountType);
   return {
     transactionId: "txn-1",
     businessId: BUSINESS_ID,
@@ -746,12 +863,18 @@ function transaction(accountName, signedAmount) {
     qboAccountId: "acct-1",
     qboAccountName: accountName,
     normalizedQboAccountName: normalizeQboGlAccountKey(accountName),
+    qboAccountType,
+    normalizedQboAccountType,
     qboTxnId: "qbo-1",
     qboTxnType: "Purchase",
     sourceWarnings: [],
     sourceTruth: { bankTransaction: true, categorizationPosted: true, qboPostedRecord: true },
     rawRefs: { bankTransactionId: "txn-1" },
-    metadata: { normalized_qbo_account_name: normalizeQboGlAccountKey(accountName) },
+    metadata: {
+      normalized_qbo_account_name: normalizeQboGlAccountKey(accountName),
+      qbo_account_type: qboAccountType,
+      normalized_qbo_account_type: normalizedQboAccountType,
+    },
   };
 }
 

@@ -14,6 +14,8 @@ export function toLegacyDeductionsMatrix(canonicalSummary) {
       nondeductibleYtd: round0(category.nondeductibleAmount),
       capitalizableYtd: round0(category.capitalizableAmount),
       needsReviewYtd: round0(category.needsReviewAmount),
+      needsTaxReviewGrossExpense: round0(category.needsTaxReviewGrossExpense),
+      needsTaxReviewCount: Number(category.needsTaxReviewCount || 0),
       transactionCount: category.transactionCount,
       confidenceLevel: category.confidenceLevel,
       warnings: category.warnings || [],
@@ -28,6 +30,8 @@ export function toLegacyDeductionsMatrix(canonicalSummary) {
     nondeductibleYtd: round0(canonicalSummary.totals.nondeductibleAmount),
     capitalizableYtd: round0(canonicalSummary.totals.capitalizableAmount),
     needsReviewYtd: round0(canonicalSummary.totals.needsReviewAmount),
+    needsTaxReviewGrossExpense: round0(canonicalSummary.totals.needsTaxReviewGrossExpense),
+    needsTaxReviewCount: Number(canonicalSummary.totals.needsTaxReviewCount || canonicalSummary.coverage.needsTaxReviewCount || 0),
   };
   return {
     meta: {

@@ -6,6 +6,7 @@ const CLASSIFICATION_SELECT = "*";
 const AUTHORITATIVE_OUTCOME_STATUSES = new Set([
   TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED,
   TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
+  TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW,
   TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED,
   TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED,
   TAX_CLASSIFICATION_STATUSES.EXCLUDED,
@@ -294,9 +295,11 @@ export async function getClassificationCoverage({ supabase, businessId, taxYear,
   const confirmedCount = rows.filter(isConfirmed).length;
   const autoClassifiedCount = rows.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED).length;
   const needsReviewCount = rows.filter(isReviewWithProposal).length;
+  const needsTaxReviewRows = evaluatedRows.filter(isTaxReviewHoldingClassification);
+  const needsTaxReviewCount = needsTaxReviewRows.length;
   const unresolvedCount = evaluatedRows.filter(isUnresolvedFallbackClassification).length;
   const excludedCount = rows.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.EXCLUDED).length;
-  const classifiedCount = autoClassifiedCount + needsReviewCount + excludedCount + confirmedCount;
+  const classifiedCount = autoClassifiedCount + needsReviewCount + needsTaxReviewCount + excludedCount + confirmedCount;
   const missingEvaluationCount = Math.max(0, Number(eligiblePostedCount || 0) - evaluatedRows.length);
   const unclassifiedCount = missingEvaluationCount + unresolvedCount;
   const classificationStatus = unclassifiedCount > 0
@@ -313,6 +316,7 @@ export async function getClassificationCoverage({ supabase, businessId, taxYear,
     confirmedCount,
     autoClassifiedCount,
     needsReviewCount,
+    needsTaxReviewCount,
     reviewRequiredWithProposalCount: needsReviewCount,
     unresolvedCount,
     evaluatedCount: evaluatedRows.length,
@@ -330,7 +334,8 @@ export async function getClassificationCoverage({ supabase, businessId, taxYear,
       failed: 0,
       processing: 0,
       missingEvaluation: missingEvaluationCount,
-      reconciled: Number(eligiblePostedCount || 0) === autoClassifiedCount + needsReviewCount + unresolvedCount + excludedCount + confirmedCount + missingEvaluationCount,
+      needsTaxReview: needsTaxReviewCount,
+      reconciled: Number(eligiblePostedCount || 0) === autoClassifiedCount + needsReviewCount + needsTaxReviewCount + unresolvedCount + excludedCount + confirmedCount + missingEvaluationCount,
     },
     classificationStatus,
     lastRunAt: rows.reduce((latest, row) => {
@@ -343,6 +348,7 @@ export async function getClassificationCoverage({ supabase, businessId, taxYear,
     capitalizableAmount: sum("capitalizable_amount"),
     unresolvedBookAmount: round2(evaluatedRows.filter(isUnresolvedFallbackClassification).reduce((acc, row) => acc + Math.abs(Number(row.book_amount || 0)), 0)),
     unclassifiedBookAmount: round2(evaluatedRows.filter(isUnresolvedFallbackClassification).reduce((acc, row) => acc + Math.abs(Number(row.book_amount || 0)), 0)),
+    needsTaxReviewGrossExpense: round2(needsTaxReviewRows.reduce((acc, row) => acc + Math.abs(Number(row.book_amount || 0)), 0)),
     warnings: [],
   };
 }
@@ -362,6 +368,11 @@ export function hasCompletedClassificationEvaluation(row) {
   if (!row.transaction_id) return false;
   if (!nonEmpty(row.tax_category)) return false;
   if (!nonEmpty(row.deductibility_status)) return false;
+  if (isTaxReviewHoldingClassification(row)) {
+    return row.deductibility_status === "not_yet_determined" &&
+      row.deductible_percent == null &&
+      row.deductible_amount == null;
+  }
   if (!finitePercent(row.deductible_percent)) return false;
   if (!finiteMoney(row.book_amount)) return false;
   if (!finiteMoney(row.deductible_amount)) return false;
@@ -392,6 +403,14 @@ export function isReviewWithProposal(row) {
   return MEANINGFUL_REVIEW_TAX_CATEGORY.has(status) &&
     status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW &&
     taxCategory !== "unclassified";
+}
+
+export function isTaxReviewHoldingClassification(row) {
+  if (!row) return false;
+  return row.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW ||
+    row.tax_category === "tax_review_holding" ||
+    row.metadata?.is_holding === true ||
+    row.metadata?.tax_review_holding === true;
 }
 
 function nonEmpty(value) {

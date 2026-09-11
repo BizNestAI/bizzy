@@ -94,10 +94,12 @@ export const DEDUCTIBILITY_STATUSES = freeze({
   CAPITALIZABLE: "capitalizable",
   BALANCE_SHEET: "balance_sheet",
   NEEDS_REVIEW: "needs_review",
+  NOT_YET_DETERMINED: "not_yet_determined",
 });
 
 export const TAX_CLASSIFICATION_STATUSES = freeze({
   NEEDS_REVIEW: "needs_review",
+  NEEDS_TAX_REVIEW: "needs_tax_review",
   AUTO_CLASSIFIED: "auto_classified",
   USER_CONFIRMED: "user_confirmed",
   CPA_CONFIRMED: "cpa_confirmed",

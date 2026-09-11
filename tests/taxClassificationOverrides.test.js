@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import { computeClassificationAmounts } from "../src/services/tax/taxClassificationAmounts.js";
 import {
@@ -7,6 +8,7 @@ import {
   bulkApplyClassificationOverrides,
   confirmClassification,
   excludeTransactionFromTax,
+  moveClassificationsToTaxReview,
   restoreExcludedTransaction,
 } from "../src/services/tax/taxClassificationOverride.service.js";
 import {
@@ -17,6 +19,9 @@ import { classifyPostedTransaction } from "../src/services/tax/taxClassification
 import { mapChangeTypeToRecalculationEvent, TAX_CHANGE_TYPES } from "../src/services/tax/taxChangeEvents.js";
 
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
+const TAX_REVIEW_HOLDING_MIGRATION = "supabase/migrations/20261008_tax_review_holding_state.sql";
+const TAX_REVIEW_HOLDING_PREFLIGHT = "scripts/tax/tax_review_holding_preflight.sql";
+const TAX_REVIEW_HOLDING_POSTCHECK = "scripts/tax/tax_review_holding_post_migration_verification.sql";
 
 test("override inserts immutable history and recomputes partial deduction amounts", async () => {
   const supabase = makeSupabase(baseStore());
@@ -456,6 +461,115 @@ test("ordinary user batch edits still protect CPA authority", async () => {
   );
   assert.equal(supabase.store.tax_classification_overrides.length, 0);
   assert.equal(supabase.store.transaction_tax_classifications[0].classification_status, "cpa_confirmed");
+});
+
+test("tax review holding uses selected-row batch override with null deduction fields and preserves QuickBooks GL", async () => {
+  const supabase = makeSupabase(baseStore({
+    bank_transactions: [bankTxn({ id: "txn-1" }), bankTxn({ id: "txn-2" })],
+    transaction_categorizations: [
+      cat({ transaction_id: "txn-1", final_qbo_account_name: "Supplies" }),
+      cat({ transaction_id: "txn-2", final_qbo_account_name: "Supplies" }),
+    ],
+    transaction_tax_classifications: [
+      classification({
+        id: "class-1",
+        transaction_id: "txn-1",
+        tax_category: "supplies_materials",
+        classification_status: "needs_review",
+        deductibility_status: "fully_deductible",
+        deductible_percent: 100,
+        deductible_amount: 100,
+        source_qbo_account_name: "Supplies",
+        metadata: { direction: "OUTFLOW", source_qbo_account_name: "Supplies" },
+      }),
+      classification({
+        id: "class-2",
+        transaction_id: "txn-2",
+        tax_category: "supplies_materials",
+        classification_status: "needs_review",
+        deductibility_status: "fully_deductible",
+        deductible_percent: 100,
+        deductible_amount: 50,
+        book_amount: -50,
+        source_qbo_account_name: "Supplies",
+        metadata: { direction: "OUTFLOW", source_qbo_account_name: "Supplies" },
+      }),
+    ],
+  }));
+
+  const result = await moveClassificationsToTaxReview({
+    supabase,
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    transactionIds: ["txn-1"],
+    reasonCode: "possible_equipment_purchase",
+    reasonNote: "Possible equipment purchase",
+    bookkeepingIssue: true,
+    actor: actor(),
+  });
+
+  assert.equal(result.updated, 1);
+  assert.equal(supabase.store.rpcCalls.apply_tax_classification_override_batch, 1);
+  const held = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-1");
+  const untouched = supabase.store.transaction_tax_classifications.find((row) => row.transaction_id === "txn-2");
+  assert.equal(held.classification_status, "needs_tax_review");
+  assert.equal(held.tax_category, "tax_review_holding");
+  assert.equal(held.deductibility_status, "not_yet_determined");
+  assert.equal(held.deductible_percent, null);
+  assert.equal(held.deductible_amount, null);
+  assert.equal(held.requires_review, true);
+  assert.equal(held.metadata.is_holding, true);
+  assert.equal(held.metadata.bookkeeping_review_flag, true);
+  assert.equal(held.source_qbo_account_name, "Supplies");
+  assert.equal(untouched.tax_category, "supplies_materials");
+  assert.equal(supabase.store.tax_classification_overrides.length, 1);
+  assert.equal(supabase.store.tax_classification_overrides[0].previous_values.tax_category, "supplies_materials");
+  assert.equal(supabase.store.tax_classification_overrides[0].new_values.classification_status, "needs_tax_review");
+});
+
+test("tax review holding cannot silently overwrite CPA authority", async () => {
+  const supabase = makeSupabase(baseStore({
+    transaction_tax_classifications: [
+      classification({
+        classification_status: "cpa_confirmed",
+        cpa_override: true,
+        tax_category: "supplies_materials",
+        deductibility_status: "fully_deductible",
+        deductible_percent: 100,
+      }),
+    ],
+  }));
+  await assert.rejects(
+    () => moveClassificationsToTaxReview({
+      supabase,
+      businessId: BUSINESS_ID,
+      taxYear: 2026,
+      transactionIds: ["txn-1"],
+      reasonNote: "Possible equipment purchase",
+      actor: actor(),
+    }),
+    (err) => err.code === "confirmed_authority_protected"
+  );
+  assert.equal(supabase.store.tax_classification_overrides.length, 0);
+});
+
+test("tax review holding migration only updates the selected-row override RPC contract", () => {
+  const sql = readFileSync(TAX_REVIEW_HOLDING_MIGRATION, "utf8");
+  const preflightSql = readFileSync(TAX_REVIEW_HOLDING_PREFLIGHT, "utf8");
+  const postcheckSql = readFileSync(TAX_REVIEW_HOLDING_POSTCHECK, "utf8");
+  assert.match(sql, /needs_tax_review/);
+  assert.match(sql, /not_yet_determined/);
+  assert.match(sql, /tax_review_holding/);
+  assert.match(sql, /create or replace function public\.apply_tax_classification_override_batch/);
+  assert.doesNotMatch(sql, /update\s+public\.transaction_tax_classifications[\s\S]*where\s+classification_status\s*<>/i);
+  assert.doesNotMatch(sql, /insert\s+into\s+public\.transaction_tax_classifications/i);
+  assert.doesNotMatch(sql, /tax_classification_runs|tax_recalculation_requests|qbo_|plaid_/i);
+  assert.match(preflightSql, /existing_tax_review_holding_rows/);
+  assert.match(postcheckSql, /preserves_null_deductible_amount/);
+  assert.match(postcheckSql, /invalid_tax_review_holding_rows/);
+  for (const script of [preflightSql, postcheckSql]) {
+    assert.doesNotMatch(script, /\b(insert|update|delete|alter|drop|create|grant|revoke|truncate)\b/i);
+  }
 });
 
 function actor(overrides = {}) {

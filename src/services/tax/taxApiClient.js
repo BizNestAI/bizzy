@@ -434,6 +434,18 @@ export async function bulkUpdateTaxClassifications({ businessId, year, transacti
   return result;
 }
 
+export async function sendTaxClassificationsToReview({ businessId, year, transactionIds = [], reasonCode, reasonNote, expectedUpdatedAtByTransactionId = {}, bookkeepingIssue = false, signal } = {}) {
+  requireBusinessId(businessId);
+  if (!Array.isArray(transactionIds) || !transactionIds.length) throw new Error("transactionIds are required");
+  const result = unwrap(await request(`/api/tax/classifications/tax-review-hold?${query({ businessId, year })}`, {
+    method: "POST",
+    body: compact({ businessId, year, transactionIds, reasonCode, reasonNote, expectedUpdatedAtByTransactionId, bookkeepingIssue }),
+    signal,
+  }));
+  clearBusinessCache(businessId);
+  return result;
+}
+
 export async function exportTaxDeductions({ businessId, year, asOfDate, format = "summary_csv", filters = {}, signal } = {}) {
   requireBusinessId(businessId);
   return authenticatedFetch(`/api/tax/deductions/export?${query({ businessId, year, asOfDate, format, ...filters })}`, {
@@ -829,6 +841,7 @@ export default {
   confirmTaxClassification,
   rejectTaxClassification,
   overrideTaxClassification,
+  sendTaxClassificationsToReview,
   excludeTaxClassification,
   restoreTaxClassification,
   bulkUpdateTaxClassifications,

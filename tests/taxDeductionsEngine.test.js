@@ -43,6 +43,92 @@ test("partial deduction split is respected and category/month totals reconcile",
   assert.equal(monthlyDeductible, summary.totals.estimatedDeductibleAmount);
 });
 
+test("needs tax review holding rows preserve gross expense while excluding deduction amounts", async () => {
+  const supabase = makeSupabase(baseStore({
+    bank_transactions: [
+      bankTxn({ id: "holding", date: "2026-03-10", signed_amount: -2450 }),
+      bankTxn({ id: "confirmed", date: "2026-03-11", signed_amount: -120 }),
+    ],
+    transaction_categorizations: [
+      cat({ transaction_id: "holding", final_qbo_account_name: "Supplies" }),
+      cat({ transaction_id: "confirmed", final_qbo_account_name: "Supplies" }),
+    ],
+    transaction_tax_classifications: [
+      classification({
+        id: "c-holding",
+        transaction_id: "holding",
+        transaction_date: "2026-03-10",
+        tax_category: "tax_review_holding",
+        classification_status: "needs_tax_review",
+        deductibility_status: "not_yet_determined",
+        deductible_percent: null,
+        deductible_amount: null,
+        nondeductible_amount: null,
+        capitalizable_amount: null,
+        book_amount: -2450,
+        requires_review: true,
+        metadata: { is_holding: true, direction: "OUTFLOW", source_qbo_account_name: "Supplies" },
+      }),
+      classification({
+        id: "c-confirmed",
+        transaction_id: "confirmed",
+        transaction_date: "2026-03-11",
+        tax_category: "bank_fees",
+        classification_status: "user_confirmed",
+        deductible_amount: 120,
+        book_amount: -120,
+      }),
+    ],
+  }));
+
+  const summary = await computeTaxDeductionsSummary({ supabase, businessId: BUSINESS_ID, taxYear: 2026, asOfDate: "2026-12-31" });
+  assert.equal(summary.totals.estimatedDeductibleAmount, 120);
+  assert.equal(summary.totals.confirmedDeductibleAmount, 120);
+  assert.equal(summary.totals.needsTaxReviewGrossExpense, 2450);
+  assert.equal(summary.coverage.needsTaxReviewCount, 1);
+  assert.equal(summary.coverage.needsTaxReviewGrossExpense, 2450);
+  const holding = summary.categories.find((row) => row.taxCategory === "tax_review_holding");
+  assert.equal(holding.displayName, "Needs Tax Review");
+  assert.equal(holding.estimatedDeductibleAmount, 0);
+  assert.equal(holding.confirmedDeductibleAmount, 0);
+  assert.equal(holding.needsTaxReviewGrossExpense, 2450);
+  assert.equal(holding.averageDeductiblePercent, null);
+});
+
+test("legacy matrix keeps holding-only cells visible without turning them into zero-dollar deductions", async () => {
+  const canonical = await computeTaxDeductionsSummary({
+    supabase: makeSupabase(baseStore({
+      bank_transactions: [bankTxn({ id: "holding", date: "2026-03-10", signed_amount: -2450 })],
+      transaction_categorizations: [cat({ transaction_id: "holding", final_qbo_account_name: "Supplies" })],
+      transaction_tax_classifications: [
+        classification({
+          id: "c-holding",
+          transaction_id: "holding",
+          transaction_date: "2026-03-10",
+          tax_category: "tax_review_holding",
+          classification_status: "needs_tax_review",
+          deductibility_status: "not_yet_determined",
+          deductible_percent: null,
+          deductible_amount: null,
+          nondeductible_amount: null,
+          capitalizable_amount: null,
+          book_amount: -2450,
+          requires_review: true,
+          metadata: { is_holding: true, direction: "OUTFLOW", source_qbo_account_name: "Supplies" },
+        }),
+      ],
+    })),
+    businessId: BUSINESS_ID,
+    taxYear: 2026,
+    asOfDate: "2026-12-31",
+  });
+  const legacy = toLegacyDeductionsMatrix(canonical);
+  const row = legacy.grid.find((item) => item.taxCategory === "tax_review_holding");
+  assert.equal(row.ytdTotal, 0);
+  assert.equal(row.monthly["2026-03"], 0);
+  assert.equal(row.needsTaxReviewGrossExpense, 2450);
+});
+
 test("YTD cutoff and prior-year comparison use comparable dates", async () => {
   const supabase = makeSupabase(baseStore({
     bank_transactions: [

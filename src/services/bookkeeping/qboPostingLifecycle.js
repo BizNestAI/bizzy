@@ -109,7 +109,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
       detail: "This transaction type needs review before QuickBooks posting.",
     };
   }
-  if (meta.safe_to_auto_post !== true && meta.auto_approve_reason !== "manual_user" && (status === "approved" || status === "auto_approved")) {
+  if (meta.safe_to_auto_post === false && meta.auto_approve_reason !== "manual_user" && (status === "approved" || status === "auto_approved")) {
     return {
       key: "blocked_unsafe_auto_post",
       label: "Blocked: not safe for auto-post",

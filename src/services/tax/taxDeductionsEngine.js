@@ -17,6 +17,7 @@ const INCLUDED_STATUSES = new Set([
   TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED,
   TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED,
   TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
+  TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW,
 ]);
 const CONFIRMED_STATUSES = new Set([
   TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED,
@@ -183,6 +184,8 @@ async function computeCoverageFromRows({ supabase, businessId, taxYear, rows }) 
   const confirmedCount = classifications.filter((row) => CONFIRMED_STATUSES.has(row.classification_status)).length;
   const autoClassifiedCount = classifications.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED).length;
   const needsReviewCount = classifications.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW || row.requires_review === true).length;
+  const needsTaxReviewRows = classifications.filter(isNeedsTaxReview);
+  const needsTaxReviewCount = needsTaxReviewRows.length;
   const excludedCount = classifications.filter((row) => row.classification_status === TAX_CLASSIFICATION_STATUSES.EXCLUDED).length;
   const bookAmountCovered = round2(rows.reduce((sum, item) => sum + absExpenseBookAmount(item), 0));
   const needsReviewBookAmount = round2(rows.reduce((sum, item) => sum + (isNeedsReview(item.classification) ? absExpenseBookAmount(item) : 0), 0));
@@ -192,11 +195,13 @@ async function computeCoverageFromRows({ supabase, businessId, taxYear, rows }) 
     confirmedCount,
     autoClassifiedCount,
     needsReviewCount,
+    needsTaxReviewCount,
     excludedCount,
     classificationCoveragePercent: eligiblePostedCount ? round2((classifiedCount / eligiblePostedCount) * 100) : 0,
     confirmedCoveragePercent: eligiblePostedCount ? round2((confirmedCount / eligiblePostedCount) * 100) : 0,
     bookAmountCovered,
     needsReviewBookAmount,
+    needsTaxReviewGrossExpense: round2(rows.reduce((sum, item) => sum + (isNeedsTaxReview(item.classification) ? absExpenseBookAmount(item) : 0), 0)),
     warnings,
   };
 }
@@ -211,10 +216,14 @@ function applyClassificationToTotals({ item, totals, categoryMap, monthList }) {
   addContribution(totals, contribution, month);
   addContribution(category, contribution, month);
   category.transactionCount += 1;
-  category._deductiblePercentTotal += Number(row.deductible_percent || 0);
+  if (!isNeedsTaxReview(row) && row.deductible_percent != null) {
+    category._deductiblePercentTotal += Number(row.deductible_percent || 0);
+    category._deductiblePercentCount += 1;
+  }
   category._confidenceScores.push(Number(row.confidence_score || 0));
   if (CONFIRMED_STATUSES.has(row.classification_status)) category.confirmedCount += 1;
   if (isNeedsReview(row)) category.reviewCount += 1;
+  if (isNeedsTaxReview(row)) category.needsTaxReviewCount += 1;
   if (row.rule_code) category._rules.set(row.rule_code, (category._rules.get(row.rule_code) || 0) + 1);
   const bookkeepingCategory = row.metadata?.bookkeeping_category || row.metadata?.source_qbo_account_name || row.source_qbo_account_name;
   if (bookkeepingCategory) category._bookkeepingCategories.set(bookkeepingCategory, (category._bookkeepingCategories.get(bookkeepingCategory) || 0) + 1);
@@ -228,19 +237,22 @@ function contributionFor(item) {
   const isConfirmed = CONFIRMED_STATUSES.has(status);
   const isAuto = status === TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED;
   const review = isNeedsReview(row);
+  const holding = isNeedsTaxReview(row);
   const balanceSheet = deductibility === DEDUCTIBILITY_STATUSES.BALANCE_SHEET ? absBook : 0;
   const capitalizable = Number(row.capitalizable_amount || 0);
   const deductible = review ? 0 : Number(row.deductible_amount || 0);
   const nondeductible = review ? 0 : Number(row.nondeductible_amount || 0);
   return {
     bookExpenseAmount: isCurrentExpense(row, item) ? absBook : 0,
-    estimatedDeductibleAmount: isAuto || isConfirmed ? deductible : 0,
-    confirmedDeductibleAmount: isConfirmed ? deductible : 0,
-    autoClassifiedDeductibleAmount: isAuto ? deductible : 0,
-    nondeductibleAmount: nondeductible,
-    capitalizableAmount: review ? 0 : capitalizable,
+    estimatedDeductibleAmount: holding ? 0 : isAuto || isConfirmed ? deductible : 0,
+    confirmedDeductibleAmount: holding ? 0 : isConfirmed ? deductible : 0,
+    autoClassifiedDeductibleAmount: holding ? 0 : isAuto ? deductible : 0,
+    nondeductibleAmount: holding ? 0 : nondeductible,
+    capitalizableAmount: review || holding ? 0 : capitalizable,
     balanceSheetActivityAmount: balanceSheet,
-    needsReviewAmount: review ? absBook : 0,
+    needsReviewAmount: review && !holding ? absBook : 0,
+    needsTaxReviewGrossExpense: holding ? absBook : 0,
+    needsTaxReviewCount: holding ? 1 : 0,
     excludedAmount: status === TAX_CLASSIFICATION_STATUSES.EXCLUDED ? absBook : 0,
   };
 }
@@ -249,6 +261,7 @@ function isCurrentExpense(row, item) {
   if (!isExpenseOutflow(item)) return false;
   if ([DEDUCTIBILITY_STATUSES.BALANCE_SHEET, DEDUCTIBILITY_STATUSES.CAPITALIZABLE].includes(row.deductibility_status)) return false;
   if (row.classification_status === TAX_CLASSIFICATION_STATUSES.EXCLUDED) return false;
+  if (isNeedsTaxReview(row)) return false;
   if (row.tax_category === "income") return false;
   return true;
 }
@@ -264,7 +277,11 @@ function isExpenseOutflow(item) {
 }
 
 function isNeedsReview(row) {
-  return row.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW || row.requires_review === true;
+  return row.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW || row.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW || row.requires_review === true;
+}
+
+function isNeedsTaxReview(row) {
+  return row.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW || row.tax_category === "tax_review_holding" || row.metadata?.is_holding === true || row.metadata?.tax_review_holding === true;
 }
 
 function getOrCreateCategory(categoryMap, taxCategory, monthList) {
@@ -281,6 +298,8 @@ function getOrCreateCategory(categoryMap, taxCategory, monthList) {
     capitalizableAmount: 0,
     balanceSheetActivityAmount: 0,
     needsReviewAmount: 0,
+    needsTaxReviewGrossExpense: 0,
+    needsTaxReviewCount: 0,
     excludedAmount: 0,
     transactionCount: 0,
     confirmedCount: 0,
@@ -292,6 +311,7 @@ function getOrCreateCategory(categoryMap, taxCategory, monthList) {
     topRules: [],
     topBookkeepingCategories: [],
     _deductiblePercentTotal: 0,
+    _deductiblePercentCount: 0,
     _confidenceScores: [],
     _rules: new Map(),
     _bookkeepingCategories: new Map(),
@@ -315,11 +335,12 @@ function monthKey(key) {
 
 function finalizeCategory(category) {
   const copy = { ...category };
-  copy.averageDeductiblePercent = copy.transactionCount ? round2(copy._deductiblePercentTotal / copy.transactionCount) : 0;
+  copy.averageDeductiblePercent = copy._deductiblePercentCount ? round2(copy._deductiblePercentTotal / copy._deductiblePercentCount) : null;
   copy.confidenceLevel = confidenceLevel(copy._confidenceScores);
   copy.topRules = topEntries(copy._rules);
   copy.topBookkeepingCategories = topEntries(copy._bookkeepingCategories);
   delete copy._deductiblePercentTotal;
+  delete copy._deductiblePercentCount;
   delete copy._confidenceScores;
   delete copy._rules;
   delete copy._bookkeepingCategories;
@@ -350,6 +371,8 @@ function buildEmptyTotals(monthList) {
       capitalizableAmount: 0,
       balanceSheetActivityAmount: 0,
       needsReviewAmount: 0,
+      needsTaxReviewGrossExpense: 0,
+      needsTaxReviewCount: 0,
       excludedAmount: 0,
     }])),
   };
@@ -362,6 +385,8 @@ function buildEmptyMonthMap(monthList) {
     nondeductibleAmount: 0,
     capitalizableAmount: 0,
     needsReviewAmount: 0,
+    needsTaxReviewGrossExpense: 0,
+    needsTaxReviewCount: 0,
     transactionCount: 0,
   }]));
 }

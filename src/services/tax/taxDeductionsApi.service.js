@@ -194,15 +194,16 @@ function normalizeRpcDrilldownPayload(data, { limit, offset }) {
 }
 
 function normalizeRpcTransactionRow(row) {
+  const holding = row.classificationStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW || row.taxCategory === "tax_review_holding";
   return {
     ...row,
     date: normalizeDateOnly(row.date) || row.date,
     signedAmount: Number(row.signedAmount || 0),
     absoluteAmount: Number(row.absoluteAmount || Math.abs(Number(row.signedAmount || 0))),
-    deductiblePercent: Number(row.deductiblePercent || 0),
-    deductibleAmount: Number(row.deductibleAmount || 0),
-    nondeductibleAmount: Number(row.nondeductibleAmount || 0),
-    capitalizableAmount: Number(row.capitalizableAmount || 0),
+    deductiblePercent: holding ? null : nullableNumber(row.deductiblePercent),
+    deductibleAmount: holding ? null : nullableNumber(row.deductibleAmount),
+    nondeductibleAmount: holding ? null : nullableNumber(row.nondeductibleAmount),
+    capitalizableAmount: holding ? null : nullableNumber(row.capitalizableAmount),
     confidenceScore: row.confidenceScore == null ? null : Number(row.confidenceScore),
     warnings: Array.isArray(row.warnings) ? row.warnings : [],
     requiresReview: row.requiresReview === true,
@@ -448,10 +449,10 @@ function toTransactionRow(row) {
     qboTxnType: c.source_qbo_txn_type || c.metadata?.source_qbo_txn_type || null,
     taxCategory: c.tax_category,
     deductibilityStatus: c.deductibility_status,
-    deductiblePercent: Number(c.deductible_percent || 0),
-    deductibleAmount: Number(c.deductible_amount || 0),
-    nondeductibleAmount: Number(c.nondeductible_amount || 0),
-    capitalizableAmount: Number(c.capitalizable_amount || 0),
+    deductiblePercent: nullableNumber(c.deductible_percent),
+    deductibleAmount: nullableNumber(c.deductible_amount),
+    nondeductibleAmount: nullableNumber(c.nondeductible_amount),
+    capitalizableAmount: nullableNumber(c.capitalizable_amount),
     taxTreatment: c.tax_treatment || null,
     classificationStatus: c.classification_status,
     confidenceScore: c.confidence_score ?? null,
@@ -465,7 +466,7 @@ function toTransactionRow(row) {
     reason: c.reason || null,
     explanation: c.reason || null,
     warnings,
-    requiresReview: c.requires_review === true || c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
+    requiresReview: c.requires_review === true || c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW || c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW,
     override: {
       hasOverride: Boolean(c.user_override || c.cpa_override || isManualOverrideHistory(row.override)),
       source: row.override?.override_source || c.source || null,
@@ -552,12 +553,19 @@ function safeRuleSummary(c) {
 
 function authorityState(c, override) {
   if (c.classification_status === TAX_CLASSIFICATION_STATUSES.EXCLUDED) return "excluded";
+  if (c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW || c.tax_category === "tax_review_holding" || c.metadata?.is_holding === true) return "needs_tax_review";
   if (c.cpa_override || c.classification_status === TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED) return "cpa_confirmed";
   if (c.user_override || c.classification_status === TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED) return "user_confirmed";
   if (isManualOverrideHistory(override)) return "manual_override";
   if (c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW && c.tax_category !== "unclassified") return "proposed_needs_review";
   if (c.classification_status === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW) return "unresolved";
   return "rule_engine";
+}
+
+function nullableNumber(value) {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
 function isManualOverrideHistory(override) {

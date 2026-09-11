@@ -17,6 +17,8 @@ import { createOrUpdateReviewTaskForClassification, resolveReviewTaskForClassifi
 
 const OVERRIDE_VERSION = "tax-classification-override-v1";
 const BUSINESS_RULE_VERSION = "business-rule-v1";
+export const TAX_REVIEW_HOLDING_CATEGORY = "tax_review_holding";
+export const TAX_REVIEW_HOLDING_ACTION = "moved_to_tax_review";
 
 export async function applyClassificationOverride({ supabase, businessId, taxYear, transactionId, input = {}, actor = {} } = {}) {
   const year = requireTaxYear(taxYear);
@@ -167,6 +169,8 @@ export async function bulkApplyClassificationOverrides({ supabase, businessId, t
   const roleStatus = statusForActor(actor);
   const items = ids.map((transactionId) => {
     const current = byTransactionId.get(String(transactionId));
+    const expectedUpdatedAt = inputForBatch.expectedUpdatedAtByTransactionId?.[transactionId] || inputForBatch.expectedUpdatedAtByTransactionId?.[String(transactionId)] || inputForBatch.expectedUpdatedAt || null;
+    if (expectedUpdatedAt) assertNoStaleWrite(current, expectedUpdatedAt);
     if (inputForBatch.protectConfirmedAuthority && hasProtectedConfirmedAuthority(current, inputForBatch)) {
       throw conflictError("confirmed_authority_protected", "Confirmed tax classification authority is protected.", { transactionId, taxYear: year });
     }
@@ -191,14 +195,59 @@ export async function bulkApplyClassificationOverrides({ supabase, businessId, t
     const before = byTransactionId.get(String(row.transaction_id));
     emitTaxDataChanged({ businessId, taxYear: year, changeType: TAX_CHANGE_TYPES.CLASSIFICATION_OVERRIDDEN, entityId: row.transaction_id, userId: actor.userId, metadata: classificationEventMetadata(before, row, inputForBatch.reason) });
   }
-  await resolveReviewTasksForClassifications({
+  if (inputForBatch.classificationStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW) {
+    for (const row of updated) {
+      await createOrUpdateReviewTaskForClassification({
+        supabase,
+        businessId,
+        taxYear: year,
+        classification: row,
+        reasonCode: inputForBatch.reasonCode || "needs_tax_review_holding",
+      });
+    }
+  } else {
+    await resolveReviewTasksForClassifications({
+      supabase,
+      businessId,
+      taxYear: year,
+      transactionIds: updated.map((row) => row.transaction_id),
+      actor,
+    });
+  }
+  return result;
+}
+
+export async function moveClassificationsToTaxReview({ supabase, businessId, taxYear, transactionIds = [], reasonCode = null, reasonNote = null, expectedUpdatedAtByTransactionId = {}, bookkeepingIssue = false, actor = {} } = {}) {
+  const note = typeof reasonNote === "string" && reasonNote.trim() ? reasonNote.trim() : null;
+  const code = typeof reasonCode === "string" && reasonCode.trim() ? reasonCode.trim() : null;
+  return bulkApplyClassificationOverrides({
     supabase,
     businessId,
-    taxYear: year,
-    transactionIds: updated.map((row) => row.transaction_id),
+    taxYear,
+    transactionIds,
+    input: {
+      taxCategory: TAX_REVIEW_HOLDING_CATEGORY,
+      deductibilityStatus: DEDUCTIBILITY_STATUSES.NOT_YET_DETERMINED,
+      deductiblePercent: null,
+      taxTreatment: { type: "tax_review_holding", reporting_destination: null, non_reportable: true },
+      classificationStatus: TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW,
+      reason: note || "Needs tax review.",
+      reasonCode: code,
+      protectConfirmedAuthority: true,
+      allowUserConfirmedEdit: true,
+      expectedUpdatedAtByTransactionId,
+      metadata: {
+        action: TAX_REVIEW_HOLDING_ACTION,
+        is_holding: true,
+        tax_review_holding: true,
+        reason_code: code,
+        reason_note: note,
+        bookkeeping_review_flag: bookkeepingIssue === true,
+        previous_treatment_preserved: true,
+      },
+    },
     actor,
   });
-  return result;
 }
 
 function hasConfirmedAuthority(row = {}) {
@@ -219,7 +268,9 @@ function hasProtectedConfirmedAuthority(row = {}, input = {}) {
 
 function buildUpdatedClassification({ current, input, actor, transaction, status }) {
   const requestedStatus = String(input.classificationStatus || "").toLowerCase();
-  const effectiveStatus = requestedStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW ? TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW : status;
+  const effectiveStatus = [TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW, TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW].includes(requestedStatus)
+    ? requestedStatus
+    : status;
   const deductibilityStatus = input.deductibilityStatus || current.deductibility_status;
   const deductiblePercent = input.deductiblePercent == null
     ? normalizeDeductiblePercent({ deductibilityStatus, deductiblePercent: current.deductible_percent })
@@ -242,10 +293,10 @@ function buildUpdatedClassification({ current, input, actor, transaction, status
     capitalizable_amount: amounts.capitalizableAmount,
     tax_treatment: input.taxTreatment || current.tax_treatment,
     classification_status: effectiveStatus,
-    confidence_score: effectiveStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW ? Math.min(Number(current.confidence_score || 0), 60) : 100,
-    confidence_level: effectiveStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW ? TAX_CONFIDENCE_LEVELS.MEDIUM : TAX_CONFIDENCE_LEVELS.HIGH,
+    confidence_score: [TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW, TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW].includes(effectiveStatus) ? Math.min(Number(current.confidence_score || 0), 60) : 100,
+    confidence_level: [TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW, TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW].includes(effectiveStatus) ? TAX_CONFIDENCE_LEVELS.MEDIUM : TAX_CONFIDENCE_LEVELS.HIGH,
     source: actor.source || TAX_CLASSIFICATION_SOURCES.USER,
-    requires_review: effectiveStatus === TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
+    requires_review: [TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW, TAX_CLASSIFICATION_STATUSES.NEEDS_TAX_REVIEW].includes(effectiveStatus),
     reason: input.reason || current.reason,
     user_override: input.clearUserOverride === true ? false : (effectiveStatus === TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED || current.user_override === true),
     cpa_override: effectiveStatus === TAX_CLASSIFICATION_STATUSES.CPA_CONFIRMED || current.cpa_override === true,

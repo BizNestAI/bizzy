@@ -16,6 +16,9 @@ export function computeClassificationAmounts({
   const isInflow = String(direction || "").toUpperCase() === "INFLOW";
   const isExcluded = taxCategory === "excluded" || status === "excluded";
 
+  if (status === DEDUCTIBILITY_STATUSES.NOT_YET_DETERMINED || taxCategory === "tax_review_holding") {
+    return { bookAmount, deductibleAmount: null, nondeductibleAmount: null, capitalizableAmount: null, deductiblePercent: null };
+  }
   if (isInflow || isExcluded || status === DEDUCTIBILITY_STATUSES.BALANCE_SHEET) {
     return { bookAmount, deductibleAmount: 0, nondeductibleAmount: 0, capitalizableAmount: 0, deductiblePercent: percent };
   }
@@ -38,6 +41,7 @@ export function normalizeDeductiblePercent({ deductibilityStatus, deductiblePerc
   const status = String(deductibilityStatus || "");
   if (status === DEDUCTIBILITY_STATUSES.FULLY_DEDUCTIBLE) return 100;
   if ([DEDUCTIBILITY_STATUSES.NONDEDUCTIBLE, DEDUCTIBILITY_STATUSES.CAPITALIZABLE, DEDUCTIBILITY_STATUSES.BALANCE_SHEET].includes(status)) return 0;
+  if (status === DEDUCTIBILITY_STATUSES.NOT_YET_DETERMINED) return null;
   if (deductiblePercent == null || deductiblePercent === "") return 0;
   if (typeof deductiblePercent === "string") {
     throw validationError("invalid_deductible_percent", "deductiblePercent must be a numeric whole percentage from 0 to 100.", { field: "deductiblePercent" });

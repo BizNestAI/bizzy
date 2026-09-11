@@ -7,6 +7,7 @@ import {
   confirmClassification,
   excludeTransactionFromTax,
   getClassificationHistory,
+  moveClassificationsToTaxReview,
   rejectSuggestedClassification,
   restoreExcludedTransaction,
 } from "../../services/tax/taxClassificationOverride.service.js";
@@ -166,6 +167,29 @@ router.post("/classifications/bulk-update", async (req, res) => {
   }
 });
 
+router.post("/classifications/tax-review-hold", async (req, res) => {
+  setTaxNoStore(res);
+  try {
+    const ctx = await routeContext(req);
+    const ids = Array.isArray(req.body?.transactionIds) ? req.body.transactionIds : req.body?.transaction_ids;
+    if (!Array.isArray(ids) || ids.length < 1 || ids.length > 100) {
+      throw validationError("invalid_transaction_ids", "transactionIds must contain 1 to 100 transactions.", { field: "transactionIds" });
+    }
+    const data = await moveClassificationsToTaxReview({
+      ...ctx,
+      transactionIds: ids.map(String),
+      reasonCode: optionalShortText(req.body?.reasonCode ?? req.body?.reason_code, "reasonCode", 80),
+      reasonNote: optionalShortText(req.body?.reasonNote ?? req.body?.reason_note, "reasonNote", 240),
+      expectedUpdatedAtByTransactionId: req.body?.expectedUpdatedAtByTransactionId ?? req.body?.expected_updated_at_by_transaction_id ?? {},
+      bookkeepingIssue: req.body?.bookkeepingIssue === true || req.body?.bookkeeping_issue === true,
+      actor: actorFromRequest(req),
+    });
+    return sendTaxSuccess(res, data);
+  } catch (err) {
+    return sendTaxError(res, err, "tax_review_hold_failed");
+  }
+});
+
 async function handleOverride(req, res) {
   setTaxNoStore(res);
   try {
@@ -187,6 +211,15 @@ async function routeContext(req) {
 }
 
 function actorFromRequest(req) {
+  if (req?.tenantContext?.mode === "admin_view") {
+    const staffRole = req.tenantContext.staffRole || req.tenantContext.staff_role || "admin";
+    return {
+      userId: req.tenantContext.staffUserId || null,
+      role: staffRole,
+      source: staffRole === "accountant" ? "cpa" : "admin",
+      tenantMode: "admin_view",
+    };
+  }
   return { userId: req.user?.id || req.user?.sub || null, role: "user", source: "user" };
 }
 
@@ -195,6 +228,14 @@ function requireReason(value, field) {
     throw validationError(`missing_${field}`, `${field} is required.`, { field });
   }
   return value.trim();
+}
+
+function optionalShortText(value, field, max) {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") throw validationError(`invalid_${field}`, `${field} must be text.`, { field });
+  const text = value.trim();
+  if (text.length > max) throw validationError(`invalid_${field}`, `${field} is too long.`, { field });
+  return text || null;
 }
 
 export default router;

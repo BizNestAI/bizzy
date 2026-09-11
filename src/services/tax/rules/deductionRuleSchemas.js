@@ -11,6 +11,7 @@ const STRING_ARRAY_KEYS = new Set([
   "job_costing_tags",
   "qbo_account_names",
   "qbo_account_name_keys",
+  "qbo_account_type_keys",
   "qbo_account_subtype_keys",
   "direction",
 ]);

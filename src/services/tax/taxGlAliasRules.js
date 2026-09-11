@@ -1,8 +1,8 @@
 import { normalizeQboGlAccountKey } from "./taxQboGlNormalizer.js";
 
-export const TAX_GL_RULE_VERSION = "bizzi-gl-2026-v3";
+export const TAX_GL_RULE_VERSION = "bizzi-gl-2026-v4";
 export const TAX_GL_RULE_SOURCE_REFERENCE = "Bizzi approved deterministic GL-to-tax mapping policy 2026";
-export const TAX_GL_RULE_SOURCE_URL = "internal://bizzi/tax/gl-alias-rules/2026-v3";
+export const TAX_GL_RULE_SOURCE_URL = "internal://bizzi/tax/gl-alias-rules/2026-v4";
 
 export const TAX_GL_ALIAS_RULES = Object.freeze([
   rule("software_subscriptions_gl_v3", ["Software", "Software & Apps", "Subscriptions", "Computer Software", "SaaS", "Software Subscriptions", "Online Services"], "software_subscriptions", "fully_deductible", 100, false, 10, { type: "ordinary_expense", irs_category: "other_business_expense" }),
@@ -46,9 +46,95 @@ export const TAX_GL_ALIAS_RULES = Object.freeze([
   rule("employer_payroll_taxes_gl_v3", ["Payroll Taxes", "Employer Payroll Taxes"], "payroll_taxes", "fully_deductible", 100, false, 24, { type: "ordinary_expense", irs_category: "employer_payroll_taxes" }),
   rule("revenue_exclusion_gl_v3", ["Income", "Sales", "Sales Income", "Service Revenue", "Contract Revenue", "Construction Income", "Job Revenue"], "revenue", "balance_sheet", 0, false, 2, { type: "revenue", ordinaryExpense: false }),
   rule("liability_balance_sheet_exclusion_gl_v3", ["Sales Tax Payable", "Payroll Liabilities", "Credit Card Payable", "Accounts Payable", "Loans Payable"], "balance_sheet_movement", "balance_sheet", 0, false, 2, { type: "balance_sheet", component: "liability_movement" }),
+  rule("cogs_parent_account_gl_v4", ["Cost of Goods Sold", "Costs of Goods Sold", "COGS", "Cost of Sales", "Costs of Sales", "Direct Costs", "Direct Job Costs", "Job Costs", "Construction Costs", "Project Costs", "Service Costs", "Cost of Revenue"], "cost_of_goods_sold", "fully_deductible", 100, false, 11, {
+    type: "cogs_candidate",
+    reporting_destination: "schedule_c_part_iii_or_form_1125_a_candidate",
+    ordinaryExpense: false,
+    allowed_qbo_account_type_keys: ["cost of goods sold"],
+    negative_aliases: ["Gross Profit", "Gross Margin", "Cost Estimate", "Cost Reimbursement", "Reimbursed Costs", "Customer Reimbursement", "Cost Allocation", "Other Income", "Cost of Goods Sold Adjustment", "Inventory Asset", "Opening Inventory", "Closing Inventory", "Equipment Purchase", "Fixed Assets", "Loan Costs", "Startup Costs"],
+  }, "Costs posted to a verified QuickBooks cost-of-goods-sold account.", { qboAccountTypeKeys: ["Cost of Goods Sold"] }),
+  rule("inventory_purchases_review_gl_v4", ["Inventory Purchases", "Purchases - Inventory", "Purchases for Resale", "Merchandise Purchases", "Materials Inventory", "Job Materials Inventory", "Construction Materials Inventory", "Raw Materials", "Raw Materials Purchases", "Parts Inventory", "Parts Purchases", "Stock Purchases", "Resale Inventory", "Inventory Materials", "Inventory Clearing"], "inventory_purchases", "needs_review", 0, true, 17, {
+    type: "inventory_cogs_review",
+    reporting_destination: "inventory_or_cogs_destination_not_determined",
+    allowed_qbo_account_type_keys: ["cost of goods sold", "other current asset", "expense"],
+    review_question: "Were these materials used on completed jobs this year, or are they still held for future jobs?",
+    negative_aliases: ["Office Supplies", "General Supplies", "Safety Supplies", "Small Tools", "Fixed Assets", "Equipment", "Inventory Sale", "Inventory Income", "Customer Deposit", "Owner Contribution", "Inventory Loan", "Inventory Reimbursement"],
+  }, "Purchases that may need to remain in inventory until the related materials or goods are used or sold."),
+  rule("inventory_variance_review_gl_v4", ["Inventory Variance", "Purchase Returns and Allowances"], "inventory_purchases", "needs_review", 0, true, 13, {
+    type: "inventory_contra_or_variance_review",
+    reporting_destination: "inventory_or_cogs_destination_not_determined",
+    allowed_qbo_account_type_keys: ["cost of goods sold", "other current asset", "expense"],
+    signed_contra_review_required: true,
+  }, "Inventory variances or purchase returns need review before tax treatment is confirmed."),
+  rule("equipment_fuel_gl_v4", ["Equipment Fuel", "Machinery Fuel", "Jobsite Fuel", "Job Site Fuel", "Generator Fuel", "Diesel - Equipment", "Equipment Diesel", "Off-Road Fuel", "Off Road Fuel", "Fuel - Machinery", "Fuel - Equipment", "Heavy Equipment Fuel", "Small Equipment Fuel", "Landscaping Equipment Fuel", "Mower Fuel", "Fuel and Lubricants - Equipment", "Equipment Gas and Oil"], "equipment_fuel", "fully_deductible", 100, false, 19, {
+    type: "equipment_fuel",
+    reporting_destination: "schedule_c_operating_or_direct_job_cost_candidate",
+    allowed_qbo_account_type_keys: ["expense", "cost of goods sold"],
+    excludes_vehicle_method: true,
+    negative_aliases: ["Gas", "Gasoline", "Fuel", "Auto Fuel", "Vehicle Fuel", "Fleet Fuel", "Car Fuel", "Truck Fuel", "Mileage", "Fuel Reimbursement", "Fuel Surcharge Income", "Customer Fuel Reimbursement", "Heating Fuel", "Natural Gas Utility", "Oil and Gas Revenue"],
+  }, "Fuel for business equipment rather than a road vehicle."),
+  rule("shipping_postage_operating_gl_v4", ["Shipping", "Shipping Expense", "Shipping and Delivery", "Delivery Expense", "Delivery Fees", "Courier Expense", "Courier and Delivery", "Postage", "Postage and Delivery", "Postage and Shipping", "Freight-Out", "Freight Out", "Outbound Freight"], "shipping_freight_delivery", "fully_deductible", 100, false, 21, {
+    type: "postage_operating",
+    reporting_destination: "schedule_c_operating_expense_candidate",
+    allowed_qbo_account_type_keys: ["expense"],
+    negative_aliases: ["Shipping Income", "Delivery Income", "Freight Income", "Shipping Reimbursement", "Customer Delivery Reimbursement", "Freight Surcharge Income", "Delivery Driver Wages", "Vehicle Expense", "Inventory Asset", "Equipment Freight Income", "Sales"],
+  }, "Shipping and delivery costs. Inbound freight may need to be included with inventory or job costs."),
+  rule("shipping_inbound_freight_review_gl_v4", ["Freight-In", "Freight In", "Inbound Freight", "Materials Delivery", "Job Materials Delivery"], "shipping_freight_delivery", "needs_review", 0, true, 18, {
+    type: "inbound_freight_cogs",
+    reporting_destination: "inventory_or_cogs_destination_not_determined",
+    allowed_qbo_account_type_keys: ["expense", "cost of goods sold", "other current asset"],
+    review_question: "Was this inbound freight tied to inventory, job materials, or ordinary delivery?",
+  }, "Shipping and delivery costs. Inbound freight may need to be included with inventory or job costs."),
+  rule("shipping_equipment_delivery_review_gl_v4", ["Equipment Delivery"], "shipping_freight_delivery", "capitalizable", 0, true, 13, {
+    type: "equipment_delivery_capitalization_review",
+    reporting_destination: "form_4562_candidate",
+    allowed_qbo_account_type_keys: ["expense", "fixed asset"],
+    capitalization_review_required: true,
+  }, "Equipment delivery may need to be included in the cost of equipment placed in service."),
+  rule("shipping_generic_freight_review_gl_v4", ["Freight", "Freight Expense", "Trucking and Freight"], "shipping_freight_delivery", "needs_review", 0, true, 37, {
+    type: "ambiguous_freight_review",
+    reporting_destination: "not_yet_determined",
+    allowed_qbo_account_type_keys: ["expense", "cost of goods sold"],
+  }, "Shipping and delivery costs. Inbound freight may need to be included with inventory or job costs."),
+  rule("other_business_taxes_review_gl_v4", ["Business Taxes", "State Business Taxes", "Local Business Taxes", "Franchise Tax", "Franchise Taxes", "Gross Receipts Tax", "Business Property Tax", "Personal Property Tax - Business", "Tangible Personal Property Tax", "Excise Tax Expense", "Occupational Tax", "Privilege Tax", "Local Business Tax", "County Business Tax", "City Business Tax", "Use Tax Expense", "Non-Payroll Taxes", "Other Business Taxes"], "other_business_taxes", "needs_review", 0, true, 29, {
+    type: "business_tax_review",
+    reporting_destination: "entity_specific_destination_not_determined",
+    allowed_qbo_account_type_keys: ["expense"],
+    review_question: "What type of tax was this payment for?",
+    negative_aliases: ["Federal Income Tax", "Personal Income Tax", "Estimated Income Tax", "State Income Tax Payment", "Owner Tax Payment", "Sales Tax Payable", "Sales Tax Collected", "Payroll Tax Payable", "Employee Withholding", "Federal Withholding", "State Withholding", "FICA Payable", "Medicare Payable", "FUTA Payable", "SUTA Payable", "Tax Refund", "Tax Reimbursement", "Tax Penalty", "IRS Penalty", "Late Filing Penalty", "Interest and Penalties", "Property Tax Escrow", "Customer Sales Tax", "Payroll Taxes", "Licenses and Permits"],
+  }, "Business tax payments that require the tax type to be identified before treatment is confirmed."),
+  rule("commissions_referral_fees_gl_v4", ["Commissions", "Commission Expense", "Sales Commissions", "Sales Commission Expense", "Referral Fees", "Referral Fee Expense", "Finders Fees", "Finder Fees", "Lead Referral Fees", "Broker Commissions", "Agent Commissions", "Sales Agent Fees", "Dealer Commissions", "Subcontractor Commissions", "Performance Commissions", "Affiliate Commissions", "Affiliate Fees"], "commissions_referral_fees", "fully_deductible", 100, false, 23, {
+    type: "ordinary_expense",
+    irs_category: "commissions_and_fees",
+    allowed_qbo_account_type_keys: ["expense"],
+    information_reporting_review_supported: true,
+    negative_aliases: ["Commission Income", "Sales Commission Income", "Referral Income", "Affiliate Income", "Broker Income", "Employee Commission Wages", "Payroll", "Bonuses", "Merchant Fees", "Bank Fees", "Loan Origination Fees", "Real Estate Purchase Commission", "Asset Acquisition Commission", "Customer Refund", "Owner Draw", "Fees"],
+  }, "Business commissions or referral fees paid to generate work or sales."),
+  rule("employee_benefits_gl_v4", ["Employee Benefits", "Employee Benefit Programs", "Employee Health Insurance", "Group Health Insurance", "Employee Medical Insurance", "Employee Dental Insurance", "Employee Vision Insurance", "Group-Term Life Insurance", "Employee Life Insurance", "Employee Disability Insurance", "Employee Assistance Program", "Dependent Care Assistance", "Employee Welfare Benefits", "Employee Wellness Benefits", "Employer HSA Contributions", "Employer Benefit Contributions", "Workers Benefits"], "employee_benefits", "fully_deductible", 100, false, 25, {
+    type: "employee_benefits",
+    reporting_destination: "entity_specific_employee_benefit_candidate",
+    allowed_qbo_account_type_keys: ["expense"],
+    owner_employee_distinction_required_when_ambiguous: true,
+    negative_aliases: ["Owner Health Insurance", "Shareholder Health Insurance", "Partner Health Insurance", "Self-Employed Health Insurance", "Member Health Insurance", "Owner Life Insurance", "Key Person Life Insurance", "Workers Compensation", "Retirement Contributions", "Pension Expense", "Profit Sharing", "Employee Loans", "Employee Advances", "Payroll Liabilities", "Employee Withholding", "Employee Reimbursement", "Customer Benefits", "Government Benefits Income"],
+  }, "Employer-paid employee benefits, excluding owner-only benefits and retirement-plan contributions."),
+  rule("employee_benefits_review_gl_v4", ["Fringe Benefits", "Employee Reimbursements - Benefits", "Benefits"], "employee_benefits", "needs_review", 0, true, 39, {
+    type: "employee_benefits_review",
+    reporting_destination: "entity_specific_employee_benefit_candidate",
+    allowed_qbo_account_type_keys: ["expense"],
+    review_question: "Was this benefit for employees, an owner/shareholder, or both?",
+  }, "Employer-paid employee benefits, excluding owner-only benefits and retirement-plan contributions."),
+  rule("retirement_contributions_review_gl_v4", ["Employer Retirement Contributions", "Employer 401(k) Contributions", "Employer 401k Contributions", "Employer Pension Contributions", "Pension Expense", "Profit Sharing Contributions", "Employer Profit Sharing", "Employee Pension Plan Expense", "Retirement Plan Expense", "Employer SEP Contributions", "Employer SIMPLE Contributions", "Employer Matching Contributions", "401(k) Match", "401k Match", "Pension and Profit Sharing", "Qualified Plan Contributions"], "retirement_contributions", "needs_review", 0, true, 27, {
+    type: "retirement_contribution_review",
+    reporting_destination: "schedule_1_or_entity_specific_destination_not_determined",
+    allowed_qbo_account_type_keys: ["expense"],
+    beneficiary_scope: "unknown",
+    contribution_type: "unknown",
+    review_question: "Was this an employer contribution for employees, a contribution for an owner, or an employee amount withheld through payroll?",
+    negative_aliases: ["401(k) Payable", "401k Payable", "Employee 401(k) Withholding", "Employee Retirement Withholding", "Retirement Plan Liability", "Pension Payable", "Owner Contribution", "Partner Contribution", "Member Contribution", "IRA Transfer", "Retirement Transfer", "Retirement Distribution", "Pension Income", "401(k) Loan", "401k Loan", "Employee Loan", "Payroll Clearing", "Benefit Payable", "Plan Administration Fees"],
+  }, "Retirement-plan contributions requiring confirmation of whether they were for employees, owners, or payroll withholding."),
 ]);
 
-export function buildTaxGlAliasDeductionRules({ taxYear = 2026, verifiedAt = "2026-09-08T00:00:00Z" } = {}) {
+export function buildTaxGlAliasDeductionRules({ taxYear = 2026, verifiedAt = "2026-09-10T00:00:00Z" } = {}) {
   return TAX_GL_ALIAS_RULES.map((item) => ({
     id: item.rule_code,
     business_id: null,
@@ -60,7 +146,7 @@ export function buildTaxGlAliasDeductionRules({ taxYear = 2026, verifiedAt = "20
     bookkeeping_category: null,
     qbo_account_type: null,
     qbo_account_subtype: null,
-    match_conditions: { qbo_account_name_keys: item.aliasKeys },
+    match_conditions: buildMatchConditions(item),
     tax_category: item.tax_category,
     deductibility_status: item.deductibility_status,
     default_deductible_percent: item.default_deductible_percent,
@@ -79,11 +165,21 @@ export function buildTaxGlAliasDeductionRules({ taxYear = 2026, verifiedAt = "20
   }));
 }
 
-function rule(ruleCode, aliases, taxCategory, deductibilityStatus, percent, requiresReview, priority, treatment, explanation = null) {
+function buildMatchConditions(item) {
+  return Object.fromEntries(Object.entries({
+    qbo_account_name_keys: item.aliasKeys,
+    qbo_account_type_keys: item.qboAccountTypeKeys,
+    qbo_account_subtype_keys: item.qboAccountSubtypeKeys,
+  }).filter(([, value]) => Array.isArray(value) && value.length));
+}
+
+function rule(ruleCode, aliases, taxCategory, deductibilityStatus, percent, requiresReview, priority, treatment, explanation = null, options = {}) {
   return Object.freeze({
     rule_code: ruleCode,
     aliases: Object.freeze([...aliases]),
     aliasKeys: Object.freeze([...new Set(aliases.map(normalizeQboGlAccountKey))]),
+    qboAccountTypeKeys: Object.freeze([...(options.qboAccountTypeKeys || []).map(normalizeQboGlAccountKey)]),
+    qboAccountSubtypeKeys: Object.freeze([...(options.qboAccountSubtypeKeys || []).map(normalizeQboGlAccountKey)]),
     tax_category: taxCategory,
     deductibility_status: deductibilityStatus,
     default_deductible_percent: percent,

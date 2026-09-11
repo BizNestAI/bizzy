@@ -853,9 +853,10 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
             onAssignTaxClassification={deductions.assignTaxClassification}
             onOverrideClassification={deductions.overrideClassification}
             onBulkUpdateClassifications={deductions.bulkUpdateClassifications}
+            onSendToTaxReview={deductions.sendClassificationsToTaxReview}
             onSetTaxProfileMemory={deductions.setProfileMemory}
             onRefresh={refreshDeductions}
-            readOnly={readOnly}
+            readOnly={false}
           />
         ) : null}
       </AnimatePresence>
@@ -1019,7 +1020,9 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
             ? cell.transactions.filter((row) => classificationBucket(row) === "excluded")
             : authority === "failed"
               ? cell.transactions.filter((row) => classificationBucket(row) === "failed")
-              : cell.transactions.filter((row) => classificationBucket(row) === "needs_review" || classificationBucket(row) === "unclassified");
+              : authority === "needs_tax_review"
+                ? cell.transactions.filter((row) => classificationBucket(row) === "needs_tax_review")
+                : cell.transactions.filter((row) => classificationBucket(row) === "needs_review" || classificationBucket(row) === "unclassified");
     if (!transactions.length) return;
     onSelectCell({
       account,
@@ -1065,6 +1068,17 @@ function MatrixCell({ account, month, cell, onSelectCell }) {
           title={`${account.name}, ${month.longLabel}, proposed needs-review amounts`}
         >
           {cell.proposedDeductibleTotal > 0 ? `${formatCurrencyLocal(cell.proposedDeductibleTotal)} proposed` : cell.reviewActionLabel || "Review"}
+        </button>
+      ) : null}
+      {cell.needsTaxReviewTransactionCount > 0 ? (
+        <button
+          type="button"
+          onClick={() => openCell("needs_tax_review")}
+          className="w-full rounded-lg border border-amber-300/14 bg-amber-300/[0.045] px-2 py-1.5 text-right text-[12px] font-semibold text-amber-50 transition hover:border-amber-200/30 hover:bg-amber-300/[0.10] focus:outline-none focus:ring-2 focus:ring-amber-300/30"
+          title={`${account.name}, ${month.longLabel}, needs tax review`}
+        >
+          {cell.needsTaxReviewTransactionCount === 1 ? "Needs tax review" : `${cell.needsTaxReviewTransactionCount} need tax review`}
+          {cell.needsTaxReviewGrossExpense > 0 ? <span className="block text-[10px] font-medium text-white/42">{formatCurrencyLocal(cell.needsTaxReviewGrossExpense)} expenses</span> : null}
         </button>
       ) : null}
       {cell.excludedTransactionCount > 0 ? (
@@ -2068,7 +2082,9 @@ function normalizeRows(value) {
 function classificationBucket(row) {
   const status = String(row?.status || row?.classificationStatus || row?.classification_status || "").trim().toLowerCase();
   const treatment = String(row?.taxTreatment || row?.deductibilityStatus || "").trim().toLowerCase();
+  const category = String(row?.taxCategory || row?.tax_category || row?.raw?.taxCategory || row?.raw?.tax_category || "").trim().toLowerCase();
   if (status === "failed" || status === "classification_failed") return "failed";
+  if (status === "needs_tax_review" || category === "tax_review_holding" || row?.raw?.metadata?.is_holding === true) return "needs_tax_review";
   if (status === "unclassified" || status === "unsupported" || !status) return "unclassified";
   if (status === "user_confirmed" || row?.userOverride === true || row?.user_override === true) return "user_confirmed";
   if (status === "cpa_confirmed" || status === "accountant_reviewed" || row?.cpaOverride === true || row?.cpa_override === true) return "accountant_confirmed";
@@ -2081,6 +2097,7 @@ function classificationBucket(row) {
 function classificationStatusClass(bucket) {
   if (bucket === "failed") return "border-rose-300/20 bg-rose-400/[0.08] text-rose-100";
   if (bucket === "needs_review") return "border-amber-300/20 bg-amber-300/[0.08] text-amber-50";
+  if (bucket === "needs_tax_review") return "border-amber-300/20 bg-amber-300/[0.08] text-amber-50";
   if (bucket === "mixed") return "border-sky-300/18 bg-sky-300/[0.08] text-sky-50";
   if (bucket === "user_confirmed" || bucket === "accountant_confirmed") return "border-emerald-300/20 bg-emerald-300/[0.08] text-emerald-50";
   if (bucket === "excluded") return "border-white/12 bg-white/[0.055] text-white/58";
@@ -2097,6 +2114,7 @@ function aggregateClassificationStatus(rows = []) {
   if (bucket === "user_confirmed") return { bucket, label: "Confirmed by you", tone: "green" };
   if (bucket === "accountant_confirmed") return { bucket, label: "Confirmed by accountant", tone: "green" };
   if (bucket === "needs_review") return { bucket, label: "Needs review", tone: "amber" };
+  if (bucket === "needs_tax_review") return { bucket, label: "Needs tax review", tone: "amber" };
   if (bucket === "failed") return { bucket, label: "Failed", tone: "red" };
   if (bucket === "excluded") return { bucket, label: "Excluded", tone: "neutral" };
   return { bucket: "unclassified", label: "Unclassified", tone: "neutral" };
@@ -2105,6 +2123,7 @@ function aggregateClassificationStatus(rows = []) {
 function classificationStatusLabel(bucket, row) {
   if (bucket === "failed") return "Failed";
   if (bucket === "needs_review") return "Needs review";
+  if (bucket === "needs_tax_review") return "Needs tax review";
   if (bucket === "user_confirmed") return "Confirmed by you";
   if (bucket === "accountant_confirmed") return "Confirmed by accountant";
   if (bucket === "excluded") return "Excluded";
@@ -2136,6 +2155,7 @@ function deductibilityLabel(row) {
   const status = String(row?.deductibilityStatus || row?.taxTreatment || "").toLowerCase();
   const label = String(row?.taxTreatmentLabel || "").toLowerCase();
   const percent = row?.deductiblePercent == null || Number.isNaN(Number(row.deductiblePercent)) ? null : Number(row.deductiblePercent);
+  if (bucket === "needs_tax_review") return "Not yet determined";
   if (bucket === "needs_review" && percent === 0) return reviewDecisionForRow(row).actionLabel || "Depends on business use";
   if (status === "fully_deductible" || label === "deductible" || label.includes("fully deductible") || (bucket === "auto_classified" && percent === 100)) return "Fully deductible";
   if (status === "partially_deductible" || label.includes("partial")) return "Partially deductible";
@@ -2147,6 +2167,7 @@ function deductibilityLabel(row) {
 
 function deductiblePercentLabel(row) {
   if (classificationBucket(row) === "unclassified") return "";
+  if (classificationBucket(row) === "needs_tax_review") return "Not yet determined";
   if (isStandardMileageGasRow(row)) return "Covered by standard mileage";
   if (row?.deductiblePercent == null || Number.isNaN(Number(row.deductiblePercent))) return "Percent pending";
   if (classificationBucket(row) === "needs_review" && Number(row.deductiblePercent) === 0) return reviewDecisionForRow(row).actionLabel || "Review required";
@@ -2222,6 +2243,7 @@ function DeductionMonthDetailModal({
   onClose,
   onAssignTaxClassification,
   onBulkUpdateClassifications,
+  onSendToTaxReview,
   onSetTaxProfileMemory,
   onRefresh,
   readOnly = false,
@@ -2253,6 +2275,8 @@ function DeductionMonthDetailModal({
   const [standardMileageBasis, setStandardMileageBasis] = useState("records");
   const [vehicleMethod, setVehicleMethod] = useState("");
   const [resolutionCategory, setResolutionCategory] = useState("");
+  const [taxReviewReasonNote, setTaxReviewReasonNote] = useState("");
+  const [bookkeepingIssueFlag, setBookkeepingIssueFlag] = useState(false);
   const [showCategoryChange, setShowCategoryChange] = useState(false);
   const [transactionsExpanded, setTransactionsExpanded] = useState(false);
   const [editingConfirmation, setEditingConfirmation] = useState(false);
@@ -2273,6 +2297,8 @@ function DeductionMonthDetailModal({
     setStandardMileageBasis("records");
     setVehicleMethod("");
     setResolutionCategory(reviewContext.defaultTaxCategory || "");
+    setTaxReviewReasonNote("");
+    setBookkeepingIssueFlag(false);
     setShowCategoryChange(false);
     setTransactionsExpanded(!["business_use_percent", "vehicle_method"].includes(reviewContext.kind));
     setEditingConfirmation(false);
@@ -2342,8 +2368,9 @@ function DeductionMonthDetailModal({
     resolutionMode: reviewResolutionMode,
   });
   const canResolve = !readOnly && selectedCount > 0 && reviewContext.supported &&
-    (reviewContext.kind !== "business_use_percent" || businessUseSelectionValid) &&
-    (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && percentValid) || (editingConfirmation && vehicleMethod === "unsure"));
+    (isTaxReviewResolution({ resolutionMode: reviewResolutionMode, businessUseMode, vehicleMethod, resolutionCategory }) ||
+      ((reviewContext.kind !== "business_use_percent" || businessUseSelectionValid) &&
+      (reviewContext.kind !== "vehicle_method" || vehicleMethod === "standard_mileage" || (vehicleMethod === "actual_expense" && percentValid) || (editingConfirmation && vehicleMethod === "unsure"))));
 
   const enterEditConfirmation = () => {
     if (!canEditConfirmation) return;
@@ -2402,7 +2429,7 @@ function DeductionMonthDetailModal({
 
   const stageAssignment = (row, nextTaxCategory) => {
     if (readOnly) {
-      setAssignmentError("Tax classification changes are unavailable in read-only Admin View.");
+        setAssignmentError("Tax classification changes are unavailable in read-only Admin View.");
       return;
     }
     const transactionId = row.id || row.raw?.transactionId;
@@ -2430,7 +2457,17 @@ function DeductionMonthDetailModal({
     setAssignmentError("");
     setResolutionSuccess("");
     try {
-      for (const change of pendingChanges) {
+      const holdingChanges = pendingChanges.filter((change) => change.taxCategory === "tax_review_holding");
+      const ordinaryChanges = pendingChanges.filter((change) => change.taxCategory !== "tax_review_holding");
+      if (holdingChanges.length) {
+        if (typeof onSendToTaxReview !== "function") throw new Error("Tax review holding service is unavailable. Try again after the latest update is deployed.");
+        await onSendToTaxReview(holdingChanges.map((change) => change.transactionId), {
+          reasonCode: "none_of_the_categories_fit",
+          reasonNote: "None of these fit - Needs tax review",
+          skipReload: true,
+        });
+      }
+      for (const change of ordinaryChanges) {
         const treatment = TAX_CATEGORY_ASSIGNMENTS[change.taxCategory] || TAX_CATEGORY_ASSIGNMENTS.other;
         await onAssignTaxClassification(change.transactionId, {
           taxCategory: change.taxCategory,
@@ -2442,6 +2479,7 @@ function DeductionMonthDetailModal({
       }
       setAssignmentByTxn({});
       await onRefresh?.();
+      if (holdingChanges.length) setResolutionSuccess(`${holdingChanges.length} ${holdingChanges.length === 1 ? "transaction moved" : "transactions moved"} to Needs Tax Review`);
     } catch (err) {
       setAssignmentError(err?.message || "Could not assign tax classification.");
     } finally {
@@ -2461,11 +2499,20 @@ function DeductionMonthDetailModal({
       resolutionMode: reviewResolutionMode,
     });
     const standardMileageOnly = reviewContext.kind === "vehicle_method" && vehicleMethod === "standard_mileage";
-    if (!transactionIds.length || (!changes && !standardMileageOnly)) return;
+    const holdingResolution = isTaxReviewResolution({ resolutionMode: reviewResolutionMode, businessUseMode, vehicleMethod, resolutionCategory });
+    if (!transactionIds.length || (!holdingResolution && !changes && !standardMileageOnly)) return;
     setSavingChanges(true);
     setAssignmentError("");
     try {
-      if (reviewContext.kind === "vehicle_method" && typeof onSetTaxProfileMemory === "function") {
+      if (holdingResolution) {
+        if (typeof onSendToTaxReview !== "function") throw new Error("Tax review holding service is unavailable. Try again after the latest update is deployed.");
+        await onSendToTaxReview(transactionIds, {
+          reasonCode: bookkeepingIssueFlag ? "bookkeeping_category_may_be_wrong" : "none_of_the_treatments_fit",
+          reasonNote: taxReviewReasonNote || "None of these fit - Needs tax review",
+          bookkeepingIssue: bookkeepingIssueFlag,
+          skipReload: true,
+        });
+      } else if (reviewContext.kind === "vehicle_method" && typeof onSetTaxProfileMemory === "function") {
         await onSetTaxProfileMemory({
           memoryKey: "vehicle_deduction_method",
           value: vehicleMethod === "standard_mileage" ? "standard_mileage" : "actual_expense",
@@ -2501,7 +2548,7 @@ function DeductionMonthDetailModal({
         }
       }
       const reason = detailResolutionReason(reviewContext, "selected_transactions", selectedCount);
-      if (changes && typeof onBulkUpdateClassifications === "function") {
+      if (!holdingResolution && changes && typeof onBulkUpdateClassifications === "function") {
         await onBulkUpdateClassifications(transactionIds, changes, {
           reason,
           skipReload: true,
@@ -2511,7 +2558,9 @@ function DeductionMonthDetailModal({
         throw new Error("Batch confirmation service is unavailable. Try again after the latest update is deployed.");
       }
       await onRefresh?.();
-      setResolutionSuccess(standardMileageOnly
+      setResolutionSuccess(holdingResolution
+        ? `${transactionIds.length} ${transactionIds.length === 1 ? "transaction moved" : "transactions moved"} to Needs Tax Review`
+        : standardMileageOnly
         ? "Vehicle method saved. Add business miles to calculate the mileage deduction."
         : `${transactionIds.length} ${transactionIds.length === 1 ? "transaction" : "transactions"} ${editingConfirmation ? "updated" : "confirmed"}`);
       setEditingConfirmation(false);
@@ -2619,6 +2668,8 @@ function DeductionMonthDetailModal({
               monthKey={month.key}
               resolutionMode={reviewResolutionMode}
               resolutionCategory={resolutionCategory}
+              taxReviewReasonNote={taxReviewReasonNote}
+              bookkeepingIssueFlag={bookkeepingIssueFlag}
               showCategoryChange={showCategoryChange}
               estimatedEffect={estimatedEffect}
               canResolve={canResolve}
@@ -2634,6 +2685,8 @@ function DeductionMonthDetailModal({
               onStandardMileageBasisChange={setStandardMileageBasis}
               onResolutionModeChange={setReviewResolutionMode}
               onResolutionCategoryChange={setResolutionCategory}
+              onTaxReviewReasonNoteChange={setTaxReviewReasonNote}
+              onBookkeepingIssueFlagChange={setBookkeepingIssueFlag}
               onToggleCategoryChange={() => setShowCategoryChange((current) => !current)}
               onSave={saveReviewResolution}
               onCancelEdit={cancelEditConfirmation}
@@ -2952,6 +3005,8 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   monthKey,
   resolutionMode,
   resolutionCategory,
+  taxReviewReasonNote,
+  bookkeepingIssueFlag,
   showCategoryChange,
   estimatedEffect,
   canResolve,
@@ -2967,6 +3022,8 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   onStandardMileageBasisChange,
   onResolutionModeChange,
   onResolutionCategoryChange,
+  onTaxReviewReasonNoteChange,
+  onBookkeepingIssueFlagChange,
   onToggleCategoryChange,
   onSave,
   onCancelEdit,
@@ -2976,7 +3033,8 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
   const selectedCount = selectedRows.length;
   const selectedGrossTotal = selectedRows.reduce((sum, row) => sum + Math.abs(normalizeMoney(row.amount)), 0);
   const heading = detailResolutionHeading(context);
-  const saveLabel = editingConfirmation ? "Save changes" : detailResolutionSaveLabel(context, selectedCount, resolutionMode);
+  const holdingSelected = isTaxReviewResolution({ resolutionMode, businessUseMode, vehicleMethod, resolutionCategory });
+  const saveLabel = holdingSelected ? (selectedCount === 1 ? "Send to tax review" : `Send ${selectedCount || 0} to tax review`) : editingConfirmation ? "Save changes" : detailResolutionSaveLabel(context, selectedCount, resolutionMode);
   return (
     <section ref={ref} tabIndex={-1} aria-busy={saving ? "true" : "false"} className="mb-4 scroll-mt-6 rounded-[18px] border border-amber-300/18 bg-amber-300/[0.045] p-3 outline-none focus:ring-2 focus:ring-amber-300/24">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -3042,10 +3100,26 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 <ReviewChoiceButton groupName="deduction-review-resolution" value="business" current={resolutionMode} onChange={onResolutionModeChange} label={context.businessLabel || "Confirm selected as business"} />
                 <ReviewChoiceButton groupName="deduction-review-resolution" value="personal" current={resolutionMode} onChange={onResolutionModeChange} label={context.personalLabel || "Mark selected as personal"} />
+                <ReviewChoiceButton groupName="deduction-review-resolution" value="needs_tax_review" current={resolutionMode} onChange={onResolutionModeChange} label="None of these fit - Needs tax review" />
                 {editingConfirmation ? (
                   <ReviewChoiceButton groupName="deduction-review-resolution" value="unsure" current={resolutionMode} onChange={onResolutionModeChange} label="Return to Needs review" />
                 ) : null}
               </div>
+              <p className="mt-2 text-xs leading-relaxed text-white/46">
+                Use this when none of the available tax treatments fit. This transaction will remain visible and will not affect deduction totals until it is reviewed.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  onBookkeepingIssueFlagChange?.(true);
+                  onResolutionModeChange?.("needs_tax_review");
+                }}
+                disabled={readOnly || saving}
+                className="mt-2 rounded-[11px] border border-white/[0.08] bg-black/14 px-3 py-2 text-left text-xs text-white/58 transition hover:bg-white/[0.04] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="block font-semibold text-white/74">Bookkeeping category may be wrong</span>
+                <span className="block text-white/42">Use this when the QuickBooks account itself may need to be corrected. Bizzi will not change QuickBooks from this Tax modal.</span>
+              </button>
               <p className="mt-2 text-xs leading-relaxed text-amber-50/62">Uncheck personal or undocumented exceptions so they stay in Needs review.</p>
               {context.allowCategoryChange ? (
                 <div className="mt-3 border-t border-white/[0.08] pt-3">
@@ -3073,9 +3147,20 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
             </div>
           ) : null}
           </div>
+          {holdingSelected ? (
+            <TaxReviewHoldingFields
+              selectedCount={selectedCount}
+              selectedGrossTotal={selectedGrossTotal}
+              note={taxReviewReasonNote}
+              bookkeepingIssue={bookkeepingIssueFlag}
+              disabled={readOnly || saving}
+              onNoteChange={onTaxReviewReasonNoteChange}
+              onBookkeepingIssueChange={onBookkeepingIssueFlagChange}
+            />
+          ) : null}
           <div className="space-y-2">
             <div className="rounded-[12px] border border-white/[0.07] bg-white/[0.025] px-3 py-2 text-xs text-white/48">
-              {selectedCount} selected · {formatCurrencyLocal(selectedGrossTotal)} in expenses · {estimatedEffect.label === "Not calculated" ? "not calculated" : `${estimatedEffect.label} deduction`}
+              {selectedCount} selected · {formatCurrencyLocal(selectedGrossTotal)} in expenses · {holdingSelected ? "deductible amount not yet determined" : estimatedEffect.label === "Not calculated" ? "not calculated" : `${estimatedEffect.label} deduction`}
             </div>
             {successMessage ? (
               <div className="rounded-[12px] border border-emerald-300/18 bg-emerald-300/[0.07] px-3 py-2 text-xs font-semibold text-emerald-50">
@@ -3085,7 +3170,7 @@ const DetailResolutionPanel = React.forwardRef(function DetailResolutionPanel({
             {saving ? (
               <div className="flex items-center gap-2 rounded-[12px] border border-emerald-300/14 bg-emerald-300/[0.055] px-3 py-2 text-xs font-semibold text-emerald-50">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                Confirming {selectedCount} {selectedCount === 1 ? "transaction" : "transactions"}...
+                {holdingSelected ? `Sending ${selectedCount} ${selectedCount === 1 ? "transaction" : "transactions"} to tax review...` : `Confirming ${selectedCount} ${selectedCount === 1 ? "transaction" : "transactions"}...`}
               </div>
             ) : null}
             </div>
@@ -3138,6 +3223,7 @@ function UtilityBusinessUseControls({ mode, percent, percentValid, allowReturnTo
           <ReviewChoiceButton groupName="deduction-business-use-mode" value="dedicated" current={mode} onChange={onModeChange} label="100% business" />
           <ReviewChoiceButton groupName="deduction-business-use-mode" value="mixed" current={mode} onChange={onModeChange} label="Mixed business and personal use" />
           <ReviewChoiceButton groupName="deduction-business-use-mode" value="personal" current={mode} onChange={onModeChange} label="Personal - 0%" />
+          <ReviewChoiceButton groupName="deduction-business-use-mode" value="needs_tax_review" current={mode} onChange={onModeChange} label="None of these fit - Needs tax review" />
           {allowReturnToReview ? (
             <ReviewChoiceButton groupName="deduction-business-use-mode" value="unsure" current={mode} onChange={onModeChange} label="Return to Needs review" />
           ) : null}
@@ -3153,6 +3239,9 @@ function UtilityBusinessUseControls({ mode, percent, percentValid, allowReturnTo
       ) : null}
       {mode === "unsure" ? (
         <p className="text-xs leading-relaxed text-white/46">These transactions will return to Needs review until you provide business-use information.</p>
+      ) : null}
+      {mode === "needs_tax_review" ? (
+        <p className="text-xs leading-relaxed text-white/46">This transaction will remain visible and will not affect deduction totals until it is reviewed.</p>
       ) : null}
       {!mode ? (
         <p className="text-xs text-amber-100/62">Choose an option before saving. Bizzi will not assume a business-use percentage.</p>
@@ -3177,6 +3266,44 @@ function ReviewChoiceButton({ value, current, onChange, label, disabled = false,
       <span aria-hidden="true" className={`h-2 w-2 rounded-full ${selected ? "bg-emerald-300" : "bg-white/24"}`} />
       {label}
     </label>
+  );
+}
+
+function TaxReviewHoldingFields({ selectedCount, selectedGrossTotal, note, bookkeepingIssue, disabled, onNoteChange, onBookkeepingIssueChange }) {
+  return (
+    <div className="rounded-[12px] border border-amber-300/18 bg-amber-300/[0.055] px-3 py-2">
+      <div className="text-xs font-semibold text-amber-50">Needs tax review</div>
+      <p className="mt-1 text-xs leading-relaxed text-white/58">
+        Use this when none of the available tax treatments fit. This transaction will remain visible and will not affect deduction totals until it is reviewed.
+      </p>
+      <p className="mt-1 text-xs leading-relaxed text-white/46">
+        {selectedCount} selected · {formatCurrencyLocal(selectedGrossTotal)} gross expenses · deductible amount not yet determined
+      </p>
+      <label className="mt-2 block text-[10px] font-semibold uppercase tracking-[0.12em] text-white/42">
+        Review note
+        <textarea
+          value={note || ""}
+          disabled={disabled}
+          maxLength={240}
+          onChange={(event) => onNoteChange?.(event.target.value)}
+          placeholder="Possible equipment purchase, may need capitalization, ask bookkeeper..."
+          className="mt-1 min-h-[68px] w-full resize-y rounded-[11px] border border-white/10 bg-black/22 px-3 py-2 text-sm font-medium normal-case tracking-normal text-white outline-none placeholder:text-white/28 focus:ring-2 focus:ring-amber-200/20 disabled:cursor-not-allowed disabled:opacity-55"
+        />
+      </label>
+      <label className="mt-2 flex items-start gap-2 rounded-[11px] border border-white/[0.07] bg-black/14 px-3 py-2 text-xs text-white/58">
+        <input
+          type="checkbox"
+          checked={bookkeepingIssue === true}
+          disabled={disabled}
+          onChange={(event) => onBookkeepingIssueChange?.(event.target.checked)}
+          className="mt-0.5"
+        />
+        <span>
+          <span className="font-semibold text-white/74">Bookkeeping category may be wrong</span>
+          <span className="block text-white/42">Use this when the QuickBooks account itself may need to be corrected. Bizzi will not change QuickBooks from this Tax modal.</span>
+        </span>
+      </label>
+    </div>
   );
 }
 
@@ -3252,6 +3379,7 @@ function VehicleMethodControls({
           <ReviewChoiceButton groupName="deduction-vehicle-method" value="standard_mileage" current={vehicleMethod} onChange={onVehicleMethodChange} label="Standard mileage" />
           <ReviewChoiceButton groupName="deduction-vehicle-method" value="actual_expense" current={vehicleMethod} onChange={onVehicleMethodChange} label="Actual vehicle expenses" />
           <ReviewChoiceButton groupName="deduction-vehicle-method" value="unsure" current={vehicleMethod} onChange={onVehicleMethodChange} label="I'm not sure" />
+          <ReviewChoiceButton groupName="deduction-vehicle-method" value="needs_tax_review" current={vehicleMethod} onChange={onVehicleMethodChange} label="None of these fit - Needs tax review" />
         </div>
       </div>
       {vehicleMethod === "standard_mileage" ? (
@@ -3303,11 +3431,17 @@ function VehicleMethodControls({
       {vehicleMethod === "unsure" ? (
         <p className="text-xs leading-relaxed text-white/46">No vehicle method will be saved, and these gas transactions will remain Needs review.</p>
       ) : null}
+      {vehicleMethod === "needs_tax_review" ? (
+        <p className="text-xs leading-relaxed text-white/46">This transaction will remain visible and will not affect deduction totals until it is reviewed.</p>
+      ) : null}
     </div>
   );
 }
 
 function DetailDeductionValue({ row }) {
+  if (classificationBucket(row) === "needs_tax_review") {
+    return <div className="font-semibold text-amber-100/72">Not yet determined</div>;
+  }
   if (isStandardMileageGasRow(row)) {
     return <div className="font-semibold text-sky-100/78">Covered by standard mileage</div>;
   }
@@ -3412,6 +3546,9 @@ function parseBusinessUsePercent(value) {
 
 function estimateResolutionDeduction(rows, context, options = {}) {
   if (!rows.length) return { amount: 0, label: "Select transactions" };
+  if (isTaxReviewResolution(options)) {
+    return { amount: null, label: "Not calculated" };
+  }
   if (options.resolutionMode === "unsure" || options.businessUseMode === "unsure") {
     return { amount: 0, label: "Stays in review" };
   }
@@ -3441,8 +3578,16 @@ function estimateResolutionDeduction(rows, context, options = {}) {
   return { amount, label: formatCurrencyLocal(amount) };
 }
 
+function isTaxReviewResolution(options = {}) {
+  return options.resolutionMode === "needs_tax_review" ||
+    options.businessUseMode === "needs_tax_review" ||
+    options.vehicleMethod === "needs_tax_review" ||
+    options.resolutionCategory === "tax_review_holding";
+}
+
 function buildDetailResolutionChanges(context, rows, options = {}) {
   const first = rows[0] || {};
+  if (isTaxReviewResolution(options)) return null;
   const category = context.kind === "category_confirmation" || context.allowCategoryChange
     ? options.resolutionCategory || context.defaultTaxCategory
     : taxCategorySelectValue(first) || context.defaultTaxCategory;
@@ -3693,6 +3838,7 @@ const TAX_CATEGORY_OPTIONS = [
   { value: "wages_payroll", label: "Wages & Payroll" },
   { value: "utilities", label: "Utilities" },
   { value: "equipment_asset", label: "Equipment & Assets" },
+  { value: "tax_review_holding", label: "None of these fit - Needs tax review" },
   { value: "personal_expense", label: "Personal Expense" },
   { value: "other", label: "Other" },
 ];
@@ -3700,6 +3846,7 @@ const TAX_CATEGORY_OPTIONS = [
 const TAX_CATEGORY_ASSIGNMENTS = {
   meals: assignment("partially_deductible", 50, "ordinary_expense"),
   equipment_asset: assignment("capitalizable", 0, "capitalizable"),
+  tax_review_holding: assignment("not_yet_determined", null, "tax_review_holding"),
   personal_expense: assignment("nondeductible", 0, "nondeductible"),
   other: assignment("needs_review", null, "ordinary_expense"),
 };
@@ -3783,6 +3930,8 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     failedTransactionCount: 0,
     unclassifiedTransactionCount: 0,
     reviewTransactionCount: 0,
+    needsTaxReviewTransactionCount: 0,
+    needsTaxReviewGrossExpense: 0,
     reviewActionLabel: null,
     transactions: [],
   }]));
@@ -3822,6 +3971,8 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
         failedTransactionCount: 0,
         unclassifiedTransactionCount: 0,
         reviewTransactionCount: 0,
+        needsTaxReviewTransactionCount: 0,
+        needsTaxReviewGrossExpense: 0,
         reviewActionLabel: null,
       });
     }
@@ -3833,6 +3984,7 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     const standardMileageGas = isStandardMileageGasRow(row);
     const authoritativeAmount = ["auto_classified", "user_confirmed", "accountant_confirmed"].includes(bucket) && !standardMileageGas ? deductibleAmount : 0;
     const proposedAmount = bucket === "needs_review" ? deductibleAmount : 0;
+    const needsTaxReviewAmount = bucket === "needs_tax_review" ? expenseAmount : 0;
     const displayAmount = scope === "needs_review" ? proposedAmount : scope === "all" ? authoritativeAmount + proposedAmount : authoritativeAmount;
     month.expenseTotal += expenseAmount;
     month.authoritativeDeductibleTotal += authoritativeAmount;
@@ -3849,6 +4001,10 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     if (bucket === "needs_review") {
       month.reviewTransactionCount += 1;
       month.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
+    }
+    if (bucket === "needs_tax_review") {
+      month.needsTaxReviewTransactionCount += 1;
+      month.needsTaxReviewGrossExpense += needsTaxReviewAmount;
     }
     month.transactions.push(row);
     account.expenseTotal += expenseAmount;
@@ -3867,6 +4023,10 @@ function buildDeductionAccountMatrix(rows, year, { isDemo = false, scope = "all"
     if (bucket === "needs_review") {
       account.reviewTransactionCount += 1;
       account.reviewActionLabel ||= reviewDecisionForRow(row).actionLabel;
+    }
+    if (bucket === "needs_tax_review") {
+      account.needsTaxReviewTransactionCount += 1;
+      account.needsTaxReviewGrossExpense += needsTaxReviewAmount;
     }
   }
 
@@ -3890,6 +4050,8 @@ function buildMatrixAuthorityTotals(matrix) {
     userConfirmedTransactionCount: totals.userConfirmedTransactionCount + Number(account.userConfirmedTransactionCount || 0),
     accountantConfirmedTransactionCount: totals.accountantConfirmedTransactionCount + Number(account.accountantConfirmedTransactionCount || 0),
     reviewTransactionCount: totals.reviewTransactionCount + Number(account.reviewTransactionCount || 0),
+    needsTaxReviewTransactionCount: totals.needsTaxReviewTransactionCount + Number(account.needsTaxReviewTransactionCount || 0),
+    needsTaxReviewGrossExpense: totals.needsTaxReviewGrossExpense + normalizeMoney(account.needsTaxReviewGrossExpense),
   }), {
     authoritativeDeductibleTotal: 0,
     proposedDeductibleTotal: 0,
@@ -3897,6 +4059,8 @@ function buildMatrixAuthorityTotals(matrix) {
     userConfirmedTransactionCount: 0,
     accountantConfirmedTransactionCount: 0,
     reviewTransactionCount: 0,
+    needsTaxReviewTransactionCount: 0,
+    needsTaxReviewGrossExpense: 0,
   });
 }
 
@@ -3916,6 +4080,7 @@ function getTransactionMonthKey(value, year) {
 }
 
 function resolveDeductibleAmount(row) {
+  if (classificationBucket(row) === "needs_tax_review") return null;
   if (classificationBucket(row) === "needs_review") {
     const percent = Number(row?.deductiblePercent);
     if (!Number.isFinite(percent) || percent <= 0) return 0;
@@ -3934,6 +4099,7 @@ function roundCurrency(value) {
 
 function needsTaxClassificationReview(row) {
   if (!row) return false;
+  if (classificationBucket(row) === "needs_tax_review") return true;
   if (row.requiresReview === true) return true;
   const status = String(row.status || row.statusLabel || "").toLowerCase();
   const treatment = String(row.taxTreatment || row.taxTreatmentLabel || "").toLowerCase();
@@ -3951,7 +4117,8 @@ function isExpenseOutflow(row) {
 }
 
 function formatDeductiblePercent(value) {
-  if (value == null || Number.isNaN(Number(value))) return "Review";
+  if (value == null || value === "") return "Not yet determined";
+  if (Number.isNaN(Number(value))) return "Review";
   return `${Math.round(Number(value))}% deductible`;
 }
 
