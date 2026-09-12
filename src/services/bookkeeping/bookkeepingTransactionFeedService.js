@@ -2,6 +2,7 @@ import { supabase } from "../supabaseAdmin.js";
 import { formatPlaidAccountDisplayLabel } from "./postingTraceDisplay.js";
 import { deriveCreditCardPaymentStatus, isCreditCardPaymentWorkflow } from "./creditCardPaymentStatus.js";
 import { classifyAutoPostOperationalScope, getAutoPostPolicy } from "./autoPostControl.js";
+import { discoverIncomingDepositQboMatch } from "./incomingDepositMatchService.js";
 
 function firstDayOfMonth() {
   const now = new Date();
@@ -364,6 +365,102 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   return null;
 }
 
+function shouldDiscoverIncomingDepositForFeed(row = {}) {
+  const amount = Number(row.amount || 0);
+  const direction = String(row.direction || "").toUpperCase();
+  if (!(amount > 0 && (direction === "INFLOW" || !direction))) return false;
+  if (row.pending === true || row.status === "posted" || row.status === "matched_existing_qbo") return false;
+  const meta = row.meta || {};
+  if (row.incoming_deposit_match_status || meta.incoming_deposit_match_status) return false;
+  if (["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(String(meta.post_block_reason || row.post_error || ""))) return false;
+  const taxonomy = String(row.taxonomy_type || meta.taxonomy_type || meta.taxonomy_override || "").toLowerCase();
+  if (["transfer_internal", "owner_draw", "owner_contribution", "loan_proceeds", "refund", "cc_payment"].includes(taxonomy)) return false;
+  return ["needs_review", "uncategorized", ""].includes(String(row.status || "needs_review").toLowerCase());
+}
+
+function incomingDepositOverlayFromResult(result = {}) {
+  const candidates = (result.candidates || []).map((candidate) => ({
+    qbo_entity_type: candidate.qbo_entity_type,
+    qbo_entity_id: candidate.qbo_entity_id,
+    qbo_realm_id: candidate.qbo_realm_id || null,
+    match_type: candidate.match_type,
+    txn_date: candidate.txn_date,
+    amount_minor: candidate.amount_minor,
+    currency: candidate.currency || null,
+    customer_ref: candidate.customer_ref || null,
+    invoice_ids: candidate.invoice_ids || [],
+    bank_account_match: candidate.bank_account_match || null,
+    reason_codes: candidate.reason_codes || [],
+  }));
+  const status = result.status || null;
+  if (status === "candidate" && result.confidence_tier === "tier_4") return null;
+  return {
+    incoming_deposit_match_id: result.match?.id || null,
+    incoming_deposit_match_status: status,
+    incoming_deposit_confidence_tier: result.confidence_tier || null,
+    incoming_deposit_reason_codes: result.reason_codes || [],
+    incoming_deposit_candidates: candidates,
+    post_error: status === "match_check_unavailable"
+      ? "match_check_unavailable"
+      : status === "ambiguous"
+        ? "incoming_deposit_needs_match"
+        : "possible_existing_qbo_match",
+    meta: {
+      safe_to_auto_post: false,
+      post_block_reason: status === "match_check_unavailable"
+        ? "match_check_unavailable"
+        : status === "ambiguous"
+          ? "incoming_deposit_needs_match"
+          : "possible_existing_qbo_match",
+      incoming_deposit_match_id: result.match?.id || null,
+      incoming_deposit_match_status: status,
+      incoming_deposit_confidence_tier: result.confidence_tier || null,
+      incoming_deposit_reason_codes: result.reason_codes || [],
+      incoming_deposit_candidates: candidates,
+    },
+  };
+}
+
+async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, nowMs }) {
+  const targets = rows.filter(shouldDiscoverIncomingDepositForFeed).slice(0, 25);
+  if (!targets.length) return rows;
+  const overlays = new Map();
+  for (const row of targets) {
+    try {
+      const result = await discoverIncomingDepositQboMatch({
+        db,
+        businessId,
+        bankTransactionId: row.id,
+        actorRole: "feed_candidate_discovery",
+        persist: true,
+        nowMs,
+      });
+      const overlay = incomingDepositOverlayFromResult(result);
+      if (overlay) overlays.set(String(row.id), overlay);
+    } catch (err) {
+      overlays.set(String(row.id), {
+        incoming_deposit_match_status: "match_check_unavailable",
+        incoming_deposit_confidence_tier: "unavailable",
+        incoming_deposit_reason_codes: [err?.code || err?.message || "incoming_deposit_discovery_failed"],
+        incoming_deposit_candidates: [],
+        post_error: "match_check_unavailable",
+        meta: {
+          safe_to_auto_post: false,
+          post_block_reason: "match_check_unavailable",
+          incoming_deposit_match_status: "match_check_unavailable",
+          incoming_deposit_confidence_tier: "unavailable",
+          incoming_deposit_reason_codes: [err?.code || err?.message || "incoming_deposit_discovery_failed"],
+          incoming_deposit_candidates: [],
+        },
+      });
+    }
+  }
+  return rows.map((row) => {
+    const overlay = overlays.get(String(row.id));
+    return overlay ? { ...row, ...overlay, meta: { ...(row.meta || {}), ...(overlay.meta || {}) } } : row;
+  });
+}
+
 export async function countBookkeepingTransactions({
   businessId,
   statusFilter = "needs_review",
@@ -474,7 +571,13 @@ export async function fetchBookkeepingTransactions({
     policy = { enabled: false, policy_columns_available: false };
   }
   const nowMs = Date.now();
-  const enrichedRows = accountEnrichedRows.map((row) => {
+  const discoveryRows = await attachIncomingDepositDiscoveryForFeed({
+    db,
+    businessId,
+    rows: accountEnrichedRows,
+    nowMs,
+  });
+  const enrichedRows = discoveryRows.map((row) => {
     const qboPostingLifecycle = buildPostingLifecycleForFeed(row, policy, nowMs);
     return qboPostingLifecycle ? { ...row, qbo_posting_lifecycle: qboPostingLifecycle } : row;
   });

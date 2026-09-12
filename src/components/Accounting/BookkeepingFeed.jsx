@@ -522,6 +522,9 @@ function humanizeReason(code = "") {
     qbo_match_cache_stale: "QBO cache is stale",
     qbo_match_cache_unavailable: "QBO cache unavailable",
     qbo_match_cache_never_synced: "QBO cache has not synced",
+    invoice_only_duplicate_income_evidence: "Invoice-only duplicate evidence",
+    invoice_only_payment_verification_needed: "Payment verification needed",
+    incoming_deposit_match_rejected_review_required: "Rejected candidate needs review",
   };
   return labels[code] || String(code || "").replace(/_/g, " ");
 }
@@ -534,18 +537,20 @@ function incomingDepositMatchState(txn = {}) {
     txn.status === "matched_existing_qbo" ||
     txn.matched_existing_qbo === true ||
     ["needs_confirmation", "ambiguous", "match_check_unavailable", "confirmed"].includes(String(status || "")) ||
-    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified"].includes(String(blockReason || ""));
+    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(String(blockReason || ""));
   if (!active) return { active: false };
   const candidates = txn.incoming_deposit_candidates || meta.incoming_deposit_candidates || [];
   const primary = candidates[0] || null;
   const confirmed = txn.status === "matched_existing_qbo" || txn.matched_existing_qbo === true || status === "confirmed";
   const unavailable = status === "match_check_unavailable" || blockReason === "match_check_unavailable";
   const ambiguous = status === "ambiguous" || blockReason === "incoming_deposit_needs_match";
+  const invoiceOnly = candidates.length > 0 && candidates.every((candidate) => candidate.match_type === "qbo_invoice_only_context" || candidate.qbo_entity_type === "Invoice");
   return {
     active: true,
     confirmed,
     unavailable,
     ambiguous,
+    invoiceOnly,
     status,
     matchId: txn.incoming_deposit_match_id || meta.incoming_deposit_match_id || null,
     tier: txn.incoming_deposit_confidence_tier || meta.incoming_deposit_confidence_tier || null,
@@ -571,6 +576,8 @@ function IncomingDepositMatchPanel({
     ? "Matched to existing QuickBooks payment"
     : state.unavailable
       ? "Match check unavailable"
+      : state.invoiceOnly
+        ? "Possible duplicate income - payment verification needed"
       : state.ambiguous
         ? "Needs match"
         : "Possible existing QuickBooks match";
@@ -578,6 +585,8 @@ function IncomingDepositMatchPanel({
     ? "Confirmed against an existing QuickBooks bank/payment transaction. Bizzi did not create new income."
     : state.unavailable
       ? "Bizzi couldn't verify whether this deposit already exists in QuickBooks. It has not been posted as income."
+      : state.invoiceOnly
+        ? "Bizzi found QuickBooks invoice activity that may already explain this deposit, but the payment or bank deposit chain still needs verification."
       : state.ambiguous
         ? "Bizzi found more than one QuickBooks transaction that may explain this deposit."
         : "Bizzi found an existing QuickBooks deposit or payment that may already explain this bank deposit.";
@@ -619,7 +628,7 @@ function IncomingDepositMatchPanel({
           <button type="button" disabled={readOnly || action.loading} onClick={() => onInspect?.(txn.id, null, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{action.loading ? "Checking..." : "Try again"}</button>
         ) : (
           <>
-            {state.matchId && primary.qbo_entity_type ? (
+            {state.matchId && primary.qbo_entity_type && !state.invoiceOnly ? (
               <button type="button" disabled={readOnly || action.loading} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">Match existing QuickBooks payment</button>
             ) : null}
             {state.matchId ? (

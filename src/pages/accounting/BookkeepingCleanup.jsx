@@ -464,7 +464,7 @@ function hasIncomingDepositMatchWorkflow(txn = {}) {
     txn.status === "matched_existing_qbo" ||
     txn.matched_existing_qbo === true ||
     ["needs_confirmation", "ambiguous", "match_check_unavailable", "confirmed"].includes(String(status || "")) ||
-    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified"].includes(String(blockReason || ""))
+    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(String(blockReason || ""))
   );
 }
 

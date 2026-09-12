@@ -12,6 +12,14 @@ const ACTIVE_CANDIDATE_STATUSES = new Set(["needs_confirmation", "ambiguous"]);
 const FINAL_MATCH_STATUSES = new Set(["confirmed"]);
 const VERIFIED_MAPPING_SOURCES = new Set(["manual", "user_confirmed", "admin", "admin_confirmed", "external", "externally_verified"]);
 const INVALID_QBO_STATUSES = new Set(["deleted", "voided", "reversed"]);
+const CUSTOMER_RECEIPT_EXCLUDED_TAXONOMIES = new Set([
+  "transfer_internal",
+  "owner_draw",
+  "owner_contribution",
+  "loan_proceeds",
+  "refund",
+  "cc_payment",
+]);
 
 export class IncomingDepositMatchError extends Error {
   constructor(code, status = 400, details = {}) {
@@ -101,6 +109,25 @@ function isMissingSchemaError(err) {
   const code = String(err?.code || "");
   const message = String(err?.message || "");
   return code === "42P01" || code === "42703" || /relation .* does not exist|column .* does not exist/i.test(message);
+}
+
+async function matchSchemaAvailable({ db }) {
+  try {
+    const matches = await db
+      .from("bank_qbo_matches")
+      .select("id,status,match_type,confidence_tier,bank_account_match,request_idempotency_key")
+      .limit(1);
+    if (matches?.error) throw matches.error;
+    const items = await db
+      .from("bank_qbo_match_items")
+      .select("id,match_id,qbo_entity_type,qbo_entity_id,evidence_role,active_confirmed")
+      .limit(1);
+    if (items?.error) throw items.error;
+    return { ok: true };
+  } catch (err) {
+    if (isMissingSchemaError(err)) return { ok: false, reason: "incoming_deposit_match_schema_unavailable" };
+    throw err;
+  }
 }
 
 async function fetchBankTransaction({ db, businessId, bankTransactionId }) {
@@ -235,6 +262,7 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
   const consumed = await fetchAlreadyConfirmedTargetKeys({ db, businessId, bankTransactionId: bankTxn.id });
   const within = (field, value, before, after, query) => query.gte(field, shiftDate(value, -before)).lte(field, shiftDate(value, after));
   const candidates = [];
+  let evidenceSchemaIncomplete = false;
 
   try {
     const deposits = await selectRows(within("qbo_txn_date", bankTxn.date, DEPOSIT_WINDOW_BEFORE_DAYS, DEPOSIT_WINDOW_AFTER_DAYS, db
@@ -267,7 +295,7 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
       candidates.push(candidate);
     });
   } catch (err) {
-    if (!isMissingSchemaError(err)) throw err;
+    if (isMissingSchemaError(err)) evidenceSchemaIncomplete = true; else throw err;
   }
 
   try {
@@ -287,7 +315,7 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
       candidates.push(candidate);
     });
   } catch (err) {
-    if (!isMissingSchemaError(err)) throw err;
+    if (isMissingSchemaError(err)) evidenceSchemaIncomplete = true; else throw err;
   }
 
   try {
@@ -307,13 +335,37 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
       candidates.push(candidate);
     });
   } catch (err) {
-    if (!isMissingSchemaError(err)) throw err;
+    if (isMissingSchemaError(err)) evidenceSchemaIncomplete = true; else throw err;
   }
 
-  return candidates
-    .filter(candidateEligible)
-    .filter((candidate) => !rejected.has(`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`))
-    .filter((candidate) => !consumed.has(`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`));
+  try {
+    const invoices = await selectRows(within("document_date", bankTxn.date, DIRECT_WINDOW_BEFORE_DAYS, DIRECT_WINDOW_AFTER_DAYS, db
+      .from("job_revenue_documents")
+      .select("id,realm_id,external_document_id,document_number,document_date,total_amount,amount_minor,currency,customer_ref,linked_payment_ids,sync_token,source_snapshot_at,status,source_snapshot")
+      .eq("business_id", businessId)
+      .eq("source_document_type", "invoice")
+      .eq("amount_minor", bankAmountMinor)));
+    invoices.forEach((row) => {
+      const candidate = candidateBase({ bankTxn, mapping, mappingInfo, row, entityType: "Invoice", entityId: row.external_document_id, txnDate: row.document_date, amountMinor: row.amount_minor, currency: row.currency, syncToken: row.sync_token, sourceSnapshotAt: row.source_snapshot_at });
+      candidate.match_type = "qbo_invoice_only_context";
+      candidate.invoice_ids = [row.external_document_id].filter(Boolean).map(String);
+      candidate.reason_codes.push("invoice_only_duplicate_income_evidence");
+      candidate.reason_codes.push(row.linked_payment_ids?.length ? "invoice_links_payment_but_bank_chain_unproven" : "invoice_payment_chain_unproven");
+      candidate.verified_same_account = false;
+      candidate.bank_account_match = mappingInfo.bank_account_match;
+      candidates.push(candidate);
+    });
+  } catch (err) {
+    if (isMissingSchemaError(err)) evidenceSchemaIncomplete = true; else throw err;
+  }
+
+  return {
+    candidates: candidates
+      .filter(candidateEligible)
+      .filter((candidate) => !rejected.has(`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`))
+      .filter((candidate) => !consumed.has(`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`)),
+    evidenceSchemaIncomplete,
+  };
 }
 
 function classifyCandidates(candidates = []) {
@@ -344,13 +396,14 @@ function classifyCandidates(candidates = []) {
     };
   }
   if (candidates.length) {
+    const invoiceOnly = candidates.every((candidate) => candidate.match_type === "qbo_invoice_only_context");
     return {
       status: "ambiguous",
       confidence_tier: "tier_3",
       confidence_score: 0.55,
       candidates,
       primary: candidates[0],
-      reason_codes: Array.from(new Set(candidates.flatMap((candidate) => candidate.reason_codes).concat("multiple_or_unproven_qbo_candidates", "ordinary_income_posting_blocked"))),
+      reason_codes: Array.from(new Set(candidates.flatMap((candidate) => candidate.reason_codes).concat(invoiceOnly ? "invoice_only_payment_verification_needed" : "multiple_or_unproven_qbo_candidates", "ordinary_income_posting_blocked"))),
     };
   }
   return {
@@ -516,6 +569,13 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
   if (!isIncomingDeposit(bankTxn)) return { ok: true, status: "not_applicable", posting_eligibility: "ordinary_workflow", reason_codes: ["not_incoming_deposit"] };
   if (bankTxn.pending === true) return { ok: true, status: "pending", posting_eligibility: "blocked", reason_codes: ["pending_bank_transaction"] };
 
+  const schema = await matchSchemaAvailable({ db });
+  if (!schema.ok) {
+    const result = { status: "match_check_unavailable", confidence_tier: "unavailable", confidence_score: null, candidates: [], primary: null, reason_codes: [schema.reason, "ordinary_income_posting_blocked"] };
+    if (persist) await writeCategorizationBlockMeta({ db, businessId, bankTxn, result, match: null, reason: "match_check_unavailable" });
+    return { ok: true, ...result, posting_eligibility: "blocked_match_check_unavailable", match: null };
+  }
+
   const activeConfirmed = await selectRows(db
     .from("bank_qbo_matches")
     .select("*")
@@ -541,8 +601,17 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
     return { ok: true, ...result, posting_eligibility: "blocked_match_check_unavailable", match };
   }
   const bankAmountMinor = toMinorUnits(Math.abs(Number(bankTxn.amount || 0)), null);
-  const candidates = await discoverCandidates({ db, businessId, bankTxn, mapping, mappingInfo, bankAmountMinor });
+  const { candidates, evidenceSchemaIncomplete } = await discoverCandidates({ db, businessId, bankTxn, mapping, mappingInfo, bankAmountMinor });
+  if (evidenceSchemaIncomplete && !candidates.length) {
+    const result = { status: "match_check_unavailable", confidence_tier: "unavailable", confidence_score: null, candidates: [], primary: null, reason_codes: ["qbo_match_evidence_columns_unavailable", "ordinary_income_posting_blocked"] };
+    const match = persist ? await persistCandidateResult({ db, businessId, bankTxn, mapping, freshness, result, actor, actorRole }) : null;
+    if (persist) await writeCategorizationBlockMeta({ db, businessId, bankTxn, result, match, reason: "match_check_unavailable" });
+    return { ok: true, ...result, posting_eligibility: "blocked_match_check_unavailable", match };
+  }
   const result = classifyCandidates(candidates);
+  if (evidenceSchemaIncomplete) {
+    result.reason_codes = Array.from(new Set([...(result.reason_codes || []), "qbo_match_evidence_schema_partial"]));
+  }
   if (!mappingInfo.verified) {
     result.status = "ambiguous";
     result.confidence_tier = "tier_3";
@@ -566,6 +635,117 @@ export async function evaluateIncomingDepositPostingGuard(args = {}) {
     return { ok: true, allowed: true, result };
   }
   return { ok: true, allowed: false, reason: result.posting_eligibility || result.status, result };
+}
+
+function isUnresolvedCustomerReceiptCandidate(bankTxn = {}, cat = {}) {
+  if (!isIncomingDeposit(bankTxn)) return false;
+  if (bankTxn.pending === true || bankTxn.is_archived === true) return false;
+  const status = String(cat.status || "needs_review").toLowerCase();
+  if (!["needs_review", "uncategorized", ""].includes(status)) return false;
+  const meta = cat.meta || {};
+  if (meta.matched_existing_qbo === true || meta.incoming_deposit_match_status === "rejected") return false;
+  if (meta.incoming_deposit_match_status && meta.incoming_deposit_match_status !== "unchecked") return false;
+  const taxonomy = String(meta.taxonomy_type || meta.taxonomy_override || "").toLowerCase();
+  if (CUSTOMER_RECEIPT_EXCLUDED_TAXONOMIES.has(taxonomy)) return false;
+  return true;
+}
+
+function matchResultSummary(result = {}) {
+  return {
+    status: result.status || null,
+    posting_eligibility: result.posting_eligibility || null,
+    confidence_tier: result.confidence_tier || null,
+    reason_codes: result.reason_codes || [],
+    match_id: result.match?.id || result.match_id || null,
+    candidate_count: result.candidates?.length || 0,
+    candidates: (result.candidates || []).map((candidate) => ({
+      qbo_entity_type: candidate.qbo_entity_type,
+      qbo_entity_id: candidate.qbo_entity_id,
+      qbo_realm_id: candidate.qbo_realm_id || null,
+      match_type: candidate.match_type,
+      txn_date: candidate.txn_date,
+      amount_minor: candidate.amount_minor,
+      currency: candidate.currency || null,
+      customer_ref: candidate.customer_ref || null,
+      invoice_ids: candidate.invoice_ids || [],
+      bank_account_match: candidate.bank_account_match || null,
+      reason_codes: candidate.reason_codes || [],
+    })),
+  };
+}
+
+async function fetchCandidateRowsForDiscovery({ db, businessId, transactionId = null, limit = 25 }) {
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  let query = db
+    .from("bank_transactions")
+    .select("id,business_id,plaid_transaction_id,plaid_account_id,date,amount,signed_amount,direction,pending,is_archived,name,merchant_name,counterparty_name")
+    .eq("business_id", businessId)
+    .eq("is_archived", false)
+    .eq("pending", false)
+    .gt("amount", 0)
+    .order("date", { ascending: false })
+    .limit(safeLimit);
+  if (transactionId) query = query.eq("id", transactionId).limit(1);
+  const bankRows = await selectRows(query);
+  const ids = bankRows.map((row) => row.id).filter(Boolean);
+  if (!ids.length) return [];
+  const cats = await selectRows(db
+    .from("transaction_categorizations")
+    .select("transaction_id,status,post_error,meta")
+    .eq("business_id", businessId)
+    .in("transaction_id", ids));
+  const catByTxn = new Map(cats.map((row) => [String(row.transaction_id), row]));
+  return bankRows
+    .map((bankTxn) => ({ bankTxn, cat: catByTxn.get(String(bankTxn.id)) || { status: "needs_review", meta: {} } }))
+    .filter(({ bankTxn, cat }) => isUnresolvedCustomerReceiptCandidate(bankTxn, cat));
+}
+
+export async function discoverExistingIncomingDepositMatches({
+  db = defaultSupabase,
+  businessId,
+  transactionId = null,
+  dryRun = true,
+  limit = 25,
+  actor = null,
+  actorRole = "candidate_backfill",
+  nowMs = Date.now(),
+} = {}) {
+  if (!businessId) throw new IncomingDepositMatchError("missing_business_id", 400);
+  const rows = await fetchCandidateRowsForDiscovery({ db, businessId, transactionId, limit });
+  const results = [];
+  for (const { bankTxn } of rows) {
+    try {
+      const result = await discoverIncomingDepositQboMatch({
+        db,
+        businessId,
+        bankTransactionId: bankTxn.id,
+        actor,
+        actorRole,
+        persist: !dryRun,
+        nowMs,
+      });
+      results.push({ transaction_id: bankTxn.id, ok: true, ...matchResultSummary(result) });
+    } catch (err) {
+      results.push({
+        transaction_id: bankTxn.id,
+        ok: false,
+        status: "match_check_unavailable",
+        posting_eligibility: "blocked_match_check_unavailable",
+        reason_codes: [err?.code || err?.message || "incoming_deposit_discovery_failed"],
+      });
+    }
+  }
+  return {
+    ok: true,
+    dry_run: dryRun,
+    business_id: businessId,
+    requested_transaction_id: transactionId || null,
+    scanned: rows.length,
+    blocked: results.filter((row) => row.posting_eligibility && !["ordinary_workflow", "ordinary_income_posting_allowed"].includes(row.posting_eligibility)).length,
+    ordinary_allowed: results.filter((row) => row.posting_eligibility === "ordinary_income_posting_allowed").length,
+    failed: results.filter((row) => row.ok === false).length,
+    results,
+  };
 }
 
 async function fetchPrimaryMatchItem({ db, businessId, matchId }) {
@@ -651,7 +831,15 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
   }
   if (!ACTIVE_CANDIDATE_STATUSES.has(match.status)) throw new IncomingDepositMatchError("match_not_confirmable", 409, { status: match.status });
   if (match.match_type === "unavailable") throw new IncomingDepositMatchError("match_check_unavailable", 409);
-  await assertCandidateCurrent({ db, businessId, matchId });
+  const primaryItem = await fetchPrimaryMatchItem({ db, businessId, matchId });
+  if (!primaryItem) throw new IncomingDepositMatchError("primary_match_item_missing", 409);
+  if (primaryItem.qbo_entity_type === "Invoice" || match.match_type === "qbo_invoice_only_context") {
+    throw new IncomingDepositMatchError("invoice_only_match_not_confirmable", 409);
+  }
+  const { item } = await assertCandidateCurrent({ db, businessId, matchId });
+  if (item.qbo_entity_type === "Invoice" || match.match_type === "qbo_invoice_only_context") {
+    throw new IncomingDepositMatchError("invoice_only_match_not_confirmable", 409);
+  }
 
   const active = await selectRows(db
     .from("bank_qbo_matches")
@@ -726,8 +914,31 @@ export async function rejectIncomingDepositQboMatch({ db = defaultSupabase, busi
   if (FINAL_MATCH_STATUSES.has(match.status)) throw new IncomingDepositMatchError("confirmed_match_requires_undo", 409);
   const now = new Date().toISOString();
   await db.from("bank_qbo_matches").update({ status: "rejected", updated_at: now }).eq("business_id", businessId).eq("id", matchId);
+  const { data: existingCat } = await db
+    .from("transaction_categorizations")
+    .select("meta")
+    .eq("business_id", businessId)
+    .eq("transaction_id", bankTransactionId)
+    .maybeSingle();
+  await db.from("transaction_categorizations").update({
+    status: "needs_review",
+    post_after: null,
+    post_error: "incoming_deposit_match_rejected_review_required",
+    last_post_attempt_at: now,
+    meta: {
+      ...(existingCat?.meta || {}),
+      safe_to_auto_post: false,
+      post_block_reason: "incoming_deposit_match_rejected_review_required",
+      incoming_deposit_match_id: matchId,
+      incoming_deposit_match_status: "rejected",
+      incoming_deposit_confidence_tier: match.confidence_tier || null,
+      incoming_deposit_reason_codes: Array.from(new Set([...(match.reason_codes || []), "human_rejected_candidate", "ordinary_income_posting_blocked"])),
+      posting_in_progress: false,
+      next_post_attempt_at: null,
+    },
+  }).eq("business_id", businessId).eq("transaction_id", bankTransactionId);
   await insertHistory({ db, businessId, bankTransactionId, matchId, action: "rejected", previousState: match, newState: { ...match, status: "rejected" }, actor, actorRole, reason });
-  return discoverIncomingDepositQboMatch({ db, businessId, bankTransactionId, actor, actorRole, persist: true });
+  return { ok: true, status: "rejected", posting_eligibility: "blocked_rejected_candidate_review_required", match_id: matchId };
 }
 
 export async function undoIncomingDepositQboMatch({ db = defaultSupabase, businessId, bankTransactionId, matchId, actor = null, actorRole = "user", reason = "human_undo" } = {}) {

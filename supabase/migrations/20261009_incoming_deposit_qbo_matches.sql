@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS bank_qbo_matches (
     'qbo_payment_direct',
     'qbo_sales_receipt_direct',
     'qbo_payment_with_invoice_context',
+    'qbo_invoice_only_context',
     'unavailable'
   )),
   confidence_tier text NOT NULL CHECK (confidence_tier IN ('tier_1','tier_2','tier_3','tier_4','unavailable')),

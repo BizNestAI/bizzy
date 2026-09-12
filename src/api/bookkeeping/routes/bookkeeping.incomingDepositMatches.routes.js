@@ -7,6 +7,7 @@ import { createRateLimiter } from "../../_shared/rateLimit.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import {
   confirmIncomingDepositQboMatch,
+  discoverExistingIncomingDepositMatches,
   discoverIncomingDepositQboMatch,
   IncomingDepositMatchError,
   rejectIncomingDepositQboMatch,
@@ -49,6 +50,26 @@ router.get("/incoming-deposit-matches/:transactionId", requireAuth, async (req, 
     return res.json({ ok: true, result });
   } catch (err) {
     return sendError(res, err);
+  }
+});
+
+router.post("/incoming-deposit-matches/discovery", requireAuth, incomingDepositMatchWriteRateLimit, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const result = await discoverExistingIncomingDepositMatches({
+      db: supabase,
+      businessId,
+      transactionId: req.body?.transaction_id || req.body?.transactionId || null,
+      dryRun: req.body?.dry_run !== false && req.body?.dryRun !== false,
+      limit: req.body?.limit || 25,
+      actor: actorId(req),
+      actorRole: req.body?.dry_run === false || req.body?.dryRun === false ? "candidate_backfill_execute" : "candidate_backfill_dry_run",
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendError(res, err, "incoming_deposit_match_discovery_failed");
   }
 });
 

@@ -95,7 +95,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
 
   const blockReason = meta.post_block_reason || meta.auto_post_block_reason || row.post_block_reason || null;
   if (
-    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified"].includes(blockReason) ||
+    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(blockReason) ||
     ["needs_confirmation", "ambiguous", "match_check_unavailable"].includes(meta.incoming_deposit_match_status)
   ) {
     const unavailable = blockReason === "match_check_unavailable" || meta.incoming_deposit_match_status === "match_check_unavailable";

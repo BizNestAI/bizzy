@@ -9,9 +9,14 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 
 const {
   confirmIncomingDepositQboMatch,
+  discoverExistingIncomingDepositMatches,
   discoverIncomingDepositQboMatch,
   evaluateIncomingDepositPostingGuard,
+  rejectIncomingDepositQboMatch,
 } = await import("../src/services/bookkeeping/incomingDepositMatchService.js");
+const {
+  fetchBookkeepingTransactions,
+} = await import("../src/services/bookkeeping/bookkeepingTransactionFeedService.js");
 const {
   normalizeQboPaymentRecord,
   normalizeQboRevenueDocument,
@@ -56,6 +61,8 @@ test("normalizes QBO sales/payment fields needed for incoming deposit matching",
 
 test("blocks ordinary posting when one verified QBO Deposit candidate already exists", async () => {
   const db = fakeDb(baseMatchTables());
+  db.tables.qbo_entity_sync_runs[0].finished_at = new Date().toISOString();
+  db.tables.qbo_entity_sync_runs[0].started_at = new Date(Date.now() - 60_000).toISOString();
 
   const result = await discoverIncomingDepositQboMatch({
     db,
@@ -234,6 +241,148 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(page, /onUndoIncomingDepositMatch/);
 });
 
+test("existing Needs Review inflows receive feed-time candidate discovery", async () => {
+  const db = fakeDb(baseMatchTables());
+  db.tables.qbo_entity_sync_runs[0].finished_at = new Date().toISOString();
+  db.tables.qbo_entity_sync_runs[0].started_at = new Date(Date.now() - 60_000).toISOString();
+  db.rpcRows = [{
+    id: "txn-300",
+    plaid_account_id: "plaid-checking",
+    plaid_transaction_id: "plaid-1",
+    date: "2026-09-07",
+    name: "DEPOSIT INTUIT 73102173 OPTIMIST BOOKKEEPING ACH CREDIT",
+    amount: 300,
+    signed_amount: 300,
+    direction: "INFLOW",
+    pending: false,
+    cat_status: "needs_review",
+    suggested_qbo_account_id: "income-1",
+    suggested_qbo_account_name: "Sales of Product Income",
+    cat_meta: {},
+    total_count: 1,
+  }];
+  db.tables.plaid_accounts = [{
+    business_id: "b1",
+    plaid_account_id: "plaid-checking",
+    name: "Checking",
+    mask: "1234",
+  }];
+  db.tables.business_profiles = [{ id: "b1", auto_post_to_quickbooks: false }];
+  db.tables.bookkeeping_auto_post_backlog_releases = [];
+
+  const result = await fetchBookkeepingTransactions({
+    db,
+    businessId: "b1",
+    statusFilter: "needs_review",
+    rangeParam: "all",
+  });
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].incoming_deposit_match_status, "needs_confirmation");
+  assert.equal(result.rows[0].incoming_deposit_candidates[0].qbo_entity_id, "dep-300");
+  assert.equal(result.rows[0].meta.post_block_reason, "possible_existing_qbo_match");
+  assert.equal(db.tables.bank_qbo_matches.length, 1);
+  assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
+});
+
+test("existing-row dry-run discovery is bounded, idempotent, and performs no writes", async () => {
+  const db = fakeDb(baseMatchTables());
+
+  const result = await discoverExistingIncomingDepositMatches({
+    db,
+    businessId: "b1",
+    transactionId: "txn-300",
+    dryRun: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+
+  assert.equal(result.dry_run, true);
+  assert.equal(result.scanned, 1);
+  assert.equal(result.results[0].status, "needs_confirmation");
+  assert.equal(result.results[0].candidate_count, 1);
+  assert.equal(db.tables.bank_qbo_matches.length, 0);
+  assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_match_status, undefined);
+});
+
+test("missing match tables fail closed instead of silently enabling legacy income posting", async () => {
+  const db = fakeDb(baseMatchTables());
+  db.failSelectTables.add("bank_qbo_matches");
+
+  const result = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+
+  assert.equal(result.status, "match_check_unavailable");
+  assert.equal(result.posting_eligibility, "blocked_match_check_unavailable");
+  assert.equal(db.tables.transaction_categorizations[0].post_error, "match_check_unavailable");
+  assert.ok(db.tables.transaction_categorizations[0].meta.incoming_deposit_reason_codes.includes("incoming_deposit_match_schema_unavailable"));
+});
+
+test("invoice-only duplicate evidence blocks blind posting but cannot be confirmed as a bank match", async () => {
+  const tables = baseMatchTables();
+  tables.job_revenue_evidence = [];
+  tables.job_revenue_documents = [{
+    id: "doc-1102",
+    business_id: "b1",
+    realm_id: "r1",
+    source_document_type: "invoice",
+    external_document_id: "1102",
+    document_number: "1102",
+    document_date: "2026-09-07",
+    amount_minor: 30000,
+    currency: "USD",
+    customer_ref: { value: "42", name: "Projection and Video LLC" },
+    linked_payment_ids: [],
+    sync_token: "0",
+    source_snapshot_at: "2026-09-11T16:00:00Z",
+    status: "paid",
+  }];
+  const db = fakeDb(tables);
+
+  const result = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+
+  assert.equal(result.status, "ambiguous");
+  assert.equal(result.candidates[0].qbo_entity_type, "Invoice");
+  assert.equal(result.candidates[0].match_type, "qbo_invoice_only_context");
+  assert.ok(result.reason_codes.includes("invoice_only_payment_verification_needed"));
+  await assert.rejects(
+    () => confirmIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-300", matchId: result.match.id }),
+    /invoice_only_match_not_confirmable/
+  );
+});
+
+test("rejecting a candidate preserves the user decision and does not automatically permit posting", async () => {
+  const db = fakeDb(baseMatchTables());
+  const discovered = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+
+  const rejected = await rejectIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    matchId: discovered.match.id,
+  });
+
+  assert.equal(rejected.posting_eligibility, "blocked_rejected_candidate_review_required");
+  assert.equal(db.tables.transaction_categorizations[0].post_error, "incoming_deposit_match_rejected_review_required");
+  assert.equal(db.tables.transaction_categorizations[0].meta.safe_to_auto_post, false);
+});
+
 function baseMatchTables() {
   return {
     bank_transactions: [{
@@ -303,18 +452,27 @@ function fakeDb(initial = {}) {
   return {
     tables,
     calls: [],
+    failSelectTables: new Set(),
+    rpcRows: [],
+    rpc(name, args) {
+      this.calls.push({ op: "rpc", table: name, args });
+      if (name === "get_bookkeeping_transactions_bounded") return Promise.resolve({ data: this.rpcRows, error: null });
+      if (name === "count_bookkeeping_transactions_bounded") return Promise.resolve({ data: this.rpcRows.length, error: null });
+      return Promise.resolve({ data: null, error: null });
+    },
     from(table) {
       if (!tables[table]) tables[table] = [];
-      return new FakeQuery(tables, table, this.calls);
+      return new FakeQuery(tables, table, this.calls, this.failSelectTables);
     },
   };
 }
 
 class FakeQuery {
-  constructor(tables, table, calls) {
+  constructor(tables, table, calls, failSelectTables) {
     this.tables = tables;
     this.table = table;
     this.calls = calls;
+    this.failSelectTables = failSelectTables;
     this.filters = [];
     this.orderSpec = null;
     this.limitCount = null;
@@ -326,6 +484,7 @@ class FakeQuery {
   select() { this.calls.push({ op: "select", table: this.table }); return this; }
   eq(field, value) { this.calls.push({ op: "eq", table: this.table, field }); this.filters.push((row) => String(row[field]) === String(value)); return this; }
   in(field, values) { this.calls.push({ op: "in", table: this.table, field }); const set = new Set((values || []).map(String)); this.filters.push((row) => set.has(String(row[field]))); return this; }
+  gt(field, value) { this.calls.push({ op: "gt", table: this.table, field }); this.filters.push((row) => Number(row[field]) > Number(value)); return this; }
   gte(field, value) { this.filters.push((row) => String(row[field] || "") >= String(value || "")); return this; }
   lte(field, value) { this.filters.push((row) => String(row[field] || "") <= String(value || "")); return this; }
   is(field, value) { this.filters.push((row) => (value === null ? row[field] == null : row[field] === value)); return this; }
@@ -336,6 +495,9 @@ class FakeQuery {
   update(payload) { this.calls.push({ op: "update", table: this.table }); this.operation = "update"; this.payload = payload || {}; return this; }
 
   then(resolve) {
+    if (this.failSelectTables?.has(this.table) && this.operation === "select") {
+      return resolve({ data: null, error: Object.assign(new Error(`relation "${this.table}" does not exist`), { code: "42P01" }) });
+    }
     let rows = this.tables[this.table];
     if (this.operation === "insert") {
       const inserted = this.payload.map((row, index) => ({ id: row.id || `${this.table}-${rows.length + index + 1}`, ...row }));
