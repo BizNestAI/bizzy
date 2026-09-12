@@ -496,6 +496,143 @@ function formatSignedAmount(value) {
   return `${sign}$${Math.abs(amount).toFixed(2)}`;
 }
 
+function formatMinorMoney(minor, currency = "USD") {
+  const numeric = Number(minor);
+  if (!Number.isFinite(numeric)) return "";
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: currency || "USD" }).format(numeric / 100);
+}
+
+function humanizeReason(code = "") {
+  const labels = {
+    exact_amount_cents: "Exact amount",
+    compatible_positive_deposit_direction: "Incoming bank deposit",
+    verified_same_bank_account: "Verified bank account",
+    plaid_qbo_account_mapping_unverified: "Bank account could not be fully verified",
+    plaid_qbo_account_mapping_missing: "Bank account could not be fully verified",
+    qbo_deposit_affects_mapped_bank_account: "QBO deposit affects this bank account",
+    qbo_payment_deposited_directly_to_mapped_bank_account: "QBO payment deposited to this bank account",
+    qbo_sales_receipt_deposited_directly_to_mapped_bank_account: "QBO sales receipt deposited to this bank account",
+    payment_linked_to_invoice: "Payment linked to invoice",
+    deposit_payment_chain_reaches_invoice: "Deposit links through payment to invoice",
+    unique_unmatched_qbo_bank_affecting_candidate: "Only one eligible QBO candidate",
+    human_confirmation_required_for_launch: "Human confirmation required",
+    strong_qbo_bank_affecting_candidate: "Strong QBO candidate",
+    multiple_or_unproven_qbo_candidates: "Multiple or unverified candidates",
+    ordinary_income_posting_blocked: "Income posting blocked",
+    qbo_match_cache_stale: "QBO cache is stale",
+    qbo_match_cache_unavailable: "QBO cache unavailable",
+    qbo_match_cache_never_synced: "QBO cache has not synced",
+  };
+  return labels[code] || String(code || "").replace(/_/g, " ");
+}
+
+function incomingDepositMatchState(txn = {}) {
+  const meta = txn.meta || {};
+  const status = txn.incoming_deposit_match_status || meta.incoming_deposit_match_status || null;
+  const blockReason = meta.post_block_reason || txn.post_error || null;
+  const active =
+    txn.status === "matched_existing_qbo" ||
+    txn.matched_existing_qbo === true ||
+    ["needs_confirmation", "ambiguous", "match_check_unavailable", "confirmed"].includes(String(status || "")) ||
+    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified"].includes(String(blockReason || ""));
+  if (!active) return { active: false };
+  const candidates = txn.incoming_deposit_candidates || meta.incoming_deposit_candidates || [];
+  const primary = candidates[0] || null;
+  const confirmed = txn.status === "matched_existing_qbo" || txn.matched_existing_qbo === true || status === "confirmed";
+  const unavailable = status === "match_check_unavailable" || blockReason === "match_check_unavailable";
+  const ambiguous = status === "ambiguous" || blockReason === "incoming_deposit_needs_match";
+  return {
+    active: true,
+    confirmed,
+    unavailable,
+    ambiguous,
+    status,
+    matchId: txn.incoming_deposit_match_id || meta.incoming_deposit_match_id || null,
+    tier: txn.incoming_deposit_confidence_tier || meta.incoming_deposit_confidence_tier || null,
+    reasons: txn.incoming_deposit_reason_codes || meta.incoming_deposit_reason_codes || [],
+    candidates,
+    primary,
+  };
+}
+
+function IncomingDepositMatchPanel({
+  txn,
+  state,
+  action = {},
+  readOnly = false,
+  onInspect,
+  onConfirm,
+  onReject,
+  onUndo,
+}) {
+  if (!state?.active) return null;
+  const primary = state.primary || {};
+  const heading = state.confirmed
+    ? "Matched to existing QuickBooks payment"
+    : state.unavailable
+      ? "Match check unavailable"
+      : state.ambiguous
+        ? "Needs match"
+        : "Possible existing QuickBooks match";
+  const description = state.confirmed
+    ? "Confirmed against an existing QuickBooks bank/payment transaction. Bizzi did not create new income."
+    : state.unavailable
+      ? "Bizzi couldn't verify whether this deposit already exists in QuickBooks. It has not been posted as income."
+      : state.ambiguous
+        ? "Bizzi found more than one QuickBooks transaction that may explain this deposit."
+        : "Bizzi found an existing QuickBooks deposit or payment that may already explain this bank deposit.";
+  const candidateCount = state.candidates?.length || 0;
+  const bankEvidence = primary.bank_account_match === "verified_same_account" ? "Verified bank account" : "Bank account could not be fully verified";
+  const customerName = primary.customer_ref?.name || primary.customer_ref?.Name || null;
+  const invoiceText = Array.isArray(primary.invoice_ids) && primary.invoice_ids.length ? primary.invoice_ids.join(", ") : null;
+  return (
+    <div className="mt-3 rounded-lg border border-amber-300/25 bg-amber-400/8 p-3 text-left text-[11px] text-amber-50">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-[12px] font-semibold text-amber-100">{heading}</div>
+          <div className="mt-1 max-w-2xl text-[11px] leading-5 text-amber-50/78">{description}</div>
+        </div>
+        {state.tier ? <span className="rounded-full border border-amber-200/30 px-2 py-0.5 text-[10px] font-semibold text-amber-100">{state.tier.replace("_", " ").toUpperCase()}</span> : null}
+      </div>
+      {primary.qbo_entity_type ? (
+        <div className="mt-3 grid gap-2 text-[11px] text-slate-100 sm:grid-cols-3">
+          <div><span className="text-slate-400">QBO type</span><br />{primary.qbo_entity_type}</div>
+          <div><span className="text-slate-400">Date</span><br />{primary.txn_date || "Not available"}</div>
+          <div><span className="text-slate-400">Amount</span><br />{formatMinorMoney(primary.amount_minor, primary.currency || "USD") || "Not available"}</div>
+          {customerName ? <div><span className="text-slate-400">Customer</span><br />{customerName}</div> : null}
+          {invoiceText ? <div><span className="text-slate-400">Invoice</span><br />{invoiceText}</div> : null}
+          <div><span className="text-slate-400">Bank-account evidence</span><br />{bankEvidence}</div>
+        </div>
+      ) : null}
+      {state.reasons?.length ? (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {state.reasons.slice(0, 6).map((reason) => (
+            <span key={reason} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-200">{humanizeReason(reason)}</span>
+          ))}
+        </div>
+      ) : null}
+      {action.error ? <div className="mt-2 text-[11px] text-rose-100">{action.error}</div> : null}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {state.confirmed ? (
+          <button type="button" disabled={readOnly || action.loading || !state.matchId} onClick={() => onUndo?.(txn.id, state.matchId, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">Undo match</button>
+        ) : state.unavailable ? (
+          <button type="button" disabled={readOnly || action.loading} onClick={() => onInspect?.(txn.id, null, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{action.loading ? "Checking..." : "Try again"}</button>
+        ) : (
+          <>
+            {state.matchId && primary.qbo_entity_type ? (
+              <button type="button" disabled={readOnly || action.loading} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">Match existing QuickBooks payment</button>
+            ) : null}
+            {state.matchId ? (
+              <button type="button" disabled={readOnly || action.loading} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">This is not the same payment</button>
+            ) : null}
+            {candidateCount > 1 ? <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-300">Review other matches</span> : null}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ConfidenceBadge({ level }) {
   const styles = {
     high: "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40",
@@ -518,6 +655,11 @@ export default function BookkeepingFeed({
   onRejectCcPayment,
   onMarkCcPayment,
   onConfirmCcPaymentMatch,
+  onInspectIncomingDepositMatch,
+  onConfirmIncomingDepositMatch,
+  onRejectIncomingDepositMatch,
+  onUndoIncomingDepositMatch,
+  incomingDepositMatchActionState = {},
   ccPaymentActionState = {},
   postingTransactionIds,
   accounts = [],
@@ -831,6 +973,8 @@ export default function BookkeepingFeed({
             const isPending = txn.pending === true;
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
+            const incomingMatch = incomingDepositMatchState(txn);
+            const incomingMatchAction = incomingDepositMatchActionState?.[txn.id] || {};
             const fullMemo = getTransactionMemo(txn) || "No bank memo available.";
             const operatorRequest = txn.operator_request || null;
             const customerAnswered = Boolean(txn.customer_answered || (operatorRequest?.answer_text && operatorRequest?.status === "answered" && !operatorRequest?.resolved_at));
@@ -904,7 +1048,7 @@ export default function BookkeepingFeed({
               (isCcPaymentSuspected || (isCcPayment && !["confirmed", "posted"].includes(String(txn.cc_payment_pair_status || txn.meta?.cc_payment_pair_status || "").toLowerCase())));
             const ccAction = ccPaymentActionState?.[txn.id] || {};
             const ccConfirmBusy = ccAction.loading === true;
-            const rowSelectable = !isPosted && !isPending && !isCcPaymentWorkflow && !readOnly;
+            const rowSelectable = !isPosted && !isPending && !isCcPaymentWorkflow && !incomingMatch.active && !readOnly;
 
             return (
               <React.Fragment key={txn.id}>
@@ -1002,6 +1146,15 @@ export default function BookkeepingFeed({
                       <span className="truncate text-[9px] font-medium text-amber-100/65">{txn.suggestedAccountName || txn.glAccountName} · Suggested</span>
                     ) : null}
                   </span>
+                ) : incomingMatch.active ? (
+                  <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
+                    <span className="truncate">
+                      {incomingMatch.confirmed ? "Matched to existing QBO" : incomingMatch.unavailable ? "Match check unavailable" : incomingMatch.ambiguous ? "Needs Match" : "Possible QBO match"}
+                    </span>
+                    <span className="truncate text-[9px] font-medium text-amber-100/65">
+                      {incomingMatch.primary?.qbo_entity_type || "QuickBooks"} {incomingMatch.primary?.txn_date || ""}
+                    </span>
+                  </span>
                 ) : ccWorkflowStatus ? (
                   <CreditCardPaymentMatchControl
                     value={selectedCcTargetValue}
@@ -1030,7 +1183,7 @@ export default function BookkeepingFeed({
                     Possible credit card payment
                   </span>
                 ) : null}
-                {!isPending && !isCcPaymentWorkflow && accounts.length > 0 ? (
+                {!isPending && !isCcPaymentWorkflow && !incomingMatch.active && accounts.length > 0 ? (
                   <CoaDropdown
                     value={selectedAccountValue}
                     suggestedId={txn.suggestedAccountId}
@@ -1058,7 +1211,7 @@ export default function BookkeepingFeed({
                     }
                     onChange={(id) => handleAccountSelect(txn.id, id)}
                   />
-                ) : !isPending && !isCcPaymentWorkflow ? (
+                ) : !isPending && !isCcPaymentWorkflow && !incomingMatch.active ? (
                   <span className="text-slate-400 text-[11px] truncate">{readOnlyGlLabel}</span>
                 ) : null}
                 {txn.status === "auto_approved" ? (
@@ -1095,6 +1248,8 @@ export default function BookkeepingFeed({
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
+                ) : incomingMatch.active ? (
+                  <span className="text-[10px] text-slate-400">{incomingMatch.confirmed ? "Matched" : incomingMatch.unavailable ? "Retry" : "Needs match"}</span>
                 ) : isCcPaymentWorkflow ? (
                   <span className="text-[10px] text-slate-400">{ccWorkflowStatus?.matched ? "Matched" : "Needs match"}</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
@@ -1154,7 +1309,7 @@ export default function BookkeepingFeed({
            </div>
            <div
              className={`overflow-hidden border-b transition-[max-height,opacity] duration-200 ease-out ${
-               isExpanded ? "max-h-80 opacity-100" : "max-h-0 opacity-0"
+               isExpanded ? "max-h-[34rem] opacity-100" : "max-h-0 opacity-0"
              }`}
              style={{ background: "rgba(15,17,20,0.92)", borderColor: panelBorder }}
              aria-hidden={!isExpanded}
@@ -1173,6 +1328,16 @@ export default function BookkeepingFeed({
                  <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
                    {fullMemo}
                  </div>
+                 <IncomingDepositMatchPanel
+                   txn={txn}
+                   state={incomingMatch}
+                   action={incomingMatchAction}
+                   readOnly={readOnly}
+                   onInspect={onInspectIncomingDepositMatch}
+                   onConfirm={onConfirmIncomingDepositMatch}
+                   onReject={onRejectIncomingDepositMatch}
+                   onUndo={onUndoIncomingDepositMatch}
+                 />
                  {customerAnswered ? (
                    <div className="mt-3 rounded-lg border border-cyan-300/18 bg-cyan-400/[0.06] px-3 py-2">
                      <div className="text-[10px] font-semibold uppercase tracking-wide text-cyan-100/80">

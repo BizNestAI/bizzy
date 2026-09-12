@@ -32,6 +32,15 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   const meta = row.meta || {};
   const ccStatus = deriveCreditCardPaymentStatus(row);
 
+  if (status === "matched_existing_qbo" || meta.matched_existing_qbo === true || meta.incoming_deposit_match_status === "confirmed") {
+    return {
+      key: "matched_existing_qbo",
+      label: "Matched to existing QBO",
+      tone: "good",
+      detail: "Confirmed against an existing QuickBooks bank/payment transaction; Bizzi did not create new income.",
+    };
+  }
+
   if (hasQboTxn) {
     return {
       key: "posted",
@@ -85,6 +94,21 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   }
 
   const blockReason = meta.post_block_reason || meta.auto_post_block_reason || row.post_block_reason || null;
+  if (
+    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified"].includes(blockReason) ||
+    ["needs_confirmation", "ambiguous", "match_check_unavailable"].includes(meta.incoming_deposit_match_status)
+  ) {
+    const unavailable = blockReason === "match_check_unavailable" || meta.incoming_deposit_match_status === "match_check_unavailable";
+    const ambiguous = blockReason === "incoming_deposit_needs_match" || meta.incoming_deposit_match_status === "ambiguous";
+    return {
+      key: unavailable ? "qbo_match_check_unavailable" : ambiguous ? "incoming_deposit_needs_match" : "possible_existing_qbo_match",
+      label: unavailable ? "Match check unavailable" : ambiguous ? "Needs Match" : "Possible QBO match",
+      tone: "warning",
+      detail: unavailable
+        ? "A fresh QuickBooks match search is required before this deposit can be posted as income."
+        : "Review the existing QuickBooks candidate before posting this deposit as new income.",
+    };
+  }
   if (blockReason === "historical_scope_review_required") {
     return {
       key: "held_historical_backlog",
@@ -186,6 +210,10 @@ export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) 
       "blocked_missing_final_account",
       "blocked_unsupported_transaction_type",
       "verification_required",
+      "possible_existing_qbo_match",
+      "incoming_deposit_needs_match",
+      "qbo_match_check_unavailable",
+      "matched_existing_qbo",
     ].includes(lifecycle.key)
   ) {
     return {

@@ -2,13 +2,13 @@
 
 Status: **skipped**
 Runtime executed: **no**
-Generated at: 2026-09-06T22:23:20.730Z
+Generated at: 2026-09-12T16:54:00.071Z
 Target: test
 
 ## Static Companion Scan
 
 Status: **pass**
-Findings: 10
+Findings: 11
 
 | File | Line | Severity | Category | Preview |
 | --- | ---: | --- | --- | --- |
@@ -19,7 +19,8 @@ Findings: 10
 | src/services/tax/state/stateTaxEngine 2.js | 54 | medium | error_details_rendering | configSet = { stateCode: state, configs: {}, missing: [{ code: err.code, details: err.details }], warnings: [], supportLevel: TAX_RULE_SUPPO |
 | src/services/tax/state/stateTaxEngine.js | 54 | medium | error_details_rendering | configSet = { stateCode: state, configs: {}, missing: [{ code: err.code, details: err.details }], warnings: [], supportLevel: TAX_RULE_SUPPO |
 | src/services/tax/stateTaxRule.repository.js | 94 | medium | error_details_rendering | missing.push({ ruleType, code: err.code \|\| "unsupported_state_tax_rule", details: err.details }); |
-| src/services/tax/taxClassificationWorker.service.js | 338 | medium | error_details_rendering | error.details = details; |
+| src/services/tax/taxClassificationFallbackRepair.service.js | 290 | medium | error_details_rendering | details: sanitizeRepairMessage(err?.details), |
+| src/services/tax/taxClassificationWorker.service.js | 410 | medium | error_details_rendering | error.details = details; |
 | src/services/tax/taxRuleConfig.repository.js | 95 | medium | error_details_rendering | missing.push({ ruleType, code: err.code \|\| "tax_rule_config_missing", details: err.details }); |
 | src/components/Tax/Setup/TaxSetupWorkflow.jsx | 482 | medium | error_details_rendering | const details = err?.details \|\| {}; |
 

@@ -27,6 +27,10 @@ import {
   getMappingStatus,
   getClarificationRequests,
   postTransactionToQuickBooks,
+  inspectIncomingDepositMatch,
+  confirmIncomingDepositMatch,
+  rejectIncomingDepositMatch,
+  undoIncomingDepositMatch,
   getAutoPostStatus,
   updateAutoPostStatus,
   previewAutoPostBacklogScope,
@@ -447,8 +451,21 @@ function matchesBooksTab(txn = {}, tabKey = "needs_review") {
   }
   if (tabKey === "handled") return handledStatuses.includes(status);
   if (tabKey === "posted") return status === "posted" || Boolean(txn.qbo_txn_id || txn.qboTxnId);
+  if (tabKey === "reconciled") return status === "matched_existing_qbo" || txn.matched_existing_qbo === true || Boolean(txn.reconciled_at);
   if (tabKey === "flagged") return Boolean(txn.flagged);
   return false;
+}
+
+function hasIncomingDepositMatchWorkflow(txn = {}) {
+  const meta = txn.meta || {};
+  const status = txn.incoming_deposit_match_status || meta.incoming_deposit_match_status || null;
+  const blockReason = meta.post_block_reason || txn.post_error || null;
+  return (
+    txn.status === "matched_existing_qbo" ||
+    txn.matched_existing_qbo === true ||
+    ["needs_confirmation", "ambiguous", "match_check_unavailable", "confirmed"].includes(String(status || "")) ||
+    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified"].includes(String(blockReason || ""))
+  );
 }
 
 function isWithinBookkeepingDateRange(dateStr, dateRange, { ignoreRange = false, now = new Date() } = {}) {
@@ -615,6 +632,7 @@ function BookkeepingCleanup() {
   const [autoPostPreview, setAutoPostPreview] = useState(null);
   const [loadingAutoPostPreview, setLoadingAutoPostPreview] = useState(false);
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
+  const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
   const [manualPostTxn, setManualPostTxn] = useState(null);
   const [manualPostResult, setManualPostResult] = useState(null);
   const [clarRequests, setClarRequests] = useState([]);
@@ -1053,7 +1071,7 @@ function BookkeepingCleanup() {
       ? categorizedTransactions.slice(start, start + rowsPerPage)
       : categorizedTransactions
     : tableTransactions;
-  const selectableRows = feedRows.filter((t) => t?.status !== "posted" && t?.pending !== true && t?.taxonomy_type !== "cc_payment" && t?.meta?.taxonomy_type !== "cc_payment");
+  const selectableRows = feedRows.filter((t) => t?.status !== "posted" && !hasIncomingDepositMatchWorkflow(t) && t?.pending !== true && t?.taxonomy_type !== "cc_payment" && t?.meta?.taxonomy_type !== "cc_payment");
   const selectableIds = selectableRows.map((t) => t.id);
   const allVisibleSelected = selectableRows.length > 0 && selectableRows.every((txn) => selectedIds.has(txn.id));
   const pageCount = Math.max(
@@ -1344,6 +1362,39 @@ function BookkeepingCleanup() {
     }
   };
 
+  const withIncomingDepositMatchAction = async (id, action) => {
+    if (!canRunAI || !businessId || !id || usingDemo) return;
+    setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: true, error: "" } }));
+    try {
+      await action();
+      setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: false, error: "" } }));
+      setCountsRefreshKey((value) => value + 1);
+      await reloadTransactions();
+      await loadMappingStatus();
+    } catch (e) {
+      const message = e?.body?.message || e?.message || "Could not update this QuickBooks match.";
+      setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: false, error: message } }));
+    }
+  };
+
+  const handleInspectIncomingDepositMatch = async (id) => {
+    await withIncomingDepositMatchAction(id, () => inspectIncomingDepositMatch(businessId, id, { persist: true }));
+  };
+
+  const handleConfirmIncomingDepositMatch = async (id, matchId, txn = {}) => {
+    await withIncomingDepositMatchAction(id, () =>
+      confirmIncomingDepositMatch(businessId, id, matchId, { expectedBankUpdatedAt: txn.updated_at || txn.updatedAt || null })
+    );
+  };
+
+  const handleRejectIncomingDepositMatch = async (id, matchId) => {
+    await withIncomingDepositMatchAction(id, () => rejectIncomingDepositMatch(businessId, id, matchId));
+  };
+
+  const handleUndoIncomingDepositMatch = async (id, matchId) => {
+    await withIncomingDepositMatchAction(id, () => undoIncomingDepositMatch(businessId, id, matchId));
+  };
+
   const handleBulkApprove = async () => {
     if (!canRunAI || !selectedTransactions.length || !bulkAccountId) return;
     const account = chartAccounts.find((a) => String(a.id) === String(bulkAccountId));
@@ -1409,6 +1460,7 @@ function BookkeepingCleanup() {
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
     const txn = transactions.find((t) => t.id === txnId);
     if (!txn) return;
+    if (hasIncomingDepositMatchWorkflow(txn)) return;
     setManualPostResult(null);
     setManualPostTxn(txn);
   };
@@ -1417,6 +1469,7 @@ function BookkeepingCleanup() {
     const txn = manualPostTxn;
     const txnId = txn?.id;
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
+    if (hasIncomingDepositMatchWorkflow(txn)) return;
     setManualPostTxn(null);
     setPostingTransactionIds((prev) => new Set(prev).add(txnId));
     try {
@@ -2245,6 +2298,11 @@ function BookkeepingCleanup() {
               onRejectCcPayment={handleRejectCreditCardPayment}
               onMarkCcPayment={handleMarkCreditCardPayment}
               onConfirmCcPaymentMatch={handleConfirmCreditCardPaymentMatch}
+              onInspectIncomingDepositMatch={handleInspectIncomingDepositMatch}
+              onConfirmIncomingDepositMatch={handleConfirmIncomingDepositMatch}
+              onRejectIncomingDepositMatch={handleRejectIncomingDepositMatch}
+              onUndoIncomingDepositMatch={handleUndoIncomingDepositMatch}
+              incomingDepositMatchActionState={incomingDepositMatchActionState}
               ccPaymentActionState={Object.fromEntries(
                 transactions
                   .filter((txn) => txn.cc_payment_match_error)

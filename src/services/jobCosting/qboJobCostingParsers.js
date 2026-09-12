@@ -21,6 +21,12 @@ export function toNumber(value, fallback = 0) {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+export function toMinorUnits(value, fallback = null) {
+  const numeric = toNumber(value, null);
+  if (numeric === null) return fallback;
+  return Math.round(numeric * 100);
+}
+
 export function toDateOnly(value) {
   if (!value) return null;
   const date = new Date(value);
@@ -113,6 +119,14 @@ export function parseDocumentLinkedTxns(document = {}) {
     })),
   );
   return [...entityLinks, ...lineLinks];
+}
+
+function linkedIdsByType(links = [], type) {
+  const wanted = String(type || "").toLowerCase();
+  return Array.from(new Set((links || [])
+    .filter((link) => String(link.linked_transaction_type || "").toLowerCase() === wanted)
+    .map((link) => String(link.linked_transaction_id || "").trim())
+    .filter(Boolean)));
 }
 
 export function parsePaymentLineLinkedTxns(payment = {}) {
@@ -272,6 +286,8 @@ export function normalizeQboRevenueDocument(document = {}, qboType, { businessId
   const linkedTxn = parseDocumentLinkedTxns(document);
   const lines = parseDocumentLines(document);
   const updatedAt = document.MetaData?.LastUpdatedTime || document.MetaData?.CreateTime || now.toISOString();
+  const totalAmount = toNumber(document.TotalAmt, 0);
+  const openBalance = toNumber(document.Balance, 0);
 
   return {
     business_id: businessId,
@@ -284,13 +300,18 @@ export function normalizeQboRevenueDocument(document = {}, qboType, { businessId
     document_date: toDateOnly(document.TxnDate),
     due_date: toDateOnly(document.DueDate),
     expiration_date: toDateOnly(document.ExpirationDate),
-    total_amount: toNumber(document.TotalAmt, 0),
-    open_balance: toNumber(document.Balance, 0),
+    total_amount: totalAmount,
+    amount_minor: toMinorUnits(totalAmount, 0),
+    open_balance: openBalance,
+    open_balance_minor: toMinorUnits(openBalance, 0),
     status: inferQboEntityStatus(document, documentType),
     currency: normalizeQboRef(document.CurrencyRef)?.value || null,
     realm_id: realmId,
     sync_token: document.SyncToken || null,
     exchange_rate: toNumber(document.ExchangeRate, null),
+    deposit_account_ref: normalizeQboRef(document.DepositToAccountRef),
+    payment_ref_num: document.PaymentRefNum || null,
+    payment_method_ref: normalizeQboRef(document.PaymentMethodRef),
     customer_ref: customerRef,
     project_ref: projectRef,
     linked_txn: linkedTxn,
@@ -301,7 +322,9 @@ export function normalizeQboRevenueDocument(document = {}, qboType, { businessId
     print_status: document.PrintStatus || null,
     private_note: document.PrivateNote || null,
     customer_memo: document.CustomerMemo?.value || document.CustomerMemo || null,
+    linked_payment_ids: linkedIdsByType(linkedTxn, "payment"),
     source_snapshot: { realm_id: realmId, qbo_type: qboType, document },
+    source_snapshot_at: now.toISOString(),
     source_updated_at: updatedAt,
     sync_status: "synced",
     updated_at: now.toISOString(),
@@ -311,23 +334,37 @@ export function normalizeQboRevenueDocument(document = {}, qboType, { businessId
 export function normalizeQboPaymentRecord(payment = {}, { businessId, realmId, customerId = null, now = new Date() } = {}) {
   const lineAllocations = parsePaymentLineLinkedTxns(payment);
   const updatedAt = payment.MetaData?.LastUpdatedTime || payment.MetaData?.CreateTime || now.toISOString();
+  const totalAmount = toNumber(payment.TotalAmt, 0);
+  const unappliedAmount = toNumber(payment.UnappliedAmt, 0);
+  const linkedInvoiceIds = Array.from(new Set(lineAllocations
+    .filter((allocation) => String(allocation.linked_transaction_type || "").toLowerCase() === "invoice")
+    .map((allocation) => String(allocation.linked_transaction_id || "").trim())
+    .filter(Boolean)));
   return {
     business_id: businessId,
     customer_id: customerId,
     source_system: "quickbooks",
     external_payment_id: String(payment.Id),
     payment_date: toDateOnly(payment.TxnDate),
-    total_amount: toNumber(payment.TotalAmt, 0),
-    unapplied_amount: toNumber(payment.UnappliedAmt, 0),
+    total_amount: totalAmount,
+    amount_minor: toMinorUnits(totalAmount, 0),
+    unapplied_amount: unappliedAmount,
+    unapplied_amount_minor: toMinorUnits(unappliedAmount, 0),
+    customer_ref: parseCustomerRef(payment),
     deposit_ref: normalizeQboRef(payment.DepositToAccountRef),
     currency: normalizeQboRef(payment.CurrencyRef)?.value || null,
     realm_id: realmId,
     sync_token: payment.SyncToken || null,
+    payment_ref_num: payment.PaymentRefNum || null,
+    payment_method_ref: normalizeQboRef(payment.PaymentMethodRef),
+    exchange_rate: toNumber(payment.ExchangeRate, null),
     status: inferQboEntityStatus(payment, "payment"),
     private_note: payment.PrivateNote || null,
     linked_txn: parseLinkedTxnArray(payment.LinkedTxn),
+    linked_invoice_ids: linkedInvoiceIds,
     line_allocations: lineAllocations,
     source_snapshot: payment,
+    source_snapshot_at: now.toISOString(),
     source_updated_at: updatedAt,
     sync_status: "synced",
     updated_at: now.toISOString(),

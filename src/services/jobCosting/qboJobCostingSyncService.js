@@ -10,7 +10,9 @@ import {
   normalizeQboRevenueDocument,
   parseCustomerRef,
   parseProjectRef,
+  normalizeQboRef,
   toNumber,
+  toMinorUnits,
 } from "./qboJobCostingParsers.js";
 import { generateJobCandidatesForBusiness } from "./jobIdentityResolver.js";
 import { getQboProjectsDiagnostics } from "./qboProjectsService.js";
@@ -362,6 +364,7 @@ async function importPayment({ db, businessId, realmId, payment, now, diagnostic
 }
 
 async function importDepositEvidence({ db, businessId, realmId, deposit, now, diagnostics }) {
+  const depositLines = Array.isArray(deposit.Line) ? deposit.Line : [];
   const linkedTxns = (deposit.Line || []).flatMap((line) =>
     (Array.isArray(line.LinkedTxn) ? line.LinkedTxn : line.LinkedTxn ? [line.LinkedTxn] : []).map((linked) => ({
       txn_id: String(linked.TxnId || linked.txnId || ""),
@@ -411,6 +414,7 @@ async function importDepositEvidence({ db, businessId, realmId, deposit, now, di
   }
 
   const status = linkedPaymentIds.length && paymentRecordId ? "confirmed" : "partial";
+  const amount = Math.abs(toNumber(deposit.TotalAmt ?? deposit.TotalAmtValue, 0));
   const payload = {
     business_id: businessId,
     job_id: jobId,
@@ -419,9 +423,22 @@ async function importDepositEvidence({ db, businessId, realmId, deposit, now, di
     qbo_env: qboEnvName,
     qbo_txn_id: String(deposit.Id || ""),
     qbo_txn_type: "Deposit",
+    qbo_txn_date: deposit.TxnDate || null,
     match_type: "deposit_evidence",
     match_confidence: status === "confirmed" ? 0.9 : 0.45,
-    amount: Math.abs(toNumber(deposit.TotalAmt ?? deposit.TotalAmtValue, 0)),
+    amount,
+    amount_minor: toMinorUnits(amount, 0),
+    currency: normalizeQboRef(deposit.CurrencyRef)?.value || null,
+    deposit_account_ref: normalizeQboRef(deposit.DepositToAccountRef),
+    private_note: deposit.PrivateNote || null,
+    line_descriptions: depositLines.map((line) => line.Description || null).filter(Boolean),
+    line_entity_refs: depositLines
+      .map((line) => normalizeQboRef(line.Entity || line.EntityRef || line.DepositLineDetail?.Entity))
+      .filter(Boolean),
+    linked_payment_ids: linkedPaymentIds,
+    sync_token: deposit.SyncToken || null,
+    source_updated_at: deposit.MetaData?.LastUpdatedTime || deposit.MetaData?.CreateTime || now.toISOString(),
+    source_snapshot_at: now.toISOString(),
     status,
     source_snapshot: {
       deposit,

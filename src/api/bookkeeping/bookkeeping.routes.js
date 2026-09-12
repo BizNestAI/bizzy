@@ -16,6 +16,7 @@ import clarificationsRoutes from "./routes/bookkeeping.clarifications.routes.js"
 import postingRoutes from "./routes/bookkeeping.posting.routes.js";
 import canonicalCoaRoutes from "./routes/bookkeeping.canonicalCoa.routes.js";
 import processingRoutes from "./routes/bookkeeping.processing.routes.js";
+import incomingDepositMatchesRoutes from "./routes/bookkeeping.incomingDepositMatches.routes.js";
 
 const router = Router();
 
@@ -36,5 +37,6 @@ router.use(clarificationsRoutes);
 router.use(postingRoutes);
 router.use(canonicalCoaRoutes);
 router.use(processingRoutes);
+router.use(incomingDepositMatchesRoutes);
 
 export default router;

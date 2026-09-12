@@ -12,6 +12,7 @@ import { fetchChartOfAccounts, validateBusinessQboCreditCardAccount } from "./qb
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
 import { enqueueUnresolvedBookkeepingBacklog } from "./backgroundBookkeepingProcessingService.js";
+import { evaluateIncomingDepositPostingGuard } from "./incomingDepositMatchService.js";
 
 export class BookkeepingApprovalError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -385,6 +386,35 @@ export async function approveBookkeepingTransactions({
   const missingAccounts = approvals.filter((a) => !a.final_qbo_account_id && !a.is_check).map((a) => a.transaction_id);
   if (missingAccounts.length) throw new BookkeepingApprovalError("missing_account_id", 400, { transactions: missingAccounts });
 
+  for (const approval of approvals) {
+    const bankTxn = bankTxnMap[approval.transaction_id] || null;
+    const amount = Number(bankTxn?.amount || 0);
+    const direction = String(bankTxn?.direction || "").toUpperCase();
+    const isIncomingDeposit = amount > 0 && (direction === "INFLOW" || !direction);
+    if (!isIncomingDeposit || approval.meta?.taxonomy_type === "cc_payment") continue;
+    const guard = await evaluateIncomingDepositPostingGuard({
+      db,
+      businessId,
+      bankTransactionId: approval.transaction_id,
+      actor,
+      actorRole: "manual_approval",
+    });
+    if (guard.allowed) continue;
+    approval.status = "needs_review";
+    approval.post_after = null;
+    approval.post_error = guard.reason || "incoming_deposit_match_required";
+    approval.meta = {
+      ...(approval.meta || {}),
+      safe_to_auto_post: false,
+      post_block_reason: approval.post_error,
+      incoming_deposit_match_id: guard.result?.match?.id || null,
+      incoming_deposit_match_status: guard.result?.status || null,
+      incoming_deposit_confidence_tier: guard.result?.confidence_tier || null,
+      incoming_deposit_reason_codes: guard.result?.reason_codes || [],
+    };
+    warnings.push({ transaction_id: approval.transaction_id, code: approval.post_error });
+  }
+
   const payload = approvals.map((item) => {
     const bankTxn = bankTxnMap[item.transaction_id] || null;
     const checkHit = isCheck(bankTxn || {});
@@ -399,7 +429,7 @@ export async function approveBookkeepingTransactions({
     return {
       business_id: businessId,
       transaction_id: item.transaction_id,
-      status: "approved",
+      status: item.status || "approved",
       final_qbo_account_id: item.final_qbo_account_id || null,
       final_qbo_account_name: item.final_qbo_account_name || null,
       final_canonical_account_key: item.final_canonical_account_key || null,
@@ -409,7 +439,7 @@ export async function approveBookkeepingTransactions({
       decided_at: nowIso,
       updated_at: nowIso,
       post_after: item.post_after === undefined ? postAfter : item.post_after,
-      post_error: null,
+      post_error: item.post_error || null,
       meta: mergedMeta || null,
     };
   });

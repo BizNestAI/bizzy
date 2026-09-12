@@ -25,6 +25,7 @@ import {
   markCreditCardPaymentPairFailed,
   markCreditCardPaymentPairPosted,
 } from "../services/bookkeeping/creditCardPaymentPairService.js";
+import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/incomingDepositMatchService.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
@@ -1797,6 +1798,39 @@ export async function handleItem(item, options = {}) {
     return;
   }
 
+  if (qboTxnType === "Deposit") {
+    const depositGuard = await timePostingStage(timing, "incoming_deposit_match_guard_ms", () =>
+      evaluateIncomingDepositPostingGuard({ businessId, bankTransactionId: txnId, actorRole: manual ? "manual_post" : "auto_post" })
+    );
+    if (!depositGuard.allowed) {
+      await insertPostAttempt({
+        businessId,
+        transactionId: txnId,
+        status: "skipped",
+        errorMessage: depositGuard.reason || "incoming_deposit_match_required",
+        retryCount: Number(item?.meta?.post_retry_count || 0) || null,
+        postAfter: item?.post_after || null,
+        payloadSummary: summarizePayload(item, bank, mapping),
+        responseSummary: {
+          reason: depositGuard.reason || "incoming_deposit_match_required",
+          incoming_deposit_match_status: depositGuard.result?.status || null,
+          confidence_tier: depositGuard.result?.confidence_tier || null,
+          reason_codes: depositGuard.result?.reason_codes || [],
+        },
+      });
+      logPostingTiming({
+        businessId,
+        transactionId: txnId,
+        qboTxnType,
+        manual,
+        timing,
+        status: "blocked",
+        failureCode: depositGuard.reason || "incoming_deposit_match_required",
+      });
+      return;
+    }
+  }
+
   const tokenRow = await timePostingStage(timing, "qbo_auth_ms", () => getLatestQuickBooksTokenRow(businessId));
   const realmId = tokenRow?.realm_id || null;
   if (!realmId) {
@@ -2345,7 +2379,7 @@ async function runOnce(options = {}) {
 
     const nowIso = new Date().toISOString();
     const checkUpdates = [];
-    const eligible = (duePending || []).filter((item) => {
+    let eligible = (duePending || []).filter((item) => {
       const preloadKey = `${item.business_id}:${item.transaction_id}`;
       if (failedPreloadIds.has(preloadKey) || missingPreloadIds.has(preloadKey)) {
         return false;
@@ -2459,8 +2493,6 @@ async function runOnce(options = {}) {
         log.error("[books-post] failed to mark check txns", checkErr?.message || checkErr);
       }
     }
-    summary.eligible = eligible.length;
-    summary.skipped = duePending.length - eligible.length;
     const unsafeCcDue = (pending || []).filter((item) => {
       const looksCcMeta =
         item?.meta?.taxonomy_type === "cc_payment" ||
@@ -2505,6 +2537,49 @@ async function runOnce(options = {}) {
         log.error("[books-post] failed to clear unsafe cc mappings", ccUpdateErr?.message || ccUpdateErr);
       }
     }
+    const guardedEligible = [];
+    for (const item of eligible) {
+      const bankTxn = (bankCache[item.business_id] || {})[item.transaction_id];
+      const amount = Number(bankTxn?.amount || 0);
+      const direction = String(bankTxn?.direction || "").toUpperCase();
+      const isIncomingDeposit = amount > 0 && (direction === "INFLOW" || !direction);
+      const isCcWorkflow =
+        item?.meta?.taxonomy_type === "cc_payment" ||
+        item?.meta?.cc_payment_bank_qbo_account_id ||
+        item?.meta?.cc_payment_cc_qbo_account_id ||
+        item?.meta?.cc_payment_mapping_confidence;
+      if (!isIncomingDeposit || isCcWorkflow) {
+        guardedEligible.push(item);
+        continue;
+      }
+      const depositGuard = await evaluateIncomingDepositPostingGuard({
+        businessId: item.business_id,
+        bankTransactionId: item.transaction_id,
+        actorRole: "auto_post_selection",
+      });
+      if (depositGuard.allowed) {
+        guardedEligible.push(item);
+        continue;
+      }
+      summary.blocked += 1;
+      await insertPostAttempt({
+        businessId: item.business_id,
+        transactionId: item.transaction_id,
+        status: "skipped",
+        errorMessage: depositGuard.reason || "incoming_deposit_match_required",
+        postAfter: item?.post_after || null,
+        responseSummary: {
+          reason: depositGuard.reason || "incoming_deposit_match_required",
+          incoming_deposit_match_status: depositGuard.result?.status || null,
+          confidence_tier: depositGuard.result?.confidence_tier || null,
+          reason_codes: depositGuard.result?.reason_codes || [],
+        },
+        attemptedAt: nowIso,
+      });
+    }
+    eligible = guardedEligible;
+    summary.eligible = eligible.length;
+    summary.skipped = duePending.length - eligible.length;
     if (process.env.NODE_ENV !== "production" && duePending.length) {
       const skipped = duePending.length - eligible.length;
       if (skipped > 0) {

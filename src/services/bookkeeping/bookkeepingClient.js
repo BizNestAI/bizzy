@@ -100,6 +100,50 @@ export async function postTransactionToQuickBooks(businessId, transactionId) {
   return res;
 }
 
+export async function inspectIncomingDepositMatch(businessId, transactionId, { persist = true } = {}) {
+  const params = new URLSearchParams();
+  if (businessId) params.set("business_id", businessId);
+  if (persist === false) params.set("persist", "false");
+  const qs = params.toString() ? `?${params.toString()}` : "";
+  return safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}${qs}`), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+}
+
+export async function confirmIncomingDepositMatch(businessId, transactionId, matchId, { expectedBankUpdatedAt = null } = {}) {
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/${encodeURIComponent(matchId)}/confirm`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, {
+      "Content-Type": "application/json",
+      "Idempotency-Key": `incoming-deposit-confirm-${transactionId}-${matchId}`,
+    }),
+    body: JSON.stringify({ business_id: businessId, expected_bank_updated_at: expectedBankUpdatedAt }),
+  });
+  if (res && res.ok === false) throw new Error(res.message || res.error || "incoming_deposit_match_confirm_failed");
+  return res;
+}
+
+export async function rejectIncomingDepositMatch(businessId, transactionId, matchId) {
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/${encodeURIComponent(matchId)}/reject`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId }),
+  });
+  if (res && res.ok === false) throw new Error(res.message || res.error || "incoming_deposit_match_reject_failed");
+  return res;
+}
+
+export async function undoIncomingDepositMatch(businessId, transactionId, matchId) {
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/${encodeURIComponent(matchId)}/undo`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId }),
+  });
+  if (res && res.ok === false) throw new Error(res.message || res.error || "incoming_deposit_match_undo_failed");
+  return res;
+}
+
 export async function getAutoPostStatus(businessId) {
   return safeFetch(apiUrl("/api/bookkeeping/posting/auto-post"), {
     method: "GET",
