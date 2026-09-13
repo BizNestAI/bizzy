@@ -597,7 +597,13 @@ function IncomingDepositMatchPanel({
   const candidateCount = state.candidates?.length || 0;
   const bankEvidence = primary.bank_account_match === "verified_same_account" ? "Verified bank account" : "Bank account could not be fully verified";
   const customerName = primary.customer_ref?.name || primary.customer_ref?.Name || null;
-  const invoiceText = Array.isArray(primary.invoice_ids) && primary.invoice_ids.length ? primary.invoice_ids.join(", ") : null;
+  const invoiceRefs = Array.isArray(primary.invoice_refs) ? primary.invoice_refs : [];
+  const invoiceText = invoiceRefs.length
+    ? invoiceRefs
+        .map((invoice) => invoice.document_number ? `#${invoice.document_number}` : invoice.qbo_entity_id || null)
+        .filter(Boolean)
+        .join(", ")
+    : Array.isArray(primary.invoice_ids) && primary.invoice_ids.length ? primary.invoice_ids.join(", ") : null;
   return (
     <div className="mt-3 rounded-lg border border-amber-300/25 bg-amber-400/8 p-3 text-left text-[11px] text-amber-50">
       <div className="flex flex-wrap items-start justify-between gap-2">

@@ -255,6 +255,7 @@ function candidateBase({ bankTxn, mapping, mappingInfo, row, entityType, entityI
     source_snapshot_at: sourceSnapshotAt || null,
     customer_ref: row.customer_ref || row.source_snapshot?.payment?.CustomerRef || null,
     invoice_ids: row.linked_invoice_ids || [],
+    invoice_refs: [],
     bank_account_match: mappingInfo.bank_account_match,
     exact_amount: exactAmount,
     same_currency: sameCurrency,
@@ -264,6 +265,25 @@ function candidateBase({ bankTxn, mapping, mappingInfo, row, entityType, entityI
     raw: row,
     mapping,
   };
+}
+
+async function fetchInvoiceRefsById({ db, businessId, invoiceIds = [] }) {
+  const ids = Array.from(new Set((invoiceIds || []).map(String).filter(Boolean)));
+  if (!ids.length) return new Map();
+  const rows = await selectRows(db
+    .from("job_revenue_documents")
+    .select("realm_id,external_document_id,document_number,customer_ref,open_balance_minor,status")
+    .eq("business_id", businessId)
+    .eq("source_document_type", "invoice")
+    .in("external_document_id", ids));
+  return new Map(rows.map((row) => [String(row.external_document_id), {
+    qbo_entity_id: String(row.external_document_id),
+    document_number: row.document_number || null,
+    customer_ref: row.customer_ref || null,
+    open_balance_minor: row.open_balance_minor ?? null,
+    status: row.status || null,
+    qbo_realm_id: row.realm_id || null,
+  }]));
 }
 
 function candidateEligible(candidate) {
@@ -338,6 +358,11 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
           .in("external_payment_id", depositPaymentIds))
       : [];
     const paymentContextById = new Map(paymentContext.map((row) => [String(row.external_payment_id), row]));
+    const invoiceContext = await fetchInvoiceRefsById({
+      db,
+      businessId,
+      invoiceIds: paymentContext.flatMap((row) => row.linked_invoice_ids || []),
+    });
     deposits.forEach((row) => {
       const accountMatches = String(refValue(row.deposit_account_ref) || "") === String(mapping?.qbo_account_id || "");
       const candidate = candidateBase({ bankTxn, mapping, mappingInfo, row, entityType: "Deposit", entityId: row.qbo_txn_id, txnDate: row.qbo_txn_date, amountMinor: row.amount_minor, currency: row.currency, syncToken: row.sync_token, sourceSnapshotAt: row.source_snapshot_at });
@@ -346,6 +371,7 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
       const linkedContexts = linkedPayments.map((paymentId) => paymentContextById.get(String(paymentId))).filter(Boolean);
       candidate.linked_payment_ids = linkedPayments;
       candidate.invoice_ids = Array.from(new Set(linkedContexts.flatMap((context) => context.linked_invoice_ids || []).map(String).filter(Boolean)));
+      candidate.invoice_refs = candidate.invoice_ids.map((invoiceId) => invoiceContext.get(String(invoiceId))).filter(Boolean);
       candidate.customer_ref = linkedContexts.find((context) => context.customer_ref)?.customer_ref || candidate.customer_ref || null;
       candidate.reason_codes.push(accountMatches ? "qbo_deposit_affects_mapped_bank_account" : "qbo_deposit_bank_account_mismatch_or_missing");
       candidate.reason_codes.push(candidate.invoice_ids.length ? "deposit_payment_chain_reaches_invoice" : "deposit_payment_invoice_context_missing");
@@ -363,10 +389,16 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
       .select("id,realm_id,external_payment_id,payment_date,total_amount,amount_minor,unapplied_amount_minor,deposit_ref,currency,customer_ref,payment_ref_num,payment_method_ref,linked_invoice_ids,sync_token,source_snapshot_at,status,private_note,source_snapshot")
       .eq("business_id", businessId)
       .eq("amount_minor", bankAmountMinor)));
+    const invoiceContext = await fetchInvoiceRefsById({
+      db,
+      businessId,
+      invoiceIds: payments.flatMap((row) => row.linked_invoice_ids || []),
+    });
     payments.forEach((row) => {
       const directAccount = String(refValue(row.deposit_ref) || "") === String(mapping?.qbo_account_id || "");
       const candidate = candidateBase({ bankTxn, mapping, mappingInfo, row, entityType: "Payment", entityId: row.external_payment_id, txnDate: row.payment_date, amountMinor: row.amount_minor, currency: row.currency, syncToken: row.sync_token, sourceSnapshotAt: row.source_snapshot_at });
       candidate.match_type = directAccount ? "qbo_payment_direct" : "qbo_payment_with_invoice_context";
+      candidate.invoice_refs = (candidate.invoice_ids || []).map((invoiceId) => invoiceContext.get(String(invoiceId))).filter(Boolean);
       candidate.reason_codes.push(directAccount ? "qbo_payment_deposited_directly_to_mapped_bank_account" : "qbo_payment_not_proven_to_mapped_bank_account");
       candidate.reason_codes.push(candidate.invoice_ids?.length ? "payment_linked_to_invoice" : "payment_invoice_link_missing");
       candidate.verified_same_account = mappingInfo.verified && directAccount;
@@ -408,6 +440,12 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
       const candidate = candidateBase({ bankTxn, mapping, mappingInfo, row, entityType: "Invoice", entityId: row.external_document_id, txnDate: row.document_date, amountMinor: row.amount_minor, currency: row.currency, syncToken: row.sync_token, sourceSnapshotAt: row.source_snapshot_at });
       candidate.match_type = "qbo_invoice_only_context";
       candidate.invoice_ids = [row.external_document_id].filter(Boolean).map(String);
+      candidate.invoice_refs = [{
+        qbo_entity_id: String(row.external_document_id),
+        document_number: row.document_number || null,
+        customer_ref: row.customer_ref || null,
+        qbo_realm_id: row.realm_id || null,
+      }];
       candidate.reason_codes.push("invoice_only_duplicate_income_evidence");
       candidate.reason_codes.push(row.linked_payment_ids?.length ? "invoice_links_payment_but_bank_chain_unproven" : "invoice_payment_chain_unproven");
       candidate.verified_same_account = false;
@@ -571,6 +609,7 @@ async function persistCandidateResult({ db, businessId, bankTxn, mapping, freshn
         customer_ref: candidate.customer_ref,
         linked_payment_ids: candidate.linked_payment_ids || [],
         invoice_ids: candidate.invoice_ids || [],
+        invoice_refs: candidate.invoice_refs || [],
         reason_codes: candidate.reason_codes,
       })),
     },
@@ -581,7 +620,19 @@ async function persistCandidateResult({ db, businessId, bankTxn, mapping, freshn
     .eq("business_id", businessId)
     .eq("request_idempotency_key", requestKey)
     .maybeSingle());
-  const match = existing || (await selectMaybe(db.from("bank_qbo_matches").insert(row).select("*").maybeSingle()));
+  if (existing) {
+    const updateRow = {
+      ...row,
+      updated_at: new Date().toISOString(),
+    };
+    await db
+      .from("bank_qbo_matches")
+      .update(updateRow)
+      .eq("business_id", businessId)
+      .eq("id", existing.id);
+    return { ...existing, ...updateRow };
+  }
+  const match = await selectMaybe(db.from("bank_qbo_matches").insert(row).select("*").maybeSingle());
   if (!existing) {
     const items = result.candidates.map((candidate, index) => ({
       match_id: match.id,
@@ -592,15 +643,17 @@ async function persistCandidateResult({ db, businessId, bankTxn, mapping, freshn
       amount_allocated_minor: candidate.amount_minor,
       customer_ref: candidate.customer_ref || null,
       invoice_ids: candidate.invoice_ids || [],
+      invoice_refs: candidate.invoice_refs || [],
       qbo_sync_token: candidate.sync_token || null,
       source_snapshot_at: candidate.source_snapshot_at || null,
       evidence_role: index === 0 ? "primary" : "supporting",
       meta: {
         match_type: candidate.match_type,
         txn_date: candidate.txn_date,
-        linked_payment_ids: candidate.linked_payment_ids || [],
-        reason_codes: candidate.reason_codes,
-      },
+          linked_payment_ids: candidate.linked_payment_ids || [],
+          invoice_refs: candidate.invoice_refs || [],
+          reason_codes: candidate.reason_codes,
+        },
     }));
     if (items.length) await db.from("bank_qbo_match_items").insert(items);
     await insertHistory({ db, businessId, bankTransactionId: bankTxn.id, matchId: match.id, action: "discovered", newState: row, actor, actorRole });
@@ -641,6 +694,7 @@ async function writeCategorizationBlockMeta({ db, businessId, bankTxn, result, m
           customer_ref: candidate.customer_ref || null,
           linked_payment_ids: candidate.linked_payment_ids || [],
           invoice_ids: candidate.invoice_ids || [],
+          invoice_refs: candidate.invoice_refs || [],
           bank_account_match: candidate.bank_account_match || null,
           reason_codes: candidate.reason_codes || [],
         })),
@@ -968,6 +1022,7 @@ function matchResultSummary(result = {}) {
       customer_ref: candidate.customer_ref || null,
       linked_payment_ids: candidate.linked_payment_ids || [],
       invoice_ids: candidate.invoice_ids || [],
+      invoice_refs: candidate.invoice_refs || [],
       bank_account_match: candidate.bank_account_match || null,
       reason_codes: candidate.reason_codes || [],
     })),

@@ -484,6 +484,7 @@ test("cache re-normalization uses stored snapshots and is idempotent for the exa
   assert.deepEqual(db.tables.job_revenue_documents[0].linked_payment_ids, ["1507"]);
   assert.equal(discovered.status, "needs_confirmation");
   assert.equal(discovered.candidates[0].qbo_entity_id, "1508");
+  assert.equal(discovered.candidates[0].invoice_refs[0].document_number, "1102");
 });
 
 test("invoice-only duplicate evidence blocks blind posting but cannot be confirmed as a bank match", async () => {

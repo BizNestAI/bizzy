@@ -393,6 +393,7 @@ function incomingDepositOverlayFromResult(result = {}) {
     currency: candidate.currency || null,
     customer_ref: candidate.customer_ref || null,
     invoice_ids: candidate.invoice_ids || [],
+    invoice_refs: candidate.invoice_refs || [],
     bank_account_match: candidate.bank_account_match || null,
     reason_codes: candidate.reason_codes || [],
   }));
