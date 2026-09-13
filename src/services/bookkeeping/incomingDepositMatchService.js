@@ -95,17 +95,6 @@ function linkedTxnRowsFromLines(lines = []) {
   });
 }
 
-function snapshotWithNormalizationMeta(sourceSnapshot = {}, now, entityType) {
-  return {
-    ...(sourceSnapshot && typeof sourceSnapshot === "object" ? sourceSnapshot : {}),
-    _bizzi_normalization: {
-      version: QBO_CACHE_NORMALIZATION_VERSION,
-      normalized_at: now.toISOString(),
-      entity_type: entityType,
-    },
-  };
-}
-
 function cachePreview(row = {}, fields = []) {
   return Object.fromEntries(fields.map((field) => [field, row[field] ?? null]));
 }
@@ -687,7 +676,6 @@ function buildDepositCachePatch(row = {}, now = new Date()) {
     sync_token: deposit.SyncToken || row.sync_token || null,
     source_updated_at: deposit.MetaData?.LastUpdatedTime || deposit.MetaData?.CreateTime || row.source_updated_at || now.toISOString(),
     source_snapshot_at: row.source_snapshot_at || now.toISOString(),
-    source_snapshot: snapshotWithNormalizationMeta(row.source_snapshot, now, "Deposit"),
     updated_at: now.toISOString(),
   };
 }
@@ -718,7 +706,6 @@ function buildPaymentCachePatch(row = {}, now = new Date()) {
     line_allocations: normalized.line_allocations || row.line_allocations || [],
     source_updated_at: normalized.source_updated_at || row.source_updated_at || now.toISOString(),
     source_snapshot_at: row.source_snapshot_at || now.toISOString(),
-    source_snapshot: snapshotWithNormalizationMeta(row.source_snapshot, now, "Payment"),
     sync_status: "synced",
     updated_at: now.toISOString(),
   };
@@ -753,7 +740,6 @@ function buildRevenueDocumentCachePatch(row = {}, now = new Date()) {
     sync_token: normalized.sync_token || row.sync_token || null,
     source_updated_at: normalized.source_updated_at || row.source_updated_at || now.toISOString(),
     source_snapshot_at: row.source_snapshot_at || now.toISOString(),
-    source_snapshot: snapshotWithNormalizationMeta(row.source_snapshot, now, "RevenueDocument"),
     sync_status: "synced",
     updated_at: now.toISOString(),
   };
