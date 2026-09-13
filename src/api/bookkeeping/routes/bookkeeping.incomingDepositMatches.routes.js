@@ -26,17 +26,29 @@ function actorId(req) {
   return req.user?.id || req.user?.sub || null;
 }
 
-function sendError(res, err, fallback = "incoming_deposit_match_failed") {
+function requestCorrelationId(req) {
+  return req.get("X-Request-ID") || req.get("X-Correlation-ID") || `incoming-deposit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function sendError(req, res, err, fallback = "incoming_deposit_match_failed") {
+  const correlationId = req.matchCorrelationId || requestCorrelationId(req);
   if (err instanceof IncomingDepositMatchError) {
-    return res.status(err.status || 400).json({ ok: false, error: err.code, details: err.details || {} });
+    return res.status(err.status || 400).json({ ok: false, error: err.code, correlation_id: correlationId });
   }
-  console.error("[bookkeeping][incoming-deposit-match] failed", err?.message || err);
-  return res.status(err?.status || 500).json({ ok: false, error: err?.code || fallback, message: err?.message || "failed" });
+  console.error("[bookkeeping][incoming-deposit-match] failed", {
+    correlation_id: correlationId,
+    code: err?.code || null,
+    message: err?.message || null,
+    details: err?.details || null,
+    hint: err?.hint || null,
+  });
+  return res.status(err?.status || 500).json({ ok: false, error: fallback, correlation_id: correlationId });
 }
 
 router.get("/incoming-deposit-matches/:transactionId", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  req.matchCorrelationId = requestCorrelationId(req);
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const result = await discoverIncomingDepositQboMatch({
@@ -46,16 +58,18 @@ router.get("/incoming-deposit-matches/:transactionId", requireAuth, async (req, 
       actor: actorId(req),
       actorRole: "user",
       persist: req.query?.persist !== "false",
+      correlationId: req.matchCorrelationId,
     });
     return res.json({ ok: true, result });
   } catch (err) {
-    return sendError(res, err);
+    return sendError(req, res, err);
   }
 });
 
 router.post("/incoming-deposit-matches/discovery", requireAuth, incomingDepositMatchWriteRateLimit, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  req.matchCorrelationId = requestCorrelationId(req);
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const result = await discoverExistingIncomingDepositMatches({
@@ -69,13 +83,14 @@ router.post("/incoming-deposit-matches/discovery", requireAuth, incomingDepositM
     });
     return res.json(result);
   } catch (err) {
-    return sendError(res, err, "incoming_deposit_match_discovery_failed");
+    return sendError(req, res, err, "incoming_deposit_match_discovery_failed");
   }
 });
 
 router.post("/incoming-deposit-matches/:transactionId/:matchId/confirm", requireAuth, incomingDepositMatchWriteRateLimit, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  req.matchCorrelationId = requestCorrelationId(req);
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const result = await confirmIncomingDepositQboMatch({
@@ -90,13 +105,14 @@ router.post("/incoming-deposit-matches/:transactionId/:matchId/confirm", require
     });
     return res.json(result);
   } catch (err) {
-    return sendError(res, err, "incoming_deposit_match_confirm_failed");
+    return sendError(req, res, err, "incoming_deposit_match_confirm_failed");
   }
 });
 
 router.post("/incoming-deposit-matches/:transactionId/:matchId/reject", requireAuth, incomingDepositMatchWriteRateLimit, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  req.matchCorrelationId = requestCorrelationId(req);
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const result = await rejectIncomingDepositQboMatch({
@@ -110,13 +126,14 @@ router.post("/incoming-deposit-matches/:transactionId/:matchId/reject", requireA
     });
     return res.json({ ok: true, result });
   } catch (err) {
-    return sendError(res, err, "incoming_deposit_match_reject_failed");
+    return sendError(req, res, err, "incoming_deposit_match_reject_failed");
   }
 });
 
 router.post("/incoming-deposit-matches/:transactionId/:matchId/undo", requireAuth, incomingDepositMatchWriteRateLimit, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  req.matchCorrelationId = requestCorrelationId(req);
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const result = await undoIncomingDepositQboMatch({
@@ -130,7 +147,7 @@ router.post("/incoming-deposit-matches/:transactionId/:matchId/undo", requireAut
     });
     return res.json(result);
   } catch (err) {
-    return sendError(res, err, "incoming_deposit_match_undo_failed");
+    return sendError(req, res, err, "incoming_deposit_match_undo_failed");
   }
 });
 

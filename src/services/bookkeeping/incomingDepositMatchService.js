@@ -1,12 +1,18 @@
 /* global process */
 import crypto from "crypto";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
+import {
+  normalizeQboPaymentRecord,
+  normalizeQboRef,
+  normalizeQboRevenueDocument,
+} from "../jobCosting/qboJobCostingParsers.js";
 
 const DEFAULT_FRESHNESS_MINUTES = Number(process.env.QBO_INCOMING_DEPOSIT_MATCH_FRESHNESS_MINUTES || 240);
 const DEPOSIT_WINDOW_BEFORE_DAYS = Number(process.env.QBO_DEPOSIT_MATCH_WINDOW_BEFORE_DAYS || 7);
 const DEPOSIT_WINDOW_AFTER_DAYS = Number(process.env.QBO_DEPOSIT_MATCH_WINDOW_AFTER_DAYS || 2);
 const DIRECT_WINDOW_BEFORE_DAYS = Number(process.env.QBO_DIRECT_PAYMENT_MATCH_WINDOW_BEFORE_DAYS || 7);
 const DIRECT_WINDOW_AFTER_DAYS = Number(process.env.QBO_DIRECT_PAYMENT_MATCH_WINDOW_AFTER_DAYS || 2);
+const QBO_CACHE_NORMALIZATION_VERSION = "incoming-deposit-qbo-match-v1";
 
 const ACTIVE_CANDIDATE_STATUSES = new Set(["needs_confirmation", "ambiguous"]);
 const FINAL_MATCH_STATUSES = new Set(["confirmed"]);
@@ -73,6 +79,37 @@ function normalizeCurrency(value) {
   return text || null;
 }
 
+function rawSnapshotEntity(row = {}, key) {
+  const snapshot = row.source_snapshot || {};
+  return snapshot?.[key] && typeof snapshot[key] === "object" ? snapshot[key] : snapshot;
+}
+
+function linkedTxnRowsFromLines(lines = []) {
+  return (Array.isArray(lines) ? lines : []).flatMap((line) => {
+    const links = Array.isArray(line?.LinkedTxn) ? line.LinkedTxn : line?.LinkedTxn ? [line.LinkedTxn] : [];
+    return links.map((linked) => ({
+      txn_id: String(linked?.TxnId || linked?.txnId || ""),
+      txn_type: String(linked?.TxnType || linked?.txnType || ""),
+      amount: Number.isFinite(Number(line?.Amount)) ? Number(line.Amount) : null,
+    })).filter((linked) => linked.txn_id);
+  });
+}
+
+function snapshotWithNormalizationMeta(sourceSnapshot = {}, now, entityType) {
+  return {
+    ...(sourceSnapshot && typeof sourceSnapshot === "object" ? sourceSnapshot : {}),
+    _bizzi_normalization: {
+      version: QBO_CACHE_NORMALIZATION_VERSION,
+      normalized_at: now.toISOString(),
+      entity_type: entityType,
+    },
+  };
+}
+
+function cachePreview(row = {}, fields = []) {
+  return Object.fromEntries(fields.map((field) => [field, row[field] ?? null]));
+}
+
 function isIncomingDeposit(bankTxn = {}) {
   const amount = Number(bankTxn.amount || 0);
   const dir = String(bankTxn.direction || "").toUpperCase();
@@ -108,19 +145,51 @@ async function selectRows(query) {
 function isMissingSchemaError(err) {
   const code = String(err?.code || "");
   const message = String(err?.message || "");
-  return code === "42P01" || code === "42703" || /relation .* does not exist|column .* does not exist/i.test(message);
+  return code === "42P01" || code === "42703" || code === "PGRST204" || /relation .* does not exist|column .* does not exist|could not find .* column/i.test(message);
+}
+
+function sanitizedDbError(err = {}) {
+  return {
+    code: err.code || null,
+    message: err.message || null,
+    details: err.details || null,
+    hint: err.hint || null,
+  };
+}
+
+function logDbContractError({ err, stage, table = null, operation = null, businessId = null, bankTransactionId = null, correlationId = null }) {
+  console.warn("[incoming-deposit-match][db-contract]", {
+    stage,
+    table,
+    operation,
+    business_id: businessId,
+    bank_transaction_id: bankTransactionId,
+    correlation_id: correlationId,
+    error: sanitizedDbError(err),
+  });
+}
+
+function schemaUnavailableResult(reason = "incoming_deposit_match_schema_unavailable") {
+  return {
+    status: "match_check_unavailable",
+    confidence_tier: "unavailable",
+    confidence_score: null,
+    candidates: [],
+    primary: null,
+    reason_codes: [reason, "quickbooks_match_check_temporarily_unavailable", "ordinary_income_posting_blocked"],
+  };
 }
 
 async function matchSchemaAvailable({ db }) {
   try {
     const matches = await db
       .from("bank_qbo_matches")
-      .select("id,status,match_type,confidence_tier,bank_account_match,request_idempotency_key")
+      .select("id,status,match_type,confidence_tier,bank_account_match,request_idempotency_key,qbo_realm_id")
       .limit(1);
     if (matches?.error) throw matches.error;
     const items = await db
       .from("bank_qbo_match_items")
-      .select("id,match_id,qbo_entity_type,qbo_entity_id,evidence_role,active_confirmed")
+      .select("id,match_id,qbo_entity_type,qbo_entity_id,qbo_realm_id,evidence_role,active_confirmed")
       .limit(1);
     if (items?.error) throw items.error;
     return { ok: true };
@@ -153,7 +222,7 @@ async function fetchFreshness({ db, businessId, nowMs = Date.now(), freshnessMin
   try {
     const latest = await selectRows(db
       .from("qbo_entity_sync_runs")
-      .select("id,status,started_at,finished_at,created_at,error_message")
+      .select("id,status,started_at,finished_at,created_at")
       .eq("business_id", businessId)
       .order("started_at", { ascending: false })
       .limit(1));
@@ -286,6 +355,7 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
       candidate.match_type = "qbo_deposit";
       const linkedPayments = (row.linked_payment_ids || row.source_snapshot?.linked_payment_ids || []).map(String).filter(Boolean);
       const linkedContexts = linkedPayments.map((paymentId) => paymentContextById.get(String(paymentId))).filter(Boolean);
+      candidate.linked_payment_ids = linkedPayments;
       candidate.invoice_ids = Array.from(new Set(linkedContexts.flatMap((context) => context.linked_invoice_ids || []).map(String).filter(Boolean)));
       candidate.customer_ref = linkedContexts.find((context) => context.customer_ref)?.customer_ref || candidate.customer_ref || null;
       candidate.reason_codes.push(accountMatches ? "qbo_deposit_affects_mapped_bank_account" : "qbo_deposit_bank_account_mismatch_or_missing");
@@ -374,6 +444,34 @@ function classifyCandidates(candidates = []) {
     ["qbo_deposit", "qbo_payment_direct", "qbo_sales_receipt_direct"].includes(candidate.match_type));
   const withLinkedChain = bankAffecting.filter((candidate) =>
     candidate.qbo_entity_type === "SalesReceipt" || candidate.qbo_entity_type === "Deposit" || candidate.invoice_ids?.length);
+  const depositCandidates = bankAffecting.filter((candidate) => candidate.match_type === "qbo_deposit");
+  if (depositCandidates.length === 1) {
+    const primary = depositCandidates[0];
+    const linkedPayments = new Set((primary.linked_payment_ids || []).map(String));
+    const linkedInvoices = new Set((primary.invoice_ids || []).map(String));
+    const competing = candidates.filter((candidate) => {
+      if (candidate === primary) return false;
+      if (candidate.qbo_entity_type === "Payment" && linkedPayments.has(String(candidate.qbo_entity_id))) return false;
+      if (candidate.qbo_entity_type === "Invoice" && linkedInvoices.has(String(candidate.qbo_entity_id))) return false;
+      return true;
+    });
+    if (!competing.length) {
+      const hasKnownChain = Boolean(primary.invoice_ids?.length || primary.linked_payment_ids?.length);
+      return {
+        status: "needs_confirmation",
+        confidence_tier: hasKnownChain ? "tier_1" : "tier_2",
+        confidence_score: hasKnownChain ? 0.98 : 0.86,
+        candidates,
+        primary,
+        reason_codes: Array.from(new Set([
+          ...primary.reason_codes,
+          hasKnownChain ? "unique_unmatched_qbo_bank_affecting_candidate" : "strong_qbo_bank_affecting_candidate",
+          primary.invoice_ids?.length ? "known_deposit_payment_invoice_chain" : primary.linked_payment_ids?.length ? "known_deposit_payment_chain" : "deposit_payment_invoice_context_missing",
+          "human_confirmation_required_for_launch",
+        ])),
+      };
+    }
+  }
 
   if (withLinkedChain.length === 1 && candidates.length === 1) {
     return {
@@ -482,6 +580,7 @@ async function persistCandidateResult({ db, businessId, bankTxn, mapping, freshn
         amount_minor: candidate.amount_minor,
         txn_date: candidate.txn_date,
         customer_ref: candidate.customer_ref,
+        linked_payment_ids: candidate.linked_payment_ids || [],
         invoice_ids: candidate.invoice_ids || [],
         reason_codes: candidate.reason_codes,
       })),
@@ -510,6 +609,7 @@ async function persistCandidateResult({ db, businessId, bankTxn, mapping, freshn
       meta: {
         match_type: candidate.match_type,
         txn_date: candidate.txn_date,
+        linked_payment_ids: candidate.linked_payment_ids || [],
         reason_codes: candidate.reason_codes,
       },
     }));
@@ -550,6 +650,7 @@ async function writeCategorizationBlockMeta({ db, businessId, bankTxn, result, m
           amount_minor: candidate.amount_minor,
           currency: candidate.currency || null,
           customer_ref: candidate.customer_ref || null,
+          linked_payment_ids: candidate.linked_payment_ids || [],
           invoice_ids: candidate.invoice_ids || [],
           bank_account_match: candidate.bank_account_match || null,
           reason_codes: candidate.reason_codes || [],
@@ -562,7 +663,196 @@ async function writeCategorizationBlockMeta({ db, businessId, bankTxn, result, m
     .eq("transaction_id", bankTxn.id);
 }
 
-export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, businessId, bankTransactionId, actor = null, actorRole = null, persist = true, nowMs = Date.now() } = {}) {
+function buildDepositCachePatch(row = {}, now = new Date()) {
+  const deposit = rawSnapshotEntity(row, "deposit");
+  const lines = Array.isArray(deposit.Line) ? deposit.Line : [];
+  const linkedTxns = linkedTxnRowsFromLines(lines);
+  const linkedPaymentIds = Array.from(new Set(linkedTxns
+    .filter((linked) => /payment|receive_payment/i.test(linked.txn_type))
+    .map((linked) => linked.txn_id)
+    .filter(Boolean)));
+  const amount = Math.abs(Number(deposit.TotalAmt ?? deposit.TotalAmtValue ?? row.amount ?? 0));
+  return {
+    qbo_txn_date: dateOnly(deposit.TxnDate || row.qbo_txn_date),
+    amount,
+    amount_minor: toMinorUnits(amount, 0),
+    currency: normalizeQboRef(deposit.CurrencyRef)?.value || row.currency || null,
+    deposit_account_ref: normalizeQboRef(deposit.DepositToAccountRef) || row.deposit_account_ref || null,
+    private_note: deposit.PrivateNote || row.private_note || null,
+    line_descriptions: lines.map((line) => line.Description || null).filter(Boolean),
+    line_entity_refs: lines
+      .map((line) => normalizeQboRef(line.Entity || line.EntityRef || line.DepositLineDetail?.Entity))
+      .filter(Boolean),
+    linked_payment_ids: linkedPaymentIds,
+    sync_token: deposit.SyncToken || row.sync_token || null,
+    source_updated_at: deposit.MetaData?.LastUpdatedTime || deposit.MetaData?.CreateTime || row.source_updated_at || now.toISOString(),
+    source_snapshot_at: row.source_snapshot_at || now.toISOString(),
+    source_snapshot: snapshotWithNormalizationMeta(row.source_snapshot, now, "Deposit"),
+    updated_at: now.toISOString(),
+  };
+}
+
+function buildPaymentCachePatch(row = {}, now = new Date()) {
+  const payment = rawSnapshotEntity(row, "payment");
+  const normalized = normalizeQboPaymentRecord(payment, {
+    businessId: row.business_id,
+    realmId: row.realm_id,
+    customerId: row.customer_id || null,
+    now,
+  });
+  return {
+    payment_date: normalized.payment_date || row.payment_date || null,
+    total_amount: normalized.total_amount,
+    amount_minor: normalized.amount_minor,
+    unapplied_amount: normalized.unapplied_amount,
+    unapplied_amount_minor: normalized.unapplied_amount_minor,
+    customer_ref: normalized.customer_ref || row.customer_ref || null,
+    deposit_ref: normalized.deposit_ref || row.deposit_ref || null,
+    currency: normalized.currency || row.currency || null,
+    sync_token: normalized.sync_token || row.sync_token || null,
+    payment_ref_num: normalized.payment_ref_num || row.payment_ref_num || null,
+    payment_method_ref: normalized.payment_method_ref || row.payment_method_ref || null,
+    exchange_rate: normalized.exchange_rate,
+    linked_txn: normalized.linked_txn || row.linked_txn || [],
+    linked_invoice_ids: normalized.linked_invoice_ids || row.linked_invoice_ids || [],
+    line_allocations: normalized.line_allocations || row.line_allocations || [],
+    source_updated_at: normalized.source_updated_at || row.source_updated_at || now.toISOString(),
+    source_snapshot_at: row.source_snapshot_at || now.toISOString(),
+    source_snapshot: snapshotWithNormalizationMeta(row.source_snapshot, now, "Payment"),
+    sync_status: "synced",
+    updated_at: now.toISOString(),
+  };
+}
+
+function buildRevenueDocumentCachePatch(row = {}, now = new Date()) {
+  const document = rawSnapshotEntity(row, "document");
+  const qboType = row.source_snapshot?.qbo_type || row.source_document_type || "Invoice";
+  const normalized = normalizeQboRevenueDocument(document, qboType, {
+    businessId: row.business_id,
+    realmId: row.realm_id,
+    customerId: row.customer_id || null,
+    jobId: row.job_id || null,
+    now,
+  });
+  return {
+    document_number: normalized.document_number || row.document_number || null,
+    document_date: normalized.document_date || row.document_date || null,
+    due_date: normalized.due_date || row.due_date || null,
+    total_amount: normalized.total_amount,
+    amount_minor: normalized.amount_minor,
+    open_balance: normalized.open_balance,
+    open_balance_minor: normalized.open_balance_minor,
+    status: normalized.status || row.status || "active",
+    currency: normalized.currency || row.currency || null,
+    customer_ref: normalized.customer_ref || row.customer_ref || null,
+    deposit_account_ref: normalized.deposit_account_ref || row.deposit_account_ref || null,
+    payment_ref_num: normalized.payment_ref_num || row.payment_ref_num || null,
+    payment_method_ref: normalized.payment_method_ref || row.payment_method_ref || null,
+    linked_txn: normalized.linked_txn || row.linked_txn || [],
+    linked_payment_ids: normalized.linked_payment_ids || row.linked_payment_ids || [],
+    sync_token: normalized.sync_token || row.sync_token || null,
+    source_updated_at: normalized.source_updated_at || row.source_updated_at || now.toISOString(),
+    source_snapshot_at: row.source_snapshot_at || now.toISOString(),
+    source_snapshot: snapshotWithNormalizationMeta(row.source_snapshot, now, "RevenueDocument"),
+    sync_status: "synced",
+    updated_at: now.toISOString(),
+  };
+}
+
+async function renormalizeRows({ db, table, businessId, idColumn, ids = [], select, buildPatch, fields, dryRun, now }) {
+  if (!ids.length) return [];
+  const rows = await selectRows(db
+    .from(table)
+    .select(select)
+    .eq("business_id", businessId)
+    .in(idColumn, ids.map(String)));
+  const results = [];
+  for (const row of rows) {
+    const before = cachePreview(row, fields);
+    const patch = buildPatch(row, now);
+    const after = cachePreview({ ...row, ...patch }, fields);
+    results.push({
+      table,
+      entity_id: row[idColumn],
+      id: row.id || null,
+      before,
+      after,
+      changed: JSON.stringify(before) !== JSON.stringify(after),
+      dry_run: dryRun,
+    });
+    if (!dryRun) {
+      const { error } = await db
+        .from(table)
+        .update(patch)
+        .eq("business_id", businessId)
+        .eq(idColumn, row[idColumn]);
+      if (error) throw error;
+    }
+  }
+  return results;
+}
+
+export async function renormalizeIncomingDepositQboCacheEvidence({
+  db = defaultSupabase,
+  businessId,
+  depositIds = [],
+  paymentIds = [],
+  invoiceIds = [],
+  dryRun = true,
+  now = new Date(),
+} = {}) {
+  if (!businessId) throw new IncomingDepositMatchError("missing_business_id", 400);
+  const at = now instanceof Date ? now : new Date(now);
+  const results = [];
+  results.push(...await renormalizeRows({
+    db,
+    table: "job_revenue_evidence",
+    businessId,
+    idColumn: "qbo_txn_id",
+    ids: depositIds,
+    select: "id,business_id,job_id,bank_transaction_id,realm_id,qbo_txn_id,qbo_txn_type,qbo_txn_date,amount,amount_minor,currency,deposit_account_ref,private_note,line_descriptions,line_entity_refs,linked_payment_ids,sync_token,source_updated_at,source_snapshot_at,source_snapshot,updated_at",
+    buildPatch: buildDepositCachePatch,
+    fields: ["qbo_txn_date", "amount", "amount_minor", "currency", "deposit_account_ref", "linked_payment_ids", "sync_token", "source_snapshot_at"],
+    dryRun,
+    now: at,
+  }));
+  results.push(...await renormalizeRows({
+    db,
+    table: "job_payment_records",
+    businessId,
+    idColumn: "external_payment_id",
+    ids: paymentIds,
+    select: "id,business_id,customer_id,realm_id,external_payment_id,payment_date,total_amount,amount_minor,unapplied_amount,unapplied_amount_minor,currency,deposit_ref,customer_ref,payment_ref_num,payment_method_ref,exchange_rate,linked_txn,linked_invoice_ids,line_allocations,sync_token,source_updated_at,source_snapshot_at,source_snapshot,updated_at",
+    buildPatch: buildPaymentCachePatch,
+    fields: ["payment_date", "total_amount", "amount_minor", "unapplied_amount", "unapplied_amount_minor", "currency", "deposit_ref", "customer_ref", "linked_invoice_ids", "sync_token", "source_snapshot_at"],
+    dryRun,
+    now: at,
+  }));
+  results.push(...await renormalizeRows({
+    db,
+    table: "job_revenue_documents",
+    businessId,
+    idColumn: "external_document_id",
+    ids: invoiceIds,
+    select: "id,business_id,job_id,customer_id,realm_id,source_document_type,external_document_id,document_number,document_date,due_date,total_amount,amount_minor,open_balance,open_balance_minor,status,currency,customer_ref,deposit_account_ref,payment_ref_num,payment_method_ref,linked_txn,linked_payment_ids,sync_token,source_updated_at,source_snapshot_at,source_snapshot,updated_at",
+    buildPatch: buildRevenueDocumentCachePatch,
+    fields: ["document_number", "document_date", "total_amount", "amount_minor", "open_balance", "open_balance_minor", "status", "currency", "customer_ref", "linked_payment_ids", "sync_token", "source_snapshot_at"],
+    dryRun,
+    now: at,
+  }));
+  return {
+    ok: true,
+    dry_run: dryRun,
+    business_id: businessId,
+    parser_version: QBO_CACHE_NORMALIZATION_VERSION,
+    normalized_at: at.toISOString(),
+    updated: dryRun ? 0 : results.filter((row) => row.changed).length,
+    inspected: results.length,
+    results,
+  };
+}
+
+export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, businessId, bankTransactionId, actor = null, actorRole = null, persist = true, nowMs = Date.now(), correlationId = null } = {}) {
   if (!businessId || !bankTransactionId) throw new IncomingDepositMatchError("missing_match_input", 400);
   const bankTxn = await fetchBankTransaction({ db, businessId, bankTransactionId });
   if (!bankTxn) throw new IncomingDepositMatchError("bank_transaction_not_found", 404);
@@ -571,7 +861,7 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
 
   const schema = await matchSchemaAvailable({ db });
   if (!schema.ok) {
-    const result = { status: "match_check_unavailable", confidence_tier: "unavailable", confidence_score: null, candidates: [], primary: null, reason_codes: [schema.reason, "ordinary_income_posting_blocked"] };
+    const result = schemaUnavailableResult(schema.reason);
     if (persist) await writeCategorizationBlockMeta({ db, businessId, bankTxn, result, match: null, reason: "match_check_unavailable" });
     return { ok: true, ...result, posting_eligibility: "blocked_match_check_unavailable", match: null };
   }
@@ -595,16 +885,30 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
   const mappingInfo = mappingEvidence(mapping);
   const freshness = await fetchFreshness({ db, businessId, nowMs });
   if (!freshness.ok) {
-    const result = { status: "match_check_unavailable", confidence_tier: "unavailable", confidence_score: null, candidates: [], primary: null, reason_codes: [freshness.reason, "ordinary_income_posting_blocked"] };
-    const match = persist ? await persistCandidateResult({ db, businessId, bankTxn, mapping, freshness, result, actor, actorRole }) : null;
+    const result = schemaUnavailableResult(freshness.reason);
+    let match = null;
+    try {
+      match = persist ? await persistCandidateResult({ db, businessId, bankTxn, mapping, freshness, result, actor, actorRole }) : null;
+    } catch (err) {
+      if (!isMissingSchemaError(err)) throw err;
+      logDbContractError({ err, stage: "persist_unavailable_freshness", table: "bank_qbo_matches", operation: "insert/select", businessId, bankTransactionId, correlationId });
+      result.reason_codes = schemaUnavailableResult("incoming_deposit_match_schema_unavailable").reason_codes;
+    }
     if (persist) await writeCategorizationBlockMeta({ db, businessId, bankTxn, result, match, reason: "match_check_unavailable" });
     return { ok: true, ...result, posting_eligibility: "blocked_match_check_unavailable", match };
   }
   const bankAmountMinor = toMinorUnits(Math.abs(Number(bankTxn.amount || 0)), null);
   const { candidates, evidenceSchemaIncomplete } = await discoverCandidates({ db, businessId, bankTxn, mapping, mappingInfo, bankAmountMinor });
   if (evidenceSchemaIncomplete && !candidates.length) {
-    const result = { status: "match_check_unavailable", confidence_tier: "unavailable", confidence_score: null, candidates: [], primary: null, reason_codes: ["qbo_match_evidence_columns_unavailable", "ordinary_income_posting_blocked"] };
-    const match = persist ? await persistCandidateResult({ db, businessId, bankTxn, mapping, freshness, result, actor, actorRole }) : null;
+    const result = schemaUnavailableResult("qbo_match_evidence_columns_unavailable");
+    let match = null;
+    try {
+      match = persist ? await persistCandidateResult({ db, businessId, bankTxn, mapping, freshness, result, actor, actorRole }) : null;
+    } catch (err) {
+      if (!isMissingSchemaError(err)) throw err;
+      logDbContractError({ err, stage: "persist_unavailable_evidence", table: "bank_qbo_matches", operation: "insert/select", businessId, bankTransactionId, correlationId });
+      result.reason_codes = schemaUnavailableResult("incoming_deposit_match_schema_unavailable").reason_codes;
+    }
     if (persist) await writeCategorizationBlockMeta({ db, businessId, bankTxn, result, match, reason: "match_check_unavailable" });
     return { ok: true, ...result, posting_eligibility: "blocked_match_check_unavailable", match };
   }
@@ -618,7 +922,16 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
     result.confidence_score = null;
     result.reason_codes = Array.from(new Set([...(result.reason_codes || []), mappingInfo.reason, "bank_account_could_not_be_fully_verified", "ordinary_income_posting_blocked"]));
   }
-  const match = persist ? await persistCandidateResult({ db, businessId, bankTxn, mapping, freshness, result, actor, actorRole }) : null;
+  let match = null;
+  try {
+    match = persist ? await persistCandidateResult({ db, businessId, bankTxn, mapping, freshness, result, actor, actorRole }) : null;
+  } catch (err) {
+    if (!isMissingSchemaError(err)) throw err;
+    logDbContractError({ err, stage: "persist_candidate_result", table: "bank_qbo_matches/bank_qbo_match_items", operation: "insert/select", businessId, bankTransactionId, correlationId });
+    const unavailable = schemaUnavailableResult("incoming_deposit_match_schema_unavailable");
+    if (persist) await writeCategorizationBlockMeta({ db, businessId, bankTxn, result: unavailable, match: null, reason: "match_check_unavailable" });
+    return { ok: true, ...unavailable, posting_eligibility: "blocked_match_check_unavailable", match: null };
+  }
   if (result.status === "candidate" && result.confidence_tier === "tier_4") {
     return { ok: true, ...result, posting_eligibility: "ordinary_income_posting_allowed", match: null };
   }
@@ -667,6 +980,7 @@ function matchResultSummary(result = {}) {
       amount_minor: candidate.amount_minor,
       currency: candidate.currency || null,
       customer_ref: candidate.customer_ref || null,
+      linked_payment_ids: candidate.linked_payment_ids || [],
       invoice_ids: candidate.invoice_ids || [],
       bank_account_match: candidate.bank_account_match || null,
       reason_codes: candidate.reason_codes || [],

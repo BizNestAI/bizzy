@@ -12,6 +12,7 @@ const {
   discoverExistingIncomingDepositMatches,
   discoverIncomingDepositQboMatch,
   evaluateIncomingDepositPostingGuard,
+  renormalizeIncomingDepositQboCacheEvidence,
   rejectIncomingDepositQboMatch,
 } = await import("../src/services/bookkeeping/incomingDepositMatchService.js");
 const {
@@ -322,6 +323,169 @@ test("missing match tables fail closed instead of silently enabling legacy incom
   assert.ok(db.tables.transaction_categorizations[0].meta.incoming_deposit_reason_codes.includes("incoming_deposit_match_schema_unavailable"));
 });
 
+test("missing match columns and PGRST204 fail closed without exposing raw infrastructure codes to customer state", async () => {
+  const db = fakeDb(baseMatchTables());
+  db.failSelectColumns.set("bank_qbo_matches", new Set(["qbo_realm_id"]));
+
+  const result = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+    correlationId: "corr-1",
+  });
+
+  assert.equal(result.status, "match_check_unavailable");
+  assert.equal(result.posting_eligibility, "blocked_match_check_unavailable");
+  assert.equal(db.tables.transaction_categorizations[0].post_error, "match_check_unavailable");
+  assert.ok(result.reason_codes.includes("quickbooks_match_check_temporarily_unavailable"));
+  assert.equal(result.reason_codes.includes("PGRST204"), false);
+  assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_reason_codes.includes("PGRST204"), false);
+});
+
+test("freshness probe does not require legacy qbo sync error_message column", async () => {
+  const db = fakeDb(baseMatchTables());
+  db.failSelectColumns.set("qbo_entity_sync_runs", new Set(["error_message"]));
+
+  const result = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+
+  assert.equal(result.status, "needs_confirmation");
+  assert.equal(result.posting_eligibility, "blocked_confirmation_required");
+  assert.equal(result.candidates[0].qbo_entity_id, "dep-300");
+});
+
+test("cache re-normalization uses stored snapshots and is idempotent for the exact QBO chain", async () => {
+  const tables = baseMatchTables();
+  tables.qbo_entity_sync_runs[0].started_at = "2026-09-13T01:55:00Z";
+  tables.qbo_entity_sync_runs[0].finished_at = "2026-09-13T02:00:00Z";
+  tables.qbo_entity_sync_runs[0].created_at = "2026-09-13T01:55:00Z";
+  tables.job_revenue_evidence[0] = {
+    ...tables.job_revenue_evidence[0],
+    qbo_txn_id: "1508",
+    qbo_txn_date: null,
+    amount: 300,
+    amount_minor: null,
+    currency: null,
+    deposit_account_ref: null,
+    linked_payment_ids: null,
+    source_snapshot_at: null,
+    source_snapshot: {
+      deposit: {
+        Id: "1508",
+        TxnDate: "2026-09-07",
+        TotalAmt: 300,
+        DepositToAccountRef: { value: "qbo-bank-1", name: "Checking" },
+        CurrencyRef: { value: "USD" },
+        SyncToken: "0",
+        Line: [{ Amount: 300, LinkedTxn: [{ TxnId: "1507", TxnType: "Payment" }] }],
+        MetaData: { LastUpdatedTime: "2026-09-07T18:00:00Z" },
+      },
+    },
+  };
+  tables.job_payment_records = [{
+    id: "pay-row",
+    business_id: "b1",
+    realm_id: "r1",
+    external_payment_id: "1507",
+    payment_date: "2026-09-07",
+    total_amount: 300,
+    amount_minor: null,
+    unapplied_amount: 0,
+    unapplied_amount_minor: null,
+    deposit_ref: { value: "qbo-bank-1", name: "Checking" },
+    source_snapshot_at: null,
+    source_snapshot: {
+      Id: "1507",
+      TxnDate: "2026-09-07",
+      TotalAmt: 300,
+      UnappliedAmt: 0,
+      CustomerRef: { value: "42", name: "Projection and Video LLC" },
+      DepositToAccountRef: { value: "qbo-bank-1", name: "Checking" },
+      CurrencyRef: { value: "USD" },
+      SyncToken: "0",
+      Line: [{ Amount: 300, LinkedTxn: [{ TxnId: "1291", TxnType: "Invoice" }] }],
+      MetaData: { LastUpdatedTime: "2026-09-07T17:00:00Z" },
+    },
+  }];
+  tables.job_revenue_documents = [{
+    id: "invoice-row",
+    business_id: "b1",
+    realm_id: "r1",
+    source_document_type: "invoice",
+    external_document_id: "1291",
+    document_number: "1102",
+    document_date: "2026-08-19",
+    total_amount: 300,
+    amount_minor: null,
+    open_balance: 0,
+    open_balance_minor: null,
+    status: "paid",
+    customer_ref: { value: "42", name: "Projection and Video LLC" },
+    source_snapshot_at: null,
+    source_snapshot: {
+      qbo_type: "Invoice",
+      realm_id: "r1",
+      document: {
+        Id: "1291",
+        DocNumber: "1102",
+        TxnDate: "2026-08-19",
+        TotalAmt: 300,
+        Balance: 0,
+        CustomerRef: { value: "42", name: "Projection and Video LLC" },
+        LinkedTxn: [{ TxnId: "1507", TxnType: "Payment" }],
+        CurrencyRef: { value: "USD" },
+        SyncToken: "1",
+        MetaData: { LastUpdatedTime: "2026-09-07T17:30:00Z" },
+      },
+    },
+  }];
+  const db = fakeDb(tables);
+
+  const first = await renormalizeIncomingDepositQboCacheEvidence({
+    db,
+    businessId: "b1",
+    depositIds: ["1508"],
+    paymentIds: ["1507"],
+    invoiceIds: ["1291"],
+    dryRun: false,
+    now: new Date("2026-09-13T02:00:00Z"),
+  });
+  const second = await renormalizeIncomingDepositQboCacheEvidence({
+    db,
+    businessId: "b1",
+    depositIds: ["1508"],
+    paymentIds: ["1507"],
+    invoiceIds: ["1291"],
+    dryRun: false,
+    now: new Date("2026-09-13T02:00:00Z"),
+  });
+  const discovered = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: false,
+    nowMs: Date.parse("2026-09-13T02:01:00Z"),
+  });
+
+  assert.equal(first.updated, 3);
+  assert.equal(second.updated, 0);
+  assert.equal(db.tables.job_revenue_evidence[0].amount_minor, 30000);
+  assert.deepEqual(db.tables.job_revenue_evidence[0].linked_payment_ids, ["1507"]);
+  assert.equal(db.tables.job_payment_records[0].amount_minor, 30000);
+  assert.deepEqual(db.tables.job_payment_records[0].linked_invoice_ids, ["1291"]);
+  assert.equal(db.tables.job_revenue_documents[0].amount_minor, 30000);
+  assert.deepEqual(db.tables.job_revenue_documents[0].linked_payment_ids, ["1507"]);
+  assert.equal(discovered.status, "needs_confirmation");
+  assert.equal(discovered.candidates[0].qbo_entity_id, "1508");
+});
+
 test("invoice-only duplicate evidence blocks blind posting but cannot be confirmed as a bank match", async () => {
   const tables = baseMatchTables();
   tables.job_revenue_evidence = [];
@@ -381,6 +545,14 @@ test("rejecting a candidate preserves the user decision and does not automatical
   assert.equal(rejected.posting_eligibility, "blocked_rejected_candidate_review_required");
   assert.equal(db.tables.transaction_categorizations[0].post_error, "incoming_deposit_match_rejected_review_required");
   assert.equal(db.tables.transaction_categorizations[0].meta.safe_to_auto_post, false);
+});
+
+test("frontend unavailable copy avoids raw PGRST204 customer display", () => {
+  const feed = readFileSync(join(root, "src/components/Accounting/BookkeepingFeed.jsx"), "utf8");
+  assert.match(feed, /QuickBooks match check temporarily unavailable/);
+  assert.match(feed, /Bizzi couldn't safely check whether this deposit is already recorded in QuickBooks/);
+  assert.match(feed, /\^PGRST\\d\+/);
+  assert.doesNotMatch(feed, /<[^>]*>\{reason\}<\/span>/);
 });
 
 function baseMatchTables() {
@@ -453,6 +625,7 @@ function fakeDb(initial = {}) {
     tables,
     calls: [],
     failSelectTables: new Set(),
+    failSelectColumns: new Map(),
     rpcRows: [],
     rpc(name, args) {
       this.calls.push({ op: "rpc", table: name, args });
@@ -462,17 +635,18 @@ function fakeDb(initial = {}) {
     },
     from(table) {
       if (!tables[table]) tables[table] = [];
-      return new FakeQuery(tables, table, this.calls, this.failSelectTables);
+      return new FakeQuery(tables, table, this.calls, this.failSelectTables, this.failSelectColumns);
     },
   };
 }
 
 class FakeQuery {
-  constructor(tables, table, calls, failSelectTables) {
+  constructor(tables, table, calls, failSelectTables, failSelectColumns) {
     this.tables = tables;
     this.table = table;
     this.calls = calls;
     this.failSelectTables = failSelectTables;
+    this.failSelectColumns = failSelectColumns;
     this.filters = [];
     this.orderSpec = null;
     this.limitCount = null;
@@ -481,7 +655,7 @@ class FakeQuery {
     this.single = false;
   }
 
-  select() { this.calls.push({ op: "select", table: this.table }); return this; }
+  select(columns = "*") { this.calls.push({ op: "select", table: this.table, columns }); this.selectedColumns = String(columns || "*"); return this; }
   eq(field, value) { this.calls.push({ op: "eq", table: this.table, field }); this.filters.push((row) => String(row[field]) === String(value)); return this; }
   in(field, values) { this.calls.push({ op: "in", table: this.table, field }); const set = new Set((values || []).map(String)); this.filters.push((row) => set.has(String(row[field]))); return this; }
   gt(field, value) { this.calls.push({ op: "gt", table: this.table, field }); this.filters.push((row) => Number(row[field]) > Number(value)); return this; }
@@ -497,6 +671,21 @@ class FakeQuery {
   then(resolve) {
     if (this.failSelectTables?.has(this.table) && this.operation === "select") {
       return resolve({ data: null, error: Object.assign(new Error(`relation "${this.table}" does not exist`), { code: "42P01" }) });
+    }
+    const failingColumns = this.failSelectColumns?.get(this.table);
+    if (failingColumns && this.operation === "select") {
+      const missing = Array.from(failingColumns).find((column) => this.selectedColumns.split(",").map((part) => part.trim()).includes(column));
+      if (missing) {
+        return resolve({
+          data: null,
+          error: {
+            code: "PGRST204",
+            message: `Could not find the '${missing}' column of '${this.table}' in the schema cache`,
+            details: null,
+            hint: null,
+          },
+        });
+      }
     }
     let rows = this.tables[this.table];
     if (this.operation === "insert") {

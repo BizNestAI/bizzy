@@ -4,6 +4,10 @@ import { deriveCreditCardPaymentStatus, isCreditCardPaymentWorkflow } from "./cr
 import { classifyAutoPostOperationalScope, getAutoPostPolicy } from "./autoPostControl.js";
 import { discoverIncomingDepositQboMatch } from "./incomingDepositMatchService.js";
 
+function makeCorrelationId(prefix = "feed") {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function firstDayOfMonth() {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -426,6 +430,7 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
   if (!targets.length) return rows;
   const overlays = new Map();
   for (const row of targets) {
+    const correlationId = makeCorrelationId("incoming-deposit-feed");
     try {
       const result = await discoverIncomingDepositQboMatch({
         db,
@@ -434,14 +439,21 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
         actorRole: "feed_candidate_discovery",
         persist: true,
         nowMs,
+        correlationId,
       });
       const overlay = incomingDepositOverlayFromResult(result);
       if (overlay) overlays.set(String(row.id), overlay);
     } catch (err) {
+      console.warn("[bookkeeping-feed][incoming-deposit-discovery]", {
+        business_id: businessId,
+        bank_transaction_id: row.id,
+        correlation_id: correlationId,
+        error: { code: err?.code || null, message: err?.message || null },
+      });
       overlays.set(String(row.id), {
         incoming_deposit_match_status: "match_check_unavailable",
         incoming_deposit_confidence_tier: "unavailable",
-        incoming_deposit_reason_codes: [err?.code || err?.message || "incoming_deposit_discovery_failed"],
+        incoming_deposit_reason_codes: ["quickbooks_match_check_temporarily_unavailable", "ordinary_income_posting_blocked"],
         incoming_deposit_candidates: [],
         post_error: "match_check_unavailable",
         meta: {
@@ -449,8 +461,9 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
           post_block_reason: "match_check_unavailable",
           incoming_deposit_match_status: "match_check_unavailable",
           incoming_deposit_confidence_tier: "unavailable",
-          incoming_deposit_reason_codes: [err?.code || err?.message || "incoming_deposit_discovery_failed"],
+          incoming_deposit_reason_codes: ["quickbooks_match_check_temporarily_unavailable", "ordinary_income_posting_blocked"],
           incoming_deposit_candidates: [],
+          incoming_deposit_match_correlation_id: correlationId,
         },
       });
     }

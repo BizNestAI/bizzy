@@ -503,6 +503,7 @@ function formatMinorMoney(minor, currency = "USD") {
 }
 
 function humanizeReason(code = "") {
+  if (/^PGRST\d+$/i.test(String(code || ""))) return null;
   const labels = {
     exact_amount_cents: "Exact amount",
     compatible_positive_deposit_direction: "Incoming bank deposit",
@@ -522,6 +523,9 @@ function humanizeReason(code = "") {
     qbo_match_cache_stale: "QBO cache is stale",
     qbo_match_cache_unavailable: "QBO cache unavailable",
     qbo_match_cache_never_synced: "QBO cache has not synced",
+    quickbooks_match_check_temporarily_unavailable: "Temporary QuickBooks match check issue",
+    incoming_deposit_match_schema_unavailable: "QuickBooks match check temporarily unavailable",
+    qbo_match_evidence_columns_unavailable: "QuickBooks evidence check unavailable",
     invoice_only_duplicate_income_evidence: "Invoice-only duplicate evidence",
     invoice_only_payment_verification_needed: "Payment verification needed",
     incoming_deposit_match_rejected_review_required: "Rejected candidate needs review",
@@ -575,7 +579,7 @@ function IncomingDepositMatchPanel({
   const heading = state.confirmed
     ? "Matched to existing QuickBooks payment"
     : state.unavailable
-      ? "Match check unavailable"
+      ? "QuickBooks match check temporarily unavailable"
       : state.invoiceOnly
         ? "Possible duplicate income - payment verification needed"
       : state.ambiguous
@@ -584,7 +588,7 @@ function IncomingDepositMatchPanel({
   const description = state.confirmed
     ? "Confirmed against an existing QuickBooks bank/payment transaction. Bizzi did not create new income."
     : state.unavailable
-      ? "Bizzi couldn't verify whether this deposit already exists in QuickBooks. It has not been posted as income."
+      ? "Bizzi couldn't safely check whether this deposit is already recorded in QuickBooks. It has not been posted as income."
       : state.invoiceOnly
         ? "Bizzi found QuickBooks invoice activity that may already explain this deposit, but the payment or bank deposit chain still needs verification."
       : state.ambiguous
@@ -615,9 +619,10 @@ function IncomingDepositMatchPanel({
       ) : null}
       {state.reasons?.length ? (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {state.reasons.slice(0, 6).map((reason) => (
-            <span key={reason} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-200">{humanizeReason(reason)}</span>
-          ))}
+          {state.reasons.slice(0, 6).map((reason) => {
+            const label = humanizeReason(reason);
+            return label ? <span key={reason} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-200">{label}</span> : null;
+          })}
         </div>
       ) : null}
       {action.error ? <div className="mt-2 text-[11px] text-rose-100">{action.error}</div> : null}
