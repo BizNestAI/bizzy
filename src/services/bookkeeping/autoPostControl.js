@@ -171,9 +171,6 @@ export function classifyAutoPostBacklogCandidate({ item = {}, bankTxn = {}, poli
   if (item?.qbo_txn_id || item?.source_qbo_txn_id || item?.meta?.source_qbo_txn_id) {
     return "already_linked";
   }
-  if (item?.post_after) {
-    return "already_scheduled";
-  }
   if (item?.meta?.possible_qbo_duplicate === true || item?.meta?.duplicate_risk === true) {
     return "possible_existing_qbo_duplicate";
   }
@@ -193,6 +190,9 @@ export function classifyAutoPostBacklogCandidate({ item = {}, bankTxn = {}, poli
   const scope = classifyAutoPostOperationalScope({ item, bankTxn, policy });
   if (!scope.allowed && scope.code === "historical_scope_review_required") {
     return "historical_scope_review_required";
+  }
+  if (item?.post_after) {
+    return "already_scheduled";
   }
   return "safe_new_post";
 }
@@ -641,10 +641,10 @@ async function evaluateBacklogRowForRelease({ db, businessId, item, bankTxn = {}
   if (item?.qbo_txn_id || item?.source_qbo_txn_id || item?.meta?.source_qbo_txn_id) {
     return { category: "already_represented_in_qbo", reason: "already_represented_in_qbo" };
   }
-  let category = classifyAutoPostBacklogCandidate({ item, bankTxn, policy });
-  if (category === BACKLOG_ELIGIBLE_BUCKET && bankTxn.plaid_account_id && !sourceMappings.has(bankTxn.plaid_account_id)) {
-    category = "missing_source_mapping";
+  if (bankTxn.plaid_account_id && !sourceMappings.has(bankTxn.plaid_account_id)) {
+    return { category: "missing_source_mapping", reason: "missing_source_mapping" };
   }
+  let category = classifyAutoPostBacklogCandidate({ item, bankTxn, policy });
   if (category === BACKLOG_ELIGIBLE_BUCKET) {
     return {
       category,
@@ -682,9 +682,14 @@ async function evaluateBacklogRowForRelease({ db, businessId, item, bankTxn = {}
       canonicalVendorReliable: true,
     });
     if (decision.eligible === true) {
+      const validSchedule = Boolean(
+        item?.meta?.safe_to_auto_post === true &&
+        item?.post_after &&
+        Number.isFinite(Date.parse(item.post_after))
+      );
       return {
-        category: BACKLOG_ELIGIBLE_BUCKET,
-        reason: "previously_unsafe_but_now_safe",
+        category: validSchedule ? "already_scheduled" : BACKLOG_ELIGIBLE_BUCKET,
+        reason: validSchedule ? "currently_safe_existing_schedule_valid" : "previously_unsafe_but_now_safe",
         meta: {
           ...(item.meta || {}),
           safe_to_auto_post: true,

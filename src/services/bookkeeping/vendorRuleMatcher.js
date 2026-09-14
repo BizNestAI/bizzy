@@ -1,6 +1,7 @@
 /* global process */
 import { normalizeMerchantIdentity, normalizedMerchantKeys } from "./merchantNormalization.js";
 import { BUSINESS_MERCHANT_RULE_SOURCE } from "./vendorRuleLearner.js";
+import { signedAmountMinor, vendorRuleMatchConditionsPass } from "./vendorRuleMatchConditions.js";
 
 export function normalizeText(str = "") {
   return String(str || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -41,6 +42,16 @@ function isActiveRule(rule = {}) {
   return notes.state !== "superseded" && notes.active !== false;
 }
 
+function directionMatches(rule = {}, bankTransaction = {}) {
+  const hint = String(rule.direction_hint || "").toUpperCase();
+  if (!hint || hint === "UNKNOWN") return true;
+  const raw = String(bankTransaction.direction || "").toUpperCase();
+  if (raw === "INFLOW" || raw === "OUTFLOW") return raw === hint;
+  const minor = signedAmountMinor(bankTransaction);
+  if (minor == null || minor === 0) return false;
+  return hint === (minor < 0 ? "OUTFLOW" : "INFLOW");
+}
+
 function ruleSpecificity(rule = {}) {
   return parseRuleNotes(rule.notes).match_specificity || (rule.match_type === "merchant_entity_id" ? "exact_provider_merchant_id" : "broad_fuzzy_alias");
 }
@@ -76,9 +87,17 @@ function shapeRule(rule, match_reason, match_score) {
     source_type: parseRuleNotes(rule.notes).source_type || rule.source || null,
     authority: parseRuleNotes(rule.notes).authority || null,
     match_specificity: ruleSpecificity(rule),
+    match_conditions: rule.match_conditions || null,
     match_reason,
     match_score,
   };
+}
+
+function ruleEligibleForTransaction(rule = {}, bankTransaction = {}) {
+  if (!hasCategoryDefaults(rule)) return false;
+  if (!isActiveRule(rule)) return false;
+  if (!directionMatches(rule, bankTransaction)) return false;
+  return vendorRuleMatchConditionsPass(rule, bankTransaction, buildMemo).ok === true;
 }
 
 export async function getVendorRuleForTransaction({ businessId, bankTransaction, db = null } = {}) {
@@ -103,7 +122,7 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction,
       .limit(1);
     debug.steps.push({ tier: "merchant_entity_id", returned: meRules?.length || 0, error: !!meErr });
     if (!meErr && meRules?.length) {
-      const rule = meRules.find((candidate) => hasCategoryDefaults(candidate) && isActiveRule(candidate));
+      const rule = meRules.find((candidate) => ruleEligibleForTransaction(candidate, bankTransaction));
       if (rule) return shapeRule(rule, "merchant_entity_id", 1000);
     }
   }
@@ -129,6 +148,8 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction,
         if (!ruleVal) continue;
         if (!isActiveRule(rule)) continue;
         const specificity = ruleSpecificity(rule);
+        if (!directionMatches(rule, bankTransaction)) continue;
+        if (vendorRuleMatchConditionsPass(rule, bankTransaction, buildMemo).ok !== true) continue;
         const exactAuthorized =
           rule.source === BUSINESS_MERCHANT_RULE_SOURCE &&
           ["exact_normalized_merchant", "exact_descriptor_fingerprint", "memo_fingerprint"].includes(specificity);
@@ -166,7 +187,7 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction,
       try {
         const re = new RegExp(pattern, "i");
         if (re.test(rawMemo) || re.test(cleanedMemo)) {
-          if (hasCategoryDefaults(rule) && isActiveRule(rule)) {
+          if (ruleEligibleForTransaction(rule, bankTransaction)) {
             return shapeRule(rule, "regex", 300);
           }
         }
@@ -187,7 +208,7 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction,
       .not("default_qbo_account_id", "is", null);
     debug.steps.push({ tier: "qbo_entity", returned: entityRules?.length || 0, error: !!entErr });
     if (!entErr && entityRules?.length) {
-      const sorted = [...entityRules].filter(isActiveRule).sort((a, b) => {
+      const sorted = [...entityRules].filter((rule) => ruleEligibleForTransaction(rule, bankTransaction)).sort((a, b) => {
         const ua = a.usage_count || 0;
         const ub = b.usage_count || 0;
         if (ua !== ub) return ub - ua;

@@ -66,6 +66,9 @@ class Query {
     }
     return this;
   }
+  order() {
+    return this;
+  }
   update(payload) {
     this.pendingUpdate = payload;
     return this;
@@ -126,6 +129,13 @@ class Query {
         result = value;
       });
       return { data: result?.data?.[0] || null, error: result?.error || null };
+    }
+    if (this.pendingUpdate) {
+      const rows = this.rows();
+      const row = rows[0] || null;
+      if (!row) return { data: null, error: null };
+      Object.assign(row, this.pendingUpdate);
+      return { data: { ...row }, error: null };
     }
     const rows = this.rows();
     return { data: rows[0] || null, error: null };
@@ -289,6 +299,56 @@ test("Monthly Review authorized ordinary expense creates active business merchan
   });
   assert.equal(oneTime.reusable_rule?.skipped, true);
   assert.equal(oneTimeDb.tables.vendor_rules.length, 0);
+});
+
+test("vendor rule learner deterministically promotes exact identity rows and repeats idempotently", async () => {
+  const { learnVendorRuleFromTransaction } = await import("../src/services/bookkeeping/vendorRuleLearner.js");
+  const db = makeDb({
+    vendor_rules: [{
+      id: "identity-adobe",
+      business_id: "biz-1",
+      match_type: "merchant_entity_id",
+      match_value: "adobe-entity",
+      counterparty_name: "Adobe",
+      rule_kind: "identity",
+      default_qbo_account_id: null,
+      usage_count: 3,
+      counterparty_confidence: "high",
+    }],
+  });
+  const bank = bankTxn({
+    id: "adobe-1",
+    name: "ADOBE *800-833-6687",
+    merchant_name: "Adobe",
+    merchant_entity_id: "adobe-entity",
+    amount: -32.16,
+    direction: "OUTFLOW",
+  });
+
+  const first = await learnVendorRuleFromTransaction({
+    businessId: "biz-1",
+    bankTxn: bank,
+    finalAccountId: "24",
+    finalAccountName: "Software",
+    options: { actor: { id: "owner-1", role: "owner" }, matchConditions: null },
+    db,
+  });
+  assert.equal(first.ok, true);
+  assert.equal(db.tables.vendor_rules.length, 1);
+  assert.equal(db.tables.vendor_rules[0].rule_kind, "category_default");
+  assert.equal(db.tables.vendor_rules[0].default_qbo_account_id, "24");
+
+  const second = await learnVendorRuleFromTransaction({
+    businessId: "biz-1",
+    bankTxn: bank,
+    finalAccountId: "24",
+    finalAccountName: "Software",
+    options: { actor: { id: "owner-1", role: "owner" } },
+    db,
+  });
+  assert.equal(second.ok, true);
+  assert.equal(db.tables.vendor_rules.length, 1);
+  assert.equal(db.tables.vendor_rules[0].usage_count, 5);
 });
 
 test("Monthly Review handled unposted reclassification updates categorization without QBO create or auto-post changes", async () => {

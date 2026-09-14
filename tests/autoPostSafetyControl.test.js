@@ -10,6 +10,7 @@ import {
   getAutoPostSettings,
   getAutoPostToQuickBooks,
   previewAutoPostBacklog,
+  reEvaluateAutoPostBacklog,
   releaseAutoPostBacklogScope,
   setAutoPostEnabled,
 } from "../src/services/bookkeeping/autoPostControl.js";
@@ -355,6 +356,84 @@ test("effective-date preview releases only fully eligible historical rows", asyn
   assert.deepEqual(db.table("bookkeeping_auto_post_backlog_releases")[0].transaction_ids, ["safe-1"]);
   assert.equal(db.table("business_profiles")[0].auto_post_scope_mode, "effective_date");
   assert.equal(db.table("business_profiles")[0].historical_backlog_status, "released");
+});
+
+test("stale post_after does not mask newly authoritative merchant-rule safety", async () => {
+  const notes = JSON.stringify({
+    source_type: "business_merchant_rule",
+    authority: "user_confirmed",
+    match_specificity: "exact_provider_merchant_id",
+    state: "active",
+  });
+  const db = makeSupabase({
+    business_profiles: [{
+      id: "biz-1",
+      bookkeeping_start_date: null,
+      auto_post_to_quickbooks: true,
+      auto_post_enabled_at: "2026-09-02T12:00:00.000Z",
+      auto_post_scope_mode: "effective_date",
+      auto_post_effective_date: "2026-05-15",
+      historical_backlog_status: "released",
+    }],
+    bookkeeping_auto_post_backlog_releases: [{
+      business_id: "biz-1",
+      status: "active",
+      release_start_date: "2026-05-15",
+      release_end_date: null,
+      transaction_ids: [],
+    }],
+    plaid_qbo_account_mappings: [
+      { business_id: "biz-1", plaid_account_id: "plaid-cc", qbo_account_id: "qbo-cc", qbo_account_name: "Credit Card" },
+    ],
+    vendor_rules: [{
+      id: "rule-adobe",
+      business_id: "biz-1",
+      match_type: "merchant_entity_id",
+      match_value: "adobe-entity",
+      counterparty_name: "Adobe",
+      default_qbo_account_id: "24",
+      default_qbo_account_name: "Software",
+      direction_hint: "OUTFLOW",
+      confidence: "high",
+      source: "business_merchant_rule",
+      notes,
+      rule_kind: "category_default",
+      usage_count: 1,
+    }],
+    bank_transactions: [
+      {
+        id: "adobe-1",
+        business_id: "biz-1",
+        plaid_account_id: "plaid-cc",
+        merchant_entity_id: "adobe-entity",
+        merchant_name: "Adobe",
+        name: "ADOBE *800-833-6687",
+        amount: -32.16,
+        direction: "OUTFLOW",
+        is_archived: false,
+        date: "2026-05-31",
+        pending: false,
+      },
+    ],
+    transaction_categorizations: [
+      {
+        business_id: "biz-1",
+        transaction_id: "adobe-1",
+        status: "auto_approved",
+        final_qbo_account_id: "24",
+        final_qbo_account_name: "Software",
+        qbo_txn_id: null,
+        post_after: "2026-09-01T16:28:48.413Z",
+        meta: { safe_to_auto_post: false, auto_approve_reason: "universal_hint" },
+      },
+    ],
+  });
+
+  const reevaluation = await reEvaluateAutoPostBacklog({ db, businessId: "biz-1", transactionIds: ["adobe-1"], effectiveDate: "2026-05-15" });
+  assert.deepEqual(reevaluation.eligible_transaction_ids, ["adobe-1"]);
+  assert.equal(reevaluation.evaluations[0].category, "safe_new_post");
+  assert.equal(reevaluation.evaluations[0].reason, "previously_unsafe_but_now_safe");
+  assert.equal(reevaluation.evaluations[0].meta.safe_to_auto_post, true);
 });
 
 test("effective-date scope save uses canonical enum, preview fingerprint, and one atomic RPC", async () => {
@@ -774,6 +853,9 @@ class Query {
     const set = new Set(values || []);
     this.calls.push({ table: this.table, op: "in", field, valuesLength: values?.length || 0 });
     this.rows = this.rows.filter((row) => set.has(row[field]));
+    return this;
+  }
+  order() {
     return this;
   }
   limit() {

@@ -1,4 +1,5 @@
 import { NORMALIZATION_VERSION, normalizeMerchantIdentity } from "./merchantNormalization.js";
+import { validateVendorRuleMatchConditions } from "./vendorRuleMatchConditions.js";
 
 const LANDMINE_TYPES = new Set(["transfer_internal", "cc_payment", "owner_draw", "owner_contribution", "refund", "payroll", "peer_to_peer_transfer"]);
 const GENERIC_IDENTITY_TOKENS = new Set(["payment", "purchase", "online", "mobile", "store", "thank", "you", "thank you", "card", "debit", "credit", "pmt", "ach"]);
@@ -189,6 +190,10 @@ export async function learnVendorRuleFromTransaction({
   if (taxonomyType && LANDMINE_TYPES.has(taxonomyType)) return { ok: true, skipped: true, reason: "taxonomy_landmine" };
   if (looksLikeTaxonomyLandmineMemo(bankTxn)) return { ok: true, skipped: true, reason: "memo_landmine" };
   const opts = options || {};
+  const matchConditionsValidation = validateVendorRuleMatchConditions(opts.matchConditions ?? opts.match_conditions ?? null);
+  if (!matchConditionsValidation.ok) {
+    return { ok: false, error: matchConditionsValidation.reason || "invalid_match_conditions" };
+  }
 
   const direction = canonicalTxnDirection(bankTxn);
   if (direction === "UNKNOWN") return { ok: true, skipped: true, reason: "unknown_direction" };
@@ -225,6 +230,7 @@ export async function learnVendorRuleFromTransaction({
     last_used_at: new Date().toISOString(),
     rule_kind: "category_default",
     source: BUSINESS_MERCHANT_RULE_SOURCE,
+    match_conditions: matchConditionsValidation.normalized,
   };
 
   const buildNotes = (existingNotes = null) => {
@@ -262,6 +268,8 @@ export async function learnVendorRuleFromTransaction({
       .eq("qbo_entity_type", qboEntityType)
       .eq("qbo_entity_id", qboEntityId)
       .eq("rule_kind", "category_default")
+      .order("usage_count", { ascending: false })
+      .order("last_used_at", { ascending: false })
       .limit(5);
     if (qboErr) return { ok: false, error: qboErr?.message || "qbo_entity_select_failed" };
     const pref = (mt) => {
@@ -304,15 +312,40 @@ export async function learnVendorRuleFromTransaction({
 
   const { data: existingRows, error: selErr } = await db
     .from("vendor_rules")
-    .select("id,usage_count,notes,counterparty_confidence,confidence,default_qbo_account_id,default_qbo_account_name,rule_kind")
+    .select("id,usage_count,notes,counterparty_confidence,confidence,default_qbo_account_id,default_qbo_account_name,rule_kind,source,direction_hint,match_conditions,updated_at")
     .eq("business_id", businessId)
     .eq("match_type", match_type)
     .eq("match_value", match_value)
+    .order("rule_kind", { ascending: true })
+    .order("updated_at", { ascending: false })
     .limit(5);
   if (selErr) {
     return { ok: false, error: selErr?.message || "select_failed" };
   }
-  const existing = (existingRows || []).find((row) => row.rule_kind === "category_default") || existingRows?.[0] || null;
+  const compatibleRows = (existingRows || []).filter((row) => {
+    const rowDirection = String(row.direction_hint || direction || "").toUpperCase();
+    const directionCompatible = !rowDirection || rowDirection === "UNKNOWN" || rowDirection === direction;
+    const accountCompatible =
+      !row.default_qbo_account_id || String(row.default_qbo_account_id) === String(finalAccountId);
+    const existingConditions = validateVendorRuleMatchConditions(row.match_conditions);
+    const conditionsCompatible =
+      existingConditions.ok &&
+      JSON.stringify(existingConditions.normalized) === JSON.stringify(matchConditionsValidation.normalized);
+    return directionCompatible && accountCompatible && conditionsCompatible;
+  });
+  const duplicateCategoryDefaults = compatibleRows.filter((row) => row.rule_kind === "category_default");
+  if (duplicateCategoryDefaults.length > 1) {
+    return { ok: false, error: "duplicate_compatible_vendor_rules_require_review" };
+  }
+  const incompatibleCategoryDefault = (existingRows || []).find((row) =>
+    row.rule_kind === "category_default" &&
+    row.default_qbo_account_id &&
+    String(row.default_qbo_account_id) !== String(finalAccountId)
+  );
+  if (incompatibleCategoryDefault) {
+    return { ok: false, error: "incompatible_existing_vendor_rule_requires_correction" };
+  }
+  const existing = duplicateCategoryDefaults[0] || compatibleRows.find((row) => row.rule_kind === "identity") || compatibleRows[0] || null;
   const usage_count = (existing?.usage_count || 0) + 1;
   const counterparty_confidence = existing?.counterparty_confidence || (merchantEntityId ? "high" : "medium");
   const inferredConfidence = merchantEntityId || identity.match_specificity !== "broad_fuzzy_alias" ? "high" : "medium";

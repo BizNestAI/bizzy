@@ -27,6 +27,7 @@ function makeVendorRuleDb(rows = []) {
           if (op === "is" && value === null) filters.push((row) => row[column] !== null && row[column] !== undefined);
           return this;
         },
+        order() { return this; },
         limit() { return this; },
         then(resolve) {
           resolve({ data: rows.filter((row) => filters.every((fn) => fn(row))), error: null });
@@ -47,6 +48,85 @@ test("Monthly Review Needs Review decisions use the shared approval path that le
   assert.match(approval, /import \{ learnVendorRuleFromTransaction \}/);
   assert.match(approval, /await learnVendorRuleFromTransaction\(\{/);
   assert.match(approval, /\.upsert\(payload, \{ onConflict: "business_id,transaction_id" \}\)/);
+});
+
+test("conditional merchant rules require exact identity, signed amount, and description evidence", async () => {
+  const { getVendorRuleForTransaction } = await import("../src/services/bookkeeping/vendorRuleMatcher.js");
+  const notes = JSON.stringify({
+    source_type: "business_merchant_rule",
+    authority: "user_confirmed",
+    match_specificity: "exact_provider_merchant_id",
+    state: "active",
+  });
+  const db = makeVendorRuleDb([
+    {
+      id: "rule-amazon-prime",
+      business_id: "biz-1",
+      match_type: "merchant_entity_id",
+      match_value: "amazon-provider",
+      counterparty_name: "Amazon",
+      default_qbo_account_id: "24",
+      default_qbo_account_name: "Software",
+      direction_hint: "OUTFLOW",
+      confidence: "high",
+      source: "business_merchant_rule",
+      notes,
+      rule_kind: "category_default",
+      match_conditions: {
+        version: 1,
+        amount: { exact_minor: -800, currency: "USD" },
+        description: { include_any: ["amazon prime"], exclude_any: ["marketplace", "refund"] },
+      },
+    },
+  ]);
+
+  const base = { merchant_entity_id: "amazon-provider", merchant_name: "Amazon", direction: "OUTFLOW" };
+  const match = await getVendorRuleForTransaction({
+    businessId: "biz-1",
+    bankTransaction: { ...base, name: "Amazon Prime", amount: -8 },
+    db,
+  });
+  assert.equal(match.default_qbo_account_id, "24");
+  assert.equal(match.match_conditions.amount.exact_minor, -800);
+
+  for (const tx of [
+    { ...base, name: "AMAZON MARKETPLACE NAMZN.COM/BILL", amount: -7.22 },
+    { ...base, name: "Amazon Prime", amount: -10.51 },
+    { ...base, name: "Amazon Prime refund", amount: 8, direction: "INFLOW" },
+    { ...base, merchant_entity_id: "other-provider", merchant_name: "Other Merchant", name: "Amazon Prime", amount: -8 },
+  ]) {
+    assert.equal(await getVendorRuleForTransaction({ businessId: "biz-1", bankTransaction: tx, db }), null);
+  }
+});
+
+test("malformed and unknown-version match conditions fail closed", async () => {
+  const { getVendorRuleForTransaction } = await import("../src/services/bookkeeping/vendorRuleMatcher.js");
+  const notes = JSON.stringify({ source_type: "business_merchant_rule", match_specificity: "exact_provider_merchant_id", state: "active" });
+  for (const match_conditions of [
+    { version: 2, amount: { exact_minor: -800 } },
+    { version: 1, amount: { exact_minor: -8.01 } },
+    { version: 1, unsupported: true },
+  ]) {
+    const db = makeVendorRuleDb([{
+      id: "bad-rule",
+      business_id: "biz-1",
+      match_type: "merchant_entity_id",
+      match_value: "amazon-provider",
+      default_qbo_account_id: "24",
+      default_qbo_account_name: "Software",
+      direction_hint: "OUTFLOW",
+      source: "business_merchant_rule",
+      notes,
+      rule_kind: "category_default",
+      match_conditions,
+    }]);
+    const result = await getVendorRuleForTransaction({
+      businessId: "biz-1",
+      bankTransaction: { merchant_entity_id: "amazon-provider", merchant_name: "Amazon", name: "Amazon Prime", amount: -8, direction: "OUTFLOW" },
+      db,
+    });
+    assert.equal(result, null);
+  }
 });
 
 test("learned memo-prefix rules match future normalized merchant variants", async () => {
