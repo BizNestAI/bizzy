@@ -1,3 +1,4 @@
+/* global process */
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { getQBOClient as defaultGetQBOClient } from "../../utils/qboClient.js";
 import { isCheck } from "./checkDetector.js";
@@ -10,6 +11,7 @@ import {
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../tax/taxChangeEvents.js";
+import { learnVendorRuleFromTransaction } from "./vendorRuleLearner.js";
 
 export class BookkeepingReclassificationError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -66,6 +68,8 @@ export async function reclassifyBookkeepingTransaction({
   validateQboAccount = fetchQboAccountByIdForBusiness,
   approveTransactions = approveBookkeepingTransactions,
   getQBOClient = defaultGetQBOClient,
+  learnReusableRule = true,
+  validateApprovalSelectedAccountsFn = undefined,
 } = {}) {
   if (!businessId) throw new BookkeepingReclassificationError("missing_business_id", 400);
   if (!transactionId) throw new BookkeepingReclassificationError("missing_transaction_id", 400);
@@ -147,6 +151,8 @@ export async function reclassifyBookkeepingTransaction({
           final_qbo_account_id: targetAccount.id,
           final_qbo_account_name: targetAccount.name,
           reason,
+          learn_reusable_rule: learnReusableRule !== false,
+          only_this_transaction: learnReusableRule === false,
         }],
         actor,
         reason,
@@ -164,6 +170,7 @@ export async function reclassifyBookkeepingTransaction({
           }),
         },
         db,
+        ...(validateApprovalSelectedAccountsFn ? { validateSelectedAccountsFn: validateApprovalSelectedAccountsFn } : {}),
       });
     } catch (err) {
       if (err instanceof BookkeepingApprovalError) {
@@ -181,6 +188,9 @@ export async function reclassifyBookkeepingTransaction({
       source,
     });
     const updated = Array.isArray(approval?.rows) ? approval.rows.find((row) => String(row.transaction_id) === String(transactionId)) : null;
+    const reusableRule =
+      approval?.vendor_rule_results?.find((row) => String(row.transaction_id) === String(transactionId)) ||
+      (learnReusableRule === false ? { ok: true, skipped: true, reason: "one_time_decision" } : null);
     return {
       ok: true,
       mode: "needs_review_approval",
@@ -191,6 +201,7 @@ export async function reclassifyBookkeepingTransaction({
       qbo_update: null,
       posting_summary: null,
       approval,
+      reusable_rule: reusableRule,
       operator_response_resolution: operatorResponseResolution,
     };
   }
@@ -207,6 +218,24 @@ export async function reclassifyBookkeepingTransaction({
       reason,
       now,
     });
+    let reusableRule = null;
+    if (learnReusableRule !== false) {
+      try {
+        reusableRule = await learnVendorRuleFromTransaction({
+          businessId,
+          bankTxn: context.bankTxn,
+          finalAccountId: targetAccount.id,
+          finalAccountName: targetAccount.name,
+          taxonomyType: previous?.meta?.taxonomy_type || null,
+          options: { actor, learnedFrom: "monthly_review_correction" },
+          db,
+        });
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[bookkeeping-reclassification] vendor rule learn skipped", err?.message || err);
+        }
+      }
+    }
     return {
       ok: true,
       mode: "handled_unposted_reclassification",
@@ -216,6 +245,7 @@ export async function reclassifyBookkeepingTransaction({
       target_account: targetAccount,
       qbo_update: null,
       posting_summary: null,
+      reusable_rule: reusableRule,
     };
   }
 

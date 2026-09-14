@@ -1,5 +1,7 @@
 /* global process */
 import { createHash } from "node:crypto";
+import { getVendorRuleForTransaction } from "./vendorRuleMatcher.js";
+import { canAutoHandle } from "./autoHandlingPolicy.js";
 
 function isMissingAutoPostColumn(error) {
   const message = String(error?.message || error || "").toLowerCase();
@@ -161,8 +163,16 @@ export function classifyAutoPostBacklogCandidate({ item = {}, bankTxn = {}, poli
   if (bankTxn?.pending === true || item?.meta?.pending === true) {
     return "pending";
   }
+  const direction = String(bankTxn?.direction || "").toUpperCase();
+  const amount = Number(bankTxn?.amount || 0);
+  if (direction === "INFLOW" || (!direction && amount > 0)) {
+    return "incoming_deposit_match_required";
+  }
   if (item?.qbo_txn_id || item?.source_qbo_txn_id || item?.meta?.source_qbo_txn_id) {
     return "already_linked";
+  }
+  if (item?.post_after) {
+    return "already_scheduled";
   }
   if (item?.meta?.possible_qbo_duplicate === true || item?.meta?.duplicate_risk === true) {
     return "possible_existing_qbo_duplicate";
@@ -340,7 +350,7 @@ export async function getAutoPostSettings({ db, businessId, graceHours = DEFAULT
   const workerIntervalMinutes = Math.max(1, Number(process.env.BOOKS_POST_CRON_MINUTES || 10));
   const scopeCopy = buildAutoPostScopeCopy(policy, { workerIntervalMinutes });
   let backlogPreviewSummary = null;
-  if (enabled && policy.historical_backlog_status === "review_required" && backlogIds.length > 0) {
+  if (enabled && backlogIds.length > 0) {
     try {
       const preview = await previewAutoPostBacklog({
         db,
@@ -605,7 +615,7 @@ async function fetchBacklogBankRows(db, businessId, transactionIds = []) {
   for (const ids of chunk(Array.from(new Set((transactionIds || []).filter(Boolean))))) {
     const { data, error } = await db
       .from("bank_transactions")
-      .select("id,business_id,plaid_account_id,date,pending,is_archived,amount,direction,transaction_type")
+      .select("id,business_id,plaid_account_id,date,pending,is_archived,amount,direction,transaction_type,name,merchant_name,counterparty_name,merchant_entity_id,qbo_entity_type,qbo_entity_id,check_number,category_primary,personal_finance_category,accounting_review_required")
       .eq("business_id", businessId)
       .in("id", ids);
     if (error) throw wrapAutoPostDbError("auto_post_backlog_preview_bank_transactions_failed", error);
@@ -617,6 +627,137 @@ async function fetchBacklogBankRows(db, businessId, transactionIds = []) {
     }
   }
   return { map, missing };
+}
+
+function addReasonBucket(buckets, reason) {
+  const key = reason || "unknown";
+  buckets[key] = (buckets[key] || 0) + 1;
+}
+
+async function evaluateBacklogRowForRelease({ db, businessId, item, bankTxn = {}, policy = {}, sourceMappings = new Map() }) {
+  if (String(item?.status || "").toLowerCase() === "failed") {
+    return { category: "failed_posting_requires_retry_review", reason: item?.post_error || "failed_posting_requires_retry_review" };
+  }
+  if (item?.qbo_txn_id || item?.source_qbo_txn_id || item?.meta?.source_qbo_txn_id) {
+    return { category: "already_represented_in_qbo", reason: "already_represented_in_qbo" };
+  }
+  let category = classifyAutoPostBacklogCandidate({ item, bankTxn, policy });
+  if (category === BACKLOG_ELIGIBLE_BUCKET && bankTxn.plaid_account_id && !sourceMappings.has(bankTxn.plaid_account_id)) {
+    category = "missing_source_mapping";
+  }
+  if (category === BACKLOG_ELIGIBLE_BUCKET) {
+    return {
+      category,
+      reason: item?.meta?.safe_to_auto_post === true ? "previously_safe_and_still_safe" : "eligible",
+      meta: { ...(item.meta || {}), safe_to_auto_post: true },
+    };
+  }
+  if (category !== "unsafe_auto_post") return { category, reason: category };
+
+  const vendorRule = await getVendorRuleForTransaction({ businessId, bankTransaction: bankTxn, db });
+  const exactBusinessRule =
+    vendorRule?.source_type === "business_merchant_rule" &&
+    ["exact_provider_merchant_id", "exact_normalized_merchant", "exact_descriptor_fingerprint", "memo_fingerprint"].includes(
+      vendorRule.match_specificity
+    );
+  const sameAccount =
+    item?.final_qbo_account_id &&
+    vendorRule?.default_qbo_account_id &&
+    String(item.final_qbo_account_id) === String(vendorRule.default_qbo_account_id);
+  if (exactBusinessRule && sameAccount && sourceMappings.has(bankTxn.plaid_account_id)) {
+    const decision = canAutoHandle(bankTxn, {
+      source: "business_merchant_rule",
+      confidence: "high",
+      accountId: item.final_qbo_account_id,
+      accountName: item.final_qbo_account_name,
+      safeToAutoHandle: true,
+      meta: {
+        ...(item.meta || {}),
+        vendor_rule_id: vendorRule.id,
+        vendor_rule_source_type: vendorRule.source_type,
+        vendor_rule_match_specificity: vendorRule.match_specificity,
+      },
+      canonicalAccountResolved: true,
+      merchantEvidenceStrong: true,
+      canonicalVendorReliable: true,
+    });
+    if (decision.eligible === true) {
+      return {
+        category: BACKLOG_ELIGIBLE_BUCKET,
+        reason: "previously_unsafe_but_now_safe",
+        meta: {
+          ...(item.meta || {}),
+          safe_to_auto_post: true,
+          safe_to_auto_handle: true,
+          auto_approve_reason: item.meta?.auto_approve_reason || "business_merchant_rule",
+          auto_post_reevaluated_at: new Date().toISOString(),
+          auto_post_reevaluation_reason: "previously_unsafe_but_now_safe",
+        },
+      };
+    }
+    return { category: "still_unsafe", reason: decision.reason || "auto_handle_policy_blocked" };
+  }
+  return { category: "still_unsafe", reason: "no_active_authoritative_business_rule" };
+}
+
+export async function reEvaluateAutoPostBacklog({
+  db,
+  businessId,
+  rangeStart = null,
+  rangeEnd = null,
+  transactionIds = [],
+  effectiveDate = null,
+} = {}) {
+  const start = normalizeDateString(rangeStart || effectiveDate);
+  const end = normalizeDateString(rangeEnd);
+  const rows = await fetchBacklogCategorizationRows(db, businessId, { transactionIds });
+  const bankRows = await fetchBacklogBankRows(db, businessId, rows.map((row) => row.transaction_id));
+  const sourceMappings = await fetchSourceMappingRows(
+    db,
+    businessId,
+    Array.from(new Set(Array.from(bankRows.map.values()).map((row) => row.plaid_account_id).filter(Boolean)))
+  );
+  const basePolicy = await getAutoPostPolicy(db, businessId);
+  const policy = buildPreviewPolicy(basePolicy, { effectiveDate: effectiveDate || start });
+  const buckets = {};
+  const reasons = {};
+  const eligibleIds = [];
+  const reevaluatedSafeIds = [];
+  const evaluations = [];
+  let scopedTotal = 0;
+  for (const item of rows) {
+    const bankTxn = bankRows.map.get(item.transaction_id) || {};
+    if (start && bankTxn.date && bankTxn.date < start) continue;
+    if (end && bankTxn.date && bankTxn.date >= end) continue;
+    scopedTotal += 1;
+    let evaluation = bankRows.missing.includes(item.transaction_id)
+      ? { category: "missing_transaction", reason: "missing_transaction" }
+      : await evaluateBacklogRowForRelease({ db, businessId, item, bankTxn, policy, sourceMappings });
+    if (evaluation.category === BACKLOG_ELIGIBLE_BUCKET) {
+      eligibleIds.push(item.transaction_id);
+      if (evaluation.reason === "previously_unsafe_but_now_safe") reevaluatedSafeIds.push(item.transaction_id);
+    }
+    addReasonBucket(buckets, evaluation.category);
+    addReasonBucket(reasons, evaluation.reason);
+    evaluations.push({
+      transaction_id: item.transaction_id,
+      date: bankTxn.date || null,
+      status: item.status,
+      category: evaluation.category,
+      reason: evaluation.reason,
+      meta: evaluation.meta || item.meta || {},
+    });
+  }
+  return {
+    total: scopedTotal,
+    eligible_transaction_ids: eligibleIds,
+    reevaluated_safe_transaction_ids: reevaluatedSafeIds,
+    eligible_count: eligibleIds.length,
+    blocked_count: scopedTotal - eligibleIds.length,
+    buckets,
+    reasons,
+    evaluations,
+  };
 }
 
 async function fetchSourceMappingRows(db, businessId, plaidAccountIds = []) {
@@ -674,44 +815,21 @@ export async function previewAutoPostBacklog({
   }
   const start = normalizeDateString(rangeStart || effectiveDate);
   const end = normalizeDateString(rangeEnd);
-  const rows = await fetchBacklogCategorizationRows(db, businessId, {
-    transactionIds,
-  });
-  const bankRows = await fetchBacklogBankRows(db, businessId, rows.map((row) => row.transaction_id));
-  const sourceMappings = await fetchSourceMappingRows(
+  const reevaluation = await reEvaluateAutoPostBacklog({
     db,
     businessId,
-    Array.from(new Set(Array.from(bankRows.map.values()).map((row) => row.plaid_account_id).filter(Boolean)))
-  );
-  const basePolicy = await getAutoPostPolicy(db, businessId);
-  const policy = buildPreviewPolicy(basePolicy, { effectiveDate: effectiveDate || start });
-  const buckets = {};
-  const sample = [];
-  const eligibleIds = [];
-  let scopedTotal = 0;
-  for (const item of rows) {
-    const bankTxn = bankRows.map.get(item.transaction_id) || {};
-    if (start && bankTxn.date && bankTxn.date < start) continue;
-    if (end && bankTxn.date && bankTxn.date >= end) continue;
-    scopedTotal += 1;
-    let category = bankRows.missing.includes(item.transaction_id)
-      ? "missing_transaction"
-      : classifyAutoPostBacklogCandidate({ item, bankTxn, policy });
-    if (category === BACKLOG_ELIGIBLE_BUCKET && bankTxn.plaid_account_id && !sourceMappings.has(bankTxn.plaid_account_id)) {
-      category = "missing_source_mapping";
-    }
-    buckets[category] = (buckets[category] || 0) + 1;
-    if (category === BACKLOG_ELIGIBLE_BUCKET) eligibleIds.push(item.transaction_id);
-    if (sample.length < 50) {
-      sample.push({
-        transaction_id: item.transaction_id,
-        date: bankTxn.date || null,
-        status: item.status,
-        category,
-      });
-    }
-  }
-  const blockedTotal = scopedTotal - eligibleIds.length;
+    rangeStart: start,
+    rangeEnd: end,
+    transactionIds,
+    effectiveDate: effectiveDate || start,
+  });
+  const sample = reevaluation.evaluations.slice(0, 50).map((item) => ({
+    transaction_id: item.transaction_id,
+    date: item.date || null,
+    status: item.status,
+    category: item.category,
+    reason: item.reason,
+  }));
   const preview = {
     ok: true,
     business_id: businessId,
@@ -721,17 +839,53 @@ export async function previewAutoPostBacklog({
       effective_date: normalizeDateString(effectiveDate || start),
       transaction_ids_count: transactionIds.length,
     },
-    total: scopedTotal,
-    eligible_count: eligibleIds.length,
-    blocked_count: blockedTotal,
-    eligible_transaction_ids: eligibleIds,
-    buckets,
+    total: reevaluation.total,
+    eligible_count: reevaluation.eligible_count,
+    blocked_count: reevaluation.blocked_count,
+    eligible_transaction_ids: reevaluation.eligible_transaction_ids,
+    reevaluated_safe_transaction_ids: reevaluation.reevaluated_safe_transaction_ids,
+    buckets: reevaluation.buckets,
+    reasons: reevaluation.reasons,
     sample,
   };
   return {
     ...preview,
     preview_fingerprint: buildBacklogPreviewFingerprint(preview),
   };
+}
+
+async function scheduleBacklogRows({ db, businessId, evaluations = [], postAfter = null, batchSize = 50 } = {}) {
+  const eligible = evaluations.filter((row) => row.category === BACKLOG_ELIGIBLE_BUCKET);
+  const released = [];
+  const failed = [];
+  for (const batch of chunk(eligible, batchSize)) {
+    for (const row of batch) {
+      const releasedAt = new Date().toISOString();
+      const { error } = await db
+        .from("transaction_categorizations")
+        .update({
+          status: "auto_approved",
+          post_after: postAfter,
+          post_error: null,
+          updated_at: releasedAt,
+          meta: {
+            ...(row.meta || {}),
+            safe_to_auto_post: true,
+            auto_post_backlog_released_at: releasedAt,
+          },
+        })
+        .eq("business_id", businessId)
+        .eq("transaction_id", row.transaction_id)
+        .is("qbo_txn_id", null)
+        .in("status", ["approved", "auto_approved"]);
+      if (error) {
+        failed.push({ transaction_id: row.transaction_id, reason: error.message || "schedule_failed" });
+      } else {
+        released.push(row.transaction_id);
+      }
+    }
+  }
+  return { released, failed };
 }
 
 async function confirmAutoPostScopeFromPreview({
@@ -822,7 +976,7 @@ export async function releaseAutoPostBacklogScope({
   });
   const confirmedFingerprint = assertMatchingPreviewFingerprint(preview, previewFingerprint);
   if (!ids.length) ids = preview.eligible_transaction_ids || [];
-  return confirmAutoPostScopeFromPreview({
+  const confirmation = await confirmAutoPostScopeFromPreview({
     db,
     businessId,
     requestedBy,
@@ -836,4 +990,29 @@ export async function releaseAutoPostBacklogScope({
     previewFingerprint: confirmedFingerprint,
     metadata,
   });
+  const fresh = await reEvaluateAutoPostBacklog({
+    db,
+    businessId,
+    rangeStart: start,
+    rangeEnd: end,
+    transactionIds: ids,
+    effectiveDate: start,
+  });
+  const postAfter = computePostAfterForAutoPost(true, DEFAULT_GRACE_HOURS);
+  const schedule = await scheduleBacklogRows({
+    db,
+    businessId,
+    evaluations: fresh.evaluations,
+    postAfter,
+  });
+  return {
+    ...confirmation,
+    attempted: ids.length,
+    released: schedule.released.length,
+    skipped: Math.max(0, ids.length - schedule.released.length),
+    failed: schedule.failed.length,
+    post_after: postAfter,
+    skipped_reason_counts: fresh.reasons || {},
+    failed_rows: schedule.failed,
+  };
 }

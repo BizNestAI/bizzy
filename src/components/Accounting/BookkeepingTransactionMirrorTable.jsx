@@ -20,6 +20,8 @@ export default function BookkeepingTransactionMirrorTable({
   busyAction = "",
   busyActions = {},
   rowErrors = {},
+  learningPreferences = {},
+  onLearningPreferenceChange,
   onApprove,
   onReclassify,
   onPost,
@@ -61,6 +63,8 @@ export default function BookkeepingTransactionMirrorTable({
             busyAction={busyAction}
             busyActions={busyActions}
             rowError={rowErrors?.[row.id] || ""}
+            learnReusableRule={learningPreferences?.[row.id] !== false}
+            onLearningPreferenceChange={(enabled) => onLearningPreferenceChange?.(row.id, enabled)}
             onApprove={onApprove}
             onReclassify={onReclassify}
             onPost={onPost}
@@ -86,6 +90,8 @@ function BookkeepingTransactionMirrorRow({
   busyAction,
   busyActions,
   rowError,
+  learnReusableRule,
+  onLearningPreferenceChange,
   onApprove,
   onReclassify,
   onPost,
@@ -244,24 +250,58 @@ function BookkeepingTransactionMirrorRow({
             <span className="text-[11px] text-white/45">{ccWorkflowStatus.matched ? "Matched" : "Needs match"}</span>
           ) : null}
           {isNeedsReviewFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus ? (
-            <button
-              type="button"
-              onClick={() => onApprove?.(row, selectedAccountId)}
-              disabled={!selectedAccountId || isActionBusy("approve")}
-              className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
-            >
-              {isActionBusy("approve") ? "Approving..." : "Approve"}
-            </button>
+            <>
+              <div className="basis-full text-[11px] text-white/42">
+                {learnReusableRule
+                  ? `Future transactions from ${row.payee || row.vendor || row.description || "this merchant"} will use ${selectedAccountName(selectedAccountId, accounts) || "the selected account"}.`
+                  : "Only this transaction"}
+              </div>
+              <label className="inline-flex basis-full items-center gap-1.5 text-[11px] text-white/55">
+                <input
+                  type="checkbox"
+                  checked={!learnReusableRule}
+                  onChange={(event) => onLearningPreferenceChange?.(!event.target.checked)}
+                />
+                Only this transaction
+              </label>
+              <button
+                type="button"
+                onClick={() => onApprove?.(row, selectedAccountId)}
+                disabled={!selectedAccountId || isActionBusy("approve")}
+                className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.1] px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-300/[0.16] disabled:opacity-45"
+              >
+                {isActionBusy("approve") ? "Approving..." : "Approve"}
+              </button>
+            </>
           ) : null}
           {isHandledFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus ? (
-            <button
-              type="button"
-              onClick={() => onReclassify?.(row, selectedAccountId)}
-              disabled={!selectedChanged || isActionBusy("reclassify")}
-              className="rounded-lg border border-white/12 bg-white/[0.06] px-2 py-1 text-[11px] font-semibold text-white/75 hover:bg-white/[0.1] disabled:opacity-45"
-            >
-              {isActionBusy("reclassify") ? "Saving..." : "Reclassify"}
-            </button>
+            <>
+              {selectedChanged ? (
+                <>
+                  <div className="basis-full text-[11px] text-white/42">
+                    {learnReusableRule
+                      ? `Future transactions from ${row.payee || row.vendor || row.description || "this merchant"} will use ${selectedAccountName(selectedAccountId, accounts) || "the selected account"}.`
+                      : "Only this transaction"}
+                  </div>
+                  <label className="inline-flex basis-full items-center gap-1.5 text-[11px] text-white/55">
+                    <input
+                      type="checkbox"
+                      checked={!learnReusableRule}
+                      onChange={(event) => onLearningPreferenceChange?.(!event.target.checked)}
+                    />
+                    Only this transaction
+                  </label>
+                </>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => onReclassify?.(row, selectedAccountId)}
+                disabled={!selectedChanged || isActionBusy("reclassify")}
+                className="rounded-lg border border-white/12 bg-white/[0.06] px-2 py-1 text-[11px] font-semibold text-white/75 hover:bg-white/[0.1] disabled:opacity-45"
+              >
+                {isActionBusy("reclassify") ? "Saving..." : "Reclassify"}
+              </button>
+            </>
           ) : null}
         </div>
         <div className="mt-1 flex flex-wrap gap-1.5">
@@ -307,6 +347,11 @@ function buildTransactionFlags(row) {
   if (row.duplicate_risk) badges.push({ label: "Duplicate risk", className: "border-amber-300/25 bg-amber-300/10 text-amber-100" });
   if (row.relink_status) badges.push({ label: `Relink ${row.relink_status}`, className: "border-white/10 bg-white/[0.06] text-white/60" });
   return badges;
+}
+
+function selectedAccountName(accountId, accounts = []) {
+  const found = (accounts || []).find((account) => String(account.id || "") === String(accountId || ""));
+  return found?.name || found?.fullyQualifiedName || "";
 }
 
 export function deriveMirrorQboPostingStatus(row = {}) {

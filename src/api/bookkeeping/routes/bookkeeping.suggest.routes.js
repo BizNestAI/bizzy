@@ -331,6 +331,7 @@ async function autoLearnVendorRuleFromAutoApproval({
         allowQboEntityFallback: true,
         learnedFrom,
       },
+      db: supabase,
     });
   } catch (e) {
     if (process.env.NODE_ENV !== "production") {
@@ -2367,6 +2368,11 @@ export async function runBookkeepingSuggestionPass({
             const ruleConf = (vendorRule.confidence || "").toLowerCase();
             let vendorConfidence = vendorRule.match_reason === "merchant_entity_id" ? "high" : "medium";
             let vendorSafeToAutoPost = vendorRule.match_reason === "merchant_entity_id";
+            const exactBusinessRule =
+              vendorRule.source_type === "business_merchant_rule" &&
+              ["exact_provider_merchant_id", "exact_normalized_merchant", "exact_descriptor_fingerprint", "memo_fingerprint"].includes(
+                vendorRule.match_specificity
+              );
             if (ruleConf === "low") {
               vendorConfidence = "medium";
               vendorSafeToAutoPost = false;
@@ -2387,6 +2393,11 @@ export async function runBookkeepingSuggestionPass({
               vendorUsage >= VENDOR_RULE_MEMO_PREFIX_PROMOTE_MIN_USES &&
               !vendorSuspense;
             let vendorAutoApproveReason = vendorSafeToAutoPost ? "vendor_rule" : null;
+            if (exactBusinessRule && ruleConf !== "low" && !vendorSuspense) {
+              vendorConfidence = "high";
+              vendorSafeToAutoPost = true;
+              vendorAutoApproveReason = "business_merchant_rule";
+            }
             if (memoPrefixEligible && ruleConf !== "low") {
               vendorConfidence = "high";
               vendorSafeToAutoPost = true;

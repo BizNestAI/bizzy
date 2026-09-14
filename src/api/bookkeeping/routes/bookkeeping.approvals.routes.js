@@ -28,7 +28,7 @@ router.post("/approve", requireAuth, async (req, res) => {
       actor: "user",
       db: supabase,
     });
-    return res.json({ ok: true, updated: result.updated, rows: result.rows, warnings: result.warnings });
+    return res.json({ ok: true, updated: result.updated, rows: result.rows, warnings: result.warnings, vendor_rule_results: result.vendor_rule_results || [] });
   } catch (err) {
     if (err instanceof BookkeepingApprovalError) {
       return res.status(err.status || 400).json({ ok: false, error: err.error, ...err.details });

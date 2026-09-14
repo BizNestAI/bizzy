@@ -2331,20 +2331,34 @@ function BookkeepingCleanup() {
       {!usingDemo && autoPostStatus?.auto_post_to_quickbooks === true ? (
         <div className="mb-3 rounded-xl border border-emerald-300/18 bg-emerald-300/[0.06] px-3 py-2 text-xs leading-5 text-slate-300">
           <div className="font-semibold text-emerald-100">
-            {autoPostStatus?.scope_copy?.headline || "Auto-posting is enabled"}
+            {Number(autoPostStatus?.handled_backlog_count || 0) > 0
+              ? `${Number(autoPostStatus.handled_backlog_count)} handled transactions are waiting for posting review`
+              : autoPostStatus?.scope_copy?.headline || "Auto-posting is enabled"}
           </div>
           <div>
             {autoPostStatus?.scope_copy?.detail || "Eligible handled transactions post automatically after the grace period."}
-            {Number(autoPostStatus?.handled_backlog_count || 0) > 0 ? (
-              <span>
-                {" "}
-                Historical Handled: {Number(autoPostStatus.handled_backlog_count)} held for scope review
-                {autoPostStatus?.backlog_preview_summary
-                  ? ` (${Number(autoPostStatus.backlog_preview_summary.eligible_count || 0)} eligible, ${Number(autoPostStatus.backlog_preview_summary.blocked_count || 0)} blocked).`
-                  : "."}
-              </span>
-            ) : null}
           </div>
+          {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && autoPostStatus?.backlog_preview_summary ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {[
+                ["Ready to release", autoPostStatus.backlog_preview_summary.eligible_count],
+                ["Re-evaluation needed", autoPostStatus.backlog_preview_summary.buckets?.still_unsafe || autoPostStatus.backlog_preview_summary.buckets?.unsafe_auto_post || 0],
+                ["Failed", autoPostStatus.backlog_preview_summary.buckets?.failed_posting_requires_retry_review || 0],
+                ["Missing mapping", (autoPostStatus.backlog_preview_summary.buckets?.missing_mapping || 0) + (autoPostStatus.backlog_preview_summary.buckets?.missing_source_mapping || 0)],
+                ["Protected workflows", (autoPostStatus.backlog_preview_summary.buckets?.pending || 0) + (autoPostStatus.backlog_preview_summary.buckets?.possible_existing_qbo_duplicate || 0) + (autoPostStatus.backlog_preview_summary.buckets?.unsupported || 0)],
+              ].map(([label, value]) => (
+                <span key={label} className="rounded-md border border-slate-700/80 bg-slate-950/40 px-2 py-1 text-slate-300">
+                  <span className="font-semibold text-slate-100">{Number(value || 0)}</span> {label}
+                </span>
+              ))}
+              <button type="button" onClick={() => setActiveTab("handled")} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60">
+                Review posting backlog
+              </button>
+              <button type="button" onClick={() => loadAutoPostPreview(autoPostStatus?.auto_post_effective_date || autoPostEffectiveDate)} className="rounded-md border border-emerald-400/40 px-2 py-1 font-semibold text-emerald-100 hover:border-emerald-300">
+                Run safety preview
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 

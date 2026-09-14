@@ -103,6 +103,7 @@ export async function approveBookkeepingTransactions({
   allowCcPaymentRejection = true,
   extraMetaByTransactionId = {},
   db = defaultSupabase,
+  validateSelectedAccountsFn = validateSelectedAccounts,
 } = {}) {
   if (!businessId) throw new BookkeepingApprovalError("missing_business_id", 400);
   if (!Array.isArray(items) || !items.length) throw new BookkeepingApprovalError("missing_items", 400);
@@ -200,7 +201,7 @@ export async function approveBookkeepingTransactions({
     const explicitFinalId = finalIdFromItem(item);
     if (txnId && explicitFinalId) explicitFinalByTxn[txnId] = explicitFinalId;
   }
-  await validateSelectedAccounts({ businessId, items, explicitFinalByTxn });
+  await validateSelectedAccountsFn({ businessId, items, explicitFinalByTxn });
 
   const missingCheckFinals = [];
   const ccPairConfirmTxnIds = new Set();
@@ -367,6 +368,8 @@ export async function approveBookkeepingTransactions({
         final_canonical_account_key: explicitCanonicalKey || suggestedCanonicalMap[txnId] || mergedMeta?.canonical_account_key || null,
         confidence: item?.confidence || null,
         reason: item?.reason || reason || null,
+        learn_reusable_rule: item?.learn_reusable_rule !== false,
+        only_this_transaction: item?.only_this_transaction === true || item?.learn_reusable_rule === false,
         post_after:
           isTransferTaxonomy ||
           (isCcPaymentTaxonomy && mergedMeta.safe_to_auto_post !== true) ||
@@ -517,6 +520,7 @@ export async function approveBookkeepingTransactions({
     }
   }
 
+  const vendorRuleResults = [];
   for (const item of approvals) {
     try {
       const bankTxn = bankTxnMap[item.transaction_id];
@@ -524,22 +528,35 @@ export async function approveBookkeepingTransactions({
       const taxonomyType = (existingMetaMap[item.transaction_id] || {}).taxonomy_type || null;
       const checkHit = isCheck(bankTxn || {});
       if (checkHit.is_check) {
-        await learnVendorRuleFromTransaction({
+        const learnResult = await learnVendorRuleFromTransaction({
           businessId,
           bankTxn,
           finalAccountId: item.final_qbo_account_id,
           finalAccountName: item.final_qbo_account_name,
           taxonomyType,
-          options: { allowQboEntityFallback: true, learnedFrom: "check" },
+          options: {
+            allowQboEntityFallback: true,
+            learnedFrom: "check",
+            actor,
+            onlyThisTransaction: item.only_this_transaction === true || item.learn_reusable_rule === false,
+          },
+          db,
         });
+        vendorRuleResults.push({ transaction_id: item.transaction_id, ...learnResult });
       } else {
-        await learnVendorRuleFromTransaction({
+        const learnResult = await learnVendorRuleFromTransaction({
           businessId,
           bankTxn,
           finalAccountId: item.final_qbo_account_id,
           finalAccountName: item.final_qbo_account_name,
           taxonomyType,
+          options: {
+            actor,
+            onlyThisTransaction: item.only_this_transaction === true || item.learn_reusable_rule === false,
+          },
+          db,
         });
+        vendorRuleResults.push({ transaction_id: item.transaction_id, ...learnResult });
       }
     } catch (e) {
       if (process.env.NODE_ENV !== "production") {
@@ -567,5 +584,5 @@ export async function approveBookkeepingTransactions({
     reason: "human_approval",
   });
 
-  return { ok: true, updated: data?.length || 0, rows: data || [], warnings, auto_post_enabled: autoPostEnabled === true };
+  return { ok: true, updated: data?.length || 0, rows: data || [], warnings, auto_post_enabled: autoPostEnabled === true, vendor_rule_results: vendorRuleResults };
 }

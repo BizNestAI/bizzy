@@ -120,7 +120,13 @@ router.patch("/transactions/:transactionId", requireAuth, async (req, res) => {
             finalAccountId: updatePayload.final_qbo_account_id,
             finalAccountName: updatePayload.final_qbo_account_name,
             taxonomyType,
-            options: { allowQboEntityFallback: true, learnedFrom: "check" },
+            options: {
+              allowQboEntityFallback: true,
+              learnedFrom: "check",
+              actor: req.user || null,
+              onlyThisTransaction: raw.only_this_transaction === true || raw.learn_reusable_rule === false,
+            },
+            db: supabase,
           });
         } else {
           await learnVendorRuleFromTransaction({
@@ -129,6 +135,11 @@ router.patch("/transactions/:transactionId", requireAuth, async (req, res) => {
             finalAccountId: updatePayload.final_qbo_account_id,
             finalAccountName: updatePayload.final_qbo_account_name,
             taxonomyType,
+            options: {
+              actor: req.user || null,
+              onlyThisTransaction: raw.only_this_transaction === true || raw.learn_reusable_rule === false,
+            },
+            db: supabase,
           });
         }
       }

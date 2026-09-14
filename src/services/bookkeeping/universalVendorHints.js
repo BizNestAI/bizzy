@@ -1,6 +1,8 @@
+/* global process */
 // Universal Vendor Intelligence Library
 // Provides global, non-binding vendor intent hints (no business-specific COA).
 // Keep this pure JS: no network, no DB. Intent-only hints to be mapped later.
+import { normalizeMerchantIdentity } from "./merchantNormalization.js";
 
 const TRUE_NOISE_PREFIXES = [
   /^apl\s*pay\s+/i,
@@ -23,7 +25,7 @@ const PHRASE_NORMALIZERS = [
 ];
 
 export function normalizeVendorString(input = "") {
-  let s = (input || "").toLowerCase();
+  let s = normalizeMerchantIdentity(input).normalized;
   TRUE_NOISE_PREFIXES.forEach((re) => {
     s = s.replace(re, "");
   });
@@ -693,8 +695,13 @@ addVendors(
 
 // Entertainment / tickets / recreation
 addVendors(
-  ["AMC", "AMC Theatres", "AMC Theaters", "PlayStation", "Playstation Network", "Sony PlayStation", "Ticketmaster", "Fandango", "Gametime", "Rebill Gametime", "Monster Mini Golf"],
+  ["AMC", "AMC Theatres", "AMC Theaters", "Ticketmaster", "Fandango", "Gametime", "Rebill Gametime", "Monster Mini Golf", "Charlotte Knights"],
   { intents: ["entertainment"], primary: "entertainment", confidence: "medium", notes: "Entertainment, tickets, or recreation" }
+);
+
+addVendors(
+  ["PlayStation", "Playstation Network", "Sony PlayStation"],
+  { intents: ["gaming", "entertainment"], primary: "gaming", confidence: "medium", notes: "Gaming or entertainment; protect until business-specific history exists" }
 );
 
 // Clothing / apparel
@@ -1009,8 +1016,13 @@ UNIVERSAL_VENDOR_HINTS.push(
 
 // Medical / health
 addVendors(
-  ["Rite Aid", "Duane Reade", "Health Mart", "Kaiser", "UnitedHealthcare", "Blue Cross", "Cigna", "Humana"],
+  ["MinuteClinic", "Minute Clinic", "Rite Aid", "Duane Reade", "Health Mart", "Kaiser", "UnitedHealthcare", "Blue Cross", "Cigna", "Humana"],
   { intents: ["medical"], primary: "medical", confidence: "medium" }
+);
+
+addVendors(
+  ["Greenpeace", "Green Peace"],
+  { intents: ["charity", "charitable_contributions"], primary: "charity", confidence: "medium", notes: "Charitable organization; entity/accounting treatment needs review" }
 );
 
 // Pharmacy / convenience supplies

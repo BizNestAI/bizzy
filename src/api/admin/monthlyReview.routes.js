@@ -1494,6 +1494,7 @@ router.patch("/runs/:runId/transactions/:transactionId/account", async (req, res
       actor: req.user?.id || req.user?.email || "internal_admin",
       source: "monthly_review",
       reason: req.body?.reason || "Adjusted GL account during monthly human review.",
+      learnReusableRule: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false ? false : true,
     });
 
     await logAuditEvent({
@@ -1529,6 +1530,7 @@ router.patch("/runs/:runId/transactions/:transactionId/account", async (req, res
       target_account: result.target_account,
       qbo_update: result.qbo_update,
       posting_summary: result.posting_summary || null,
+      reusable_rule: result.reusable_rule || null,
     });
   } catch (e) {
     console.error("[monthly-review] account adjustment failed", {
@@ -1572,6 +1574,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       actor: req.user?.id || req.user?.email || "internal_admin",
       source: "monthly_review",
       reason: req.body?.reason || "Approved from Monthly Review Needs Review feed.",
+      learnReusableRule: req.body?.only_this_transaction === true || req.body?.learn_reusable_rule === false ? false : true,
     });
     if (result.mode !== "needs_review_approval") {
       return res.status(409).json({
@@ -1612,6 +1615,7 @@ router.post("/runs/:runId/transactions/:transactionId/approve", async (req, res)
       categorization: result.categorization,
       target_account: result.target_account,
       operator_response_resolution: result.operator_response_resolution || null,
+      reusable_rule: result.reusable_rule || null,
     });
   } catch (e) {
     console.error("[monthly-review] feed approval failed", e?.message || e);

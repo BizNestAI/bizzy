@@ -19,6 +19,7 @@ const ROUTINE_EXPENSE_BLOCKED_TAXONOMY_TYPES = new Set([
 ]);
 const ROUTINE_EXPENSE_LANDMINE_RE =
   /\b(?:payroll|salary|wages|paychex|adp payroll|owner draw|owner contribution|loan principal|principal payment|credit card payment|cc payment|autopay payment|zelle|venmo|cash app|cashapp|payment id)\b/i;
+const INCOMING_DEPOSIT_RE = /\b(?:deposit|incoming|invoice\s+payment|intuit\s+deposit|quickbooks\s+deposit)\b/i;
 
 export function isReviewAccount({ accountId, accountName, suspenseIds = [] } = {}) {
   if (!accountId) return true;
@@ -65,6 +66,15 @@ function isNormalOutflow(transaction = {}) {
   const amount = Number(transaction?.amount);
   if (Number.isFinite(amount) && amount !== 0) return amount < 0;
   return false;
+}
+
+function hasDirectionEvidence(transaction = {}) {
+  const direction = String(transaction?.direction || "").toUpperCase();
+  if (direction === "OUTFLOW" || direction === "INFLOW") return true;
+  const signed = Number(transaction?.signed_amount);
+  if (Number.isFinite(signed) && signed !== 0) return true;
+  const amount = Number(transaction?.amount);
+  return Number.isFinite(amount) && amount !== 0;
 }
 
 export function isRoutineExpenseFullyResolved(transaction = {}, categorizationEvidence = {}, businessContext = {}) {
@@ -178,6 +188,22 @@ export function canAutoHandle(transaction = {}, categorizationEvidence = {}, bus
   if (transaction?.pending === true) {
     return block("pending_transaction_not_postable", { confidence, source, evidence });
   }
+  const statementCreditException =
+    evidence.allowTaxonomyAutoHandle === true &&
+    evidence.taxonomyAutoHandleReason === "statement_credit_rewards_income";
+  if (hasDirectionEvidence(transaction) && !isNormalOutflow(transaction) && !statementCreditException) {
+    const memo = [
+      transaction?.name,
+      transaction?.merchant_name,
+      transaction?.counterparty_name,
+      meta.memo,
+    ].filter(Boolean).join(" ");
+    return block(INCOMING_DEPOSIT_RE.test(memo) ? "incoming_deposit_match_required" : "not_normal_outflow", {
+      confidence,
+      source,
+      evidence,
+    });
+  }
   if (transaction?.accounting_review_required === true || meta.accounting_review_required === true) {
     return block("plaid_accounting_review_required", { confidence, source, evidence });
   }
@@ -228,6 +254,13 @@ export function canAutoHandle(transaction = {}, categorizationEvidence = {}, bus
   }
   if (isReviewAccount({ accountId, accountName, suspenseIds: businessContext.suspenseIds })) {
     return block("review_or_suspense_account", { confidence, source, evidence });
+  }
+  if (evidence.protectedReviewRequired === true || meta.protected_review_required === true) {
+    return block(evidence.protectedReviewReason || meta.protected_review_reason || "classification_requires_confirmation", {
+      confidence,
+      source,
+      evidence,
+    });
   }
 
   const routineDecision = isRoutineExpenseFullyResolved(transaction, evidence, businessContext);

@@ -1,6 +1,9 @@
-import { supabase } from "../supabaseAdmin.js";
+import { NORMALIZATION_VERSION, normalizeMerchantIdentity } from "./merchantNormalization.js";
 
 const LANDMINE_TYPES = new Set(["transfer_internal", "cc_payment", "owner_draw", "owner_contribution", "refund", "payroll", "peer_to_peer_transfer"]);
+const GENERIC_IDENTITY_TOKENS = new Set(["payment", "purchase", "online", "mobile", "store", "thank", "you", "thank you", "card", "debit", "credit", "pmt", "ach"]);
+export const BUSINESS_MERCHANT_RULE_SOURCE = "business_merchant_rule";
+export const BUSINESS_MERCHANT_RULE_VERSION = "business_merchant_rule_v1";
 
 export function normalizeText(str = "") {
   return String(str || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -11,13 +14,7 @@ export function buildMemoForLearning(tx = {}) {
 }
 
 export function cleanMemoForPrefix(memo = "") {
-  return (memo || "")
-    .replace(/^(POS|DEBIT|CREDIT|ACH|ACH DEBIT|ACH CREDIT|SQ \*|VENMO PAYMENT|PP\*|PURCHASE|PP \*|VENMO|PAYPAL)\s+/i, "")
-    .replace(/\d{4,}/g, " ")
-    .replace(/[^a-z0-9]+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return normalizeMerchantIdentity(memo).normalized;
 }
 
 export function computeMemoPrefixForLearning(tx = {}, N = 20) {
@@ -25,6 +22,82 @@ export function computeMemoPrefixForLearning(tx = {}, N = 20) {
   const cleanedMemo = cleanMemoForPrefix(memo);
   const prefix = (cleanedMemo || "").slice(0, N);
   return { prefix };
+}
+
+function parseRuleNotes(notes = "") {
+  if (!notes || typeof notes !== "string") return {};
+  try {
+    const parsed = JSON.parse(notes);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function stringifyRuleNotes(notes = {}) {
+  return JSON.stringify(notes);
+}
+
+function isSpecificIdentity(value = "") {
+  const normalized = String(value || "").trim();
+  if (normalized.length < 5) return false;
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  if (!tokens.length) return false;
+  if (tokens.every((token) => GENERIC_IDENTITY_TOKENS.has(token))) return false;
+  if (tokens.length === 1 && GENERIC_IDENTITY_TOKENS.has(tokens[0])) return false;
+  return true;
+}
+
+export function buildAuthorizedMerchantRuleIdentity(bankTxn = {}) {
+  const merchantEntityId = bankTxn.merchant_entity_id || bankTxn.merchant_id || null;
+  if (merchantEntityId) {
+    return {
+      match_type: "merchant_entity_id",
+      match_value: merchantEntityId,
+      match_specificity: "exact_provider_merchant_id",
+      normalized_merchant: null,
+      normalized_descriptor: null,
+      normalization_version: NORMALIZATION_VERSION,
+    };
+  }
+
+  const merchantIdentity = normalizeMerchantIdentity(bankTxn.merchant_name || bankTxn.counterparty_name || "");
+  if (isSpecificIdentity(merchantIdentity.normalized)) {
+    return {
+      match_type: "memo_prefix",
+      match_value: merchantIdentity.normalized,
+      match_specificity: "exact_normalized_merchant",
+      normalized_merchant: merchantIdentity.normalized,
+      normalized_descriptor: null,
+      normalization_version: merchantIdentity.normalization_version,
+    };
+  }
+
+  const descriptorIdentity = normalizeMerchantIdentity([bankTxn.name, bankTxn.merchant_name, bankTxn.counterparty_name].filter(Boolean).join(" "));
+  if (isSpecificIdentity(descriptorIdentity.normalized)) {
+    return {
+      match_type: "memo_prefix",
+      match_value: descriptorIdentity.normalized,
+      match_specificity: "exact_descriptor_fingerprint",
+      normalized_merchant: merchantIdentity.normalized || null,
+      normalized_descriptor: descriptorIdentity.normalized,
+      normalization_version: descriptorIdentity.normalization_version,
+    };
+  }
+
+  const memo = computeMemoPrefixForLearning(bankTxn, 80).prefix;
+  if (isSpecificIdentity(memo) && memo.length >= 10) {
+    return {
+      match_type: "memo_prefix",
+      match_value: memo,
+      match_specificity: "memo_fingerprint",
+      normalized_merchant: merchantIdentity.normalized || null,
+      normalized_descriptor: descriptorIdentity.normalized || null,
+      normalization_version: NORMALIZATION_VERSION,
+    };
+  }
+
+  return null;
 }
 
 export function canonicalTxnDirection(tx = {}) {
@@ -89,8 +162,30 @@ export function looksLikeTaxonomyLandmineMemo(tx = {}) {
   return transferHit || ccHit || refundHit || ownerHit || payrollHit || p2pHit;
 }
 
-export async function learnVendorRuleFromTransaction({ businessId, bankTxn, finalAccountId, finalAccountName, taxonomyType, options = {} }) {
+function authorityForActor(actor = null) {
+  const type = String(actor?.role || actor?.type || actor?.actorType || actor || "").toLowerCase();
+  if (type.includes("bookkeeper")) return "bookkeeper_confirmed";
+  if (type.includes("admin")) return "admin_confirmed";
+  return "user_confirmed";
+}
+
+export async function learnVendorRuleFromTransaction({
+  businessId,
+  bankTxn,
+  finalAccountId,
+  finalAccountName,
+  taxonomyType,
+  options = {},
+  db = null,
+}) {
+  if (!db) {
+    const { supabase } = await import("../supabaseAdmin.js");
+    db = supabase;
+  }
   if (!businessId || !bankTxn || !finalAccountId) return { ok: true, skipped: true, reason: "missing_inputs" };
+  if (options?.onlyThisTransaction === true || options?.learnReusableRule === false) {
+    return { ok: true, skipped: true, reason: "one_time_decision" };
+  }
   if (taxonomyType && LANDMINE_TYPES.has(taxonomyType)) return { ok: true, skipped: true, reason: "taxonomy_landmine" };
   if (looksLikeTaxonomyLandmineMemo(bankTxn)) return { ok: true, skipped: true, reason: "memo_landmine" };
   const opts = options || {};
@@ -106,8 +201,11 @@ export async function learnVendorRuleFromTransaction({ businessId, bankTxn, fina
     return { ok: true, skipped: true, reason: "no_vendor_signal_for_check" };
   }
 
-  const merchantEntityId = bankTxn.merchant_entity_id || null;
-  const { prefix } = computeMemoPrefixForLearning(bankTxn, 20);
+  const identity = buildAuthorizedMerchantRuleIdentity(bankTxn);
+  if (!identity) return { ok: true, skipped: true, reason: "identity_too_weak" };
+  const merchantEntityId = bankTxn.merchant_entity_id || bankTxn.merchant_id || null;
+  const normalizedMerchant = normalizeMerchantIdentity(bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || "");
+  const prefix = identity.match_value;
   if (opts.learnedFrom === "universal_hint" && !merchantEntityId) {
     if (!prefix || prefix.length < 10) {
       return { ok: true, skipped: true, reason: "universal_hint_identity_too_weak" };
@@ -126,31 +224,45 @@ export async function learnVendorRuleFromTransaction({ businessId, bankTxn, fina
     direction_hint: direction,
     last_used_at: new Date().toISOString(),
     rule_kind: "category_default",
+    source: BUSINESS_MERCHANT_RULE_SOURCE,
   };
 
-  const appendLearnedFromNote = (notes) => {
-    const from = opts.learnedFrom ? String(opts.learnedFrom) : null;
-    if (!from) return notes || null;
-    const marker = `learned_from: ${from}`;
-    if (!notes) return marker;
-    if (notes.includes(marker)) return notes;
-    return `${notes} | ${marker}`;
+  const buildNotes = (existingNotes = null) => {
+    const existing = parseRuleNotes(existingNotes);
+    return stringifyRuleNotes({
+      ...existing,
+      source_type: BUSINESS_MERCHANT_RULE_SOURCE,
+      authority: opts.authority || authorityForActor(opts.actor),
+      source_transaction_id: bankTxn.id || bankTxn.transaction_id || bankTxn.plaid_transaction_id || null,
+      actor_id: opts.actor?.id || opts.actor?.userId || opts.actorId || null,
+      actor_type: opts.actor?.role || opts.actor?.type || opts.actorType || null,
+      selected_qbo_account_id: finalAccountId,
+      selected_qbo_account_name: finalAccountName || null,
+      normalized_merchant: identity.normalized_merchant || normalizedMerchant.normalized || null,
+      normalized_descriptor: identity.normalized_descriptor || null,
+      normalized_fingerprint: identity.match_value,
+      match_specificity: identity.match_specificity,
+      normalization_version: identity.normalization_version || NORMALIZATION_VERSION,
+      rule_version: BUSINESS_MERCHANT_RULE_VERSION,
+      state: "active",
+      superseded_at: null,
+      learned_from: opts.learnedFrom || existing.learned_from || "manual_decision",
+      created_at: existing.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
   };
 
-  let match_type = null;
-  let match_value = null;
-  if (merchantEntityId) {
-    match_type = "merchant_entity_id";
-    match_value = merchantEntityId;
-  } else if (opts.allowQboEntityFallback && qboEntityType && qboEntityId) {
-  const { data: qboRules, error: qboErr } = await supabase
-    .from("vendor_rules")
-    .select("id,match_type,match_value,usage_count,notes,counterparty_confidence,confidence")
-    .eq("business_id", businessId)
-    .eq("qbo_entity_type", qboEntityType)
-    .eq("qbo_entity_id", qboEntityId)
-    .eq("rule_kind", "category_default")
-    .limit(5);
+  let match_type = identity.match_type;
+  let match_value = identity.match_value;
+  if (!merchantEntityId && opts.allowQboEntityFallback && qboEntityType && qboEntityId) {
+    const { data: qboRules, error: qboErr } = await db
+      .from("vendor_rules")
+      .select("id,match_type,match_value,usage_count,notes,counterparty_confidence,confidence")
+      .eq("business_id", businessId)
+      .eq("qbo_entity_type", qboEntityType)
+      .eq("qbo_entity_id", qboEntityId)
+      .eq("rule_kind", "category_default")
+      .limit(5);
     if (qboErr) return { ok: false, error: qboErr?.message || "qbo_entity_select_failed" };
     const pref = (mt) => {
       if (mt === "merchant_entity_id") return 0;
@@ -172,10 +284,10 @@ export async function learnVendorRuleFromTransaction({ businessId, bankTxn, fina
         usage_count,
         confidence,
         counterparty_confidence: candidate.counterparty_confidence || "medium",
-        notes: appendLearnedFromNote(candidate.notes || null),
+        notes: buildNotes(candidate.notes || null),
         rule_kind: "category_default",
       };
-      const { error: updErr, data: updData } = await supabase
+      const { error: updErr, data: updData } = await db
         .from("vendor_rules")
         .update(payload)
         .eq("id", candidate.id)
@@ -186,45 +298,49 @@ export async function learnVendorRuleFromTransaction({ businessId, bankTxn, fina
       return { ok: true, rule: updData || { id: candidate.id, match_type: candidate.match_type, match_value: candidate.match_value } };
     }
   }
-  if (!match_type) {
-    if (prefix) {
-      if (prefix.length < 8) {
-        return { ok: true, skipped: true, reason: "memo_prefix_too_short" };
-      }
-      match_type = "memo_prefix";
-      match_value = prefix;
-    } else {
-      return { ok: true, skipped: true, reason: "no_identity" };
-    }
+  if (!match_type || !match_value) {
+    return { ok: true, skipped: true, reason: "no_identity" };
   }
 
-  const { data: existingRows, error: selErr } = await supabase
+  const { data: existingRows, error: selErr } = await db
     .from("vendor_rules")
-    .select("id,usage_count,notes,counterparty_confidence,confidence")
+    .select("id,usage_count,notes,counterparty_confidence,confidence,default_qbo_account_id,default_qbo_account_name,rule_kind")
     .eq("business_id", businessId)
     .eq("match_type", match_type)
     .eq("match_value", match_value)
-    .eq("rule_kind", "category_default")
-    .limit(1);
+    .limit(5);
   if (selErr) {
     return { ok: false, error: selErr?.message || "select_failed" };
   }
-  const existing = existingRows?.[0] || null;
+  const existing = (existingRows || []).find((row) => row.rule_kind === "category_default") || existingRows?.[0] || null;
   const usage_count = (existing?.usage_count || 0) + 1;
   const counterparty_confidence = existing?.counterparty_confidence || (merchantEntityId ? "high" : "medium");
-  const inferredConfidence = merchantEntityId ? "high" : "medium";
+  const inferredConfidence = merchantEntityId || identity.match_specificity !== "broad_fuzzy_alias" ? "high" : "medium";
   const confidence = existing?.confidence === "high" ? "high" : inferredConfidence;
 
   if (existing?.id) {
+    const existingNotes = parseRuleNotes(existing.notes || null);
     const payload = {
       ...basePayload,
       usage_count,
       counterparty_confidence,
       confidence,
-      notes: appendLearnedFromNote(existing?.notes || null),
+      notes: buildNotes(existing?.notes || null),
       rule_kind: "category_default",
     };
-    const { error: updErr, data: updData } = await supabase
+    if (existing.default_qbo_account_id && String(existing.default_qbo_account_id) !== String(finalAccountId)) {
+      payload.notes = stringifyRuleNotes({
+        ...parseRuleNotes(payload.notes),
+        previous_rule: {
+          default_qbo_account_id: existing.default_qbo_account_id,
+          default_qbo_account_name: existing.default_qbo_account_name || null,
+          confidence: existing.confidence || null,
+          notes: existingNotes,
+          superseded_at: new Date().toISOString(),
+        },
+      });
+    }
+    const { error: updErr, data: updData } = await db
       .from("vendor_rules")
       .update(payload)
       .eq("id", existing.id)
@@ -242,9 +358,9 @@ export async function learnVendorRuleFromTransaction({ businessId, bankTxn, fina
     usage_count,
     counterparty_confidence,
     confidence,
-    notes: appendLearnedFromNote(null),
+    notes: buildNotes(null),
   };
-  const { data: insData, error: insErr } = await supabase
+  const { data: insData, error: insErr } = await db
     .from("vendor_rules")
     .insert(insertPayload)
     .select("id,match_type,match_value")

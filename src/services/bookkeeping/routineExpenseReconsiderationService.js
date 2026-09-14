@@ -1,3 +1,4 @@
+/* global process */
 import { isCheck } from "./checkDetector.js";
 import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "./autoPostControl.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
@@ -20,6 +21,7 @@ import {
   isSpecificUniversalVendorEvidence,
   withCategorizationPolicyVersion,
 } from "./categorizationEvidencePolicy.js";
+import { normalizeMerchantIdentity, normalizedMerchantKeys } from "./merchantNormalization.js";
 
 const MAX_RECONSIDERATION_LIMIT = 500;
 const PNL_ACCOUNT_TYPES = new Set(["income", "other income", "expense", "cost of goods sold", "costofgoodssold"]);
@@ -144,6 +146,7 @@ function stripBusinessSuffix(value = "") {
 }
 
 function merchantIdentityKeys(txn = {}) {
+  const normalized = normalizedMerchantKeys(txn).keys;
   const raw = [txn.merchant_name, txn.counterparty_name, txn.name]
     .filter(Boolean)
     .flatMap((value) => {
@@ -154,7 +157,33 @@ function merchantIdentityKeys(txn = {}) {
       return [normalized, stripped, compact.length >= 7 ? compact : null, firstTokens.length >= 7 ? firstTokens : null];
     })
     .filter(Boolean);
-  return [...new Set(raw)];
+  return [...new Set([...normalized, ...raw])];
+}
+
+const PROTECTED_REVIEW_INTENTS = new Map([
+  ["meals", "business_personal_ambiguity"],
+  ["medical", "personal_or_owner_review"],
+  ["entertainment", "personal_or_owner_review"],
+  ["gaming", "personal_or_owner_review"],
+  ["charity", "personal_or_owner_review"],
+  ["charitable_contributions", "personal_or_owner_review"],
+  ["supplies", "business_personal_ambiguity"],
+  ["supplies_materials", "business_personal_ambiguity"],
+]);
+
+function protectedReviewForIntent({ intent, source, meta = {} } = {}) {
+  const normalizedSource = String(source || "").toLowerCase();
+  if (["approved_business_rule", "business_history"].includes(normalizedSource)) {
+    return { protectedReviewRequired: false, protectedReviewReason: null };
+  }
+  if (meta.business_specific_authorization === true) {
+    return { protectedReviewRequired: false, protectedReviewReason: null };
+  }
+  const reason = PROTECTED_REVIEW_INTENTS.get(String(intent || ""));
+  return {
+    protectedReviewRequired: Boolean(reason),
+    protectedReviewReason: reason || null,
+  };
 }
 
 function isPnlAccount(account = {}) {
@@ -193,6 +222,7 @@ function suggestedIntentFromAccountName(accountName = "") {
   const name = normalizeText(accountName);
   if (/\bmeal|restaurant|dining|food|coffee\b/.test(name)) return "meals";
   if (/\btransport|parking|toll|travel|lyft|uber\b/.test(name)) return "transportation";
+  if (/\bvehicle|auto|automobile|truck|fleet|tire|maintenance\b/.test(name)) return "vehicle_expense";
   if (/\bgas|fuel|charging\b/.test(name)) return "gas_charging";
   if (/\bsoftware|subscription|dues\b/.test(name)) return "software";
   if (/\binsurance\b/.test(name)) return "insurance";
@@ -204,6 +234,26 @@ function suggestedIntentFromAccountName(accountName = "") {
   return null;
 }
 
+function accountIntentConflictsWithMerchant({ semanticIntent, account = {} } = {}) {
+  const accountIntent = suggestedIntentFromAccountName(account?.name || "");
+  const intent = String(semanticIntent || "");
+  if (!intent || !accountIntent) return false;
+  if (intent === accountIntent) return false;
+  const compatible = new Set([
+    "parking_tolls:transportation",
+    "transportation:parking_tolls",
+    "fuel:gas_charging",
+    "gas_charging:fuel",
+    "software_subscription:software",
+    "software:software_subscription",
+  ]);
+  if (compatible.has(`${intent}:${accountIntent}`)) return false;
+  if (intent === "vehicle_expense" && ["transportation", "parking_tolls", "meals"].includes(accountIntent)) return true;
+  if (intent === "medical" && accountIntent !== "medical") return true;
+  if (["entertainment", "gaming", "charity"].includes(intent) && accountIntent !== intent) return true;
+  return false;
+}
+
 function hasDeterministicMediumSuggestionEvidence({ bankTxn = {}, account = {}, meta = {}, universalHint = null }) {
   if (!account?.id || !account?.name || !isPnlAccount(account)) return false;
   if (PROTECTED_TAXONOMY_RE.test(String(meta.taxonomy_type || ""))) return false;
@@ -212,6 +262,9 @@ function hasDeterministicMediumSuggestionEvidence({ bankTxn = {}, account = {}, 
   if (!["plaid_mapping", "plaid_baseline", "backlog_reconsideration"].includes(source)) return false;
   const intent = suggestedIntentFromAccountName(account.name);
   if (!intent) return false;
+  if (accountIntentConflictsWithMerchant({ semanticIntent: universalHint?.primary_intent || deriveIntentFromTransaction(bankTxn, meta), account })) {
+    return false;
+  }
   const text = transactionText(bankTxn);
   if (!text) return false;
   if (intent === "meals") {
@@ -239,6 +292,9 @@ function deriveIntentFromTransaction(bankTxn = {}, meta = {}) {
   if (/\bparkmobile\b|\bpark mobile\b|\bparking\b|\bparking lot\b|\bsurface lot\b|\btoll\b|\btolls\b|\bcdot pay\b|\bpps\b/.test(text)) return "parking_tolls";
   if (/\bchargeonsite\b|\bcharging\b|\bev charge\b|\bgas\b|\bfuel\b|\bquiktrip\b|\bquicktrip\b|\bqt\b/.test(text)) return "gas_charging";
   if (/\bopenai\b|\bchatgpt\b|\bclaude\b|\banthropic\b|\bsoftware\b|\bsubscription\b|\bsubscriptions\b|\bsaas\b/.test(text)) return "software";
+  if (/\bminuteclinic\b|\bminute clinic\b|\bmedical\b|\bhealthcare\b|\bpharmacy\b|\bcvs pharmacy\b/.test(text)) return "medical";
+  if (/\bticketmaster\b|\bplaystation\b|\bsony\b|\bgametime\b|\bfandango\b|\bknights\b|\bstadium\b|\btheater\b|\btheatre\b/.test(text)) return "entertainment";
+  if (/\bgreenpeace\b|\bdonation\b|\bcharity\b|\bcharitable\b/.test(text)) return "charity";
   if (/\btst\b|\bcafe\b|\bcoffee\b|\bcocktail\b|\bbar\b|\bwhiskey\b|\brestaurant\b|\brestaurants\b|\bfood\b|\bdining\b|\bgrill\b|\bkitchen\b|\bchick\b|\bchipotle\b|\bcava\b|\bamelie\b|\byamazaru\b|\bsumaq\b|\bcarillon\b|\bexchange\b|\bbarcelona\b|\bsloan\b|\bpub\b|\bbistro\b|\btavern\b/.test(text)) return "meals";
   if (/\bentertainment\b|\bmovie\b|\bmovies\b|\btheater\b|\btheatre\b|\bcinema\b|\bamc\b/.test(text)) return "entertainment";
   if (/\bcostco\b|\btarget\b|\bwalmart\b|\bwalgreens\b|\bsupplies\b|\bsupply\b|\bmaterials\b/.test(text)) return "supplies_materials";
@@ -860,7 +916,12 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         db,
         dependencies,
       });
-      const confidenceTier = vendorRule.match_reason === "merchant_entity_id" ? "very_high" : "high";
+      const exactBusinessRule =
+        vendorRule.source_type === "business_merchant_rule" &&
+        ["exact_provider_merchant_id", "exact_normalized_merchant", "exact_descriptor_fingerprint", "memo_fingerprint"].includes(
+          vendorRule.match_specificity
+        );
+      const confidenceTier = vendorRule.match_reason === "merchant_entity_id" || exactBusinessRule ? "very_high" : "high";
       const decision = decideBookkeepingCategorization({
         transaction: bankTxn,
         account: account || {
@@ -895,6 +956,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         vendor_rule_counterparty_name: vendorRule.counterparty_name || null,
         vendor_rule_coa_id: account?.id || vendorRule.default_qbo_account_id,
         vendor_rule_coa_name: account?.name || vendorRule.default_qbo_account_name,
+        vendor_rule_source_type: vendorRule.source_type || null,
+        vendor_rule_authority: vendorRule.authority || null,
+        vendor_rule_match_specificity: vendorRule.match_specificity || null,
         merchant_evidence_strong: true,
         safe_to_auto_handle: decision.auto_handle === true,
         safe_to_auto_post: decision.auto_handle === true,
@@ -1159,6 +1223,11 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           };
         }
       }
+      const merchantAccountConflict = accountIntentConflictsWithMerchant({ semanticIntent: universalHint.primary_intent, account });
+      if (merchantAccountConflict) {
+        account = { id: null, name: null };
+        semanticResolution = null;
+      }
       const vendorEvidence = await resolveVendorEvidence({
         db,
         businessId,
@@ -1177,6 +1246,18 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         (specificMediumEvidence && isSpecificUniversalVendorEvidence(universalHint)) || semanticAccountResolved
           ? "high"
           : universalHint.confidence || "high";
+      const protectedReview = protectedReviewForIntent({
+        intent: universalHint.primary_intent,
+        source: specificMediumEvidence
+          ? "specific_universal_vendor"
+          : semanticAccountResolved
+          ? "universal_hint_semantic_coa"
+          : "universal_hint",
+        meta,
+      });
+      const merchantNormalization = normalizeMerchantIdentity(
+        bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || ""
+      );
       const decision = decideBookkeepingCategorization({
         transaction: bankTxn,
         account,
@@ -1199,6 +1280,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           merchantEvidenceStrong:
             vendorEvidence.merchantEvidenceStrong === true ||
             Boolean(bankTxn.merchant_entity_id || bankTxn.merchant_name || bankTxn.counterparty_name),
+          protectedReviewRequired: protectedReview.protectedReviewRequired,
+          protectedReviewReason: protectedReview.protectedReviewReason,
           allowTaxonomyAutoHandle: allowStatementCredit,
           taxonomyAutoHandleReason: allowStatementCredit ? "statement_credit_rewards_income" : null,
           conflictingEvidence: meta.conflicting_categorization_evidence === true,
@@ -1234,6 +1317,13 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         canonical_vendor_id: vendorEvidence.canonicalVendorId || null,
         canonical_vendor_reliable: vendorEvidence.canonicalVendorReliable === true,
         merchant_evidence_strong: decision.evidence?.merchantEvidenceStrong === true,
+        raw_merchant: bankTxn.merchant_name || bankTxn.counterparty_name || null,
+        normalized_merchant: merchantNormalization.normalized || null,
+        merchant_normalization_version: merchantNormalization.normalization_version,
+        merchant_normalization_evidence: merchantNormalization.evidence,
+        protected_review_required: protectedReview.protectedReviewRequired,
+        protected_review_reason: protectedReview.protectedReviewReason,
+        merchant_account_intent_conflict: merchantAccountConflict,
         taxonomy_auto_handle_reason: allowStatementCredit ? "statement_credit_rewards_income" : null,
         evidence_source: decision.evidence_source,
         confidence_tier: decision.confidence_tier,
@@ -1377,6 +1467,11 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       ? "semantic_coa_fallback"
       : normalizeSource(meta.suggestion_source || cat.decided_by || "backlog_reconsideration");
     const confidenceTier = semanticAccountResolved || allowStatementCredit ? "high" : cat.confidence || meta.confidence || "medium";
+    const protectedReview = protectedReviewForIntent({ intent: semanticIntent, source, meta });
+    const merchantAccountConflict = accountIntentConflictsWithMerchant({ semanticIntent, account });
+    const merchantNormalization = normalizeMerchantIdentity(
+      bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || ""
+    );
     const decision = decideBookkeepingCategorization({
       transaction: bankTxn,
       account,
@@ -1401,10 +1496,12 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           semanticAccountResolved === true ||
           allowStatementCredit === true ||
           Boolean(bankTxn.merchant_name && meta.suggestion_source === "universal_hint"),
+        protectedReviewRequired: protectedReview.protectedReviewRequired,
+        protectedReviewReason: protectedReview.protectedReviewReason,
         deterministicMediumEvidence,
         allowTaxonomyAutoHandle: allowStatementCredit,
         taxonomyAutoHandleReason: allowStatementCredit ? "statement_credit_rewards_income" : null,
-        conflictingEvidence: meta.conflicting_categorization_evidence === true,
+        conflictingEvidence: meta.conflicting_categorization_evidence === true || merchantAccountConflict,
         reason: allowStatementCredit
           ? "statement_credit_rewards_income"
           : semanticAccountResolved
@@ -1430,6 +1527,13 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       canonical_vendor_reliable: vendorEvidence.canonicalVendorReliable === true,
       canonical_vendor_resolution_reason: vendorEvidence.reason || null,
       merchant_evidence_strong: decision.evidence?.merchantEvidenceStrong === true,
+      raw_merchant: bankTxn.merchant_name || bankTxn.counterparty_name || null,
+      normalized_merchant: merchantNormalization.normalized || null,
+      merchant_normalization_version: merchantNormalization.normalization_version,
+      merchant_normalization_evidence: merchantNormalization.evidence,
+      protected_review_required: protectedReview.protectedReviewRequired,
+      protected_review_reason: protectedReview.protectedReviewReason,
+      merchant_account_intent_conflict: merchantAccountConflict,
       deterministic_medium_evidence: deterministicMediumEvidence,
       semantic_coa_resolved: Boolean(semanticResolution?.id),
       semantic_intent: semanticIntent || null,

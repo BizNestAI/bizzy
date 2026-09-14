@@ -21,6 +21,7 @@ function makeDb(initial = {}) {
     bank_transactions: [],
     transaction_categorizations: [],
     clarification_requests: [],
+    vendor_rules: [],
     ...initial,
   };
   return {
@@ -38,6 +39,8 @@ class Query {
     this.filters = [];
     this.nullFilters = [];
     this.pendingUpdate = null;
+    this.pendingInsert = null;
+    this.pendingUpsert = null;
     this.pendingSelect = false;
   }
   select() {
@@ -57,13 +60,26 @@ class Query {
     this.filters.push((row) => set.has(String(row[column])));
     return this;
   }
+  not(column, operator, value) {
+    if (operator === "is" && value === null) {
+      this.filters.push((row) => row[column] != null);
+    }
+    return this;
+  }
   update(payload) {
     this.pendingUpdate = payload;
     return this;
   }
-  async maybeSingle() {
-    const rows = this.rows();
-    return { data: rows[0] || null, error: null };
+  insert(payload) {
+    this.pendingInsert = payload;
+    return this;
+  }
+  upsert(payload) {
+    this.pendingUpsert = payload;
+    return this;
+  }
+  limit() {
+    return this;
   }
   async single() {
     if (this.pendingUpdate) {
@@ -77,12 +93,42 @@ class Query {
     return row ? { data: { ...row }, error: null } : { data: null, error: { message: "row not found" } };
   }
   then(resolve) {
+    if (this.pendingInsert || this.pendingUpsert) {
+      const payloads = Array.isArray(this.pendingInsert || this.pendingUpsert)
+        ? (this.pendingInsert || this.pendingUpsert)
+        : [this.pendingInsert || this.pendingUpsert];
+      const table = this.tables[this.table] || (this.tables[this.table] = []);
+      const rows = payloads.map((payload) => {
+        const existing = this.pendingUpsert
+          ? table.find((row) => String(row.business_id) === String(payload.business_id) && String(row.transaction_id || row.match_value) === String(payload.transaction_id || payload.match_value))
+          : null;
+        if (existing) {
+          Object.assign(existing, payload);
+          return { ...existing };
+        }
+        const row = { id: payload.id || `${this.table}-${table.length + 1}`, ...payload };
+        table.push(row);
+        return { ...row };
+      });
+      return resolve({ data: rows, error: null });
+    }
     if (this.pendingUpdate) {
       const rows = this.rows();
       rows.forEach((row) => Object.assign(row, this.pendingUpdate));
       return resolve({ data: rows.map((row) => ({ ...row })), error: null });
     }
     return resolve({ data: this.rows().map((row) => ({ ...row })), error: null });
+  }
+  async maybeSingle() {
+    if (this.pendingInsert || this.pendingUpsert) {
+      let result;
+      await this.then((value) => {
+        result = value;
+      });
+      return { data: result?.data?.[0] || null, error: result?.error || null };
+    }
+    const rows = this.rows();
+    return { data: rows[0] || null, error: null };
   }
   rows() {
     return (this.tables[this.table] || []).filter((row) => {
@@ -166,6 +212,83 @@ test("Monthly Review Needs Review reclassification delegates to shared approval 
   assert.equal(result.operator_response_resolution.resolved, 1);
   assert.equal(db.tables.clarification_requests[0].resolved_reason, "monthly_review_reclassified");
   assert.equal(db.tables.clarification_requests[0].resolved_final_qbo_account_id, "acct-meals");
+});
+
+test("Monthly Review authorized ordinary expense creates active business merchant rule and one-time option skips it", async () => {
+  const { getVendorRuleForTransaction } = await import("../src/services/bookkeeping/vendorRuleMatcher.js");
+  const db = makeDb({
+    bank_transactions: [bankTxn({
+      id: "greenpeace-1",
+      name: "GREENPEACE DONATION 4811",
+      merchant_name: "Greenpeace",
+      amount: -25,
+      direction: "OUTFLOW",
+    })],
+    transaction_categorizations: [cat({ transaction_id: "greenpeace-1", status: "needs_review" })],
+  });
+
+  const result = await reclassifyBookkeepingTransaction({
+    businessId: "biz-1",
+    transactionId: "greenpeace-1",
+    targetQboAccountId: "acct-charity",
+    actor: { id: "admin-1", role: "admin" },
+    db,
+    validateQboAccount: validAccount({ id: "acct-charity", name: "Contributions to Charities", type: "Expense" }),
+    validateApprovalSelectedAccountsFn: async () => {},
+  });
+
+  assert.equal(result.mode, "needs_review_approval");
+  assert.equal(db.tables.vendor_rules.length, 1);
+  const storedRule = db.tables.vendor_rules[0];
+  assert.equal(storedRule.business_id, "biz-1");
+  assert.equal(storedRule.source, "business_merchant_rule");
+  assert.equal(storedRule.default_qbo_account_id, "acct-charity");
+  const notes = JSON.parse(storedRule.notes);
+  assert.equal(notes.source_type, "business_merchant_rule");
+  assert.equal(notes.authority, "admin_confirmed");
+  assert.equal(notes.source_transaction_id, "greenpeace-1");
+  assert.equal(notes.normalized_fingerprint, "greenpeace");
+  assert.equal(notes.match_specificity, "exact_normalized_merchant");
+
+  const futureRule = await getVendorRuleForTransaction({
+    businessId: "biz-1",
+    bankTransaction: {
+      id: "greenpeace-2",
+      business_id: "biz-1",
+      name: "GREENPEACE DONATION 9921",
+      merchant_name: "Greenpeace",
+      amount: -25,
+      direction: "OUTFLOW",
+    },
+    db,
+  });
+  assert.equal(futureRule.default_qbo_account_id, "acct-charity");
+  assert.equal(futureRule.source_type, "business_merchant_rule");
+  assert.equal(futureRule.match_specificity, "exact_normalized_merchant");
+
+  const otherBusinessRule = await getVendorRuleForTransaction({
+    businessId: "biz-2",
+    bankTransaction: { name: "GREENPEACE DONATION 9921", merchant_name: "Greenpeace", amount: -25, direction: "OUTFLOW" },
+    db,
+  });
+  assert.equal(otherBusinessRule, null);
+
+  const oneTimeDb = makeDb({
+    bank_transactions: [bankTxn({ id: "greenpeace-3", name: "GREENPEACE DONATION", merchant_name: "Greenpeace", amount: -25, direction: "OUTFLOW" })],
+    transaction_categorizations: [cat({ transaction_id: "greenpeace-3", status: "needs_review" })],
+  });
+  const oneTime = await reclassifyBookkeepingTransaction({
+    businessId: "biz-1",
+    transactionId: "greenpeace-3",
+    targetQboAccountId: "acct-charity",
+    actor: { id: "admin-1", role: "admin" },
+    db: oneTimeDb,
+    validateQboAccount: validAccount({ id: "acct-charity", name: "Contributions to Charities", type: "Expense" }),
+    learnReusableRule: false,
+    validateApprovalSelectedAccountsFn: async () => {},
+  });
+  assert.equal(oneTime.reusable_rule?.skipped, true);
+  assert.equal(oneTimeDb.tables.vendor_rules.length, 0);
 });
 
 test("Monthly Review handled unposted reclassification updates categorization without QBO create or auto-post changes", async () => {

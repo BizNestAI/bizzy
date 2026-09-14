@@ -324,10 +324,10 @@ test("effective-date preview releases only fully eligible historical rows", asyn
       { id: "missing-source-1", business_id: "biz-1", plaid_account_id: "acct-2", is_archived: false, date: "2026-08-13", pending: false },
     ],
     transaction_categorizations: [
-      { business_id: "biz-1", transaction_id: "safe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: true } },
-      { business_id: "biz-1", transaction_id: "unsafe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: false } },
-      { business_id: "biz-1", transaction_id: "pending-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: true } },
-      { business_id: "biz-1", transaction_id: "missing-source-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "safe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: null, meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "unsafe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: null, meta: { safe_to_auto_post: false } },
+      { business_id: "biz-1", transaction_id: "pending-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: null, meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "missing-source-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: null, meta: { safe_to_auto_post: true } },
     ],
   });
 
@@ -338,7 +338,7 @@ test("effective-date preview releases only fully eligible historical rows", asyn
   assert.match(preview.preview_fingerprint, /^[a-f0-9]{64}$/);
   assert.deepEqual(preview.eligible_transaction_ids, ["safe-1"]);
   assert.equal(preview.buckets.safe_new_post, 1);
-  assert.equal(preview.buckets.unsafe_auto_post, 1);
+  assert.equal(preview.buckets.still_unsafe, 1);
   assert.equal(preview.buckets.pending, 1);
   assert.equal(preview.buckets.missing_source_mapping, 1);
 
@@ -375,8 +375,8 @@ test("effective-date scope save uses canonical enum, preview fingerprint, and on
       { id: "unsafe-1", business_id: "biz-1", plaid_account_id: "acct-1", is_archived: false, date: "2026-08-11", pending: false },
     ],
     transaction_categorizations: [
-      { business_id: "biz-1", transaction_id: "safe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: true } },
-      { business_id: "biz-1", transaction_id: "unsafe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: "2026-09-01T00:00:00.000Z", meta: { safe_to_auto_post: false } },
+      { business_id: "biz-1", transaction_id: "safe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: null, meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "unsafe-1", status: "auto_approved", final_qbo_account_id: "qbo-meals", qbo_txn_id: null, post_after: null, meta: { safe_to_auto_post: false } },
     ],
   });
   const preview = await previewAutoPostBacklog({ db, businessId: "biz-1", effectiveDate: "2026-08-01" });
@@ -764,10 +764,19 @@ class Query {
     this.rows = this.rows.filter((row) => row[field] === value);
     return this;
   }
+  not(field, operator, value) {
+    if (operator === "is" && value === null) {
+      this.rows = this.rows.filter((row) => row[field] != null);
+    }
+    return this;
+  }
   in(field, values) {
     const set = new Set(values || []);
     this.calls.push({ table: this.table, op: "in", field, valuesLength: values?.length || 0 });
     this.rows = this.rows.filter((row) => set.has(row[field]));
+    return this;
+  }
+  limit() {
     return this;
   }
   maybeSingle() {

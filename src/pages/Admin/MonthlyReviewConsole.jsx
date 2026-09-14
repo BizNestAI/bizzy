@@ -116,6 +116,7 @@ export default function MonthlyReviewConsole() {
   const [bookkeepingReconsideration, setBookkeepingReconsideration] = useState({ loading: false, message: "", error: "" });
   const [busyFeedActions, setBusyFeedActions] = useState({});
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
+  const [bookkeepingRulePreferences, setBookkeepingRulePreferences] = useState({});
   const [ccPaymentActionState, setCcPaymentActionState] = useState({});
   const [loadingBusinesses, setLoadingBusinesses] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -871,6 +872,7 @@ export default function MonthlyReviewConsole() {
     setError("");
     try {
       let result = null;
+      const learnReusableRule = bookkeepingRulePreferences?.[transactionId] !== false;
       if (actionKey === "approve") {
         if (!accountId) throw new Error("Choose a GL account before approving.");
         result = await safeFetch(`${routeBase}/approve`, {
@@ -878,6 +880,8 @@ export default function MonthlyReviewConsole() {
           body: {
             final_qbo_account_id: accountId,
             reason: "Approved from Monthly Review Needs Review feed.",
+            learn_reusable_rule: learnReusableRule,
+            only_this_transaction: learnReusableRule === false,
           },
         });
       } else if (actionKey === "reclassify") {
@@ -887,6 +891,8 @@ export default function MonthlyReviewConsole() {
           body: {
             final_qbo_account_id: accountId,
             reason: "Reclassified from Monthly Review Handled feed.",
+            learn_reusable_rule: learnReusableRule,
+            only_this_transaction: learnReusableRule === false,
           },
         });
       } else if (actionKey === "post") {
@@ -900,6 +906,12 @@ export default function MonthlyReviewConsole() {
         patchBookkeepingFeedsAfterReclassification(row, accountId, result);
       } else {
         await refreshAfterFeedAction();
+      }
+      if ((actionKey === "approve" || actionKey === "reclassify") && result?.reusable_rule?.rule) {
+        setBookkeepingFeedActionErrors((current) => ({
+          ...current,
+          [transactionId]: "Rule created · Undo · Manage rule",
+        }));
       }
     } catch (e) {
       const message = e?.body?.message || e?.message || "Could not complete bookkeeping action.";
@@ -916,7 +928,7 @@ export default function MonthlyReviewConsole() {
       });
       setBusyFeedAction("");
     }
-  }, [detail?.run?.id, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction]);
+  }, [bookkeepingRulePreferences, detail?.run?.id, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction]);
 
   useEffect(() => {
     if (!detail?.run?.id) return undefined;
@@ -1589,6 +1601,10 @@ export default function MonthlyReviewConsole() {
                   busyAction={busyFeedAction}
                   busyActions={busyFeedActions}
                   rowErrors={bookkeepingFeedActionErrors}
+                  learningPreferences={bookkeepingRulePreferences}
+                  onLearningPreferenceChange={(transactionId, enabled) => {
+                    setBookkeepingRulePreferences((current) => ({ ...current, [transactionId]: enabled }));
+                  }}
                   onApprove={(row, accountId) => runBookkeepingFeedAction("approve", row, accountId)}
                   onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
                   onPost={(row) => runBookkeepingFeedAction("post", row)}
@@ -1695,6 +1711,8 @@ function BookkeepingFeedMirrorPanels({
   busyAction,
   busyActions,
   rowErrors,
+  learningPreferences,
+  onLearningPreferenceChange,
   onApprove,
   onReclassify,
   onPost,
@@ -1764,6 +1782,8 @@ function BookkeepingFeedMirrorPanels({
             busyAction={busyAction}
             busyActions={busyActions}
             rowErrors={rowErrors}
+            learningPreferences={learningPreferences}
+            onLearningPreferenceChange={onLearningPreferenceChange}
             onApprove={onApprove}
             onReclassify={onReclassify}
             onPost={onPost}
@@ -1793,6 +1813,8 @@ function BookkeepingFeedMirrorSection({
   busyAction,
   busyActions,
   rowErrors,
+  learningPreferences,
+  onLearningPreferenceChange,
   onApprove,
   onReclassify,
   onPost,
@@ -1848,6 +1870,8 @@ function BookkeepingFeedMirrorSection({
               busyAction={busyAction}
               busyActions={busyActions}
               rowErrors={rowErrors}
+              learningPreferences={learningPreferences}
+              onLearningPreferenceChange={onLearningPreferenceChange}
               onApprove={onApprove}
               onReclassify={onReclassify}
               onPost={onPost}

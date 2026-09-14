@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -58,6 +59,54 @@ test("generic medium first encounter remains Needs Review", () => {
   });
   assert.equal(decision.eligible, false);
   assert.equal(decision.reason, "medium_confidence_requires_review");
+});
+
+test("incoming deposits cannot bypass matching through high-confidence evidence", () => {
+  const decision = decide({
+    transaction: {
+      name: "DEPOSIT INTUIT 73102173 OPTIMIST",
+      direction: "INFLOW",
+      amount: 300,
+      signed_amount: 300,
+    },
+    evidence: {
+      source: "universal_hint",
+      confidence: "high",
+      accountId: "income-sales",
+      accountName: "Sales",
+      accountType: "Income",
+      safeToAutoHandle: true,
+    },
+  });
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "incoming_deposit_match_required");
+});
+
+test("protected recognizable merchants need business-specific authorization before auto-handling", () => {
+  const firstRestaurant = routineDecision({
+    transaction: { merchant_name: "Bonefish Grill" },
+    evidence: {
+      accountId: "acct-meals",
+      accountName: "Meals",
+      canonicalAccountKey: "meals",
+      protectedReviewRequired: true,
+      protectedReviewReason: "business_personal_ambiguity",
+    },
+  });
+  assert.equal(firstRestaurant.eligible, false);
+  assert.equal(firstRestaurant.reason, "business_personal_ambiguity");
+
+  const authorizedRestaurant = routineDecision({
+    transaction: { merchant_name: "Bonefish Grill" },
+    evidence: {
+      source: "business_history",
+      accountId: "acct-meals",
+      accountName: "Meals",
+      canonicalAccountKey: "meals",
+      meta: { business_specific_authorization: true },
+    },
+  });
+  assert.equal(authorizedRestaurant.eligible, true);
 });
 
 function routineDecision(overrides = {}) {

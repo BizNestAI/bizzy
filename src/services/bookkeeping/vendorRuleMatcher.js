@@ -1,4 +1,6 @@
-import { supabase } from "../supabaseAdmin.js";
+/* global process */
+import { normalizeMerchantIdentity, normalizedMerchantKeys } from "./merchantNormalization.js";
+import { BUSINESS_MERCHANT_RULE_SOURCE } from "./vendorRuleLearner.js";
 
 export function normalizeText(str = "") {
   return String(str || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -10,13 +12,7 @@ export function buildMemo(tx = {}) {
 }
 
 export function cleanMemoForPrefix(memo = "") {
-  return (memo || "")
-    .replace(/^(POS|DEBIT|CREDIT|ACH|ACH DEBIT|ACH CREDIT|SQ \*|VENMO PAYMENT|PP\*|PURCHASE|PP \*|VENMO|PAYPAL)\s+/i, "")
-    .replace(/\d{4,}/g, " ")
-    .replace(/[^a-z0-9]+/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+  return normalizeMerchantIdentity(memo).normalized;
 }
 
 export function computeMemoPrefix(tx = {}, N = 20) {
@@ -28,6 +24,25 @@ export function computeMemoPrefix(tx = {}, N = 20) {
 
 function hasCategoryDefaults(rule) {
   return !!(rule && rule.default_qbo_account_id);
+}
+
+function parseRuleNotes(notes = "") {
+  if (!notes || typeof notes !== "string") return {};
+  try {
+    const parsed = JSON.parse(notes);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function isActiveRule(rule = {}) {
+  const notes = parseRuleNotes(rule.notes);
+  return notes.state !== "superseded" && notes.active !== false;
+}
+
+function ruleSpecificity(rule = {}) {
+  return parseRuleNotes(rule.notes).match_specificity || (rule.match_type === "merchant_entity_id" ? "exact_provider_merchant_id" : "broad_fuzzy_alias");
 }
 
 function devLog(businessId, bankTransaction, debug) {
@@ -57,13 +72,21 @@ function shapeRule(rule, match_reason, match_score) {
     qbo_entity_id: rule.qbo_entity_id,
     usage_count: rule.usage_count,
     last_used_at: rule.last_used_at,
+    source: rule.source,
+    source_type: parseRuleNotes(rule.notes).source_type || rule.source || null,
+    authority: parseRuleNotes(rule.notes).authority || null,
+    match_specificity: ruleSpecificity(rule),
     match_reason,
     match_score,
   };
 }
 
-export async function getVendorRuleForTransaction({ businessId, bankTransaction, db = supabase } = {}) {
+export async function getVendorRuleForTransaction({ businessId, bankTransaction, db = null } = {}) {
   if (!businessId || !bankTransaction) return null;
+  if (!db) {
+    const { supabase } = await import("../supabaseAdmin.js");
+    db = supabase;
+  }
   const debug = { steps: [] };
 
   // 1) merchant_entity_id exact
@@ -80,13 +103,14 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction,
       .limit(1);
     debug.steps.push({ tier: "merchant_entity_id", returned: meRules?.length || 0, error: !!meErr });
     if (!meErr && meRules?.length) {
-      const rule = meRules.find(hasCategoryDefaults);
+      const rule = meRules.find((candidate) => hasCategoryDefaults(candidate) && isActiveRule(candidate));
       if (rule) return shapeRule(rule, "merchant_entity_id", 1000);
     }
   }
 
   // 2) memo_prefix
   const { cleanedMemo } = computeMemoPrefix(bankTransaction);
+  const normalizedKeys = normalizedMerchantKeys(bankTransaction).keys;
   if (cleanedMemo) {
     const { data: prefixRules, error: mpErr } = await db
       .from("vendor_rules")
@@ -103,7 +127,15 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction,
       for (const rule of prefixRules) {
         const ruleVal = cleanMemoForPrefix(rule.match_value || "");
         if (!ruleVal) continue;
-        if (cleanedMemo.startsWith(ruleVal) && ruleVal.length > bestLen) {
+        if (!isActiveRule(rule)) continue;
+        const specificity = ruleSpecificity(rule);
+        const exactAuthorized =
+          rule.source === BUSINESS_MERCHANT_RULE_SOURCE &&
+          ["exact_normalized_merchant", "exact_descriptor_fingerprint", "memo_fingerprint"].includes(specificity);
+        const normalizedMatch = exactAuthorized
+          ? normalizedKeys.some((key) => key === ruleVal) || cleanedMemo === ruleVal
+          : normalizedKeys.some((key) => key === ruleVal || key.startsWith(ruleVal));
+        if ((exactAuthorized ? normalizedMatch : (cleanedMemo.startsWith(ruleVal) || normalizedMatch)) && ruleVal.length > bestLen) {
           if (hasCategoryDefaults(rule)) {
             best = rule;
             bestLen = ruleVal.length;
@@ -134,7 +166,7 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction,
       try {
         const re = new RegExp(pattern, "i");
         if (re.test(rawMemo) || re.test(cleanedMemo)) {
-          if (hasCategoryDefaults(rule)) {
+          if (hasCategoryDefaults(rule) && isActiveRule(rule)) {
             return shapeRule(rule, "regex", 300);
           }
         }
@@ -155,7 +187,7 @@ export async function getVendorRuleForTransaction({ businessId, bankTransaction,
       .not("default_qbo_account_id", "is", null);
     debug.steps.push({ tier: "qbo_entity", returned: entityRules?.length || 0, error: !!entErr });
     if (!entErr && entityRules?.length) {
-      const sorted = [...entityRules].sort((a, b) => {
+      const sorted = [...entityRules].filter(isActiveRule).sort((a, b) => {
         const ua = a.usage_count || 0;
         const ub = b.usage_count || 0;
         if (ua !== ub) return ub - ua;
