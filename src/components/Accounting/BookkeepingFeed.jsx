@@ -576,8 +576,9 @@ function IncomingDepositMatchPanel({
 }) {
   if (!state?.active) return null;
   const primary = state.primary || {};
+  const paymentCandidate = (state.candidates || []).find((candidate) => candidate.qbo_entity_type === "Payment") || null;
   const heading = state.confirmed
-    ? "Matched to existing QuickBooks payment"
+    ? "Matched to existing QuickBooks"
     : state.unavailable
       ? "QuickBooks match check temporarily unavailable"
       : state.invoiceOnly
@@ -586,7 +587,7 @@ function IncomingDepositMatchPanel({
         ? "Needs match"
         : "Possible existing QuickBooks match";
   const description = state.confirmed
-    ? "Confirmed against an existing QuickBooks bank/payment transaction. Bizzi did not create new income."
+    ? "Confirmed against existing QuickBooks activity. Bizzi did not create a new QuickBooks transaction."
     : state.unavailable
       ? "Bizzi couldn't safely check whether this deposit is already recorded in QuickBooks. It has not been posted as income."
       : state.invoiceOnly
@@ -604,23 +605,32 @@ function IncomingDepositMatchPanel({
         .filter(Boolean)
         .join(", ")
     : Array.isArray(primary.invoice_ids) && primary.invoice_ids.length ? primary.invoice_ids.join(", ") : null;
+  const panelTone = state.confirmed
+    ? "border-emerald-300/25 bg-emerald-500/8 text-emerald-50"
+    : "border-amber-300/25 bg-amber-400/8 text-amber-50";
+  const headingTone = state.confirmed ? "text-emerald-100" : "text-amber-100";
+  const copyTone = state.confirmed ? "text-emerald-50/78" : "text-amber-50/78";
+  const tierTone = state.confirmed ? "border-emerald-200/30 text-emerald-100" : "border-amber-200/30 text-amber-100";
   return (
-    <div className="mt-3 rounded-lg border border-amber-300/25 bg-amber-400/8 p-3 text-left text-[11px] text-amber-50">
+    <div className={`mt-3 rounded-lg border p-3 text-left text-[11px] ${panelTone}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-[12px] font-semibold text-amber-100">{heading}</div>
-          <div className="mt-1 max-w-2xl text-[11px] leading-5 text-amber-50/78">{description}</div>
+          <div className={`text-[12px] font-semibold ${headingTone}`}>{heading}</div>
+          <div className={`mt-1 max-w-2xl text-[11px] leading-5 ${copyTone}`}>{description}</div>
         </div>
-        {state.tier ? <span className="rounded-full border border-amber-200/30 px-2 py-0.5 text-[10px] font-semibold text-amber-100">{state.tier.replace("_", " ").toUpperCase()}</span> : null}
+        {state.tier ? <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tierTone}`}>{state.tier.replace("_", " ").toUpperCase()}</span> : null}
       </div>
       {primary.qbo_entity_type ? (
         <div className="mt-3 grid gap-2 text-[11px] text-slate-100 sm:grid-cols-3">
-          <div><span className="text-slate-400">QBO type</span><br />{primary.qbo_entity_type}</div>
-          <div><span className="text-slate-400">Date</span><br />{primary.txn_date || "Not available"}</div>
-          <div><span className="text-slate-400">Amount</span><br />{formatMinorMoney(primary.amount_minor, primary.currency || "USD") || "Not available"}</div>
-          {customerName ? <div><span className="text-slate-400">Customer</span><br />{customerName}</div> : null}
+          <div><span className="text-slate-400">Bank amount</span><br />{formatMinorMoney(Math.round(Math.abs(Number(txn.amount || 0)) * 100), primary.currency || "USD") || "Not available"}</div>
+          <div><span className="text-slate-400">Bank date</span><br />{txn.date || "Not available"}</div>
+          <div><span className="text-slate-400">Match date</span><br />{txn.reconciled_at ? new Date(txn.reconciled_at).toLocaleDateString() : "Not available"}</div>
+          <div><span className="text-slate-400">QBO Deposit</span><br />{primary.qbo_entity_type === "Deposit" ? formatMinorMoney(primary.amount_minor, primary.currency || "USD") || "Not available" : primary.qbo_entity_type}</div>
+          <div><span className="text-slate-400">QBO Payment</span><br />{paymentCandidate ? formatMinorMoney(paymentCandidate.amount_minor, paymentCandidate.currency || primary.currency || "USD") || "Not available" : "Not available"}</div>
           {invoiceText ? <div><span className="text-slate-400">Invoice</span><br />{invoiceText}</div> : null}
+          {customerName ? <div><span className="text-slate-400">Customer</span><br />{customerName}</div> : null}
           <div><span className="text-slate-400">Bank-account evidence</span><br />{bankEvidence}</div>
+          {state.confirmed ? <div><span className="text-slate-400">Matched by</span><br />you</div> : null}
         </div>
       ) : null}
       {state.reasons?.length ? (
@@ -634,13 +644,16 @@ function IncomingDepositMatchPanel({
       {action.error ? <div className="mt-2 text-[11px] text-rose-100">{action.error}</div> : null}
       <div className="mt-3 flex flex-wrap gap-2">
         {state.confirmed ? (
-          <button type="button" disabled={readOnly || action.loading || !state.matchId} onClick={() => onUndo?.(txn.id, state.matchId, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">Undo match</button>
+          <>
+            <span className="rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold text-slate-100">View match details</span>
+            <button type="button" disabled={readOnly || action.loading || !state.matchId} onClick={() => onUndo?.(txn.id, state.matchId, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">Undo match</button>
+          </>
         ) : state.unavailable ? (
           <button type="button" disabled={readOnly || action.loading} onClick={() => onInspect?.(txn.id, null, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{action.loading ? "Checking..." : "Try again"}</button>
         ) : (
           <>
             {state.matchId && primary.qbo_entity_type && !state.invoiceOnly ? (
-              <button type="button" disabled={readOnly || action.loading} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">Match existing QuickBooks payment</button>
+              <button type="button" disabled={readOnly || action.loading} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">Match existing payment</button>
             ) : null}
             {state.matchId ? (
               <button type="button" disabled={readOnly || action.loading} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">This is not the same payment</button>
@@ -1167,11 +1180,15 @@ export default function BookkeepingFeed({
                     ) : null}
                   </span>
                 ) : incomingMatch.active ? (
-                  <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
+                  <span className={`inline-flex w-fit max-w-full flex-col rounded-md border px-2 py-1 text-[10px] font-semibold ${
+                    incomingMatch.confirmed
+                      ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-100"
+                      : "border-amber-300/25 bg-amber-400/10 text-amber-100"
+                  }`}>
                     <span className="truncate">
-                      {incomingMatch.confirmed ? "Matched to existing QBO" : incomingMatch.unavailable ? "Match check unavailable" : incomingMatch.ambiguous ? "Needs Match" : "Possible QBO match"}
+                      {incomingMatch.confirmed ? "Matched to existing QuickBooks" : incomingMatch.unavailable ? "Match check unavailable" : incomingMatch.ambiguous ? "Needs Match" : "Possible QBO match"}
                     </span>
-                    <span className="truncate text-[9px] font-medium text-amber-100/65">
+                    <span className={`truncate text-[9px] font-medium ${incomingMatch.confirmed ? "text-emerald-100/65" : "text-amber-100/65"}`}>
                       {incomingMatch.primary?.qbo_entity_type || "QuickBooks"} {incomingMatch.primary?.txn_date || ""}
                     </span>
                   </span>
@@ -1269,7 +1286,17 @@ export default function BookkeepingFeed({
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
                 ) : incomingMatch.active ? (
-                  <span className="text-[10px] text-slate-400">{incomingMatch.confirmed ? "Matched" : incomingMatch.unavailable ? "Retry" : "Needs match"}</span>
+                  incomingMatch.confirmed ? (
+                    <button
+                      type="button"
+                      onClick={() => toggleExpandedRow(txn.id)}
+                      className="inline-flex h-7 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold text-emerald-100/95 transition hover:border-emerald-300/65 hover:bg-emerald-500/16"
+                    >
+                      View match details
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-slate-400">{incomingMatch.unavailable ? "Retry" : "Needs match"}</span>
+                  )
                 ) : isCcPaymentWorkflow ? (
                   <span className="text-[10px] text-slate-400">{ccWorkflowStatus?.matched ? "Matched" : "Needs match"}</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (

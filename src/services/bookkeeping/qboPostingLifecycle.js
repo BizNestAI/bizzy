@@ -35,7 +35,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   if (status === "matched_existing_qbo" || meta.matched_existing_qbo === true || meta.incoming_deposit_match_status === "confirmed") {
     return {
       key: "matched_existing_qbo",
-      label: "Matched to existing QBO",
+      label: "Matched to existing QuickBooks",
       tone: "good",
       detail: "Confirmed against an existing QuickBooks bank/payment transaction; Bizzi did not create new income.",
     };

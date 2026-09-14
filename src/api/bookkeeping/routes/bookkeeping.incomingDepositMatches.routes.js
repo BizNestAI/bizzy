@@ -144,6 +144,8 @@ router.post("/incoming-deposit-matches/:transactionId/:matchId/undo", requireAut
       actor: actorId(req),
       actorRole: "user",
       reason: req.body?.reason || "human_undo",
+      idempotencyKey: req.body?.idempotency_key || req.get("Idempotency-Key") || null,
+      expectedBankUpdatedAt: req.body?.expected_bank_updated_at || req.body?.expectedBankUpdatedAt || null,
     });
     return res.json(result);
   } catch (err) {

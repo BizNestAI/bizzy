@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -9,7 +10,6 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 const root = process.cwd();
 const adminRoute = readFileSync(join(root, "src/api/admin/monthlyReview.routes.js"), "utf8");
 const monthlyReviewUi = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
-const serviceSource = readFileSync(join(root, "src/services/bookkeeping/bookkeepingTransactionFeedService.js"), "utf8");
 const customerRoute = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.transactions.routes.js"), "utf8");
 const migration = readFileSync(join(root, "supabase/migrations/20260909_bookkeeping_bounded_month_end.sql"), "utf8");
 
@@ -28,6 +28,11 @@ test("shared feed service preserves Books Review status semantics", async () => 
   assert.equal(matchesTransactionStatusFilter("handled", { status: "failed" }), true);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "posted", qbo_txn_id: "1" }), false);
   assert.equal(matchesTransactionStatusFilter("posted", { status: "approved", qbo_txn_id: "qbo-1" }), true);
+  assert.equal(matchesTransactionStatusFilter("matched", { status: "matched_existing_qbo" }), true);
+  assert.equal(matchesTransactionStatusFilter("matched", { status: "needs_review", meta: { incoming_deposit_match_status: "confirmed" } }), true);
+  assert.equal(matchesTransactionStatusFilter("needs_review", { status: "matched_existing_qbo" }), false);
+  assert.equal(matchesTransactionStatusFilter("handled", { status: "matched_existing_qbo" }), false);
+  assert.equal(matchesTransactionStatusFilter("posted", { status: "matched_existing_qbo", qbo_txn_id: null }), false);
 });
 
 test("shared service sends exact selected-month end bound before pagination", async () => {
@@ -87,6 +92,60 @@ test("shared service sends exact selected-month end bound before pagination", as
   assert.equal(result.rows[0].customer_answered, true);
   assert.equal(result.rows[0].customer_response, "Client visit");
   assert.equal(result.rows[0].cc_payment_pair_id, "pair-1");
+});
+
+test("canonical matched feed uses the deployed reconciled RPC predicate for counts and rows", async () => {
+  const { fetchBookkeepingTransactions, countBookkeepingTransactions } = await servicePromise;
+  const rpcCalls = [];
+  const db = {
+    rpc: async (name, params) => {
+      rpcCalls.push({ name, params });
+      if (name === "count_bookkeeping_transactions_bounded") return { data: 1, error: null };
+      return {
+        data: [{
+          id: "bf13f8d0-8a57-43dd-ac2c-206a1b34b559",
+          plaid_account_id: "plaid-checking",
+          date: "2026-09-08",
+          name: "DEPOSIT INTUIT 73102173 OPTIMIST BOOKKEEPING ACH CREDIT",
+          amount: 300,
+          signed_amount: 300,
+          direction: "INFLOW",
+          cat_status: "matched_existing_qbo",
+          reconciled_at: "2026-09-14T02:47:21.197Z",
+          cat_meta: {
+            matched_existing_qbo: true,
+            incoming_deposit_match_status: "confirmed",
+            incoming_deposit_candidates: [{
+              qbo_entity_type: "Deposit",
+              qbo_entity_id: "1508",
+              amount_minor: 30000,
+              txn_date: "2026-09-07",
+              invoice_refs: [{ document_number: "1102", customer_ref: { name: "Projection and Video LLC" } }],
+            }],
+          },
+          total_count: 1,
+        }],
+        error: null,
+      };
+    },
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          in: async () => ({ data: [], error: null }),
+        }),
+      }),
+    }),
+  };
+
+  const count = await countBookkeepingTransactions({ db, businessId: "biz-1", statusFilter: "matched", rangeParam: "all" });
+  const page = await fetchBookkeepingTransactions({ db, businessId: "biz-1", statusFilter: "matched", rangeParam: "all" });
+
+  assert.equal(count, 1);
+  assert.equal(page.totalCount, 1);
+  assert.equal(page.rows[0].matched_existing_qbo, true);
+  assert.equal(page.rows[0].status, "matched_existing_qbo");
+  assert.equal(rpcCalls[0].params.p_status_filter, "reconciled");
+  assert.equal(rpcCalls[1].params.p_status_filter, "reconciled");
 });
 
 test("shared feed service enriches Plaid account ids into human-readable bank labels", async () => {

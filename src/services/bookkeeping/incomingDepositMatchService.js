@@ -1296,7 +1296,23 @@ export async function rejectIncomingDepositQboMatch({ db = defaultSupabase, busi
   return { ok: true, status: "rejected", posting_eligibility: "blocked_rejected_candidate_review_required", match_id: matchId };
 }
 
-export async function undoIncomingDepositQboMatch({ db = defaultSupabase, businessId, bankTransactionId, matchId, actor = null, actorRole = "user", reason = "human_undo" } = {}) {
+export async function undoIncomingDepositQboMatch({
+  db = defaultSupabase,
+  businessId,
+  bankTransactionId,
+  matchId,
+  actor = null,
+  actorRole = "user",
+  reason = "human_undo",
+  idempotencyKey = null,
+  expectedBankUpdatedAt = null,
+} = {}) {
+  if (!businessId || !bankTransactionId || !matchId) throw new IncomingDepositMatchError("missing_undo_input", 400);
+  const bankTxn = await fetchBankTransaction({ db, businessId, bankTransactionId });
+  if (!bankTxn) throw new IncomingDepositMatchError("bank_transaction_not_found", 404);
+  if (expectedBankUpdatedAt && bankTxn.updated_at && String(expectedBankUpdatedAt) !== String(bankTxn.updated_at)) {
+    throw new IncomingDepositMatchError("stale_bank_transaction_version", 409);
+  }
   const match = await selectMaybe(db
     .from("bank_qbo_matches")
     .select("*")
@@ -1305,9 +1321,21 @@ export async function undoIncomingDepositQboMatch({ db = defaultSupabase, busine
     .eq("id", matchId)
     .maybeSingle());
   if (!match) throw new IncomingDepositMatchError("match_not_found", 404);
+  if (match.status === "superseded") {
+    const existingKey = match.meta?.undo_idempotency_key || null;
+    if (existingKey && idempotencyKey && String(existingKey) !== String(idempotencyKey)) {
+      throw new IncomingDepositMatchError("idempotency_key_mismatch", 409);
+    }
+    return { ok: true, status: "superseded", match_id: matchId, idempotent: true };
+  }
   if (match.status !== "confirmed") throw new IncomingDepositMatchError("match_not_confirmed", 409);
   const now = new Date().toISOString();
-  await db.from("bank_qbo_matches").update({ status: "superseded", superseded_at: now, updated_at: now }).eq("business_id", businessId).eq("id", matchId);
+  await db.from("bank_qbo_matches").update({
+    status: "superseded",
+    superseded_at: now,
+    updated_at: now,
+    meta: { ...(match.meta || {}), undo_idempotency_key: idempotencyKey || null },
+  }).eq("business_id", businessId).eq("id", matchId).eq("status", "confirmed");
   await db.from("bank_qbo_match_items").update({ active_confirmed: false }).eq("business_id", businessId).eq("match_id", matchId);
   const { data: existingCat } = await db
     .from("transaction_categorizations")
@@ -1319,12 +1347,21 @@ export async function undoIncomingDepositQboMatch({ db = defaultSupabase, busine
     status: "needs_review",
     posted_at: null,
     reconciled_at: null,
+    post_after: null,
+    post_error: "incoming_deposit_needs_match",
+    last_post_attempt_at: now,
     meta: {
       ...(existingCat?.meta || {}),
       incoming_deposit_match_status: "superseded",
       incoming_deposit_match_id: matchId,
+      incoming_deposit_confidence_tier: match.confidence_tier || null,
+      incoming_deposit_reason_codes: Array.from(new Set([...(match.reason_codes || []), "previous_match_undone", "fresh_match_check_required", "ordinary_income_posting_blocked"])),
       matched_existing_qbo: false,
       qbo_write_performed: false,
+      safe_to_auto_post: false,
+      post_block_reason: "incoming_deposit_needs_match",
+      posting_in_progress: false,
+      next_post_attempt_at: null,
     },
   }).eq("business_id", businessId).eq("transaction_id", bankTransactionId);
   await insertHistory({ db, businessId, bankTransactionId, matchId, action: "superseded", previousState: match, newState: { ...match, status: "superseded" }, actor, actorRole, reason });

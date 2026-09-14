@@ -53,13 +53,21 @@ function resolveRangeStart({ rangeParam = "this_month", rangeStart } = {}) {
 
 export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   const status = cat?.status || "needs_review";
+  const statusKey = String(statusFilter || "needs_review").toLowerCase();
   const isCheckTxn = cat?.meta?.is_check === true;
   const pending = cat?.pending === true || cat?.bank_pending === true || cat?.meta?.pending === true;
-  const handledView = statusFilter === "approved" || statusFilter === "handled";
-  const postedView = statusFilter === "posted";
-  const pendingView = statusFilter === "pending";
+  const matchedExistingQbo =
+    status === "matched_existing_qbo" ||
+    cat?.meta?.matched_existing_qbo === true ||
+    cat?.meta?.incoming_deposit_match_status === "confirmed";
+  const handledView = statusKey === "approved" || statusKey === "handled";
+  const postedView = statusKey === "posted";
+  const pendingView = statusKey === "pending";
+  const matchedView = statusKey === "matched" || statusKey === "reconciled";
 
   if (pendingView) return pending;
+  if (matchedView) return !pending && matchedExistingQbo;
+  if (matchedExistingQbo) return false;
   if (pending && !postedView) return false;
 
   if (postedView) {
@@ -74,6 +82,14 @@ export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   if (!status || status === "needs_review" || status === "uncategorized") return true;
   if (status === "auto_approved" && isCheckTxn) return true;
   return false;
+}
+
+function rpcStatusFilter(statusFilter = "needs_review") {
+  const statusKey = String(statusFilter || "needs_review").toLowerCase();
+  // The deployed bounded feed RPC already exposes existing-QBO matches through
+  // the reconciliation predicate. Keep the public API canonical as `matched`.
+  if (statusKey === "matched") return "reconciled";
+  return statusKey;
 }
 
 function normalizeOperatorRequest(row = null) {
@@ -486,7 +502,7 @@ export async function countBookkeepingTransactions({
 } = {}) {
   const { data, error } = await db.rpc("count_bookkeeping_transactions_bounded", {
     p_business_id: businessId,
-    p_status_filter: statusFilter,
+    p_status_filter: rpcStatusFilter(statusFilter),
     p_account_id: accountId || null,
     p_range_start: resolveRangeStart({ rangeParam, rangeStart }),
     p_range_end: normalizeBookkeepingDate(rangeEnd),
@@ -547,7 +563,7 @@ export async function fetchBookkeepingTransactions({
   const safePageSize = Math.min(Math.max(parseInt(pageSize, 10) || 25, 1), 200);
   const { data, error } = await db.rpc("get_bookkeeping_transactions_bounded", {
     p_business_id: businessId,
-    p_status_filter: statusFilter,
+    p_status_filter: rpcStatusFilter(statusFilter),
     p_account_id: accountId || null,
     p_range_start: resolveRangeStart({ rangeParam, rangeStart }),
     p_range_end: normalizeBookkeepingDate(rangeEnd),

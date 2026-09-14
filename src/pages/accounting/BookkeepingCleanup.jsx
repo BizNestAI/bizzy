@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { CheckCircle2, CircleAlert, UploadCloud } from "lucide-react";
+import { CheckCircle2, CircleAlert, Link2, UploadCloud } from "lucide-react";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { useBusiness } from "../../context/BusinessContext.jsx";
 import { useAdminView } from "../../context/AdminViewContext.jsx";
@@ -167,6 +167,7 @@ const TABS = [
   { key: "needs_review", label: "Needs Review", icon: CircleAlert },
   { key: "handled", label: "Handled", icon: CheckCircle2 },
   { key: "posted", label: "Posted", icon: UploadCloud },
+  { key: "matched", label: "Matched", icon: Link2 },
   { key: "pending", label: "Pending", icon: CircleAlert },
 ];
 
@@ -439,8 +440,16 @@ function getTxnAccountKey(txn = {}) {
 function matchesBooksTab(txn = {}, tabKey = "needs_review") {
   const status = txn.status || "needs_review";
   const handledStatuses = ["approved", "auto_approved", "failed"];
+  const matchedExistingQbo =
+    status === "matched_existing_qbo" ||
+    txn.matched_existing_qbo === true ||
+    txn.meta?.matched_existing_qbo === true ||
+    txn.incoming_deposit_match_status === "confirmed" ||
+    txn.meta?.incoming_deposit_match_status === "confirmed";
   if (tabKey === "all") return true;
   if (tabKey === "pending") return txn.pending === true;
+  if (tabKey === "matched") return txn.pending !== true && matchedExistingQbo;
+  if (matchedExistingQbo) return false;
   if (txn.pending === true && tabKey !== "posted") return false;
   if (tabKey === "needs_review") {
     if (status === "needs_review" || status === "uncategorized" || !status) return true;
@@ -516,7 +525,7 @@ function BookkeepingCleanup() {
   const [backgroundRefreshingTxns, setBackgroundRefreshingTxns] = useState(false);
   const [categorizationStatus, setCategorizationStatus] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
-  const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null, pending: null });
+  const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null, matched: null, pending: null });
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
   const lastSuccessfulTransactionPagesRef = useRef(new Map());
   const accountOverrides = useRef(new Map());
@@ -633,6 +642,7 @@ function BookkeepingCleanup() {
   const [loadingAutoPostPreview, setLoadingAutoPostPreview] = useState(false);
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
+  const [incomingDepositUndoTxn, setIncomingDepositUndoTxn] = useState(null);
   const [manualPostTxn, setManualPostTxn] = useState(null);
   const [manualPostResult, setManualPostResult] = useState(null);
   const [clarRequests, setClarRequests] = useState([]);
@@ -785,7 +795,7 @@ function BookkeepingCleanup() {
   }, [autoPostConfirmOpen, autoPostEffectiveDate, autoPostScopeChoice, loadAutoPostPreview]);
 
   useEffect(() => {
-    const modalOpen = autoPostConfirmOpen || Boolean(manualPostTxn) || Boolean(manualPostResult);
+    const modalOpen = autoPostConfirmOpen || Boolean(manualPostTxn) || Boolean(manualPostResult) || Boolean(incomingDepositUndoTxn);
     if (!modalOpen || typeof document === "undefined") return undefined;
     const html = document.documentElement;
     const body = document.body;
@@ -802,6 +812,7 @@ function BookkeepingCleanup() {
     const onKeyDown = (event) => {
       if (event.key === "Escape" && !savingAutoPost) {
         setAutoPostConfirmOpen(false);
+        setIncomingDepositUndoTxn(null);
         setManualPostTxn(null);
         setManualPostResult(null);
       }
@@ -813,12 +824,12 @@ function BookkeepingCleanup() {
       if (appShell) appShell.style.overflow = previous.appOverflow;
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [autoPostConfirmOpen, manualPostTxn, manualPostResult, savingAutoPost]);
+  }, [autoPostConfirmOpen, incomingDepositUndoTxn, manualPostTxn, manualPostResult, savingAutoPost]);
 
   const loadTabCounts = useCallback(async () => {
     if (usingDemo) return;
     if (!businessId || !accountFilter) {
-      setTabCounts({ needs_review: null, handled: null, posted: null, pending: null });
+      setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null });
       return;
     }
     try {
@@ -830,11 +841,12 @@ function BookkeepingCleanup() {
         needs_review: Number(counts?.needs_review || 0),
         handled: Number(counts?.handled || 0),
         posted: Number(counts?.posted || 0),
+        matched: Number(counts?.matched || 0),
         pending: Number(counts?.pending || 0),
       });
     } catch (e) {
       console.warn("[bookkeeping] transaction counts fetch failed", e?.message || e);
-      setTabCounts({ needs_review: null, handled: null, posted: null, pending: null });
+      setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null });
     }
   }, [accountFilter, businessId, dateRange, usingDemo]);
 
@@ -1028,9 +1040,10 @@ function BookkeepingCleanup() {
         if (matchesBooksTab(txn, "needs_review")) acc.needs_review += 1;
         if (matchesBooksTab(txn, "handled")) acc.handled += 1;
         if (matchesBooksTab(txn, "posted")) acc.posted += 1;
+        if (matchesBooksTab(txn, "matched")) acc.matched += 1;
         return acc;
       },
-      { needs_review: 0, handled: 0, posted: 0, pending: 0 }
+      { needs_review: 0, handled: 0, posted: 0, matched: 0, pending: 0 }
     );
   }, [accountFilter, dateRange, tabCounts, transactions, usingDemo]);
 
@@ -1391,8 +1404,24 @@ function BookkeepingCleanup() {
     await withIncomingDepositMatchAction(id, () => rejectIncomingDepositMatch(businessId, id, matchId));
   };
 
-  const handleUndoIncomingDepositMatch = async (id, matchId) => {
-    await withIncomingDepositMatchAction(id, () => undoIncomingDepositMatch(businessId, id, matchId));
+  const confirmUndoIncomingDepositMatch = async () => {
+    const pendingUndo = incomingDepositUndoTxn;
+    if (!pendingUndo?.id || !pendingUndo?.matchId) return;
+    setIncomingDepositUndoTxn(null);
+    await withIncomingDepositMatchAction(pendingUndo.id, () =>
+      undoIncomingDepositMatch(businessId, pendingUndo.id, pendingUndo.matchId, { expectedBankUpdatedAt: pendingUndo.updatedAt || null })
+    );
+  };
+
+  const handleUndoIncomingDepositMatch = async (id, matchId, txn = {}) => {
+    setIncomingDepositUndoTxn({
+      id,
+      matchId,
+      updatedAt: txn.updated_at || txn.updatedAt || null,
+      description: txn.description || txn.vendor || txn.payee || "this transaction",
+      amount: formatPostingAmount(txn),
+      date: txn.date || "Unknown",
+    });
   };
 
   const handleBulkApprove = async () => {
@@ -1761,7 +1790,7 @@ function BookkeepingCleanup() {
         console.log("[Books] fetching txns", { accountFilter, activeTab, dateRange, page, rowsPerPage });
       }
       const res = await fetchTransactions(businessId, {
-        status: activeTab === "handled" ? "handled" : activeTab === "posted" ? "posted" : activeTab === "pending" ? "pending" : "needs_review",
+        status: activeTab === "handled" || activeTab === "posted" || activeTab === "matched" || activeTab === "pending" ? activeTab : "needs_review",
         account_id: accountFilter,
         range: dateRange,
         page,
@@ -1985,6 +2014,11 @@ function BookkeepingCleanup() {
       {activeTab === "posted" ? (
         <div className="mt-2 text-xs text-slate-400">
           These transactions have been posted to QuickBooks by Bizzi (read-only).
+        </div>
+      ) : null}
+      {activeTab === "matched" ? (
+        <div className="mt-2 text-xs text-slate-400">
+          These transactions were matched to records that already existed in QuickBooks. Bizzi did not create new income.
         </div>
       ) : null}
 
@@ -2330,6 +2364,88 @@ function BookkeepingCleanup() {
           </>
         )}
       </BillingGate>
+      {typeof document !== "undefined"
+        ? createPortal(
+            <AnimatePresence>
+              {incomingDepositUndoTxn ? (
+                <motion.div
+                  className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="incoming-deposit-undo-title"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18, ease: [0.22, 0.1, 0.25, 1] }}
+                >
+                  <motion.button
+                    type="button"
+                    aria-label="Cancel undo match"
+                    className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
+                    onClick={() => setIncomingDepositUndoTxn(null)}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: 0.18 }}
+                  />
+                  <motion.div
+                    className="relative w-full max-w-[520px] rounded-2xl border p-5 text-slate-100 shadow-[0_28px_90px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.04)]"
+                    style={{ background: "rgba(17,19,18,0.97)", borderColor: "rgba(251,191,36,0.30)" }}
+                    initial={{ opacity: 0, y: 18, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: [0.16, 0.84, 0.44, 1] }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-amber-300/35 bg-amber-400/[0.12] text-amber-100">
+                        <CircleAlert className="h-4 w-4" strokeWidth={2} />
+                      </div>
+                      <div className="min-w-0">
+                        <h2 id="incoming-deposit-undo-title" className="text-base font-semibold text-white">
+                          Undo this QuickBooks match?
+                        </h2>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">
+                          Bizzi will return this transaction to protected match review. Nothing will be changed in QuickBooks and no income will be posted.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-sm">
+                      <div className="grid grid-cols-[92px_1fr] gap-x-3 gap-y-2">
+                        <span className="text-slate-500">Date</span>
+                        <span className="text-slate-200">{incomingDepositUndoTxn.date}</span>
+                        <span className="text-slate-500">Transaction</span>
+                        <span className="min-w-0 truncate text-slate-200">{incomingDepositUndoTxn.description}</span>
+                        <span className="text-slate-500">Amount</span>
+                        <span className={incomingDepositUndoTxn.amount?.startsWith("-") ? "text-rose-300" : "text-emerald-300"}>
+                          {incomingDepositUndoTxn.amount}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIncomingDepositUndoTxn(null)}
+                        className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08]"
+                      >
+                        Keep match
+                      </button>
+                      <button
+                        type="button"
+                        onClick={confirmUndoIncomingDepositMatch}
+                        className="rounded-full border border-amber-200/40 bg-amber-300 px-4 py-2 text-sm font-semibold text-[#171006] shadow-[0_10px_24px_rgba(251,191,36,0.16)] transition hover:bg-amber-200"
+                      >
+                        Undo match
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>,
+            document.body
+          )
+        : null}
       {typeof document !== "undefined"
         ? createPortal(
             <AnimatePresence>

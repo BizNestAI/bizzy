@@ -73,7 +73,7 @@ export async function getTransactionCounts(businessId, params = {}) {
     method: "GET",
     headers: withBizHeaders(businessId),
   });
-  return res?.counts || { needs_review: 0, handled: 0, posted: 0 };
+  return res?.counts || { needs_review: 0, handled: 0, posted: 0, matched: 0, pending: 0 };
 }
 
 export async function runPostingNow(businessId, options = {}) {
@@ -134,11 +134,14 @@ export async function rejectIncomingDepositMatch(businessId, transactionId, matc
   return res;
 }
 
-export async function undoIncomingDepositMatch(businessId, transactionId, matchId) {
+export async function undoIncomingDepositMatch(businessId, transactionId, matchId, { expectedBankUpdatedAt = null } = {}) {
   const res = await safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/${encodeURIComponent(matchId)}/undo`), {
     method: "POST",
-    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
-    body: JSON.stringify({ business_id: businessId }),
+    headers: withBizHeaders(businessId, {
+      "Content-Type": "application/json",
+      "Idempotency-Key": `incoming-deposit-undo-${transactionId}-${matchId}`,
+    }),
+    body: JSON.stringify({ business_id: businessId, expected_bank_updated_at: expectedBankUpdatedAt }),
   });
   if (res && res.ok === false) throw new Error(res.message || res.error || "incoming_deposit_match_undo_failed");
   return res;

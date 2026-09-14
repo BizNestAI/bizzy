@@ -14,9 +14,11 @@ const {
   evaluateIncomingDepositPostingGuard,
   renormalizeIncomingDepositQboCacheEvidence,
   rejectIncomingDepositQboMatch,
+  undoIncomingDepositQboMatch,
 } = await import("../src/services/bookkeeping/incomingDepositMatchService.js");
 const {
   fetchBookkeepingTransactions,
+  matchesTransactionStatusFilter,
 } = await import("../src/services/bookkeeping/bookkeepingTransactionFeedService.js");
 const {
   normalizeQboPaymentRecord,
@@ -167,6 +169,11 @@ test("confirmation is local-only, idempotent, and rejects stale QBO candidate ve
   assert.equal(again.idempotent, true);
   assert.equal(db.tables.transaction_categorizations[0].status, "matched_existing_qbo");
   assert.equal(db.tables.transaction_categorizations[0].meta.qbo_write_performed, false);
+  assert.equal(matchesTransactionStatusFilter("matched", db.tables.transaction_categorizations[0]), true);
+  assert.equal(matchesTransactionStatusFilter("needs_review", db.tables.transaction_categorizations[0]), false);
+  assert.equal(matchesTransactionStatusFilter("handled", db.tables.transaction_categorizations[0]), false);
+  assert.equal(matchesTransactionStatusFilter("posted", db.tables.transaction_categorizations[0]), false);
+  assert.equal(matchesTransactionStatusFilter("pending", db.tables.transaction_categorizations[0]), false);
   assert.equal(db.tables.bank_qbo_match_items[0].active_confirmed, true);
   assert.equal(db.tables.bank_qbo_match_history.some((row) => row.action === "confirmed" && row.actor === "user-1"), true);
   assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
@@ -188,6 +195,69 @@ test("confirmation is local-only, idempotent, and rejects stale QBO candidate ve
   await assert.rejects(
     () => confirmIncomingDepositQboMatch({ db: staleDb, businessId: "b1", bankTransactionId: "txn-300", matchId: staleDiscovered.match.id }),
     /qbo_match_candidate_stale/
+  );
+});
+
+test("undo preserves history and returns a confirmed match to protected Needs Match review", async () => {
+  const db = fakeDb(baseMatchTables());
+  const discovered = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+  const matchId = discovered.match.id;
+  await confirmIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    matchId,
+    actor: "user-1",
+    actorRole: "user",
+    idempotencyKey: "confirm-1",
+    expectedBankUpdatedAt: "2026-09-07T18:00:00Z",
+  });
+
+  const undone = await undoIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    matchId,
+    actor: "bookkeeper-1",
+    actorRole: "bookkeeper",
+    idempotencyKey: "undo-1",
+    expectedBankUpdatedAt: "2026-09-07T18:00:00Z",
+  });
+  const again = await undoIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    matchId,
+    actor: "bookkeeper-1",
+    actorRole: "bookkeeper",
+    idempotencyKey: "undo-1",
+  });
+  const cat = db.tables.transaction_categorizations[0];
+
+  assert.equal(undone.status, "superseded");
+  assert.equal(again.idempotent, true);
+  assert.equal(db.tables.bank_qbo_matches[0].status, "superseded");
+  assert.equal(db.tables.bank_qbo_match_items[0].active_confirmed, false);
+  assert.equal(cat.status, "needs_review");
+  assert.equal(cat.post_error, "incoming_deposit_needs_match");
+  assert.equal(cat.meta.safe_to_auto_post, false);
+  assert.equal(cat.meta.post_block_reason, "incoming_deposit_needs_match");
+  assert.equal(cat.meta.matched_existing_qbo, false);
+  assert.equal(matchesTransactionStatusFilter("matched", cat), false);
+  assert.equal(matchesTransactionStatusFilter("needs_review", cat), true);
+  assert.equal(db.tables.bank_qbo_match_history.some((row) => row.action === "confirmed"), true);
+  assert.equal(db.tables.bank_qbo_match_history.some((row) => row.action === "superseded" && row.actor === "bookkeeper-1"), true);
+  assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
+
+  await assert.rejects(
+    () => undoIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-300", matchId, idempotencyKey: "different" }),
+    /idempotency_key_mismatch/
   );
 });
 
@@ -233,11 +303,15 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(client, /rejectIncomingDepositMatch/);
   assert.match(client, /undoIncomingDepositMatch/);
   assert.match(feed, /Possible existing QuickBooks match/);
-  assert.match(feed, /Match existing QuickBooks payment/);
+  assert.match(feed, /Match existing payment/);
+  assert.match(feed, /Matched to existing QuickBooks/);
+  assert.match(feed, /View match details/);
   assert.match(feed, /This is not the same payment/);
   assert.match(feed, /Match check unavailable/);
   assert.match(feed, /Undo match/);
   assert.match(page, /hasIncomingDepositMatchWorkflow/);
+  assert.match(page, /key: "matched", label: "Matched"/);
+  assert.match(page, /status: activeTab === "handled" \|\| activeTab === "posted" \|\| activeTab === "matched" \|\| activeTab === "pending" \? activeTab : "needs_review"/);
   assert.match(page, /onConfirmIncomingDepositMatch/);
   assert.match(page, /onUndoIncomingDepositMatch/);
 });
