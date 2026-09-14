@@ -505,8 +505,9 @@ function normalizePaymentAccountType(value = "") {
 }
 
 function formatMappedCreditCardLabel(row = {}) {
-  const name = row.qbo_account_name || row.plaid_name || "Credit card";
-  const mask = row.mask ? String(row.mask).slice(-4) : "";
+  const name = row.qboAccountName || row.qbo_account_name || row.plaidAccountName || row.plaid_name || "Credit card";
+  const maskValue = row.plaidMask || row.mask || "";
+  const mask = maskValue ? String(maskValue).slice(-4) : "";
   return mask ? `${name} • ${mask}` : name;
 }
 
@@ -514,19 +515,21 @@ function buildCreditCardPaymentDestinationOptions(rows = [], businessId = null) 
   const seen = new Set();
   return (Array.isArray(rows) ? rows : [])
     .filter((row) => {
-      const plaidType = normalizePaymentAccountType(row.plaid_type);
-      const qboType = normalizePaymentAccountType(row.qbo_account_type);
+      const plaidType = normalizePaymentAccountType(row.plaidType || row.plaid_type);
+      const qboType = normalizePaymentAccountType(row.qboAccountType || row.qbo_account_type);
       return (
-        row?.mapped === true &&
+        (row?.mapped === true || row?.mappingStatus === "mapped" || row?.mapping_status === "mapped") &&
+        row?.isActive !== false &&
         row?.is_active !== false &&
         plaidType === "credit" &&
         qboType === "creditcard" &&
-        row.qbo_account_id
+        (row.qboAccountId || row.qbo_account_id)
       );
     })
     .map((row) => {
-      const id = String(row.qbo_account_id);
-      const key = `${row.plaid_account_id || "plaid"}:${id}`;
+      const id = String(row.qboAccountId || row.qbo_account_id);
+      const plaidAccountId = row.plaidAccountId || row.plaid_account_id || null;
+      const key = `${plaidAccountId || "plaid"}:${id}`;
       if (seen.has(key)) return null;
       seen.add(key);
       return {
@@ -535,16 +538,16 @@ function buildCreditCardPaymentDestinationOptions(rows = [], businessId = null) 
         type: "CreditCard",
         accountType: "CreditCard",
         account_type: "CreditCard",
-        subType: row.qbo_account_subtype || row.plaid_subtype || "CreditCard",
-        mappingId: row.mapping_id || key,
-        plaidAccountId: row.plaid_account_id || null,
+        subType: row.qboAccountSubtype || row.qbo_account_subtype || row.plaidSubtype || row.plaid_subtype || "CreditCard",
+        mappingId: row.mappingId || row.mapping_id || key,
+        plaidAccountId,
         qboAccountId: id,
-        qboAccountName: row.qbo_account_name || null,
-        institutionName: row.institution_name || null,
-        mask: row.mask || null,
-        mappingStatus: row.mapping_status || "mapped",
-        active: row.is_active !== false,
-        eligible: true,
+        qboAccountName: row.qboAccountName || row.qbo_account_name || null,
+        institutionName: row.institutionName || row.institution_name || null,
+        mask: row.plaidMask || row.mask || null,
+        mappingStatus: row.mappingStatus || row.mapping_status || "mapped",
+        active: row.isActive !== false && row.is_active !== false,
+        eligible: row.isEligible !== false,
         businessId,
       };
     })

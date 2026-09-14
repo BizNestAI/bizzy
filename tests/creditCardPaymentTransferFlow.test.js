@@ -246,7 +246,11 @@ test("credit-card-payment selector uses mapped card destinations and preserves l
   assert.match(feed, /No mapped credit-card accounts/);
   assert.match(feed, /disabled=\{!currentAccount \|\| loading\}/);
   assert.match(feed, /Not a credit card payment/);
-  assert.match(mappingsRoute, /institution_name/);
+  assert.match(mappingsRoute, /\.from\("plaid_items"\)[\s\S]*\.select\("plaid_item_id,institution_name,institution_id,status,is_active"\)/);
+  assert.match(mappingsRoute, /\.from\("plaid_accounts"\)[\s\S]*\.select\("plaid_account_id,plaid_item_id,name,official_name,mask,type,subtype,is_active"\)/);
+  assert.doesNotMatch(mappingsRoute, /plaid_accounts"\)[\s\S]{0,160}\.select\("[^"]*institution_name/);
+  assert.doesNotMatch(mappingsRoute, /plaid_accounts"\)[\s\S]{0,160}\.select\("[^"]*institution"/);
+  assert.doesNotMatch(mappingsRoute, /await fetchChartOfAccounts\(businessId\)[\s\S]{0,400}return res\.json\(\{ ok: true, accounts \}\)/);
   assert.match(mappingsRoute, /mapping_id/);
   assert.match(mappingsRoute, /mapping_status/);
   assert.match(mappingsRoute, /qbo_account_subtype/);
