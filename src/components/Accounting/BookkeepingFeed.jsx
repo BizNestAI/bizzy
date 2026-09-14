@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom";
-import { CreditCard, Plus, RotateCcw, UploadCloud } from "lucide-react";
+import { CreditCard, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
 import {
   deriveCreditCardPaymentOrientation,
@@ -533,6 +533,7 @@ function humanizeReason(code = "") {
     ambiguous_match_requires_review: "Multiple candidates need review",
     fresh_match_check_required: "Fresh match check required",
     stale_match_refresh_required: "Fresh match check required",
+    primary_match_item_missing: "Match details need refresh",
   };
   return labels[code] || String(code || "").replace(/_/g, " ");
 }
@@ -599,6 +600,8 @@ function IncomingDepositMatchPanel({
   const paymentCandidate = (state.candidates || []).find((candidate) => candidate.qbo_entity_type === "Payment") || null;
   const heading = state.confirmed
     ? "Matched to existing QuickBooks"
+    : action.error
+      ? "Match needs to be refreshed"
     : state.unavailable
       ? "QuickBooks match check temporarily unavailable"
       : state.invoiceOnly
@@ -610,6 +613,8 @@ function IncomingDepositMatchPanel({
         : "Possible existing QuickBooks match";
   const description = state.confirmed
     ? "Confirmed against existing QuickBooks activity. Bizzi did not create a new QuickBooks transaction."
+    : action.error
+      ? action.error
     : state.unavailable
       ? "Bizzi couldn't safely check whether this deposit is already recorded in QuickBooks. It has not been posted as income."
       : state.invoiceOnly
@@ -620,6 +625,8 @@ function IncomingDepositMatchPanel({
         ? "Bizzi found more than one independent QuickBooks transaction that may explain this deposit."
         : "Bizzi found an existing QuickBooks deposit or payment that may already explain this bank deposit.";
   const candidateCount = state.independentCandidateCount ?? independentCandidateCount(state.candidates || []);
+  const primaryActionLabel = primary.qbo_entity_type === "Deposit" ? "Match existing QuickBooks deposit" : "Match existing payment";
+  const refreshable = ["primary_match_item_missing", "fresh_match_check_required", "stale_match_refresh_required"].includes(String(state.confirmabilityReason || action.reason || ""));
   const bankEvidence = primary.bank_account_match === "verified_same_account" ? "Verified bank account" : "Bank account could not be fully verified";
   const customerName = primary.customer_ref?.name || primary.customer_ref?.Name || null;
   const invoiceRefs = Array.isArray(primary.invoice_refs) ? primary.invoice_refs : [];
@@ -636,7 +643,8 @@ function IncomingDepositMatchPanel({
   const copyTone = state.confirmed ? "text-emerald-50/78" : "text-amber-50/78";
   const tierTone = state.confirmed ? "border-emerald-200/30 text-emerald-100" : "border-amber-200/30 text-amber-100";
   return (
-    <div className={`mt-3 rounded-lg border p-3 text-left text-[11px] ${panelTone}`}>
+    <div className={`mt-3 rounded-lg border p-3 text-left text-[11px] ${panelTone}`} aria-busy={action.loading ? "true" : "false"}>
+      <span className="sr-only" aria-live="polite">{action.loading ? "Matching to QuickBooks" : ""}</span>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className={`text-[12px] font-semibold ${headingTone}`}>{heading}</div>
@@ -665,7 +673,6 @@ function IncomingDepositMatchPanel({
           })}
         </div>
       ) : null}
-      {action.error ? <div className="mt-2 text-[11px] text-rose-100">{action.error}</div> : null}
       <div className="mt-3 flex flex-wrap gap-2">
         {state.confirmed ? (
           <>
@@ -677,9 +684,15 @@ function IncomingDepositMatchPanel({
         ) : (
           <>
             {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && state.confirmable ? (
-              <button type="button" disabled={readOnly || action.loading} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">Match existing payment</button>
+              <button type="button" disabled={readOnly || action.loading} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="inline-flex min-w-[170px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
+                {action.loading ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                {action.loading ? "Matching to QuickBooks…" : primaryActionLabel}
+              </button>
             ) : state.matchId && primary.qbo_entity_type && !state.invoiceOnly ? (
-              <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-300">Fresh match check required</span>
+              <button type="button" disabled={readOnly || action.loading} onClick={() => onInspect?.(txn.id, null, txn)} className="inline-flex min-w-[116px] items-center justify-center gap-1.5 rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">
+                {action.loading ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                {action.loading ? "Refreshing..." : refreshable ? "Refresh match" : "Retry match check"}
+              </button>
             ) : null}
             {state.matchId ? (
               <button type="button" disabled={readOnly || action.loading} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">This is not the same payment</button>

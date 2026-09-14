@@ -1383,7 +1383,26 @@ function BookkeepingCleanup() {
     incomingDepositActionInFlightRef.current.add(key);
     setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: true, error: "" } }));
     try {
-      await action();
+      const result = await action();
+      const patch = result?.transaction_patch || result?.result?.transaction_patch || null;
+      const countDelta = result?.count_delta || result?.result?.count_delta || null;
+      if (patch?.status === "matched_existing_qbo") {
+        setTransactions((prev) => (
+          activeTab === "matched"
+            ? prev.map((txn) => (txn.id === id ? { ...txn, ...patch, meta: { ...(txn.meta || {}), ...(patch.meta || {}) } } : txn))
+            : prev.filter((txn) => txn.id !== id)
+        ));
+        if (countDelta) {
+          setTabCounts((prev) => ({
+            ...prev,
+            needs_review: adjustCount(prev.needs_review, countDelta.needs_review),
+            matched: adjustCount(prev.matched, countDelta.matched),
+            handled: adjustCount(prev.handled, countDelta.handled),
+            posted: adjustCount(prev.posted, countDelta.posted),
+            pending: adjustCount(prev.pending, countDelta.pending),
+          }));
+        }
+      }
       setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: false, error: "" } }));
       setCountsRefreshKey((value) => value + 1);
       await reloadTransactions();
@@ -1393,6 +1412,7 @@ function BookkeepingCleanup() {
       const customerSafeErrors = {
         match_not_confirmable: "This QuickBooks match needs a fresh check before it can be confirmed.",
         stale_match_refresh_required: "This QuickBooks match needs a fresh check before it can be confirmed.",
+        primary_match_item_missing: "Bizzi found the QuickBooks transaction, but the match details need to be refreshed before you can confirm it.",
         invoice_only_match_not_confirmable: "This deposit needs payment or bank-deposit evidence before it can be matched.",
         match_check_unavailable: "QuickBooks match checking is temporarily unavailable. Try again shortly.",
       };

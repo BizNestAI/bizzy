@@ -90,6 +90,8 @@ test("blocks ordinary posting when one verified QBO Deposit candidate already ex
   assert.equal(db.tables.bank_qbo_match_items[0].qbo_entity_type, "Deposit");
   assert.equal(db.tables.bank_qbo_match_items[1].qbo_entity_type, "Payment");
   assert.equal(db.tables.bank_qbo_match_items[1].evidence_role, "supporting");
+  assert.equal(db.tables.bank_qbo_match_items[2].qbo_entity_type, "Invoice");
+  assert.equal(db.tables.bank_qbo_match_items[2].evidence_role, "linked_context");
   assert.equal(result.independent_candidate_count, 1);
   assert.equal(result.confirmable, true);
   assert.equal(db.tables.transaction_categorizations[0].status, "needs_review");
@@ -319,6 +321,84 @@ test("undone existing-QBO match can be rediscovered and reconfirmed without reus
   );
 });
 
+test("incomplete unconfirmed candidate self-heals match items during rediscovery", async () => {
+  const db = fakeDb(baseMatchTables());
+  const discovered = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+  db.tables.bank_qbo_match_items = [];
+
+  const healed = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+  const primaryItems = db.tables.bank_qbo_match_items.filter((item) => item.match_id === discovered.match.id && item.evidence_role === "primary");
+
+  assert.equal(healed.match.id, discovered.match.id);
+  assert.equal(healed.confirmable, true);
+  assert.equal(primaryItems.length, 1);
+  assert.equal(primaryItems[0].qbo_entity_type, "Deposit");
+  assert.equal(primaryItems[0].qbo_entity_id, "dep-300");
+  assert.equal(db.tables.bank_qbo_match_items.some((item) => item.qbo_entity_type === "Payment" && item.evidence_role === "supporting"), true);
+  assert.equal(db.tables.bank_qbo_match_items.some((item) => item.qbo_entity_type === "Invoice" && item.evidence_role === "linked_context"), true);
+  assert.equal(db.tables.bank_qbo_match_history.some((row) => row.action === "repaired_candidate_items"), true);
+  assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
+});
+
+test("confirmation self-heals missing primary item from persisted candidate metadata before confirming", async () => {
+  const db = fakeDb(baseMatchTables());
+  const discovered = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+  db.tables.bank_qbo_match_items = [];
+
+  const confirmed = await confirmIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    matchId: discovered.match.id,
+    idempotencyKey: "confirm-after-repair",
+  });
+  const primaryItems = db.tables.bank_qbo_match_items.filter((item) => item.match_id === discovered.match.id && item.evidence_role === "primary");
+
+  assert.equal(confirmed.status, "confirmed");
+  assert.equal(primaryItems.length, 1);
+  assert.equal(primaryItems[0].qbo_entity_type, "Deposit");
+  assert.equal(primaryItems[0].qbo_entity_id, "dep-300");
+  assert.equal(db.tables.bank_qbo_match_items.some((item) => item.qbo_entity_type === "Invoice" && item.evidence_role === "linked_context"), true);
+  assert.equal(db.tables.transaction_categorizations[0].status, "matched_existing_qbo");
+  assert.equal(db.tables.bank_qbo_match_history.some((row) => row.action === "repaired_candidate_items"), true);
+  assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
+});
+
+test("candidate with failed item persistence cannot be returned as confirmable", async () => {
+  const db = fakeDb(baseMatchTables());
+  db.failInsertTables.add("bank_qbo_match_items");
+
+  const result = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+
+  assert.equal(result.status, "match_check_unavailable");
+  assert.equal(result.confirmable, false);
+  assert.equal(result.posting_eligibility, "blocked_match_check_unavailable");
+});
+
 test("migration declares launch constraints, business-scoped FKs, and tenant RLS", () => {
   const sql = readFileSync(join(root, "supabase/migrations/20261009_incoming_deposit_qbo_matches.sql"), "utf8");
   assert.match(sql, /CREATE TABLE IF NOT EXISTS bank_qbo_matches/i);
@@ -361,12 +441,16 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(client, /rejectIncomingDepositMatch/);
   assert.match(client, /undoIncomingDepositMatch/);
   assert.match(feed, /Possible existing QuickBooks match/);
-  assert.match(feed, /Match existing payment/);
+  assert.match(feed, /Match existing QuickBooks deposit/);
+  assert.match(feed, /Matching to QuickBooks…/);
+  assert.match(feed, /aria-busy/);
   assert.match(feed, /state\.confirmable/);
   assert.match(feed, /independentCandidateCount/);
   assert.match(feed, /Matched to existing QuickBooks/);
   assert.match(feed, /View match details/);
   assert.match(feed, /This is not the same payment/);
+  assert.match(feed, /Match needs to be refreshed/);
+  assert.match(feed, /Refresh match/);
   assert.match(feed, /Match check unavailable/);
   assert.match(feed, /Undo match/);
   assert.match(page, /hasIncomingDepositMatchWorkflow/);
@@ -861,6 +945,7 @@ function fakeDb(initial = {}) {
     calls: [],
     failSelectTables: new Set(),
     failSelectColumns: new Map(),
+    failInsertTables: new Set(),
     rpcRows: [],
     rpc(name, args) {
       this.calls.push({ op: "rpc", table: name, args });
@@ -870,18 +955,19 @@ function fakeDb(initial = {}) {
     },
     from(table) {
       if (!tables[table]) tables[table] = [];
-      return new FakeQuery(tables, table, this.calls, this.failSelectTables, this.failSelectColumns);
+      return new FakeQuery(tables, table, this.calls, this.failSelectTables, this.failSelectColumns, this.failInsertTables);
     },
   };
 }
 
 class FakeQuery {
-  constructor(tables, table, calls, failSelectTables, failSelectColumns) {
+  constructor(tables, table, calls, failSelectTables, failSelectColumns, failInsertTables) {
     this.tables = tables;
     this.table = table;
     this.calls = calls;
     this.failSelectTables = failSelectTables;
     this.failSelectColumns = failSelectColumns;
+    this.failInsertTables = failInsertTables;
     this.filters = [];
     this.orderSpec = null;
     this.limitCount = null;
@@ -924,6 +1010,15 @@ class FakeQuery {
     }
     let rows = this.tables[this.table];
     if (this.operation === "insert") {
+      if (this.failInsertTables?.has(this.table)) {
+        return resolve({
+          data: null,
+          error: {
+            code: "PGRST204",
+            message: `Could not find the 'invoice_refs' column of '${this.table}' in the schema cache`,
+          },
+        });
+      }
       const inserted = this.payload.map((row, index) => ({ id: row.id || `${this.table}-${rows.length + index + 1}`, ...row }));
       rows.push(...inserted);
       return resolve({ data: this.single ? inserted[0] : inserted, error: null });

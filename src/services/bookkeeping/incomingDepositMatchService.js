@@ -336,6 +336,125 @@ function independentCandidates(candidates = []) {
   return candidates.filter((candidate) => candidate.candidate_role !== "supporting");
 }
 
+function canonicalCandidateItems({ matchId, businessId, candidates = [] }) {
+  const items = candidates.map((candidate, index) => ({
+    match_id: matchId,
+    business_id: businessId,
+    qbo_entity_type: candidate.qbo_entity_type,
+    qbo_entity_id: candidate.qbo_entity_id,
+    qbo_realm_id: candidate.qbo_realm_id || null,
+    amount_allocated_minor: candidate.amount_minor,
+    customer_ref: candidate.customer_ref || null,
+    invoice_ids: candidate.invoice_ids || [],
+    qbo_sync_token: candidate.sync_token || null,
+    source_snapshot_at: candidate.source_snapshot_at || null,
+    evidence_role: candidate.qbo_entity_type === "Invoice" && candidate.candidate_role !== "primary"
+      ? "linked_context"
+      : candidate.candidate_role === "supporting" || index > 0 ? "supporting" : "primary",
+    meta: {
+      match_type: candidate.match_type,
+      txn_date: candidate.txn_date,
+      candidate_group_id: candidate.candidate_group_id || null,
+      candidate_role: candidate.candidate_role || "primary",
+      independent_bank_match: candidate.independent_bank_match !== false,
+      linked_payment_ids: candidate.linked_payment_ids || [],
+      invoice_refs: candidate.invoice_refs || [],
+      reason_codes: candidate.reason_codes,
+    },
+  }));
+  const existingKeys = new Set(items.map((item) => `${item.qbo_entity_type}:${item.qbo_entity_id}`));
+  for (const candidate of candidates) {
+    const invoiceRefs = Array.isArray(candidate.invoice_refs) ? candidate.invoice_refs : [];
+    const invoiceIds = Array.from(new Set([
+      ...(candidate.invoice_ids || []),
+      ...invoiceRefs.map((invoice) => invoice.qbo_entity_id),
+    ].map((id) => String(id || "")).filter(Boolean)));
+    for (const invoiceId of invoiceIds) {
+      const key = `Invoice:${invoiceId}`;
+      if (existingKeys.has(key)) continue;
+      const invoiceRef = invoiceRefs.find((invoice) => String(invoice.qbo_entity_id || "") === String(invoiceId)) || null;
+      items.push({
+        match_id: matchId,
+        business_id: businessId,
+        qbo_entity_type: "Invoice",
+        qbo_entity_id: invoiceId,
+        qbo_realm_id: invoiceRef?.qbo_realm_id || candidate.qbo_realm_id || null,
+        amount_allocated_minor: null,
+        customer_ref: invoiceRef?.customer_ref || candidate.customer_ref || null,
+        invoice_ids: [invoiceId],
+        qbo_sync_token: null,
+        source_snapshot_at: null,
+        evidence_role: "linked_context",
+        meta: {
+          match_type: "qbo_invoice_context",
+          document_number: invoiceRef?.document_number || null,
+          open_balance_minor: invoiceRef?.open_balance_minor ?? null,
+          candidate_group_id: candidate.candidate_group_id || null,
+          candidate_role: "linked_context",
+          independent_bank_match: false,
+        },
+      });
+      existingKeys.add(key);
+    }
+  }
+  return items;
+}
+
+async function fetchMatchItems({ db, businessId, matchId }) {
+  return selectRows(db
+    .from("bank_qbo_match_items")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("match_id", matchId));
+}
+
+function persistedPrimaryItemState({ match, items = [], result = null }) {
+  const primaryItems = items.filter((item) => item.evidence_role === "primary");
+  const expectedPrimary = result?.primary || (match?.meta?.candidates || []).find((candidate) => candidate.candidate_role === "primary") || (match?.meta?.candidates || [])[0] || null;
+  const validPrimary = primaryItems.length === 1 && expectedPrimary &&
+    String(primaryItems[0].qbo_entity_type || "") === String(expectedPrimary.qbo_entity_type || "") &&
+    String(primaryItems[0].qbo_entity_id || "") === String(expectedPrimary.qbo_entity_id || "") &&
+    (!primaryItems[0].qbo_realm_id || !expectedPrimary.qbo_realm_id || String(primaryItems[0].qbo_realm_id) === String(expectedPrimary.qbo_realm_id));
+  return {
+    ok: validPrimary,
+    reason: primaryItems.length === 0 ? "primary_match_item_missing" : primaryItems.length > 1 ? "multiple_primary_match_items" : validPrimary ? "primary_match_item_valid" : "primary_match_item_mismatch",
+    primary_items: primaryItems,
+    expected_primary: expectedPrimary,
+  };
+}
+
+async function ensurePersistedCandidateItems({ db, businessId, bankTransactionId, match, result, actor = null, actorRole = null }) {
+  if (!match?.id || !ACTIVE_CANDIDATE_STATUSES.has(String(match.status || ""))) return { ok: false, reason: "match_not_confirmable" };
+  const desiredItems = canonicalCandidateItems({ matchId: match.id, businessId, candidates: result.candidates || [] });
+  if (!desiredItems.length) return { ok: false, reason: "candidate_items_missing" };
+
+  let items = await fetchMatchItems({ db, businessId, matchId: match.id });
+  const before = persistedPrimaryItemState({ match, items, result });
+  if (!before.ok) {
+    const existingKeys = new Set(items.map((item) => `${item.evidence_role}:${item.qbo_entity_type}:${item.qbo_entity_id}`));
+    const missingItems = desiredItems.filter((item) => !existingKeys.has(`${item.evidence_role}:${item.qbo_entity_type}:${item.qbo_entity_id}`));
+    if (missingItems.length) {
+      const insertResult = await db.from("bank_qbo_match_items").insert(missingItems);
+      if (insertResult?.error) throw insertResult.error;
+      await insertHistory({
+        db,
+        businessId,
+        bankTransactionId,
+        matchId: match.id,
+        action: "repaired_candidate_items",
+        previousState: { reason: before.reason, item_count: items.length },
+        newState: { inserted_item_count: missingItems.length },
+        actor,
+        actorRole,
+        reason: "rebuilt_unconfirmed_candidate_items_from_cached_qbo_evidence",
+      });
+    }
+    items = await fetchMatchItems({ db, businessId, matchId: match.id });
+  }
+  const after = persistedPrimaryItemState({ match, items, result });
+  return { ...after, items };
+}
+
 function addConfirmability(result = {}) {
   const primary = result.primary || null;
   const confirmable = (
@@ -356,6 +475,19 @@ function addConfirmability(result = {}) {
     confirmability_reason: reason,
     independent_candidate_count: independentCandidates(result.candidates || []).length,
   };
+}
+
+function resultFromPersistedMatch(match = {}) {
+  const candidates = annotateCandidateChains(Array.isArray(match.meta?.candidates) ? match.meta.candidates : []);
+  const primary = candidates.find((candidate) => candidate.candidate_role === "primary") || candidates[0] || null;
+  return addConfirmability({
+    status: match.status,
+    confidence_tier: match.confidence_tier || null,
+    confidence_score: match.confidence_score ?? null,
+    candidates,
+    primary,
+    reason_codes: match.reason_codes || [],
+  });
 }
 
 async function fetchRejectedTargetKeys({ db, businessId, bankTransactionId }) {
@@ -717,35 +849,40 @@ async function persistCandidateResult({ db, businessId, bankTxn, mapping, freshn
       .update(updateRow)
       .eq("business_id", businessId)
       .eq("id", existing.id);
-    return { ...existing, ...updateRow };
+    const updated = { ...existing, ...updateRow };
+    const itemState = await ensurePersistedCandidateItems({ db, businessId, bankTransactionId: bankTxn.id, match: updated, result, actor, actorRole });
+    if (!itemState.ok) {
+      updated.meta = {
+        ...(updated.meta || {}),
+        confirmable: false,
+        confirmability_reason: itemState.reason,
+      };
+    }
+    return updated;
   }
   const match = await selectMaybe(db.from("bank_qbo_matches").insert(row).select("*").maybeSingle());
   if (!existing) {
-    const items = result.candidates.map((candidate, index) => ({
-      match_id: match.id,
-      business_id: businessId,
-      qbo_entity_type: candidate.qbo_entity_type,
-      qbo_entity_id: candidate.qbo_entity_id,
-      qbo_realm_id: candidate.qbo_realm_id || null,
-      amount_allocated_minor: candidate.amount_minor,
-      customer_ref: candidate.customer_ref || null,
-      invoice_ids: candidate.invoice_ids || [],
-      invoice_refs: candidate.invoice_refs || [],
-      qbo_sync_token: candidate.sync_token || null,
-      source_snapshot_at: candidate.source_snapshot_at || null,
-      evidence_role: candidate.candidate_role === "supporting" || index > 0 ? "supporting" : "primary",
-      meta: {
-        match_type: candidate.match_type,
-        txn_date: candidate.txn_date,
-          candidate_group_id: candidate.candidate_group_id || null,
-          candidate_role: candidate.candidate_role || "primary",
-          independent_bank_match: candidate.independent_bank_match !== false,
-          linked_payment_ids: candidate.linked_payment_ids || [],
-          invoice_refs: candidate.invoice_refs || [],
-          reason_codes: candidate.reason_codes,
+    const items = canonicalCandidateItems({ matchId: match.id, businessId, candidates: result.candidates || [] });
+    if (items.length) {
+      const insertResult = await db.from("bank_qbo_match_items").insert(items);
+      if (insertResult?.error) throw insertResult.error;
+    }
+    const itemState = await ensurePersistedCandidateItems({ db, businessId, bankTransactionId: bankTxn.id, match, result, actor, actorRole });
+    if (!itemState.ok) {
+      await db.from("bank_qbo_matches").update({
+        meta: {
+          ...(match.meta || {}),
+          confirmable: false,
+          confirmability_reason: itemState.reason,
         },
-    }));
-    if (items.length) await db.from("bank_qbo_match_items").insert(items);
+        updated_at: new Date().toISOString(),
+      }).eq("business_id", businessId).eq("id", match.id);
+      match.meta = {
+        ...(match.meta || {}),
+        confirmable: false,
+        confirmability_reason: itemState.reason,
+      };
+    }
     await insertHistory({ db, businessId, bankTransactionId: bankTxn.id, matchId: match.id, action: "discovered", newState: row, actor, actorRole });
   }
   return match;
@@ -1072,6 +1209,10 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
     if (persist) await writeCategorizationBlockMeta({ db, businessId, bankTxn, result: unavailable, match: null, reason: "match_check_unavailable" });
     return { ok: true, ...unavailable, posting_eligibility: "blocked_match_check_unavailable", match: null };
   }
+  if (match?.meta?.confirmable === false && result.confirmable === true) {
+    result.confirmable = false;
+    result.confirmability_reason = match.meta.confirmability_reason || "candidate_item_persistence_failed";
+  }
   if (result.status === "candidate" && result.confidence_tier === "tier_4") {
     return { ok: true, ...result, posting_eligibility: "ordinary_income_posting_allowed", match: null };
   }
@@ -1290,14 +1431,19 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
     if (existingKey && idempotencyKey && String(existingKey) !== String(idempotencyKey)) {
       throw new IncomingDepositMatchError("idempotency_key_mismatch", 409);
     }
-    return { ok: true, status: "confirmed", match_id: matchId, idempotent: true };
+    return { ok: true, status: "confirmed", match_id: matchId, idempotent: true, count_delta: { needs_review: 0, matched: 0, handled: 0, posted: 0, pending: 0 } };
   }
   if (!ACTIVE_CANDIDATE_STATUSES.has(match.status)) {
     const code = match.status === "superseded" ? "stale_match_refresh_required" : "match_not_confirmable";
     throw new IncomingDepositMatchError(code, 409, { status: match.status });
   }
   if (match.match_type === "unavailable") throw new IncomingDepositMatchError("match_check_unavailable", 409);
-  const primaryItem = await fetchPrimaryMatchItem({ db, businessId, matchId });
+  let primaryItem = await fetchPrimaryMatchItem({ db, businessId, matchId });
+  if (!primaryItem) {
+    const repairResult = resultFromPersistedMatch(match);
+    const repair = await ensurePersistedCandidateItems({ db, businessId, bankTransactionId, match, result: repairResult, actor, actorRole });
+    if (repair.ok) primaryItem = repair.primary_items[0] || null;
+  }
   if (!primaryItem) throw new IncomingDepositMatchError("primary_match_item_missing", 409);
   if (primaryItem.qbo_entity_type === "Invoice" || match.match_type === "qbo_invoice_only_context") {
     throw new IncomingDepositMatchError("invoice_only_match_not_confirmable", 409);
@@ -1329,10 +1475,11 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
 
   const { data: existingCat } = await db
     .from("transaction_categorizations")
-    .select("meta")
+    .select("status,meta")
     .eq("business_id", businessId)
     .eq("transaction_id", bankTransactionId)
     .maybeSingle();
+  const alreadyMatched = existingCat?.status === "matched_existing_qbo" || existingCat?.meta?.matched_existing_qbo === true || existingCat?.meta?.incoming_deposit_match_status === "confirmed";
   await db.from("transaction_categorizations").update({
     status: "matched_existing_qbo",
     post_after: null,
@@ -1365,7 +1512,43 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
     actorRole,
     reason: "human_confirmed_existing_qbo_match",
   });
-  return { ok: true, status: "confirmed", match_id: matchId };
+  return {
+    ok: true,
+    status: "confirmed",
+    match_id: matchId,
+    transaction_patch: {
+      id: bankTransactionId,
+      status: "matched_existing_qbo",
+      matched_existing_qbo: true,
+      incoming_deposit_match_id: matchId,
+      incoming_deposit_match_status: "confirmed",
+      incoming_deposit_confidence_tier: match.confidence_tier || null,
+      incoming_deposit_reason_codes: match.reason_codes || [],
+      incoming_deposit_candidates: Array.isArray(match.meta?.candidates) ? match.meta.candidates : [],
+      incoming_deposit_confirmable: false,
+      incoming_deposit_confirmability_reason: "already_matched_to_existing_qbo",
+      reconciled_at: now,
+      post_error: null,
+      post_after: null,
+      meta: {
+        ...(existingCat?.meta || {}),
+        safe_to_auto_post: false,
+        post_block_reason: null,
+        incoming_deposit_match_id: matchId,
+        incoming_deposit_match_status: "confirmed",
+        incoming_deposit_confidence_tier: match.confidence_tier || null,
+        incoming_deposit_reason_codes: match.reason_codes || [],
+        incoming_deposit_candidates: Array.isArray(match.meta?.candidates) ? match.meta.candidates : [],
+        incoming_deposit_confirmable: false,
+        incoming_deposit_confirmability_reason: "already_matched_to_existing_qbo",
+        matched_existing_qbo: true,
+        qbo_write_performed: false,
+        posting_in_progress: false,
+        next_post_attempt_at: null,
+      },
+    },
+    count_delta: alreadyMatched ? { needs_review: 0, matched: 0, handled: 0, posted: 0, pending: 0 } : { needs_review: -1, matched: 1, handled: 0, posted: 0, pending: 0 },
+  };
 }
 
 export async function rejectIncomingDepositQboMatch({ db = defaultSupabase, businessId, bankTransactionId, matchId, actor = null, actorRole = "user", reason = "human_rejected" } = {}) {
