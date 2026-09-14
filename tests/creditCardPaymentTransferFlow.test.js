@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -208,6 +209,32 @@ test("credit-card-payment UI exposes transfer target state instead of only a gen
   assert.match(feed, /isQboBankAccount/);
   assert.match(feed, /isQboCreditCardAccount/);
   assert.match(page, /newAccountType/);
+});
+
+test("credit-card-payment selector uses mapped card destinations and preserves load states", () => {
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  const mappingsRoute = read("src/api/bookkeeping/routes/bookkeeping.accountMappings.routes.js");
+
+  assert.match(page, /getAccountMappings/);
+  assert.match(page, /buildCreditCardPaymentDestinationOptions/);
+  assert.match(page, /plaidType === "credit"/);
+  assert.match(page, /qboType === "creditcard"/);
+  assert.match(page, /row\?\.mapped === true/);
+  assert.match(page, /ccPaymentAccountsLoaded/);
+  assert.match(page, /setCcPaymentAccountsError\("Couldn’t load credit-card accounts"\)/);
+  assert.match(page, /ccPaymentAccounts=\{ccPaymentAccounts\}/);
+  assert.match(feed, /ccPaymentAccounts = \[\]/);
+  assert.match(feed, /ccPaymentDestinationAccounts/);
+  assert.match(feed, /Loading credit-card accounts…/);
+  assert.match(feed, /Couldn’t load credit-card accounts/);
+  assert.match(feed, /No mapped credit-card accounts/);
+  assert.match(feed, /disabled=\{!currentAccount \|\| loading\}/);
+  assert.match(feed, /Not a credit card payment/);
+  assert.match(mappingsRoute, /institution_name/);
+  assert.match(mappingsRoute, /mapping_id/);
+  assert.match(mappingsRoute, /mapping_status/);
+  assert.match(mappingsRoute, /qbo_account_subtype/);
 });
 
 test("taxonomy-only cc-payment stays suspected and does not lock the account picker", () => {

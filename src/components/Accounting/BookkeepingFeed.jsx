@@ -13,8 +13,8 @@ import { formatQboPostingSchedule } from "../../services/bookkeeping/qboPostingL
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
 const DIVIDER_COLOR = "rgba(255,255,255,0.06)";
-const BASE_COL_WIDTHS = [36, 90, 220, 160, 245, 105, 120];
-const BASE_MIN_COL_WIDTHS = [36, 90, 190, 160, 245, 105, 120];
+const BASE_COL_WIDTHS = [36, 90, 220, 160, 245, 105, 150];
+const BASE_MIN_COL_WIDTHS = [36, 90, 190, 160, 245, 105, 150];
 const QBO_COL_WIDTH = 120;
 const QBO_MIN_COL_WIDTH = 105;
 
@@ -304,6 +304,9 @@ export function CoaDropdown({
 export function CreditCardPaymentMatchControl({
   value = "",
   accounts = [],
+  accountsLoaded = true,
+  loadingAccounts = false,
+  accountsError = "",
   statusLabel = "Credit Card Payment · Needs Match",
   targetLabel = "Match payment to",
   placeholder = "Match payment to...",
@@ -316,6 +319,7 @@ export function CreditCardPaymentMatchControl({
   onChange,
   onConfirm,
   onUseCoa,
+  onRetryAccounts,
 }) {
   const [open, setOpen] = React.useState(false);
   const [menuPos, setMenuPos] = React.useState(null);
@@ -398,7 +402,7 @@ export function CreditCardPaymentMatchControl({
             {onConfirm ? (
               <button
                 type="button"
-                disabled={!value || loading}
+                disabled={!currentAccount || loading}
                 onClick={(e) => {
                   e.stopPropagation();
                   onConfirm();
@@ -444,8 +448,28 @@ export function CreditCardPaymentMatchControl({
                       {active ? <span className="text-emerald-300">✓</span> : null}
                     </button>
                   );
-                }) : (
+                }) : loadingAccounts ? (
+                  <div className="flex items-center gap-2 px-3 py-2 text-[12px] text-white/60">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                    Loading credit-card accounts…
+                  </div>
+                ) : accountsError ? (
+                  <div className="px-3 py-2">
+                    <div className="text-[12px] text-amber-100/85">Couldn’t load credit-card accounts</div>
+                    {onRetryAccounts ? (
+                      <button
+                        type="button"
+                        className="mt-1 text-[11px] font-semibold text-cyan-100 hover:text-cyan-50"
+                        onClick={() => onRetryAccounts()}
+                      >
+                        Try again
+                      </button>
+                    ) : null}
+                  </div>
+                ) : accountsLoaded ? (
                   <div className="px-3 py-2 text-[12px] text-white/48">No mapped credit-card accounts</div>
+                ) : (
+                  <div className="px-3 py-2 text-[12px] text-white/48">Loading credit-card accounts…</div>
                 )}
                 {onUseCoa ? (
                   <button
@@ -743,6 +767,11 @@ export default function BookkeepingFeed({
   onUndoIncomingDepositMatch,
   incomingDepositMatchActionState = {},
   ccPaymentActionState = {},
+  ccPaymentAccounts = [],
+  ccPaymentAccountsLoaded = true,
+  loadingCcPaymentAccounts = false,
+  ccPaymentAccountsError = "",
+  onRetryCcPaymentAccounts,
   postingTransactionIds,
   accounts = [],
   onAccountChange,
@@ -1113,6 +1142,9 @@ export default function BookkeepingFeed({
               }
               return false;
             });
+            const ccPaymentDestinationAccounts = ccOrientation.counterpartAccountType === "CreditCard"
+              ? ccPaymentAccounts.filter((account) => String(account.id) !== String(txn.source_qbo_account_id || ""))
+              : ccSelectableAccounts;
             const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (readOnly ? "" : txn.accountId) ?? "";
             const selectedCcTargetValue = accountSelections.get(txn.id) ?? ccTargetId ?? "";
             const qboSchedule = showQboSchedule ? formatQboPostingSchedule(txn) : null;
@@ -1244,7 +1276,10 @@ export default function BookkeepingFeed({
                 ) : ccWorkflowStatus ? (
                   <CreditCardPaymentMatchControl
                     value={selectedCcTargetValue}
-                    accounts={ccSelectableAccounts}
+                    accounts={ccPaymentDestinationAccounts}
+                    accountsLoaded={ccOrientation.counterpartAccountType === "CreditCard" ? ccPaymentAccountsLoaded : true}
+                    loadingAccounts={ccOrientation.counterpartAccountType === "CreditCard" ? loadingCcPaymentAccounts : false}
+                    accountsError={ccOrientation.counterpartAccountType === "CreditCard" ? ccPaymentAccountsError : ""}
                     statusLabel={ccWorkflowStatus.label}
                     targetLabel={ccOrientation.label}
                     placeholder={ccOrientation.placeholder}
@@ -1257,6 +1292,7 @@ export default function BookkeepingFeed({
                     onChange={(id) => handleAccountSelect(txn.id, id)}
                     onConfirm={() => onConfirmCcPaymentMatch?.(txn.id, selectedCcTargetValue)}
                     onUseCoa={canRejectCcPayment ? () => onRejectCcPayment?.(txn.id) : null}
+                    onRetryAccounts={onRetryCcPaymentAccounts}
                   />
                 ) : ccTransferLabel ? (
                   <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100">
@@ -1329,7 +1365,7 @@ export default function BookkeepingFeed({
                   </span>
                 </div>
               ) : null}
-              <div className="flex justify-center pl-4" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-center pl-3 pr-3" onClick={(e) => e.stopPropagation()}>
                 {isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : isPending ? (
@@ -1339,7 +1375,7 @@ export default function BookkeepingFeed({
                     <button
                       type="button"
                       onClick={() => toggleExpandedRow(txn.id)}
-                      className="inline-flex h-7 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold text-emerald-100/95 transition hover:border-emerald-300/65 hover:bg-emerald-500/16"
+                      className="inline-flex min-h-8 min-w-[124px] items-center justify-center whitespace-nowrap rounded-full border border-emerald-300/35 bg-emerald-500/10 px-3.5 py-1.5 text-[10px] font-semibold leading-none text-emerald-100/95 transition hover:border-emerald-300/65 hover:bg-emerald-500/16"
                     >
                       View match details
                     </button>

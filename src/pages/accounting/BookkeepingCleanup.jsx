@@ -25,6 +25,7 @@ import {
   updateHandledTransaction,
   getBookkeepingProcessingStatus,
   getMappingStatus,
+  getAccountMappings,
   getClarificationRequests,
   postTransactionToQuickBooks,
   inspectIncomingDepositMatch,
@@ -499,6 +500,57 @@ function transitionDelay(ms = 450) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function normalizePaymentAccountType(value = "") {
+  return String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
+}
+
+function formatMappedCreditCardLabel(row = {}) {
+  const name = row.qbo_account_name || row.plaid_name || "Credit card";
+  const mask = row.mask ? String(row.mask).slice(-4) : "";
+  return mask ? `${name} • ${mask}` : name;
+}
+
+function buildCreditCardPaymentDestinationOptions(rows = [], businessId = null) {
+  const seen = new Set();
+  return (Array.isArray(rows) ? rows : [])
+    .filter((row) => {
+      const plaidType = normalizePaymentAccountType(row.plaid_type);
+      const qboType = normalizePaymentAccountType(row.qbo_account_type);
+      return (
+        row?.mapped === true &&
+        row?.is_active !== false &&
+        plaidType === "credit" &&
+        qboType === "creditcard" &&
+        row.qbo_account_id
+      );
+    })
+    .map((row) => {
+      const id = String(row.qbo_account_id);
+      const key = `${row.plaid_account_id || "plaid"}:${id}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+      return {
+        id,
+        name: formatMappedCreditCardLabel(row),
+        type: "CreditCard",
+        accountType: "CreditCard",
+        account_type: "CreditCard",
+        subType: row.qbo_account_subtype || row.plaid_subtype || "CreditCard",
+        mappingId: row.mapping_id || key,
+        plaidAccountId: row.plaid_account_id || null,
+        qboAccountId: id,
+        qboAccountName: row.qbo_account_name || null,
+        institutionName: row.institution_name || null,
+        mask: row.mask || null,
+        mappingStatus: row.mapping_status || "mapped",
+        active: row.is_active !== false,
+        eligible: true,
+        businessId,
+      };
+    })
+    .filter(Boolean);
+}
+
 function BookkeepingCleanup() {
   const { currentBusiness } = useBusiness?.() || {};
   const adminView = useAdminView();
@@ -636,6 +688,10 @@ function BookkeepingCleanup() {
   const showPostedToast = () => window.alert("Already posted to QuickBooks.");
   const [mappingStatus, setMappingStatus] = useState(null);
   const [loadingMappingStatus, setLoadingMappingStatus] = useState(false);
+  const [ccPaymentAccounts, setCcPaymentAccounts] = useState([]);
+  const [ccPaymentAccountsLoaded, setCcPaymentAccountsLoaded] = useState(false);
+  const [loadingCcPaymentAccounts, setLoadingCcPaymentAccounts] = useState(false);
+  const [ccPaymentAccountsError, setCcPaymentAccountsError] = useState("");
   const [autoPostStatus, setAutoPostStatus] = useState({ auto_post_to_quickbooks: false, handled_backlog_count: 0 });
   const [loadingAutoPost, setLoadingAutoPost] = useState(false);
   const [savingAutoPost, setSavingAutoPost] = useState(false);
@@ -670,6 +726,28 @@ function BookkeepingCleanup() {
       console.warn("[bookkeeping] mapping status fetch failed", e?.message || e);
     } finally {
       setLoadingMappingStatus(false);
+    }
+  }, [businessId, usingDemo]);
+
+  const loadCreditCardPaymentAccounts = useCallback(async () => {
+    if (!businessId || usingDemo) {
+      setCcPaymentAccounts([]);
+      setCcPaymentAccountsLoaded(usingDemo);
+      setCcPaymentAccountsError("");
+      return;
+    }
+    setLoadingCcPaymentAccounts(true);
+    setCcPaymentAccountsError("");
+    try {
+      const res = await getAccountMappings(businessId);
+      const options = buildCreditCardPaymentDestinationOptions(res?.accounts || [], businessId);
+      setCcPaymentAccounts(options);
+      setCcPaymentAccountsLoaded(true);
+    } catch (e) {
+      console.warn("[bookkeeping] credit card payment accounts load failed", e?.message || e);
+      setCcPaymentAccountsError("Couldn’t load credit-card accounts");
+    } finally {
+      setLoadingCcPaymentAccounts(false);
     }
   }, [businessId, usingDemo]);
 
@@ -1951,8 +2029,9 @@ function BookkeepingCleanup() {
     if (usingDemo) return;
     reloadAccounts();
     reloadCoa();
+    loadCreditCardPaymentAccounts();
     loadAutoPostStatus();
-  }, [usingDemo, reloadAccounts, reloadCoa, loadAutoPostStatus]);
+  }, [usingDemo, reloadAccounts, reloadCoa, loadCreditCardPaymentAccounts, loadAutoPostStatus]);
 
   useEffect(() => {
     if (!adminView.active || usingDemo) return;
@@ -2439,6 +2518,11 @@ function BookkeepingCleanup() {
               )}
               postingTransactionIds={postingTransactionIds}
               accounts={groupedChartAccounts}
+              ccPaymentAccounts={ccPaymentAccounts}
+              ccPaymentAccountsLoaded={ccPaymentAccountsLoaded}
+              loadingCcPaymentAccounts={loadingCcPaymentAccounts}
+              ccPaymentAccountsError={ccPaymentAccountsError}
+              onRetryCcPaymentAccounts={loadCreditCardPaymentAccounts}
               onAccountChange={handleAccountChange}
               onCreateAccount={canRunAI && !usingDemo ? handleCreateQboAccount : null}
               onCreatedAccountSelect={handleCreatedAccountSelect}

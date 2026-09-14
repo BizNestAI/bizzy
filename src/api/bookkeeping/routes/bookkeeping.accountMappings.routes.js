@@ -38,14 +38,14 @@ function mapRailToPostingCategory(rail) {
 export async function fetchAdminViewPersistedAccountMappings({ db = supabase, businessId }) {
   const { data: plaidAccounts, error: acctErr } = await db
     .from("plaid_accounts")
-    .select("plaid_account_id,name,official_name,mask,type,subtype,is_active")
+    .select("plaid_account_id,name,official_name,mask,type,subtype,is_active,institution_name,institution")
     .eq("business_id", businessId)
     .eq("is_active", true);
   if (acctErr) throw acctErr;
 
   const { data: mappings, error: mapErr } = await db
     .from("plaid_qbo_account_mappings")
-    .select("plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type")
+    .select("plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type,source,confidence,updated_at,created_at")
     .eq("business_id", businessId);
   if (mapErr) throw mapErr;
 
@@ -72,6 +72,12 @@ export async function fetchAdminViewPersistedAccountMappings({ db = supabase, bu
       qbo_account_id: mapping?.qbo_account_id || null,
       qbo_account_name: mapping?.qbo_account_name || null,
       qbo_account_type: mapping?.qbo_account_type || null,
+      qbo_account_subtype: null,
+      institution_name: acct.institution_name || acct.institution || null,
+      mapping_id: mapping?.plaid_account_id && mapping?.qbo_account_id ? `${mapping.plaid_account_id}:${mapping.qbo_account_id}` : null,
+      mapping_status: mapping?.qbo_account_id ? "mapped" : "unmapped",
+      mapping_source: mapping?.source || null,
+      mapping_confidence: mapping?.confidence || null,
       suggested: null,
       qbo_options_hint: requiresMapping ? { type_needed: postingCategory } : null,
     };
@@ -91,14 +97,14 @@ router.get("/account-mappings", requireAuth, async (req, res) => {
 
     const { data: plaidAccounts, error: acctErr } = await supabase
       .from("plaid_accounts")
-      .select("plaid_account_id,name,official_name,mask,type,subtype,is_active")
+      .select("plaid_account_id,name,official_name,mask,type,subtype,is_active,institution_name,institution")
       .eq("business_id", businessId)
       .eq("is_active", true);
     if (acctErr) throw acctErr;
 
     const { data: mappings, error: mapErr } = await supabase
       .from("plaid_qbo_account_mappings")
-      .select("plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type")
+      .select("plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type,source,confidence,updated_at,created_at")
       .eq("business_id", businessId);
     if (mapErr) throw mapErr;
     const mappingByPlaid = (mappings || []).reduce((acc, row) => {
@@ -107,6 +113,7 @@ router.get("/account-mappings", requireAuth, async (req, res) => {
     }, {});
 
     const qboAccounts = await fetchChartOfAccounts(businessId);
+    const qboById = new Map((qboAccounts || []).map((account) => [String(account.id), account]));
 
     const accounts = (plaidAccounts || []).map((acct) => {
       const mapping = mappingByPlaid[acct.plaid_account_id] || null;
@@ -131,6 +138,7 @@ router.get("/account-mappings", requireAuth, async (req, res) => {
         suggestedRaw?.confidence === "high"
           ? suggestedRaw
           : null;
+      const mappedQboAccount = mapping?.qbo_account_id ? qboById.get(String(mapping.qbo_account_id)) : null;
       return {
         plaid_account_id: acct.plaid_account_id,
         plaid_name: acct.name || acct.official_name || null,
@@ -144,6 +152,12 @@ router.get("/account-mappings", requireAuth, async (req, res) => {
         qbo_account_id: mapping?.qbo_account_id || null,
         qbo_account_name: mapping?.qbo_account_name || null,
         qbo_account_type: mapping?.qbo_account_type || null,
+        qbo_account_subtype: mappedQboAccount?.subType || mappedQboAccount?.account_subtype || null,
+        institution_name: acct.institution_name || acct.institution || null,
+        mapping_id: mapping?.plaid_account_id && mapping?.qbo_account_id ? `${mapping.plaid_account_id}:${mapping.qbo_account_id}` : null,
+        mapping_status: mapping?.qbo_account_id ? "mapped" : "unmapped",
+        mapping_source: mapping?.source || null,
+        mapping_confidence: mapping?.confidence || null,
         suggested: suggested || null,
         qbo_options_hint: qboOptionsHint,
       };
