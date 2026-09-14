@@ -173,6 +173,9 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     incoming_deposit_confidence_tier: cat.meta?.incoming_deposit_confidence_tier || null,
     incoming_deposit_reason_codes: cat.meta?.incoming_deposit_reason_codes || [],
     incoming_deposit_candidates: cat.meta?.incoming_deposit_candidates || [],
+    incoming_deposit_confirmable: cat.meta?.incoming_deposit_confirmable ?? null,
+    incoming_deposit_confirmability_reason: cat.meta?.incoming_deposit_confirmability_reason || null,
+    incoming_deposit_independent_candidate_count: cat.meta?.incoming_deposit_independent_candidate_count ?? null,
     matched_existing_qbo: cat.meta?.matched_existing_qbo === true || cat.status === "matched_existing_qbo",
     post_after: cat.post_after || null,
     post_error: cat.post_error || null,
@@ -391,8 +394,12 @@ function shouldDiscoverIncomingDepositForFeed(row = {}) {
   if (!(amount > 0 && (direction === "INFLOW" || !direction))) return false;
   if (row.pending === true || row.status === "posted" || row.status === "matched_existing_qbo") return false;
   const meta = row.meta || {};
-  if (row.incoming_deposit_match_status || meta.incoming_deposit_match_status) return false;
-  if (["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(String(meta.post_block_reason || row.post_error || ""))) return false;
+  const matchStatus = String(row.incoming_deposit_match_status || meta.incoming_deposit_match_status || "");
+  const rediscoverableStatus = !matchStatus || matchStatus === "unchecked" || matchStatus === "superseded";
+  if (!rediscoverableStatus) return false;
+  const blockReason = String(meta.post_block_reason || row.post_error || "");
+  if (["possible_existing_qbo_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(blockReason)) return false;
+  if (blockReason === "incoming_deposit_needs_match" && !["unchecked", "superseded"].includes(matchStatus)) return false;
   const taxonomy = String(row.taxonomy_type || meta.taxonomy_type || meta.taxonomy_override || "").toLowerCase();
   if (["transfer_internal", "owner_draw", "owner_contribution", "loan_proceeds", "refund", "cc_payment"].includes(taxonomy)) return false;
   return ["needs_review", "uncategorized", ""].includes(String(row.status || "needs_review").toLowerCase());
@@ -404,6 +411,11 @@ function incomingDepositOverlayFromResult(result = {}) {
     qbo_entity_id: candidate.qbo_entity_id,
     qbo_realm_id: candidate.qbo_realm_id || null,
     match_type: candidate.match_type,
+    candidate_group_id: candidate.candidate_group_id || null,
+    candidate_role: candidate.candidate_role || "primary",
+    independent_bank_match: candidate.independent_bank_match !== false,
+    primary_qbo_entity_type: candidate.primary_qbo_entity_type || null,
+    primary_qbo_entity_id: candidate.primary_qbo_entity_id || null,
     txn_date: candidate.txn_date,
     amount_minor: candidate.amount_minor,
     currency: candidate.currency || null,
@@ -421,6 +433,9 @@ function incomingDepositOverlayFromResult(result = {}) {
     incoming_deposit_confidence_tier: result.confidence_tier || null,
     incoming_deposit_reason_codes: result.reason_codes || [],
     incoming_deposit_candidates: candidates,
+    incoming_deposit_confirmable: result.confirmable === true,
+    incoming_deposit_confirmability_reason: result.confirmability_reason || null,
+    incoming_deposit_independent_candidate_count: result.independent_candidate_count ?? candidates.filter((candidate) => candidate.candidate_role !== "supporting").length,
     post_error: status === "match_check_unavailable"
       ? "match_check_unavailable"
       : status === "ambiguous"
@@ -438,6 +453,9 @@ function incomingDepositOverlayFromResult(result = {}) {
       incoming_deposit_confidence_tier: result.confidence_tier || null,
       incoming_deposit_reason_codes: result.reason_codes || [],
       incoming_deposit_candidates: candidates,
+      incoming_deposit_confirmable: result.confirmable === true,
+      incoming_deposit_confirmability_reason: result.confirmability_reason || null,
+      incoming_deposit_independent_candidate_count: result.independent_candidate_count ?? candidates.filter((candidate) => candidate.candidate_role !== "supporting").length,
     },
   };
 }
@@ -472,6 +490,9 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
         incoming_deposit_confidence_tier: "unavailable",
         incoming_deposit_reason_codes: ["quickbooks_match_check_temporarily_unavailable", "ordinary_income_posting_blocked"],
         incoming_deposit_candidates: [],
+        incoming_deposit_confirmable: false,
+        incoming_deposit_confirmability_reason: "match_check_unavailable",
+        incoming_deposit_independent_candidate_count: 0,
         post_error: "match_check_unavailable",
         meta: {
           safe_to_auto_post: false,
@@ -480,6 +501,9 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
           incoming_deposit_confidence_tier: "unavailable",
           incoming_deposit_reason_codes: ["quickbooks_match_check_temporarily_unavailable", "ordinary_income_posting_blocked"],
           incoming_deposit_candidates: [],
+          incoming_deposit_confirmable: false,
+          incoming_deposit_confirmability_reason: "match_check_unavailable",
+          incoming_deposit_independent_candidate_count: 0,
           incoming_deposit_match_correlation_id: correlationId,
         },
       });

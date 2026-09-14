@@ -642,6 +642,7 @@ function BookkeepingCleanup() {
   const [loadingAutoPostPreview, setLoadingAutoPostPreview] = useState(false);
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
+  const incomingDepositActionInFlightRef = useRef(new Set());
   const [incomingDepositUndoTxn, setIncomingDepositUndoTxn] = useState(null);
   const [manualPostTxn, setManualPostTxn] = useState(null);
   const [manualPostResult, setManualPostResult] = useState(null);
@@ -1377,6 +1378,9 @@ function BookkeepingCleanup() {
 
   const withIncomingDepositMatchAction = async (id, action) => {
     if (!canRunAI || !businessId || !id || usingDemo) return;
+    const key = String(id);
+    if (incomingDepositActionInFlightRef.current.has(key)) return;
+    incomingDepositActionInFlightRef.current.add(key);
     setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: true, error: "" } }));
     try {
       await action();
@@ -1385,8 +1389,17 @@ function BookkeepingCleanup() {
       await reloadTransactions();
       await loadMappingStatus();
     } catch (e) {
-      const message = e?.body?.message || e?.message || "Could not update this QuickBooks match.";
+      const code = e?.body?.error || e?.code || e?.message || "";
+      const customerSafeErrors = {
+        match_not_confirmable: "This QuickBooks match needs a fresh check before it can be confirmed.",
+        stale_match_refresh_required: "This QuickBooks match needs a fresh check before it can be confirmed.",
+        invoice_only_match_not_confirmable: "This deposit needs payment or bank-deposit evidence before it can be matched.",
+        match_check_unavailable: "QuickBooks match checking is temporarily unavailable. Try again shortly.",
+      };
+      const message = customerSafeErrors[code] || e?.body?.message || e?.message || "Could not update this QuickBooks match.";
       setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: false, error: message } }));
+    } finally {
+      incomingDepositActionInFlightRef.current.delete(key);
     }
   };
 

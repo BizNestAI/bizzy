@@ -529,14 +529,27 @@ function humanizeReason(code = "") {
     invoice_only_duplicate_income_evidence: "Invoice-only duplicate evidence",
     invoice_only_payment_verification_needed: "Payment verification needed",
     incoming_deposit_match_rejected_review_required: "Rejected candidate needs review",
+    confirmable_existing_qbo_match: "Ready for confirmation",
+    ambiguous_match_requires_review: "Multiple candidates need review",
+    fresh_match_check_required: "Fresh match check required",
+    stale_match_refresh_required: "Fresh match check required",
   };
   return labels[code] || String(code || "").replace(/_/g, " ");
+}
+
+function isTruthy(value) {
+  return value === true || String(value || "").toLowerCase() === "true";
+}
+
+function independentCandidateCount(candidates = []) {
+  return (candidates || []).filter((candidate) => candidate?.candidate_role !== "supporting").length;
 }
 
 function incomingDepositMatchState(txn = {}) {
   const meta = txn.meta || {};
   const status = txn.incoming_deposit_match_status || meta.incoming_deposit_match_status || null;
   const blockReason = meta.post_block_reason || txn.post_error || null;
+  const confirmableValue = txn.incoming_deposit_confirmable ?? meta.incoming_deposit_confirmable;
   const active =
     txn.status === "matched_existing_qbo" ||
     txn.matched_existing_qbo === true ||
@@ -547,13 +560,20 @@ function incomingDepositMatchState(txn = {}) {
   const primary = candidates[0] || null;
   const confirmed = txn.status === "matched_existing_qbo" || txn.matched_existing_qbo === true || status === "confirmed";
   const unavailable = status === "match_check_unavailable" || blockReason === "match_check_unavailable";
-  const ambiguous = status === "ambiguous" || blockReason === "incoming_deposit_needs_match";
+  const explicitIndependentCount = Number(txn.incoming_deposit_independent_candidate_count ?? meta.incoming_deposit_independent_candidate_count);
+  const rootCount = Number.isFinite(explicitIndependentCount) ? explicitIndependentCount : independentCandidateCount(candidates);
+  const needsFreshCheck = blockReason === "incoming_deposit_needs_match" && (status === "unchecked" || status === "superseded" || !primary);
+  const ambiguous = status === "ambiguous" || (blockReason === "incoming_deposit_needs_match" && rootCount > 1);
   const invoiceOnly = candidates.length > 0 && candidates.every((candidate) => candidate.match_type === "qbo_invoice_only_context" || candidate.qbo_entity_type === "Invoice");
   return {
     active: true,
     confirmed,
     unavailable,
     ambiguous,
+    needsFreshCheck,
+    confirmable: isTruthy(confirmableValue),
+    confirmabilityReason: txn.incoming_deposit_confirmability_reason || meta.incoming_deposit_confirmability_reason || null,
+    independentCandidateCount: rootCount,
     invoiceOnly,
     status,
     matchId: txn.incoming_deposit_match_id || meta.incoming_deposit_match_id || null,
@@ -583,6 +603,8 @@ function IncomingDepositMatchPanel({
       ? "QuickBooks match check temporarily unavailable"
       : state.invoiceOnly
         ? "Possible duplicate income - payment verification needed"
+      : state.needsFreshCheck
+        ? "Needs match"
       : state.ambiguous
         ? "Needs match"
         : "Possible existing QuickBooks match";
@@ -592,10 +614,12 @@ function IncomingDepositMatchPanel({
       ? "Bizzi couldn't safely check whether this deposit is already recorded in QuickBooks. It has not been posted as income."
       : state.invoiceOnly
         ? "Bizzi found QuickBooks invoice activity that may already explain this deposit, but the payment or bank deposit chain still needs verification."
+      : state.needsFreshCheck
+        ? "This deposit needs a fresh QuickBooks match check before it can be posted as income."
       : state.ambiguous
-        ? "Bizzi found more than one QuickBooks transaction that may explain this deposit."
+        ? "Bizzi found more than one independent QuickBooks transaction that may explain this deposit."
         : "Bizzi found an existing QuickBooks deposit or payment that may already explain this bank deposit.";
-  const candidateCount = state.candidates?.length || 0;
+  const candidateCount = state.independentCandidateCount ?? independentCandidateCount(state.candidates || []);
   const bankEvidence = primary.bank_account_match === "verified_same_account" ? "Verified bank account" : "Bank account could not be fully verified";
   const customerName = primary.customer_ref?.name || primary.customer_ref?.Name || null;
   const invoiceRefs = Array.isArray(primary.invoice_refs) ? primary.invoice_refs : [];
@@ -652,8 +676,10 @@ function IncomingDepositMatchPanel({
           <button type="button" disabled={readOnly || action.loading} onClick={() => onInspect?.(txn.id, null, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{action.loading ? "Checking..." : "Try again"}</button>
         ) : (
           <>
-            {state.matchId && primary.qbo_entity_type && !state.invoiceOnly ? (
+            {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && state.confirmable ? (
               <button type="button" disabled={readOnly || action.loading} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">Match existing payment</button>
+            ) : state.matchId && primary.qbo_entity_type && !state.invoiceOnly ? (
+              <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-300">Fresh match check required</span>
             ) : null}
             {state.matchId ? (
               <button type="button" disabled={readOnly || action.loading} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">This is not the same payment</button>
@@ -1186,7 +1212,7 @@ export default function BookkeepingFeed({
                       : "border-amber-300/25 bg-amber-400/10 text-amber-100"
                   }`}>
                     <span className="truncate">
-                      {incomingMatch.confirmed ? "Matched to existing QuickBooks" : incomingMatch.unavailable ? "Match check unavailable" : incomingMatch.ambiguous ? "Needs Match" : "Possible QBO match"}
+                      {incomingMatch.confirmed ? "Matched to existing QuickBooks" : incomingMatch.unavailable ? "Match check unavailable" : incomingMatch.ambiguous || incomingMatch.needsFreshCheck ? "Needs Match" : "Possible QBO match"}
                     </span>
                     <span className={`truncate text-[9px] font-medium ${incomingMatch.confirmed ? "text-emerald-100/65" : "text-amber-100/65"}`}>
                       {incomingMatch.primary?.qbo_entity_type || "QuickBooks"} {incomingMatch.primary?.txn_date || ""}

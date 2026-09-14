@@ -88,10 +88,16 @@ test("blocks ordinary posting when one verified QBO Deposit candidate already ex
   assert.equal(db.tables.bank_qbo_matches.length, 1, "discovery is deduplicated by request key");
   assert.equal(db.tables.bank_qbo_matches[0].match_type, "qbo_deposit");
   assert.equal(db.tables.bank_qbo_match_items[0].qbo_entity_type, "Deposit");
+  assert.equal(db.tables.bank_qbo_match_items[1].qbo_entity_type, "Payment");
+  assert.equal(db.tables.bank_qbo_match_items[1].evidence_role, "supporting");
+  assert.equal(result.independent_candidate_count, 1);
+  assert.equal(result.confirmable, true);
   assert.equal(db.tables.transaction_categorizations[0].status, "needs_review");
   assert.equal(db.tables.transaction_categorizations[0].meta.safe_to_auto_post, false);
   assert.match(db.tables.transaction_categorizations[0].post_error, /possible_existing_qbo_match/);
   assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_candidates[0].qbo_entity_id, "dep-300");
+  assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_independent_candidate_count, 1);
+  assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_confirmable, true);
 });
 
 test("stale or failed QBO cache blocks income posting without fabricating a match", async () => {
@@ -249,6 +255,11 @@ test("undo preserves history and returns a confirmed match to protected Needs Ma
   assert.equal(cat.meta.safe_to_auto_post, false);
   assert.equal(cat.meta.post_block_reason, "incoming_deposit_needs_match");
   assert.equal(cat.meta.matched_existing_qbo, false);
+  assert.equal(cat.meta.incoming_deposit_match_status, "unchecked");
+  assert.equal(cat.meta.incoming_deposit_match_id, null);
+  assert.equal(cat.meta.previous_incoming_deposit_match_id, matchId);
+  assert.deepEqual(cat.meta.incoming_deposit_candidates, []);
+  assert.equal(cat.meta.incoming_deposit_confirmable, false);
   assert.equal(matchesTransactionStatusFilter("matched", cat), false);
   assert.equal(matchesTransactionStatusFilter("needs_review", cat), true);
   assert.equal(db.tables.bank_qbo_match_history.some((row) => row.action === "confirmed"), true);
@@ -258,6 +269,53 @@ test("undo preserves history and returns a confirmed match to protected Needs Ma
   await assert.rejects(
     () => undoIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-300", matchId, idempotencyKey: "different" }),
     /idempotency_key_mismatch/
+  );
+});
+
+test("undone existing-QBO match can be rediscovered and reconfirmed without reusing the superseded match", async () => {
+  const db = fakeDb(baseMatchTables());
+  const discovered = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+  const firstMatchId = discovered.match.id;
+  await confirmIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-300", matchId: firstMatchId, idempotencyKey: "confirm-1" });
+  await undoIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-300", matchId: firstMatchId, idempotencyKey: "undo-1" });
+
+  const rediscovered = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    persist: true,
+    nowMs: Date.parse("2026-09-11T16:01:00Z"),
+  });
+  const secondMatchId = rediscovered.match.id;
+  const reconfirmed = await confirmIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-300",
+    matchId: secondMatchId,
+    idempotencyKey: "confirm-2",
+  });
+
+  assert.equal(rediscovered.status, "needs_confirmation");
+  assert.equal(rediscovered.confirmable, true);
+  assert.equal(rediscovered.independent_candidate_count, 1);
+  assert.notEqual(secondMatchId, firstMatchId);
+  assert.equal(db.tables.bank_qbo_matches.find((row) => row.id === firstMatchId).status, "superseded");
+  assert.equal(db.tables.bank_qbo_matches.find((row) => row.id === secondMatchId).status, "confirmed");
+  assert.equal(reconfirmed.status, "confirmed");
+  assert.equal(db.tables.transaction_categorizations[0].status, "matched_existing_qbo");
+  assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_match_id, secondMatchId);
+  assert.equal(db.tables.bank_qbo_match_history.filter((row) => row.action === "confirmed").length, 2);
+  assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
+
+  await assert.rejects(
+    () => confirmIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-300", matchId: firstMatchId }),
+    /stale_match_refresh_required/
   );
 });
 
@@ -304,6 +362,8 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(client, /undoIncomingDepositMatch/);
   assert.match(feed, /Possible existing QuickBooks match/);
   assert.match(feed, /Match existing payment/);
+  assert.match(feed, /state\.confirmable/);
+  assert.match(feed, /independentCandidateCount/);
   assert.match(feed, /Matched to existing QuickBooks/);
   assert.match(feed, /View match details/);
   assert.match(feed, /This is not the same payment/);
@@ -314,6 +374,8 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(page, /status: activeTab === "handled" \|\| activeTab === "posted" \|\| activeTab === "matched" \|\| activeTab === "pending" \? activeTab : "needs_review"/);
   assert.match(page, /onConfirmIncomingDepositMatch/);
   assert.match(page, /onUndoIncomingDepositMatch/);
+  assert.match(page, /incomingDepositActionInFlightRef/);
+  assert.match(page, /stale_match_refresh_required/);
 });
 
 test("existing Needs Review inflows receive feed-time candidate discovery", async () => {
@@ -355,8 +417,68 @@ test("existing Needs Review inflows receive feed-time candidate discovery", asyn
   assert.equal(result.rows.length, 1);
   assert.equal(result.rows[0].incoming_deposit_match_status, "needs_confirmation");
   assert.equal(result.rows[0].incoming_deposit_candidates[0].qbo_entity_id, "dep-300");
+  assert.equal(result.rows[0].incoming_deposit_independent_candidate_count, 1);
+  assert.equal(result.rows[0].incoming_deposit_confirmable, true);
   assert.equal(result.rows[0].meta.post_block_reason, "possible_existing_qbo_match");
   assert.equal(db.tables.bank_qbo_matches.length, 1);
+  assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
+});
+
+test("feed-time discovery refreshes protected rows left with superseded match metadata after undo", async () => {
+  const db = fakeDb(baseMatchTables());
+  db.tables.qbo_entity_sync_runs[0].finished_at = new Date().toISOString();
+  db.tables.qbo_entity_sync_runs[0].started_at = new Date(Date.now() - 60_000).toISOString();
+  db.tables.bank_qbo_matches.push({
+    id: "old-match",
+    business_id: "b1",
+    bank_transaction_id: "txn-300",
+    status: "superseded",
+    match_type: "qbo_deposit",
+    confidence_tier: "tier_1",
+    confidence_score: 0.98,
+    reason_codes: ["exact_amount_cents"],
+    gross_bank_amount_minor: 30000,
+    request_idempotency_key: "old-key",
+    superseded_at: "2026-09-11T16:03:00Z",
+    meta: {},
+  });
+  db.rpcRows = [{
+    id: "txn-300",
+    plaid_account_id: "plaid-checking",
+    plaid_transaction_id: "plaid-1",
+    date: "2026-09-07",
+    name: "DEPOSIT INTUIT 73102173 OPTIMIST BOOKKEEPING ACH CREDIT",
+    amount: 300,
+    signed_amount: 300,
+    direction: "INFLOW",
+    pending: false,
+    cat_status: "needs_review",
+    cat_meta: {
+      safe_to_auto_post: false,
+      post_block_reason: "incoming_deposit_needs_match",
+      incoming_deposit_match_id: "old-match",
+      incoming_deposit_match_status: "superseded",
+      incoming_deposit_candidates: [{ qbo_entity_type: "Deposit", qbo_entity_id: "dep-300" }],
+    },
+    post_error: "incoming_deposit_needs_match",
+    total_count: 1,
+  }];
+  db.tables.transaction_categorizations[0].meta = db.rpcRows[0].cat_meta;
+  db.tables.transaction_categorizations[0].post_error = "incoming_deposit_needs_match";
+  db.tables.plaid_accounts = [{ business_id: "b1", plaid_account_id: "plaid-checking", name: "Checking", mask: "1234" }];
+  db.tables.business_profiles = [{ id: "b1", auto_post_to_quickbooks: false }];
+  db.tables.bookkeeping_auto_post_backlog_releases = [];
+
+  const result = await fetchBookkeepingTransactions({ db, businessId: "b1", statusFilter: "needs_review", rangeParam: "all" });
+
+  assert.equal(result.rows.length, 1);
+  assert.equal(result.rows[0].incoming_deposit_match_status, "needs_confirmation");
+  assert.notEqual(result.rows[0].incoming_deposit_match_id, "old-match");
+  assert.equal(result.rows[0].incoming_deposit_confirmable, true);
+  assert.equal(result.rows[0].incoming_deposit_independent_candidate_count, 1);
+  assert.equal(db.tables.bank_qbo_matches.length, 2);
+  assert.equal(db.tables.bank_qbo_matches.find((row) => row.id === "old-match").status, "superseded");
+  assert.equal(db.tables.bank_qbo_matches.filter((row) => row.status === "needs_confirmation").length, 1);
   assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
 });
 
@@ -374,7 +496,9 @@ test("existing-row dry-run discovery is bounded, idempotent, and performs no wri
   assert.equal(result.dry_run, true);
   assert.equal(result.scanned, 1);
   assert.equal(result.results[0].status, "needs_confirmation");
-  assert.equal(result.results[0].candidate_count, 1);
+  assert.equal(result.results[0].candidate_count, 3);
+  assert.equal(result.results[0].independent_candidate_count, 1);
+  assert.equal(result.results[0].confirmable, true);
   assert.equal(db.tables.bank_qbo_matches.length, 0);
   assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_match_status, undefined);
 });
@@ -564,6 +688,7 @@ test("cache re-normalization uses stored snapshots and is idempotent for the exa
 test("invoice-only duplicate evidence blocks blind posting but cannot be confirmed as a bank match", async () => {
   const tables = baseMatchTables();
   tables.job_revenue_evidence = [];
+  tables.job_payment_records = [];
   tables.job_revenue_documents = [{
     id: "doc-1102",
     business_id: "b1",
@@ -680,8 +805,43 @@ function baseMatchTables() {
       source_snapshot_at: "2026-09-11T16:00:00Z",
       source_snapshot: { revenue_document_id: "doc-1102" },
     }],
-    job_payment_records: [],
-    job_revenue_documents: [],
+    job_payment_records: [{
+      id: "pay-row",
+      business_id: "b1",
+      realm_id: "r1",
+      external_payment_id: "pay-300",
+      payment_date: "2026-09-07",
+      total_amount: 300,
+      amount_minor: 30000,
+      unapplied_amount: 0,
+      unapplied_amount_minor: 0,
+      deposit_ref: { value: "qbo-bank-1", name: "Checking" },
+      currency: "USD",
+      customer_ref: { value: "42", name: "Projection and Video LLC" },
+      linked_invoice_ids: ["doc-1102"],
+      sync_token: "0",
+      source_snapshot_at: "2026-09-11T16:00:00Z",
+      status: "confirmed",
+    }],
+    job_revenue_documents: [{
+      id: "doc-row",
+      business_id: "b1",
+      realm_id: "r1",
+      source_document_type: "invoice",
+      external_document_id: "doc-1102",
+      document_number: "1102",
+      document_date: "2026-09-07",
+      total_amount: 300,
+      amount_minor: 30000,
+      open_balance: 0,
+      open_balance_minor: 0,
+      currency: "USD",
+      customer_ref: { value: "42", name: "Projection and Video LLC" },
+      linked_payment_ids: ["pay-300"],
+      sync_token: "0",
+      source_snapshot_at: "2026-09-11T16:00:00Z",
+      status: "paid",
+    }],
     bank_qbo_matches: [],
     bank_qbo_match_items: [],
     bank_qbo_match_history: [],
