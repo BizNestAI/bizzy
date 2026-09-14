@@ -495,6 +495,10 @@ function adjustCount(value, delta) {
   return Math.max(0, Number(value || 0) + delta);
 }
 
+function transitionDelay(ms = 450) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function BookkeepingCleanup() {
   const { currentBusiness } = useBusiness?.() || {};
   const adminView = useAdminView();
@@ -643,12 +647,18 @@ function BookkeepingCleanup() {
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
   const incomingDepositActionInFlightRef = useRef(new Set());
+  const incomingDepositMatchedSuppressRef = useRef(new Set());
+  const mountedRef = useRef(true);
   const [incomingDepositUndoTxn, setIncomingDepositUndoTxn] = useState(null);
   const [manualPostTxn, setManualPostTxn] = useState(null);
   const [manualPostResult, setManualPostResult] = useState(null);
   const [clarRequests, setClarRequests] = useState([]);
   const [clarOpen, setClarOpen] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
   const loadMappingStatus = useCallback(async () => {
     if (!businessId || usingDemo) return;
@@ -1344,8 +1354,8 @@ function BookkeepingCleanup() {
     try {
       await markCreditCardPayment(businessId, id);
       accountOverrides.current?.delete?.(id);
-      setCountsRefreshKey((value) => value + 1);
       await reloadTransactions();
+      setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] cc payment mark failed", e?.message || e);
@@ -1358,8 +1368,8 @@ function BookkeepingCleanup() {
     try {
       await confirmCreditCardPaymentMatch(businessId, id, targetQboAccountId);
       accountOverrides.current?.delete?.(id);
-      setCountsRefreshKey((value) => value + 1);
       await reloadTransactions();
+      setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
     } catch (e) {
       const message = e?.body?.message || e?.message || "No matching opposite-side payment was found yet.";
@@ -1381,17 +1391,13 @@ function BookkeepingCleanup() {
     const key = String(id);
     if (incomingDepositActionInFlightRef.current.has(key)) return;
     incomingDepositActionInFlightRef.current.add(key);
-    setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: true, error: "" } }));
+    setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { status: "matching", loading: true, error: "" } }));
     try {
       const result = await action();
       const patch = result?.transaction_patch || result?.result?.transaction_patch || null;
       const countDelta = result?.count_delta || result?.result?.count_delta || null;
+      const resultStatus = result?.status || result?.result?.status || null;
       if (patch?.status === "matched_existing_qbo") {
-        setTransactions((prev) => (
-          activeTab === "matched"
-            ? prev.map((txn) => (txn.id === id ? { ...txn, ...patch, meta: { ...(txn.meta || {}), ...(patch.meta || {}) } } : txn))
-            : prev.filter((txn) => txn.id !== id)
-        ));
         if (countDelta) {
           setTabCounts((prev) => ({
             ...prev,
@@ -1402,11 +1408,43 @@ function BookkeepingCleanup() {
             pending: adjustCount(prev.pending, countDelta.pending),
           }));
         }
+        window.dispatchEvent(new CustomEvent("bizzy:toast", {
+          detail: {
+            severity: "success",
+            title: "Matched to existing QuickBooks",
+            body: "View in Matched",
+          },
+        }));
+        setIncomingDepositMatchActionState((prev) => ({
+          ...prev,
+          [id]: { status: "success", loading: false, error: "", matchedAt: patch.reconciled_at || new Date().toISOString() },
+        }));
+        await transitionDelay(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? 0 : 450);
+        if (!mountedRef.current) return;
+        incomingDepositMatchedSuppressRef.current.add(key);
+        setTransactions((prev) => (
+          activeTab === "matched"
+            ? prev.map((txn) => (txn.id === id ? { ...txn, ...patch, meta: { ...(txn.meta || {}), ...(patch.meta || {}) } } : txn))
+            : prev.filter((txn) => txn.id !== id)
+        ));
+      } else {
+        if (resultStatus === "superseded" || resultStatus === "rejected") {
+          incomingDepositMatchedSuppressRef.current.delete(key);
+        }
+        setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { status: "idle", loading: false, error: "" } }));
       }
-      setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: false, error: "" } }));
-      setCountsRefreshKey((value) => value + 1);
       await reloadTransactions();
-      await loadMappingStatus();
+      if (patch?.status !== "matched_existing_qbo") {
+        setCountsRefreshKey((value) => value + 1);
+        await loadMappingStatus();
+      }
+      if (patch?.status === "matched_existing_qbo" && mountedRef.current) {
+        setIncomingDepositMatchActionState((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }
     } catch (e) {
       const code = e?.body?.error || e?.code || e?.message || "";
       const customerSafeErrors = {
@@ -1417,7 +1455,7 @@ function BookkeepingCleanup() {
         match_check_unavailable: "QuickBooks match checking is temporarily unavailable. Try again shortly.",
       };
       const message = customerSafeErrors[code] || e?.body?.message || e?.message || "Could not update this QuickBooks match.";
-      setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { loading: false, error: message } }));
+      setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { status: "error", loading: false, error: message, reason: code } }));
     } finally {
       incomingDepositActionInFlightRef.current.delete(key);
     }
@@ -1718,9 +1756,20 @@ function BookkeepingCleanup() {
     const cacheKey = buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage });
     const previousPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
     const cachedPage = readTransactionPageCache(cacheKey) || previousPage;
+    const suppressCachedMatchedTransitions = (rows = [], totalValue = null) => {
+      const suppressIds = incomingDepositMatchedSuppressRef.current;
+      if (activeTab === "matched" || !suppressIds?.size) return { rows, totalCount: totalValue };
+      const filteredRows = rows.filter((txn) => !suppressIds.has(String(txn.id)));
+      const removed = rows.length - filteredRows.length;
+      return {
+        rows: filteredRows,
+        totalCount: typeof totalValue === "number" ? Math.max(0, totalValue - removed) : totalValue,
+      };
+    };
     if (cachedPage && Array.isArray(cachedPage.rows)) {
-      setTransactions(cachedPage.rows);
-      setTotalCount(typeof cachedPage.totalCount === "number" ? cachedPage.totalCount : cachedPage.rows.length);
+      const cached = suppressCachedMatchedTransitions(cachedPage.rows, typeof cachedPage.totalCount === "number" ? cachedPage.totalCount : cachedPage.rows.length);
+      setTransactions(cached.rows);
+      setTotalCount(typeof cached.totalCount === "number" ? cached.totalCount : cached.rows.length);
       setLoadingTxns(false);
       setBackgroundRefreshingTxns(true);
     } else {
@@ -1778,6 +1827,16 @@ function BookkeepingCleanup() {
           direction,
         };
       });
+    const suppressMatchedTransitions = (list = [], totalValue = null) => {
+      const suppressIds = incomingDepositMatchedSuppressRef.current;
+      if (activeTab === "matched" || !suppressIds?.size) {
+        return { rows: list, totalCount: totalValue };
+      }
+      const rows = list.filter((txn) => !suppressIds.has(String(txn.id)));
+      const removed = list.length - rows.length;
+      const totalCount = typeof totalValue === "number" ? Math.max(0, totalValue - removed) : totalValue;
+      return { rows, totalCount };
+    };
     const extractTxns = (res) =>
       Array.isArray(res)
         ? res
@@ -1794,6 +1853,9 @@ function BookkeepingCleanup() {
       (typeof res?.meta?.total_count === "number" ? res.meta.total_count : null) ??
       normalizedList.length;
     const commitTransactionPage = (normalizedList, nextTotalValue, { cache = true } = {}) => {
+      const suppressed = suppressMatchedTransitions(normalizedList, nextTotalValue);
+      normalizedList = suppressed.rows;
+      nextTotalValue = suppressed.totalCount;
       const incomplete = isInconsistentEmptyTransactionPage({ rows: normalizedList, totalCount: nextTotalValue });
       setTotalCount(nextTotalValue);
       if (incomplete) {

@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom";
-import { CreditCard, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
+import { CheckCircle2, CreditCard, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
 import {
   deriveCreditCardPaymentOrientation,
@@ -598,7 +598,9 @@ function IncomingDepositMatchPanel({
   if (!state?.active) return null;
   const primary = state.primary || {};
   const paymentCandidate = (state.candidates || []).find((candidate) => candidate.qbo_entity_type === "Payment") || null;
-  const heading = state.confirmed
+  const transitionSuccess = action.status === "success";
+  const transitionMatching = action.status === "matching" || action.loading === true;
+  const heading = state.confirmed || transitionSuccess
     ? "Matched to existing QuickBooks"
     : action.error
       ? "Match needs to be refreshed"
@@ -611,8 +613,8 @@ function IncomingDepositMatchPanel({
       : state.ambiguous
         ? "Needs match"
         : "Possible existing QuickBooks match";
-  const description = state.confirmed
-    ? "Confirmed against existing QuickBooks activity. Bizzi did not create a new QuickBooks transaction."
+  const description = state.confirmed || transitionSuccess
+    ? transitionSuccess ? "Match confirmed. No new QuickBooks transaction was created." : "Confirmed against existing QuickBooks activity. Bizzi did not create a new QuickBooks transaction."
     : action.error
       ? action.error
     : state.unavailable
@@ -636,27 +638,30 @@ function IncomingDepositMatchPanel({
         .filter(Boolean)
         .join(", ")
     : Array.isArray(primary.invoice_ids) && primary.invoice_ids.length ? primary.invoice_ids.join(", ") : null;
-  const panelTone = state.confirmed
+  const panelTone = state.confirmed || transitionSuccess
     ? "border-emerald-300/25 bg-emerald-500/8 text-emerald-50"
     : "border-amber-300/25 bg-amber-400/8 text-amber-50";
-  const headingTone = state.confirmed ? "text-emerald-100" : "text-amber-100";
-  const copyTone = state.confirmed ? "text-emerald-50/78" : "text-amber-50/78";
-  const tierTone = state.confirmed ? "border-emerald-200/30 text-emerald-100" : "border-amber-200/30 text-amber-100";
+  const headingTone = state.confirmed || transitionSuccess ? "text-emerald-100" : "text-amber-100";
+  const copyTone = state.confirmed || transitionSuccess ? "text-emerald-50/78" : "text-amber-50/78";
+  const tierTone = state.confirmed || transitionSuccess ? "border-emerald-200/30 text-emerald-100" : "border-amber-200/30 text-amber-100";
   return (
-    <div className={`mt-3 rounded-lg border p-3 text-left text-[11px] ${panelTone}`} aria-busy={action.loading ? "true" : "false"}>
-      <span className="sr-only" aria-live="polite">{action.loading ? "Matching to QuickBooks" : ""}</span>
+    <div className={`mt-3 rounded-lg border p-3 text-left text-[11px] ${panelTone}`} aria-busy={transitionMatching ? "true" : "false"}>
+      <span className="sr-only" aria-live="polite">{transitionMatching ? "Matching this bank deposit to the existing QuickBooks deposit." : transitionSuccess ? "Match confirmed." : ""}</span>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className={`text-[12px] font-semibold ${headingTone}`}>{heading}</div>
+          <div className={`flex items-center gap-1.5 text-[12px] font-semibold ${headingTone}`}>
+            {transitionSuccess ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-200 motion-safe:animate-pulse" aria-hidden="true" /> : null}
+            <span>{transitionSuccess ? "Match confirmed" : heading}</span>
+          </div>
           <div className={`mt-1 max-w-2xl text-[11px] leading-5 ${copyTone}`}>{description}</div>
         </div>
-        {state.tier ? <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tierTone}`}>{state.tier.replace("_", " ").toUpperCase()}</span> : null}
+        {transitionSuccess ? <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tierTone}`}>MATCHED</span> : state.tier ? <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tierTone}`}>{state.tier.replace("_", " ").toUpperCase()}</span> : null}
       </div>
       {primary.qbo_entity_type ? (
         <div className="mt-3 grid gap-2 text-[11px] text-slate-100 sm:grid-cols-3">
           <div><span className="text-slate-400">Bank amount</span><br />{formatMinorMoney(Math.round(Math.abs(Number(txn.amount || 0)) * 100), primary.currency || "USD") || "Not available"}</div>
           <div><span className="text-slate-400">Bank date</span><br />{txn.date || "Not available"}</div>
-          <div><span className="text-slate-400">Match date</span><br />{txn.reconciled_at ? new Date(txn.reconciled_at).toLocaleDateString() : "Not available"}</div>
+          <div><span className="text-slate-400">Match date</span><br />{txn.reconciled_at || action.matchedAt ? new Date(txn.reconciled_at || action.matchedAt).toLocaleDateString() : "Not available"}</div>
           <div><span className="text-slate-400">QBO Deposit</span><br />{primary.qbo_entity_type === "Deposit" ? formatMinorMoney(primary.amount_minor, primary.currency || "USD") || "Not available" : primary.qbo_entity_type}</div>
           <div><span className="text-slate-400">QBO Payment</span><br />{paymentCandidate ? formatMinorMoney(paymentCandidate.amount_minor, paymentCandidate.currency || primary.currency || "USD") || "Not available" : "Not available"}</div>
           {invoiceText ? <div><span className="text-slate-400">Invoice</span><br />{invoiceText}</div> : null}
@@ -674,28 +679,33 @@ function IncomingDepositMatchPanel({
         </div>
       ) : null}
       <div className="mt-3 flex flex-wrap gap-2">
-        {state.confirmed ? (
+        {transitionSuccess ? (
+          <>
+            <span className="rounded-md border border-emerald-300/35 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-100">Matched to existing QuickBooks</span>
+            <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-200">View in Matched</span>
+          </>
+        ) : state.confirmed ? (
           <>
             <span className="rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold text-slate-100">View match details</span>
             <button type="button" disabled={readOnly || action.loading || !state.matchId} onClick={() => onUndo?.(txn.id, state.matchId, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">Undo match</button>
           </>
         ) : state.unavailable ? (
-          <button type="button" disabled={readOnly || action.loading} onClick={() => onInspect?.(txn.id, null, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{action.loading ? "Checking..." : "Try again"}</button>
+          <button type="button" disabled={readOnly || transitionMatching} onClick={() => onInspect?.(txn.id, null, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{transitionMatching ? "Checking..." : "Try again"}</button>
         ) : (
           <>
             {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && state.confirmable ? (
-              <button type="button" disabled={readOnly || action.loading} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="inline-flex min-w-[170px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
-                {action.loading ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
-                {action.loading ? "Matching to QuickBooks…" : primaryActionLabel}
+              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="inline-flex min-w-[190px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
+                {transitionMatching ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                {transitionMatching ? "Matching to QuickBooks…" : primaryActionLabel}
               </button>
             ) : state.matchId && primary.qbo_entity_type && !state.invoiceOnly ? (
-              <button type="button" disabled={readOnly || action.loading} onClick={() => onInspect?.(txn.id, null, txn)} className="inline-flex min-w-[116px] items-center justify-center gap-1.5 rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">
-                {action.loading ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
-                {action.loading ? "Refreshing..." : refreshable ? "Refresh match" : "Retry match check"}
+              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onInspect?.(txn.id, null, txn)} className="inline-flex min-w-[116px] items-center justify-center gap-1.5 rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">
+                {transitionMatching ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
+                {transitionMatching ? "Refreshing..." : refreshable ? "Refresh match" : "Retry match check"}
               </button>
             ) : null}
             {state.matchId ? (
-              <button type="button" disabled={readOnly || action.loading} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">This is not the same payment</button>
+              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">This is not the same payment</button>
             ) : null}
             {candidateCount > 1 ? <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-300">Review other matches</span> : null}
           </>
