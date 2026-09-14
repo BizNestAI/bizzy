@@ -125,6 +125,22 @@ export function deriveCreditCardPaymentOrientation(row = {}) {
       placeholder: "Paid from...",
     };
   }
+  if (isCreditCardPaymentWorkflow(row) && isOutflow) {
+    return {
+      side: "bank",
+      counterpartAccountType: "CreditCard",
+      label: "Paid to",
+      placeholder: "Match payment to...",
+    };
+  }
+  if (isCreditCardPaymentWorkflow(row) && isInflow) {
+    return {
+      side: "credit_card",
+      counterpartAccountType: "Bank",
+      label: "Paid from",
+      placeholder: "Paid from...",
+    };
+  }
   return {
     side: "unknown",
     counterpartAccountType: null,

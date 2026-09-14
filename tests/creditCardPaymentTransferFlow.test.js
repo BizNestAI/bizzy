@@ -47,6 +47,21 @@ test("credit-card payment orientation is bidirectional and account-type aware", 
   assert.equal(isQboBankAccount({ type: "CreditCard" }), false);
 });
 
+test("taxonomy-only credit-card payment outflow still offers mapped credit-card destinations", () => {
+  const orientation = deriveCreditCardPaymentOrientation({
+    taxonomy_type: "cc_payment",
+    direction: "OUTFLOW",
+    signed_amount: -40,
+  });
+
+  assert.deepEqual(orientation, {
+    side: "bank",
+    counterpartAccountType: "CreditCard",
+    label: "Paid to",
+    placeholder: "Match payment to...",
+  });
+});
+
 test("credit-card-payment pairs are durable, tenant scoped, and one leg cannot belong to multiple active pairs", () => {
   const migration = read("supabase/migrations/20260903_credit_card_payment_pairs.sql");
 
