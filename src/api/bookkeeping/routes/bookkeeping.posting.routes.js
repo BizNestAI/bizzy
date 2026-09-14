@@ -6,6 +6,10 @@ import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import { postSingleBookkeepingTransactionNow, runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
 import {
   getAutoPostSettings,
+  getCanonicalPostingBacklogSummary,
+  getMerchantBacklogGroups,
+  approveMerchantBacklogGroup,
+  postReadyBacklogTransactions,
   previewAutoPostBacklog,
   releaseAutoPostBacklogScope,
   setAutoPostEnabled,
@@ -17,6 +21,92 @@ import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../../services/tax/taxC
 
 const router = Router();
 const POSTING_GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
+
+function cents(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(Math.abs(n) * 100) : null;
+}
+
+function normalizeMatchText(value = "") {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function qboDuplicateDateWindow(date) {
+  const center = date ? new Date(`${date}T00:00:00Z`) : new Date();
+  if (!Number.isFinite(center.getTime())) return { start: date, end: date };
+  const start = new Date(center);
+  start.setUTCDate(start.getUTCDate() - 3);
+  const end = new Date(center);
+  end.setUTCDate(end.getUTCDate() + 3);
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+}
+
+function collectQboDuplicateText(entity = {}) {
+  const parts = [entity.DocNumber, entity.PrivateNote, entity.Memo, entity.PaymentRefNum, entity.EntityRef?.name, entity.AccountRef?.name];
+  for (const line of Array.isArray(entity.Line) ? entity.Line : []) {
+    parts.push(line?.Description, line?.AccountBasedExpenseLineDetail?.AccountRef?.name);
+  }
+  return normalizeMatchText(parts.filter(Boolean).join(" "));
+}
+
+function unwrapQboFindPurchases(resp) {
+  const query = resp?.QueryResponse || resp || {};
+  if (Array.isArray(query.Purchase)) return query.Purchase;
+  if (query.Purchase) return [query.Purchase];
+  return Object.values(query).filter(Array.isArray).flat();
+}
+
+async function findQboPurchasesForDuplicatePreflight(qbo, bankTxn = {}) {
+  const fn = typeof qbo?.findPurchases === "function" ? qbo.findPurchases.bind(qbo) : null;
+  if (!fn) throw new Error("qbo_find_purchases_not_supported");
+  const { start, end } = qboDuplicateDateWindow(bankTxn.date);
+  const criteria = [
+    { field: "TxnDate", operator: ">=", value: start },
+    { field: "TxnDate", operator: "<=", value: end },
+    { field: "limit", value: 50 },
+  ];
+  const resp = await new Promise((resolve, reject) => fn(criteria, (err, data) => (err ? reject(err) : resolve(data))));
+  return unwrapQboFindPurchases(resp);
+}
+
+async function runLiveDuplicatePreflight({ businessId, bankTxn = {} }) {
+  const { data: mapping, error: mappingError } = await supabase
+    .from("plaid_qbo_account_mappings")
+    .select("qbo_account_id,qbo_account_name,qbo_account_type")
+    .eq("business_id", businessId)
+    .eq("plaid_account_id", bankTxn.plaid_account_id)
+    .limit(1)
+    .maybeSingle();
+  if (mappingError || !mapping?.qbo_account_id) {
+    return { confidence: "MISSING_MAPPING", candidates: [], reason: mappingError?.message || "missing_source_mapping" };
+  }
+  const qbo = await getQBOClient(businessId);
+  const purchases = await findQboPurchasesForDuplicatePreflight(qbo, bankTxn);
+  const payeeText = normalizeMatchText(bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || "");
+  const scored = purchases
+    .map((entity) => {
+      const txnDate = entity.TxnDate || null;
+      const days = txnDate && bankTxn.date
+        ? Math.abs(new Date(`${txnDate}T00:00:00Z`) - new Date(`${bankTxn.date}T00:00:00Z`)) / 86400000
+        : Infinity;
+      const text = collectQboDuplicateText(entity);
+      return {
+        qbo_txn_id: entity.Id || null,
+        qbo_txn_type: "Purchase",
+        txn_date: txnDate,
+        amount: entity.TotalAmt ?? null,
+        account_matches: String(entity.AccountRef?.value || "") === String(mapping.qbo_account_id),
+        date_matches: days <= 1,
+        amount_matches: cents(entity.TotalAmt) === cents(bankTxn.amount),
+        payee_matches: Boolean(payeeText && text.includes(payeeText)),
+      };
+    })
+    .filter((row) => row.qbo_txn_id && row.account_matches && row.date_matches && row.amount_matches);
+  const strong = scored.filter((row) => row.payee_matches);
+  if (strong.length === 1) return { confidence: "HIGH_CONFIDENCE_PROBABLE_DUPLICATE", candidates: strong };
+  if (strong.length > 1 || scored.length > 0) return { confidence: "AMBIGUOUS", candidates: strong.length ? strong : scored };
+  return { confidence: "NO_MATCH", candidates: [], candidate_count: purchases.length };
+}
 
 function normalizeQboTxnType(value = "") {
   const normalized = String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
@@ -144,6 +234,108 @@ router.get("/posting/backlog/preview", requireAuth, async (req, res) => {
     return res.status(err?.status || 500).json({
       ok: false,
       error: err?.code || "auto_post_backlog_preview_failed",
+      message: err?.message || "failed",
+    });
+  }
+});
+
+router.get("/posting/backlog/summary", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const summary = await getCanonicalPostingBacklogSummary({
+      db: supabase,
+      businessId,
+      rangeStart: req.query?.range_start || null,
+      rangeEnd: req.query?.range_end || null,
+      effectiveDate: req.query?.effective_date || req.query?.range_start || null,
+    });
+    return res.json(summary);
+  } catch (err) {
+    console.error("[bookkeeping][backlog-summary] failed", err?.message || err);
+    return res.status(err?.status || 500).json({
+      ok: false,
+      error: err?.code || "posting_backlog_summary_failed",
+      message: err?.message || "failed",
+    });
+  }
+});
+
+router.get("/posting/backlog/merchant-groups", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const groups = await getMerchantBacklogGroups({
+      db: supabase,
+      businessId,
+      rangeStart: req.query?.range_start || null,
+      rangeEnd: req.query?.range_end || null,
+      effectiveDate: req.query?.effective_date || req.query?.range_start || null,
+      limit: req.query?.limit || 50,
+    });
+    return res.json(groups);
+  } catch (err) {
+    console.error("[bookkeeping][merchant-groups] failed", err?.message || err);
+    return res.status(err?.status || 500).json({
+      ok: false,
+      error: err?.code || "merchant_groups_failed",
+      message: err?.message || "failed",
+    });
+  }
+});
+
+router.post("/posting/backlog/merchant-groups/approve", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const result = await approveMerchantBacklogGroup({
+      db: supabase,
+      businessId,
+      actorId: req.user?.id || req.user?.sub || null,
+      selectedQboAccountId: req.body?.selected_qbo_account_id || req.body?.qbo_account_id || null,
+      rememberForFuture: req.body?.remember_for_future !== false,
+      groupSnapshotToken: req.body?.group_snapshot_token || req.body?.snapshot_token || null,
+      transactionIds: Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids : [],
+      exclusionIds: Array.isArray(req.body?.exclusion_ids) ? req.body.exclusion_ids : [],
+      expectedRowVersions: req.body?.expected_row_versions || {},
+      idempotencyKey: req.get("Idempotency-Key") || req.body?.idempotency_key || null,
+      duplicatePreflight: runLiveDuplicatePreflight,
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error("[bookkeeping][merchant-group-approve] failed", err?.message || err);
+    return res.status(err?.status || 500).json({
+      ok: false,
+      error: err?.code || "merchant_group_approval_failed",
+      message: err?.message || "failed",
+    });
+  }
+});
+
+router.post("/posting/backlog/post-ready", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const result = await postReadyBacklogTransactions({
+      db: supabase,
+      businessId,
+      transactionIds: Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids : [],
+      duplicatePreflight: runLiveDuplicatePreflight,
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error("[bookkeeping][post-ready-backlog] failed", err?.message || err);
+    return res.status(err?.status || 500).json({
+      ok: false,
+      error: err?.code || "post_ready_backlog_failed",
       message: err?.message || "failed",
     });
   }

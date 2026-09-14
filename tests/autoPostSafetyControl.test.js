@@ -7,8 +7,11 @@ import { join } from "node:path";
 import {
   classifyAutoPostOperationalScope,
   computePostAfterForAutoPost,
+  getCanonicalPostingBacklogSummary,
+  getMerchantBacklogGroups,
   getAutoPostSettings,
   getAutoPostToQuickBooks,
+  approveMerchantBacklogGroup,
   previewAutoPostBacklog,
   reEvaluateAutoPostBacklog,
   releaseAutoPostBacklogScope,
@@ -723,6 +726,107 @@ test("Auto-post UI uses policy-aware scope copy instead of all imported dates", 
   assert.match(page, /Update automatic posting scope/);
   assert.match(page, /New activity only/);
   assert.match(page, /Include existing safe Handled transactions/);
+});
+
+test("canonical posting backlog summary is exhaustive and frontend renders backend buckets", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    transaction_categorizations: [
+      { business_id: "biz-1", transaction_id: "safe", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", post_after: null, qbo_txn_id: null, meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "needs-rule", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", post_after: null, qbo_txn_id: null, meta: { auto_approve_reason: "universal_hint" } },
+      { business_id: "biz-1", transaction_id: "posting", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", post_after: null, qbo_txn_id: null, meta: { posting_in_progress: true } },
+      { business_id: "biz-1", transaction_id: "future", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", post_after: "2999-01-01T00:00:00.000Z", qbo_txn_id: null, meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "income", status: "auto_approved", final_qbo_account_id: "1", final_qbo_account_name: "Income", post_after: null, qbo_txn_id: null, meta: {} },
+      { business_id: "biz-1", transaction_id: "cc", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", post_after: null, qbo_txn_id: null, meta: { taxonomy_type: "cc_payment" } },
+      { business_id: "biz-1", transaction_id: "missing", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", post_after: null, qbo_txn_id: null, meta: { safe_to_auto_post: true } },
+      { business_id: "biz-1", transaction_id: "failed", status: "failed", final_qbo_account_id: "24", final_qbo_account_name: "Software", post_after: null, post_error: "boom", qbo_txn_id: null, meta: {} },
+    ],
+    bank_transactions: [
+      { business_id: "biz-1", id: "safe", plaid_account_id: "pa-1", date: "2026-06-01", amount: -10, direction: "OUTFLOW", name: "Adobe", merchant_name: "Adobe", merchant_entity_id: "adobe-ent", is_archived: false },
+      { business_id: "biz-1", id: "needs-rule", plaid_account_id: "pa-1", date: "2026-06-02", amount: -20, direction: "OUTFLOW", name: "OpenAI", merchant_name: "OpenAI", merchant_entity_id: "openai-ent", is_archived: false },
+      { business_id: "biz-1", id: "posting", plaid_account_id: "pa-1", date: "2026-06-03", amount: -30, direction: "OUTFLOW", name: "Adobe", merchant_name: "Adobe", merchant_entity_id: "adobe-ent", is_archived: false },
+      { business_id: "biz-1", id: "future", plaid_account_id: "pa-1", date: "2026-06-04", amount: -40, direction: "OUTFLOW", name: "Adobe", merchant_name: "Adobe", merchant_entity_id: "adobe-ent", is_archived: false },
+      { business_id: "biz-1", id: "income", plaid_account_id: "pa-1", date: "2026-06-05", amount: 50, direction: "INFLOW", name: "Deposit", merchant_name: "Client", is_archived: false },
+      { business_id: "biz-1", id: "cc", plaid_account_id: "pa-1", date: "2026-06-06", amount: -60, direction: "OUTFLOW", name: "Credit Card Payment", merchant_name: "Bank", is_archived: false },
+      { business_id: "biz-1", id: "missing", plaid_account_id: "pa-missing", date: "2026-06-07", amount: -70, direction: "OUTFLOW", name: "Adobe", merchant_name: "Adobe", merchant_entity_id: "adobe-ent", is_archived: false },
+      { business_id: "biz-1", id: "failed", plaid_account_id: "pa-1", date: "2026-06-08", amount: -80, direction: "OUTFLOW", name: "Adobe", merchant_name: "Adobe", merchant_entity_id: "adobe-ent", is_archived: false },
+    ],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "19", qbo_account_name: "Credit Card", qbo_account_type: "CreditCard" }],
+    vendor_rules: [{
+      id: "rule-adobe",
+      business_id: "biz-1",
+      match_type: "merchant_entity_id",
+      match_value: "adobe-ent",
+      counterparty_name: "Adobe",
+      rule_kind: "category_default",
+      source: "business_merchant_rule",
+      default_qbo_account_id: "24",
+      default_qbo_account_name: "Software",
+      direction_hint: "OUTFLOW",
+      notes: JSON.stringify({ source_type: "business_merchant_rule", authority: "user_confirmed", match_specificity: "exact_provider_merchant_id", state: "active" }),
+      match_conditions: null,
+    }],
+  });
+  const summary = await getCanonicalPostingBacklogSummary({ db, businessId: "biz-1", effectiveDate: "2026-05-01" });
+  assert.equal(summary.total, 8);
+  assert.equal(Object.values(summary.buckets).reduce((sum, n) => sum + n, 0), 8);
+  assert.equal(summary.buckets.ready_to_release, 1);
+  assert.equal(summary.buckets.merchant_approval_needed, 1);
+  assert.equal(summary.buckets.active_posting, 1);
+  assert.equal(summary.buckets.scheduled_future, 1);
+  assert.equal(summary.buckets.protected_income_match, 1);
+  assert.equal(summary.buckets.protected_credit_card_payment, 1);
+  assert.equal(summary.buckets.missing_mapping, 1);
+  assert.equal(summary.buckets.failed, 1);
+
+  const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+  assert.match(page, /backlog_summary/);
+  assert.doesNotMatch(page, /Ready to release", autoPostStatus\.backlog_preview_summary\.eligible_count/);
+});
+
+test("merchant groups use exact identity and grouped approval schedules only passing rows", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "24", name: "Software", account_type: "Expense", active: true }],
+    transaction_categorizations: [
+      { business_id: "biz-1", transaction_id: "openai-1", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", qbo_txn_id: null, meta: { auto_approve_reason: "universal_hint" }, updated_at: "v1" },
+      { business_id: "biz-1", transaction_id: "openai-2", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", qbo_txn_id: null, meta: { auto_approve_reason: "universal_hint" }, updated_at: "v1" },
+      { business_id: "biz-1", transaction_id: "openai-pending", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", qbo_txn_id: null, meta: { auto_approve_reason: "universal_hint" }, updated_at: "v1" },
+      { business_id: "biz-1", transaction_id: "goodyear-house", status: "auto_approved", final_qbo_account_id: "60", final_qbo_account_name: "Meals", qbo_txn_id: null, meta: { auto_approve_reason: "universal_hint" }, updated_at: "v1" },
+      { business_id: "biz-1", transaction_id: "goodyear-auto", status: "auto_approved", final_qbo_account_id: "61", final_qbo_account_name: "Repairs", qbo_txn_id: null, meta: { auto_approve_reason: "universal_hint" }, updated_at: "v1" },
+      { business_id: "biz-1", transaction_id: "payment", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", qbo_txn_id: null, meta: { auto_approve_reason: "universal_hint" }, updated_at: "v1" },
+    ],
+    bank_transactions: [
+      { business_id: "biz-1", id: "openai-1", plaid_account_id: "pa-1", date: "2026-06-01", amount: -200, direction: "OUTFLOW", name: "OPENAI CHATGPT", merchant_name: "OpenAI", merchant_entity_id: "openai-ent", is_archived: false },
+      { business_id: "biz-1", id: "openai-2", plaid_account_id: "pa-1", date: "2026-07-01", amount: -200, direction: "OUTFLOW", name: "OPENAI CHATGPT", merchant_name: "OpenAI", merchant_entity_id: "openai-ent", is_archived: false },
+      { business_id: "biz-1", id: "openai-pending", plaid_account_id: "pa-1", date: "2026-08-01", amount: -200, direction: "OUTFLOW", name: "OPENAI CHATGPT", merchant_name: "OpenAI", merchant_entity_id: "openai-ent", pending: true, is_archived: false },
+      { business_id: "biz-1", id: "goodyear-house", plaid_account_id: "pa-1", date: "2026-06-03", amount: -12, direction: "OUTFLOW", name: "THE GOODYEAR HOUSE", merchant_name: "The Goodyear House", merchant_entity_id: "goodyear-house-ent", is_archived: false },
+      { business_id: "biz-1", id: "goodyear-auto", plaid_account_id: "pa-1", date: "2026-06-04", amount: -130, direction: "OUTFLOW", name: "GOODYEAR AUTO", merchant_name: "Goodyear", merchant_entity_id: "goodyear-auto-ent", is_archived: false },
+      { business_id: "biz-1", id: "payment", plaid_account_id: "pa-1", date: "2026-06-05", amount: -5, direction: "OUTFLOW", name: "Online payment", merchant_name: "Payment", is_archived: false },
+    ],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "19", qbo_account_name: "Credit Card", qbo_account_type: "CreditCard" }],
+    vendor_rules: [],
+  });
+  const groups = await getMerchantBacklogGroups({ db, businessId: "biz-1", effectiveDate: "2026-05-01" });
+  const openai = groups.groups.find((group) => group.display_merchant === "OpenAI");
+  assert.equal(openai.transaction_count, 2);
+  assert.notEqual(groups.groups.find((group) => group.display_merchant === "The Goodyear House")?.group_id, groups.groups.find((group) => group.display_merchant === "Goodyear")?.group_id);
+  assert.equal(groups.groups.some((group) => group.display_merchant === "Payment"), false);
+
+  const result = await approveMerchantBacklogGroup({
+    db,
+    businessId: "biz-1",
+    selectedQboAccountId: "24",
+    groupSnapshotToken: openai.snapshot_token,
+    duplicatePreflight: async () => ({ confidence: "NO_MATCH", candidates: [] }),
+    idempotencyKey: "idem-1",
+  });
+  assert.equal(result.rule.match_type, "merchant_entity_id");
+  assert.equal(db.table("vendor_rules").length, 1);
+  assert.equal(db.cat("biz-1", "openai-1").meta.safe_to_auto_post, true);
+  assert.equal(db.cat("biz-1", "openai-2").meta.safe_to_auto_post, true);
+  assert.equal(db.cat("biz-1", "openai-pending").meta.safe_to_auto_post, undefined);
+  assert.equal(result.scheduled_count, 2);
 });
 
 function makeSupabase(tables = {}, options = {}) {

@@ -207,6 +207,55 @@ export async function previewAutoPostBacklogScope(businessId, { effectiveDate = 
   });
 }
 
+export async function getPostingBacklogSummary(businessId, { effectiveDate = null, rangeStart = null, rangeEnd = null } = {}) {
+  const params = new URLSearchParams();
+  if (businessId) params.set("business_id", businessId);
+  if (effectiveDate) params.set("effective_date", effectiveDate);
+  if (rangeStart || effectiveDate) params.set("range_start", rangeStart || effectiveDate);
+  if (rangeEnd) params.set("range_end", rangeEnd);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return safeFetch(apiUrl(`/api/bookkeeping/posting/backlog/summary${suffix}`), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+}
+
+export async function getPostingBacklogMerchantGroups(businessId, { effectiveDate = null, rangeStart = null, rangeEnd = null, limit = 50 } = {}) {
+  const params = new URLSearchParams();
+  if (businessId) params.set("business_id", businessId);
+  if (effectiveDate) params.set("effective_date", effectiveDate);
+  if (rangeStart || effectiveDate) params.set("range_start", rangeStart || effectiveDate);
+  if (rangeEnd) params.set("range_end", rangeEnd);
+  if (limit) params.set("limit", String(limit));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return safeFetch(apiUrl(`/api/bookkeeping/posting/backlog/merchant-groups${suffix}`), {
+    method: "GET",
+    headers: withBizHeaders(businessId),
+  });
+}
+
+export async function approvePostingBacklogMerchantGroup(businessId, payload = {}) {
+  return safeFetch(apiUrl("/api/bookkeeping/posting/backlog/merchant-groups/approve"), {
+    method: "POST",
+    headers: withBizHeaders(businessId, {
+      "Content-Type": "application/json",
+      "Idempotency-Key": payload.idempotency_key || `merchant-group-${payload.group_snapshot_token || Date.now()}`,
+    }),
+    body: JSON.stringify({ business_id: businessId, ...payload }),
+  });
+}
+
+export async function postReadyPostingBacklogTransactions(businessId, transactionIds = []) {
+  return safeFetch(apiUrl("/api/bookkeeping/posting/backlog/post-ready"), {
+    method: "POST",
+    headers: withBizHeaders(businessId, {
+      "Content-Type": "application/json",
+      "Idempotency-Key": `post-ready-${transactionIds.slice().sort().join("-") || "all"}`,
+    }),
+    body: JSON.stringify({ business_id: businessId, transaction_ids: transactionIds }),
+  });
+}
+
 export async function getQboCoa(businessId) {
   return safeFetch(apiUrl("/api/bookkeeping/qbo/coa"), {
     method: "GET",

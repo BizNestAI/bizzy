@@ -35,6 +35,10 @@ import {
   getAutoPostStatus,
   updateAutoPostStatus,
   previewAutoPostBacklogScope,
+  getPostingBacklogSummary,
+  getPostingBacklogMerchantGroups,
+  approvePostingBacklogMerchantGroup,
+  postReadyPostingBacklogTransactions,
 } from "../../services/bookkeeping/bookkeepingClient.js";
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
@@ -298,6 +302,11 @@ function formatShortDate(dateStr) {
 
 function formatPostingAmount(txn = {}) {
   const amount = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0;
+  return `${amount < 0 ? "-" : "+"}$${Math.abs(amount).toFixed(2)}`;
+}
+
+function formatSignedCurrency(value) {
+  const amount = Number(value || 0);
   return `${amount < 0 ? "-" : "+"}$${Math.abs(amount).toFixed(2)}`;
 }
 
@@ -703,6 +712,13 @@ function BookkeepingCleanup() {
   const [autoPostEffectiveDate, setAutoPostEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [autoPostPreview, setAutoPostPreview] = useState(null);
   const [loadingAutoPostPreview, setLoadingAutoPostPreview] = useState(false);
+  const [postingBacklogSummary, setPostingBacklogSummary] = useState(null);
+  const [merchantReviewOpen, setMerchantReviewOpen] = useState(false);
+  const [merchantGroups, setMerchantGroups] = useState([]);
+  const [loadingMerchantGroups, setLoadingMerchantGroups] = useState(false);
+  const [merchantGroupAction, setMerchantGroupAction] = useState(null);
+  const [expandedMerchantGroup, setExpandedMerchantGroup] = useState(null);
+  const [merchantGroupOptions, setMerchantGroupOptions] = useState({});
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
   const incomingDepositActionInFlightRef = useRef(new Set());
@@ -770,6 +786,7 @@ function BookkeepingCleanup() {
     try {
       const res = await getAutoPostStatus(businessId);
       setAutoPostStatus(res || { auto_post_to_quickbooks: false, handled_backlog_count: 0 });
+      setPostingBacklogSummary(res?.backlog_summary || null);
     } catch (e) {
       console.warn("[bookkeeping] auto-post status fetch failed", e?.message || e);
       window.dispatchEvent(new CustomEvent("bizzy:toast", {
@@ -790,6 +807,8 @@ function BookkeepingCleanup() {
     try {
       const res = await previewAutoPostBacklogScope(businessId, { effectiveDate });
       setAutoPostPreview(res || null);
+      const summary = await getPostingBacklogSummary(businessId, { effectiveDate });
+      setPostingBacklogSummary(summary || null);
     } catch (e) {
       console.warn("[bookkeeping] auto-post preview failed", e?.message || e);
       setAutoPostPreview(null);
@@ -797,6 +816,103 @@ function BookkeepingCleanup() {
       setLoadingAutoPostPreview(false);
     }
   }, [businessId, usingDemo]);
+
+  const loadMerchantGroups = useCallback(async () => {
+    if (!businessId || usingDemo) return;
+    setLoadingMerchantGroups(true);
+    try {
+      const res = await getPostingBacklogMerchantGroups(businessId, {
+        effectiveDate: autoPostStatus?.auto_post_effective_date || autoPostEffectiveDate,
+        limit: 50,
+      });
+      const groups = Array.isArray(res?.groups) ? res.groups : [];
+      setMerchantGroups(groups);
+      setMerchantGroupOptions((prev) => {
+        const next = { ...(prev || {}) };
+        groups.forEach((group) => {
+          if (!next[group.group_id]) {
+            next[group.group_id] = {
+              qboAccountId: group.proposed_qbo_account_id,
+              rememberForFuture: true,
+              applyHistorical: true,
+              postPassing: autoPostStatus?.auto_post_to_quickbooks === true,
+              exclusions: new Set(),
+            };
+          }
+        });
+        return next;
+      });
+    } catch (e) {
+      console.warn("[bookkeeping] merchant groups failed", e?.message || e);
+    } finally {
+      setLoadingMerchantGroups(false);
+    }
+  }, [autoPostEffectiveDate, autoPostStatus?.auto_post_effective_date, autoPostStatus?.auto_post_to_quickbooks, businessId, usingDemo]);
+
+  const openMerchantReview = useCallback(async () => {
+    setMerchantReviewOpen(true);
+    await loadMerchantGroups();
+  }, [loadMerchantGroups]);
+
+  const approveMerchantGroup = useCallback(async (group) => {
+    if (!businessId || !group || merchantGroupAction) return;
+    const options = merchantGroupOptions[group.group_id] || {};
+    const exclusions = Array.from(options.exclusions || []);
+    setMerchantGroupAction(group.group_id);
+    try {
+      const result = await approvePostingBacklogMerchantGroup(businessId, {
+        group_snapshot_token: group.snapshot_token,
+        selected_qbo_account_id: options.qboAccountId || group.proposed_qbo_account_id,
+        remember_for_future: options.rememberForFuture !== false,
+        transaction_ids: options.applyHistorical === false ? group.transaction_ids.slice(0, 1) : group.transaction_ids,
+        exclusion_ids: exclusions,
+        expected_row_versions: group.row_versions || {},
+        idempotency_key: `merchant-group-${group.snapshot_token}`,
+      });
+      setPostingBacklogSummary(result?.backlog_summary || null);
+      await loadMerchantGroups();
+      await loadAutoPostStatus();
+      setCountsRefreshKey((v) => v + 1);
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: {
+          severity: "success",
+          title: "Merchant group saved",
+          body: `${Number(result?.scheduled_count || result?.ready_count || 0)} transactions updated.`,
+        },
+      }));
+    } catch (e) {
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: {
+          severity: "error",
+          title: "Merchant group not saved",
+          body: e?.message || "Refresh and try again.",
+        },
+      }));
+    } finally {
+      setMerchantGroupAction(null);
+    }
+  }, [businessId, loadAutoPostStatus, loadMerchantGroups, merchantGroupAction, merchantGroupOptions]);
+
+  const postReadyBacklog = useCallback(async () => {
+    if (!businessId || merchantGroupAction) return;
+    setMerchantGroupAction("ready");
+    try {
+      const result = await postReadyPostingBacklogTransactions(businessId);
+      setPostingBacklogSummary(result?.backlog_summary || null);
+      await loadAutoPostStatus();
+      setCountsRefreshKey((v) => v + 1);
+    } catch (e) {
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: {
+          severity: "error",
+          title: "Ready transactions not scheduled",
+          body: e?.message || "Refresh and try again.",
+        },
+      }));
+    } finally {
+      setMerchantGroupAction(null);
+    }
+  }, [businessId, loadAutoPostStatus, merchantGroupAction]);
 
   const updateAutoPost = useCallback(async ({
     enabled,
@@ -2338,21 +2454,18 @@ function BookkeepingCleanup() {
           <div>
             {autoPostStatus?.scope_copy?.detail || "Eligible handled transactions post automatically after the grace period."}
           </div>
-          {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && autoPostStatus?.backlog_preview_summary ? (
+          {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && (postingBacklogSummary || autoPostStatus?.backlog_summary) ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
-              {[
-                ["Ready to release", autoPostStatus.backlog_preview_summary.eligible_count],
-                ["Re-evaluation needed", autoPostStatus.backlog_preview_summary.buckets?.still_unsafe || autoPostStatus.backlog_preview_summary.buckets?.unsafe_auto_post || 0],
-                ["Failed", autoPostStatus.backlog_preview_summary.buckets?.failed_posting_requires_retry_review || 0],
-                ["Missing mapping", (autoPostStatus.backlog_preview_summary.buckets?.missing_mapping || 0) + (autoPostStatus.backlog_preview_summary.buckets?.missing_source_mapping || 0)],
-                ["Protected workflows", (autoPostStatus.backlog_preview_summary.buckets?.pending || 0) + (autoPostStatus.backlog_preview_summary.buckets?.possible_existing_qbo_duplicate || 0) + (autoPostStatus.backlog_preview_summary.buckets?.unsupported || 0)],
-              ].map(([label, value]) => (
+              {Object.entries((postingBacklogSummary || autoPostStatus.backlog_summary)?.labels || {}).map(([key, label]) => (
                 <span key={label} className="rounded-md border border-slate-700/80 bg-slate-950/40 px-2 py-1 text-slate-300">
-                  <span className="font-semibold text-slate-100">{Number(value || 0)}</span> {label}
+                  <span className="font-semibold text-slate-100">{Number((postingBacklogSummary || autoPostStatus.backlog_summary)?.buckets?.[key] || 0)}</span> {label}
                 </span>
               ))}
-              <button type="button" onClick={() => setActiveTab("handled")} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60">
+              <button type="button" onClick={openMerchantReview} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60">
                 Review posting backlog
+              </button>
+              <button type="button" onClick={postReadyBacklog} disabled={merchantGroupAction === "ready"} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60 disabled:opacity-60">
+                Post safe transactions
               </button>
               <button type="button" onClick={() => loadAutoPostPreview(autoPostStatus?.auto_post_effective_date || autoPostEffectiveDate)} className="rounded-md border border-emerald-400/40 px-2 py-1 font-semibold text-emerald-100 hover:border-emerald-300">
                 Run safety preview
@@ -2813,6 +2926,181 @@ function BookkeepingCleanup() {
                       >
                         {manualPostResult.primaryLabel || "Close"}
                       </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>,
+            document.body
+          )
+        : null}
+      {typeof document !== "undefined"
+        ? createPortal(
+            <AnimatePresence>
+              {merchantReviewOpen ? (
+                <motion.div
+                  className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="merchant-backlog-review-title"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18, ease: [0.22, 0.1, 0.25, 1] }}
+                >
+                  <motion.button
+                    type="button"
+                    aria-label="Close merchant review"
+                    className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
+                    onClick={() => setMerchantReviewOpen(false)}
+                  />
+                  <motion.div
+                    className="relative flex max-h-[86vh] w-full max-w-[980px] flex-col rounded-2xl border border-emerald-300/22 bg-[#111312] p-5 text-slate-100 shadow-[0_28px_90px_rgba(0,0,0,0.68)]"
+                    initial={{ opacity: 0, y: 18, scale: 0.97 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 12, scale: 0.98 }}
+                    transition={{ duration: 0.22, ease: [0.16, 0.84, 0.44, 1] }}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h2 id="merchant-backlog-review-title" className="text-base font-semibold text-white">Review posting backlog</h2>
+                        <p className="mt-1 text-sm text-slate-400">
+                          Review merchants, confirm the QuickBooks category, and let Bizzi post passing transactions in the background.
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" onClick={loadMerchantGroups} className="rounded-full border border-white/12 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/[0.06]">
+                          Refresh
+                        </button>
+                        <button type="button" onClick={() => setMerchantReviewOpen(false)} className="rounded-full border border-white/12 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/[0.06]">
+                          Close
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                      {Object.entries((postingBacklogSummary || autoPostStatus?.backlog_summary)?.labels || {}).slice(0, 8).map(([key, label]) => (
+                        <div key={key} className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2">
+                          <div className="text-lg font-semibold text-slate-50">{Number((postingBacklogSummary || autoPostStatus?.backlog_summary)?.buckets?.[key] || 0)}</div>
+                          <div className="text-slate-400">{label}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-4 flex-1 overflow-y-auto pr-1">
+                      {loadingMerchantGroups ? (
+                        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-4 text-sm text-slate-300">Reviewing transactions...</div>
+                      ) : merchantGroups.length ? (
+                        <div className="space-y-3">
+                          {merchantGroups.map((group) => {
+                            const opts = merchantGroupOptions[group.group_id] || {};
+                            const excludedCount = Number(group.excluded_transaction_count || 0) + Number(opts.exclusions?.size || 0);
+                            const postCount = opts.postPassing === false ? 0 : Math.max(0, Number(group.transaction_count || 0) - excludedCount);
+                            return (
+                              <div key={group.group_id} className="rounded-xl border border-white/10 bg-white/[0.035] p-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <h3 className="truncate text-sm font-semibold text-white">{group.display_merchant}</h3>
+                                      <span className="rounded-full border border-emerald-300/25 bg-emerald-300/[0.08] px-2 py-0.5 text-[11px] text-emerald-100">{group.evidence?.match_specificity || group.identity?.specificity}</span>
+                                    </div>
+                                    <p className="mt-1 text-xs text-slate-400">
+                                      {group.transaction_count} transactions · {formatSignedCurrency(group.total_amount)} · {group.date_range?.start} to {group.date_range?.end}
+                                    </p>
+                                    <p className="mt-1 text-xs text-slate-500">
+                                      {group.normalized_identity} · {group.source_accounts?.map((acct) => acct.name).join(", ") || "Mapped source account"}
+                                    </p>
+                                  </div>
+                                  <div className="flex min-w-[260px] flex-wrap items-center justify-end gap-2">
+                                    <select
+                                      value={opts.qboAccountId || group.proposed_qbo_account_id}
+                                      onChange={(e) => setMerchantGroupOptions((prev) => ({
+                                        ...(prev || {}),
+                                        [group.group_id]: { ...(prev?.[group.group_id] || {}), qboAccountId: e.target.value },
+                                      }))}
+                                      className="min-h-[34px] rounded-md border border-white/10 bg-[#0f1110] px-2 text-xs text-slate-100"
+                                    >
+                                      {chartAccounts.map((acct) => (
+                                        <option key={acct.id || acct.Id} value={acct.id || acct.Id}>{acct.name || acct.Name}</option>
+                                      ))}
+                                    </select>
+                                    <button
+                                      type="button"
+                                      onClick={() => approveMerchantGroup(group)}
+                                      disabled={merchantGroupAction === group.group_id}
+                                      className="rounded-full bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-[#06100c] hover:bg-emerald-200 disabled:opacity-60"
+                                    >
+                                      {merchantGroupAction === group.group_id ? "Scheduling..." : "Approve category and post"}
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+                                  <label className="flex items-center gap-2 text-slate-300">
+                                    <input
+                                      type="checkbox"
+                                      checked={opts.rememberForFuture !== false}
+                                      onChange={(e) => setMerchantGroupOptions((prev) => ({
+                                        ...(prev || {}),
+                                        [group.group_id]: { ...(prev?.[group.group_id] || {}), rememberForFuture: e.target.checked },
+                                      }))}
+                                    />
+                                    Remember for future
+                                  </label>
+                                  <label className="flex items-center gap-2 text-slate-300">
+                                    <input
+                                      type="checkbox"
+                                      checked={opts.applyHistorical !== false}
+                                      onChange={(e) => setMerchantGroupOptions((prev) => ({
+                                        ...(prev || {}),
+                                        [group.group_id]: { ...(prev?.[group.group_id] || {}), applyHistorical: e.target.checked },
+                                      }))}
+                                    />
+                                    Only these transactions
+                                  </label>
+                                  <label className="flex items-center gap-2 text-slate-300">
+                                    <input
+                                      type="checkbox"
+                                      checked={opts.postPassing !== false}
+                                      onChange={(e) => setMerchantGroupOptions((prev) => ({
+                                        ...(prev || {}),
+                                        [group.group_id]: { ...(prev?.[group.group_id] || {}), postPassing: e.target.checked },
+                                      }))}
+                                    />
+                                    Post passing transactions
+                                  </label>
+                                </div>
+                                <div className="mt-3 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.06] px-3 py-2 text-xs text-emerald-50/90">
+                                  Bizzi will remember this category for this merchant, apply it to {Math.max(0, Number(group.transaction_count || 0) - excludedCount)} compatible transactions, and post {postCount} transactions after duplicate and safety checks.
+                                </div>
+                                {excludedCount ? (
+                                  <div className="mt-2 text-xs text-amber-200">{excludedCount} transactions will stay in review.</div>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={() => setExpandedMerchantGroup(expandedMerchantGroup === group.group_id ? null : group.group_id)}
+                                  className="mt-3 text-xs font-semibold text-emerald-200 hover:text-emerald-100"
+                                >
+                                  {expandedMerchantGroup === group.group_id ? "Hide transactions" : "Show transactions"}
+                                </button>
+                                {expandedMerchantGroup === group.group_id ? (
+                                  <div className="mt-3 overflow-hidden rounded-lg border border-white/10">
+                                    {group.transactions.slice(0, 20).map((txn) => (
+                                      <div key={txn.transaction_id} className="grid grid-cols-[92px_80px_1fr_150px] gap-2 border-b border-white/10 px-3 py-2 text-xs last:border-b-0">
+                                        <span className="text-slate-400">{txn.date}</span>
+                                        <span className={Number(txn.amount || 0) < 0 ? "text-rose-300" : "text-emerald-300"}>{formatSignedCurrency(txn.amount)}</span>
+                                        <span className="min-w-0 truncate text-slate-200">{txn.description || txn.memo}</span>
+                                        <span className="truncate text-slate-400">{txn.proposed_gl}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-4 text-sm text-slate-300">No merchant groups are ready for grouped review.</div>
+                      )}
                     </div>
                   </motion.div>
                 </motion.div>
