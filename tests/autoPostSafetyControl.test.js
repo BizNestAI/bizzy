@@ -253,6 +253,7 @@ test("auto-post settings service reads, updates, and preserves historical backlo
   assert.equal(initialSettings.auto_post_scope_mode, "new_activity_only");
   assert.equal(initialSettings.worker.enabled, true);
   assert.match(initialSettings.scope_copy.headline, /Auto-posting is off/);
+  assert.equal(initialSettings.backlog_summary?.total, 2);
 
   await assert.rejects(
     setAutoPostEnabled({ db, businessId: "biz-1", enabled: true, graceHours: 24, nowMs }),
@@ -781,6 +782,9 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
 
   const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
   assert.match(page, /backlog_summary/);
+  assert.match(page, /auto_post_to_quickbooks === true \|\| Number\(autoPostStatus\?\.handled_backlog_count \|\| 0\) > 0/);
+  assert.match(page, /Bizzi is holding these until posting is turned on or an authorized operator releases them/);
+  assert.match(page, /canUsePostingBacklogTools \?/);
   assert.doesNotMatch(page, /Ready to release", autoPostStatus\.backlog_preview_summary\.eligible_count/);
 });
 

@@ -573,6 +573,7 @@ function BookkeepingCleanup() {
   const { status: billingStatus, loading: loadingBillingStatus } = useBillingStatus(businessId, userId);
   const billingAccess = getBillingAccess(resolveStatusValue(billingStatus));
   const canRunAI = adminView.active ? false : (usingDemo ? true : billingAccess.canRunAI);
+  const canUsePostingBacklogTools = adminView.active;
   const [accounts, setAccounts] = useState(usingDemo ? DEMO_ACCOUNT_LIST : []);
   const [chartAccounts, setChartAccounts] = useState(() => {
     if (!usingDemo) return [];
@@ -818,7 +819,7 @@ function BookkeepingCleanup() {
   }, [businessId, usingDemo]);
 
   const loadMerchantGroups = useCallback(async () => {
-    if (!businessId || usingDemo) return;
+    if (!businessId || usingDemo || !canUsePostingBacklogTools) return;
     setLoadingMerchantGroups(true);
     try {
       const res = await getPostingBacklogMerchantGroups(businessId, {
@@ -847,15 +848,16 @@ function BookkeepingCleanup() {
     } finally {
       setLoadingMerchantGroups(false);
     }
-  }, [autoPostEffectiveDate, autoPostStatus?.auto_post_effective_date, autoPostStatus?.auto_post_to_quickbooks, businessId, usingDemo]);
+  }, [autoPostEffectiveDate, autoPostStatus?.auto_post_effective_date, autoPostStatus?.auto_post_to_quickbooks, businessId, canUsePostingBacklogTools, usingDemo]);
 
   const openMerchantReview = useCallback(async () => {
+    if (!canUsePostingBacklogTools) return;
     setMerchantReviewOpen(true);
     await loadMerchantGroups();
-  }, [loadMerchantGroups]);
+  }, [canUsePostingBacklogTools, loadMerchantGroups]);
 
   const approveMerchantGroup = useCallback(async (group) => {
-    if (!businessId || !group || merchantGroupAction) return;
+    if (!businessId || !group || merchantGroupAction || !canUsePostingBacklogTools) return;
     const options = merchantGroupOptions[group.group_id] || {};
     const exclusions = Array.from(options.exclusions || []);
     setMerchantGroupAction(group.group_id);
@@ -891,10 +893,10 @@ function BookkeepingCleanup() {
     } finally {
       setMerchantGroupAction(null);
     }
-  }, [businessId, loadAutoPostStatus, loadMerchantGroups, merchantGroupAction, merchantGroupOptions]);
+  }, [businessId, canUsePostingBacklogTools, loadAutoPostStatus, loadMerchantGroups, merchantGroupAction, merchantGroupOptions]);
 
   const postReadyBacklog = useCallback(async () => {
-    if (!businessId || merchantGroupAction) return;
+    if (!businessId || merchantGroupAction || !canUsePostingBacklogTools) return;
     setMerchantGroupAction("ready");
     try {
       const result = await postReadyPostingBacklogTransactions(businessId);
@@ -912,7 +914,7 @@ function BookkeepingCleanup() {
     } finally {
       setMerchantGroupAction(null);
     }
-  }, [businessId, loadAutoPostStatus, merchantGroupAction]);
+  }, [businessId, canUsePostingBacklogTools, loadAutoPostStatus, merchantGroupAction]);
 
   const updateAutoPost = useCallback(async ({
     enabled,
@@ -2444,7 +2446,7 @@ function BookkeepingCleanup() {
         </div>
       </div>
 
-      {!usingDemo && autoPostStatus?.auto_post_to_quickbooks === true ? (
+      {!usingDemo && (autoPostStatus?.auto_post_to_quickbooks === true || Number(autoPostStatus?.handled_backlog_count || 0) > 0) ? (
         <div className="mb-3 rounded-xl border border-emerald-300/18 bg-emerald-300/[0.06] px-3 py-2 text-xs leading-5 text-slate-300">
           <div className="font-semibold text-emerald-100">
             {Number(autoPostStatus?.handled_backlog_count || 0) > 0
@@ -2452,7 +2454,9 @@ function BookkeepingCleanup() {
               : autoPostStatus?.scope_copy?.headline || "Auto-posting is enabled"}
           </div>
           <div>
-            {autoPostStatus?.scope_copy?.detail || "Eligible handled transactions post automatically after the grace period."}
+            {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && autoPostStatus?.auto_post_to_quickbooks !== true
+              ? "Bizzi is holding these until posting is turned on or an authorized operator releases them."
+              : autoPostStatus?.scope_copy?.detail || "Eligible handled transactions post automatically after the grace period."}
           </div>
           {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && (postingBacklogSummary || autoPostStatus?.backlog_summary) ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -2461,15 +2465,21 @@ function BookkeepingCleanup() {
                   <span className="font-semibold text-slate-100">{Number((postingBacklogSummary || autoPostStatus.backlog_summary)?.buckets?.[key] || 0)}</span> {label}
                 </span>
               ))}
-              <button type="button" onClick={openMerchantReview} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60">
-                Review posting backlog
-              </button>
-              <button type="button" onClick={postReadyBacklog} disabled={merchantGroupAction === "ready"} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60 disabled:opacity-60">
-                Post safe transactions
-              </button>
-              <button type="button" onClick={() => loadAutoPostPreview(autoPostStatus?.auto_post_effective_date || autoPostEffectiveDate)} className="rounded-md border border-emerald-400/40 px-2 py-1 font-semibold text-emerald-100 hover:border-emerald-300">
-                Run safety preview
-              </button>
+              {canUsePostingBacklogTools ? (
+                <>
+                  <button type="button" onClick={openMerchantReview} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60">
+                    Review posting backlog
+                  </button>
+                  <button type="button" onClick={postReadyBacklog} disabled={merchantGroupAction === "ready"} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60 disabled:opacity-60">
+                    Post safe transactions
+                  </button>
+                </>
+              ) : null}
+              {canUsePostingBacklogTools ? (
+                <button type="button" onClick={() => loadAutoPostPreview(autoPostStatus?.auto_post_effective_date || autoPostEffectiveDate)} className="rounded-md border border-emerald-400/40 px-2 py-1 font-semibold text-emerald-100 hover:border-emerald-300">
+                  Run safety preview
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>

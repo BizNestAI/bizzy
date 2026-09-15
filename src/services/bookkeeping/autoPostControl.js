@@ -366,24 +366,26 @@ export async function getAutoPostSettings({ db, businessId, graceHours = DEFAULT
   const scopeCopy = buildAutoPostScopeCopy(policy, { workerIntervalMinutes });
   let backlogPreviewSummary = null;
   let backlogSummary = null;
-  if (enabled && backlogIds.length > 0) {
+  if (backlogIds.length > 0) {
     try {
-      const preview = await previewAutoPostBacklog({
-        db,
-        businessId,
-        effectiveDate: policy.auto_post_effective_date || policy.bookkeeping_start_date || "0001-01-01",
-      });
-      backlogPreviewSummary = {
-        total: preview.total,
-        eligible_count: preview.eligible_count,
-        blocked_count: preview.blocked_count,
-        buckets: preview.buckets,
-      };
       backlogSummary = await getCanonicalPostingBacklogSummary({
         db,
         businessId,
         effectiveDate: policy.auto_post_effective_date || policy.bookkeeping_start_date || "0001-01-01",
       });
+      if (enabled) {
+        const preview = await previewAutoPostBacklog({
+          db,
+          businessId,
+          effectiveDate: policy.auto_post_effective_date || policy.bookkeeping_start_date || "0001-01-01",
+        });
+        backlogPreviewSummary = {
+          total: preview.total,
+          eligible_count: preview.eligible_count,
+          blocked_count: preview.blocked_count,
+          buckets: preview.buckets,
+        };
+      }
     } catch {
       backlogPreviewSummary = null;
       backlogSummary = null;
