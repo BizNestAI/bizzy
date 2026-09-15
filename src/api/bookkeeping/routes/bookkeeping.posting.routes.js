@@ -18,6 +18,7 @@ import { assertTaxBusinessAccess } from "../../tax/taxRouteUtils.js";
 import { getQBOClient } from "../../../utils/qboClient.js";
 import { getLatestQuickBooksTokenRow } from "../../../services/quickbooksTokenService.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../../services/tax/taxChangeEvents.js";
+import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../../_shared/internalStaffAuth.js";
 
 const router = Router();
 const POSTING_GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
@@ -225,7 +226,7 @@ router.patch("/posting/auto-post", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/posting/backlog/preview", requireAuth, async (req, res) => {
+router.get("/posting/backlog/preview", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   setNoStoreHeaders(res);
@@ -255,7 +256,7 @@ router.get("/posting/backlog/preview", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/posting/backlog/summary", requireAuth, async (req, res) => {
+router.get("/posting/backlog/summary", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   setNoStoreHeaders(res);
@@ -280,7 +281,7 @@ router.get("/posting/backlog/summary", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/posting/backlog/merchant-groups", requireAuth, async (req, res) => {
+router.get("/posting/backlog/merchant-groups", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   setNoStoreHeaders(res);
@@ -306,7 +307,7 @@ router.get("/posting/backlog/merchant-groups", requireAuth, async (req, res) => 
   }
 });
 
-router.post("/posting/backlog/merchant-groups/approve", requireAuth, async (req, res) => {
+router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
 
@@ -336,7 +337,7 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, async (req,
   }
 });
 
-router.post("/posting/backlog/post-ready", requireAuth, async (req, res) => {
+router.post("/posting/backlog/post-ready", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
 
@@ -359,7 +360,7 @@ router.post("/posting/backlog/post-ready", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/posting/backlog/release", requireAuth, async (req, res) => {
+router.post("/posting/backlog/release", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
 

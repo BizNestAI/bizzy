@@ -19,6 +19,10 @@ import {
   fetchBookkeepingTransactions,
   matchesTransactionStatusFilter,
 } from "../../services/bookkeeping/bookkeepingTransactionFeedService.js";
+import {
+  getCanonicalPostingBacklogSummary,
+  getMerchantBacklogGroups,
+} from "../../services/bookkeeping/autoPostControl.js";
 import { getAvailableMonthlyReviewPeriods } from "../../services/bookkeeping/monthlyReviewAvailablePeriodsService.js";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import {
@@ -622,6 +626,89 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
   } catch (e) {
     console.error("[monthly-review] bookkeeping feed failed", e?.message || e);
     sendMonthlyReviewError(res, "monthly_review_bookkeeping_feed_failed", "Could not load bookkeeping transactions.", e);
+  }
+});
+
+router.get("/businesses/:businessId/bookkeeping/posting-review/summary", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const month = normalizeMonth(req.query.month);
+    const { data: business, error: bizErr } = await supabase
+      .from("business_profiles")
+      .select("id")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
+
+    const [rangeStart, rangeEnd] = monthBounds(month);
+    const summary = await getCanonicalPostingBacklogSummary({
+      db: supabase,
+      businessId,
+      rangeStart,
+      rangeEnd,
+      effectiveDate: rangeStart,
+    });
+    return res.json({
+      ...summary,
+      ok: true,
+      business_id: businessId,
+      month,
+      selected_month_count: Number(summary?.headline_count || summary?.total || 0),
+      source_contract: {
+        service: "autoPostControl.getCanonicalPostingBacklogSummary",
+        selected_month_bounds: "server-side [range_start, range_end)",
+        posting_review_semantics: "handled_but_not_successfully_posted",
+        provider_calls: false,
+        qbo_writes: false,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] posting review summary failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_posting_review_summary_failed", "Could not load posting review summary.", e);
+  }
+});
+
+router.get("/businesses/:businessId/bookkeeping/posting-review/merchant-groups", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const month = normalizeMonth(req.query.month);
+    const limit = Math.min(Math.max(parseInt(req.query?.limit, 10) || 50, 1), 100);
+    const { data: business, error: bizErr } = await supabase
+      .from("business_profiles")
+      .select("id")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
+
+    const [rangeStart, rangeEnd] = monthBounds(month);
+    const groups = await getMerchantBacklogGroups({
+      db: supabase,
+      businessId,
+      rangeStart,
+      rangeEnd,
+      effectiveDate: rangeStart,
+      limit,
+    });
+    return res.json({
+      ...groups,
+      ok: true,
+      business_id: businessId,
+      month,
+      source_contract: {
+        service: "autoPostControl.getMerchantBacklogGroups",
+        selected_month_bounds: "server-side [range_start, range_end)",
+        grouping: "exact merchant identity or exact fingerprint only",
+        provider_calls: false,
+        qbo_writes: false,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] posting review merchant groups failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_posting_review_groups_failed", "Could not load posting review merchant groups.", e);
   }
 });
 

@@ -114,6 +114,17 @@ export default function MonthlyReviewConsole() {
   const [loadingBookkeepingCounts, setLoadingBookkeepingCounts] = useState(false);
   const [bookkeepingCountsError, setBookkeepingCountsError] = useState("");
   const [bookkeepingReconsideration, setBookkeepingReconsideration] = useState({ loading: false, message: "", error: "" });
+  const [postingReview, setPostingReview] = useState({
+    expanded: false,
+    summary: null,
+    groups: [],
+    loading: false,
+    error: "",
+    loaded: false,
+  });
+  const [postingReviewOptions, setPostingReviewOptions] = useState({});
+  const [postingReviewAction, setPostingReviewAction] = useState(null);
+  const [expandedPostingReviewGroup, setExpandedPostingReviewGroup] = useState(null);
   const [busyFeedActions, setBusyFeedActions] = useState({});
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
   const [bookkeepingRulePreferences, setBookkeepingRulePreferences] = useState({});
@@ -531,6 +542,87 @@ export default function MonthlyReviewConsole() {
     }
   }, [bookkeepingFeeds, month, selectedBusinessId]);
 
+  const loadPostingReview = useCallback(async () => {
+    if (!selectedBusinessId) {
+      setPostingReview({ expanded: false, summary: null, groups: [], loading: false, error: "", loaded: false });
+      return;
+    }
+    setPostingReview((current) => ({ ...current, loading: true, error: "" }));
+    try {
+      const [summary, groupsResult] = await Promise.all([
+        safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/posting-review/summary?month=${encodeURIComponent(month)}`),
+        safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/posting-review/merchant-groups?month=${encodeURIComponent(month)}&limit=50`),
+      ]);
+      const groups = Array.isArray(groupsResult?.groups) ? groupsResult.groups : [];
+      setPostingReview((current) => ({
+        ...current,
+        summary,
+        groups,
+        loading: false,
+        error: "",
+        loaded: true,
+      }));
+      setPostingReviewOptions((current) => {
+        const next = { ...(current || {}) };
+        groups.forEach((group) => {
+          if (!next[group.group_id]) {
+            next[group.group_id] = {
+              qboAccountId: group.proposed_qbo_account_id,
+              rememberForFuture: true,
+              onlyTheseTransactions: false,
+              postPassing: true,
+            };
+          }
+        });
+        return next;
+      });
+    } catch (e) {
+      setPostingReview((current) => ({
+        ...current,
+        loading: false,
+        error: e?.body?.message || e?.message || "Could not load Posting Review.",
+      }));
+    }
+  }, [month, selectedBusinessId]);
+
+  const togglePostingReview = useCallback(() => {
+    const nextExpanded = !postingReview.expanded;
+    setPostingReview((current) => ({ ...current, expanded: nextExpanded }));
+    if (nextExpanded && !postingReview.loaded && !postingReview.loading) loadPostingReview();
+  }, [loadPostingReview, postingReview.expanded, postingReview.loaded, postingReview.loading]);
+
+  const approvePostingReviewGroup = useCallback(async (group) => {
+    if (!selectedBusinessId || !group || postingReviewAction) return;
+    const options = postingReviewOptions[group.group_id] || {};
+    setPostingReviewAction(group.group_id);
+    try {
+      await safeFetch("/api/bookkeeping/posting/backlog/merchant-groups/approve", {
+        method: "POST",
+        body: {
+          business_id: selectedBusinessId,
+          group_snapshot_token: group.snapshot_token,
+          selected_qbo_account_id: options.qboAccountId || group.proposed_qbo_account_id,
+          remember_for_future: options.rememberForFuture !== false,
+          transaction_ids: options.onlyTheseTransactions ? group.transaction_ids.slice(0, 1) : group.transaction_ids,
+          exclusion_ids: [],
+          expected_row_versions: group.row_versions || {},
+          idempotency_key: `monthly-review-posting-group-${group.snapshot_token}`,
+        },
+      });
+      await Promise.all([
+        loadPostingReview(),
+        loadBookkeepingFeedCounts(),
+      ]);
+    } catch (e) {
+      setPostingReview((current) => ({
+        ...current,
+        error: e?.body?.message || e?.message || "Could not approve merchant group.",
+      }));
+    } finally {
+      setPostingReviewAction(null);
+    }
+  }, [loadBookkeepingFeedCounts, loadPostingReview, postingReviewAction, postingReviewOptions, selectedBusinessId]);
+
   useEffect(() => {
     loadBusinesses();
   }, [loadBusinesses]);
@@ -562,8 +654,12 @@ export default function MonthlyReviewConsole() {
   useEffect(() => {
     setBookkeepingFeeds(buildInitialBookkeepingFeeds());
     setBookkeepingReconsideration({ loading: false, message: "", error: "" });
+    setPostingReview({ expanded: false, summary: null, groups: [], loading: false, error: "", loaded: false });
+    setPostingReviewOptions({});
+    setExpandedPostingReviewGroup(null);
     loadBookkeepingFeedCounts();
-  }, [loadBookkeepingFeedCounts]);
+    loadPostingReview();
+  }, [loadBookkeepingFeedCounts, loadPostingReview]);
 
   useEffect(() => {
     const onAdminViewReturn = (event) => {
@@ -597,6 +693,9 @@ export default function MonthlyReviewConsole() {
     setConnectedAccountsError("");
     setBookkeepingFeeds(buildInitialBookkeepingFeeds());
     setBookkeepingCountsError("");
+    setPostingReview({ expanded: false, summary: null, groups: [], loading: false, error: "", loaded: false });
+    setPostingReviewOptions({});
+    setExpandedPostingReviewGroup(null);
     setError("");
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
@@ -614,6 +713,9 @@ export default function MonthlyReviewConsole() {
     setQboPnlAccountDetails({});
     setBookkeepingFeeds(buildInitialBookkeepingFeeds());
     setBookkeepingCountsError("");
+    setPostingReview({ expanded: false, summary: null, groups: [], loading: false, error: "", loaded: false });
+    setPostingReviewOptions({});
+    setExpandedPostingReviewGroup(null);
     setError("");
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
@@ -638,12 +740,13 @@ export default function MonthlyReviewConsole() {
 
   const refreshBookkeepingFeeds = useCallback(() => {
     loadBookkeepingFeedCounts();
+    loadPostingReview();
     Object.keys(BOOKKEEPING_FEED_CONFIG).forEach((status) => {
       if (bookkeepingFeeds[status]?.expanded) {
         loadBookkeepingFeed(status, { reset: true });
       }
     });
-  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts]);
+  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadPostingReview]);
 
   const runBookkeepingReconsideration = useCallback(async () => {
     if (!selectedBusinessId) return;
@@ -711,11 +814,12 @@ export default function MonthlyReviewConsole() {
       loadQboPnlSnapshot(),
       loadBusinesses(),
       loadBookkeepingFeedCounts(),
+      loadPostingReview(),
     ]);
     await Promise.all(Object.keys(BOOKKEEPING_FEED_CONFIG).map((status) => (
       bookkeepingFeeds[status]?.expanded ? loadBookkeepingFeed(status, { reset: true }) : Promise.resolve()
     )));
-  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadBusinesses, loadDetail, loadQboPnlSnapshot, loadSourceLedger]);
+  }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts, loadBusinesses, loadDetail, loadPostingReview, loadQboPnlSnapshot, loadSourceLedger]);
 
   const patchBookkeepingFeedsAfterApproval = useCallback((row, accountId, result = {}) => {
     const transactionId = row?.id;
@@ -1593,10 +1697,24 @@ export default function MonthlyReviewConsole() {
                   loadingCounts={loadingBookkeepingCounts}
                   countsError={bookkeepingCountsError}
                   reconsideration={bookkeepingReconsideration}
+                  postingReview={postingReview}
+                  postingReviewOptions={postingReviewOptions}
+                  postingReviewAction={postingReviewAction}
+                  expandedPostingReviewGroup={expandedPostingReviewGroup}
                   onToggle={toggleBookkeepingFeed}
                   onLoadMore={(status) => loadBookkeepingFeed(status)}
                   onRefresh={refreshBookkeepingFeeds}
                   onReconsider={runBookkeepingReconsideration}
+                  onTogglePostingReview={togglePostingReview}
+                  onRefreshPostingReview={loadPostingReview}
+                  onPostingReviewOptionChange={(groupId, patch) => {
+                    setPostingReviewOptions((current) => ({
+                      ...(current || {}),
+                      [groupId]: { ...(current?.[groupId] || {}), ...(patch || {}) },
+                    }));
+                  }}
+                  onApprovePostingReviewGroup={approvePostingReviewGroup}
+                  onTogglePostingReviewGroup={setExpandedPostingReviewGroup}
                   accounts={mirrorFeedAccounts}
                   busyAction={busyFeedAction}
                   busyActions={busyFeedActions}
@@ -1703,10 +1821,19 @@ function BookkeepingFeedMirrorPanels({
   loadingCounts,
   countsError,
   reconsideration,
+  postingReview,
+  postingReviewOptions,
+  postingReviewAction,
+  expandedPostingReviewGroup,
   onToggle,
   onLoadMore,
   onRefresh,
   onReconsider,
+  onTogglePostingReview,
+  onRefreshPostingReview,
+  onPostingReviewOptionChange,
+  onApprovePostingReviewGroup,
+  onTogglePostingReviewGroup,
   accounts,
   busyAction,
   busyActions,
@@ -1797,8 +1924,215 @@ function BookkeepingFeedMirrorPanels({
             accountTypes={accountTypes}
           />
         ))}
+        <PostingReviewMirrorSection
+          postingReview={postingReview}
+          postingReviewOptions={postingReviewOptions}
+          postingReviewAction={postingReviewAction}
+          expandedPostingReviewGroup={expandedPostingReviewGroup}
+          accounts={accounts}
+          onToggle={onTogglePostingReview}
+          onRefresh={onRefreshPostingReview}
+          onOptionChange={onPostingReviewOptionChange}
+          onApproveGroup={onApprovePostingReviewGroup}
+          onToggleGroup={onTogglePostingReviewGroup}
+        />
       </div>
     </section>
+  );
+}
+
+function PostingReviewMirrorSection({
+  postingReview,
+  postingReviewOptions,
+  postingReviewAction,
+  expandedPostingReviewGroup,
+  accounts,
+  onToggle,
+  onRefresh,
+  onOptionChange,
+  onApproveGroup,
+  onToggleGroup,
+}) {
+  const summary = postingReview?.summary || {};
+  const labels = summary.labels || {};
+  const buckets = summary.buckets || {};
+  const headlineCount = Number(summary.selected_month_count ?? summary.headline_count ?? summary.total ?? 0);
+  const bucketTotal = Number(summary.bucket_total ?? Object.values(buckets).reduce((sum, value) => sum + Number(value || 0), 0));
+  const groups = Array.isArray(postingReview?.groups) ? postingReview.groups : [];
+  const bucketOrder = [
+    "merchant_approval_needed",
+    "ready_to_release",
+    "scheduled_future",
+    "active_posting",
+    "protected_income_match",
+    "protected_credit_card_payment",
+    "protected_transfer",
+    "protected_check",
+    "protected_other",
+    "failed",
+    "missing_mapping",
+  ];
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.025]">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left"
+        aria-expanded={postingReview?.expanded === true}
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          {postingReview?.expanded ? <ChevronDown className="h-4 w-4 text-white/45" /> : <ChevronRight className="h-4 w-4 text-white/45" />}
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-white">Posting Review (Handled but not posting)</h3>
+            <p className="mt-1 text-xs text-white/45">
+              Transactions Bizzi categorized or handled but has not successfully posted to QuickBooks.
+            </p>
+          </div>
+        </div>
+        <span className="shrink-0 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-1.5 text-sm font-semibold text-white">
+          {postingReview?.loading && !postingReview?.loaded ? "Loading..." : `${headlineCount} transactions`}
+        </span>
+      </button>
+      {postingReview?.expanded ? (
+        <div className="space-y-4 border-t border-white/[0.06] px-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs text-white/45">
+              Selected-month buckets total {bucketTotal} of {headlineCount}.
+            </div>
+            <button
+              type="button"
+              onClick={onRefresh}
+              disabled={postingReview?.loading}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.05] px-3 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/[0.09] disabled:opacity-50"
+            >
+              <RefreshCcw className={`h-3.5 w-3.5 ${postingReview?.loading ? "animate-spin" : ""}`} />
+              Refresh Posting Review
+            </button>
+          </div>
+          {postingReview?.error ? (
+            <div className="rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-xs text-amber-100">
+              {postingReview.error}
+            </div>
+          ) : null}
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {bucketOrder.map((key) => (
+              <div key={key} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+                <div className="text-lg font-semibold text-white">{Number(buckets[key] || 0)}</div>
+                <div className="text-xs text-white/45">{labels[key] || titleCase(key)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-xl border border-emerald-300/15 bg-emerald-300/[0.06] px-3 py-2 text-xs text-emerald-50/90">
+            Bizzi will remember this category for this merchant, apply it to X compatible transactions, and post Y transactions after duplicate and safety checks.
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            {["Retry posting", "Correct account mapping", "Change category", "Open income match", "Open payment match", "Open transfer/check review", "Keep for review"].map((label) => (
+              <span key={label} className="rounded-full border border-white/10 bg-white/[0.035] px-2.5 py-1 text-white/55">{label}</span>
+            ))}
+          </div>
+          {groups.length ? (
+            <div className="space-y-3">
+              {groups.map((group) => {
+                const options = postingReviewOptions?.[group.group_id] || {};
+                const selectedAccountId = options.qboAccountId || group.proposed_qbo_account_id || "";
+                const excludedCount = Number(group.excluded_transaction_count || 0);
+                const postCount = options.postPassing === false ? 0 : Math.max(0, Number(group.transaction_count || 0) - excludedCount);
+                const isExpanded = expandedPostingReviewGroup === group.group_id;
+                return (
+                  <div key={group.group_id} className="rounded-xl border border-white/10 bg-black/20 p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h4 className="truncate text-sm font-semibold text-white">{group.display_merchant}</h4>
+                          <span className="rounded-full border border-emerald-300/25 bg-emerald-300/[0.08] px-2 py-0.5 text-[11px] text-emerald-100">
+                            {group.evidence?.match_specificity || group.identity?.specificity || "exact"}
+                          </span>
+                          <span className="rounded-full border border-white/10 bg-white/[0.035] px-2 py-0.5 text-[11px] text-white/55">
+                            {group.evidence?.reusable_rule_status || "rule status unknown"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-xs text-white/45">
+                          {group.transaction_count} transactions · {formatCurrency(group.total_amount)} · {group.date_range?.start || "n/a"} to {group.date_range?.end || "n/a"}
+                        </p>
+                        <p className="mt-1 text-xs text-white/40">
+                          {group.source_accounts?.map((acct) => acct.name).join(", ") || "Mapped source accounts"} · {Object.keys(group.classification_sources || {}).join(", ") || "classification source recorded"}
+                        </p>
+                      </div>
+                      <div className="flex min-w-[280px] flex-wrap justify-end gap-2">
+                        <select
+                          value={selectedAccountId}
+                          onChange={(event) => onOptionChange(group.group_id, { qboAccountId: event.target.value })}
+                          className="min-h-9 rounded-lg border border-white/10 bg-[#0f1115] px-2 text-xs text-white"
+                        >
+                          {accounts.map((acct) => (
+                            <option key={acct.id || acct.Id} value={acct.id || acct.Id}>{acct.name || acct.Name}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => onApproveGroup(group)}
+                          disabled={postingReviewAction === group.group_id}
+                          className="rounded-lg bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-[#06100c] hover:bg-emerald-200 disabled:opacity-50"
+                        >
+                          {postingReviewAction === group.group_id ? "Scheduling..." : "Approve category and post"}
+                        </button>
+                        <button type="button" className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/[0.06]">
+                          Change category
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-3 text-xs text-white/60">
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={options.rememberForFuture !== false} onChange={(event) => onOptionChange(group.group_id, { rememberForFuture: event.target.checked })} />
+                        Remember for future
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={options.onlyTheseTransactions === true} onChange={(event) => onOptionChange(group.group_id, { onlyTheseTransactions: event.target.checked })} />
+                        Only these transactions
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input type="checkbox" checked={options.postPassing !== false} onChange={(event) => onOptionChange(group.group_id, { postPassing: event.target.checked })} />
+                        Post passing transactions
+                      </label>
+                      <button type="button" className="font-semibold text-white/55 hover:text-white">Exclude selected</button>
+                      <button type="button" className="font-semibold text-white/55 hover:text-white">Keep for review</button>
+                    </div>
+                    <div className="mt-3 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.06] px-3 py-2 text-xs text-emerald-50/90">
+                      Bizzi will remember this category for this merchant, apply it to {Math.max(0, Number(group.transaction_count || 0) - excludedCount)} compatible transactions, and post {postCount} transactions after duplicate and safety checks.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onToggleGroup(isExpanded ? null : group.group_id)}
+                      className="mt-3 text-xs font-semibold text-emerald-200 hover:text-emerald-100"
+                    >
+                      {isExpanded ? "Hide transactions" : "Show transactions"}
+                    </button>
+                    {isExpanded ? (
+                      <div className="mt-3 overflow-hidden rounded-lg border border-white/10">
+                        {group.transactions.slice(0, 20).map((txn) => (
+                          <div key={txn.transaction_id} className="grid grid-cols-[88px_84px_1fr_160px_140px] gap-2 border-b border-white/10 px-3 py-2 text-xs last:border-b-0">
+                            <span className="text-white/45">{txn.date}</span>
+                            <span className={Number(txn.amount || 0) < 0 ? "text-rose-300" : "text-emerald-300"}>{formatCurrency(txn.amount)}</span>
+                            <span className="min-w-0 truncate text-white/80" title={`${txn.description || ""} ${txn.memo || ""}`}>{txn.description || txn.memo || "No description"}</span>
+                            <span className="truncate text-white/45">{txn.source_account || "Mapped account"}</span>
+                            <span className="truncate text-white/45">{txn.proposed_gl || "Current category"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-sm text-white/55">
+              No merchant groups are ready for grouped posting review in this month.
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

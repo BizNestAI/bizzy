@@ -730,13 +730,18 @@ test("Books Review auto-post failures use toast UI and do not alert raw fetch er
   assert.doesNotMatch(loadCatchBlock, /setAutoPostStatus/);
 });
 
-test("Auto-post UI uses policy-aware scope copy instead of all imported dates", () => {
+test("Auto-post UI keeps customer scope lightweight and operator backlog review separate", () => {
   const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+  const adminPage = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
   assert.match(page, /scope_copy\?\.headline/);
   assert.doesNotMatch(page, /Active books start: all imported dates/);
-  assert.match(page, /Update automatic posting scope/);
-  assert.match(page, /New activity only/);
-  assert.match(page, /Include existing safe Handled transactions/);
+  assert.match(page, /Turn on automatic QuickBooks posting\?/);
+  assert.match(page, /Future eligible transactions will post automatically/);
+  assert.match(page, /operator review flow/);
+  assert.doesNotMatch(page, /Update automatic posting scope/);
+  assert.doesNotMatch(page, /Include existing safe Handled transactions/);
+  assert.doesNotMatch(page, /Review posting backlog/);
+  assert.match(adminPage, /Posting Review \(Handled but not posting\)/);
 });
 
 test("canonical posting backlog summary is exhaustive and frontend renders backend buckets", async () => {
@@ -790,14 +795,19 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
   assert.equal(summary.buckets.missing_mapping, 1);
   assert.equal(summary.buckets.failed, 1);
 
-  const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
-  assert.match(page, /backlog_summary/);
-  assert.match(page, /auto_post_to_quickbooks === true \|\| Number\(autoPostStatus\?\.handled_backlog_count \|\| 0\) > 0/);
-  assert.match(page, /getPostingBacklogSummary\(businessId/);
-  assert.match(page, /Bizzi is holding these until posting is turned on or an authorized operator releases them/);
-  assert.match(page, /canUsePostingBacklogTools \?/);
-  assert.match(page, /handlePostingBacklogBucketClick\(key\)/);
-  assert.doesNotMatch(page, /Ready to release", autoPostStatus\.backlog_preview_summary\.eligible_count/);
+  const customerPage = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+  const adminPage = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
+  const monthlyReviewRoutes = readFileSync(join(root, "src/api/admin/monthlyReview.routes.js"), "utf8");
+  const postingRoutes = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+  assert.doesNotMatch(customerPage, /getPostingBacklogSummary\(businessId/);
+  assert.doesNotMatch(customerPage, /handled transactions are waiting for posting review/);
+  assert.doesNotMatch(customerPage, /handlePostingBacklogBucketClick\(key\)/);
+  assert.match(adminPage, /Posting Review \(Handled but not posting\)/);
+  assert.match(adminPage, /bookkeeping\/posting-review\/summary/);
+  assert.match(adminPage, /bucketOrder = \[/);
+  assert.match(monthlyReviewRoutes, /getCanonicalPostingBacklogSummary/);
+  assert.match(monthlyReviewRoutes, /getMerchantBacklogGroups/);
+  assert.match(postingRoutes, /requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)/);
 });
 
 test("merchant groups use exact identity and grouped approval schedules only passing rows", async () => {

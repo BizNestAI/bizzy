@@ -34,11 +34,6 @@ import {
   undoIncomingDepositMatch,
   getAutoPostStatus,
   updateAutoPostStatus,
-  previewAutoPostBacklogScope,
-  getPostingBacklogSummary,
-  getPostingBacklogMerchantGroups,
-  approvePostingBacklogMerchantGroup,
-  postReadyPostingBacklogTransactions,
 } from "../../services/bookkeeping/bookkeepingClient.js";
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
@@ -305,11 +300,6 @@ function formatPostingAmount(txn = {}) {
   return `${amount < 0 ? "-" : "+"}$${Math.abs(amount).toFixed(2)}`;
 }
 
-function formatSignedCurrency(value) {
-  const amount = Number(value || 0);
-  return `${amount < 0 ? "-" : "+"}$${Math.abs(amount).toFixed(2)}`;
-}
-
 function getManualPostSummary(txn = {}) {
   return {
     date: txn.date || "Unknown",
@@ -573,7 +563,6 @@ function BookkeepingCleanup() {
   const { status: billingStatus, loading: loadingBillingStatus } = useBillingStatus(businessId, userId);
   const billingAccess = getBillingAccess(resolveStatusValue(billingStatus));
   const canRunAI = adminView.active ? false : (usingDemo ? true : billingAccess.canRunAI);
-  const canUsePostingBacklogTools = adminView.active;
   const [accounts, setAccounts] = useState(usingDemo ? DEMO_ACCOUNT_LIST : []);
   const [chartAccounts, setChartAccounts] = useState(() => {
     if (!usingDemo) return [];
@@ -712,17 +701,6 @@ function BookkeepingCleanup() {
   const [loadingAutoPost, setLoadingAutoPost] = useState(false);
   const [savingAutoPost, setSavingAutoPost] = useState(false);
   const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
-  const [autoPostScopeChoice, setAutoPostScopeChoice] = useState("new_activity_only");
-  const [autoPostEffectiveDate, setAutoPostEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [autoPostPreview, setAutoPostPreview] = useState(null);
-  const [loadingAutoPostPreview, setLoadingAutoPostPreview] = useState(false);
-  const [postingBacklogSummary, setPostingBacklogSummary] = useState(null);
-  const [merchantReviewOpen, setMerchantReviewOpen] = useState(false);
-  const [merchantGroups, setMerchantGroups] = useState([]);
-  const [loadingMerchantGroups, setLoadingMerchantGroups] = useState(false);
-  const [merchantGroupAction, setMerchantGroupAction] = useState(null);
-  const [expandedMerchantGroup, setExpandedMerchantGroup] = useState(null);
-  const [merchantGroupOptions, setMerchantGroupOptions] = useState({});
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
   const incomingDepositActionInFlightRef = useRef(new Set());
@@ -790,18 +768,6 @@ function BookkeepingCleanup() {
     try {
       const res = await getAutoPostStatus(businessId);
       setAutoPostStatus(res || { auto_post_to_quickbooks: false, handled_backlog_count: 0 });
-      if (res?.backlog_summary) {
-        setPostingBacklogSummary(res.backlog_summary);
-      } else if (!canUsePostingBacklogTools || Number(res?.handled_backlog_count || 0) <= 0) {
-        setPostingBacklogSummary(null);
-      }
-      if (canUsePostingBacklogTools && Number(res?.handled_backlog_count || 0) > 0 && !res?.backlog_summary) {
-        getPostingBacklogSummary(businessId, {
-          effectiveDate: res?.auto_post_effective_date || autoPostEffectiveDate,
-        })
-          .then((summary) => setPostingBacklogSummary(summary || null))
-          .catch((err) => console.warn("[bookkeeping] posting backlog summary fetch failed", err?.message || err));
-      }
     } catch (e) {
       console.warn("[bookkeeping] auto-post status fetch failed", e?.message || e);
       window.dispatchEvent(new CustomEvent("bizzy:toast", {
@@ -814,138 +780,7 @@ function BookkeepingCleanup() {
     } finally {
       setLoadingAutoPost(false);
     }
-  }, [autoPostEffectiveDate, businessId, canUsePostingBacklogTools, usingDemo]);
-
-  const loadAutoPostPreview = useCallback(async (effectiveDate) => {
-    if (!businessId || usingDemo || !effectiveDate) return;
-    setLoadingAutoPostPreview(true);
-    try {
-      const res = await previewAutoPostBacklogScope(businessId, { effectiveDate });
-      setAutoPostPreview(res || null);
-      const summary = await getPostingBacklogSummary(businessId, { effectiveDate });
-      setPostingBacklogSummary(summary || null);
-    } catch (e) {
-      console.warn("[bookkeeping] auto-post preview failed", e?.message || e);
-      setAutoPostPreview(null);
-    } finally {
-      setLoadingAutoPostPreview(false);
-    }
   }, [businessId, usingDemo]);
-
-  const loadMerchantGroups = useCallback(async () => {
-    if (!businessId || usingDemo || !canUsePostingBacklogTools) return;
-    setLoadingMerchantGroups(true);
-    try {
-      const res = await getPostingBacklogMerchantGroups(businessId, {
-        effectiveDate: autoPostStatus?.auto_post_effective_date || autoPostEffectiveDate,
-        limit: 50,
-      });
-      const groups = Array.isArray(res?.groups) ? res.groups : [];
-      setMerchantGroups(groups);
-      setMerchantGroupOptions((prev) => {
-        const next = { ...(prev || {}) };
-        groups.forEach((group) => {
-          if (!next[group.group_id]) {
-            next[group.group_id] = {
-              qboAccountId: group.proposed_qbo_account_id,
-              rememberForFuture: true,
-              applyHistorical: true,
-              postPassing: autoPostStatus?.auto_post_to_quickbooks === true,
-              exclusions: new Set(),
-            };
-          }
-        });
-        return next;
-      });
-    } catch (e) {
-      console.warn("[bookkeeping] merchant groups failed", e?.message || e);
-    } finally {
-      setLoadingMerchantGroups(false);
-    }
-  }, [autoPostEffectiveDate, autoPostStatus?.auto_post_effective_date, autoPostStatus?.auto_post_to_quickbooks, businessId, canUsePostingBacklogTools, usingDemo]);
-
-  const openMerchantReview = useCallback(async () => {
-    if (!canUsePostingBacklogTools) return;
-    setMerchantReviewOpen(true);
-    await loadMerchantGroups();
-  }, [canUsePostingBacklogTools, loadMerchantGroups]);
-
-  const approveMerchantGroup = useCallback(async (group) => {
-    if (!businessId || !group || merchantGroupAction || !canUsePostingBacklogTools) return;
-    const options = merchantGroupOptions[group.group_id] || {};
-    const exclusions = Array.from(options.exclusions || []);
-    setMerchantGroupAction(group.group_id);
-    try {
-      const result = await approvePostingBacklogMerchantGroup(businessId, {
-        group_snapshot_token: group.snapshot_token,
-        selected_qbo_account_id: options.qboAccountId || group.proposed_qbo_account_id,
-        remember_for_future: options.rememberForFuture !== false,
-        transaction_ids: options.applyHistorical === false ? group.transaction_ids.slice(0, 1) : group.transaction_ids,
-        exclusion_ids: exclusions,
-        expected_row_versions: group.row_versions || {},
-        idempotency_key: `merchant-group-${group.snapshot_token}`,
-      });
-      setPostingBacklogSummary(result?.backlog_summary || null);
-      await loadMerchantGroups();
-      await loadAutoPostStatus();
-      setCountsRefreshKey((v) => v + 1);
-      window.dispatchEvent(new CustomEvent("bizzy:toast", {
-        detail: {
-          severity: "success",
-          title: "Merchant group saved",
-          body: `${Number(result?.scheduled_count || result?.ready_count || 0)} transactions updated.`,
-        },
-      }));
-    } catch (e) {
-      window.dispatchEvent(new CustomEvent("bizzy:toast", {
-        detail: {
-          severity: "error",
-          title: "Merchant group not saved",
-          body: e?.message || "Refresh and try again.",
-        },
-      }));
-    } finally {
-      setMerchantGroupAction(null);
-    }
-  }, [businessId, canUsePostingBacklogTools, loadAutoPostStatus, loadMerchantGroups, merchantGroupAction, merchantGroupOptions]);
-
-  const postReadyBacklog = useCallback(async () => {
-    if (!businessId || merchantGroupAction || !canUsePostingBacklogTools) return;
-    setMerchantGroupAction("ready");
-    try {
-      const result = await postReadyPostingBacklogTransactions(businessId);
-      setPostingBacklogSummary(result?.backlog_summary || null);
-      await loadAutoPostStatus();
-      setCountsRefreshKey((v) => v + 1);
-    } catch (e) {
-      window.dispatchEvent(new CustomEvent("bizzy:toast", {
-        detail: {
-          severity: "error",
-          title: "Ready transactions not scheduled",
-          body: e?.message || "Refresh and try again.",
-        },
-      }));
-    } finally {
-      setMerchantGroupAction(null);
-    }
-  }, [businessId, canUsePostingBacklogTools, loadAutoPostStatus, merchantGroupAction]);
-
-  const handlePostingBacklogBucketClick = useCallback((bucketKey) => {
-    if (!canUsePostingBacklogTools) return;
-    if (bucketKey === "merchant_approval_needed") {
-      openMerchantReview();
-      return;
-    }
-    if (bucketKey === "failed" || bucketKey === "scheduled_future" || bucketKey === "active_posting" || bucketKey === "ready_to_release") {
-      setActiveTab("handled");
-      setPage(1);
-      return;
-    }
-    if (String(bucketKey || "").startsWith("protected_")) {
-      setActiveTab("needs_review");
-      setPage(1);
-    }
-  }, [canUsePostingBacklogTools, openMerchantReview]);
 
   const updateAutoPost = useCallback(async ({
     enabled,
@@ -965,7 +800,7 @@ function BookkeepingCleanup() {
           scopeMode,
           effectiveDate,
           previewAcknowledged,
-          previewFingerprint: autoPostScopeChoice === "effective_date" ? autoPostPreview?.preview_fingerprint : null,
+          previewFingerprint: null,
         });
       } catch (err) {
         if (enabled && err?.requiresConfirmation) {
@@ -997,20 +832,17 @@ function BookkeepingCleanup() {
     } finally {
       setSavingAutoPost(false);
     }
-  }, [autoPostPreview?.preview_fingerprint, autoPostScopeChoice, businessId, savingAutoPost, usingDemo]);
+  }, [businessId, savingAutoPost, usingDemo]);
 
   const handleToggleAutoPost = useCallback(async () => {
     if (!businessId || usingDemo || savingAutoPost) return;
     const nextEnabled = autoPostStatus?.auto_post_to_quickbooks !== true;
     if (nextEnabled) {
-      setAutoPostScopeChoice("new_activity_only");
-      setAutoPostEffectiveDate(autoPostStatus?.auto_post_effective_date || new Date().toISOString().slice(0, 10));
       setAutoPostConfirmOpen(true);
       return;
     }
     await updateAutoPost({ enabled: false, confirmBacklog: false });
   }, [
-    autoPostStatus?.auto_post_effective_date,
     autoPostStatus?.auto_post_to_quickbooks,
     businessId,
     savingAutoPost,
@@ -1019,21 +851,14 @@ function BookkeepingCleanup() {
   ]);
 
   const confirmEnableAutoPost = useCallback(async () => {
-    const effectiveDate = autoPostScopeChoice === "effective_date" ? autoPostEffectiveDate : null;
     await updateAutoPost({
       enabled: true,
       confirmBacklog: true,
-      scopeMode: autoPostScopeChoice,
-      effectiveDate,
-      previewAcknowledged: autoPostScopeChoice === "effective_date",
+      scopeMode: "new_activity_only",
+      effectiveDate: null,
+      previewAcknowledged: false,
     });
-  }, [autoPostEffectiveDate, autoPostScopeChoice, updateAutoPost]);
-
-  useEffect(() => {
-    if (!autoPostConfirmOpen || autoPostScopeChoice !== "effective_date") return;
-    setAutoPostPreview(null);
-    loadAutoPostPreview(autoPostEffectiveDate);
-  }, [autoPostConfirmOpen, autoPostEffectiveDate, autoPostScopeChoice, loadAutoPostPreview]);
+  }, [updateAutoPost]);
 
   useEffect(() => {
     const modalOpen = autoPostConfirmOpen || Boolean(manualPostTxn) || Boolean(manualPostResult) || Boolean(incomingDepositUndoTxn);
@@ -2493,74 +2318,10 @@ function BookkeepingCleanup() {
                   />
                 </span>
               </button>
-              {autoPostStatus?.auto_post_to_quickbooks === true ? (
-                <button
-                  type="button"
-                  disabled={savingAutoPost || loadingAutoPost}
-                  onClick={() => {
-                    setAutoPostScopeChoice(autoPostStatus?.auto_post_scope_mode === "effective_date" ? "effective_date" : "new_activity_only");
-                    setAutoPostEffectiveDate(autoPostStatus?.auto_post_effective_date || new Date().toISOString().slice(0, 10));
-                    setAutoPostConfirmOpen(true);
-                  }}
-                  className="min-w-0 rounded-full border border-white/10 px-3 py-1.5 text-center text-slate-200 transition hover:border-[var(--accent-line)] hover:bg-[var(--panel)] disabled:cursor-not-allowed disabled:opacity-60 sm:px-3.5"
-                >
-                  Update scope
-                </button>
-              ) : null}
             </>
           ) : null}
         </div>
       </div>
-
-      {!usingDemo && (autoPostStatus?.auto_post_to_quickbooks === true || Number(autoPostStatus?.handled_backlog_count || 0) > 0) ? (
-        <div className="mb-3 rounded-xl border border-emerald-300/18 bg-emerald-300/[0.06] px-3 py-2 text-xs leading-5 text-slate-300">
-          <div className="font-semibold text-emerald-100">
-            {Number(autoPostStatus?.handled_backlog_count || 0) > 0
-              ? `${Number(autoPostStatus.handled_backlog_count)} handled transactions are waiting for posting review`
-              : autoPostStatus?.scope_copy?.headline || "Auto-posting is enabled"}
-          </div>
-          <div>
-            {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && autoPostStatus?.auto_post_to_quickbooks !== true
-              ? "Bizzi is holding these until posting is turned on or an authorized operator releases them."
-              : autoPostStatus?.scope_copy?.detail || "Eligible handled transactions post automatically after the grace period."}
-          </div>
-          {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && (postingBacklogSummary || autoPostStatus?.backlog_summary) ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {Object.entries((postingBacklogSummary || autoPostStatus.backlog_summary)?.labels || {}).map(([key, label]) => (
-                canUsePostingBacklogTools ? (
-                  <button
-                    type="button"
-                    key={label}
-                    onClick={() => handlePostingBacklogBucketClick(key)}
-                    className="rounded-md border border-slate-700/80 bg-slate-950/40 px-2 py-1 text-left text-slate-300 transition hover:border-emerald-400/60 hover:text-slate-100"
-                  >
-                    <span className="font-semibold text-slate-100">{Number((postingBacklogSummary || autoPostStatus.backlog_summary)?.buckets?.[key] || 0)}</span> {label}
-                  </button>
-                ) : (
-                  <span key={label} className="rounded-md border border-slate-700/80 bg-slate-950/40 px-2 py-1 text-slate-300">
-                    <span className="font-semibold text-slate-100">{Number((postingBacklogSummary || autoPostStatus.backlog_summary)?.buckets?.[key] || 0)}</span> {label}
-                  </span>
-                )
-              ))}
-              {canUsePostingBacklogTools ? (
-                <>
-                  <button type="button" onClick={openMerchantReview} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60">
-                    Review posting backlog
-                  </button>
-                  <button type="button" onClick={postReadyBacklog} disabled={merchantGroupAction === "ready"} className="rounded-md border border-slate-700 px-2 py-1 font-semibold text-slate-100 hover:border-emerald-400/60 disabled:opacity-60">
-                    Post safe transactions
-                  </button>
-                </>
-              ) : null}
-              {canUsePostingBacklogTools ? (
-                <button type="button" onClick={() => loadAutoPostPreview(autoPostStatus?.auto_post_effective_date || autoPostEffectiveDate)} className="rounded-md border border-emerald-400/40 px-2 py-1 font-semibold text-emerald-100 hover:border-emerald-300">
-                  Run safety preview
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
 
       <div className="flex flex-wrap items-center gap-3 text-xs sm:text-sm mb-2 text-slate-300">
         <label className="flex items-center gap-2">
@@ -3024,181 +2785,6 @@ function BookkeepingCleanup() {
       {typeof document !== "undefined"
         ? createPortal(
             <AnimatePresence>
-              {merchantReviewOpen ? (
-                <motion.div
-                  className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-labelledby="merchant-backlog-review-title"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.18, ease: [0.22, 0.1, 0.25, 1] }}
-                >
-                  <motion.button
-                    type="button"
-                    aria-label="Close merchant review"
-                    className="absolute inset-0 bg-black/72 backdrop-blur-[3px]"
-                    onClick={() => setMerchantReviewOpen(false)}
-                  />
-                  <motion.div
-                    className="relative flex max-h-[86vh] w-full max-w-[980px] flex-col rounded-2xl border border-emerald-300/22 bg-[#111312] p-5 text-slate-100 shadow-[0_28px_90px_rgba(0,0,0,0.68)]"
-                    initial={{ opacity: 0, y: 18, scale: 0.97 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 12, scale: 0.98 }}
-                    transition={{ duration: 0.22, ease: [0.16, 0.84, 0.44, 1] }}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h2 id="merchant-backlog-review-title" className="text-base font-semibold text-white">Review posting backlog</h2>
-                        <p className="mt-1 text-sm text-slate-400">
-                          Review merchants, confirm the QuickBooks category, and let Bizzi post passing transactions in the background.
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button type="button" onClick={loadMerchantGroups} className="rounded-full border border-white/12 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/[0.06]">
-                          Refresh
-                        </button>
-                        <button type="button" onClick={() => setMerchantReviewOpen(false)} className="rounded-full border border-white/12 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/[0.06]">
-                          Close
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
-                      {Object.entries((postingBacklogSummary || autoPostStatus?.backlog_summary)?.labels || {}).slice(0, 8).map(([key, label]) => (
-                        <div key={key} className="rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2">
-                          <div className="text-lg font-semibold text-slate-50">{Number((postingBacklogSummary || autoPostStatus?.backlog_summary)?.buckets?.[key] || 0)}</div>
-                          <div className="text-slate-400">{label}</div>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="mt-4 flex-1 overflow-y-auto pr-1">
-                      {loadingMerchantGroups ? (
-                        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-4 text-sm text-slate-300">Reviewing transactions...</div>
-                      ) : merchantGroups.length ? (
-                        <div className="space-y-3">
-                          {merchantGroups.map((group) => {
-                            const opts = merchantGroupOptions[group.group_id] || {};
-                            const excludedCount = Number(group.excluded_transaction_count || 0) + Number(opts.exclusions?.size || 0);
-                            const postCount = opts.postPassing === false ? 0 : Math.max(0, Number(group.transaction_count || 0) - excludedCount);
-                            return (
-                              <div key={group.group_id} className="rounded-xl border border-white/10 bg-white/[0.035] p-4">
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <h3 className="truncate text-sm font-semibold text-white">{group.display_merchant}</h3>
-                                      <span className="rounded-full border border-emerald-300/25 bg-emerald-300/[0.08] px-2 py-0.5 text-[11px] text-emerald-100">{group.evidence?.match_specificity || group.identity?.specificity}</span>
-                                    </div>
-                                    <p className="mt-1 text-xs text-slate-400">
-                                      {group.transaction_count} transactions · {formatSignedCurrency(group.total_amount)} · {group.date_range?.start} to {group.date_range?.end}
-                                    </p>
-                                    <p className="mt-1 text-xs text-slate-500">
-                                      {group.normalized_identity} · {group.source_accounts?.map((acct) => acct.name).join(", ") || "Mapped source account"}
-                                    </p>
-                                  </div>
-                                  <div className="flex min-w-[260px] flex-wrap items-center justify-end gap-2">
-                                    <select
-                                      value={opts.qboAccountId || group.proposed_qbo_account_id}
-                                      onChange={(e) => setMerchantGroupOptions((prev) => ({
-                                        ...(prev || {}),
-                                        [group.group_id]: { ...(prev?.[group.group_id] || {}), qboAccountId: e.target.value },
-                                      }))}
-                                      className="min-h-[34px] rounded-md border border-white/10 bg-[#0f1110] px-2 text-xs text-slate-100"
-                                    >
-                                      {chartAccounts.map((acct) => (
-                                        <option key={acct.id || acct.Id} value={acct.id || acct.Id}>{acct.name || acct.Name}</option>
-                                      ))}
-                                    </select>
-                                    <button
-                                      type="button"
-                                      onClick={() => approveMerchantGroup(group)}
-                                      disabled={merchantGroupAction === group.group_id}
-                                      className="rounded-full bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-[#06100c] hover:bg-emerald-200 disabled:opacity-60"
-                                    >
-                                      {merchantGroupAction === group.group_id ? "Scheduling..." : "Approve category and post"}
-                                    </button>
-                                  </div>
-                                </div>
-                                <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
-                                  <label className="flex items-center gap-2 text-slate-300">
-                                    <input
-                                      type="checkbox"
-                                      checked={opts.rememberForFuture !== false}
-                                      onChange={(e) => setMerchantGroupOptions((prev) => ({
-                                        ...(prev || {}),
-                                        [group.group_id]: { ...(prev?.[group.group_id] || {}), rememberForFuture: e.target.checked },
-                                      }))}
-                                    />
-                                    Remember for future
-                                  </label>
-                                  <label className="flex items-center gap-2 text-slate-300">
-                                    <input
-                                      type="checkbox"
-                                      checked={opts.applyHistorical !== false}
-                                      onChange={(e) => setMerchantGroupOptions((prev) => ({
-                                        ...(prev || {}),
-                                        [group.group_id]: { ...(prev?.[group.group_id] || {}), applyHistorical: e.target.checked },
-                                      }))}
-                                    />
-                                    Only these transactions
-                                  </label>
-                                  <label className="flex items-center gap-2 text-slate-300">
-                                    <input
-                                      type="checkbox"
-                                      checked={opts.postPassing !== false}
-                                      onChange={(e) => setMerchantGroupOptions((prev) => ({
-                                        ...(prev || {}),
-                                        [group.group_id]: { ...(prev?.[group.group_id] || {}), postPassing: e.target.checked },
-                                      }))}
-                                    />
-                                    Post passing transactions
-                                  </label>
-                                </div>
-                                <div className="mt-3 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.06] px-3 py-2 text-xs text-emerald-50/90">
-                                  Bizzi will remember this category for this merchant, apply it to {Math.max(0, Number(group.transaction_count || 0) - excludedCount)} compatible transactions, and post {postCount} transactions after duplicate and safety checks.
-                                </div>
-                                {excludedCount ? (
-                                  <div className="mt-2 text-xs text-amber-200">{excludedCount} transactions will stay in review.</div>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  onClick={() => setExpandedMerchantGroup(expandedMerchantGroup === group.group_id ? null : group.group_id)}
-                                  className="mt-3 text-xs font-semibold text-emerald-200 hover:text-emerald-100"
-                                >
-                                  {expandedMerchantGroup === group.group_id ? "Hide transactions" : "Show transactions"}
-                                </button>
-                                {expandedMerchantGroup === group.group_id ? (
-                                  <div className="mt-3 overflow-hidden rounded-lg border border-white/10">
-                                    {group.transactions.slice(0, 20).map((txn) => (
-                                      <div key={txn.transaction_id} className="grid grid-cols-[92px_80px_1fr_150px] gap-2 border-b border-white/10 px-3 py-2 text-xs last:border-b-0">
-                                        <span className="text-slate-400">{txn.date}</span>
-                                        <span className={Number(txn.amount || 0) < 0 ? "text-rose-300" : "text-emerald-300"}>{formatSignedCurrency(txn.amount)}</span>
-                                        <span className="min-w-0 truncate text-slate-200">{txn.description || txn.memo}</span>
-                                        <span className="truncate text-slate-400">{txn.proposed_gl}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : null}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-4 text-sm text-slate-300">No merchant groups are ready for grouped review.</div>
-                      )}
-                    </div>
-                  </motion.div>
-                </motion.div>
-              ) : null}
-            </AnimatePresence>,
-            document.body
-          )
-        : null}
-      {typeof document !== "undefined"
-        ? createPortal(
-            <AnimatePresence>
               {autoPostConfirmOpen ? (
                 <motion.div
                   className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center overflow-hidden overscroll-none px-4 py-6"
@@ -3236,110 +2822,17 @@ function BookkeepingCleanup() {
                       </div>
                       <div className="min-w-0">
                         <h2 id="auto-post-confirm-title" className="text-base font-semibold text-white">
-                          {autoPostStatus?.auto_post_to_quickbooks === true
-                            ? "Update automatic posting scope"
-                            : "Turn on automatic QuickBooks posting?"}
+                          Turn on automatic QuickBooks posting?
                         </h2>
                         <p className="mt-2 text-sm leading-6 text-slate-300">
-                          Choose which handled transactions Bizzi may post automatically. Eligible rows still wait through the posting grace period before going to QuickBooks.
+                          Future eligible transactions will post automatically after Bizzi categorizes them and checks QuickBooks.
                         </p>
                       </div>
                     </div>
 
-                    <div className="mt-4 grid gap-2">
-                      <label
-                        className={`cursor-pointer rounded-xl border px-3 py-3 text-sm transition ${
-                          autoPostScopeChoice === "new_activity_only"
-                            ? "border-emerald-300/50 bg-emerald-300/[0.10]"
-                            : "border-white/12 bg-white/[0.035] hover:bg-white/[0.06]"
-                        }`}
-                      >
-                        <span className="flex items-start gap-3">
-                          <input
-                            type="radio"
-                            name="auto-post-scope"
-                            value="new_activity_only"
-                            checked={autoPostScopeChoice === "new_activity_only"}
-                            onChange={() => setAutoPostScopeChoice("new_activity_only")}
-                            className="mt-1"
-                          />
-                          <span>
-                            <span className="block font-semibold text-slate-100">New activity only</span>
-                            <span className="block text-slate-400">
-                              Automatically post eligible transactions handled after enablement. Existing Handled transactions remain held.
-                            </span>
-                          </span>
-                        </span>
-                      </label>
-
-                      <label
-                        className={`cursor-pointer rounded-xl border px-3 py-3 text-sm transition ${
-                          autoPostScopeChoice === "effective_date"
-                            ? "border-emerald-300/50 bg-emerald-300/[0.10]"
-                            : "border-white/12 bg-white/[0.035] hover:bg-white/[0.06]"
-                        }`}
-                      >
-                        <span className="flex items-start gap-3">
-                          <input
-                            type="radio"
-                            name="auto-post-scope"
-                            value="effective_date"
-                            checked={autoPostScopeChoice === "effective_date"}
-                            onChange={() => setAutoPostScopeChoice("effective_date")}
-                            className="mt-1"
-                          />
-                          <span className="min-w-0 flex-1">
-                            <span className="block font-semibold text-slate-100">Include existing safe Handled transactions</span>
-                            <span className="block text-slate-400">
-                              Pick an effective date. Bizzi enrolls only rows that pass posting safety checks.
-                            </span>
-                          </span>
-                        </span>
-                      </label>
+                    <div className="mt-4 rounded-xl border border-emerald-300/24 bg-emerald-300/[0.08] px-3 py-2.5 text-sm leading-5 text-emerald-50/88">
+                      Existing handled transactions stay with Bizzi’s operator review flow. Your Books page will continue to show completed activity and any questions that need your business context.
                     </div>
-
-                    {autoPostScopeChoice === "effective_date" ? (
-                      <div className="mt-4 rounded-xl border border-white/12 bg-black/20 p-3">
-                        <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                          Effective date
-                        </label>
-                        <input
-                          type="date"
-                          value={autoPostEffectiveDate}
-                          onChange={(event) => setAutoPostEffectiveDate(event.target.value)}
-                          className="mt-2 w-full rounded-lg border border-white/12 bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none focus:border-emerald-300/60"
-                        />
-                        <div className="mt-3 text-sm leading-5 text-slate-300">
-                          {loadingAutoPostPreview ? (
-                            "Checking eligible rows..."
-                          ) : autoPostPreview ? (
-                            <>
-                              <span className="font-semibold text-emerald-100">{Number(autoPostPreview.eligible_count || 0)}</span>{" "}
-                              will be enrolled.{" "}
-                              <span className="font-semibold text-amber-100">{Number(autoPostPreview.blocked_count || 0)}</span>{" "}
-                              blocked rows will stay out of Auto-post.
-                            </>
-                          ) : (
-                            "Preview the selected scope before confirming."
-                          )}
-                        </div>
-                        {autoPostPreview?.buckets ? (
-                          <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-400">
-                            {Object.entries(autoPostPreview.buckets).slice(0, 8).map(([key, value]) => (
-                              <div key={key} className="rounded-lg bg-white/[0.035] px-2 py-1">
-                                {key.replace(/_/g, " ")}: <span className="text-slate-200">{Number(value || 0)}</span>
-                              </div>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && autoPostScopeChoice === "new_activity_only" ? (
-                      <div className="mt-4 rounded-xl border border-amber-300/24 bg-amber-300/[0.08] px-3 py-2.5 text-sm leading-5 text-amber-50/88">
-                        Existing Handled transactions remain held. Future eligible transactions post automatically after their grace period.
-                      </div>
-                    ) : null}
 
                     <div className="mt-5 flex items-center justify-end gap-2">
                       <button
@@ -3352,11 +2845,7 @@ function BookkeepingCleanup() {
                       </button>
                       <button
                         type="button"
-                        disabled={
-                          savingAutoPost ||
-                          (autoPostScopeChoice === "effective_date" &&
-                            (loadingAutoPostPreview || !autoPostPreview?.preview_fingerprint))
-                        }
+                        disabled={savingAutoPost}
                         onClick={confirmEnableAutoPost}
                         className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
                       >
