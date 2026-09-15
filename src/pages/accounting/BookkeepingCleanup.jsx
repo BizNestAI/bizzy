@@ -594,9 +594,12 @@ function BookkeepingCleanup() {
   const [backgroundRefreshingTxns, setBackgroundRefreshingTxns] = useState(false);
   const [categorizationStatus, setCategorizationStatus] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
+  const [completedProcessingMessage, setCompletedProcessingMessage] = useState(null);
   const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null, matched: null, pending: null });
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
   const lastSuccessfulTransactionPagesRef = useRef(new Map());
+  const lastProcessingRunRef = useRef(null);
+  const processingCompleteTimerRef = useRef(null);
   const accountOverrides = useRef(new Map());
   const accountScrollRef = useRef(null);
   const [showAccountScrollLeft, setShowAccountScrollLeft] = useState(false);
@@ -787,7 +790,18 @@ function BookkeepingCleanup() {
     try {
       const res = await getAutoPostStatus(businessId);
       setAutoPostStatus(res || { auto_post_to_quickbooks: false, handled_backlog_count: 0 });
-      setPostingBacklogSummary(res?.backlog_summary || null);
+      if (res?.backlog_summary) {
+        setPostingBacklogSummary(res.backlog_summary);
+      } else if (!canUsePostingBacklogTools || Number(res?.handled_backlog_count || 0) <= 0) {
+        setPostingBacklogSummary(null);
+      }
+      if (canUsePostingBacklogTools && Number(res?.handled_backlog_count || 0) > 0 && !res?.backlog_summary) {
+        getPostingBacklogSummary(businessId, {
+          effectiveDate: res?.auto_post_effective_date || autoPostEffectiveDate,
+        })
+          .then((summary) => setPostingBacklogSummary(summary || null))
+          .catch((err) => console.warn("[bookkeeping] posting backlog summary fetch failed", err?.message || err));
+      }
     } catch (e) {
       console.warn("[bookkeeping] auto-post status fetch failed", e?.message || e);
       window.dispatchEvent(new CustomEvent("bizzy:toast", {
@@ -800,7 +814,7 @@ function BookkeepingCleanup() {
     } finally {
       setLoadingAutoPost(false);
     }
-  }, [businessId, usingDemo]);
+  }, [autoPostEffectiveDate, businessId, canUsePostingBacklogTools, usingDemo]);
 
   const loadAutoPostPreview = useCallback(async (effectiveDate) => {
     if (!businessId || usingDemo || !effectiveDate) return;
@@ -915,6 +929,23 @@ function BookkeepingCleanup() {
       setMerchantGroupAction(null);
     }
   }, [businessId, canUsePostingBacklogTools, loadAutoPostStatus, merchantGroupAction]);
+
+  const handlePostingBacklogBucketClick = useCallback((bucketKey) => {
+    if (!canUsePostingBacklogTools) return;
+    if (bucketKey === "merchant_approval_needed") {
+      openMerchantReview();
+      return;
+    }
+    if (bucketKey === "failed" || bucketKey === "scheduled_future" || bucketKey === "active_posting" || bucketKey === "ready_to_release") {
+      setActiveTab("handled");
+      setPage(1);
+      return;
+    }
+    if (String(bucketKey || "").startsWith("protected_")) {
+      setActiveTab("needs_review");
+      setPage(1);
+    }
+  }, [canUsePostingBacklogTools, openMerchantReview]);
 
   const updateAutoPost = useCallback(async ({
     enabled,
@@ -1092,6 +1123,35 @@ function BookkeepingCleanup() {
     }, 15000);
     return () => window.clearInterval(timer);
   }, [businessId, loadProcessingStatus, processingStatus?.active_count, usingDemo]);
+
+  useEffect(() => {
+    if (usingDemo) return;
+    const activeCount = Number(processingStatus?.active_count || 0);
+    if (activeCount > 0) {
+      lastProcessingRunRef.current = processingStatus?.current_run || { expected_count: activeCount };
+      setCompletedProcessingMessage(null);
+      if (processingCompleteTimerRef.current) {
+        window.clearTimeout(processingCompleteTimerRef.current);
+        processingCompleteTimerRef.current = null;
+      }
+      return;
+    }
+    const lastRun = lastProcessingRunRef.current;
+    if (!lastRun) return;
+    const count = Math.max(0, Number(lastRun.expected_count || lastRun.processed_count || 0));
+    lastProcessingRunRef.current = null;
+    if (count > 0) {
+      setCompletedProcessingMessage(`${count} ${count === 1 ? "transaction" : "transactions"} categorized`);
+      processingCompleteTimerRef.current = window.setTimeout(() => {
+        setCompletedProcessingMessage(null);
+        processingCompleteTimerRef.current = null;
+      }, window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ? 1200 : 3600);
+    }
+  }, [processingStatus?.active_count, processingStatus?.current_run, usingDemo]);
+
+  useEffect(() => () => {
+    if (processingCompleteTimerRef.current) window.clearTimeout(processingCompleteTimerRef.current);
+  }, []);
 
   const accountCards = useMemo(() => {
     if (!usingDemo) {
@@ -1339,10 +1399,16 @@ function BookkeepingCleanup() {
   }, [categorizationStatus]);
   const processingMessage = useMemo(() => {
     if (!hasRelevantProcessing) return null;
+    const run = processingStatus?.current_run || null;
+    if (Number(run?.expected_count || 0) > 0) {
+      const processed = Math.max(0, Number(run.processed_count || 0));
+      const expected = Math.max(processed, Number(run.expected_count || 0));
+      return `Categorized ${processed} of ${expected} transactions.`;
+    }
     return serverProcessingCount === 1
       ? "Categorizing 1 new transaction."
       : `Categorizing ${serverProcessingCount} new transactions.`;
-  }, [hasRelevantProcessing, serverProcessingCount]);
+  }, [hasRelevantProcessing, processingStatus?.current_run, serverProcessingCount]);
   const manualPostSummary = manualPostTxn ? getManualPostSummary(manualPostTxn) : null;
   const pendingCount = useMemo(() => {
     return transactions.filter(
@@ -2461,9 +2527,20 @@ function BookkeepingCleanup() {
           {Number(autoPostStatus?.handled_backlog_count || 0) > 0 && (postingBacklogSummary || autoPostStatus?.backlog_summary) ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               {Object.entries((postingBacklogSummary || autoPostStatus.backlog_summary)?.labels || {}).map(([key, label]) => (
-                <span key={label} className="rounded-md border border-slate-700/80 bg-slate-950/40 px-2 py-1 text-slate-300">
-                  <span className="font-semibold text-slate-100">{Number((postingBacklogSummary || autoPostStatus.backlog_summary)?.buckets?.[key] || 0)}</span> {label}
-                </span>
+                canUsePostingBacklogTools ? (
+                  <button
+                    type="button"
+                    key={label}
+                    onClick={() => handlePostingBacklogBucketClick(key)}
+                    className="rounded-md border border-slate-700/80 bg-slate-950/40 px-2 py-1 text-left text-slate-300 transition hover:border-emerald-400/60 hover:text-slate-100"
+                  >
+                    <span className="font-semibold text-slate-100">{Number((postingBacklogSummary || autoPostStatus.backlog_summary)?.buckets?.[key] || 0)}</span> {label}
+                  </button>
+                ) : (
+                  <span key={label} className="rounded-md border border-slate-700/80 bg-slate-950/40 px-2 py-1 text-slate-300">
+                    <span className="font-semibold text-slate-100">{Number((postingBacklogSummary || autoPostStatus.backlog_summary)?.buckets?.[key] || 0)}</span> {label}
+                  </span>
+                )
               ))}
               {canUsePostingBacklogTools ? (
                 <>
@@ -2543,7 +2620,7 @@ function BookkeepingCleanup() {
         </div>
       )}
 
-      {!usingDemo && hasVisibleRows && (categorizationMessage || processingMessage || backgroundRefreshingTxns) ? (
+      {!usingDemo && hasVisibleRows && (categorizationMessage || processingMessage || completedProcessingMessage || backgroundRefreshingTxns) ? (
         <div
           className="mb-2 flex items-center gap-3 rounded-xl border px-3 py-2 text-xs text-slate-300"
           style={{
@@ -2560,10 +2637,10 @@ function BookkeepingCleanup() {
           </div>
           <div>
             <p className="font-semibold text-slate-100">
-              {categorizationMessage ? "Updating transactions" : processingMessage ? "Categorizing new transactions" : "Refreshing transactions"}
+              {categorizationMessage ? "Updating transactions" : processingMessage ? "Categorizing new transactions" : completedProcessingMessage ? "Transactions categorized" : "Refreshing transactions"}
             </p>
             <p className="text-slate-400">
-              {categorizationMessage || processingMessage || "Updating this feed in the background without hiding your current rows."}
+              {categorizationMessage || processingMessage || completedProcessingMessage || "Updating this feed in the background without hiding your current rows."}
             </p>
           </div>
         </div>

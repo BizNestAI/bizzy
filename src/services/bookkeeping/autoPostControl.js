@@ -350,7 +350,13 @@ async function clearBacklogPostAfter(db, businessId, transactionIds = [], nowIso
   }
 }
 
-export async function getAutoPostSettings({ db, businessId, graceHours = DEFAULT_GRACE_HOURS } = {}) {
+export async function getAutoPostSettings({
+  db,
+  businessId,
+  graceHours = DEFAULT_GRACE_HOURS,
+  includeBacklogSummary = false,
+  includeBacklogPreview = false,
+} = {}) {
   if (!db || !businessId) {
     return {
       enabled: false,
@@ -366,14 +372,16 @@ export async function getAutoPostSettings({ db, businessId, graceHours = DEFAULT
   const scopeCopy = buildAutoPostScopeCopy(policy, { workerIntervalMinutes });
   let backlogPreviewSummary = null;
   let backlogSummary = null;
-  if (backlogIds.length > 0) {
+  if (backlogIds.length > 0 && (includeBacklogSummary || includeBacklogPreview)) {
     try {
-      backlogSummary = await getCanonicalPostingBacklogSummary({
-        db,
-        businessId,
-        effectiveDate: policy.auto_post_effective_date || policy.bookkeeping_start_date || "0001-01-01",
-      });
-      if (enabled) {
+      if (includeBacklogSummary) {
+        backlogSummary = await getCanonicalPostingBacklogSummary({
+          db,
+          businessId,
+          effectiveDate: policy.auto_post_effective_date || policy.bookkeeping_start_date || "0001-01-01",
+        });
+      }
+      if (enabled && includeBacklogPreview) {
         const preview = await previewAutoPostBacklog({
           db,
           businessId,

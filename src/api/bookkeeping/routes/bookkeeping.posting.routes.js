@@ -22,6 +22,14 @@ import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../../services/tax/taxC
 const router = Router();
 const POSTING_GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
 
+function setNoStoreHeaders(res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  res.set("Surrogate-Control", "no-store");
+  res.set("Vary", "Authorization, x-business-id, x-bizzi-admin-view");
+}
+
 function cents(value) {
   const n = Number(value);
   return Number.isFinite(n) ? Math.round(Math.abs(n) * 100) : null;
@@ -163,10 +171,17 @@ async function fetchExistingQboTransaction(qbo, txnType, txnId) {
 router.get("/posting/auto-post", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  setNoStoreHeaders(res);
 
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
-    const settings = await getAutoPostSettings({ db: supabase, businessId, graceHours: POSTING_GRACE_HOURS });
+    const settings = await getAutoPostSettings({
+      db: supabase,
+      businessId,
+      graceHours: POSTING_GRACE_HOURS,
+      includeBacklogSummary: false,
+      includeBacklogPreview: false,
+    });
     return res.json({ ok: true, ...settings });
   } catch (err) {
     console.error("[bookkeeping][auto-post-status] failed", err?.message || err);
@@ -213,6 +228,7 @@ router.patch("/posting/auto-post", requireAuth, async (req, res) => {
 router.get("/posting/backlog/preview", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  setNoStoreHeaders(res);
 
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
@@ -242,6 +258,7 @@ router.get("/posting/backlog/preview", requireAuth, async (req, res) => {
 router.get("/posting/backlog/summary", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  setNoStoreHeaders(res);
 
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
@@ -266,6 +283,7 @@ router.get("/posting/backlog/summary", requireAuth, async (req, res) => {
 router.get("/posting/backlog/merchant-groups", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  setNoStoreHeaders(res);
 
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });

@@ -1,3 +1,4 @@
+/* global process */
 import { reconsiderNeedsReviewTransactions } from "./routineExpenseReconsiderationService.js";
 import { getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "./bookkeepingScope.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
@@ -111,6 +112,14 @@ function isUnresolvedCategorization(cat = {}) {
     !cat?.posted_at;
 }
 
+function processingRunKey(row = {}) {
+  const metadata = row?.metadata || {};
+  return [
+    metadata.source || "background_bookkeeping",
+    metadata.last_enqueued_at || row.process_after || row.created_at || "",
+  ].map((part) => String(part || "")).join("|");
+}
+
 async function fetchOwnedTransactionIds({ db, businessId, transactionIds }) {
   const ids = uniqueIds(transactionIds);
   if (!businessId || !ids.length) return [];
@@ -153,8 +162,9 @@ async function updateRequest({ db, requestId, patch }) {
 
 async function insertOrResetRequests({ db, businessId, transactionIds, source = "unknown", priority = 0, now = new Date() }) {
   const ids = await assertOwnedTransactionIds({ db, businessId, transactionIds });
-  if (!businessId || !ids.length) return { ok: true, enqueued: 0, transaction_ids: [] };
   const timestamp = nowIso(now);
+  const runId = `${source}|${timestamp}`;
+  if (!businessId || !ids.length) return { ok: true, enqueued: 0, transaction_ids: [], run_id: runId };
   const rows = ids.map((transactionId) => ({
     business_id: businessId,
     transaction_id: transactionId,
@@ -204,7 +214,7 @@ async function insertOrResetRequests({ db, businessId, transactionIds, source = 
       }
       enqueued += 1;
     }
-    return { ok: true, enqueued, transaction_ids: ids };
+    return { ok: true, enqueued, transaction_ids: ids, run_id: runId };
   }
 
   const { error: insertErr } = await db
@@ -235,7 +245,7 @@ async function insertOrResetRequests({ db, businessId, transactionIds, source = 
     .in("transaction_id", ids)
     .neq("status", BOOKKEEPING_PROCESSING_STATUSES.PROCESSING);
   if (updateErr) throw updateErr;
-  return { ok: true, enqueued: ids.length, transaction_ids: ids };
+  return { ok: true, enqueued: ids.length, transaction_ids: ids, run_id: runId };
 }
 
 export async function enqueueBookkeepingProcessingForTransactions({
@@ -669,21 +679,63 @@ export async function getBookkeepingProcessingStatus({
   const staleBefore = new Date(now.getTime() - STALE_PROCESSING_MINUTES * 60 * 1000).toISOString();
   const { data: queued, error: queueErr } = await db
     .from("bookkeeping_processing_requests")
-    .select("id,status,locked_at,process_after")
+    .select("id,transaction_id,status,locked_at,locked_by,process_after,processed_at,error_code,error_message,metadata,created_at,updated_at")
     .eq("business_id", businessId)
     .in("status", [BOOKKEEPING_PROCESSING_STATUSES.PENDING, BOOKKEEPING_PROCESSING_STATUSES.PROCESSING])
     .limit(1000);
   if (queueErr) throw queueErr;
+  const stale = [];
   const active = (queued || []).filter((row) => {
     const status = String(row?.status || "").toLowerCase();
     if (status === BOOKKEEPING_PROCESSING_STATUSES.PENDING) {
       return !row.process_after || String(row.process_after) <= nowText;
     }
     if (status === BOOKKEEPING_PROCESSING_STATUSES.PROCESSING) {
-      return row.locked_at && String(row.locked_at) >= staleBefore;
+      const fresh = row.locked_at && String(row.locked_at) >= staleBefore;
+      if (!fresh) stale.push(row);
+      return fresh;
     }
     return false;
   });
+  let currentRun = null;
+  if (active.length) {
+    const key = processingRunKey(active[0]);
+    const { data: recentRows, error: recentErr } = await db
+      .from("bookkeeping_processing_requests")
+      .select("id,status,locked_at,locked_by,process_after,processed_at,error_code,error_message,metadata,created_at,updated_at")
+      .eq("business_id", businessId)
+      .order("updated_at", { ascending: false })
+      .limit(1000);
+    if (recentErr) throw recentErr;
+    const runRows = (recentRows || []).filter((row) => processingRunKey(row) === key);
+    const runCreatedAt = active[0]?.metadata?.last_enqueued_at || active[0]?.process_after || active[0]?.created_at || null;
+    const total = runRows.length || active.length;
+    const completed = runRows.filter((row) => row.status === BOOKKEEPING_PROCESSING_STATUSES.COMPLETED).length;
+    const failed = runRows.filter((row) =>
+      [BOOKKEEPING_PROCESSING_STATUSES.FAILED, BOOKKEEPING_PROCESSING_STATUSES.DEAD_LETTER].includes(row.status)
+    ).length;
+    const skipped = runRows.filter((row) => row.status === BOOKKEEPING_PROCESSING_STATUSES.SKIPPED).length;
+    currentRun = {
+      id: key,
+      status: active.some((row) => row.status === BOOKKEEPING_PROCESSING_STATUSES.PROCESSING) ? "processing" : "pending",
+      source: active[0]?.metadata?.source || "background_bookkeeping",
+      created_at: runCreatedAt,
+      started_at: active.find((row) => row.locked_at)?.locked_at || null,
+      heartbeat_at: active.map((row) => row.updated_at).filter(Boolean).sort().at(-1) || null,
+      completed_at: null,
+      expected_count: total,
+      processed_count: completed + failed + skipped,
+      succeeded_count: completed,
+      failed_count: failed,
+      skipped_count: skipped,
+      remaining_count: Math.max(0, total - completed - failed - skipped),
+      lock_owner: active.find((row) => row.locked_by)?.locked_by || null,
+      lock_expires_at: active.find((row) => row.locked_at)?.locked_at
+        ? new Date(new Date(active.find((row) => row.locked_at).locked_at).getTime() + STALE_PROCESSING_MINUTES * 60 * 1000).toISOString()
+        : null,
+      last_error: runRows.find((row) => row.error_message || row.error_code)?.error_message || null,
+    };
+  }
   const { data: retryRows, error: retryErr } = await db
     .from("bookkeeping_processing_requests")
     .select("id")
@@ -703,8 +755,10 @@ export async function getBookkeepingProcessingStatus({
     ok: true,
     active_count: active.length,
     queued_count: queued?.length || 0,
+    stale_count: stale.length,
     retry_count: retryRows?.length || 0,
     unresolved_count: unresolved?.length || 0,
+    current_run: currentRun,
     up_to_date: !(active.length) && !(unresolved?.length),
   };
 }

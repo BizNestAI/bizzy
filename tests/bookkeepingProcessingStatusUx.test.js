@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -13,6 +14,8 @@ test("processing status active_count excludes failed retry rows and stale proces
   assert.match(service, /const active = \(queued \|\| \[\]\)\.filter/);
   assert.match(service, /status === BOOKKEEPING_PROCESSING_STATUSES\.PENDING[\s\S]*?return !row\.process_after \|\| String\(row\.process_after\) <= nowText/);
   assert.match(service, /status === BOOKKEEPING_PROCESSING_STATUSES\.PROCESSING[\s\S]*?String\(row\.locked_at\) >= staleBefore/);
+  assert.match(service, /stale_count: stale\.length/);
+  assert.match(service, /current_run: currentRun/);
   assert.match(service, /retry_count: retryRows\?\.length \|\| 0/);
   assert.match(service, /active_count: active\.length/);
 });
@@ -25,7 +28,9 @@ test("Books Review feed reads processing status without creating processing requ
 
   assert.match(page, /getBookkeepingProcessingStatus\(businessId\)/);
   assert.match(client, /safeFetch\(apiUrl\("\/api\/bookkeeping\/processing\/status"\)/);
+  assert.match(client, /cache:\s*"no-store"/);
   assert.match(processingRoute, /router\.get\("\/processing\/status"/);
+  assert.match(processingRoute, /Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate"/);
   assert.match(processingRoute, /getBookkeepingProcessingStatus\(\{ businessId \}\)/);
   assert.doesNotMatch(processingRoute.slice(
     processingRoute.indexOf('router.get("/processing/status"'),

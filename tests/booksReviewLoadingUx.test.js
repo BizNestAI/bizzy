@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -12,6 +13,10 @@ test("Books Review keeps loaded rows visible while categorization continues", ()
   assert.match(source, /const hasVisibleRows = feedRows\.length > 0/);
   assert.match(source, /!hasVisibleRows[\s\S]*?\(loadingTxns \|\| isPreparingCategories/);
   assert.match(source, /const processingMessage = useMemo/);
+  assert.match(source, /current_run/);
+  assert.match(source, /Categorized \$\{processed\} of \$\{expected\} transactions/);
+  assert.match(source, /completedProcessingMessage/);
+  assert.match(source, /\$\{count\} \$\{count === 1 \? "transaction" : "transactions"\} categorized/);
   assert.match(source, /Categorizing \$\{serverProcessingCount\} new transactions/);
   assert.match(source, /You can keep working while this finishes/);
 });
@@ -71,7 +76,7 @@ test("Books Review full loading state is reserved for true first load without re
   assert.match(source, /const showLoadingState =[\s\S]*?!hasVisibleRows[\s\S]*?\(loadingTxns \|\| isPreparingCategories/);
   assert.match(source, /setTransactions\(\[\]\);[\s\S]*?setTotalCount\(null\);[\s\S]*?setLoadingTxns\(true\)/);
   assert.match(source, /const cachedPage = readTransactionPageCache\(cacheKey\) \|\| previousPage/);
-  assert.match(source, /if \(cachedPage && Array\.isArray\(cachedPage\.rows\)\) \{[\s\S]*?setTransactions\(cachedPage\.rows\)[\s\S]*?setBackgroundRefreshingTxns\(true\)/);
+  assert.match(source, /if \(cachedPage && Array\.isArray\(cachedPage\.rows\)\) \{[\s\S]*?setTransactions\(cached\.rows\)[\s\S]*?setBackgroundRefreshingTxns\(true\)/);
 });
 
 test("Books Review bulk approval uses live COA accounts and selected vendors instead of mock placeholders", () => {

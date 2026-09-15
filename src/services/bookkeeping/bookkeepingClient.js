@@ -150,6 +150,7 @@ export async function undoIncomingDepositMatch(businessId, transactionId, matchI
 export async function getAutoPostStatus(businessId) {
   return safeFetch(apiUrl("/api/bookkeeping/posting/auto-post"), {
     method: "GET",
+    cache: "no-store",
     headers: withBizHeaders(businessId),
   });
 }
@@ -203,6 +204,7 @@ export async function previewAutoPostBacklogScope(businessId, { effectiveDate = 
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return safeFetch(apiUrl(`/api/bookkeeping/posting/backlog/preview${suffix}`), {
     method: "GET",
+    cache: "no-store",
     headers: withBizHeaders(businessId),
   });
 }
@@ -216,6 +218,7 @@ export async function getPostingBacklogSummary(businessId, { effectiveDate = nul
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return safeFetch(apiUrl(`/api/bookkeeping/posting/backlog/summary${suffix}`), {
     method: "GET",
+    cache: "no-store",
     headers: withBizHeaders(businessId),
   });
 }
@@ -230,6 +233,7 @@ export async function getPostingBacklogMerchantGroups(businessId, { effectiveDat
   const suffix = params.toString() ? `?${params.toString()}` : "";
   return safeFetch(apiUrl(`/api/bookkeeping/posting/backlog/merchant-groups${suffix}`), {
     method: "GET",
+    cache: "no-store",
     headers: withBizHeaders(businessId),
   });
 }
@@ -445,6 +449,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, payload = {}
 
 export async function getBookkeepingProcessingStatus(businessId) {
   const res = await safeFetch(apiUrl("/api/bookkeeping/processing/status"), {
+    cache: "no-store",
     headers: withBizHeaders(businessId),
   });
   if (res && res.ok === false) {

@@ -7,9 +7,18 @@ import {
 
 const router = Router();
 
+function setNoStoreHeaders(res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  res.set("Surrogate-Control", "no-store");
+  res.set("Vary", "Authorization, x-business-id, x-bizzi-admin-view");
+}
+
 router.get("/processing/status", async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  setNoStoreHeaders(res);
   try {
     const result = await getBookkeepingProcessingStatus({ businessId });
     return res.json(result);

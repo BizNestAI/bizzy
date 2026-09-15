@@ -221,7 +221,9 @@ test("auto-post setting route is business scoped and protected by tenant authori
 
   assert.match(route, /requireAuth/);
   assert.match(route, /assertTaxBusinessAccess\(\{ req, businessId, supabase \}\)/);
-  assert.match(route, /getAutoPostSettings\(\{ db: supabase, businessId/);
+  assert.match(route, /getAutoPostSettings\(\{[\s\S]*db: supabase,[\s\S]*businessId/);
+  assert.match(route, /includeBacklogSummary:\s*false/);
+  assert.match(route, /includeBacklogPreview:\s*false/);
   assert.match(route, /setAutoPostEnabled\(\{[\s\S]*db: supabase,[\s\S]*businessId/);
 });
 
@@ -253,7 +255,14 @@ test("auto-post settings service reads, updates, and preserves historical backlo
   assert.equal(initialSettings.auto_post_scope_mode, "new_activity_only");
   assert.equal(initialSettings.worker.enabled, true);
   assert.match(initialSettings.scope_copy.headline, /Auto-posting is off/);
-  assert.equal(initialSettings.backlog_summary?.total, 2);
+  assert.equal(initialSettings.backlog_summary, null);
+  const initialSettingsWithSummary = await getAutoPostSettings({
+    db,
+    businessId: "biz-1",
+    graceHours: 24,
+    includeBacklogSummary: true,
+  });
+  assert.equal(initialSettingsWithSummary.backlog_summary?.total, 2);
 
   await assert.rejects(
     setAutoPostEnabled({ db, businessId: "biz-1", enabled: true, graceHours: 24, nowMs }),
@@ -704,6 +713,7 @@ test("auto-post GET and PATCH share one backend settings authority", () => {
 
   assert.match(qboPostingRoutePrefix, /getAutoPostSettings/);
   assert.match(qboPostingRoutePrefix, /setAutoPostEnabled/);
+  assert.match(qboPostingRoutePrefix, /setNoStoreHeaders\(res\)/);
   assert.doesNotMatch(qboPostingRoutePrefix, /getQBOClient|fetch\(|axios|runBooksPostOnce|postSingleBookkeepingTransactionNow/);
 });
 
@@ -783,8 +793,10 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
   const page = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
   assert.match(page, /backlog_summary/);
   assert.match(page, /auto_post_to_quickbooks === true \|\| Number\(autoPostStatus\?\.handled_backlog_count \|\| 0\) > 0/);
+  assert.match(page, /getPostingBacklogSummary\(businessId/);
   assert.match(page, /Bizzi is holding these until posting is turned on or an authorized operator releases them/);
   assert.match(page, /canUsePostingBacklogTools \?/);
+  assert.match(page, /handlePostingBacklogBucketClick\(key\)/);
   assert.doesNotMatch(page, /Ready to release", autoPostStatus\.backlog_preview_summary\.eligible_count/);
 });
 

@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -7,6 +8,7 @@ import {
   __setBackgroundBookkeepingProcessingTestDeps,
   enqueueBookkeepingProcessingForTransactions,
   enqueueUnresolvedBookkeepingBacklog,
+  getBookkeepingProcessingStatus,
   processPendingBookkeepingRequests,
   processPendingBookkeepingRequestsUntilIdle,
 } from "../src/services/bookkeeping/backgroundBookkeepingProcessingService.js";
@@ -113,6 +115,63 @@ function resetDeps() {
 
 test.afterEach(resetDeps);
 
+test("processing status reports live run progress and excludes stale locks from active count", async () => {
+  const supabase = makeSupabase();
+  const lastEnqueuedAt = "2026-09-15T00:00:00.000Z";
+  supabase.store.bookkeeping_processing_requests.push(
+    {
+      id: "req-processing",
+      business_id: BUSINESS_ID,
+      transaction_id: "txn-processing",
+      status: "processing",
+      process_after: lastEnqueuedAt,
+      locked_at: new Date(Date.now() - 60_000).toISOString(),
+      locked_by: "bookkeeping:test-worker",
+      processed_at: null,
+      metadata: { source: "bookkeeping_catchup", last_enqueued_at: lastEnqueuedAt },
+      created_at: "2026-09-15T00:00:00.000Z",
+      updated_at: new Date(Date.now() - 30_000).toISOString(),
+    },
+    {
+      id: "req-completed",
+      business_id: BUSINESS_ID,
+      transaction_id: "txn-completed",
+      status: "completed",
+      process_after: lastEnqueuedAt,
+      locked_at: null,
+      locked_by: "bookkeeping:test-worker",
+      processed_at: new Date(Date.now() - 20_000).toISOString(),
+      metadata: { source: "bookkeeping_catchup", last_enqueued_at: lastEnqueuedAt },
+      created_at: "2026-09-15T00:00:00.000Z",
+      updated_at: new Date(Date.now() - 20_000).toISOString(),
+    },
+    {
+      id: "req-stale",
+      business_id: BUSINESS_ID,
+      transaction_id: "txn-stale",
+      status: "processing",
+      process_after: lastEnqueuedAt,
+      locked_at: new Date(Date.now() - 15 * 60_000).toISOString(),
+      locked_by: "bookkeeping:abandoned",
+      processed_at: null,
+      metadata: { source: "bookkeeping_catchup", last_enqueued_at: "2026-09-14T00:00:00.000Z" },
+      created_at: "2026-09-14T00:00:00.000Z",
+      updated_at: new Date(Date.now() - 15 * 60_000).toISOString(),
+    },
+  );
+  supabase.store.transaction_categorizations.push(
+    { business_id: BUSINESS_ID, transaction_id: "txn-processing", status: "needs_review", qbo_txn_id: null },
+    { business_id: BUSINESS_ID, transaction_id: "txn-stale", status: "needs_review", qbo_txn_id: null },
+  );
+
+  const status = await getBookkeepingProcessingStatus({ businessId: BUSINESS_ID, supabase });
+  assert.equal(status.active_count, 1);
+  assert.equal(status.stale_count, 1);
+  assert.equal(status.current_run.expected_count, 2);
+  assert.equal(status.current_run.processed_count, 1);
+  assert.equal(status.current_run.remaining_count, 1);
+});
+
 test("background processing runs without browser user state and can auto-handle while Auto-post is off", async () => {
   const supabase = makeSupabase();
   seedBankTransactions(supabase, BUSINESS_ID, ["txn-1"]);
@@ -148,12 +207,13 @@ test("background processing runs without browser user state and can auto-handle 
     },
   });
 
-  await enqueueBookkeepingProcessingForTransactions({
+  const enqueueResult = await enqueueBookkeepingProcessingForTransactions({
     businessId: BUSINESS_ID,
     transactionIds: ["txn-1"],
     source: "plaid_sync",
     supabase,
   });
+  assert.match(enqueueResult.run_id, /^plaid_sync\|/);
   const result = await processPendingBookkeepingRequests({ supabase, batchSize: 1, workerId: "test-worker" });
 
   assert.equal(result.completed, 1);
