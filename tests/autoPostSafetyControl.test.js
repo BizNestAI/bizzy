@@ -907,6 +907,7 @@ test("merchant group route operation acceptance persists operator intent without
   });
   const groups = await getMerchantBacklogGroups({ db, businessId: "biz-1", effectiveDate: "2026-09-01" });
   const chex = groups.groups.find((group) => group.display_merchant === "Chex Grill");
+  db.calls.length = 0;
   const accepted = await persistMerchantBacklogGroupApprovalOperation({
     db,
     businessId: "biz-1",
@@ -924,6 +925,9 @@ test("merchant group route operation acceptance persists operator intent without
   assert.equal(db.cat("biz-1", "chex-1").meta.safe_to_auto_post, false);
   assert.equal(db.cat("biz-1", "chex-1").meta.merchant_group_operation_state, "accepted");
   assert.equal(db.cat("biz-1", "chex-1").meta.merchant_group_requested_decision.selected_qbo_account_id, "1150040001");
+  assert.equal(db.calls.some((call) => call.table === "bank_transactions"), false);
+  assert.equal(db.calls.some((call) => call.table === "plaid_qbo_account_mappings"), false);
+  assert.equal(db.calls.some((call) => call.table === "vendor_rules"), false);
 });
 
 test("durable worker resumes accepted merchant approval operations and schedules immediately", async () => {

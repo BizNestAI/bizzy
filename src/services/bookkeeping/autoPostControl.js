@@ -1405,33 +1405,42 @@ export async function persistMerchantBacklogGroupApprovalOperation({
   expectedRowVersions = {},
   idempotencyKey = null,
 } = {}) {
+  if (!db || !businessId || !selectedQboAccountId) {
+    const err = new Error("businessId and selectedQboAccountId are required.");
+    err.status = 400;
+    err.code = "missing_merchant_group_approval_input";
+    throw err;
+  }
   const operationId = buildMerchantApprovalOperationId({ businessId, idempotencyKey, groupSnapshotToken, transactionIds, selectedQboAccountId });
-  const { account, group, excluded, candidateIds, rows, bankRows, policy, sourceMappings } = await resolveMerchantBacklogApproval({
-    db,
-    businessId,
-    selectedQboAccountId,
-    groupSnapshotToken,
-    transactionIds,
-    exclusionIds,
-  });
+  const account = await fetchQboAccountForApproval(db, businessId, selectedQboAccountId);
+  const excluded = new Set(exclusionIds || []);
+  const candidateIds = Array.from(new Set((transactionIds || []).filter(Boolean))).filter((id) => !excluded.has(id));
+  if (!candidateIds.length) {
+    const err = new Error("No transactions are selected for this merchant group.");
+    err.status = 400;
+    err.code = "merchant_group_empty_selection";
+    throw err;
+  }
+  const rows = await fetchBacklogCategorizationRows(db, businessId, { transactionIds: candidateIds });
+  const rowsById = new Map(rows.map((row) => [row.transaction_id, row]));
+  const group = {
+    business_id: businessId,
+    group_id: groupSnapshotToken || operationId,
+    snapshot_token: groupSnapshotToken || null,
+    identity: { key: groupSnapshotToken || operationId, specificity: null },
+  };
   const accepted = [];
   const blocked = [];
-  for (const item of rows) {
-    const bankTxn = bankRows.map.get(item.transaction_id);
+  for (const transactionId of candidateIds) {
+    const item = rowsById.get(transactionId);
+    if (!item) {
+      blocked.push({ transaction_id: transactionId, reason: "missing_categorization" });
+      continue;
+    }
     const expectedVersion = expectedRowVersions?.[item.transaction_id];
     const currentVersion = item.meta?.row_version || item.meta?.version || item.updated_at || null;
     if (expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
       blocked.push({ transaction_id: item.transaction_id, reason: "row_changed" });
-      continue;
-    }
-    if (!bankTxn) {
-      blocked.push({ transaction_id: item.transaction_id, reason: "missing_transaction" });
-      continue;
-    }
-    const evaluation = await evaluateBacklogRowForRelease({ db, businessId, item, bankTxn, policy: buildPreviewPolicy(policy, { effectiveDate: bankTxn.date }), sourceMappings });
-    const customerBucket = customerBucketForEvaluation({ item, bankTxn, evaluation, sourceMappings });
-    if (!["ready_to_release", "merchant_approval_needed"].includes(customerBucket.bucket)) {
-      blocked.push({ transaction_id: item.transaction_id, reason: customerBucket.reason });
       continue;
     }
     const recorded = await recordMerchantApprovalOperationAccepted({
