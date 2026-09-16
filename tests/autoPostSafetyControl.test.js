@@ -13,6 +13,7 @@ import {
   getAutoPostSettings,
   getAutoPostToQuickBooks,
   approveMerchantBacklogGroup,
+  markMerchantBacklogApprovalOperationFailed,
   persistMerchantBacklogGroupApprovalDecision,
   previewAutoPostBacklog,
   reEvaluateAutoPostBacklog,
@@ -824,6 +825,12 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
   assert.match(postingRoutes, /res\.status\(202\)\.json/);
   assert.match(postingRoutes, /setImmediate/);
   assert.match(postingRoutes, /createCachedLiveDuplicatePreflight/);
+  assert.match(postingRoutes, /merchant-groups\/operations\/:operationId/);
+  assert.match(postingRoutes, /graceHours:\s*0/);
+  assert.match(postingRoutes, /markMerchantBacklogApprovalOperationFailed/);
+  assert.match(postingRoutes, /\.order\("updated_at"[\s\S]*?\.order\("created_at"[\s\S]*?\.order\("qbo_account_id"[\s\S]*?\.limit\(1\)[\s\S]*?\.maybeSingle\(\)/);
+  assert.doesNotMatch(postingRoutes, /\.eq\("plaid_account_id", bankTxn\.plaid_account_id\)\s*\.limit\(1\)/);
+  assert.doesNotMatch(readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8"), /\.from\("qbo_accounts_cache"\)[\s\S]*?\.eq\("qbo_account_id"[\s\S]*?\.limit\(1\)[\s\S]*?\.maybeSingle\(\)/);
 });
 
 test("posting review details expose every counted non-merchant bucket and approval decision saves before posting checks", async () => {
@@ -865,6 +872,19 @@ test("posting review details expose every counted non-merchant bucket and approv
   assert.equal(db.cat("biz-1", "merchant-1").post_after, null);
   assert.equal(db.cat("biz-1", "merchant-1").meta.merchant_group_operation_state, "decision_saved");
   assert.equal(db.cat("biz-1", "merchant-1").meta.duplicate_preflight.confidence, "PENDING");
+
+  await markMerchantBacklogApprovalOperationFailed({
+    db,
+    businessId: "biz-1",
+    operationId: decision.operation_id,
+    transactionIds: ["merchant-1"],
+    reasonCode: "duplicate_preflight_failed",
+    message: "A 'limit' was applied without an explicit 'order'",
+  });
+  assert.equal(db.cat("biz-1", "merchant-1").post_after, null);
+  assert.equal(db.cat("biz-1", "merchant-1").meta.safe_to_auto_post, false);
+  assert.equal(db.cat("biz-1", "merchant-1").meta.merchant_group_operation_state, "failed");
+  assert.equal(db.cat("biz-1", "merchant-1").meta.merchant_group_operation_failure_code, "duplicate_preflight_failed");
 });
 
 test("merchant groups use exact identity and grouped approval schedules only passing rows", async () => {

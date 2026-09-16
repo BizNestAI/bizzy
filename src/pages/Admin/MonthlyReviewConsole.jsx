@@ -605,7 +605,7 @@ export default function MonthlyReviewConsole() {
     setPostingReviewAction(group.group_id);
     setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Saving decision" }));
     try {
-      await safeFetch("/api/bookkeeping/posting/backlog/merchant-groups/approve", {
+      const decision = await safeFetch("/api/bookkeeping/posting/backlog/merchant-groups/approve", {
         method: "POST",
         body: {
           business_id: selectedBusinessId,
@@ -619,14 +619,33 @@ export default function MonthlyReviewConsole() {
         },
       });
       setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Checking QuickBooks" }));
+      const statusUrl = decision?.status_url || (decision?.operation_id
+        ? `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(selectedBusinessId)}`
+        : null);
+      if (statusUrl) {
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 600 : 1500));
+          const operation = await safeFetch(statusUrl, { cache: "no-store" });
+          const states = operation?.states || {};
+          if (states.scheduled || states.ready_to_post) {
+            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Queued for posting" }));
+          } else if (states.checking_duplicates) {
+            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Checking QuickBooks" }));
+          } else if (states.failed || states.blocked) {
+            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Needs review" }));
+          }
+          if (operation?.terminal) break;
+        }
+      }
       await Promise.all([
         loadPostingReview(),
         loadBookkeepingFeedCounts(),
       ]);
     } catch (e) {
+      console.warn("[monthly-review][posting-review-approval] failed", e?.body || e?.message || e);
       setPostingReview((current) => ({
         ...current,
-        error: e?.body?.message || e?.message || "Could not approve merchant group.",
+        error: "Bizzi could not finish this posting decision. Nothing was posted automatically. Refresh Posting Review and try again.",
       }));
     } finally {
       setPostingReviewAction(null);
@@ -2285,17 +2304,19 @@ function PostingReviewStatusSections({ items = [], labels = {} }) {
 
 function PostingReviewItemList({ items = [] }) {
   return (
-    <div className="divide-y divide-white/[0.06]">
-      {items.map((item) => (
-        <div key={item.transaction_id} className="grid gap-2 px-3 py-2 text-xs text-white/60 md:grid-cols-[88px_84px_1fr_160px_150px_140px]">
-          <span className="text-white/45">{item.date || "n/a"}</span>
-          <span className={Number(item.amount || 0) < 0 ? "text-rose-300" : "text-emerald-300"}>{formatCurrency(item.amount)}</span>
-          <span className="min-w-0 truncate text-white/80" title={`${item.description || ""} ${item.memo || ""}`}>{item.merchant || item.description || "Transaction"}</span>
-          <span className="truncate text-white/45">{item.proposed_gl || "Current category"}</span>
-          <span className="truncate text-white/45">{item.source_account || "Mapped account"}</span>
-          <span className="truncate text-white/70">{formatPostingReviewItemStatus(item)}</span>
-        </div>
-      ))}
+    <div className="overflow-x-auto">
+      <div className="min-w-[1120px] divide-y divide-white/[0.06]">
+        {items.map((item) => (
+          <div key={item.transaction_id} className="grid grid-cols-[96px_92px_minmax(260px,1fr)_180px_190px_260px] gap-2 px-3 py-2 text-xs text-white/60">
+            <span className="whitespace-nowrap text-white/45">{item.date || "n/a"}</span>
+            <span className={`whitespace-nowrap ${Number(item.amount || 0) < 0 ? "text-rose-300" : "text-emerald-300"}`}>{formatCurrency(item.amount)}</span>
+            <span className="min-w-0 truncate text-white/80" title={`${item.description || ""} ${item.memo || ""}`}>{item.merchant || item.description || "Transaction"}</span>
+            <span className="truncate text-white/45">{item.proposed_gl || "Current category"}</span>
+            <span className="truncate text-white/45">{item.source_account || "Mapped account"}</span>
+            <span className="whitespace-nowrap text-white/70">{formatPostingReviewItemStatus(item)}</span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

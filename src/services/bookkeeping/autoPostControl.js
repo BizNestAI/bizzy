@@ -1192,7 +1192,6 @@ async function fetchQboAccountForApproval(db, businessId, qboAccountId) {
     .select("qbo_account_id,name,account_type,active")
     .eq("business_id", businessId)
     .eq("qbo_account_id", String(qboAccountId))
-    .limit(1)
     .maybeSingle();
   if (error) throw wrapAutoPostDbError("merchant_group_qbo_account_fetch_failed", error);
   if (!data?.qbo_account_id) {
@@ -1499,6 +1498,13 @@ export async function runMerchantBacklogApprovalOperation({
     bankRows,
     db,
   });
+  await markMerchantBacklogApprovalRowsState({
+    db,
+    businessId,
+    operationId: resolvedOperationId,
+    transactionIds: rows.map((row) => row.transaction_id),
+    state: "checking_duplicates",
+  });
   const scheduled = [];
   const blocked = [];
   for (const item of rows) {
@@ -1507,25 +1513,30 @@ export async function runMerchantBacklogApprovalOperation({
     const currentVersion = item.meta?.row_version || item.meta?.version || item.updated_at || null;
     if (expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
       blocked.push({ transaction_id: item.transaction_id, reason: "row_changed" });
+      await markMerchantBacklogApprovalRowsState({ db, businessId, operationId: resolvedOperationId, transactionIds: [item.transaction_id], state: "blocked", reasonCode: "row_changed" });
       continue;
     }
     if (!bankTxn) {
       blocked.push({ transaction_id: item.transaction_id, reason: "missing_transaction" });
+      await markMerchantBacklogApprovalRowsState({ db, businessId, operationId: resolvedOperationId, transactionIds: [item.transaction_id], state: "blocked", reasonCode: "missing_transaction" });
       continue;
     }
     const evaluation = await evaluateBacklogRowForRelease({ db, businessId, item, bankTxn, policy: buildPreviewPolicy(policy, { effectiveDate: bankTxn.date }), sourceMappings });
     const customerBucket = customerBucketForEvaluation({ item, bankTxn, evaluation, sourceMappings });
     if (!["ready_to_release", "merchant_approval_needed"].includes(customerBucket.bucket)) {
       blocked.push({ transaction_id: item.transaction_id, reason: customerBucket.reason });
+      await markMerchantBacklogApprovalRowsState({ db, businessId, operationId: resolvedOperationId, transactionIds: [item.transaction_id], state: "blocked", reasonCode: customerBucket.reason });
       continue;
     }
     const duplicate = await duplicatePreflight({ businessId, transactionId: item.transaction_id, bankTxn, item, qboAccount: account, group });
     if (duplicate?.confidence && duplicate.confidence !== "NO_MATCH") {
       blocked.push({ transaction_id: item.transaction_id, reason: `duplicate_preflight_${duplicate.confidence}`, duplicate_preflight: duplicate });
+      await markMerchantBacklogApprovalRowsState({ db, businessId, operationId: resolvedOperationId, transactionIds: [item.transaction_id], state: "blocked", reasonCode: `duplicate_preflight_${duplicate.confidence}` });
       continue;
     }
     if (duplicate?.ok === false && !duplicate.confidence) {
       blocked.push({ transaction_id: item.transaction_id, reason: duplicate.reason || "duplicate_preflight_required", duplicate_preflight: duplicate });
+      await markMerchantBacklogApprovalRowsState({ db, businessId, operationId: resolvedOperationId, transactionIds: [item.transaction_id], state: "blocked", reasonCode: duplicate.reason || "duplicate_preflight_required" });
       continue;
     }
     const postAfter = policy.enabled === true ? computePostAfterForAutoPost(true, graceHours) : null;
@@ -1563,6 +1574,73 @@ export async function runMerchantBacklogApprovalOperation({
     excluded_transaction_ids: Array.from(excluded),
     backlog_summary: summary,
   };
+}
+
+async function markMerchantBacklogApprovalRowsState({
+  db,
+  businessId,
+  operationId,
+  transactionIds = [],
+  state,
+  reasonCode = null,
+  message = null,
+} = {}) {
+  const ids = Array.from(new Set((transactionIds || []).filter(Boolean)));
+  if (!db || !businessId || !operationId || !ids.length || !state) return { ok: true, updated_count: 0 };
+  const rows = await fetchBacklogCategorizationRows(db, businessId, { transactionIds: ids });
+  const now = new Date().toISOString();
+  let updated = 0;
+  for (const item of rows) {
+    if (item?.meta?.merchant_group_operation_id && item.meta.merchant_group_operation_id !== operationId) continue;
+    const nextMeta = {
+      ...(item.meta || {}),
+      merchant_group_operation_id: operationId,
+      merchant_group_operation_state: state,
+    };
+    if (state === "failed") {
+      nextMeta.safe_to_auto_post = false;
+      nextMeta.merchant_group_operation_failed_at = now;
+      nextMeta.merchant_group_operation_failure_code = reasonCode || "merchant_group_approval_operation_failed";
+      nextMeta.merchant_group_operation_failure_message = String(message || "Posting approval could not finish.").slice(0, 500);
+      nextMeta.per_row_safety_result = {
+        ...(item.meta?.per_row_safety_result || {}),
+        category: "approval_operation_failed",
+        reason: reasonCode || "merchant_group_approval_operation_failed",
+      };
+    } else if (reasonCode) {
+      nextMeta.merchant_group_operation_reason = reasonCode;
+    }
+    const patch = { meta: nextMeta, updated_at: now };
+    if (state === "failed") patch.post_after = null;
+    const { error } = await db
+      .from("transaction_categorizations")
+      .update(patch)
+      .eq("business_id", businessId)
+      .eq("transaction_id", item.transaction_id)
+      .is("qbo_txn_id", null);
+    if (error) throw wrapAutoPostDbError("merchant_group_operation_state_update_failed", error);
+    updated += 1;
+  }
+  return { ok: true, updated_count: updated };
+}
+
+export async function markMerchantBacklogApprovalOperationFailed({
+  db,
+  businessId,
+  operationId,
+  transactionIds = [],
+  reasonCode = "merchant_group_approval_operation_failed",
+  message = null,
+} = {}) {
+  return markMerchantBacklogApprovalRowsState({
+    db,
+    businessId,
+    operationId,
+    transactionIds,
+    state: "failed",
+    reasonCode,
+    message,
+  });
 }
 
 export async function approveMerchantBacklogGroup(options = {}) {

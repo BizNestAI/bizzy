@@ -8,6 +8,7 @@ import {
   getAutoPostSettings,
   getCanonicalPostingBacklogSummary,
   getMerchantBacklogGroups,
+  markMerchantBacklogApprovalOperationFailed,
   persistMerchantBacklogGroupApprovalDecision,
   runMerchantBacklogApprovalOperation,
   postReadyBacklogTransactions,
@@ -85,6 +86,9 @@ async function runLiveDuplicatePreflight({ businessId, bankTxn = {} }) {
     .select("qbo_account_id,qbo_account_name,qbo_account_type")
     .eq("business_id", businessId)
     .eq("plaid_account_id", bankTxn.plaid_account_id)
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false, nullsFirst: false })
+    .order("qbo_account_id", { ascending: true })
     .limit(1)
     .maybeSingle();
   if (mappingError || !mapping?.qbo_account_id) {
@@ -131,6 +135,9 @@ function createCachedLiveDuplicatePreflight() {
         .select("qbo_account_id,qbo_account_name,qbo_account_type")
         .eq("business_id", businessId)
         .eq("plaid_account_id", bankTxn.plaid_account_id)
+        .order("updated_at", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false, nullsFirst: false })
+        .order("qbo_account_id", { ascending: true })
         .limit(1)
         .maybeSingle();
       mapping = error || !data?.qbo_account_id ? { error, data: null } : { error: null, data };
@@ -388,17 +395,32 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
         transactionIds: decision.saved?.map((row) => row.transaction_id).filter(Boolean) || common.transactionIds,
         operationId: decision.operation_id,
         duplicatePreflight,
+        graceHours: 0,
       }).catch((err) => {
         console.error("[bookkeeping][merchant-group-approve-operation] failed", {
           business_id: businessId,
           operation_id: decision.operation_id,
           message: err?.message || String(err),
         });
+        markMerchantBacklogApprovalOperationFailed({
+          db: supabase,
+          businessId,
+          operationId: decision.operation_id,
+          transactionIds: decision.saved?.map((row) => row.transaction_id).filter(Boolean) || common.transactionIds,
+          reasonCode: err?.code || "merchant_group_approval_operation_failed",
+          message: err?.message || String(err),
+        }).catch((markErr) => {
+          console.error("[bookkeeping][merchant-group-approve-operation-state] failed", {
+            business_id: businessId,
+            operation_id: decision.operation_id,
+            message: markErr?.message || String(markErr),
+          });
+        });
       });
     });
     return res.status(202).json({
       ...decision,
-      status_url: `/api/bookkeeping/posting/backlog/summary?business_id=${encodeURIComponent(businessId)}`,
+      status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(businessId)}`,
     });
   } catch (err) {
     console.error("[bookkeeping][merchant-group-approve] failed", err?.message || err);
@@ -406,6 +428,58 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       ok: false,
       error: err?.code || "merchant_group_approval_failed",
       message: err?.message || "failed",
+    });
+  }
+});
+
+router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  setNoStoreHeaders(res);
+
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const operationId = String(req.params?.operationId || "").trim();
+    if (!operationId) return res.status(400).json({ ok: false, error: "missing_operation_id", message: "Missing operation id." });
+    const { data, error } = await supabase
+      .from("transaction_categorizations")
+      .select("transaction_id,status,post_after,qbo_txn_id,post_error,meta,updated_at")
+      .eq("business_id", businessId)
+      .contains("meta", { merchant_group_operation_id: operationId })
+      .order("updated_at", { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    const rows = Array.isArray(data) ? data : [];
+    const states = rows.reduce((acc, row) => {
+      const state = row?.meta?.merchant_group_operation_state || "unknown";
+      acc[state] = (acc[state] || 0) + 1;
+      return acc;
+    }, {});
+    const terminal = rows.length > 0 && rows.every((row) => {
+      const state = row?.meta?.merchant_group_operation_state || "";
+      return ["scheduled", "ready_to_post", "blocked", "failed"].includes(state) || row.qbo_txn_id;
+    });
+    return res.json({
+      ok: true,
+      operation_id: operationId,
+      row_count: rows.length,
+      states,
+      terminal,
+      rows: rows.map((row) => ({
+        transaction_id: row.transaction_id,
+        state: row?.meta?.merchant_group_operation_state || "unknown",
+        status: row.status,
+        post_after: row.post_after || null,
+        posted: Boolean(row.qbo_txn_id),
+        failure_code: row?.meta?.merchant_group_operation_failure_code || null,
+      })),
+    });
+  } catch (err) {
+    console.error("[bookkeeping][merchant-group-approve-operation-status] failed", err?.message || err);
+    return res.status(err?.status || 500).json({
+      ok: false,
+      error: err?.code || "merchant_group_operation_status_failed",
+      message: "Could not load posting operation status.",
     });
   }
 });
