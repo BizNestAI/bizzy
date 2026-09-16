@@ -270,6 +270,7 @@ export async function learnVendorRuleFromTransaction({
       .eq("rule_kind", "category_default")
       .order("usage_count", { ascending: false })
       .order("last_used_at", { ascending: false })
+      .order("id", { ascending: true })
       .limit(5);
     if (qboErr) return { ok: false, error: qboErr?.message || "qbo_entity_select_failed" };
     const pref = (mt) => {
@@ -300,7 +301,6 @@ export async function learnVendorRuleFromTransaction({
         .update(payload)
         .eq("id", candidate.id)
         .select("id,match_type,match_value")
-        .limit(1)
         .maybeSingle();
       if (updErr) return { ok: false, error: updErr?.message || "qbo_entity_update_failed" };
       return { ok: true, rule: updData || { id: candidate.id, match_type: candidate.match_type, match_value: candidate.match_value } };
@@ -318,6 +318,7 @@ export async function learnVendorRuleFromTransaction({
     .eq("match_value", match_value)
     .order("rule_kind", { ascending: true })
     .order("updated_at", { ascending: false })
+    .order("id", { ascending: true })
     .limit(5);
   if (selErr) {
     return { ok: false, error: selErr?.message || "select_failed" };
@@ -378,7 +379,6 @@ export async function learnVendorRuleFromTransaction({
       .update(payload)
       .eq("id", existing.id)
       .select("id,match_type,match_value")
-      .limit(1)
       .maybeSingle();
     if (updErr) return { ok: false, error: updErr?.message || "update_failed" };
     return { ok: true, rule: updData || { id: existing.id, match_type, match_value } };

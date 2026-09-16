@@ -164,6 +164,84 @@ test("learned memo-prefix rules match future normalized merchant variants", asyn
   assert.equal(rule.default_qbo_account_id, "acct-parking");
 });
 
+test("merchant-rule learner updates Chex-shaped rules without unordered update limits", async () => {
+  const { learnVendorRuleFromTransaction } = await import("../src/services/bookkeeping/vendorRuleLearner.js");
+  const rows = [{
+    id: "rule-chex",
+    business_id: "biz-1",
+    match_type: "memo_prefix",
+    match_value: "chex grill",
+    rule_kind: "category_default",
+    source: "business_merchant_rule",
+    default_qbo_account_id: "1150040001",
+    default_qbo_account_name: "Meals",
+    direction_hint: "OUTFLOW",
+    usage_count: 1,
+    confidence: "high",
+    counterparty_confidence: "medium",
+    notes: JSON.stringify({ source_type: "business_merchant_rule", match_specificity: "exact_normalized_merchant", state: "active" }),
+    match_conditions: null,
+    updated_at: "2026-09-16T02:15:11.866Z",
+  }];
+  const calls = [];
+  class GuardedQuery {
+    constructor() {
+      this.rows = [...rows];
+      this.patch = null;
+      this.ordered = false;
+      this.limited = false;
+    }
+    select() { return this; }
+    eq(column, value) {
+      this.rows = this.rows.filter((row) => row[column] === value);
+      return this;
+    }
+    order() {
+      this.ordered = true;
+      return this;
+    }
+    limit() {
+      this.limited = true;
+      return this;
+    }
+    update(patch) {
+      this.patch = patch;
+      calls.push({ op: "update", patch });
+      return this;
+    }
+    maybeSingle() {
+      if (this.limited && !this.ordered) throw new Error("A 'limit' was applied without an explicit 'order'");
+      if (this.patch) Object.assign(this.rows[0], this.patch);
+      return Promise.resolve({ data: this.rows[0] || null, error: null });
+    }
+    then(resolve) {
+      if (this.limited && !this.ordered) throw new Error("A 'limit' was applied without an explicit 'order'");
+      return Promise.resolve({ data: this.rows, error: null }).then(resolve);
+    }
+  }
+  const db = { from(table) { assert.equal(table, "vendor_rules"); return new GuardedQuery(); } };
+
+  const result = await learnVendorRuleFromTransaction({
+    db,
+    businessId: "biz-1",
+    bankTxn: {
+      id: "144742f9-77d7-4ca5-82b6-0f19930d079a",
+      name: "AplPay CHEX GRILL &",
+      merchant_name: "Chex Grill",
+      amount: -13.65,
+      direction: "OUTFLOW",
+    },
+    finalAccountId: "1150040001",
+    finalAccountName: "Meals",
+    options: { actorId: "operator-1", actorType: "user", authority: "user_confirmed", learnedFrom: "merchant_group_review" },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.rule.id, "rule-chex");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].patch.usage_count, 2);
+});
+
 test("authorized exact merchant fingerprints stay tenant scoped and distinct from lookalike names", async () => {
   const { getVendorRuleForTransaction } = await import("../src/services/bookkeeping/vendorRuleMatcher.js");
   const notes = JSON.stringify({

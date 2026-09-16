@@ -1,4 +1,4 @@
-/* global process, setImmediate */
+/* global process */
 import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
@@ -8,9 +8,7 @@ import {
   getAutoPostSettings,
   getCanonicalPostingBacklogSummary,
   getMerchantBacklogGroups,
-  markMerchantBacklogApprovalOperationFailed,
-  persistMerchantBacklogGroupApprovalDecision,
-  runMerchantBacklogApprovalOperation,
+  persistMerchantBacklogGroupApprovalOperation,
   postReadyBacklogTransactions,
   previewAutoPostBacklog,
   releaseAutoPostBacklogScope,
@@ -20,10 +18,19 @@ import { assertTaxBusinessAccess } from "../../tax/taxRouteUtils.js";
 import { getQBOClient } from "../../../utils/qboClient.js";
 import { getLatestQuickBooksTokenRow } from "../../../services/quickbooksTokenService.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../../services/tax/taxChangeEvents.js";
+import { runLiveDuplicatePreflight } from "../../../services/bookkeeping/qboDuplicatePreflightService.js";
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../../_shared/internalStaffAuth.js";
 
 const router = Router();
 const POSTING_GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
+
+function nowMs() {
+  return Number(process.hrtime.bigint() / 1000000n);
+}
+
+function routeTiming(startMs) {
+  return Math.max(0, nowMs() - startMs);
+}
 
 function setNoStoreHeaders(res) {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -31,152 +38,6 @@ function setNoStoreHeaders(res) {
   res.set("Expires", "0");
   res.set("Surrogate-Control", "no-store");
   res.set("Vary", "Authorization, x-business-id, x-bizzi-admin-view");
-}
-
-function cents(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? Math.round(Math.abs(n) * 100) : null;
-}
-
-function normalizeMatchText(value = "") {
-  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function qboDuplicateDateWindow(date) {
-  const center = date ? new Date(`${date}T00:00:00Z`) : new Date();
-  if (!Number.isFinite(center.getTime())) return { start: date, end: date };
-  const start = new Date(center);
-  start.setUTCDate(start.getUTCDate() - 3);
-  const end = new Date(center);
-  end.setUTCDate(end.getUTCDate() + 3);
-  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
-}
-
-function collectQboDuplicateText(entity = {}) {
-  const parts = [entity.DocNumber, entity.PrivateNote, entity.Memo, entity.PaymentRefNum, entity.EntityRef?.name, entity.AccountRef?.name];
-  for (const line of Array.isArray(entity.Line) ? entity.Line : []) {
-    parts.push(line?.Description, line?.AccountBasedExpenseLineDetail?.AccountRef?.name);
-  }
-  return normalizeMatchText(parts.filter(Boolean).join(" "));
-}
-
-function unwrapQboFindPurchases(resp) {
-  const query = resp?.QueryResponse || resp || {};
-  if (Array.isArray(query.Purchase)) return query.Purchase;
-  if (query.Purchase) return [query.Purchase];
-  return Object.values(query).filter(Array.isArray).flat();
-}
-
-async function findQboPurchasesForDuplicatePreflight(qbo, bankTxn = {}) {
-  const fn = typeof qbo?.findPurchases === "function" ? qbo.findPurchases.bind(qbo) : null;
-  if (!fn) throw new Error("qbo_find_purchases_not_supported");
-  const { start, end } = qboDuplicateDateWindow(bankTxn.date);
-  const criteria = [
-    { field: "TxnDate", operator: ">=", value: start },
-    { field: "TxnDate", operator: "<=", value: end },
-    { field: "limit", value: 50 },
-  ];
-  const resp = await new Promise((resolve, reject) => fn(criteria, (err, data) => (err ? reject(err) : resolve(data))));
-  return unwrapQboFindPurchases(resp);
-}
-
-async function runLiveDuplicatePreflight({ businessId, bankTxn = {} }) {
-  const { data: mapping, error: mappingError } = await supabase
-    .from("plaid_qbo_account_mappings")
-    .select("qbo_account_id,qbo_account_name,qbo_account_type")
-    .eq("business_id", businessId)
-    .eq("plaid_account_id", bankTxn.plaid_account_id)
-    .order("updated_at", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false, nullsFirst: false })
-    .order("qbo_account_id", { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  if (mappingError || !mapping?.qbo_account_id) {
-    return { confidence: "MISSING_MAPPING", candidates: [], reason: mappingError?.message || "missing_source_mapping" };
-  }
-  const qbo = await getQBOClient(businessId);
-  const purchases = await findQboPurchasesForDuplicatePreflight(qbo, bankTxn);
-  const payeeText = normalizeMatchText(bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || "");
-  const scored = purchases
-    .map((entity) => {
-      const txnDate = entity.TxnDate || null;
-      const days = txnDate && bankTxn.date
-        ? Math.abs(new Date(`${txnDate}T00:00:00Z`) - new Date(`${bankTxn.date}T00:00:00Z`)) / 86400000
-        : Infinity;
-      const text = collectQboDuplicateText(entity);
-      return {
-        qbo_txn_id: entity.Id || null,
-        qbo_txn_type: "Purchase",
-        txn_date: txnDate,
-        amount: entity.TotalAmt ?? null,
-        account_matches: String(entity.AccountRef?.value || "") === String(mapping.qbo_account_id),
-        date_matches: days <= 1,
-        amount_matches: cents(entity.TotalAmt) === cents(bankTxn.amount),
-        payee_matches: Boolean(payeeText && text.includes(payeeText)),
-      };
-    })
-    .filter((row) => row.qbo_txn_id && row.account_matches && row.date_matches && row.amount_matches);
-  const strong = scored.filter((row) => row.payee_matches);
-  if (strong.length === 1) return { confidence: "HIGH_CONFIDENCE_PROBABLE_DUPLICATE", candidates: strong };
-  if (strong.length > 1 || scored.length > 0) return { confidence: "AMBIGUOUS", candidates: strong.length ? strong : scored };
-  return { confidence: "NO_MATCH", candidates: [], candidate_count: purchases.length };
-}
-
-function createCachedLiveDuplicatePreflight() {
-  const mappingCache = new Map();
-  const qboClientCache = new Map();
-  const purchaseCache = new Map();
-  return async function cachedLiveDuplicatePreflight({ businessId, bankTxn = {} }) {
-    const mappingKey = `${businessId}:${bankTxn.plaid_account_id || ""}`;
-    let mapping = mappingCache.get(mappingKey);
-    if (!mappingCache.has(mappingKey)) {
-      const { data, error } = await supabase
-        .from("plaid_qbo_account_mappings")
-        .select("qbo_account_id,qbo_account_name,qbo_account_type")
-        .eq("business_id", businessId)
-        .eq("plaid_account_id", bankTxn.plaid_account_id)
-        .order("updated_at", { ascending: false, nullsFirst: false })
-        .order("created_at", { ascending: false, nullsFirst: false })
-        .order("qbo_account_id", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-      mapping = error || !data?.qbo_account_id ? { error, data: null } : { error: null, data };
-      mappingCache.set(mappingKey, mapping);
-    }
-    if (mapping.error || !mapping.data?.qbo_account_id) {
-      return { confidence: "MISSING_MAPPING", candidates: [], reason: mapping.error?.message || "missing_source_mapping" };
-    }
-    if (!qboClientCache.has(businessId)) qboClientCache.set(businessId, getQBOClient(businessId));
-    const qbo = await qboClientCache.get(businessId);
-    const { start, end } = qboDuplicateDateWindow(bankTxn.date);
-    const purchaseKey = `${businessId}:${start}:${end}`;
-    if (!purchaseCache.has(purchaseKey)) purchaseCache.set(purchaseKey, findQboPurchasesForDuplicatePreflight(qbo, bankTxn));
-    const purchases = await purchaseCache.get(purchaseKey);
-    const payeeText = normalizeMatchText(bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || "");
-    const scored = purchases
-      .map((entity) => {
-        const txnDate = entity.TxnDate || null;
-        const days = txnDate && bankTxn.date
-          ? Math.abs(new Date(`${txnDate}T00:00:00Z`) - new Date(`${bankTxn.date}T00:00:00Z`)) / 86400000
-          : Infinity;
-        const text = collectQboDuplicateText(entity);
-        return {
-          qbo_txn_id: entity.Id || null,
-          qbo_txn_type: "Purchase",
-          txn_date: txnDate,
-          amount: entity.TotalAmt ?? null,
-          account_matches: String(entity.AccountRef?.value || "") === String(mapping.data.qbo_account_id),
-          date_matches: days <= 1,
-          amount_matches: cents(entity.TotalAmt) === cents(bankTxn.amount),
-          payee_matches: Boolean(payeeText && text.includes(payeeText)),
-        };
-      })
-      .filter((row) => row.qbo_txn_id && row.account_matches && row.date_matches && row.amount_matches);
-    const strong = scored.filter((row) => row.payee_matches);
-    if (strong.length === 1) return { confidence: "HIGH_CONFIDENCE_PROBABLE_DUPLICATE", candidates: strong };
-    if (strong.length > 1 || scored.length > 0) return { confidence: "AMBIGUOUS", candidates: strong.length ? strong : scored };
-    return { confidence: "NO_MATCH", candidates: [], candidate_count: purchases.length };
-  };
 }
 
 function normalizeQboTxnType(value = "") {
@@ -370,11 +231,15 @@ router.get("/posting/backlog/merchant-groups", requireAuth, requireInternalRole(
 });
 
 router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
+  const routeStartMs = nowMs();
+  const stageTimings = {};
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
 
   try {
+    let stageStartMs = nowMs();
     await assertTaxBusinessAccess({ req, businessId, supabase });
+    stageTimings.auth_ms = routeTiming(stageStartMs);
     const common = {
       db: supabase,
       businessId,
@@ -387,47 +252,27 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       expectedRowVersions: req.body?.expected_row_versions || {},
       idempotencyKey: req.get("Idempotency-Key") || req.body?.idempotency_key || null,
     };
-    const decision = await persistMerchantBacklogGroupApprovalDecision(common);
-    const duplicatePreflight = createCachedLiveDuplicatePreflight();
-    setImmediate(() => {
-      runMerchantBacklogApprovalOperation({
-        ...common,
-        transactionIds: decision.saved?.map((row) => row.transaction_id).filter(Boolean) || common.transactionIds,
-        operationId: decision.operation_id,
-        duplicatePreflight,
-        graceHours: 0,
-      }).catch((err) => {
-        console.error("[bookkeeping][merchant-group-approve-operation] failed", {
-          business_id: businessId,
-          operation_id: decision.operation_id,
-          message: err?.message || String(err),
-        });
-        markMerchantBacklogApprovalOperationFailed({
-          db: supabase,
-          businessId,
-          operationId: decision.operation_id,
-          transactionIds: decision.saved?.map((row) => row.transaction_id).filter(Boolean) || common.transactionIds,
-          reasonCode: err?.code || "merchant_group_approval_operation_failed",
-          message: err?.message || String(err),
-        }).catch((markErr) => {
-          console.error("[bookkeeping][merchant-group-approve-operation-state] failed", {
-            business_id: businessId,
-            operation_id: decision.operation_id,
-            message: markErr?.message || String(markErr),
-          });
-        });
-      });
-    });
+    stageStartMs = nowMs();
+    const decision = await persistMerchantBacklogGroupApprovalOperation(common);
+    stageTimings.accept_operation_ms = routeTiming(stageStartMs);
     return res.status(202).json({
       ...decision,
+      stage_timings_ms: stageTimings,
+      response_ms: routeTiming(routeStartMs),
       status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(businessId)}`,
     });
   } catch (err) {
-    console.error("[bookkeeping][merchant-group-approve] failed", err?.message || err);
+    console.error("[bookkeeping][merchant-group-approve] failed", {
+      business_id: businessId,
+      error: err?.code || err?.message || String(err),
+      response_ms: routeTiming(routeStartMs),
+      stage_timings_ms: stageTimings,
+    });
     return res.status(err?.status || 500).json({
       ok: false,
       error: err?.code || "merchant_group_approval_failed",
-      message: err?.message || "failed",
+      message: "Could not save this posting decision.",
+      response_ms: routeTiming(routeStartMs),
     });
   }
 });

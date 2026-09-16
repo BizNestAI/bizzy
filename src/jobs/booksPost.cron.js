@@ -16,7 +16,9 @@ import {
   classifyAutoPostOperationalScope,
   getAutoPostPolicy,
   getAutoPostToQuickBooks,
+  processPendingMerchantBacklogApprovalOperations,
 } from "../services/bookkeeping/autoPostControl.js";
+import { createCachedLiveDuplicatePreflight } from "../services/bookkeeping/qboDuplicatePreflightService.js";
 import { consumeQuickBooksRefreshMarker, getLatestQuickBooksTokenRow } from "../services/quickbooksTokenService.js";
 import { canonicalizeVendorDisplayName, classifyQboVendorProviderError, getVendorPostingRequirement } from "../services/bookkeeping/canonicalVendorService.js";
 import {
@@ -2292,6 +2294,8 @@ async function runOnce(options = {}) {
     preload_missing: 0,
     deferred: 0,
     auto_post_disabled: 0,
+    merchant_approval_operations: 0,
+    merchant_approval_operations_failed: 0,
     businesses_failed: 0,
   };
   try {
@@ -2302,6 +2306,14 @@ async function runOnce(options = {}) {
         return summary;
       }
     }
+    const approvalOps = await processPendingMerchantBacklogApprovalOperations({
+      db: supabase,
+      businessId,
+      duplicatePreflight: createCachedLiveDuplicatePreflight(),
+      graceHours: 0,
+    });
+    summary.merchant_approval_operations = approvalOps.processed_count || 0;
+    summary.merchant_approval_operations_failed = approvalOps.failed_count || 0;
     const pending = await fetchPending(businessId, { force });
     summary.pending = pending.length;
     if (!pending.length) return summary;

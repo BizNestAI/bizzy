@@ -622,25 +622,35 @@ export default function MonthlyReviewConsole() {
       const statusUrl = decision?.status_url || (decision?.operation_id
         ? `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(selectedBusinessId)}`
         : null);
+      let terminal = false;
       if (statusUrl) {
         for (let attempt = 0; attempt < 8; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 600 : 1500));
           const operation = await safeFetch(statusUrl, { cache: "no-store" });
           const states = operation?.states || {};
-          if (states.scheduled || states.ready_to_post) {
+          if (states.scheduled) {
             setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Queued for posting" }));
+          } else if (states.ready_to_post) {
+            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Ready to post" }));
           } else if (states.checking_duplicates) {
             setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Checking QuickBooks" }));
+          } else if (states.accepted) {
+            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Decision saved" }));
           } else if (states.failed || states.blocked) {
             setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Needs review" }));
           }
-          if (operation?.terminal) break;
+          if (operation?.terminal) {
+            terminal = true;
+            break;
+          }
         }
       }
-      await Promise.all([
-        loadPostingReview(),
-        loadBookkeepingFeedCounts(),
-      ]);
+      if (terminal) {
+        await Promise.all([
+          loadPostingReview(),
+          loadBookkeepingFeedCounts(),
+        ]);
+      }
     } catch (e) {
       console.warn("[monthly-review][posting-review-approval] failed", e?.body || e?.message || e);
       setPostingReview((current) => ({

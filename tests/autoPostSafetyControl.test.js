@@ -14,6 +14,8 @@ import {
   getAutoPostToQuickBooks,
   approveMerchantBacklogGroup,
   markMerchantBacklogApprovalOperationFailed,
+  processPendingMerchantBacklogApprovalOperations,
+  persistMerchantBacklogGroupApprovalOperation,
   persistMerchantBacklogGroupApprovalDecision,
   previewAutoPostBacklog,
   reEvaluateAutoPostBacklog,
@@ -32,6 +34,7 @@ test("new business auto-post defaults safely off in schema and helper", async ()
 
 test("off permits handled state but does not create a posting grace timestamp", () => {
   assert.equal(computePostAfterForAutoPost(false, 24, Date.parse("2026-08-01T00:00:00Z")), null);
+  assert.equal(computePostAfterForAutoPost(true, 0, Date.parse("2026-09-16T02:59:00Z")), "2026-09-16T02:59:00.000Z");
 
   const approvals = readFileSync(join(root, "src/services/bookkeeping/bookkeepingApprovalService.js"), "utf8");
   const suggest = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.suggest.routes.js"), "utf8");
@@ -822,13 +825,15 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
   assert.match(monthlyReviewRoutes, /getCanonicalPostingBacklogSummary/);
   assert.match(monthlyReviewRoutes, /getMerchantBacklogGroups/);
   assert.match(postingRoutes, /requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)/);
+  assert.match(postingRoutes, /persistMerchantBacklogGroupApprovalOperation\(common\)/);
+  assert.doesNotMatch(postingRoutes, /const decision = await persistMerchantBacklogGroupApprovalDecision\(common\)/);
   assert.match(postingRoutes, /res\.status\(202\)\.json/);
-  assert.match(postingRoutes, /setImmediate/);
-  assert.match(postingRoutes, /createCachedLiveDuplicatePreflight/);
+  assert.doesNotMatch(postingRoutes, /setImmediate/);
+  assert.doesNotMatch(postingRoutes, /runMerchantBacklogApprovalOperation/);
   assert.match(postingRoutes, /merchant-groups\/operations\/:operationId/);
-  assert.match(postingRoutes, /graceHours:\s*0/);
-  assert.match(postingRoutes, /markMerchantBacklogApprovalOperationFailed/);
-  assert.match(postingRoutes, /\.order\("updated_at"[\s\S]*?\.order\("created_at"[\s\S]*?\.order\("qbo_account_id"[\s\S]*?\.limit\(1\)[\s\S]*?\.maybeSingle\(\)/);
+  assert.match(readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8"), /processPendingMerchantBacklogApprovalOperations/);
+  assert.match(readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8"), /graceHours:\s*0/);
+  assert.match(readFileSync(join(root, "src/services/bookkeeping/qboDuplicatePreflightService.js"), "utf8"), /\.order\("updated_at"[\s\S]*?\.order\("created_at"[\s\S]*?\.order\("qbo_account_id"[\s\S]*?\.limit\(1\)[\s\S]*?\.maybeSingle\(\)/);
   assert.doesNotMatch(postingRoutes, /\.eq\("plaid_account_id", bankTxn\.plaid_account_id\)\s*\.limit\(1\)/);
   assert.doesNotMatch(readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8"), /\.from\("qbo_accounts_cache"\)[\s\S]*?\.eq\("qbo_account_id"[\s\S]*?\.limit\(1\)[\s\S]*?\.maybeSingle\(\)/);
 });
@@ -885,6 +890,156 @@ test("posting review details expose every counted non-merchant bucket and approv
   assert.equal(db.cat("biz-1", "merchant-1").meta.safe_to_auto_post, false);
   assert.equal(db.cat("biz-1", "merchant-1").meta.merchant_group_operation_state, "failed");
   assert.equal(db.cat("biz-1", "merchant-1").meta.merchant_group_operation_failure_code, "duplicate_preflight_failed");
+});
+
+test("merchant group route operation acceptance persists operator intent without learning or scheduling synchronously", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
+    transaction_categorizations: [
+      { business_id: "biz-1", transaction_id: "chex-1", status: "auto_approved", final_qbo_account_id: "1150040001", final_qbo_account_name: "Meals", qbo_txn_id: null, post_after: null, meta: { auto_approve_reason: "universal_hint" }, updated_at: "v1" },
+    ],
+    bank_transactions: [
+      { business_id: "biz-1", id: "chex-1", plaid_account_id: "pa-1", date: "2026-09-06", amount: -13.65, direction: "OUTFLOW", name: "AplPay CHEX GRILL &", merchant_name: "Chex Grill", is_archived: false },
+    ],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "20", qbo_account_name: "Blue Cash Everyday", qbo_account_type: "CreditCard" }],
+    vendor_rules: [],
+  });
+  const groups = await getMerchantBacklogGroups({ db, businessId: "biz-1", effectiveDate: "2026-09-01" });
+  const chex = groups.groups.find((group) => group.display_merchant === "Chex Grill");
+  const accepted = await persistMerchantBacklogGroupApprovalOperation({
+    db,
+    businessId: "biz-1",
+    actorId: "operator-1",
+    selectedQboAccountId: "1150040001",
+    groupSnapshotToken: chex.snapshot_token,
+    transactionIds: ["chex-1"],
+    idempotencyKey: "idem-chex",
+  });
+
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.state, "accepted");
+  assert.equal(db.table("vendor_rules").length, 0);
+  assert.equal(db.cat("biz-1", "chex-1").post_after, null);
+  assert.equal(db.cat("biz-1", "chex-1").meta.safe_to_auto_post, false);
+  assert.equal(db.cat("biz-1", "chex-1").meta.merchant_group_operation_state, "accepted");
+  assert.equal(db.cat("biz-1", "chex-1").meta.merchant_group_requested_decision.selected_qbo_account_id, "1150040001");
+});
+
+test("durable worker resumes accepted merchant approval operations and schedules immediately", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
+    transaction_categorizations: [
+      {
+        business_id: "biz-1",
+        transaction_id: "chex-1",
+        status: "auto_approved",
+        final_qbo_account_id: "1150040001",
+        final_qbo_account_name: "Meals",
+        qbo_txn_id: null,
+        post_after: null,
+        meta: {
+          auto_approve_reason: "universal_hint",
+          merchant_group_operation_id: "op-chex",
+          merchant_group_operation_state: "accepted",
+          merchant_group_snapshot_token: null,
+          merchant_group_requested_decision: {
+            selected_qbo_account_id: "1150040001",
+            selected_qbo_account_name: "Meals",
+            remember_for_future: true,
+          },
+        },
+        updated_at: "2026-09-16T02:15:00.000Z",
+      },
+    ],
+    bank_transactions: [
+      { business_id: "biz-1", id: "chex-1", plaid_account_id: "pa-1", date: "2026-09-06", amount: -13.65, direction: "OUTFLOW", name: "AplPay CHEX GRILL &", merchant_name: "Chex Grill", is_archived: false },
+    ],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "20", qbo_account_name: "Blue Cash Everyday", qbo_account_type: "CreditCard" }],
+    vendor_rules: [],
+  });
+
+  const result = await processPendingMerchantBacklogApprovalOperations({
+    db,
+    businessId: "biz-1",
+    graceHours: 0,
+    duplicatePreflight: async () => ({ confidence: "NO_MATCH", candidates: [] }),
+  });
+
+  assert.equal(result.processed_count, 1);
+  assert.equal(result.failed_count, 0);
+  const row = db.cat("biz-1", "chex-1");
+  assert.equal(row.meta.merchant_group_operation_id, "op-chex");
+  assert.equal(row.meta.merchant_group_operation_state, "scheduled");
+  assert.equal(row.meta.safe_to_auto_post, true);
+  assert.match(row.post_after, /^\d{4}-\d{2}-\d{2}T/);
+  assert.ok(Math.abs(Date.parse(row.post_after) - Date.now()) < 5000);
+  assert.equal(db.table("vendor_rules").length, 1);
+});
+
+test("durable worker resumes prior decision_saved merchant operations without duplicate rules", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
+    transaction_categorizations: [
+      {
+        business_id: "biz-1",
+        transaction_id: "chex-1",
+        status: "auto_approved",
+        final_qbo_account_id: "1150040001",
+        final_qbo_account_name: "Meals",
+        qbo_txn_id: null,
+        post_after: null,
+        meta: {
+          auto_approve_reason: "business_merchant_rule",
+          vendor_rule_id: "rule-chex",
+          selected_qbo_account_id: "1150040001",
+          merchant_group_operation_id: "op-chex",
+          merchant_group_operation_state: "decision_saved",
+          merchant_group_snapshot_token: null,
+          duplicate_preflight: { confidence: "PENDING" },
+          safe_to_auto_post: false,
+        },
+        updated_at: "2026-09-16T02:15:00.000Z",
+      },
+    ],
+    bank_transactions: [
+      { business_id: "biz-1", id: "chex-1", plaid_account_id: "pa-1", date: "2026-09-06", amount: -13.65, direction: "OUTFLOW", name: "AplPay CHEX GRILL &", merchant_name: "Chex Grill", is_archived: false },
+    ],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "20", qbo_account_name: "Blue Cash Everyday", qbo_account_type: "CreditCard" }],
+    vendor_rules: [{
+      id: "rule-chex",
+      business_id: "biz-1",
+      match_type: "memo_prefix",
+      match_value: "chex grill",
+      rule_kind: "category_default",
+      source: "business_merchant_rule",
+      default_qbo_account_id: "1150040001",
+      default_qbo_account_name: "Meals",
+      direction_hint: "OUTFLOW",
+      usage_count: 1,
+      confidence: "high",
+      counterparty_confidence: "medium",
+      notes: JSON.stringify({ source_type: "business_merchant_rule", match_specificity: "exact_normalized_merchant", state: "active" }),
+      match_conditions: null,
+      updated_at: "2026-09-16T02:15:11.866Z",
+    }],
+  });
+
+  const result = await processPendingMerchantBacklogApprovalOperations({
+    db,
+    businessId: "biz-1",
+    graceHours: 0,
+    duplicatePreflight: async () => ({ confidence: "NO_MATCH", candidates: [] }),
+  });
+
+  assert.equal(result.processed_count, 1);
+  assert.equal(db.table("vendor_rules").length, 1);
+  assert.equal(db.table("vendor_rules")[0].id, "rule-chex");
+  assert.equal(db.table("vendor_rules")[0].usage_count, 2);
+  assert.equal(db.cat("biz-1", "chex-1").meta.safe_to_auto_post, true);
+  assert.equal(db.cat("biz-1", "chex-1").meta.merchant_group_operation_state, "scheduled");
 });
 
 test("merchant groups use exact identity and grouped approval schedules only passing rows", async () => {
@@ -1060,6 +1215,16 @@ class Query {
     const set = new Set(values || []);
     this.calls.push({ table: this.table, op: "in", field, valuesLength: values?.length || 0 });
     this.rows = this.rows.filter((row) => set.has(row[field]));
+    return this;
+  }
+  contains(field, value) {
+    this.calls.push({ table: this.table, op: "contains", field });
+    const matches = (rowValue, expected) => {
+      if (!expected || typeof expected !== "object") return rowValue === expected;
+      if (!rowValue || typeof rowValue !== "object") return false;
+      return Object.entries(expected).every(([key, nested]) => matches(rowValue[key], nested));
+    };
+    this.rows = this.rows.filter((row) => matches(row[field], value));
     return this;
   }
   order() {

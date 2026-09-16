@@ -12,6 +12,7 @@ function isMissingAutoPostColumn(error) {
 
 const DEFAULT_GRACE_HOURS = 24;
 const POSTGREST_IN_BATCH_SIZE = 50;
+const MERCHANT_APPROVAL_RESUMABLE_STATES = ["accepted", "decision_saved", "checking_duplicates"];
 export const AUTO_POST_SCOPE_MODES = Object.freeze({
   NEW_ACTIVITY_ONLY: "new_activity_only",
   EFFECTIVE_DATE: "effective_date",
@@ -240,7 +241,9 @@ function buildAutoPostScopeCopy(policy = {}, { workerIntervalMinutes = 10 } = {}
 
 export function computePostAfterForAutoPost(autoPostEnabled, graceHours = 24, nowMs = Date.now()) {
   if (autoPostEnabled !== true) return null;
-  return new Date(nowMs + Number(graceHours || 24) * 60 * 60 * 1000).toISOString();
+  const parsedGraceHours = graceHours == null || graceHours === "" ? 24 : Number(graceHours);
+  const effectiveGraceHours = Number.isFinite(parsedGraceHours) ? parsedGraceHours : 24;
+  return new Date(nowMs + effectiveGraceHours * 60 * 60 * 1000).toISOString();
 }
 
 function chunk(values = [], size = POSTGREST_IN_BATCH_SIZE) {
@@ -250,8 +253,8 @@ function chunk(values = [], size = POSTGREST_IN_BATCH_SIZE) {
 }
 
 function normalizeGraceHours(graceHours = DEFAULT_GRACE_HOURS) {
-  const n = Number(graceHours || DEFAULT_GRACE_HOURS);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_GRACE_HOURS;
+  const n = graceHours == null || graceHours === "" ? DEFAULT_GRACE_HOURS : Number(graceHours);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_GRACE_HOURS;
 }
 
 function wrapAutoPostDbError(operation, error) {
@@ -1296,6 +1299,57 @@ async function recordMerchantApprovalDecision({
   };
 }
 
+async function recordMerchantApprovalOperationAccepted({
+  db,
+  businessId,
+  item,
+  account,
+  actorId,
+  group,
+  idempotencyKey,
+  operationId,
+  rememberForFuture = true,
+} = {}) {
+  const acceptedAt = new Date().toISOString();
+  const existingState = item.meta?.merchant_group_operation_state || null;
+  const sameOperation = item.meta?.merchant_group_operation_id === operationId;
+  if (sameOperation && ["accepted", "decision_saved", "checking_duplicates", "scheduled", "ready_to_post"].includes(existingState)) {
+    return { ok: true, transaction_id: item.transaction_id, status: existingState || "accepted", idempotent: true };
+  }
+  const meta = {
+    ...(item.meta || {}),
+    merchant_group_requested_at: acceptedAt,
+    merchant_group_requested_by: actorId || null,
+    merchant_group_idempotency_key: idempotencyKey || null,
+    merchant_group_identity_key: group?.identity?.key || null,
+    merchant_group_snapshot_token: group?.snapshot_token || null,
+    merchant_group_operation_id: operationId,
+    merchant_group_operation_state: "accepted",
+    merchant_group_operation_stage: "accepted",
+    merchant_group_requested_decision: {
+      selected_qbo_account_id: String(account.qbo_account_id),
+      selected_qbo_account_name: account.name || item.final_qbo_account_name || null,
+      remember_for_future: rememberForFuture === true,
+      requested_at: acceptedAt,
+    },
+    selected_qbo_account_id: String(account.qbo_account_id),
+    selected_qbo_account_name: account.name || item.final_qbo_account_name || null,
+    safe_to_auto_post: false,
+  };
+  const { error } = await db
+    .from("transaction_categorizations")
+    .update({
+      meta,
+      updated_at: acceptedAt,
+    })
+    .eq("business_id", businessId)
+    .eq("transaction_id", item.transaction_id)
+    .is("qbo_txn_id", null)
+    .in("status", ["approved", "auto_approved"]);
+  if (error) return { ok: false, transaction_id: item.transaction_id, reason: error.message || "operation_accept_failed" };
+  return { ok: true, transaction_id: item.transaction_id, status: "accepted" };
+}
+
 async function resolveMerchantBacklogApproval({
   db,
   businessId,
@@ -1337,6 +1391,80 @@ async function resolveMerchantBacklogApproval({
     Array.from(new Set(Array.from(bankRows.map.values()).map((row) => row.plaid_account_id).filter(Boolean)))
   );
   return { account, group, excluded, candidateIds, rows, bankRows, policy, sourceMappings };
+}
+
+export async function persistMerchantBacklogGroupApprovalOperation({
+  db,
+  businessId,
+  actorId = null,
+  selectedQboAccountId,
+  rememberForFuture = true,
+  groupSnapshotToken = null,
+  transactionIds = [],
+  exclusionIds = [],
+  expectedRowVersions = {},
+  idempotencyKey = null,
+} = {}) {
+  const operationId = buildMerchantApprovalOperationId({ businessId, idempotencyKey, groupSnapshotToken, transactionIds, selectedQboAccountId });
+  const { account, group, excluded, candidateIds, rows, bankRows, policy, sourceMappings } = await resolveMerchantBacklogApproval({
+    db,
+    businessId,
+    selectedQboAccountId,
+    groupSnapshotToken,
+    transactionIds,
+    exclusionIds,
+  });
+  const accepted = [];
+  const blocked = [];
+  for (const item of rows) {
+    const bankTxn = bankRows.map.get(item.transaction_id);
+    const expectedVersion = expectedRowVersions?.[item.transaction_id];
+    const currentVersion = item.meta?.row_version || item.meta?.version || item.updated_at || null;
+    if (expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
+      blocked.push({ transaction_id: item.transaction_id, reason: "row_changed" });
+      continue;
+    }
+    if (!bankTxn) {
+      blocked.push({ transaction_id: item.transaction_id, reason: "missing_transaction" });
+      continue;
+    }
+    const evaluation = await evaluateBacklogRowForRelease({ db, businessId, item, bankTxn, policy: buildPreviewPolicy(policy, { effectiveDate: bankTxn.date }), sourceMappings });
+    const customerBucket = customerBucketForEvaluation({ item, bankTxn, evaluation, sourceMappings });
+    if (!["ready_to_release", "merchant_approval_needed"].includes(customerBucket.bucket)) {
+      blocked.push({ transaction_id: item.transaction_id, reason: customerBucket.reason });
+      continue;
+    }
+    const recorded = await recordMerchantApprovalOperationAccepted({
+      db,
+      businessId,
+      item,
+      account,
+      actorId,
+      group,
+      idempotencyKey,
+      operationId,
+      rememberForFuture,
+    });
+    if (recorded.ok) accepted.push(recorded);
+    else blocked.push(recorded);
+  }
+  return {
+    ok: true,
+    accepted: true,
+    business_id: businessId,
+    operation_id: operationId,
+    state: "accepted",
+    group_id: group.group_id,
+    snapshot_token: group.snapshot_token,
+    remember_for_future: rememberForFuture === true,
+    selected_transaction_count: candidateIds.length,
+    accepted_count: accepted.length,
+    saved_count: accepted.length,
+    blocked_count: blocked.length,
+    saved: accepted,
+    blocked,
+    excluded_transaction_ids: Array.from(excluded),
+  };
 }
 
 async function learnRuleForMerchantApproval({
@@ -1573,6 +1701,134 @@ export async function runMerchantBacklogApprovalOperation({
     blocked,
     excluded_transaction_ids: Array.from(excluded),
     backlog_summary: summary,
+  };
+}
+
+async function fetchPendingMerchantApprovalOperationRows({ db, businessId = null, limit = 25 } = {}) {
+  const byKey = new Map();
+  for (const state of MERCHANT_APPROVAL_RESUMABLE_STATES) {
+    let query = db
+      .from("transaction_categorizations")
+      .select("business_id,transaction_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,post_after,post_error,meta,updated_at")
+      .contains("meta", { merchant_group_operation_state: state })
+      .is("qbo_txn_id", null)
+      .in("status", ["approved", "auto_approved"])
+      .order("updated_at", { ascending: true })
+      .order("transaction_id", { ascending: true })
+      .limit(limit);
+    if (businessId) query = query.eq("business_id", businessId);
+    const { data, error } = await query;
+    if (error) throw wrapAutoPostDbError("merchant_group_pending_operations_fetch_failed", error);
+    for (const row of data || []) {
+      const operationId = row?.meta?.merchant_group_operation_id || null;
+      if (!operationId) continue;
+      byKey.set(`${row.business_id}:${operationId}:${row.transaction_id}`, row);
+    }
+  }
+  return Array.from(byKey.values()).slice(0, limit);
+}
+
+function buildPendingMerchantApprovalOperations(rows = []) {
+  const grouped = new Map();
+  for (const row of rows || []) {
+    const operationId = row?.meta?.merchant_group_operation_id || null;
+    if (!row?.business_id || !operationId) continue;
+    const key = `${row.business_id}:${operationId}`;
+    const requestedDecision = row.meta?.merchant_group_requested_decision || {};
+    const existing = grouped.get(key) || {
+      business_id: row.business_id,
+      operation_id: operationId,
+      actor_id: row.meta?.merchant_group_requested_by || row.meta?.merchant_group_approved_by || null,
+      selected_qbo_account_id: requestedDecision.selected_qbo_account_id || row.meta?.selected_qbo_account_id || row.final_qbo_account_id || null,
+      remember_for_future: requestedDecision.remember_for_future !== false,
+      group_snapshot_token: row.meta?.merchant_group_snapshot_token || null,
+      idempotency_key: row.meta?.merchant_group_idempotency_key || null,
+      transaction_ids: [],
+    };
+    if (!existing.selected_qbo_account_id) {
+      existing.selected_qbo_account_id = requestedDecision.selected_qbo_account_id || row.meta?.selected_qbo_account_id || row.final_qbo_account_id || null;
+    }
+    if (!existing.group_snapshot_token && row.meta?.merchant_group_snapshot_token) {
+      existing.group_snapshot_token = row.meta.merchant_group_snapshot_token;
+    }
+    existing.transaction_ids.push(row.transaction_id);
+    grouped.set(key, existing);
+  }
+  return Array.from(grouped.values()).map((operation) => ({
+    ...operation,
+    transaction_ids: Array.from(new Set(operation.transaction_ids || [])).sort(),
+  }));
+}
+
+export async function processPendingMerchantBacklogApprovalOperations({
+  db,
+  businessId = null,
+  duplicatePreflight = defaultDuplicatePreflight,
+  graceHours = 0,
+  limit = 25,
+} = {}) {
+  if (!db) {
+    const err = new Error("db is required.");
+    err.status = 400;
+    err.code = "missing_db";
+    throw err;
+  }
+  const rows = await fetchPendingMerchantApprovalOperationRows({ db, businessId, limit });
+  const operations = buildPendingMerchantApprovalOperations(rows);
+  const processed = [];
+  const failed = [];
+  for (const operation of operations) {
+    try {
+      if (!operation.selected_qbo_account_id) {
+        await markMerchantBacklogApprovalOperationFailed({
+          db,
+          businessId: operation.business_id,
+          operationId: operation.operation_id,
+          transactionIds: operation.transaction_ids,
+          reasonCode: "merchant_group_missing_selected_account",
+          message: "The saved posting decision is missing a selected account.",
+        });
+        failed.push({ operation_id: operation.operation_id, business_id: operation.business_id, reason: "merchant_group_missing_selected_account" });
+        continue;
+      }
+      const result = await runMerchantBacklogApprovalOperation({
+        db,
+        businessId: operation.business_id,
+        actorId: operation.actor_id,
+        selectedQboAccountId: operation.selected_qbo_account_id,
+        rememberForFuture: operation.remember_for_future,
+        groupSnapshotToken: operation.group_snapshot_token,
+        transactionIds: operation.transaction_ids,
+        idempotencyKey: operation.idempotency_key,
+        duplicatePreflight,
+        graceHours,
+        operationId: operation.operation_id,
+      });
+      processed.push({ operation_id: operation.operation_id, business_id: operation.business_id, result });
+    } catch (err) {
+      await markMerchantBacklogApprovalOperationFailed({
+        db,
+        businessId: operation.business_id,
+        operationId: operation.operation_id,
+        transactionIds: operation.transaction_ids,
+        reasonCode: err?.code || "merchant_group_approval_operation_failed",
+        message: err?.message || String(err),
+      });
+      failed.push({
+        operation_id: operation.operation_id,
+        business_id: operation.business_id,
+        reason: err?.code || err?.message || "merchant_group_approval_operation_failed",
+      });
+    }
+  }
+  return {
+    ok: true,
+    scanned: rows.length,
+    operation_count: operations.length,
+    processed_count: processed.length,
+    failed_count: failed.length,
+    processed,
+    failed,
   };
 }
 
