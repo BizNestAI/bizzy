@@ -12,6 +12,7 @@ import {
   postReadyBacklogTransactions,
   previewAutoPostBacklog,
   releaseAutoPostBacklogScope,
+  requestMerchantGroupPostingRetryNow,
   setAutoPostEnabled,
 } from "../../../services/bookkeeping/autoPostControl.js";
 import { assertTaxBusinessAccess } from "../../tax/taxRouteUtils.js";
@@ -335,6 +336,45 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
       ok: false,
       error: err?.code || "merchant_group_operation_status_failed",
       message: "Could not load posting operation status.",
+    });
+  }
+});
+
+router.post("/posting/backlog/merchant-groups/operations/:operationId/retry-now", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
+  const routeStartMs = nowMs();
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  setNoStoreHeaders(res);
+
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const operationId = String(req.params?.operationId || "").trim();
+    const transactionIds = Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids : [];
+    if (!operationId) return res.status(400).json({ ok: false, error: "missing_operation_id", message: "Missing operation id." });
+    const result = await requestMerchantGroupPostingRetryNow({
+      db: supabase,
+      businessId,
+      operationId,
+      transactionIds,
+      actorId: req.user?.id || req.user?.sub || null,
+    });
+    return res.status(202).json({
+      ...result,
+      response_ms: routeTiming(routeStartMs),
+      status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(operationId)}?business_id=${encodeURIComponent(businessId)}`,
+    });
+  } catch (err) {
+    console.error("[bookkeeping][merchant-group-retry-now] failed", {
+      business_id: businessId,
+      operation_id: req.params?.operationId || null,
+      error: err?.code || err?.message || String(err),
+      response_ms: routeTiming(routeStartMs),
+    });
+    return res.status(err?.status || 500).json({
+      ok: false,
+      error: err?.code || "merchant_group_retry_failed",
+      message: "Could not request this posting retry.",
+      response_ms: routeTiming(routeStartMs),
     });
   }
 });

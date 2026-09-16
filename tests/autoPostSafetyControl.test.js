@@ -20,6 +20,7 @@ import {
   previewAutoPostBacklog,
   reEvaluateAutoPostBacklog,
   releaseAutoPostBacklogScope,
+  requestMerchantGroupPostingRetryNow,
   setAutoPostEnabled,
 } from "../src/services/bookkeeping/autoPostControl.js";
 
@@ -1196,6 +1197,58 @@ test("posting review separates retry backoff and operator attention from ordinar
   assert.equal(summary.bucket_total, summary.headline_count);
 });
 
+test("retry now resumes an existing merchant operation without re-approving or duplicating records", async () => {
+  const future = new Date(Date.now() + 86_400_000).toISOString();
+  const db = makeSupabase({
+    transaction_categorizations: [{
+      business_id: "biz-1",
+      transaction_id: "exchange-1",
+      status: "auto_approved",
+      final_qbo_account_id: "1150040001",
+      final_qbo_account_name: "Meals",
+      qbo_txn_id: null,
+      post_after: future,
+      post_error: "vendor_db_error",
+      meta: {
+        safe_to_auto_post: true,
+        next_post_attempt_at: future,
+        posting_in_progress: false,
+        vendor_rule_id: "rule-1",
+        merchant_group_operation_id: "op-exchange",
+        merchant_group_operation_state: "retry_scheduled",
+        merchant_group_operation_stage: "retry_scheduled",
+        merchant_group_requested_decision: {
+          selected_qbo_account_id: "1150040001",
+          selected_qbo_account_name: "Meals",
+          remember_for_future: true,
+        },
+      },
+      updated_at: "2026-09-16T20:00:45.000Z",
+    }],
+    vendor_rules: [{ id: "rule-1", business_id: "biz-1", source_type: "business_merchant_rule" }],
+    qbo_posted_transactions: [{ business_id: "biz-1", transaction_id: "exchange-1", status: "processing", qbo_txn_id: null }],
+  });
+
+  const result = await requestMerchantGroupPostingRetryNow({
+    db,
+    businessId: "biz-1",
+    operationId: "op-exchange",
+    transactionIds: ["exchange-1"],
+    actorId: "user-1",
+  });
+
+  assert.equal(result.retried_count, 1);
+  assert.equal(result.skipped_count, 0);
+  const row = db.cat("biz-1", "exchange-1");
+  assert.equal(row.meta.merchant_group_operation_state, "retry_requested");
+  assert.equal(row.meta.next_post_attempt_at, null);
+  assert.equal(row.meta.merchant_group_retry_previous_post_error, "vendor_db_error");
+  assert.equal(row.post_error, "vendor_db_error");
+  assert.ok(Date.parse(row.post_after) <= Date.now() + 1_000);
+  assert.equal(db.table("vendor_rules").length, 1);
+  assert.equal(db.table("qbo_posted_transactions").length, 1);
+});
+
 test("posting worker marks merchant approval operation state truthfully on retry, block, and receipt", () => {
   const source = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
   assert.match(source, /meta\.merchant_group_operation_state = operationState/);
@@ -1211,6 +1264,8 @@ test("operation status endpoint exposes retry and posted states without reportin
   assert.match(route, /rowOperationState/);
   assert.match(route, /posting_in_progress === true\) return "posting"/);
   assert.match(route, /"retry_scheduled"/);
+  assert.match(route, /retry-now/);
+  assert.match(route, /requestMerchantGroupPostingRetryNow/);
   assert.match(route, /next_post_attempt_at/);
   assert.match(route, /failure_message/);
 });
@@ -1218,6 +1273,9 @@ test("operation status endpoint exposes retry and posted states without reportin
 test("posting review UI surfaces terminal operation states instead of reverting to approve", () => {
   const page = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
   assert.match(page, /Retry scheduled/);
+  assert.match(page, /Retry now/);
+  assert.match(page, /Next retry:/);
+  assert.match(page, /last_post_attempt_at/);
   assert.match(page, /Could not prepare posting/);
   assert.match(page, /Processing interrupted/);
   assert.match(page, /progressLabel \|\| \(postingReviewAction === group\.group_id \? "Scheduling\.\.\." : primaryLabel\)/);

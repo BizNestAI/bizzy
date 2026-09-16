@@ -638,7 +638,7 @@ function assertMatchingPreviewFingerprint(preview, expectedFingerprint) {
 async function fetchBacklogCategorizationRows(db, businessId, { transactionIds = [] } = {}) {
   let query = db
     .from("transaction_categorizations")
-    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id,updated_at")
+    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,last_post_attempt_at,meta,qbo_txn_id,updated_at")
     .eq("business_id", businessId)
     .in("status", ["approved", "auto_approved", "failed"])
     .is("qbo_txn_id", null);
@@ -1071,6 +1071,8 @@ export async function getPostingBacklogReviewDetails({
       proposed_qbo_account_id: item.final_qbo_account_id || null,
       post_after: item.post_after || null,
       post_error: item.post_error || null,
+      last_post_attempt_at: item.last_post_attempt_at || null,
+      next_post_attempt_at: item.meta?.next_post_attempt_at || null,
       duplicate_preflight: item.meta?.duplicate_preflight || null,
       operation_id: item.meta?.merchant_group_operation_id || item.meta?.post_intent_id || null,
       worker_state:
@@ -2137,6 +2139,97 @@ export async function postReadyBacklogTransactions({
     scheduled,
     blocked,
     backlog_summary: await getCanonicalPostingBacklogSummary({ db, businessId }),
+  };
+}
+
+export async function requestMerchantGroupPostingRetryNow({
+  db,
+  businessId,
+  operationId,
+  transactionIds = [],
+  actorId = null,
+} = {}) {
+  if (!db || !businessId || !operationId) {
+    const err = new Error("businessId and operationId are required.");
+    err.status = 400;
+    err.code = "missing_retry_operation_input";
+    throw err;
+  }
+  const ids = Array.from(new Set((transactionIds || []).filter(Boolean)));
+  let query = db
+    .from("transaction_categorizations")
+    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,post_after,post_error,meta,updated_at")
+    .eq("business_id", businessId)
+    .contains("meta", { merchant_group_operation_id: operationId })
+    .is("qbo_txn_id", null)
+    .in("status", ["approved", "auto_approved", "failed"])
+    .order("updated_at", { ascending: true })
+    .order("transaction_id", { ascending: true });
+  if (ids.length) query = query.in("transaction_id", ids);
+  const { data: rows, error } = await query;
+  if (error) throw wrapAutoPostDbError("merchant_group_retry_fetch_failed", error);
+  if (!rows?.length) {
+    const err = new Error("No retryable posting operation rows were found.");
+    err.status = 404;
+    err.code = "merchant_group_retry_operation_not_found";
+    throw err;
+  }
+  const nowIso = new Date().toISOString();
+  const retried = [];
+  const skipped = [];
+  for (const row of rows) {
+    if (row.qbo_txn_id) {
+      skipped.push({ transaction_id: row.transaction_id, reason: "already_posted" });
+      continue;
+    }
+    if (row?.meta?.posting_in_progress === true) {
+      skipped.push({ transaction_id: row.transaction_id, reason: "posting_in_progress" });
+      continue;
+    }
+    if (!row.final_qbo_account_id) {
+      skipped.push({ transaction_id: row.transaction_id, reason: "missing_final_qbo_account" });
+      continue;
+    }
+    const meta = {
+      ...(row.meta || {}),
+      merchant_group_operation_state: "retry_requested",
+      merchant_group_operation_stage: "retry_requested",
+      merchant_group_retry_requested_at: nowIso,
+      merchant_group_retry_requested_by: actorId || null,
+      merchant_group_retry_previous_post_error: row.post_error || row.meta?.merchant_group_operation_failure_code || null,
+      merchant_group_operation_lease_expires_at: null,
+      next_post_attempt_at: null,
+      posting_in_progress: false,
+      safe_to_auto_post: true,
+    };
+    const { data: updated, error: updateErr } = await db
+      .from("transaction_categorizations")
+      .update({
+        post_after: nowIso,
+        updated_at: nowIso,
+        meta,
+      })
+      .eq("business_id", businessId)
+      .eq("transaction_id", row.transaction_id)
+      .is("qbo_txn_id", null)
+      .contains("meta", { merchant_group_operation_id: operationId })
+      .select("transaction_id,post_after,post_error,meta")
+      .maybeSingle();
+    if (updateErr) {
+      skipped.push({ transaction_id: row.transaction_id, reason: updateErr.message || "retry_update_failed" });
+      continue;
+    }
+    if (updated?.transaction_id) retried.push({ transaction_id: updated.transaction_id, post_after: updated.post_after || null });
+  }
+  return {
+    ok: true,
+    business_id: businessId,
+    operation_id: operationId,
+    retry_requested_at: nowIso,
+    retried_count: retried.length,
+    skipped_count: skipped.length,
+    retried,
+    skipped,
   };
 }
 

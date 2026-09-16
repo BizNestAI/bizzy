@@ -125,6 +125,7 @@ export default function MonthlyReviewConsole() {
   const [postingReviewOptions, setPostingReviewOptions] = useState({});
   const [postingReviewAction, setPostingReviewAction] = useState(null);
   const [postingReviewProgress, setPostingReviewProgress] = useState({});
+  const [postingReviewItemActions, setPostingReviewItemActions] = useState({});
   const [expandedPostingReviewGroup, setExpandedPostingReviewGroup] = useState(null);
   const [busyFeedActions, setBusyFeedActions] = useState({});
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
@@ -648,8 +649,6 @@ export default function MonthlyReviewConsole() {
             lastOperationLabel = firstRow?.failure_code ? `Needs attention: ${firstRow.failure_code}` : "Needs attention";
           } else if (states.failed) {
             lastOperationLabel = firstRow?.failure_code ? `Could not prepare posting: ${firstRow.failure_code}` : "Could not prepare posting";
-          } else if (states.checking_duplicates) {
-            lastOperationLabel = "Checking posting safety";
           } else if (states.accepted) {
             lastOperationLabel = "Decision accepted";
           } else if (operation?.row_count === 0) {
@@ -681,6 +680,49 @@ export default function MonthlyReviewConsole() {
       setPostingReviewAction(null);
     }
   }, [loadBookkeepingFeedCounts, loadPostingReview, postingReviewAction, postingReviewOptions, selectedBusinessId]);
+
+  const retryPostingReviewItem = useCallback(async (item) => {
+    if (!selectedBusinessId || !item?.operation_id || !item?.transaction_id || postingReviewItemActions[item.transaction_id]) return;
+    setPostingReviewItemActions((current) => ({ ...current, [item.transaction_id]: "Retry requested" }));
+    try {
+      const decision = await safeFetch(`/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(item.operation_id)}/retry-now`, {
+        method: "POST",
+        body: {
+          business_id: selectedBusinessId,
+          transaction_ids: [item.transaction_id],
+        },
+      });
+      setPostingReviewItemActions((current) => ({ ...current, [item.transaction_id]: "Preparing to post" }));
+      const statusUrl = decision?.status_url;
+      if (statusUrl) {
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 600 : 1500));
+          const operation = await safeFetch(statusUrl, { cache: "no-store" });
+          const row = Array.isArray(operation?.rows)
+            ? operation.rows.find((candidate) => candidate.transaction_id === item.transaction_id) || operation.rows[0]
+            : null;
+          const states = operation?.states || {};
+          let label = "Preparing to post";
+          if (row?.posted || states.posted) label = "Posted";
+          else if (row?.state === "posting" || states.posting) label = "Posting to QuickBooks";
+          else if (row?.state === "retry_scheduled" || states.retry_scheduled) label = row?.next_post_attempt_at ? `Retry scheduled ${formatShortTime(row.next_post_attempt_at)}` : "Retry scheduled";
+          else if (row?.state === "blocked" || states.blocked) label = row?.failure_code ? `Needs attention: ${row.failure_code}` : "Needs attention";
+          else if (row?.state === "failed" || states.failed) label = row?.failure_code ? `Retry failed: ${row.failure_code}` : "Retry failed";
+          else if (row?.post_after) label = `Waiting to post ${formatShortTime(row.post_after)}`;
+          setPostingReviewItemActions((current) => ({ ...current, [item.transaction_id]: label }));
+          if (row?.posted || ["retry_scheduled", "blocked", "failed", "posted"].includes(row?.state || "")) break;
+        }
+      }
+      await Promise.all([loadPostingReview(), loadBookkeepingFeedCounts()]);
+    } catch (e) {
+      console.warn("[monthly-review][posting-review-retry-now] failed", e?.body || e?.message || e);
+      setPostingReviewItemActions((current) => ({ ...current, [item.transaction_id]: "Retry could not be requested" }));
+      setPostingReview((current) => ({
+        ...current,
+        error: e?.body?.message || e?.message || "Bizzi could not request this retry.",
+      }));
+    }
+  }, [loadBookkeepingFeedCounts, loadPostingReview, postingReviewItemActions, selectedBusinessId]);
 
   useEffect(() => {
     loadBusinesses();
@@ -1774,6 +1816,8 @@ export default function MonthlyReviewConsole() {
                     }));
                   }}
                   onApprovePostingReviewGroup={approvePostingReviewGroup}
+                  onRetryPostingReviewItem={retryPostingReviewItem}
+                  postingReviewItemActions={postingReviewItemActions}
                   onTogglePostingReviewGroup={setExpandedPostingReviewGroup}
                   accounts={mirrorFeedAccounts}
                   busyAction={busyFeedAction}
@@ -1885,6 +1929,7 @@ function BookkeepingFeedMirrorPanels({
   postingReviewOptions,
   postingReviewAction,
   postingReviewProgress,
+  postingReviewItemActions,
   expandedPostingReviewGroup,
   onToggle,
   onLoadMore,
@@ -1894,6 +1939,7 @@ function BookkeepingFeedMirrorPanels({
   onRefreshPostingReview,
   onPostingReviewOptionChange,
   onApprovePostingReviewGroup,
+  onRetryPostingReviewItem,
   onTogglePostingReviewGroup,
   accounts,
   busyAction,
@@ -1990,12 +2036,14 @@ function BookkeepingFeedMirrorPanels({
           postingReviewOptions={postingReviewOptions}
           postingReviewAction={postingReviewAction}
           postingReviewProgress={postingReviewProgress}
+          postingReviewItemActions={postingReviewItemActions}
           expandedPostingReviewGroup={expandedPostingReviewGroup}
           accounts={accounts}
           onToggle={onTogglePostingReview}
           onRefresh={onRefreshPostingReview}
           onOptionChange={onPostingReviewOptionChange}
           onApproveGroup={onApprovePostingReviewGroup}
+          onRetryItem={onRetryPostingReviewItem}
           onToggleGroup={onTogglePostingReviewGroup}
         />
       </div>
@@ -2008,12 +2056,14 @@ function PostingReviewMirrorSection({
   postingReviewOptions,
   postingReviewAction,
   postingReviewProgress,
+  postingReviewItemActions,
   expandedPostingReviewGroup,
   accounts,
   onToggle,
   onRefresh,
   onOptionChange,
   onApproveGroup,
+  onRetryItem,
   onToggleGroup,
 }) {
   const [activeFilter, setActiveFilter] = useState("all");
@@ -2117,10 +2167,10 @@ function PostingReviewMirrorSection({
           {(visibleGroups.length || visibleItems.length) ? (
             <div className="space-y-4">
               {visibleItems.length && !activeBucket ? (
-                <PostingReviewStatusSections items={visibleItems} labels={labels} />
+                <PostingReviewStatusSections items={visibleItems} labels={labels} actions={postingReviewItemActions} onRetryItem={onRetryItem} />
               ) : null}
               {visibleItems.length && activeBucket && !isMerchantPostingFilter(selectedFilter) ? (
-                <PostingReviewItemList items={visibleItems} />
+                <PostingReviewItemList items={visibleItems} actions={postingReviewItemActions} onRetryItem={onRetryItem} />
               ) : null}
               {visibleGroups.length ? (
                 <div className="space-y-3">
@@ -2310,7 +2360,7 @@ function PostingReviewMirrorSection({
   );
 }
 
-function PostingReviewStatusSections({ items = [], labels = {} }) {
+function PostingReviewStatusSections({ items = [], labels = {}, actions = {}, onRetryItem = null }) {
   const byBucket = new Map();
   items.forEach((item) => {
     if (!byBucket.has(item.bucket)) byBucket.set(item.bucket, []);
@@ -2327,25 +2377,46 @@ function PostingReviewStatusSections({ items = [], labels = {} }) {
             <h4 className="text-sm font-semibold text-white">{section.label}</h4>
             <span className="text-xs text-white/45">{section.items.length} {section.items.length === 1 ? "transaction" : "transactions"}</span>
           </div>
-          <PostingReviewItemList items={section.items} />
+          <PostingReviewItemList items={section.items} actions={actions} onRetryItem={onRetryItem} />
         </div>
       ))}
     </div>
   );
 }
 
-function PostingReviewItemList({ items = [] }) {
+function PostingReviewItemList({ items = [], actions = {}, onRetryItem = null }) {
   return (
     <div className="overflow-x-auto">
-      <div className="min-w-[1120px] divide-y divide-white/[0.06]">
+      <div className="min-w-[1280px] divide-y divide-white/[0.06]">
         {items.map((item) => (
-          <div key={item.transaction_id} className="grid grid-cols-[96px_92px_minmax(260px,1fr)_180px_190px_260px] gap-2 px-3 py-2 text-xs text-white/60">
+          <div key={item.transaction_id} className="grid grid-cols-[96px_92px_minmax(260px,1fr)_180px_190px_300px_180px] gap-2 px-3 py-2 text-xs text-white/60">
             <span className="whitespace-nowrap text-white/45">{item.date || "n/a"}</span>
             <span className={`whitespace-nowrap ${Number(item.amount || 0) < 0 ? "text-rose-300" : "text-emerald-300"}`}>{formatCurrency(item.amount)}</span>
             <span className="min-w-0 truncate text-white/80" title={`${item.description || ""} ${item.memo || ""}`}>{item.merchant || item.description || "Transaction"}</span>
             <span className="truncate text-white/45">{item.proposed_gl || "Current category"}</span>
             <span className="truncate text-white/45">{item.source_account || "Mapped account"}</span>
-            <span className="whitespace-nowrap text-white/70">{formatPostingReviewItemStatus(item)}</span>
+            <span className="whitespace-nowrap text-white/70">{actions[item.transaction_id] || formatPostingReviewItemStatus(item)}</span>
+            <span className="flex items-center justify-end gap-2">
+              {item.bucket === "retry_scheduled" && onRetryItem ? (
+                <button
+                  type="button"
+                  onClick={() => onRetryItem(item)}
+                  disabled={Boolean(actions[item.transaction_id])}
+                  className="rounded-lg border border-emerald-300/25 bg-emerald-300/[0.08] px-2.5 py-1 text-xs font-semibold text-emerald-100 hover:bg-emerald-300/[0.14] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Retry now
+                </button>
+              ) : null}
+              <details className="text-right">
+                <summary className="cursor-pointer list-none text-xs font-semibold text-white/45 hover:text-white/75">Technical details</summary>
+                <div className="mt-2 rounded-lg border border-white/10 bg-black/30 p-2 text-left text-[11px] leading-5 text-white/55">
+                  <div>Reason: {item.post_error || item.reason || "n/a"}</div>
+                  <div>Last attempt: {formatDateTime(item.last_post_attempt_at)}</div>
+                  <div>Next retry: {formatDateTime(item.next_post_attempt_at)}</div>
+                  <div>Operation: {item.operation_id || "n/a"}</div>
+                </div>
+              </details>
+            </span>
           </div>
         ))}
       </div>
@@ -2355,6 +2426,11 @@ function PostingReviewItemList({ items = [] }) {
 
 function formatPostingReviewItemStatus(item = {}) {
   if (item.bucket === "scheduled_future" && item.post_after) return `Waiting to post ${formatDateTime(item.post_after)}`;
+  if (item.bucket === "retry_scheduled") {
+    const reason = item.post_error || item.reason || "Posting retry scheduled";
+    const next = item.next_post_attempt_at ? ` · next ${formatDateTime(item.next_post_attempt_at)}` : "";
+    return `Retry scheduled · ${reason}${next}`;
+  }
   if (item.bucket === "active_posting") return "Posting to QuickBooks";
   if (item.bucket === "failed") return item.post_error || "Posting failed";
   return item.plain_status || item.reason || "Needs review";
