@@ -23,6 +23,7 @@ import {
   patchOperatorResponseApprovalInDetail,
   patchSourceLedgerTransaction,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
+import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -1589,20 +1590,12 @@ export default function MonthlyReviewConsole() {
             <p className="mt-2 max-w-2xl text-sm text-white/55">Month-close queue, source ledger, evidence, and finalization.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <select
+            <MonthDropdown
               value={month}
+              options={monthOptions}
               disabled={loadingAvailablePeriods && monthOptions.length === 0}
-              onChange={(event) => {
-                selectMonth(event.target.value);
-              }}
-              className={SELECT_CLASS}
-            >
-              {monthOptions.map((option) => (
-                <option key={option.value} value={option.value} className="bg-[#101216] text-white">
-                  {option.label}{option.isPartialStartMonth ? " - Partial" : ""}
-                </option>
-              ))}
-            </select>
+              onChange={selectMonth}
+            />
             <select
               value={statusFilter}
               onChange={(event) => {
@@ -4024,6 +4017,66 @@ function buildMonthOptions(currentValue, availablePeriods = []) {
   return [{ value, label: formatMonth(value) }];
 }
 
+function MonthDropdown({ value, options = [], disabled = false, onChange }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const selected = options.find((option) => option.value === value) || options[0] || null;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event) => {
+      if (!rootRef.current?.contains(event.target)) setOpen(false);
+    };
+    window.addEventListener("pointerdown", close);
+    return () => window.removeEventListener("pointerdown", close);
+  }, [open]);
+
+  const selectOption = (nextValue) => {
+    setOpen(false);
+    if (nextValue && nextValue !== value) onChange?.(nextValue);
+  };
+
+  return (
+    <div ref={rootRef} className="relative min-w-[220px]">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+        className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-left text-sm text-white outline-none transition hover:border-white/22 hover:bg-white/[0.06] focus:border-emerald-300/45 focus:ring-2 focus:ring-emerald-300/20 disabled:cursor-not-allowed disabled:opacity-50"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="truncate">{selected ? `${selected.label}${selected.isPartialStartMonth ? " - Partial" : ""}` : "Select month"}</span>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open ? (
+        <div className="absolute left-0 top-full z-[10020] mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-white/12 bg-[#101216] p-1 shadow-[0_18px_45px_rgba(0,0,0,0.55)]" role="listbox">
+          {options.map((option) => {
+            const selectedOption = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={selectedOption}
+                onClick={() => selectOption(option.value)}
+                className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
+                  selectedOption
+                    ? "bg-emerald-300/[0.12] text-emerald-100"
+                    : "text-white/78 hover:bg-white/[0.07] hover:text-white"
+                }`}
+              >
+                <span className="truncate">{option.label}{option.isPartialStartMonth ? " - Partial" : ""}</span>
+                {selectedOption ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-200" /> : null}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function buildDemoReviewDetail(data, month) {
   const demo = getDemoData();
   const financials = demo?.financials || {};
@@ -4541,10 +4594,7 @@ function buildDisplayBusiness(business) {
 }
 
 function formatShortDate(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return formatShortCalendarDate(value);
 }
 
 function formatEventType(value) {
