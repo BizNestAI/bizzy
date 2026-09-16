@@ -993,6 +993,83 @@ export async function getCanonicalPostingBacklogSummary({
   };
 }
 
+function postingReviewPlainStatus({ bucket, item = {}, reason = "" } = {}) {
+  if (bucket === "scheduled_future") return "Waiting to post";
+  if (bucket === "active_posting") return "Posting to QuickBooks";
+  if (bucket === "ready_to_release") return "Ready to post";
+  if (bucket === "failed") return item.post_error || "Posting failed";
+  if (bucket === "missing_mapping") return "Missing account mapping";
+  if (bucket === "protected_income_match") return "Needs income match";
+  if (bucket === "protected_credit_card_payment") return "Needs payment match";
+  if (bucket === "protected_transfer") return "Needs transfer review";
+  if (bucket === "protected_check") return "Needs check review";
+  if (bucket === "protected_other") return "Protected workflow";
+  return reason || "Needs merchant review";
+}
+
+export async function getPostingBacklogReviewDetails({
+  db,
+  businessId,
+  rangeStart = null,
+  rangeEnd = null,
+  effectiveDate = null,
+  limit = 100,
+} = {}) {
+  if (!db || !businessId) {
+    const err = new Error("businessId is required.");
+    err.status = 400;
+    err.code = "missing_business_id";
+    throw err;
+  }
+  const rows = await fetchBacklogCategorizationRows(db, businessId);
+  const bankRows = await fetchBacklogBankRows(db, businessId, rows.map((row) => row.transaction_id));
+  const sourceMappings = await fetchSourceMappingRows(
+    db,
+    businessId,
+    Array.from(new Set(Array.from(bankRows.map.values()).map((row) => row.plaid_account_id).filter(Boolean)))
+  );
+  const reevaluation = await reEvaluateAutoPostBacklog({ db, businessId, rangeStart, rangeEnd, effectiveDate });
+  const evaluationsById = new Map(reevaluation.evaluations.map((row) => [row.transaction_id, row]));
+  const items = [];
+  for (const item of rows) {
+    const bankTxn = bankRows.map.get(item.transaction_id) || {};
+    const evaluation = evaluationsById.get(item.transaction_id);
+    if (!evaluation) continue;
+    const bucket = customerBucketForEvaluation({ item, bankTxn, evaluation, sourceMappings });
+    const mapping = sourceMappings.get(bankTxn.plaid_account_id);
+    items.push({
+      transaction_id: item.transaction_id,
+      bucket: bucket.bucket,
+      reason: bucket.reason,
+      plain_status: postingReviewPlainStatus({ bucket: bucket.bucket, item, reason: bucket.reason }),
+      date: bankTxn.date || null,
+      amount: bankTxn.amount ?? null,
+      merchant: bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || null,
+      description: bankTxn.name || "",
+      memo: bankTxn.counterparty_name || bankTxn.merchant_name || "",
+      source_account: mapping?.qbo_account_name || null,
+      source_qbo_account_id: mapping?.qbo_account_id || null,
+      proposed_gl: item.final_qbo_account_name || null,
+      proposed_qbo_account_id: item.final_qbo_account_id || null,
+      post_after: item.post_after || null,
+      post_error: item.post_error || null,
+      duplicate_preflight: item.meta?.duplicate_preflight || null,
+      operation_id: item.meta?.merchant_group_operation_id || item.meta?.post_intent_id || null,
+      worker_state: item.meta?.posting_in_progress === true ? "posting" : item.post_after ? "scheduled" : "waiting",
+    });
+  }
+  const groups = await getMerchantBacklogGroups({ db, businessId, rangeStart, rangeEnd, effectiveDate, limit });
+  return {
+    ok: true,
+    business_id: businessId,
+    items: items.slice(0, Math.max(1, Number(limit || 100))),
+    item_count: items.length,
+    groups: groups.groups || [],
+    group_count: groups.group_count || 0,
+    transaction_level_review_count: groups.transaction_level_review_count || 0,
+  };
+}
+
 export async function getMerchantBacklogGroups({
   db,
   businessId,
@@ -1147,6 +1224,18 @@ async function defaultDuplicatePreflight() {
   return { ok: false, confidence: "NOT_RUN", reason: "duplicate_preflight_required" };
 }
 
+function buildMerchantApprovalOperationId({ businessId, idempotencyKey, groupSnapshotToken, transactionIds = [], selectedQboAccountId } = {}) {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      business_id: businessId || null,
+      idempotency_key: idempotencyKey || null,
+      group_snapshot_token: groupSnapshotToken || null,
+      selected_qbo_account_id: selectedQboAccountId ? String(selectedQboAccountId) : null,
+      transaction_ids: Array.from(new Set(transactionIds || [])).sort(),
+    }))
+    .digest("hex");
+}
+
 async function recordMerchantApprovalDecision({
   db,
   businessId,
@@ -1159,6 +1248,8 @@ async function recordMerchantApprovalDecision({
   safety,
   idempotencyKey,
   postAfter,
+  operationId = null,
+  operationState = null,
 } = {}) {
   const decidedAt = new Date().toISOString();
   const meta = {
@@ -1168,6 +1259,8 @@ async function recordMerchantApprovalDecision({
     merchant_group_idempotency_key: idempotencyKey || null,
     merchant_group_identity_key: group?.identity?.key || null,
     merchant_group_snapshot_token: group?.snapshot_token || null,
+    merchant_group_operation_id: operationId || item.meta?.merchant_group_operation_id || null,
+    merchant_group_operation_state: operationState || item.meta?.merchant_group_operation_state || null,
     selected_qbo_account_id: String(account.qbo_account_id),
     selected_qbo_account_name: account.name || item.final_qbo_account_name || null,
     vendor_rule_id: rule?.rule?.id || rule?.id || item.meta?.vendor_rule_id || null,
@@ -1204,19 +1297,13 @@ async function recordMerchantApprovalDecision({
   };
 }
 
-export async function approveMerchantBacklogGroup({
+async function resolveMerchantBacklogApproval({
   db,
   businessId,
-  actorId = null,
   selectedQboAccountId,
-  rememberForFuture = true,
   groupSnapshotToken = null,
   transactionIds = [],
   exclusionIds = [],
-  expectedRowVersions = {},
-  idempotencyKey = null,
-  duplicatePreflight = defaultDuplicatePreflight,
-  graceHours = DEFAULT_GRACE_HOURS,
 } = {}) {
   if (!db || !businessId || !selectedQboAccountId) {
     const err = new Error("businessId and selectedQboAccountId are required.");
@@ -1236,6 +1323,12 @@ export async function approveMerchantBacklogGroup({
   const excluded = new Set(exclusionIds || []);
   const authorized = new Set(transactionIds?.length ? transactionIds : group.transaction_ids);
   const candidateIds = group.transaction_ids.filter((id) => authorized.has(id) && !excluded.has(id));
+  if (!candidateIds.length) {
+    const err = new Error("No transactions are selected for this merchant group.");
+    err.status = 400;
+    err.code = "merchant_group_empty_selection";
+    throw err;
+  }
   const rows = await fetchBacklogCategorizationRows(db, businessId, { transactionIds: candidateIds });
   const bankRows = await fetchBacklogBankRows(db, businessId, candidateIds);
   const policy = await getAutoPostPolicy(db, businessId);
@@ -1244,6 +1337,19 @@ export async function approveMerchantBacklogGroup({
     businessId,
     Array.from(new Set(Array.from(bankRows.map.values()).map((row) => row.plaid_account_id).filter(Boolean)))
   );
+  return { account, group, excluded, candidateIds, rows, bankRows, policy, sourceMappings };
+}
+
+async function learnRuleForMerchantApproval({
+  businessId,
+  actorId,
+  rememberForFuture,
+  account,
+  group,
+  candidateIds,
+  bankRows,
+  db,
+} = {}) {
   let ruleResult = { ok: true, skipped: true, reason: "remember_for_future_false" };
   const firstBankTxn = bankRows.map.get(candidateIds[0]);
   if (rememberForFuture === true && firstBankTxn) {
@@ -1268,6 +1374,131 @@ export async function approveMerchantBacklogGroup({
       throw err;
     }
   }
+  return ruleResult;
+}
+
+export async function persistMerchantBacklogGroupApprovalDecision({
+  db,
+  businessId,
+  actorId = null,
+  selectedQboAccountId,
+  rememberForFuture = true,
+  groupSnapshotToken = null,
+  transactionIds = [],
+  exclusionIds = [],
+  expectedRowVersions = {},
+  idempotencyKey = null,
+} = {}) {
+  const operationId = buildMerchantApprovalOperationId({ businessId, idempotencyKey, groupSnapshotToken, transactionIds, selectedQboAccountId });
+  const { account, group, excluded, candidateIds, rows, bankRows, policy, sourceMappings } = await resolveMerchantBacklogApproval({
+    db,
+    businessId,
+    selectedQboAccountId,
+    groupSnapshotToken,
+    transactionIds,
+    exclusionIds,
+  });
+  const ruleResult = await learnRuleForMerchantApproval({
+    businessId,
+    actorId,
+    rememberForFuture,
+    account,
+    group,
+    candidateIds,
+    bankRows,
+    db,
+  });
+  const saved = [];
+  const blocked = [];
+  for (const item of rows) {
+    const bankTxn = bankRows.map.get(item.transaction_id);
+    const expectedVersion = expectedRowVersions?.[item.transaction_id];
+    const currentVersion = item.meta?.row_version || item.meta?.version || item.updated_at || null;
+    if (expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
+      blocked.push({ transaction_id: item.transaction_id, reason: "row_changed" });
+      continue;
+    }
+    if (!bankTxn) {
+      blocked.push({ transaction_id: item.transaction_id, reason: "missing_transaction" });
+      continue;
+    }
+    const evaluation = await evaluateBacklogRowForRelease({ db, businessId, item, bankTxn, policy: buildPreviewPolicy(policy, { effectiveDate: bankTxn.date }), sourceMappings });
+    const customerBucket = customerBucketForEvaluation({ item, bankTxn, evaluation, sourceMappings });
+    if (!["ready_to_release", "merchant_approval_needed"].includes(customerBucket.bucket)) {
+      blocked.push({ transaction_id: item.transaction_id, reason: customerBucket.reason });
+      continue;
+    }
+    const recorded = await recordMerchantApprovalDecision({
+      db,
+      businessId,
+      item,
+      rule: ruleResult,
+      account,
+      actorId,
+      group,
+      duplicate: { confidence: "PENDING", reason: "background_duplicate_preflight_pending" },
+      safety: { category: "decision_saved", reason: "background_safety_check_pending" },
+      idempotencyKey,
+      postAfter: null,
+      operationId,
+      operationState: "decision_saved",
+    });
+    if (recorded.ok) saved.push(recorded);
+    else blocked.push(recorded);
+  }
+  return {
+    ok: true,
+    accepted: true,
+    business_id: businessId,
+    operation_id: operationId,
+    state: "decision_saved",
+    group_id: group.group_id,
+    snapshot_token: group.snapshot_token,
+    rule: ruleResult?.rule || null,
+    remember_for_future: rememberForFuture === true,
+    selected_transaction_count: candidateIds.length,
+    saved_count: saved.length,
+    blocked_count: blocked.length,
+    saved,
+    blocked,
+    excluded_transaction_ids: Array.from(excluded),
+  };
+}
+
+export async function runMerchantBacklogApprovalOperation({
+  db,
+  businessId,
+  actorId = null,
+  selectedQboAccountId,
+  rememberForFuture = true,
+  groupSnapshotToken = null,
+  transactionIds = [],
+  exclusionIds = [],
+  expectedRowVersions = {},
+  idempotencyKey = null,
+  duplicatePreflight = defaultDuplicatePreflight,
+  graceHours = DEFAULT_GRACE_HOURS,
+  operationId = null,
+} = {}) {
+  const resolvedOperationId = operationId || buildMerchantApprovalOperationId({ businessId, idempotencyKey, groupSnapshotToken, transactionIds, selectedQboAccountId });
+  const { account, group, excluded, candidateIds, rows, bankRows, policy, sourceMappings } = await resolveMerchantBacklogApproval({
+    db,
+    businessId,
+    selectedQboAccountId,
+    groupSnapshotToken,
+    transactionIds,
+    exclusionIds,
+  });
+  const ruleResult = await learnRuleForMerchantApproval({
+    businessId,
+    actorId,
+    rememberForFuture,
+    account,
+    group,
+    candidateIds,
+    bankRows,
+    db,
+  });
   const scheduled = [];
   const blocked = [];
   for (const item of rows) {
@@ -1310,6 +1541,8 @@ export async function approveMerchantBacklogGroup({
       safety: evaluation,
       idempotencyKey,
       postAfter,
+      operationId: resolvedOperationId,
+      operationState: postAfter ? "scheduled" : "ready_to_post",
     });
     if (recorded.ok) scheduled.push(recorded);
     else blocked.push(recorded);
@@ -1329,6 +1562,20 @@ export async function approveMerchantBacklogGroup({
     blocked,
     excluded_transaction_ids: Array.from(excluded),
     backlog_summary: summary,
+  };
+}
+
+export async function approveMerchantBacklogGroup(options = {}) {
+  const decision = await persistMerchantBacklogGroupApprovalDecision(options);
+  const result = await runMerchantBacklogApprovalOperation({
+    ...options,
+    transactionIds: decision.saved?.map((row) => row.transaction_id).filter(Boolean) || options.transactionIds,
+    operationId: decision.operation_id,
+  });
+  return {
+    ...result,
+    operation_id: decision.operation_id,
+    decision,
   };
 }
 

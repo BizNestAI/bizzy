@@ -1,4 +1,4 @@
-/* global process */
+/* global process, setImmediate */
 import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
@@ -8,7 +8,8 @@ import {
   getAutoPostSettings,
   getCanonicalPostingBacklogSummary,
   getMerchantBacklogGroups,
-  approveMerchantBacklogGroup,
+  persistMerchantBacklogGroupApprovalDecision,
+  runMerchantBacklogApprovalOperation,
   postReadyBacklogTransactions,
   previewAutoPostBacklog,
   releaseAutoPostBacklogScope,
@@ -115,6 +116,60 @@ async function runLiveDuplicatePreflight({ businessId, bankTxn = {} }) {
   if (strong.length === 1) return { confidence: "HIGH_CONFIDENCE_PROBABLE_DUPLICATE", candidates: strong };
   if (strong.length > 1 || scored.length > 0) return { confidence: "AMBIGUOUS", candidates: strong.length ? strong : scored };
   return { confidence: "NO_MATCH", candidates: [], candidate_count: purchases.length };
+}
+
+function createCachedLiveDuplicatePreflight() {
+  const mappingCache = new Map();
+  const qboClientCache = new Map();
+  const purchaseCache = new Map();
+  return async function cachedLiveDuplicatePreflight({ businessId, bankTxn = {} }) {
+    const mappingKey = `${businessId}:${bankTxn.plaid_account_id || ""}`;
+    let mapping = mappingCache.get(mappingKey);
+    if (!mappingCache.has(mappingKey)) {
+      const { data, error } = await supabase
+        .from("plaid_qbo_account_mappings")
+        .select("qbo_account_id,qbo_account_name,qbo_account_type")
+        .eq("business_id", businessId)
+        .eq("plaid_account_id", bankTxn.plaid_account_id)
+        .limit(1)
+        .maybeSingle();
+      mapping = error || !data?.qbo_account_id ? { error, data: null } : { error: null, data };
+      mappingCache.set(mappingKey, mapping);
+    }
+    if (mapping.error || !mapping.data?.qbo_account_id) {
+      return { confidence: "MISSING_MAPPING", candidates: [], reason: mapping.error?.message || "missing_source_mapping" };
+    }
+    if (!qboClientCache.has(businessId)) qboClientCache.set(businessId, getQBOClient(businessId));
+    const qbo = await qboClientCache.get(businessId);
+    const { start, end } = qboDuplicateDateWindow(bankTxn.date);
+    const purchaseKey = `${businessId}:${start}:${end}`;
+    if (!purchaseCache.has(purchaseKey)) purchaseCache.set(purchaseKey, findQboPurchasesForDuplicatePreflight(qbo, bankTxn));
+    const purchases = await purchaseCache.get(purchaseKey);
+    const payeeText = normalizeMatchText(bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || "");
+    const scored = purchases
+      .map((entity) => {
+        const txnDate = entity.TxnDate || null;
+        const days = txnDate && bankTxn.date
+          ? Math.abs(new Date(`${txnDate}T00:00:00Z`) - new Date(`${bankTxn.date}T00:00:00Z`)) / 86400000
+          : Infinity;
+        const text = collectQboDuplicateText(entity);
+        return {
+          qbo_txn_id: entity.Id || null,
+          qbo_txn_type: "Purchase",
+          txn_date: txnDate,
+          amount: entity.TotalAmt ?? null,
+          account_matches: String(entity.AccountRef?.value || "") === String(mapping.data.qbo_account_id),
+          date_matches: days <= 1,
+          amount_matches: cents(entity.TotalAmt) === cents(bankTxn.amount),
+          payee_matches: Boolean(payeeText && text.includes(payeeText)),
+        };
+      })
+      .filter((row) => row.qbo_txn_id && row.account_matches && row.date_matches && row.amount_matches);
+    const strong = scored.filter((row) => row.payee_matches);
+    if (strong.length === 1) return { confidence: "HIGH_CONFIDENCE_PROBABLE_DUPLICATE", candidates: strong };
+    if (strong.length > 1 || scored.length > 0) return { confidence: "AMBIGUOUS", candidates: strong.length ? strong : scored };
+    return { confidence: "NO_MATCH", candidates: [], candidate_count: purchases.length };
+  };
 }
 
 function normalizeQboTxnType(value = "") {
@@ -313,7 +368,7 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
 
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
-    const result = await approveMerchantBacklogGroup({
+    const common = {
       db: supabase,
       businessId,
       actorId: req.user?.id || req.user?.sub || null,
@@ -324,9 +379,27 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       exclusionIds: Array.isArray(req.body?.exclusion_ids) ? req.body.exclusion_ids : [],
       expectedRowVersions: req.body?.expected_row_versions || {},
       idempotencyKey: req.get("Idempotency-Key") || req.body?.idempotency_key || null,
-      duplicatePreflight: runLiveDuplicatePreflight,
+    };
+    const decision = await persistMerchantBacklogGroupApprovalDecision(common);
+    const duplicatePreflight = createCachedLiveDuplicatePreflight();
+    setImmediate(() => {
+      runMerchantBacklogApprovalOperation({
+        ...common,
+        transactionIds: decision.saved?.map((row) => row.transaction_id).filter(Boolean) || common.transactionIds,
+        operationId: decision.operation_id,
+        duplicatePreflight,
+      }).catch((err) => {
+        console.error("[bookkeeping][merchant-group-approve-operation] failed", {
+          business_id: businessId,
+          operation_id: decision.operation_id,
+          message: err?.message || String(err),
+        });
+      });
     });
-    return res.json(result);
+    return res.status(202).json({
+      ...decision,
+      status_url: `/api/bookkeeping/posting/backlog/summary?business_id=${encodeURIComponent(businessId)}`,
+    });
   } catch (err) {
     console.error("[bookkeeping][merchant-group-approve] failed", err?.message || err);
     return res.status(err?.status || 500).json({

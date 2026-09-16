@@ -1,3 +1,4 @@
+/* global process */
 import { Router } from "express";
 import crypto from "crypto";
 import { supabase } from "../../services/supabaseAdmin.js";
@@ -22,6 +23,7 @@ import {
 import {
   getCanonicalPostingBacklogSummary,
   getMerchantBacklogGroups,
+  getPostingBacklogReviewDetails,
 } from "../../services/bookkeeping/autoPostControl.js";
 import { getAvailableMonthlyReviewPeriods } from "../../services/bookkeeping/monthlyReviewAvailablePeriodsService.js";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
@@ -105,6 +107,13 @@ function sendMonthlyReviewError(res, fallbackError, fallbackMessage, e) {
     error: e?.error || fallbackError,
     message: e?.message || fallbackMessage,
   });
+}
+
+function setMonthlyReviewNoStore(res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+  res.set("Surrogate-Control", "no-store");
 }
 
 async function assertRunTransactionInSelectedMonth(run, transactionId) {
@@ -631,6 +640,7 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
 
 router.get("/businesses/:businessId/bookkeeping/posting-review/summary", async (req, res) => {
   try {
+    setMonthlyReviewNoStore(res);
     const businessId = req.params.businessId;
     if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
     const month = normalizeMonth(req.query.month);
@@ -672,6 +682,7 @@ router.get("/businesses/:businessId/bookkeeping/posting-review/summary", async (
 
 router.get("/businesses/:businessId/bookkeeping/posting-review/merchant-groups", async (req, res) => {
   try {
+    setMonthlyReviewNoStore(res);
     const businessId = req.params.businessId;
     if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
     const month = normalizeMonth(req.query.month);
@@ -709,6 +720,49 @@ router.get("/businesses/:businessId/bookkeeping/posting-review/merchant-groups",
   } catch (e) {
     console.error("[monthly-review] posting review merchant groups failed", e?.message || e);
     sendMonthlyReviewError(res, "monthly_review_posting_review_groups_failed", "Could not load posting review merchant groups.", e);
+  }
+});
+
+router.get("/businesses/:businessId/bookkeeping/posting-review/details", async (req, res) => {
+  try {
+    setMonthlyReviewNoStore(res);
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    const month = normalizeMonth(req.query.month);
+    const limit = Math.min(Math.max(parseInt(req.query?.limit, 10) || 100, 1), 250);
+    const { data: business, error: bizErr } = await supabase
+      .from("business_profiles")
+      .select("id")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (bizErr) throw bizErr;
+    if (!business) return res.status(404).json({ ok: false, error: "business_not_found" });
+
+    const [rangeStart, rangeEnd] = monthBounds(month);
+    const details = await getPostingBacklogReviewDetails({
+      db: supabase,
+      businessId,
+      rangeStart,
+      rangeEnd,
+      effectiveDate: rangeStart,
+      limit,
+    });
+    return res.json({
+      ...details,
+      ok: true,
+      business_id: businessId,
+      month,
+      source_contract: {
+        service: "autoPostControl.getPostingBacklogReviewDetails",
+        selected_month_bounds: "server-side [range_start, range_end)",
+        population: "same canonical predicates as posting-review summary",
+        provider_calls: false,
+        qbo_writes: false,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] posting review details failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_posting_review_details_failed", "Could not load Posting Review details.", e);
   }
 });
 
@@ -2827,10 +2881,6 @@ async function buildMonthlySourceLedger(businessId, month) {
   };
 }
 
-async function loadAuthoritativeMonthlyPlaidTransactions(businessId, start, end) {
-  return loadSharedAuthoritativeMonthlyPlaidTransactions(businessId, start, end);
-}
-
 export function removeSupersededPendingPlaidRows(rows = []) {
   return removeSharedSupersededPendingPlaidRows(rows);
 }
@@ -3326,22 +3376,6 @@ function metric(label, value, tone = "neutral") {
   return { label, value: value ?? "—", tone };
 }
 
-async function safeCount(table, filters = [], month, dateColumn) {
-  try {
-    const [start, end] = monthBounds(month);
-    let query = supabase.from(table).select("id", { count: "exact", head: true });
-    filters.forEach(([column, value]) => {
-      query = query.eq(column, value);
-    });
-    if (dateColumn) query = query.gte(dateColumn, start).lt(dateColumn, end);
-    const { count, error } = await query;
-    if (error) throw error;
-    return { count: count || 0 };
-  } catch {
-    return { count: 0 };
-  }
-}
-
 async function safeLatest(table, businessId, orderColumn = "created_at") {
   try {
     const { data, error } = await supabase
@@ -3372,17 +3406,6 @@ async function safeRows(factory, label = "Evidence query") {
       enumerable: false,
     });
     return rows;
-  }
-}
-
-async function safeMaybeSingle(factory) {
-  try {
-    const { data, error } = await factory();
-    if (error) throw error;
-    return data || null;
-  } catch (e) {
-    console.warn("[monthly-review] evidence lookup skipped", e?.message || e);
-    return null;
   }
 }
 

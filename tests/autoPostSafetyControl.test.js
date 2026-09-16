@@ -9,9 +9,11 @@ import {
   computePostAfterForAutoPost,
   getCanonicalPostingBacklogSummary,
   getMerchantBacklogGroups,
+  getPostingBacklogReviewDetails,
   getAutoPostSettings,
   getAutoPostToQuickBooks,
   approveMerchantBacklogGroup,
+  persistMerchantBacklogGroupApprovalDecision,
   previewAutoPostBacklog,
   reEvaluateAutoPostBacklog,
   releaseAutoPostBacklogScope,
@@ -807,7 +809,11 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
   assert.match(adminPage, /Posting Review/);
   assert.match(adminPage, /POSTING_REVIEW_FILTERS/);
   assert.match(adminPage, /bookkeeping\/posting-review\/summary/);
+  assert.match(adminPage, /bookkeeping\/posting-review\/details/);
+  assert.match(monthlyReviewRoutes, /posting-review\/details/);
+  assert.match(monthlyReviewRoutes, /getPostingBacklogReviewDetails/);
   assert.match(adminPage, /Merchant review/);
+  assert.match(adminPage, /PostingReviewStatusSections/);
   assert.match(adminPage, /Approve & post/);
   assert.match(adminPage, /Leave in review/);
   assert.doesNotMatch(adminPage, /Approve category and post/);
@@ -815,6 +821,50 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
   assert.match(monthlyReviewRoutes, /getCanonicalPostingBacklogSummary/);
   assert.match(monthlyReviewRoutes, /getMerchantBacklogGroups/);
   assert.match(postingRoutes, /requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)/);
+  assert.match(postingRoutes, /res\.status\(202\)\.json/);
+  assert.match(postingRoutes, /setImmediate/);
+  assert.match(postingRoutes, /createCachedLiveDuplicatePreflight/);
+});
+
+test("posting review details expose every counted non-merchant bucket and approval decision saves before posting checks", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "24", name: "Software", account_type: "Expense", active: true }],
+    transaction_categorizations: [
+      { business_id: "biz-1", transaction_id: "merchant-1", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", qbo_txn_id: null, post_after: null, meta: { auto_approve_reason: "universal_hint" }, updated_at: "v1" },
+      { business_id: "biz-1", transaction_id: "scheduled-1", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", qbo_txn_id: null, post_after: "2999-01-01T00:00:00.000Z", meta: { safe_to_auto_post: true }, updated_at: "v1" },
+      { business_id: "biz-1", transaction_id: "income-1", status: "auto_approved", final_qbo_account_id: "99", final_qbo_account_name: "Sales", qbo_txn_id: null, post_after: null, meta: {}, updated_at: "v1" },
+      { business_id: "biz-1", transaction_id: "payment-1", status: "auto_approved", final_qbo_account_id: "24", final_qbo_account_name: "Software", qbo_txn_id: null, post_after: null, meta: { taxonomy_type: "cc_payment" }, updated_at: "v1" },
+    ],
+    bank_transactions: [
+      { business_id: "biz-1", id: "merchant-1", plaid_account_id: "pa-1", date: "2026-09-05", amount: -33.8, direction: "OUTFLOW", name: "SUPABASE SINGAPORE SG", merchant_name: "Supabase Singapore Sg", is_archived: false },
+      { business_id: "biz-1", id: "scheduled-1", plaid_account_id: "pa-1", date: "2026-09-06", amount: -20, direction: "OUTFLOW", name: "ADOBE", merchant_name: "Adobe", is_archived: false },
+      { business_id: "biz-1", id: "income-1", plaid_account_id: "pa-1", date: "2026-09-07", amount: 300, direction: "INFLOW", name: "DEPOSIT", merchant_name: "Customer", is_archived: false },
+      { business_id: "biz-1", id: "payment-1", plaid_account_id: "pa-1", date: "2026-09-08", amount: -40, direction: "OUTFLOW", name: "ACH PMT AMEX EPAYMENT", merchant_name: "Payment", is_archived: false },
+    ],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "20", qbo_account_name: "Credit Card", qbo_account_type: "CreditCard" }],
+    vendor_rules: [],
+  });
+  const details = await getPostingBacklogReviewDetails({ db, businessId: "biz-1", rangeStart: "2026-09-01", rangeEnd: "2026-10-01", effectiveDate: "2026-09-01" });
+  assert.equal(details.item_count, 4);
+  assert.equal(details.items.filter((item) => item.bucket === "scheduled_future").length, 1);
+  assert.equal(details.items.filter((item) => item.bucket === "protected_income_match").length, 1);
+  assert.equal(details.items.filter((item) => item.bucket === "protected_credit_card_payment").length, 1);
+
+  const supabaseGroup = details.groups.find((group) => group.display_merchant === "Supabase Singapore Sg");
+  const decision = await persistMerchantBacklogGroupApprovalDecision({
+    db,
+    businessId: "biz-1",
+    selectedQboAccountId: "24",
+    groupSnapshotToken: supabaseGroup.snapshot_token,
+    transactionIds: ["merchant-1"],
+    idempotencyKey: "operator-click-1",
+  });
+  assert.equal(decision.accepted, true);
+  assert.ok(decision.operation_id);
+  assert.equal(db.cat("biz-1", "merchant-1").post_after, null);
+  assert.equal(db.cat("biz-1", "merchant-1").meta.merchant_group_operation_state, "decision_saved");
+  assert.equal(db.cat("biz-1", "merchant-1").meta.duplicate_preflight.confidence, "PENDING");
 });
 
 test("merchant groups use exact identity and grouped approval schedules only passing rows", async () => {

@@ -550,15 +550,17 @@ export default function MonthlyReviewConsole() {
     }
     setPostingReview((current) => ({ ...current, loading: true, error: "" }));
     try {
-      const [summary, groupsResult] = await Promise.all([
+      const [summary, detailsResult] = await Promise.all([
         safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/posting-review/summary?month=${encodeURIComponent(month)}`),
-        safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/posting-review/merchant-groups?month=${encodeURIComponent(month)}&limit=50`),
+        safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/posting-review/details?month=${encodeURIComponent(month)}&limit=250`),
       ]);
-      const groups = Array.isArray(groupsResult?.groups) ? groupsResult.groups : [];
+      const groups = Array.isArray(detailsResult?.groups) ? detailsResult.groups : [];
+      const items = Array.isArray(detailsResult?.items) ? detailsResult.items : [];
       setPostingReview((current) => ({
         ...current,
         summary,
         groups,
+        items,
         loading: false,
         error: "",
         loaded: true,
@@ -616,7 +618,7 @@ export default function MonthlyReviewConsole() {
           idempotency_key: `monthly-review-posting-group-${group.snapshot_token}`,
         },
       });
-      setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Posting in background" }));
+      setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Checking QuickBooks" }));
       await Promise.all([
         loadPostingReview(),
         loadBookkeepingFeedCounts(),
@@ -1974,6 +1976,7 @@ function PostingReviewMirrorSection({
   const headlineCount = Number(summary.selected_month_count ?? summary.headline_count ?? summary.total ?? 0);
   const bucketTotal = Number(summary.bucket_total ?? Object.values(buckets).reduce((sum, value) => sum + Number(value || 0), 0));
   const groups = Array.isArray(postingReview?.groups) ? postingReview.groups : [];
+  const items = Array.isArray(postingReview?.items) ? postingReview.items : [];
   const filterOptions = POSTING_REVIEW_FILTERS
     .map((filter) => ({
       ...filter,
@@ -1990,6 +1993,15 @@ function PostingReviewMirrorSection({
       return transactions.length ? { ...group, transactions, transaction_ids: transactions.map((txn) => txn.transaction_id), transaction_count: transactions.length } : null;
     })
     .filter(Boolean);
+  const merchantRepresentedIds = new Set(
+    visibleGroups.flatMap((group) => Array.isArray(group.transactions) ? group.transactions.map((txn) => txn.transaction_id) : [])
+  );
+  const visibleItems = items
+    .filter((item) => {
+      if (activeBucket) return item.bucket === activeBucket && !merchantRepresentedIds.has(item.transaction_id);
+      return !merchantRepresentedIds.has(item.transaction_id);
+    })
+    .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || Math.abs(Number(b.amount || 0)) - Math.abs(Number(a.amount || 0)));
   const confirmOptions = confirmGroup ? buildPostingReviewApproval(confirmGroup, postingReviewOptions?.[confirmGroup.group_id]) : null;
   const confirmationAccount = confirmOptions
     ? accounts.find((acct) => String(acct.id || acct.Id) === String(confirmOptions.qboAccountId))
@@ -2053,8 +2065,16 @@ function PostingReviewMirrorSection({
               </button>
             ))}
           </div>
-          {isMerchantPostingFilter(selectedFilter) && visibleGroups.length ? (
-            <div className="space-y-3">
+          {(visibleGroups.length || visibleItems.length) ? (
+            <div className="space-y-4">
+              {visibleItems.length && !activeBucket ? (
+                <PostingReviewStatusSections items={visibleItems} labels={labels} />
+              ) : null}
+              {visibleItems.length && activeBucket && !isMerchantPostingFilter(selectedFilter) ? (
+                <PostingReviewItemList items={visibleItems} />
+              ) : null}
+              {visibleGroups.length ? (
+                <div className="space-y-3">
               {visibleGroups.map((group) => {
                 const options = postingReviewOptions?.[group.group_id] || {};
                 const selectedAccountId = options.qboAccountId || group.proposed_qbo_account_id || "";
@@ -2188,14 +2208,12 @@ function PostingReviewMirrorSection({
                   </div>
                 );
               })}
-            </div>
-          ) : !isMerchantPostingFilter(selectedFilter) ? (
-            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-sm text-white/55">
-              {contextualPostingReviewCopy(selectedFilter)}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-sm text-white/55">
-              No merchant groups are ready for grouped posting review in this month.
+              {contextualPostingReviewCopy(selectedFilter)}
             </div>
           )}
         </div>
@@ -2239,6 +2257,54 @@ function PostingReviewMirrorSection({
       ) : null}
     </div>
   );
+}
+
+function PostingReviewStatusSections({ items = [], labels = {} }) {
+  const byBucket = new Map();
+  items.forEach((item) => {
+    if (!byBucket.has(item.bucket)) byBucket.set(item.bucket, []);
+    byBucket.get(item.bucket).push(item);
+  });
+  const ordered = POSTING_REVIEW_FILTERS
+    .filter((filter) => filter.bucket && byBucket.has(filter.bucket))
+    .map((filter) => ({ ...filter, items: byBucket.get(filter.bucket) || [], label: filter.label || labels[filter.bucket] || titleCase(filter.bucket) }));
+  return (
+    <div className="space-y-3">
+      {ordered.map((section) => (
+        <div key={section.bucket} className="rounded-xl border border-white/10 bg-black/20">
+          <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-3 py-2">
+            <h4 className="text-sm font-semibold text-white">{section.label}</h4>
+            <span className="text-xs text-white/45">{section.items.length} {section.items.length === 1 ? "transaction" : "transactions"}</span>
+          </div>
+          <PostingReviewItemList items={section.items} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PostingReviewItemList({ items = [] }) {
+  return (
+    <div className="divide-y divide-white/[0.06]">
+      {items.map((item) => (
+        <div key={item.transaction_id} className="grid gap-2 px-3 py-2 text-xs text-white/60 md:grid-cols-[88px_84px_1fr_160px_150px_140px]">
+          <span className="text-white/45">{item.date || "n/a"}</span>
+          <span className={Number(item.amount || 0) < 0 ? "text-rose-300" : "text-emerald-300"}>{formatCurrency(item.amount)}</span>
+          <span className="min-w-0 truncate text-white/80" title={`${item.description || ""} ${item.memo || ""}`}>{item.merchant || item.description || "Transaction"}</span>
+          <span className="truncate text-white/45">{item.proposed_gl || "Current category"}</span>
+          <span className="truncate text-white/45">{item.source_account || "Mapped account"}</span>
+          <span className="truncate text-white/70">{formatPostingReviewItemStatus(item)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function formatPostingReviewItemStatus(item = {}) {
+  if (item.bucket === "scheduled_future" && item.post_after) return `Waiting to post ${formatDateTime(item.post_after)}`;
+  if (item.bucket === "active_posting") return "Posting to QuickBooks";
+  if (item.bucket === "failed") return item.post_error || "Posting failed";
+  return item.plain_status || item.reason || "Needs review";
 }
 
 function BookkeepingFeedMirrorSection({
