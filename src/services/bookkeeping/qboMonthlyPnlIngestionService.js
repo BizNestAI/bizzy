@@ -1524,11 +1524,28 @@ function normalizeColumnKey(value) {
 
 function normalizeDate(value) {
   if (!value) return null;
-  const direct = String(value).match(/^\d{4}-\d{2}-\d{2}/);
-  if (direct) return direct[0];
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toISOString().slice(0, 10);
+  const text = String(value).trim();
+  const direct = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (direct) return `${direct[1]}-${direct[2]}-${direct[3]}`;
+  const us = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (us) {
+    const month = Number(us[1]);
+    const day = Number(us[2]);
+    const year = Number(us[3]);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (
+      month >= 1 &&
+      month <= 12 &&
+      day >= 1 &&
+      day <= 31 &&
+      parsed.getUTCFullYear() === year &&
+      parsed.getUTCMonth() === month - 1 &&
+      parsed.getUTCDate() === day
+    ) {
+      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
+  return null;
 }
 
 function normalizeLabel(value) {

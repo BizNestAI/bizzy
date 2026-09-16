@@ -1,3 +1,4 @@
+/* global process */
 import { supabase } from "../supabaseAdmin.js";
 import { getPlaidClient, plaidEnvName } from "./plaidClient.js";
 import { triggerContractorCfoInsightsBestEffort } from "../insights/contractorCfoTriggerService.js";
@@ -15,12 +16,13 @@ import {
   isDeterministicCanonicalIdentity,
   isPlaidMutationDuringPaginationError,
 } from "./plaidCanonicalIdentity.js";
+import {
+  normalizePlaidAuthorizedDate,
+  normalizePlaidPostedDate,
+} from "../bookkeeping/accountingDatePolicy.js";
 
 function normalizeDate(d) {
-  if (!d) return null;
-  const parsed = new Date(d);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return parsed.toISOString().slice(0, 10);
+  return normalizePlaidPostedDate(d);
 }
 
 function nowIso() {
@@ -116,7 +118,7 @@ async function releaseDbLock(itemId) {
 }
 
 async function runSyncForItem(plaid, businessId, item, options = {}) {
-  const { force = false } = options;
+  void options;
   const itemLockKey = `${businessId}:${item.plaid_item_id}`;
   if (memoryLocks.has(itemLockKey)) {
     return { skipped: true, reason: "memory_lock" };
@@ -224,8 +226,8 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         direction,
         iso_currency_code: tx.iso_currency_code || null,
         unofficial_currency_code: tx.unofficial_currency_code || null,
-        date: tx.date || null,
-        authorized_date: tx.authorized_date || null,
+        date: normalizePlaidPostedDate(tx.date),
+        authorized_date: normalizePlaidAuthorizedDate(tx.authorized_date),
         pending: Boolean(tx.pending),
         payment_channel: tx.payment_channel || null,
         transaction_type: tx.transaction_type || null,

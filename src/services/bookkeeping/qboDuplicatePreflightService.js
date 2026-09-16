@@ -1,5 +1,9 @@
 import { supabase } from "../supabaseAdmin.js";
 import { getQBOClient } from "../../utils/qboClient.js";
+import {
+  addCalendarDays,
+  getAccountingDateFromBankTransaction,
+} from "./accountingDatePolicy.js";
 
 function cents(value) {
   const n = Number(value);
@@ -11,13 +15,10 @@ function normalizeMatchText(value = "") {
 }
 
 function qboDuplicateDateWindow(date) {
-  const center = date ? new Date(`${date}T00:00:00Z`) : new Date();
-  if (!Number.isFinite(center.getTime())) return { start: date, end: date };
-  const start = new Date(center);
-  start.setUTCDate(start.getUTCDate() - 3);
-  const end = new Date(center);
-  end.setUTCDate(end.getUTCDate() + 3);
-  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+  const start = addCalendarDays(date, -3);
+  const end = addCalendarDays(date, 3);
+  if (!start || !end) throw new Error("missing_plaid_posted_date");
+  return { start, end };
 }
 
 function collectQboDuplicateText(entity = {}) {
@@ -38,7 +39,8 @@ function unwrapQboFindPurchases(resp) {
 async function findQboPurchasesForDuplicatePreflight(qbo, bankTxn = {}) {
   const fn = typeof qbo?.findPurchases === "function" ? qbo.findPurchases.bind(qbo) : null;
   if (!fn) throw new Error("qbo_find_purchases_not_supported");
-  const { start, end } = qboDuplicateDateWindow(bankTxn.date);
+  const accountingDate = getAccountingDateFromBankTransaction(bankTxn);
+  const { start, end } = qboDuplicateDateWindow(accountingDate);
   const criteria = [
     { field: "TxnDate", operator: ">=", value: start },
     { field: "TxnDate", operator: "<=", value: end },
@@ -49,12 +51,13 @@ async function findQboPurchasesForDuplicatePreflight(qbo, bankTxn = {}) {
 }
 
 function scoreDuplicatePurchases({ purchases = [], bankTxn = {}, qboAccountId = null } = {}) {
+  const accountingDate = getAccountingDateFromBankTransaction(bankTxn);
   const payeeText = normalizeMatchText(bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || "");
   const scored = purchases
     .map((entity) => {
       const txnDate = entity.TxnDate || null;
-      const days = txnDate && bankTxn.date
-        ? Math.abs(new Date(`${txnDate}T00:00:00Z`) - new Date(`${bankTxn.date}T00:00:00Z`)) / 86400000
+      const days = txnDate
+        ? Math.abs(new Date(`${txnDate}T00:00:00Z`) - new Date(`${accountingDate}T00:00:00Z`)) / 86400000
         : Infinity;
       const text = collectQboDuplicateText(entity);
       return {
@@ -76,6 +79,11 @@ function scoreDuplicatePurchases({ purchases = [], bankTxn = {}, qboAccountId = 
 }
 
 export async function runLiveDuplicatePreflight({ businessId, bankTxn = {}, db = supabase, getQboClient = getQBOClient } = {}) {
+  try {
+    getAccountingDateFromBankTransaction(bankTxn);
+  } catch {
+    return { confidence: "MISSING_ACCOUNTING_DATE", candidates: [], reason: "missing_plaid_posted_date" };
+  }
   const { data: mapping, error: mappingError } = await db
     .from("plaid_qbo_account_mappings")
     .select("qbo_account_id,qbo_account_name,qbo_account_type")
@@ -99,6 +107,11 @@ export function createCachedLiveDuplicatePreflight({ db = supabase, getQboClient
   const qboClientCache = new Map();
   const purchaseCache = new Map();
   return async function cachedLiveDuplicatePreflight({ businessId, bankTxn = {} }) {
+    try {
+      getAccountingDateFromBankTransaction(bankTxn);
+    } catch {
+      return { confidence: "MISSING_ACCOUNTING_DATE", candidates: [], reason: "missing_plaid_posted_date" };
+    }
     const mappingKey = `${businessId}:${bankTxn.plaid_account_id || ""}`;
     let mapping = mappingCache.get(mappingKey);
     if (!mappingCache.has(mappingKey)) {
@@ -120,7 +133,8 @@ export function createCachedLiveDuplicatePreflight({ db = supabase, getQboClient
     }
     if (!qboClientCache.has(businessId)) qboClientCache.set(businessId, getQboClient(businessId));
     const qbo = await qboClientCache.get(businessId);
-    const { start, end } = qboDuplicateDateWindow(bankTxn.date);
+    const accountingDate = getAccountingDateFromBankTransaction(bankTxn);
+    const { start, end } = qboDuplicateDateWindow(accountingDate);
     const purchaseKey = `${businessId}:${start}:${end}`;
     if (!purchaseCache.has(purchaseKey)) purchaseCache.set(purchaseKey, findQboPurchasesForDuplicatePreflight(qbo, bankTxn));
     const purchases = await purchaseCache.get(purchaseKey);

@@ -19,6 +19,11 @@ import {
   processPendingMerchantBacklogApprovalOperations,
 } from "../services/bookkeeping/autoPostControl.js";
 import { createCachedLiveDuplicatePreflight } from "../services/bookkeeping/qboDuplicatePreflightService.js";
+import {
+  addCalendarDays,
+  getAccountingDateFromBankTransaction,
+  getOptionalAccountingDateFromBankTransaction,
+} from "../services/bookkeeping/accountingDatePolicy.js";
 import { consumeQuickBooksRefreshMarker, getLatestQuickBooksTokenRow } from "../services/quickbooksTokenService.js";
 import { canonicalizeVendorDisplayName, classifyQboVendorProviderError, getVendorPostingRequirement } from "../services/bookkeeping/canonicalVendorService.js";
 import {
@@ -259,16 +264,10 @@ function normalizeMatchText(value = "") {
 }
 
 function qboDateWindow(dateValue) {
-  const base = new Date(`${dateValue || new Date().toISOString().slice(0, 10)}T00:00:00Z`);
-  if (!Number.isFinite(base.getTime())) {
-    const today = new Date();
-    return { start: today.toISOString().slice(0, 10), end: today.toISOString().slice(0, 10) };
-  }
-  const start = new Date(base);
-  start.setUTCDate(start.getUTCDate() - 1);
-  const end = new Date(base);
-  end.setUTCDate(end.getUTCDate() + 1);
-  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+  const start = addCalendarDays(dateValue, -1);
+  const end = addCalendarDays(dateValue, 1);
+  if (!start || !end) throw new Error("missing_plaid_posted_date");
+  return { start, end };
 }
 
 function cents(value) {
@@ -394,7 +393,8 @@ function getQboPostingAccountId(entity = {}, qboTxnType) {
 }
 
 function buildQboFindCriteria(bankTxn = {}) {
-  const { start, end } = qboDateWindow(bankTxn?.date);
+  const accountingDate = getAccountingDateFromBankTransaction(bankTxn);
+  const { start, end } = qboDateWindow(accountingDate);
   return [
     { field: "TxnDate", operator: ">=", value: start },
     { field: "TxnDate", operator: "<=", value: end },
@@ -459,7 +459,7 @@ function scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }) 
   const marker = normalizeMatchText(buildQboPostMarker(requestId));
   const requestText = normalizeMatchText(requestId);
   const accountMatches = String(getQboPostingAccountId(entity, qboTxnType) || "") === String(mapping?.qbo_account_id || "");
-  const dateMatches = isNearQboTxnDate(getQboTxnDate(entity), bankTxn?.date);
+  const dateMatches = isNearQboTxnDate(getQboTxnDate(entity), getOptionalAccountingDateFromBankTransaction(bankTxn));
   const amountMatches = cents(getQboTxnAmount(entity)) === cents(bankTxn?.amount);
   const payeeText = normalizeMatchText(bankTxn?.qbo_entity_id ? bankTxn?.counterparty_name || bankTxn?.merchant_name || bankTxn?.name : bankTxn?.merchant_name || bankTxn?.counterparty_name || bankTxn?.name);
   const payeeMatches = Boolean(payeeText && text.includes(payeeText));
@@ -1190,7 +1190,7 @@ async function postCcPaymentToQbo(item, bankTxn, qbo, mapping, requestId) {
   if (!bankId || !ccId) throw new Error("cc_payment_mapping_not_safe");
   const amount = Math.abs(Number(bankTxn.amount || 0));
   if (!Number.isFinite(amount) || amount === 0) throw new Error("invalid_amount");
-  const txnDate = bankTxn.date || new Date().toISOString().slice(0, 10);
+  const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note } = buildQboPostText(bankTxn, "CC payment", requestId);
 
   const payload = {
@@ -1243,7 +1243,7 @@ async function postCreditCardPaymentPairToQbo({ bankTxn, pair, qbo, requestId })
   const amount = Math.abs(Number(pair.amount || bankTxn?.amount || 0));
   if (!Number.isFinite(amount) || amount === 0) throw new Error("invalid_amount");
   if (!pair?.checking_qbo_account_id || !pair?.credit_card_qbo_account_id) throw new Error("cc_payment_mapping_not_safe");
-  const txnDate = pair.payment_date || bankTxn?.date || new Date().toISOString().slice(0, 10);
+  const txnDate = pair.payment_date || getAccountingDateFromBankTransaction(bankTxn);
   const { note } = buildQboPostText(bankTxn, "CC payment", requestId);
   return createQboTransfer(qbo, {
     requestId,
@@ -1368,7 +1368,7 @@ async function handleCreditCardPaymentPairItem({ item, bank, mapping, timing, ma
 
 async function postBankOutflowPurchase(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
   const amount = Math.abs(Number(bankTxn.amount || 0));
-  const txnDate = bankTxn.date || new Date().toISOString().slice(0, 10);
+  const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note, lineDescription } = buildQboPostText(bankTxn, "Bank transaction", requestId);
   const vendorRef = getQboEntityRef(bankTxn, "vendor");
   if (process.env.NODE_ENV !== "production") {
@@ -1401,7 +1401,7 @@ async function postBankOutflowPurchase(item, bankTxn, qbo, mappedAccountId, cate
 
 async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
   const amount = Math.abs(Number(bankTxn.amount || 0));
-  const txnDate = bankTxn.date || new Date().toISOString().slice(0, 10);
+  const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note, lineDescription } = buildQboPostText(bankTxn, "Bank transaction", requestId);
   const customerRef = getQboEntityRef(bankTxn, "customer");
   if (process.env.NODE_ENV !== "production") {
@@ -1452,7 +1452,7 @@ async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, catego
 
 async function postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
   const amount = Math.abs(Number(bankTxn.amount || 0));
-  const txnDate = bankTxn.date || new Date().toISOString().slice(0, 10);
+  const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note, lineDescription } = buildQboPostText(bankTxn, "CC charge", requestId);
   const vendorRef = getQboEntityRef(bankTxn, "vendor");
   if (process.env.NODE_ENV !== "production") {
@@ -1635,6 +1635,13 @@ export async function handleItem(item, options = {}) {
     await markTransactionNonPostable(item, "plaid_accounting_review_required");
     return;
   }
+  let accountingDate = null;
+  try {
+    accountingDate = getAccountingDateFromBankTransaction(bank);
+  } catch {
+    await markTransactionNonPostable(item, "missing_plaid_posted_date");
+    return;
+  }
   const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
   if (!isTransactionInActiveBookkeepingScope(bank, bookkeepingStartDate)) {
     await insertPostAttempt({
@@ -1712,7 +1719,7 @@ export async function handleItem(item, options = {}) {
     plaidTransactionId: bank?.plaid_transaction_id,
     finalAccountId: item.final_qbo_account_id,
     amount: bank.amount,
-    date: bank.date,
+    date: accountingDate,
   });
   item.meta = { ...(item.meta || {}), post_idempotency_key: idempotencyKey };
 
