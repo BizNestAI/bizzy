@@ -618,7 +618,7 @@ export default function MonthlyReviewConsole() {
           idempotency_key: `monthly-review-posting-group-${group.snapshot_token}`,
         },
       });
-      setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Checking QuickBooks" }));
+      setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Decision accepted" }));
       const statusUrl = decision?.status_url || (decision?.operation_id
         ? `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(selectedBusinessId)}`
         : null);
@@ -632,10 +632,12 @@ export default function MonthlyReviewConsole() {
             setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Queued for posting" }));
           } else if (states.ready_to_post) {
             setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Ready to post" }));
+          } else if (states.decision_processing) {
+            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Preparing to post" }));
           } else if (states.checking_duplicates) {
             setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Checking QuickBooks" }));
           } else if (states.accepted) {
-            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Decision saved" }));
+            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Decision accepted" }));
           } else if (states.failed || states.blocked) {
             setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Needs review" }));
           }
@@ -4465,6 +4467,8 @@ const POSTING_REVIEW_FILTERS = [
   { key: "ready_to_post", label: "Ready to post", bucket: "ready_to_release" },
   { key: "scheduled", label: "Scheduled", bucket: "scheduled_future" },
   { key: "posting", label: "Posting", bucket: "active_posting" },
+  { key: "retry_scheduled", label: "Retry scheduled", bucket: "retry_scheduled" },
+  { key: "needs_attention", label: "Needs attention", bucket: "needs_operator_attention" },
   { key: "income_matches", label: "Income matches", bucket: "protected_income_match" },
   { key: "payment_matches", label: "Payment matches", bucket: "protected_credit_card_payment" },
   { key: "transfer_matches", label: "Transfer matches", bucket: "protected_transfer" },
@@ -4552,6 +4556,8 @@ function contextualPostingReviewCopy(filterKey) {
   if (filterKey === "checks") return "Checks stay in check review.";
   if (filterKey === "protected") return "Protected workflows require their specific review path before posting.";
   if (filterKey === "scheduled") return "Scheduled rows are already waiting for the normal posting worker.";
+  if (filterKey === "retry_scheduled") return "Retry scheduled rows are waiting for their next bounded worker attempt.";
+  if (filterKey === "needs_attention") return "Rows needing attention have a blocker that must be resolved before posting.";
   if (filterKey === "posting") return "Rows in posting are already being handled by the normal worker.";
   return "No grouped transaction cards are available for this filter.";
 }

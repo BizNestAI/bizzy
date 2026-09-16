@@ -28,6 +28,8 @@ const MERCHANT_SYNONYMS = [
 
 const STRONG_CANONICAL_CLAIM_ALIAS_TYPES = new Set([
   "plaid_merchant_entity_id",
+  "approved_plaid_merchant_entity_id",
+  "approved_normalized_merchant",
   "qbo_vendor_id",
 ]);
 
@@ -250,6 +252,62 @@ function hasBlockedName(candidate = "") {
   return GENERIC_OR_BLOCKED_NAME_PATTERNS.some((re) => re.test(candidate));
 }
 
+function processorStrippedMerchantName(value = "") {
+  const normalized = normalizeVendorText(value);
+  const stripped = normalized
+    .replace(/^(aplpay|apple pay|google pay|gpay|paypal|paypal inst xfer|sq|square|toast|stripe)\s+/, "")
+    .trim();
+  if (!stripped || stripped === normalized) return "";
+  return stripped;
+}
+
+function explicitApprovalMerchantEvidence(bankTxn = {}, taxonomyMeta = {}) {
+  const meta = taxonomyMeta?.meta && typeof taxonomyMeta.meta === "object" ? taxonomyMeta.meta : taxonomyMeta;
+  const sourceType = meta?.vendor_rule_source_type || meta?.source_type || null;
+  const approvedAt = meta?.merchant_group_approved_at || meta?.approved_at || null;
+  const selectedAccount = meta?.selected_qbo_account_id || meta?.final_qbo_account_id || null;
+  const authority = meta?.categorization_authority || meta?.authority || null;
+  const explicitlyApproved =
+    sourceType === "business_merchant_rule" &&
+    approvedAt &&
+    selectedAccount &&
+    ["user_confirmed", "admin_confirmed", "bookkeeper_confirmed", null].includes(authority);
+  if (!explicitlyApproved) return null;
+
+  if (bankTxn.merchant_entity_id) {
+    return {
+      displayCandidate: bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || "",
+      evidence: {
+        alias_type: "approved_plaid_merchant_entity_id",
+        alias_value: String(bankTxn.merchant_entity_id),
+        normalized_alias_value: String(bankTxn.merchant_entity_id),
+        confidence: "high",
+        is_strong_evidence: true,
+        is_approved: true,
+      },
+    };
+  }
+
+  const explicitName =
+    bankTxn.merchant_name ||
+    bankTxn.counterparty_name ||
+    processorStrippedMerchantName(bankTxn.name) ||
+    "";
+  const normalizedName = normalizeVendorText(explicitName);
+  if (!normalizedName || normalizedName.length < 4 || hasBlockedName(normalizedName)) return null;
+  return {
+    displayCandidate: explicitName,
+    evidence: {
+      alias_type: "approved_normalized_merchant",
+      alias_value: explicitName,
+      normalized_alias_value: normalizedName,
+      confidence: "high",
+      is_strong_evidence: true,
+      is_approved: true,
+    },
+  };
+}
+
 export function getVendorAutoCreateBlockReason({ bankTxn = {}, taxonomyMeta = {}, candidateName = "" }) {
   const taxonomy = String(taxonomyMeta?.taxonomy_type || taxonomyMeta?.meta?.taxonomy_type || "").toLowerCase();
   if (!isOutflow(bankTxn)) return "not_outflow";
@@ -276,8 +334,10 @@ export function getVendorPostingRequirement({ bankTxn = {}, taxonomyMeta = {}, q
   return { required: true, reason: "normal_identifiable_merchant_outflow" };
 }
 
-function collectEvidence(bankTxn = {}, payeeResolution = {}) {
+function collectEvidence(bankTxn = {}, payeeResolution = {}, taxonomyMeta = {}) {
+  const approvalEvidence = explicitApprovalMerchantEvidence(bankTxn, taxonomyMeta);
   const displayCandidate =
+    approvalEvidence?.displayCandidate ||
     payeeResolution?.counterpartyName ||
     bankTxn.counterparty_name ||
     bankTxn.merchant_name ||
@@ -323,6 +383,9 @@ function collectEvidence(bankTxn = {}, payeeResolution = {}) {
       is_strong_evidence: Boolean(bankTxn.merchant_entity_id),
       is_approved: Boolean(bankTxn.merchant_entity_id),
     });
+  }
+  if (approvalEvidence?.evidence) {
+    evidence.unshift(approvalEvidence.evidence);
   }
   return { displayCandidate, evidence };
 }
@@ -493,7 +556,7 @@ export async function resolveCanonicalVendorForTransaction({
 }) {
   db = db || await getDefaultDb();
   if (!businessId || !bankTxn?.id) return { ok: false, reason: "missing_inputs" };
-  const { displayCandidate, evidence } = collectEvidence(bankTxn, payeeResolution);
+  const { displayCandidate, evidence } = collectEvidence(bankTxn, payeeResolution, taxonomyMeta);
   if (bankTxn.canonical_vendor_id) {
     return { ok: true, canonicalVendor: { id: bankTxn.canonical_vendor_id }, reason: "transaction_canonical_vendor" };
   }

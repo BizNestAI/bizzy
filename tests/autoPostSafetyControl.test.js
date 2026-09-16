@@ -1046,6 +1046,130 @@ test("durable worker resumes prior decision_saved merchant operations without du
   assert.equal(db.cat("biz-1", "chex-1").meta.merchant_group_operation_state, "scheduled");
 });
 
+test("merchant approval worker skips actively leased operations and recovers expired leases", async () => {
+  const activeLeaseDb = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
+    transaction_categorizations: [{
+      business_id: "biz-1",
+      transaction_id: "leased-1",
+      status: "auto_approved",
+      final_qbo_account_id: "1150040001",
+      final_qbo_account_name: "Meals",
+      qbo_txn_id: null,
+      post_after: null,
+      meta: {
+        auto_approve_reason: "business_merchant_rule",
+        merchant_group_operation_id: "op-active",
+        merchant_group_operation_state: "decision_processing",
+        merchant_group_operation_lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+        merchant_group_requested_decision: { selected_qbo_account_id: "1150040001", selected_qbo_account_name: "Meals", remember_for_future: true },
+      },
+      updated_at: "2026-09-16T02:15:00.000Z",
+    }],
+    bank_transactions: [{ business_id: "biz-1", id: "leased-1", plaid_account_id: "pa-1", date: "2026-09-06", amount: -13.65, direction: "OUTFLOW", name: "AplPay CHEX GRILL", merchant_name: "Chex Grill", is_archived: false }],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "20", qbo_account_name: "Blue Cash Everyday", qbo_account_type: "CreditCard" }],
+    vendor_rules: [],
+  });
+  const active = await processPendingMerchantBacklogApprovalOperations({
+    db: activeLeaseDb,
+    businessId: "biz-1",
+    graceHours: 0,
+    duplicatePreflight: async () => ({ confidence: "NO_MATCH", candidates: [] }),
+  });
+  assert.equal(active.processed_count, 0);
+  assert.equal(activeLeaseDb.cat("biz-1", "leased-1").meta.merchant_group_operation_state, "decision_processing");
+
+  const expiredLeaseDb = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
+    transaction_categorizations: [{
+      business_id: "biz-1",
+      transaction_id: "leased-1",
+      status: "auto_approved",
+      final_qbo_account_id: null,
+      final_qbo_account_name: null,
+      qbo_txn_id: null,
+      post_after: null,
+      meta: {
+        auto_approve_reason: "business_merchant_rule",
+        merchant_group_operation_id: "op-expired",
+        merchant_group_operation_state: "decision_processing",
+        merchant_group_operation_lease_expires_at: "2000-01-01T00:00:00.000Z",
+        merchant_group_requested_decision: { selected_qbo_account_id: "1150040001", selected_qbo_account_name: "Meals", remember_for_future: true },
+      },
+      updated_at: "2026-09-16T02:15:00.000Z",
+    }],
+    bank_transactions: [{ business_id: "biz-1", id: "leased-1", plaid_account_id: "pa-1", date: "2026-09-06", amount: -13.65, direction: "OUTFLOW", name: "AplPay CHEX GRILL", merchant_name: "Chex Grill", is_archived: false }],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "20", qbo_account_name: "Blue Cash Everyday", qbo_account_type: "CreditCard" }],
+    vendor_rules: [],
+  });
+  const expired = await processPendingMerchantBacklogApprovalOperations({
+    db: expiredLeaseDb,
+    businessId: "biz-1",
+    graceHours: 0,
+    duplicatePreflight: async () => ({ confidence: "NO_MATCH", candidates: [] }),
+  });
+  assert.equal(expired.processed_count, 1);
+  const row = expiredLeaseDb.cat("biz-1", "leased-1");
+  assert.equal(row.final_qbo_account_id, "1150040001");
+  assert.equal(row.meta.merchant_group_operation_state, "scheduled");
+});
+
+test("posting review separates retry backoff and operator attention from ordinary scheduled rows", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [],
+    transaction_categorizations: [
+      {
+        business_id: "biz-1",
+        transaction_id: "retry-1",
+        status: "auto_approved",
+        final_qbo_account_id: "1150040001",
+        final_qbo_account_name: "Meals",
+        qbo_txn_id: null,
+        post_after: new Date(Date.now() + 60_000).toISOString(),
+        post_error: "vendor_qbo_timeout",
+        meta: { safe_to_auto_post: true, next_post_attempt_at: new Date(Date.now() + 60_000).toISOString() },
+        updated_at: "v1",
+      },
+      {
+        business_id: "biz-1",
+        transaction_id: "attention-1",
+        status: "auto_approved",
+        final_qbo_account_id: "1150040001",
+        final_qbo_account_name: "Meals",
+        qbo_txn_id: null,
+        post_after: null,
+        post_error: "weak_memo_evidence",
+        meta: { safe_to_auto_post: true },
+        updated_at: "v1",
+      },
+    ],
+    bank_transactions: [
+      { business_id: "biz-1", id: "retry-1", plaid_account_id: "pa-1", date: "2026-09-06", amount: -13.65, direction: "OUTFLOW", name: "Retry Grill", merchant_name: "Retry Grill", is_archived: false },
+      { business_id: "biz-1", id: "attention-1", plaid_account_id: "pa-1", date: "2026-09-07", amount: -5.4, direction: "OUTFLOW", name: "AplPay PAYMENT", merchant_name: null, is_archived: false },
+    ],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "20", qbo_account_name: "Blue Cash Everyday", qbo_account_type: "CreditCard" }],
+    vendor_rules: [],
+  });
+
+  const summary = await getCanonicalPostingBacklogSummary({ db, businessId: "biz-1", effectiveDate: "2026-05-01" });
+  assert.equal(summary.buckets.retry_scheduled, 1);
+  assert.equal(summary.buckets.needs_operator_attention, 1);
+  assert.equal(summary.buckets.scheduled_future, 0);
+  assert.equal(summary.bucket_total, summary.headline_count);
+});
+
+test("merchant approval queue has a short durable polling loop and does not use process-local HTTP continuations", () => {
+  const routeSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+  const workerSource = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+  assert.doesNotMatch(routeSource, /setImmediate|runMerchantBacklogApprovalOperation|persistMerchantBacklogGroupApprovalDecision/);
+  assert.match(workerSource, /BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS/);
+  assert.match(workerSource, /runMerchantApprovalQueueOnce/);
+  assert.match(workerSource, /skipMerchantApprovalOperations/);
+});
+
 test("merchant groups use exact identity and grouped approval schedules only passing rows", async () => {
   const db = makeSupabase({
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],

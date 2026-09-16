@@ -30,6 +30,7 @@ import {
 import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/incomingDepositMatchService.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
+const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 5);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
 const DUE_QUERY_PAGE_SIZE = Number(process.env.BOOKS_POST_DUE_QUERY_PAGE_SIZE || 250);
 const MAX_DUE_ROWS_PER_SWEEP = Number(process.env.BOOKS_POST_MAX_DUE_ROWS_PER_SWEEP || 1000);
@@ -55,6 +56,8 @@ const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
 ]);
 
 let postAttemptsTableAvailable = true;
+let booksPostSweepRunning = false;
+let merchantApprovalQueueRunning = false;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -678,7 +681,7 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
 }
 
 async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, requestId, qboClient = null, tokenRow = null }) {
-  const taxonomyMeta = { taxonomy_type: item?.meta?.taxonomy_type || null };
+  const taxonomyMeta = { ...(item?.meta || {}), taxonomy_type: item?.meta?.taxonomy_type || null };
   const requirement = getVendorPostingRequirement({ bankTxn: bank, taxonomyMeta, qboTxnType });
   if (!requirement.required) return { ok: true, requirement };
   let vendorEnsure = null;
@@ -2279,6 +2282,7 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
 async function runOnce(options = {}) {
   const businessId = options?.businessId || null;
   const force = options?.force === true;
+  const skipMerchantApprovalOperations = options?.skipMerchantApprovalOperations === true;
   const summary = {
     ok: true,
     forced: force,
@@ -2306,14 +2310,16 @@ async function runOnce(options = {}) {
         return summary;
       }
     }
-    const approvalOps = await processPendingMerchantBacklogApprovalOperations({
-      db: supabase,
-      businessId,
-      duplicatePreflight: createCachedLiveDuplicatePreflight(),
-      graceHours: 0,
-    });
-    summary.merchant_approval_operations = approvalOps.processed_count || 0;
-    summary.merchant_approval_operations_failed = approvalOps.failed_count || 0;
+    if (!skipMerchantApprovalOperations) {
+      const approvalOps = await processPendingMerchantBacklogApprovalOperations({
+        db: supabase,
+        businessId,
+        duplicatePreflight: createCachedLiveDuplicatePreflight(),
+        graceHours: 0,
+      });
+      summary.merchant_approval_operations = approvalOps.processed_count || 0;
+      summary.merchant_approval_operations_failed = approvalOps.failed_count || 0;
+    }
     const pending = await fetchPending(businessId, { force });
     summary.pending = pending.length;
     if (!pending.length) return summary;
@@ -2658,8 +2664,51 @@ export function startBooksPostingCron() {
   const intervalMs = Math.max(1, POLL_MINUTES) * 60 * 1000;
   log.info("[books-post] cron started, interval mins:", POLL_MINUTES);
   setInterval(() => {
-    runOnce().catch((err) => log.error("[books-post] interval error", err));
+    if (booksPostSweepRunning) return;
+    booksPostSweepRunning = true;
+    runOnce()
+      .catch((err) => log.error("[books-post] interval error", err))
+      .finally(() => {
+        booksPostSweepRunning = false;
+      });
   }, intervalMs);
+
+  if (process.env.DISABLE_MERCHANT_APPROVAL_QUEUE === "true") return;
+  const queueIntervalMs = Math.max(1, MERCHANT_APPROVAL_QUEUE_SECONDS) * 1000;
+  log.info("[books-post] merchant approval queue started, interval seconds:", MERCHANT_APPROVAL_QUEUE_SECONDS);
+  setInterval(() => {
+    if (merchantApprovalQueueRunning) return;
+    merchantApprovalQueueRunning = true;
+    runMerchantApprovalQueueOnce()
+      .catch((err) => log.error("[books-post] merchant approval queue error", err))
+      .finally(() => {
+        merchantApprovalQueueRunning = false;
+      });
+  }, queueIntervalMs);
 }
 
 export const runBooksPostOnce = runOnce;
+
+export async function runMerchantApprovalQueueOnce(options = {}) {
+  const businessId = options?.businessId || null;
+  const approvalOps = await processPendingMerchantBacklogApprovalOperations({
+    db: supabase,
+    businessId,
+    duplicatePreflight: options?.duplicatePreflight || createCachedLiveDuplicatePreflight(),
+    graceHours: 0,
+    limit: options?.limit || 25,
+  });
+  let postingSweep = null;
+  if ((approvalOps.processed_count || 0) > 0) {
+    postingSweep = await runOnce({
+      businessId,
+      force: false,
+      skipMerchantApprovalOperations: true,
+    });
+  }
+  return {
+    ok: approvalOps.ok !== false && (postingSweep?.ok !== false),
+    merchant_approval_operations: approvalOps,
+    posting_sweep: postingSweep,
+  };
+}

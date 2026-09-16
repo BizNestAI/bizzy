@@ -82,6 +82,52 @@ test("weak memo similarity does not silently merge or create canonical vendors",
   assert.equal(db.calls.strongAliasClaims, 0);
 });
 
+test("explicit merchant approval turns a specific normalized merchant into strong vendor evidence", async () => {
+  const db = makeDb();
+  const result = await resolveCanonicalVendorForTransaction({
+    db,
+    businessId: BUSINESS_ID,
+    bankTxn: txn({
+      id: "exchange-1",
+      merchant_entity_id: null,
+      merchant_name: "the exchange",
+      name: "AplPay THE EXCHANGE",
+    }),
+    taxonomyMeta: {
+      vendor_rule_source_type: "business_merchant_rule",
+      categorization_authority: "admin_confirmed",
+      selected_qbo_account_id: "1150040001",
+      merchant_group_approved_at: "2026-09-16T16:13:11.015Z",
+    },
+  });
+  assert.equal(result.needsReview, undefined);
+  assert.equal(result.canonicalVendor.display_name, "The Exchange");
+  assert.equal(db.rows.vendor_aliases.some((row) => row.alias_type === "approved_normalized_merchant" && row.normalized_alias_value === "the exchange"), true);
+});
+
+test("explicit approval still fails closed for processor-only generic memo evidence", async () => {
+  const db = makeDb();
+  const result = await resolveCanonicalVendorForTransaction({
+    db,
+    businessId: BUSINESS_ID,
+    bankTxn: txn({
+      id: "generic-payment",
+      merchant_entity_id: null,
+      merchant_name: null,
+      name: "AplPay PAYMENT",
+    }),
+    taxonomyMeta: {
+      vendor_rule_source_type: "business_merchant_rule",
+      categorization_authority: "admin_confirmed",
+      selected_qbo_account_id: "1150040001",
+      merchant_group_approved_at: "2026-09-16T16:13:11.015Z",
+    },
+  });
+  assert.equal(result.needsReview, true);
+  assert.equal(result.reason, "unclear_or_non_vendor_name");
+  assert.equal(db.rows.bizzi_vendors.length, 0);
+});
+
 test("different merchant_entity_id values with similar names remain separate", async () => {
   const db = makeDb();
   const first = await resolveCanonicalVendorForTransaction({ db, businessId: BUSINESS_ID, bankTxn: txn({ id: "t1", merchant_entity_id: "ent-home-depot-retail", merchant_name: "Home Depot" }) });

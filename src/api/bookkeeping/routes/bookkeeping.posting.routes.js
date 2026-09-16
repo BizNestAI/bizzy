@@ -313,9 +313,11 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
       rows: rows.map((row) => ({
         transaction_id: row.transaction_id,
         state: row?.meta?.merchant_group_operation_state || "unknown",
+        stage: row?.meta?.merchant_group_operation_stage || row?.meta?.merchant_group_operation_state || "unknown",
         status: row.status,
         post_after: row.post_after || null,
         posted: Boolean(row.qbo_txn_id),
+        post_error: row.post_error || null,
         failure_code: row?.meta?.merchant_group_operation_failure_code || null,
       })),
     });
