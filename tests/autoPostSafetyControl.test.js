@@ -741,7 +741,9 @@ test("Auto-post UI keeps customer scope lightweight and operator backlog review 
   assert.doesNotMatch(page, /Update automatic posting scope/);
   assert.doesNotMatch(page, /Include existing safe Handled transactions/);
   assert.doesNotMatch(page, /Review posting backlog/);
-  assert.match(adminPage, /Posting Review \(Handled but not posting\)/);
+  assert.match(adminPage, /Posting Review/);
+  assert.match(adminPage, /Categorized transactions that haven’t posted to QuickBooks/);
+  assert.doesNotMatch(adminPage, /apply it to X compatible transactions/);
 });
 
 test("canonical posting backlog summary is exhaustive and frontend renders backend buckets", async () => {
@@ -802,9 +804,14 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
   assert.doesNotMatch(customerPage, /getPostingBacklogSummary\(businessId/);
   assert.doesNotMatch(customerPage, /handled transactions are waiting for posting review/);
   assert.doesNotMatch(customerPage, /handlePostingBacklogBucketClick\(key\)/);
-  assert.match(adminPage, /Posting Review \(Handled but not posting\)/);
+  assert.match(adminPage, /Posting Review/);
+  assert.match(adminPage, /POSTING_REVIEW_FILTERS/);
   assert.match(adminPage, /bookkeeping\/posting-review\/summary/);
-  assert.match(adminPage, /bucketOrder = \[/);
+  assert.match(adminPage, /Merchant review/);
+  assert.match(adminPage, /Approve & post/);
+  assert.match(adminPage, /Leave in review/);
+  assert.doesNotMatch(adminPage, /Approve category and post/);
+  assert.doesNotMatch(adminPage, /Post passing transactions/);
   assert.match(monthlyReviewRoutes, /getCanonicalPostingBacklogSummary/);
   assert.match(monthlyReviewRoutes, /getMerchantBacklogGroups/);
   assert.match(postingRoutes, /requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)/);

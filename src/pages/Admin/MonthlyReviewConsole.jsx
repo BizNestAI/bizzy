@@ -124,6 +124,7 @@ export default function MonthlyReviewConsole() {
   });
   const [postingReviewOptions, setPostingReviewOptions] = useState({});
   const [postingReviewAction, setPostingReviewAction] = useState(null);
+  const [postingReviewProgress, setPostingReviewProgress] = useState({});
   const [expandedPostingReviewGroup, setExpandedPostingReviewGroup] = useState(null);
   const [busyFeedActions, setBusyFeedActions] = useState({});
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
@@ -568,9 +569,8 @@ export default function MonthlyReviewConsole() {
           if (!next[group.group_id]) {
             next[group.group_id] = {
               qboAccountId: group.proposed_qbo_account_id,
-              rememberForFuture: true,
-              onlyTheseTransactions: false,
-              postPassing: true,
+              rememberForFuture: shouldDefaultMerchantMemoryOn(group),
+              excludedIds: new Set(),
             };
           }
         });
@@ -591,24 +591,32 @@ export default function MonthlyReviewConsole() {
     if (nextExpanded && !postingReview.loaded && !postingReview.loading) loadPostingReview();
   }, [loadPostingReview, postingReview.expanded, postingReview.loaded, postingReview.loading]);
 
-  const approvePostingReviewGroup = useCallback(async (group) => {
+  const approvePostingReviewGroup = useCallback(async (group, approval = {}) => {
     if (!selectedBusinessId || !group || postingReviewAction) return;
     const options = postingReviewOptions[group.group_id] || {};
+    const includedIds = Array.isArray(approval.transactionIds) && approval.transactionIds.length
+      ? approval.transactionIds
+      : group.transaction_ids;
+    const excludedIds = Array.isArray(approval.exclusionIds)
+      ? approval.exclusionIds
+      : Array.from(options.excludedIds || []);
     setPostingReviewAction(group.group_id);
+    setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Saving decision" }));
     try {
       await safeFetch("/api/bookkeeping/posting/backlog/merchant-groups/approve", {
         method: "POST",
         body: {
           business_id: selectedBusinessId,
           group_snapshot_token: group.snapshot_token,
-          selected_qbo_account_id: options.qboAccountId || group.proposed_qbo_account_id,
-          remember_for_future: options.rememberForFuture !== false,
-          transaction_ids: options.onlyTheseTransactions ? group.transaction_ids.slice(0, 1) : group.transaction_ids,
-          exclusion_ids: [],
+          selected_qbo_account_id: approval.qboAccountId || options.qboAccountId || group.proposed_qbo_account_id,
+          remember_for_future: approval.rememberForFuture ?? (options.rememberForFuture === true),
+          transaction_ids: includedIds,
+          exclusion_ids: excludedIds,
           expected_row_versions: group.row_versions || {},
           idempotency_key: `monthly-review-posting-group-${group.snapshot_token}`,
         },
       });
+      setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Posting in background" }));
       await Promise.all([
         loadPostingReview(),
         loadBookkeepingFeedCounts(),
@@ -1700,6 +1708,7 @@ export default function MonthlyReviewConsole() {
                   postingReview={postingReview}
                   postingReviewOptions={postingReviewOptions}
                   postingReviewAction={postingReviewAction}
+                  postingReviewProgress={postingReviewProgress}
                   expandedPostingReviewGroup={expandedPostingReviewGroup}
                   onToggle={toggleBookkeepingFeed}
                   onLoadMore={(status) => loadBookkeepingFeed(status)}
@@ -1824,6 +1833,7 @@ function BookkeepingFeedMirrorPanels({
   postingReview,
   postingReviewOptions,
   postingReviewAction,
+  postingReviewProgress,
   expandedPostingReviewGroup,
   onToggle,
   onLoadMore,
@@ -1928,6 +1938,7 @@ function BookkeepingFeedMirrorPanels({
           postingReview={postingReview}
           postingReviewOptions={postingReviewOptions}
           postingReviewAction={postingReviewAction}
+          postingReviewProgress={postingReviewProgress}
           expandedPostingReviewGroup={expandedPostingReviewGroup}
           accounts={accounts}
           onToggle={onTogglePostingReview}
@@ -1945,6 +1956,7 @@ function PostingReviewMirrorSection({
   postingReview,
   postingReviewOptions,
   postingReviewAction,
+  postingReviewProgress,
   expandedPostingReviewGroup,
   accounts,
   onToggle,
@@ -1953,25 +1965,35 @@ function PostingReviewMirrorSection({
   onApproveGroup,
   onToggleGroup,
 }) {
+  const [activeFilter, setActiveFilter] = useState("all");
+  const [technicalGroup, setTechnicalGroup] = useState(null);
+  const [confirmGroup, setConfirmGroup] = useState(null);
   const summary = postingReview?.summary || {};
   const labels = summary.labels || {};
   const buckets = summary.buckets || {};
   const headlineCount = Number(summary.selected_month_count ?? summary.headline_count ?? summary.total ?? 0);
   const bucketTotal = Number(summary.bucket_total ?? Object.values(buckets).reduce((sum, value) => sum + Number(value || 0), 0));
   const groups = Array.isArray(postingReview?.groups) ? postingReview.groups : [];
-  const bucketOrder = [
-    "merchant_approval_needed",
-    "ready_to_release",
-    "scheduled_future",
-    "active_posting",
-    "protected_income_match",
-    "protected_credit_card_payment",
-    "protected_transfer",
-    "protected_check",
-    "protected_other",
-    "failed",
-    "missing_mapping",
-  ];
+  const filterOptions = POSTING_REVIEW_FILTERS
+    .map((filter) => ({
+      ...filter,
+      count: filter.key === "all" ? headlineCount : Number(buckets[filter.bucket] || 0),
+      label: filter.key === "all" ? "All" : filter.label || labels[filter.bucket] || titleCase(filter.bucket),
+    }))
+    .filter((filter) => filter.key === "all" || filter.count > 0);
+  const selectedFilter = filterOptions.find((filter) => filter.key === activeFilter) ? activeFilter : "all";
+  const activeBucket = POSTING_REVIEW_FILTERS.find((filter) => filter.key === selectedFilter)?.bucket || null;
+  const visibleGroups = groups
+    .map((group) => {
+      if (!activeBucket) return group;
+      const transactions = (group.transactions || []).filter((txn) => txn.bucket === activeBucket);
+      return transactions.length ? { ...group, transactions, transaction_ids: transactions.map((txn) => txn.transaction_id), transaction_count: transactions.length } : null;
+    })
+    .filter(Boolean);
+  const confirmOptions = confirmGroup ? buildPostingReviewApproval(confirmGroup, postingReviewOptions?.[confirmGroup.group_id]) : null;
+  const confirmationAccount = confirmOptions
+    ? accounts.find((acct) => String(acct.id || acct.Id) === String(confirmOptions.qboAccountId))
+    : null;
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.025]">
@@ -1984,9 +2006,9 @@ function PostingReviewMirrorSection({
         <div className="flex min-w-0 items-center gap-3">
           {postingReview?.expanded ? <ChevronDown className="h-4 w-4 text-white/45" /> : <ChevronRight className="h-4 w-4 text-white/45" />}
           <div className="min-w-0">
-            <h3 className="text-base font-semibold text-white">Posting Review (Handled but not posting)</h3>
+            <h3 className="text-base font-semibold text-white">Posting Review</h3>
             <p className="mt-1 text-xs text-white/45">
-              Transactions Bizzi categorized or handled but has not successfully posted to QuickBooks.
+              Categorized transactions that haven’t posted to QuickBooks.
             </p>
           </div>
         </div>
@@ -2015,52 +2037,55 @@ function PostingReviewMirrorSection({
               {postingReview.error}
             </div>
           ) : null}
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            {bucketOrder.map((key) => (
-              <div key={key} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-                <div className="text-lg font-semibold text-white">{Number(buckets[key] || 0)}</div>
-                <div className="text-xs text-white/45">{labels[key] || titleCase(key)}</div>
-              </div>
+          <div className="flex flex-wrap gap-2">
+            {filterOptions.map((filter) => (
+              <button
+                key={filter.key}
+                type="button"
+                onClick={() => setActiveFilter(filter.key)}
+                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition focus:outline-none focus:ring-2 focus:ring-emerald-300/35 ${
+                  selectedFilter === filter.key
+                    ? "border-emerald-300/45 bg-emerald-300/[0.12] text-emerald-100"
+                    : "border-white/10 bg-white/[0.035] text-white/60 hover:bg-white/[0.06]"
+                }`}
+              >
+                {filter.label} <span className="text-white/45">{filter.count}</span>
+              </button>
             ))}
           </div>
-          <div className="rounded-xl border border-emerald-300/15 bg-emerald-300/[0.06] px-3 py-2 text-xs text-emerald-50/90">
-            Bizzi will remember this category for this merchant, apply it to X compatible transactions, and post Y transactions after duplicate and safety checks.
-          </div>
-          <div className="flex flex-wrap gap-2 text-xs">
-            {["Retry posting", "Correct account mapping", "Change category", "Open income match", "Open payment match", "Open transfer/check review", "Keep for review"].map((label) => (
-              <span key={label} className="rounded-full border border-white/10 bg-white/[0.035] px-2.5 py-1 text-white/55">{label}</span>
-            ))}
-          </div>
-          {groups.length ? (
+          {isMerchantPostingFilter(selectedFilter) && visibleGroups.length ? (
             <div className="space-y-3">
-              {groups.map((group) => {
+              {visibleGroups.map((group) => {
                 const options = postingReviewOptions?.[group.group_id] || {};
                 const selectedAccountId = options.qboAccountId || group.proposed_qbo_account_id || "";
-                const excludedCount = Number(group.excluded_transaction_count || 0);
-                const postCount = options.postPassing === false ? 0 : Math.max(0, Number(group.transaction_count || 0) - excludedCount);
+                const selectedAccount = accounts.find((acct) => String(acct.id || acct.Id) === String(selectedAccountId));
+                const excludedIds = options.excludedIds instanceof Set ? options.excludedIds : new Set();
+                const includedTransactions = (group.transactions || []).filter((txn) => !excludedIds.has(txn.transaction_id));
+                const leftInReview = Math.max(0, Number(group.transaction_count || 0) - includedTransactions.length);
+                const primaryLabel = buildPostingReviewPrimaryLabel(selectedFilter, includedTransactions.length);
                 const isExpanded = expandedPostingReviewGroup === group.group_id;
+                const techExpanded = technicalGroup === group.group_id;
+                const warning = shouldWarnVariableMerchantGroup(group);
                 return (
                   <div key={group.group_id} className="rounded-xl border border-white/10 bg-black/20 p-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h4 className="truncate text-sm font-semibold text-white">{group.display_merchant}</h4>
-                          <span className="rounded-full border border-emerald-300/25 bg-emerald-300/[0.08] px-2 py-0.5 text-[11px] text-emerald-100">
-                            {group.evidence?.match_specificity || group.identity?.specificity || "exact"}
-                          </span>
-                          <span className="rounded-full border border-white/10 bg-white/[0.035] px-2 py-0.5 text-[11px] text-white/55">
-                            {group.evidence?.reusable_rule_status || "rule status unknown"}
-                          </span>
-                        </div>
+                        <h4 className="truncate text-base font-semibold text-white">{group.display_merchant}</h4>
                         <p className="mt-1 text-xs text-white/45">
                           {group.transaction_count} transactions · {formatCurrency(group.total_amount)} · {group.date_range?.start || "n/a"} to {group.date_range?.end || "n/a"}
                         </p>
                         <p className="mt-1 text-xs text-white/40">
-                          {group.source_accounts?.map((acct) => acct.name).join(", ") || "Mapped source accounts"} · {Object.keys(group.classification_sources || {}).join(", ") || "classification source recorded"}
+                          {formatPostingReviewSourceAccounts(group.source_accounts)}
                         </p>
+                        {warning ? (
+                          <p className="mt-2 rounded-lg border border-amber-300/18 bg-amber-300/[0.07] px-2.5 py-1.5 text-xs text-amber-100/90">
+                            Review recommended: this merchant group contains different descriptions or purchase patterns.
+                          </p>
+                        ) : null}
                       </div>
                       <div className="flex min-w-[280px] flex-wrap justify-end gap-2">
                         <select
+                          aria-label={`Pending category for ${group.display_merchant}`}
                           value={selectedAccountId}
                           onChange={(event) => onOptionChange(group.group_id, { qboAccountId: event.target.value })}
                           className="min-h-9 rounded-lg border border-white/10 bg-[#0f1115] px-2 text-xs text-white"
@@ -2071,47 +2096,66 @@ function PostingReviewMirrorSection({
                         </select>
                         <button
                           type="button"
-                          onClick={() => onApproveGroup(group)}
-                          disabled={postingReviewAction === group.group_id}
+                          onClick={() => setConfirmGroup(group)}
+                          disabled={postingReviewAction === group.group_id || includedTransactions.length === 0}
                           className="rounded-lg bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-[#06100c] hover:bg-emerald-200 disabled:opacity-50"
                         >
-                          {postingReviewAction === group.group_id ? "Scheduling..." : "Approve category and post"}
+                          {postingReviewAction === group.group_id ? (postingReviewProgress?.[group.group_id] || "Scheduling...") : primaryLabel}
                         </button>
-                        <button type="button" className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-white/70 hover:bg-white/[0.06]">
-                          Change category
+                        <button
+                          type="button"
+                          className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-white/65 hover:bg-white/[0.06]"
+                        >
+                          Leave in review
                         </button>
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-3 text-xs text-white/60">
                       <label className="flex items-center gap-2">
                         <input type="checkbox" checked={options.rememberForFuture !== false} onChange={(event) => onOptionChange(group.group_id, { rememberForFuture: event.target.checked })} />
-                        Remember for future
+                        {`Remember ${selectedAccount?.name || group.proposed_qbo_account_name || "this category"} for future matching ${group.display_merchant} transactions`}
                       </label>
-                      <label className="flex items-center gap-2">
-                        <input type="checkbox" checked={options.onlyTheseTransactions === true} onChange={(event) => onOptionChange(group.group_id, { onlyTheseTransactions: event.target.checked })} />
-                        Only these transactions
-                      </label>
-                      <label className="flex items-center gap-2">
-                        <input type="checkbox" checked={options.postPassing !== false} onChange={(event) => onOptionChange(group.group_id, { postPassing: event.target.checked })} />
-                        Post passing transactions
-                      </label>
-                      <button type="button" className="font-semibold text-white/55 hover:text-white">Exclude selected</button>
-                      <button type="button" className="font-semibold text-white/55 hover:text-white">Keep for review</button>
-                    </div>
-                    <div className="mt-3 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.06] px-3 py-2 text-xs text-emerald-50/90">
-                      Bizzi will remember this category for this merchant, apply it to {Math.max(0, Number(group.transaction_count || 0) - excludedCount)} compatible transactions, and post {postCount} transactions after duplicate and safety checks.
+                      {group.transaction_count > 1 && excludedIds.size ? (
+                        <span className="text-white/45">{leftInReview} left in review</span>
+                      ) : null}
                     </div>
                     <button
                       type="button"
                       onClick={() => onToggleGroup(isExpanded ? null : group.group_id)}
                       className="mt-3 text-xs font-semibold text-emerald-200 hover:text-emerald-100"
                     >
-                      {isExpanded ? "Hide transactions" : "Show transactions"}
+                      {isExpanded ? "Hide transactions" : group.transaction_count === 1 ? "Review transaction" : `Review ${group.transaction_count} transactions`}
                     </button>
                     {isExpanded ? (
-                      <div className="mt-3 overflow-hidden rounded-lg border border-white/10">
+                      <div className="mt-3 space-y-2">
+                        {group.transaction_count > 1 ? (
+                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2 text-xs text-white/50">
+                            <span>Checked rows are included. Rows left in review will not be category-authorized by this action.</span>
+                            <button
+                              type="button"
+                              onClick={() => onOptionChange(group.group_id, { excludedIds: new Set([...(options.excludedIds || []), ...includedTransactions.map((txn) => txn.transaction_id)]) })}
+                              className="font-semibold text-white/70 hover:text-white"
+                            >
+                              Leave selected in review
+                            </button>
+                          </div>
+                        ) : null}
+                        <div className="overflow-hidden rounded-lg border border-white/10">
                         {group.transactions.slice(0, 20).map((txn) => (
-                          <div key={txn.transaction_id} className="grid grid-cols-[88px_84px_1fr_160px_140px] gap-2 border-b border-white/10 px-3 py-2 text-xs last:border-b-0">
+                          <div key={txn.transaction_id} className="grid grid-cols-[auto_88px_84px_1fr_160px_140px] gap-2 border-b border-white/10 px-3 py-2 text-xs last:border-b-0">
+                            {group.transaction_count > 1 ? (
+                              <input
+                                type="checkbox"
+                                aria-label={`Include ${txn.description || txn.memo || txn.transaction_id}`}
+                                checked={!excludedIds.has(txn.transaction_id)}
+                                onChange={(event) => {
+                                  const next = new Set(excludedIds);
+                                  if (event.target.checked) next.delete(txn.transaction_id);
+                                  else next.add(txn.transaction_id);
+                                  onOptionChange(group.group_id, { excludedIds: next });
+                                }}
+                              />
+                            ) : <span />}
                             <span className="text-white/45">{txn.date}</span>
                             <span className={Number(txn.amount || 0) < 0 ? "text-rose-300" : "text-emerald-300"}>{formatCurrency(txn.amount)}</span>
                             <span className="min-w-0 truncate text-white/80" title={`${txn.description || ""} ${txn.memo || ""}`}>{txn.description || txn.memo || "No description"}</span>
@@ -2119,17 +2163,78 @@ function PostingReviewMirrorSection({
                             <span className="truncate text-white/45">{txn.proposed_gl || "Current category"}</span>
                           </div>
                         ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => setTechnicalGroup(techExpanded ? null : group.group_id)}
+                      className="mt-3 text-xs font-semibold text-white/45 hover:text-white/75"
+                    >
+                      {techExpanded ? "Hide technical details" : "Technical details"}
+                    </button>
+                    {techExpanded ? (
+                      <div className="mt-2 grid gap-2 rounded-lg border border-white/10 bg-white/[0.025] p-3 text-xs text-white/55 sm:grid-cols-2">
+                        <div>Match type: {group.identity?.specificity || group.evidence?.match_specificity || "unknown"}</div>
+                        <div>Provider merchant ID: {group.identity?.provider_merchant_id || group.identity?.merchant_entity_id || "n/a"}</div>
+                        <div>Normalized merchant: {group.normalized_identity || "n/a"}</div>
+                        <div>Fingerprint: {group.identity?.fingerprint || group.identity?.key || "n/a"}</div>
+                        <div>Classification source: {Object.keys(group.classification_sources || {}).join(", ") || "n/a"}</div>
+                        <div>Confidence/safety: {group.evidence?.confidence || "n/a"}</div>
+                        <div>Rule state: {group.evidence?.reusable_rule_status || "n/a"}</div>
+                        <div>Blockers: {(group.warnings || []).join(", ") || "none"}</div>
                       </div>
                     ) : null}
                   </div>
                 );
               })}
             </div>
+          ) : !isMerchantPostingFilter(selectedFilter) ? (
+            <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-sm text-white/55">
+              {contextualPostingReviewCopy(selectedFilter)}
+            </div>
           ) : (
             <div className="rounded-xl border border-white/10 bg-black/20 px-3 py-3 text-sm text-white/55">
               No merchant groups are ready for grouped posting review in this month.
             </div>
           )}
+        </div>
+      ) : null}
+      {confirmGroup && confirmOptions ? (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/70 px-4 py-6">
+          <div className="w-full max-w-lg rounded-2xl border border-white/12 bg-[#111312] p-5 shadow-2xl">
+            <h3 className="text-base font-semibold text-white">
+              Approve {confirmOptions.includedCount} {confirmGroup.display_merchant} {confirmOptions.includedCount === 1 ? "transaction" : "transactions"} as {confirmationAccount?.name || confirmGroup.proposed_qbo_account_name || "selected category"}?
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-white/65">
+              Bizzi will check each transaction for duplicates and posting safety. Passing transactions will be posted to QuickBooks.
+              {confirmOptions.rememberForFuture
+                ? ` This category will be remembered for future matching ${confirmGroup.display_merchant} transactions.`
+                : " No reusable merchant rule will be created."}
+            </p>
+            <div className="mt-4 grid gap-2 text-xs text-white/55 sm:grid-cols-2">
+              <div>Included: <span className="text-white">{confirmOptions.includedCount}</span></div>
+              <div>Total: <span className="text-white">{formatCurrency(confirmOptions.includedTotal)}</span></div>
+              <div>Left in review: <span className="text-white">{confirmOptions.leftInReview}</span></div>
+              <div>Posting checks: <span className="text-white">{confirmOptions.includedCount}</span></div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setConfirmGroup(null)} className="rounded-lg border border-white/10 px-3 py-2 text-sm font-semibold text-white/70 hover:bg-white/[0.06]">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const approval = buildPostingReviewApproval(confirmGroup, postingReviewOptions?.[confirmGroup.group_id]);
+                  setConfirmGroup(null);
+                  await onApproveGroup(confirmGroup, approval);
+                }}
+                className="rounded-lg bg-emerald-300 px-3 py-2 text-sm font-semibold text-[#06100c] hover:bg-emerald-200"
+              >
+                {buildPostingReviewPrimaryLabel(selectedFilter, confirmOptions.includedCount)}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>
@@ -4255,6 +4360,103 @@ function formatEventType(value) {
 
 function titleCase(value) {
   return formatEventType(value);
+}
+
+const POSTING_REVIEW_FILTERS = [
+  { key: "all", label: "All", bucket: null },
+  { key: "merchant_review", label: "Merchant review", bucket: "merchant_approval_needed" },
+  { key: "ready_to_post", label: "Ready to post", bucket: "ready_to_release" },
+  { key: "scheduled", label: "Scheduled", bucket: "scheduled_future" },
+  { key: "posting", label: "Posting", bucket: "active_posting" },
+  { key: "income_matches", label: "Income matches", bucket: "protected_income_match" },
+  { key: "payment_matches", label: "Payment matches", bucket: "protected_credit_card_payment" },
+  { key: "transfer_matches", label: "Transfer matches", bucket: "protected_transfer" },
+  { key: "checks", label: "Checks", bucket: "protected_check" },
+  { key: "protected", label: "Protected", bucket: "protected_other" },
+  { key: "failed", label: "Failed", bucket: "failed" },
+  { key: "missing_mapping", label: "Missing mapping", bucket: "missing_mapping" },
+];
+
+const MERCHANT_POSTING_FILTERS = new Set(["all", "merchant_review", "ready_to_post"]);
+const BROAD_MERCHANT_NAMES = new Set(["amazon", "apple", "paypal", "target", "walmart"]);
+const EXACT_MEMORY_SPECIFICITIES = new Set([
+  "exact_provider_merchant_id",
+  "exact_merchant_entity_id",
+  "exact_normalized_merchant",
+  "exact_descriptor_fingerprint",
+  "memo_fingerprint",
+  "exact_memo_fingerprint",
+]);
+
+function isMerchantPostingFilter(filterKey) {
+  return MERCHANT_POSTING_FILTERS.has(filterKey || "all");
+}
+
+function shouldDefaultMerchantMemoryOn(group = {}) {
+  const specificity = group.identity?.specificity || group.evidence?.match_specificity || "";
+  const merchant = String(group.display_merchant || group.normalized_identity || "").trim().toLowerCase();
+  if (!EXACT_MEMORY_SPECIFICITIES.has(specificity)) return false;
+  if (BROAD_MERCHANT_NAMES.has(merchant) && !["exact_provider_merchant_id", "exact_merchant_entity_id", "exact_descriptor_fingerprint", "exact_memo_fingerprint"].includes(specificity)) {
+    return false;
+  }
+  return !shouldWarnVariableMerchantGroup(group);
+}
+
+function shouldWarnVariableMerchantGroup(group = {}) {
+  const txns = Array.isArray(group.transactions) ? group.transactions : [];
+  if (txns.length <= 1) {
+    const merchant = String(group.display_merchant || group.normalized_identity || "").trim().toLowerCase();
+    return BROAD_MERCHANT_NAMES.has(merchant) && !["exact_provider_merchant_id", "exact_merchant_entity_id", "exact_descriptor_fingerprint", "exact_memo_fingerprint"].includes(group.identity?.specificity || group.evidence?.match_specificity || "");
+  }
+  const descriptions = new Set(txns.map((txn) => normalizeCompactText(txn.description || txn.memo)).filter(Boolean));
+  const amounts = new Set(txns.map((txn) => Math.round(Number(txn.amount || 0) * 100)));
+  const buckets = new Set(txns.map((txn) => txn.bucket).filter(Boolean));
+  const merchant = String(group.display_merchant || group.normalized_identity || "").trim().toLowerCase();
+  return descriptions.size > 1 || amounts.size > Math.min(3, txns.length) || buckets.size > 1 || BROAD_MERCHANT_NAMES.has(merchant);
+}
+
+function normalizeCompactText(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function formatPostingReviewSourceAccounts(accounts = []) {
+  const names = (Array.isArray(accounts) ? accounts : [])
+    .map((acct) => acct.name || acct.id)
+    .filter(Boolean);
+  return names.length ? names.join(", ") : "Mapped source account";
+}
+
+function buildPostingReviewApproval(group = {}, options = {}) {
+  const excludedIds = options.excludedIds instanceof Set ? options.excludedIds : new Set();
+  const transactions = Array.isArray(group.transactions) ? group.transactions : [];
+  const included = transactions.filter((txn) => !excludedIds.has(txn.transaction_id));
+  return {
+    qboAccountId: options.qboAccountId || group.proposed_qbo_account_id || "",
+    rememberForFuture: options.rememberForFuture === true,
+    transactionIds: included.map((txn) => txn.transaction_id),
+    exclusionIds: Array.from(excludedIds),
+    includedCount: included.length,
+    includedTotal: included.reduce((sum, txn) => sum + Number(txn.amount || 0), 0),
+    leftInReview: Math.max(0, transactions.length - included.length),
+  };
+}
+
+function buildPostingReviewPrimaryLabel(filterKey = "all", includedCount = 0) {
+  if (filterKey === "ready_to_post") return includedCount === 1 ? "Schedule posting" : `Schedule ${includedCount}`;
+  return includedCount === 1 ? "Approve & post" : `Approve & post ${includedCount}`;
+}
+
+function contextualPostingReviewCopy(filterKey) {
+  if (filterKey === "failed") return "Failed rows can be retried from the relevant transaction after the safe error is reviewed.";
+  if (filterKey === "missing_mapping") return "Rows missing account mappings need their Plaid-to-QBO account mapping fixed before posting.";
+  if (filterKey === "income_matches") return "Income matches stay in their protected matching workflow.";
+  if (filterKey === "payment_matches") return "Credit-card payments stay in the payment matching workflow.";
+  if (filterKey === "transfer_matches") return "Transfers stay in transfer review.";
+  if (filterKey === "checks") return "Checks stay in check review.";
+  if (filterKey === "protected") return "Protected workflows require their specific review path before posting.";
+  if (filterKey === "scheduled") return "Scheduled rows are already waiting for the normal posting worker.";
+  if (filterKey === "posting") return "Rows in posting are already being handled by the normal worker.";
+  return "No grouped transaction cards are available for this filter.";
 }
 
 function formatShortTime(value) {
