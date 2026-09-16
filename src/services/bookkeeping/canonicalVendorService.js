@@ -28,8 +28,6 @@ const MERCHANT_SYNONYMS = [
 
 const STRONG_CANONICAL_CLAIM_ALIAS_TYPES = new Set([
   "plaid_merchant_entity_id",
-  "approved_plaid_merchant_entity_id",
-  "approved_normalized_merchant",
   "qbo_vendor_id",
 ]);
 
@@ -278,12 +276,13 @@ function explicitApprovalMerchantEvidence(bankTxn = {}, taxonomyMeta = {}) {
     return {
       displayCandidate: bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || "",
       evidence: {
-        alias_type: "approved_plaid_merchant_entity_id",
+        alias_type: "plaid_merchant_entity_id",
         alias_value: String(bankTxn.merchant_entity_id),
         normalized_alias_value: String(bankTxn.merchant_entity_id),
         confidence: "high",
         is_strong_evidence: true,
         is_approved: true,
+        metadata: { approval_source: "business_merchant_rule" },
       },
     };
   }
@@ -298,12 +297,13 @@ function explicitApprovalMerchantEvidence(bankTxn = {}, taxonomyMeta = {}) {
   return {
     displayCandidate: explicitName,
     evidence: {
-      alias_type: "approved_normalized_merchant",
+      alias_type: "normalized_merchant_text",
       alias_value: explicitName,
       normalized_alias_value: normalizedName,
       confidence: "high",
       is_strong_evidence: true,
       is_approved: true,
+      metadata: { approval_source: "business_merchant_rule" },
     },
   };
 }
@@ -374,7 +374,11 @@ function collectEvidence(bankTxn = {}, payeeResolution = {}, taxonomyMeta = {}) 
     });
   }
   const normalizedText = normalizeVendorText(displayCandidate);
-  if (normalizedText) {
+  const approvalAlias = approvalEvidence?.evidence || null;
+  const duplicateApprovalAlias =
+    approvalAlias?.alias_type === "normalized_merchant_text" &&
+    approvalAlias.normalized_alias_value === normalizedText;
+  if (normalizedText && !duplicateApprovalAlias) {
     evidence.push({
       alias_type: "normalized_merchant_text",
       alias_value: displayCandidate,
@@ -399,6 +403,13 @@ function primaryEvidenceFor(evidence = []) {
     evidence[0] ||
     null
   );
+}
+
+function primaryEvidenceTypeFor(alias = null) {
+  if (!alias?.alias_type) return "manual";
+  if (alias.alias_type === "normalized_merchant_text" && alias.is_approved === true) return "approved_alias";
+  if (alias.alias_type === "approved_memo_prefix") return "approved_alias";
+  return alias.alias_type;
 }
 
 function strongClaimAliasFor(evidence = []) {
@@ -484,7 +495,7 @@ async function createCanonicalVendor(db, { businessId, displayName, evidence, tr
     display_name: canonicalName,
     normalized_display_name: normalized,
     status: "active",
-    primary_evidence_type: primary?.alias_type || "manual",
+    primary_evidence_type: primaryEvidenceTypeFor(primary),
     primary_evidence_value: primary?.alias_value || null,
     primary_source: "resolver",
     confidence: primary?.confidence || "medium",
@@ -516,7 +527,7 @@ async function claimCanonicalVendorByStrongAlias(db, { businessId, displayName, 
     p_normalized_alias_value: strongAlias.normalized_alias_value,
     p_display_name: canonicalName,
     p_normalized_display_name: normalized,
-    p_primary_evidence_type: primary.alias_type || strongAlias.alias_type,
+    p_primary_evidence_type: primaryEvidenceTypeFor(primary || strongAlias),
     p_primary_evidence_value: primary.alias_value || strongAlias.alias_value,
     p_primary_source: "resolver",
     p_confidence: primary.confidence || strongAlias.confidence || "high",

@@ -1272,14 +1272,13 @@ async function defaultDuplicatePreflight() {
   return { ok: false, confidence: "NOT_RUN", reason: "duplicate_preflight_required" };
 }
 
-function buildMerchantApprovalOperationId({ businessId, idempotencyKey, groupSnapshotToken, transactionIds = [], selectedQboAccountId } = {}) {
+function buildMerchantApprovalOperationId({ businessId, transactionIds = [], selectedQboAccountId, retryGeneration = 0 } = {}) {
   return createHash("sha256")
     .update(JSON.stringify({
       business_id: businessId || null,
-      idempotency_key: idempotencyKey || null,
-      group_snapshot_token: groupSnapshotToken || null,
       selected_qbo_account_id: selectedQboAccountId ? String(selectedQboAccountId) : null,
       transaction_ids: Array.from(new Set(transactionIds || [])).sort(),
+      retry_generation: Number(retryGeneration || 0) || 0,
     }))
     .digest("hex");
 }

@@ -623,28 +623,46 @@ export default function MonthlyReviewConsole() {
         ? `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(selectedBusinessId)}`
         : null);
       let terminal = false;
+      let lastOperationLabel = "Decision accepted";
       if (statusUrl) {
-        for (let attempt = 0; attempt < 8; attempt += 1) {
+        for (let attempt = 0; attempt < 30; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 600 : 1500));
           const operation = await safeFetch(statusUrl, { cache: "no-store" });
           const states = operation?.states || {};
-          if (states.scheduled) {
-            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Queued for posting" }));
+          const firstRow = Array.isArray(operation?.rows) ? operation.rows[0] : null;
+          if (states.posted || firstRow?.posted) {
+            lastOperationLabel = "Posted";
+          } else if (states.posting) {
+            lastOperationLabel = "Posting to QuickBooks";
+          } else if (states.retry_scheduled) {
+            lastOperationLabel = firstRow?.next_post_attempt_at ? `Retry scheduled ${formatShortTime(firstRow.next_post_attempt_at)}` : "Retry scheduled";
+          } else if (states.scheduled) {
+            lastOperationLabel = firstRow?.post_after ? `Scheduled ${formatShortTime(firstRow.post_after)}` : "Scheduled";
           } else if (states.ready_to_post) {
-            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Ready to post" }));
-          } else if (states.decision_processing) {
-            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Preparing to post" }));
+            lastOperationLabel = "Ready to post";
+          } else if (states.safety_checking || states.checking_duplicates) {
+            lastOperationLabel = "Checking posting safety";
+          } else if (states.claimed || states.decision_processing) {
+            lastOperationLabel = "Preparing to post";
+          } else if (states.blocked) {
+            lastOperationLabel = firstRow?.failure_code ? `Needs attention: ${firstRow.failure_code}` : "Needs attention";
+          } else if (states.failed) {
+            lastOperationLabel = firstRow?.failure_code ? `Could not prepare posting: ${firstRow.failure_code}` : "Could not prepare posting";
           } else if (states.checking_duplicates) {
-            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Checking QuickBooks" }));
+            lastOperationLabel = "Checking posting safety";
           } else if (states.accepted) {
-            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Decision accepted" }));
-          } else if (states.failed || states.blocked) {
-            setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Needs review" }));
+            lastOperationLabel = "Decision accepted";
+          } else if (operation?.row_count === 0) {
+            lastOperationLabel = "Status unavailable";
           }
+          setPostingReviewProgress((current) => ({ ...current, [group.group_id]: lastOperationLabel }));
           if (operation?.terminal) {
             terminal = true;
             break;
           }
+        }
+        if (!terminal) {
+          setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Processing interrupted" }));
         }
       }
       if (terminal) {
@@ -2114,6 +2132,8 @@ function PostingReviewMirrorSection({
                 const includedTransactions = (group.transactions || []).filter((txn) => !excludedIds.has(txn.transaction_id));
                 const leftInReview = Math.max(0, Number(group.transaction_count || 0) - includedTransactions.length);
                 const primaryLabel = buildPostingReviewPrimaryLabel(selectedFilter, includedTransactions.length);
+                const progressLabel = postingReviewProgress?.[group.group_id] || "";
+                const progressActive = postingReviewAction === group.group_id || Boolean(progressLabel);
                 const isExpanded = expandedPostingReviewGroup === group.group_id;
                 const techExpanded = technicalGroup === group.group_id;
                 const warning = shouldWarnVariableMerchantGroup(group);
@@ -2148,10 +2168,10 @@ function PostingReviewMirrorSection({
                         <button
                           type="button"
                           onClick={() => setConfirmGroup(group)}
-                          disabled={postingReviewAction === group.group_id || includedTransactions.length === 0}
+                          disabled={progressActive || includedTransactions.length === 0}
                           className="rounded-lg bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-[#06100c] hover:bg-emerald-200 disabled:opacity-50"
                         >
-                          {postingReviewAction === group.group_id ? (postingReviewProgress?.[group.group_id] || "Scheduling...") : primaryLabel}
+                          {progressLabel || (postingReviewAction === group.group_id ? "Scheduling..." : primaryLabel)}
                         </button>
                         <button
                           type="button"

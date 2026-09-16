@@ -295,14 +295,19 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
       .limit(100);
     if (error) throw error;
     const rows = Array.isArray(data) ? data : [];
+    const rowOperationState = (row) => {
+      if (row?.qbo_txn_id) return "posted";
+      if (row?.meta?.posting_in_progress === true) return "posting";
+      return row?.meta?.merchant_group_operation_state || "unknown";
+    };
     const states = rows.reduce((acc, row) => {
-      const state = row?.meta?.merchant_group_operation_state || "unknown";
+      const state = rowOperationState(row);
       acc[state] = (acc[state] || 0) + 1;
       return acc;
     }, {});
     const terminal = rows.length > 0 && rows.every((row) => {
-      const state = row?.meta?.merchant_group_operation_state || "";
-      return ["scheduled", "ready_to_post", "blocked", "failed"].includes(state) || row.qbo_txn_id;
+      const state = rowOperationState(row);
+      return ["scheduled", "ready_to_post", "retry_scheduled", "blocked", "failed", "posted"].includes(state) || row.qbo_txn_id;
     });
     return res.json({
       ok: true,
@@ -312,13 +317,16 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
       terminal,
       rows: rows.map((row) => ({
         transaction_id: row.transaction_id,
-        state: row?.meta?.merchant_group_operation_state || "unknown",
-        stage: row?.meta?.merchant_group_operation_stage || row?.meta?.merchant_group_operation_state || "unknown",
+        state: rowOperationState(row),
+        stage: row?.meta?.posting_in_progress === true ? "posting" : row?.meta?.merchant_group_operation_stage || row?.meta?.merchant_group_operation_state || "unknown",
         status: row.status,
         post_after: row.post_after || null,
         posted: Boolean(row.qbo_txn_id),
         post_error: row.post_error || null,
         failure_code: row?.meta?.merchant_group_operation_failure_code || null,
+        failure_message: row?.meta?.merchant_group_operation_failure_message || null,
+        next_post_attempt_at: row?.meta?.next_post_attempt_at || null,
+        qbo_txn_id: row.qbo_txn_id || null,
       })),
     });
   } catch (err) {

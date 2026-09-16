@@ -102,7 +102,38 @@ test("explicit merchant approval turns a specific normalized merchant into stron
   });
   assert.equal(result.needsReview, undefined);
   assert.equal(result.canonicalVendor.display_name, "The Exchange");
-  assert.equal(db.rows.vendor_aliases.some((row) => row.alias_type === "approved_normalized_merchant" && row.normalized_alias_value === "the exchange"), true);
+  assert.equal(result.canonicalVendor.primary_evidence_type, "approved_alias");
+  assert.equal(db.rows.vendor_aliases.some((row) =>
+    row.alias_type === "normalized_merchant_text" &&
+    row.normalized_alias_value === "the exchange" &&
+    row.is_strong_evidence === true &&
+    row.is_approved === true
+  ), true);
+});
+
+test("explicit normalized merchant approval uses production-supported strong alias types", async () => {
+  const db = makeDb({ unsupportedStrongAliasTypes: new Set(["approved_normalized_merchant", "approved_plaid_merchant_entity_id"]) });
+  const result = await resolveCanonicalVendorForTransaction({
+    db,
+    businessId: BUSINESS_ID,
+    bankTxn: txn({
+      id: "exchange-1",
+      merchant_entity_id: null,
+      merchant_name: "the exchange",
+      name: "AplPay THE EXCHANGE",
+    }),
+    taxonomyMeta: {
+      vendor_rule_source_type: "business_merchant_rule",
+      categorization_authority: "admin_confirmed",
+      selected_qbo_account_id: "1150040001",
+      merchant_group_approved_at: "2026-09-16T19:59:58.441Z",
+    },
+  });
+
+  assert.equal(result.needsReview, undefined);
+  assert.equal(result.canonicalVendor.display_name, "The Exchange");
+  assert.equal(db.rows.vendor_aliases.some((row) => row.alias_type === "approved_normalized_merchant"), false);
+  assert.equal(db.rows.vendor_aliases.some((row) => row.alias_type === "approved_plaid_merchant_entity_id"), false);
 });
 
 test("explicit approval still fails closed for processor-only generic memo evidence", async () => {
@@ -809,7 +840,7 @@ function makeQbo({ vendors = [], customers = [], employees = [], failCreateOnceA
   };
 }
 
-function makeDb({ failActiveMappingUpsert = null } = {}) {
+function makeDb({ failActiveMappingUpsert = null, unsupportedStrongAliasTypes = new Set() } = {}) {
   const rows = {
     bizzi_vendors: [],
     vendor_aliases: [],
@@ -836,6 +867,9 @@ function makeDb({ failActiveMappingUpsert = null } = {}) {
     async rpc(name, params) {
       if (name === "claim_canonical_vendor_by_strong_alias") {
         calls.strongAliasClaims += 1;
+        if (unsupportedStrongAliasTypes.has(params.p_alias_type)) {
+          return { data: null, error: new Error(`unsupported_strong_alias_type:${params.p_alias_type}`) };
+        }
         const existingAlias = rows.vendor_aliases.find((row) =>
           row.business_id === params.p_business_id &&
           row.alias_type === params.p_alias_type &&

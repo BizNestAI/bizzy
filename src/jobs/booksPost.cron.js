@@ -611,6 +611,13 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
   const nextAttemptIso = outcome.retryable && nextRetries < MAX_RETRIES
     ? new Date(Date.parse(nowIso) + computeBackoffMs(nextRetries)).toISOString()
     : null;
+  const operationState = item?.meta?.merchant_group_operation_id
+    ? outcome.review
+      ? "blocked"
+      : nextAttemptIso
+      ? "retry_scheduled"
+      : "failed"
+    : null;
   const meta = {
     ...(item.meta || {}),
     posting_in_progress: false,
@@ -628,6 +635,14 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
     vendor_failure_retryable: outcome.retryable === true,
     vendor_failure_reconnect_required: outcome.reconnectRequired === true,
   };
+  if (operationState) {
+    meta.merchant_group_operation_state = operationState;
+    meta.merchant_group_operation_stage = operationState;
+    meta.merchant_group_operation_lease_expires_at = null;
+    meta.merchant_group_operation_failure_code = outcome.reason;
+    meta.merchant_group_operation_failure_message = outcome.diagnostics?.message || outcome.reason;
+    meta.merchant_group_operation_failed_at = nowIso;
+  }
   const update = {
     status: outcome.review ? "needs_review" : item.status,
     post_error: outcome.reason,
@@ -2117,6 +2132,13 @@ export async function handleItem(item, options = {}) {
         next_post_attempt_at: null,
         manual_post: manual === true,
         qbo_request_id: requestId,
+        ...(item?.meta?.merchant_group_operation_id
+          ? {
+              merchant_group_operation_state: "posted",
+              merchant_group_operation_stage: "posted",
+              merchant_group_operation_lease_expires_at: null,
+            }
+          : {}),
       },
     })
     .eq("business_id", businessId)
@@ -2178,6 +2200,14 @@ async function markFailed(item, message) {
     message === "cc_charge_post_not_supported";
   if (shouldStop) {
     meta.next_post_attempt_at = null;
+  }
+  if (item?.meta?.merchant_group_operation_id) {
+    meta.merchant_group_operation_state = shouldStop ? "failed" : "retry_scheduled";
+    meta.merchant_group_operation_stage = shouldStop ? "failed" : "retry_scheduled";
+    meta.merchant_group_operation_lease_expires_at = null;
+    meta.merchant_group_operation_failure_code = message || "post_failed";
+    meta.merchant_group_operation_failure_message = message || "post_failed";
+    meta.merchant_group_operation_failed_at = nowIso;
   }
   await insertPostAttempt({
     businessId: item.business_id,

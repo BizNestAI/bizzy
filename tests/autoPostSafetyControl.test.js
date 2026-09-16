@@ -930,6 +930,41 @@ test("merchant group route operation acceptance persists operator intent without
   assert.equal(db.calls.some((call) => call.table === "vendor_rules"), false);
 });
 
+test("same unresolved merchant approval decision reuses the same operation across refreshed snapshots", async () => {
+  const db = makeSupabase({
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
+    transaction_categorizations: [
+      { business_id: "biz-1", transaction_id: "exchange-1", status: "auto_approved", final_qbo_account_id: "1150040001", final_qbo_account_name: "Meals", qbo_txn_id: null, post_after: null, meta: { auto_approve_reason: "universal_hint" }, updated_at: "v1" },
+    ],
+    bank_transactions: [
+      { business_id: "biz-1", id: "exchange-1", plaid_account_id: "pa-1", date: "2026-09-09", amount: -5.4, direction: "OUTFLOW", name: "AplPay THE EXCHANGE", merchant_name: "the exchange", is_archived: false },
+    ],
+  });
+
+  const first = await persistMerchantBacklogGroupApprovalOperation({
+    db,
+    businessId: "biz-1",
+    actorId: "operator-1",
+    selectedQboAccountId: "1150040001",
+    groupSnapshotToken: "snapshot-before-refresh",
+    transactionIds: ["exchange-1"],
+    idempotencyKey: "monthly-review-posting-group-snapshot-before-refresh",
+  });
+  const second = await persistMerchantBacklogGroupApprovalOperation({
+    db,
+    businessId: "biz-1",
+    actorId: "operator-1",
+    selectedQboAccountId: "1150040001",
+    groupSnapshotToken: "snapshot-after-refresh",
+    transactionIds: ["exchange-1"],
+    idempotencyKey: "monthly-review-posting-group-snapshot-after-refresh",
+  });
+
+  assert.equal(second.operation_id, first.operation_id);
+  assert.equal(db.cat("biz-1", "exchange-1").meta.merchant_group_operation_id, first.operation_id);
+  assert.equal(db.cat("biz-1", "exchange-1").meta.merchant_group_operation_attempt_count, undefined);
+});
+
 test("durable worker resumes accepted merchant approval operations and schedules immediately", async () => {
   const db = makeSupabase({
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
@@ -1159,6 +1194,34 @@ test("posting review separates retry backoff and operator attention from ordinar
   assert.equal(summary.buckets.needs_operator_attention, 1);
   assert.equal(summary.buckets.scheduled_future, 0);
   assert.equal(summary.bucket_total, summary.headline_count);
+});
+
+test("posting worker marks merchant approval operation state truthfully on retry, block, and receipt", () => {
+  const source = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+  assert.match(source, /meta\.merchant_group_operation_state = operationState/);
+  assert.match(source, /"retry_scheduled"/);
+  assert.match(source, /"blocked"/);
+  assert.match(source, /meta\.merchant_group_operation_state = shouldStop \? "failed" : "retry_scheduled"/);
+  assert.match(source, /merchant_group_operation_state:\s*"posted"/);
+  assert.match(source, /qbo_txn_id:\s*qboId/);
+});
+
+test("operation status endpoint exposes retry and posted states without reporting scheduled while posting", () => {
+  const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+  assert.match(route, /rowOperationState/);
+  assert.match(route, /posting_in_progress === true\) return "posting"/);
+  assert.match(route, /"retry_scheduled"/);
+  assert.match(route, /next_post_attempt_at/);
+  assert.match(route, /failure_message/);
+});
+
+test("posting review UI surfaces terminal operation states instead of reverting to approve", () => {
+  const page = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
+  assert.match(page, /Retry scheduled/);
+  assert.match(page, /Could not prepare posting/);
+  assert.match(page, /Processing interrupted/);
+  assert.match(page, /progressLabel \|\| \(postingReviewAction === group\.group_id \? "Scheduling\.\.\." : primaryLabel\)/);
+  assert.doesNotMatch(page, /for \(let attempt = 0; attempt < 8/);
 });
 
 test("merchant approval queue has a short durable polling loop and does not use process-local HTTP continuations", () => {
