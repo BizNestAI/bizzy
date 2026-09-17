@@ -1427,9 +1427,13 @@ async function resolveMerchantBacklogApproval({
   const account = await fetchQboAccountForApproval(db, businessId, selectedQboAccountId);
   const excluded = new Set(exclusionIds || []);
   const explicitCandidateIds = Array.from(new Set((transactionIds || []).filter(Boolean))).filter((id) => !excluded.has(id));
-  const groupsResult = await getMerchantBacklogGroups({ db, businessId, limit: 500 });
-  const group = findGroupByToken(groupsResult.groups, groupSnapshotToken, transactionIds);
-  let candidateIds = group?.transaction_ids?.filter((id) => (transactionIds?.length ? new Set(transactionIds).has(id) : true) && !excluded.has(id)) || explicitCandidateIds;
+  let group = null;
+  let candidateIds = explicitCandidateIds;
+  if (!candidateIds.length) {
+    const groupsResult = await getMerchantBacklogGroups({ db, businessId, limit: 500 });
+    group = findGroupByToken(groupsResult.groups, groupSnapshotToken, transactionIds);
+    candidateIds = group?.transaction_ids?.filter((id) => !excluded.has(id)) || [];
+  }
   if (!candidateIds.length) {
     const err = new Error("No transactions are selected for this merchant group.");
     err.status = 400;
@@ -1438,14 +1442,14 @@ async function resolveMerchantBacklogApproval({
   }
   const rows = await fetchBacklogCategorizationRows(db, businessId, { transactionIds: candidateIds });
   const bankRows = await fetchBacklogBankRows(db, businessId, candidateIds);
-  const resolvedGroup = group || buildExplicitMerchantApprovalGroup({
+  const resolvedGroup = buildExplicitMerchantApprovalGroup({
     businessId,
     account,
     rows,
     bankRows,
     transactionIds: candidateIds,
     groupSnapshotToken,
-  });
+  }) || group;
   if (!resolvedGroup) {
     const err = new Error("Merchant group is no longer available. Refresh and try again.");
     err.status = 409;

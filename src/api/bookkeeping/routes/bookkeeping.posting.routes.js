@@ -296,6 +296,8 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
       .limit(100);
     if (error) throw error;
     const rows = Array.isArray(data) ? data : [];
+    const activeStates = new Set(["accepted", "decision_processing", "decision_saved", "checking_duplicates", "safety_checking", "posting"]);
+    const terminalStates = new Set(["scheduled", "ready_to_post", "retry_scheduled", "blocked", "failed", "posted"]);
     const rowOperationState = (row) => {
       if (row?.qbo_txn_id) return "posted";
       if (row?.meta?.posting_in_progress === true) return "posting";
@@ -306,9 +308,21 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
       acc[state] = (acc[state] || 0) + 1;
       return acc;
     }, {});
+    const rowUpdatedAtMs = rows
+      .map((row) => Date.parse(row?.updated_at || ""))
+      .filter((value) => Number.isFinite(value));
+    const lastUpdatedAtMs = rowUpdatedAtMs.length ? Math.max(...rowUpdatedAtMs) : null;
+    const nowMs = Date.now();
+    const rowIsActive = (row) => activeStates.has(rowOperationState(row));
+    const rowLeaseExpired = (row) => {
+      const leaseExpiresAtMs = Date.parse(row?.meta?.merchant_group_operation_lease_expires_at || "");
+      return Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs <= nowMs;
+    };
+    const active = rows.some(rowIsActive);
+    const stale = rows.length > 0 && rows.every((row) => rowIsActive(row) && rowLeaseExpired(row));
     const terminal = rows.length > 0 && rows.every((row) => {
       const state = rowOperationState(row);
-      return ["scheduled", "ready_to_post", "retry_scheduled", "blocked", "failed", "posted"].includes(state) || row.qbo_txn_id;
+      return terminalStates.has(state) || row.qbo_txn_id;
     });
     return res.json({
       ok: true,
@@ -316,16 +330,25 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
       row_count: rows.length,
       states,
       terminal,
+      active,
+      stale,
+      last_update_at: lastUpdatedAtMs ? new Date(lastUpdatedAtMs).toISOString() : null,
       rows: rows.map((row) => ({
         transaction_id: row.transaction_id,
         state: rowOperationState(row),
         stage: row?.meta?.posting_in_progress === true ? "posting" : row?.meta?.merchant_group_operation_stage || row?.meta?.merchant_group_operation_state || "unknown",
         status: row.status,
+        updated_at: row.updated_at || null,
         post_after: row.post_after || null,
         posted: Boolean(row.qbo_txn_id),
         post_error: row.post_error || null,
         failure_code: row?.meta?.merchant_group_operation_failure_code || null,
         failure_message: row?.meta?.merchant_group_operation_failure_message || null,
+        requested_at: row?.meta?.merchant_group_requested_at || null,
+        claimed_at: row?.meta?.merchant_group_operation_claimed_at || null,
+        lease_expires_at: row?.meta?.merchant_group_operation_lease_expires_at || null,
+        active: rowIsActive(row),
+        stale: rowIsActive(row) && rowLeaseExpired(row),
         next_post_attempt_at: row?.meta?.next_post_attempt_at || null,
         qbo_txn_id: row.qbo_txn_id || null,
       })),

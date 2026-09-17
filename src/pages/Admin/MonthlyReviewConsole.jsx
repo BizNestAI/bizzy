@@ -627,9 +627,11 @@ export default function MonthlyReviewConsole() {
       let terminal = false;
       let lastOperationLabel = "Decision accepted";
       if (statusUrl) {
+        let latestOperation = null;
         for (let attempt = 0; attempt < 30; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 600 : 1500));
           const operation = await safeFetch(statusUrl, { cache: "no-store" });
+          latestOperation = operation;
           const states = operation?.states || {};
           const firstRow = Array.isArray(operation?.rows) ? operation.rows[0] : null;
           if (states.posted || firstRow?.posted) {
@@ -662,7 +664,14 @@ export default function MonthlyReviewConsole() {
           }
         }
         if (!terminal) {
-          setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Processing interrupted" }));
+          const states = latestOperation?.states || {};
+          const stillActive = latestOperation?.active === true
+            || Boolean(states.accepted || states.decision_saved || states.decision_processing || states.checking_duplicates || states.safety_checking || states.posting);
+          const stale = latestOperation?.stale === true;
+          setPostingReviewProgress((current) => ({
+            ...current,
+            [group.group_id]: stillActive && !stale ? lastOperationLabel : "Processing interrupted",
+          }));
         }
       }
       if (terminal) {

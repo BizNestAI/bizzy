@@ -1018,6 +1018,75 @@ test("durable worker resumes accepted merchant approval operations and schedules
   assert.equal(db.table("vendor_rules").length, 1);
 });
 
+test("durable worker processes only immutable selected transaction ids after a partial merchant approval", async () => {
+  const appleRows = [
+    ["apple-1", "2026-08-03", -12.96],
+    ["apple-2", "2026-08-04", -14.06],
+    ["apple-3", "2026-08-10", -10.81],
+    ["apple-selected", "2026-08-23", -2.99],
+    ["apple-5", "2026-08-24", -43.29],
+  ];
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "24", name: "Software", account_type: "Expense", active: true }],
+    transaction_categorizations: appleRows.map(([id]) => ({
+      business_id: "biz-1",
+      transaction_id: id,
+      status: "auto_approved",
+      final_qbo_account_id: "24",
+      final_qbo_account_name: "Software",
+      qbo_txn_id: null,
+      post_after: null,
+      meta: id === "apple-selected"
+        ? {
+          auto_approve_reason: "universal_hint",
+          merchant_group_operation_id: "op-apple-single",
+          merchant_group_operation_state: "accepted",
+          merchant_group_snapshot_token: "stale-apple-six-row-snapshot",
+          merchant_group_requested_decision: {
+            selected_qbo_account_id: "24",
+            selected_qbo_account_name: "Software",
+            remember_for_future: false,
+          },
+        }
+        : { auto_approve_reason: "universal_hint", safe_to_auto_post: false },
+      updated_at: "2026-09-16T02:15:00.000Z",
+    })),
+    bank_transactions: appleRows.map(([id, date, amount]) => ({
+      business_id: "biz-1",
+      id,
+      plaid_account_id: "pa-apple",
+      date,
+      amount,
+      direction: "OUTFLOW",
+      name: "APPLE.COM/BILL",
+      merchant_name: "Apple",
+      merchant_entity_id: "apple-entity",
+      pending: false,
+      is_archived: false,
+    })),
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-apple", qbo_account_id: "19", qbo_account_name: "Credit Card", qbo_account_type: "CreditCard" }],
+    vendor_rules: [],
+  });
+
+  const result = await processPendingMerchantBacklogApprovalOperations({
+    db,
+    businessId: "biz-1",
+    graceHours: 0,
+    duplicatePreflight: async ({ transactionId }) => ({ confidence: "NO_MATCH", candidates: [], transaction_id: transactionId }),
+  });
+
+  assert.equal(result.processed_count, 1);
+  assert.equal(db.table("vendor_rules").length, 0);
+  assert.equal(db.cat("biz-1", "apple-selected").meta.merchant_group_operation_state, "scheduled");
+  assert.equal(db.cat("biz-1", "apple-selected").meta.safe_to_auto_post, true);
+  for (const [id] of appleRows.filter(([id]) => id !== "apple-selected")) {
+    assert.equal(db.cat("biz-1", id).meta.merchant_group_operation_id, undefined);
+    assert.equal(db.cat("biz-1", id).meta.safe_to_auto_post, false);
+    assert.equal(db.cat("biz-1", id).post_after, null);
+  }
+});
+
 test("durable worker resumes prior decision_saved merchant operations without duplicate rules", async () => {
   const db = makeSupabase({
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
@@ -1276,6 +1345,10 @@ test("operation status endpoint exposes retry and posted states without reportin
   assert.match(route, /rowOperationState/);
   assert.match(route, /posting_in_progress === true\) return "posting"/);
   assert.match(route, /"retry_scheduled"/);
+  assert.match(route, /activeStates/);
+  assert.match(route, /lease_expires_at/);
+  assert.match(route, /updated_at/);
+  assert.match(route, /stale/);
   assert.match(route, /retry-now/);
   assert.match(route, /requestMerchantGroupPostingRetryNow/);
   assert.match(route, /next_post_attempt_at/);
@@ -1290,6 +1363,7 @@ test("posting review UI surfaces terminal operation states instead of reverting 
   assert.match(page, /last_post_attempt_at/);
   assert.match(page, /Could not prepare posting/);
   assert.match(page, /Processing interrupted/);
+  assert.match(page, /stillActive && !stale \? lastOperationLabel : "Processing interrupted"/);
   assert.match(page, /progressLabel \|\| \(postingReviewAction === group\.group_id \? "Scheduling\.\.\." : primaryLabel\)/);
   assert.doesNotMatch(page, /for \(let attempt = 0; attempt < 8/);
 });
@@ -1297,10 +1371,14 @@ test("posting review UI surfaces terminal operation states instead of reverting 
 test("merchant approval queue has a short durable polling loop and does not use process-local HTTP continuations", () => {
   const routeSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
   const workerSource = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+  const serviceSource = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
   assert.doesNotMatch(routeSource, /setImmediate|runMerchantBacklogApprovalOperation|persistMerchantBacklogGroupApprovalDecision/);
   assert.match(workerSource, /BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS/);
   assert.match(workerSource, /runMerchantApprovalQueueOnce/);
   assert.match(workerSource, /skipMerchantApprovalOperations/);
+  assert.match(serviceSource, /let candidateIds = explicitCandidateIds/);
+  assert.match(serviceSource, /if \(!candidateIds\.length\)[\s\S]*?getMerchantBacklogGroups/);
+  assert.match(serviceSource, /buildExplicitMerchantApprovalGroup\(\{[\s\S]*?transactionIds: candidateIds/);
 });
 
 test("merchant groups use exact identity and grouped approval schedules only passing rows", async () => {
