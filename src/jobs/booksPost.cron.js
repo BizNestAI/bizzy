@@ -35,7 +35,7 @@ import {
 import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/incomingDepositMatchService.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
-const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 5);
+const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 1);
 const MAX_RETRIES = Number(process.env.BOOKS_POST_MAX_RETRIES || 5);
 const DUE_QUERY_PAGE_SIZE = Number(process.env.BOOKS_POST_DUE_QUERY_PAGE_SIZE || 250);
 const MAX_DUE_ROWS_PER_SWEEP = Number(process.env.BOOKS_POST_MAX_DUE_ROWS_PER_SWEEP || 1000);
@@ -700,8 +700,63 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
   const requirement = getVendorPostingRequirement({ bankTxn: bank, taxonomyMeta, qboTxnType });
   if (!requirement.required) return { ok: true, requirement };
   let vendorEnsure = null;
+  const vendorSubtimings = {};
+  const vendorTotalStart = Date.now();
   try {
+    if (
+      String(bank?.qbo_entity_type || "").toLowerCase() === "vendor" &&
+      bank?.qbo_entity_id &&
+      tokenRow?.realm_id
+    ) {
+      const lookupStart = Date.now();
+      const { data: mapping, error: mappingError } = await supabase
+        .from("business_qbo_vendor_mappings")
+        .select("id,canonical_vendor_id,qbo_vendor_id,qbo_display_name,status,last_validated_at,updated_at")
+        .eq("business_id", item.business_id)
+        .eq("realm_id", tokenRow.realm_id)
+        .eq("qbo_env", qboEnvName)
+        .eq("qbo_vendor_id", String(bank.qbo_entity_id))
+        .eq("status", "active")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      vendorSubtimings.active_mapping_lookup_ms = Date.now() - lookupStart;
+      const canonicalMatches =
+        !bank?.canonical_vendor_id ||
+        !mapping?.canonical_vendor_id ||
+        String(bank.canonical_vendor_id) === String(mapping.canonical_vendor_id);
+      if (!mappingError && mapping?.qbo_vendor_id && canonicalMatches) {
+        bank.qbo_entity_type = "vendor";
+        bank.qbo_entity_id = String(mapping.qbo_vendor_id);
+        bank.posting_display_name =
+          mapping.qbo_display_name ||
+          bank.counterparty_name ||
+          bank.merchant_name ||
+          null;
+        vendorSubtimings.total_ms = Date.now() - vendorTotalStart;
+        return {
+          ok: true,
+          requirement,
+          vendorEnsure: {
+            qbo_entity_type: "vendor",
+            qbo_entity_id: String(mapping.qbo_vendor_id),
+            vendor_name: mapping.qbo_display_name || bank.posting_display_name || null,
+            canonical_vendor_id: mapping.canonical_vendor_id || bank.canonical_vendor_id || null,
+            vendor_validation_mode: "validated_bank_vendor_ref",
+            vendor_subtimings: vendorSubtimings,
+          },
+        };
+      }
+      vendorSubtimings.active_mapping_result = mappingError
+        ? "lookup_error"
+        : mapping?.qbo_vendor_id
+        ? "canonical_mismatch"
+        : "not_found";
+    }
+    const resolveStart = Date.now();
     const payeeResolution = await resolvePayee({ businessId: item.business_id, txn: bank });
+    vendorSubtimings.resolve_payee_ms = Date.now() - resolveStart;
+    const ensureStart = Date.now();
     vendorEnsure = await ensureQboVendorForTransaction({
       businessId: item.business_id,
       bankTxn: bank,
@@ -712,6 +767,8 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
       qboClient,
       tokenRow,
     });
+    vendorSubtimings.ensure_qbo_vendor_ms = Date.now() - ensureStart;
+    vendorSubtimings.total_ms = Date.now() - vendorTotalStart;
   } catch (err) {
     const message = String(err?.message || err || "").toLowerCase();
     const fallbackStage = /quickbooks|qbo_client|token|reconnect|auth/.test(message)
@@ -722,6 +779,7 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
     return { ok: false, requirement, outcome };
   }
   if (vendorEnsure?.qbo_entity_id && (vendorEnsure.qbo_entity_type || "").toLowerCase() === "vendor") {
+    vendorEnsure.vendor_subtimings = vendorEnsure.vendor_subtimings || vendorSubtimings;
     bank.qbo_entity_type = "vendor";
     bank.qbo_entity_id = vendorEnsure.qbo_entity_id;
     bank.posting_display_name =
@@ -2034,6 +2092,7 @@ export async function handleItem(item, options = {}) {
     vendorGate?.vendorEnsure?.reason ||
     vendorGate?.outcome?.stage ||
     null;
+  timing.context.vendor_subtimings = vendorGate?.vendorEnsure?.vendor_subtimings || null;
   if (!vendorGate.ok) {
     timing.context.failure_code = vendorGate?.outcome?.code || vendorGate?.outcome?.reason || "vendor_gate_blocked";
     logPostingTiming({ businessId, transactionId: txnId, qboTxnType: intentQboTxnTypeForLog, manual, timing, status: "blocked", failureCode: timing.context.failure_code });
@@ -2131,6 +2190,7 @@ export async function handleItem(item, options = {}) {
       posted_at: postedIso,
       reconciled_at: postedIso,
       post_error: null,
+      post_after: null,
       last_post_attempt_at: postedIso,
       meta: {
         ...(item.meta || {}),

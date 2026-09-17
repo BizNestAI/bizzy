@@ -297,11 +297,20 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
     if (error) throw error;
     const rows = Array.isArray(data) ? data : [];
     const activeStates = new Set(["accepted", "decision_processing", "decision_saved", "checking_duplicates", "safety_checking", "posting"]);
-    const terminalStates = new Set(["scheduled", "ready_to_post", "retry_scheduled", "blocked", "failed", "posted"]);
+    const terminalStates = new Set(["retry_scheduled", "blocked", "failed", "posted"]);
     const rowOperationState = (row) => {
       if (row?.qbo_txn_id) return "posted";
       if (row?.meta?.posting_in_progress === true) return "posting";
       return row?.meta?.merchant_group_operation_state || "unknown";
+    };
+    const currentTimeMs = Date.now();
+    const rowPostAfterMs = (row) => {
+      const value = Date.parse(row?.post_after || "");
+      return Number.isFinite(value) ? value : null;
+    };
+    const rowDueForPosting = (row) => {
+      const postAfterMs = rowPostAfterMs(row);
+      return postAfterMs !== null && postAfterMs <= currentTimeMs;
     };
     const states = rows.reduce((acc, row) => {
       const state = rowOperationState(row);
@@ -312,17 +321,18 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
       .map((row) => Date.parse(row?.updated_at || ""))
       .filter((value) => Number.isFinite(value));
     const lastUpdatedAtMs = rowUpdatedAtMs.length ? Math.max(...rowUpdatedAtMs) : null;
-    const nowMs = Date.now();
-    const rowIsActive = (row) => activeStates.has(rowOperationState(row));
+    const rowIsActive = (row) => activeStates.has(rowOperationState(row)) || rowDueForPosting(row);
     const rowLeaseExpired = (row) => {
       const leaseExpiresAtMs = Date.parse(row?.meta?.merchant_group_operation_lease_expires_at || "");
-      return Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs <= nowMs;
+      return Number.isFinite(leaseExpiresAtMs) && leaseExpiresAtMs <= currentTimeMs;
     };
     const active = rows.some(rowIsActive);
     const stale = rows.length > 0 && rows.every((row) => rowIsActive(row) && rowLeaseExpired(row));
     const terminal = rows.length > 0 && rows.every((row) => {
       const state = rowOperationState(row);
-      return terminalStates.has(state) || row.qbo_txn_id;
+      if (row.qbo_txn_id || terminalStates.has(state)) return true;
+      if (state === "scheduled") return !rowDueForPosting(row);
+      return false;
     });
     return res.json({
       ok: true,

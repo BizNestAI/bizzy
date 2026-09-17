@@ -839,6 +839,58 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
   assert.doesNotMatch(readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8"), /\.from\("qbo_accounts_cache"\)[\s\S]*?\.eq\("qbo_account_id"[\s\S]*?\.limit\(1\)[\s\S]*?\.maybeSingle\(\)/);
 });
 
+test("merchant approval queue is promptly polled and still durable through the database", () => {
+  const cron = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+  const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+
+  assert.match(cron, /BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS \|\| 1/);
+  assert.match(cron, /runMerchantApprovalQueueOnce/);
+  assert.match(cron, /processPendingMerchantBacklogApprovalOperations/);
+  assert.match(cron, /postingSweep = await runOnce\(\{/);
+  assert.match(route, /persistMerchantBacklogGroupApprovalOperation\(common\)/);
+  assert.doesNotMatch(route, /persistMerchantBacklogGroupApprovalDecision\(common\)/);
+  assert.doesNotMatch(route, /setImmediate|postToQbo|claim_qbo_posting_intent/);
+});
+
+test("operation status keeps polling due scheduled rows until receipt-confirmed posted", () => {
+  const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+
+  assert.match(route, /const terminalStates = new Set\(\["retry_scheduled", "blocked", "failed", "posted"\]\)/);
+  assert.match(route, /rowDueForPosting/);
+  assert.match(route, /if \(state === "scheduled"\) return !rowDueForPosting\(row\)/);
+  assert.match(route, /if \(row\?\.qbo_txn_id\) return "posted"/);
+});
+
+test("successful QBO receipt clears scheduling state and records vendor substages", () => {
+  const cron = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+
+  assert.match(cron, /const postedIso = await recordQboPostingSuccess/);
+  assert.match(cron, /status:\s*"posted"[\s\S]*?qbo_txn_id:\s*qboId[\s\S]*?post_after:\s*null/);
+  assert.match(cron, /vendor_subtimings/);
+  assert.match(cron, /active_mapping_lookup_ms/);
+  assert.match(cron, /vendor_validation_mode:\s*"validated_bank_vendor_ref"/);
+});
+
+test("validated vendor mapping can skip fresh QBO vendor search safely", () => {
+  const cron = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+
+  assert.match(cron, /from\("business_qbo_vendor_mappings"\)/);
+  assert.match(cron, /\.eq\("realm_id", tokenRow\.realm_id\)/);
+  assert.match(cron, /\.eq\("qbo_vendor_id", String\(bank\.qbo_entity_id\)\)/);
+  assert.match(cron, /canonicalMatches/);
+  assert.match(cron, /return \{\s*ok: true,\s*requirement,\s*vendorEnsure:/);
+  assert.match(cron, /const payeeResolution = await resolvePayee/);
+});
+
+test("Posting Review removes rows locally only after receipt-confirmed posted status", () => {
+  const adminPage = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
+
+  assert.match(adminPage, /function removePostedPostingReviewTransactions/);
+  assert.match(adminPage, /row\?\.posted && row\?\.qbo_txn_id/);
+  assert.match(adminPage, /setPostingReview\(\(current\) => removePostedPostingReviewTransactions\(current, confirmedPostedIds\)\)/);
+  assert.doesNotMatch(adminPage, /removePostedPostingReviewTransactions\(current, includedIds\)/);
+});
+
 test("posting review details expose every counted non-merchant bucket and approval decision saves before posting checks", async () => {
   const db = makeSupabase({
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],

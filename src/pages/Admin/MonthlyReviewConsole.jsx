@@ -95,6 +95,65 @@ function buildInitialBookkeepingFeeds() {
   ]));
 }
 
+function removePostedPostingReviewTransactions(current, transactionIds = []) {
+  const removedIds = new Set((transactionIds || []).filter(Boolean));
+  if (!removedIds.size) return current;
+  const removedBucketCounts = {};
+  let removedCount = 0;
+  const rememberRemoved = (txn) => {
+    if (!txn?.transaction_id || !removedIds.has(txn.transaction_id)) return;
+    removedCount += 1;
+    if (txn.bucket) removedBucketCounts[txn.bucket] = (removedBucketCounts[txn.bucket] || 0) + 1;
+  };
+  const nextItems = (current.items || []).filter((item) => {
+    if (removedIds.has(item.transaction_id)) {
+      rememberRemoved(item);
+      return false;
+    }
+    return true;
+  });
+  const nextGroups = (current.groups || []).map((group) => {
+    const remainingTransactions = (group.transactions || []).filter((txn) => {
+      if (removedIds.has(txn.transaction_id)) {
+        rememberRemoved(txn);
+        return false;
+      }
+      return true;
+    });
+    if (!remainingTransactions.length) return null;
+    const amounts = remainingTransactions.map((txn) => Number(txn.amount || 0));
+    const dates = remainingTransactions.map((txn) => txn.date).filter(Boolean).sort();
+    return {
+      ...group,
+      transactions: remainingTransactions,
+      transaction_ids: remainingTransactions.map((txn) => txn.transaction_id),
+      transaction_count: remainingTransactions.length,
+      total_amount: amounts.reduce((sum, amount) => sum + amount, 0),
+      date_range: dates.length ? { start: dates[0], end: dates[dates.length - 1] } : group.date_range,
+    };
+  }).filter(Boolean);
+  if (!removedCount) return current;
+  const summary = current.summary ? { ...current.summary } : current.summary;
+  if (summary) {
+    const buckets = { ...(summary.buckets || {}) };
+    Object.entries(removedBucketCounts).forEach(([bucket, count]) => {
+      buckets[bucket] = Math.max(0, Number(buckets[bucket] || 0) - Number(count || 0));
+    });
+    summary.buckets = buckets;
+    ["total", "headline_count", "selected_month_count", "bucket_total"].forEach((key) => {
+      if (summary[key] !== undefined && summary[key] !== null) {
+        summary[key] = Math.max(0, Number(summary[key] || 0) - removedCount);
+      }
+    });
+  }
+  return {
+    ...current,
+    summary,
+    groups: nextGroups,
+    items: nextItems,
+  };
+}
+
 export default function MonthlyReviewConsole() {
   const [month, setMonth] = useState(() => initialMonthValue());
   const [businesses, setBusinesses] = useState([]);
@@ -626,6 +685,7 @@ export default function MonthlyReviewConsole() {
         : null);
       let terminal = false;
       let lastOperationLabel = "Decision accepted";
+      let confirmedPostedIds = [];
       if (statusUrl) {
         let latestOperation = null;
         for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -634,8 +694,12 @@ export default function MonthlyReviewConsole() {
           latestOperation = operation;
           const states = operation?.states || {};
           const firstRow = Array.isArray(operation?.rows) ? operation.rows[0] : null;
+          const postedIds = Array.isArray(operation?.rows)
+            ? operation.rows.filter((row) => row?.posted && row?.qbo_txn_id).map((row) => row.transaction_id).filter(Boolean)
+            : [];
           if (states.posted || firstRow?.posted) {
             lastOperationLabel = "Posted";
+            confirmedPostedIds = postedIds;
           } else if (states.posting) {
             lastOperationLabel = "Posting to QuickBooks";
           } else if (states.retry_scheduled) {
@@ -675,6 +739,9 @@ export default function MonthlyReviewConsole() {
         }
       }
       if (terminal) {
+        if (confirmedPostedIds.length) {
+          setPostingReview((current) => removePostedPostingReviewTransactions(current, confirmedPostedIds));
+        }
         await Promise.all([
           loadPostingReview(),
           loadBookkeepingFeedCounts(),
