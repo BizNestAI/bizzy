@@ -1405,27 +1405,56 @@ test("operation status endpoint exposes retry and posted states without reportin
   assert.match(route, /requestMerchantGroupPostingRetryNow/);
   assert.match(route, /next_post_attempt_at/);
   assert.match(route, /failure_message/);
+  assert.match(route, /posted_transaction_ids: postedTransactionIds/);
+  assert.match(route, /blocked_transaction_ids: blockedTransactionIds/);
+  assert.match(route, /failed_transaction_ids: failedTransactionIds/);
+  assert.match(route, /user_message: buildMerchantApprovalOperationUserMessage/);
 });
 
-test("posting review UI surfaces terminal operation states instead of reverting to approve", () => {
+test("posting review UI presents merchant approval as one posting lifecycle and receipt-confirmed success", () => {
   const page = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
-  assert.match(page, /Retry scheduled/);
-  assert.match(page, /Retry now/);
-  assert.match(page, /Next retry:/);
-  assert.match(page, /last_post_attempt_at/);
-  assert.match(page, /Could not prepare posting/);
-  assert.match(page, /Processing interrupted/);
-  assert.match(page, /stillActive && !stale \? lastOperationLabel : "Processing interrupted"/);
-  assert.match(page, /progressLabel \|\| \(postingReviewAction === group\.group_id \? "Scheduling\.\.\." : primaryLabel\)/);
+  assert.match(page, /uiState:\s*"submitting"/);
+  assert.match(page, /uiState:\s*"posting"/);
+  assert.match(page, /postingReviewSubmittingRef\.current\.has\(group\.group_id\)/);
+  assert.match(page, /Posting\.\.\./);
+  assert.match(page, /extractReceiptConfirmedPostedIds\(operation\)/);
+  assert.match(page, /removePostedPostingReviewTransactions\(current, confirmedPostedIds\)/);
+  assert.match(page, /1 transaction posted to QuickBooks\./);
+  assert.match(page, /Posting is taking longer than expected\./);
+  assert.match(page, /Check status/);
+  assert.doesNotMatch(page, /lastOperationLabel = "Posted"/);
+  assert.doesNotMatch(page, /"Scheduling\.\.\."/);
+  assert.doesNotMatch(page, /progressLabel \|\| \(postingReviewAction === group\.group_id/);
   assert.doesNotMatch(page, /for \(let attempt = 0; attempt < 8/);
 });
 
-test("merchant approval queue has a short durable polling loop and does not use process-local HTTP continuations", () => {
+test("posting review polling is keyed by operation id and cleaned up", () => {
+  const page = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
+  assert.match(page, /postingReviewPollsRef = useRef\(new Map\(\)\)/);
+  assert.match(page, /postingReviewPollsRef\.current\.has\(operationId\)/);
+  assert.match(page, /postingReviewPollsRef\.current\.set\(operationId, poll\)/);
+  assert.match(page, /postingReviewPollsRef\.current\.delete\(operationId\)/);
+  assert.match(page, /poll\.controller\.abort\(\)/);
+});
+
+test("partial merchant success preserves unchecked rows and keeps success out of the action button", () => {
+  const page = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
+  assert.match(page, /date_range: dates\.length \? \{ start: dates\[0\], end: dates\[dates\.length - 1\] \}/);
+  assert.match(page, /leftInReview = Math\.max\(0, Number\(group\.transaction_count \|\| 0\) - includedTransactions\.length\)/);
+  assert.match(page, /showPostingReviewNotice\(/);
+  assert.match(page, /postedPostingReviewIdsRef\.current\.add\(id\)/);
+  assert.match(page, /Promise\.all\(\[loadPostingReview\(\), loadBookkeepingFeedCounts\(\)\]\)\.catch/);
+  assert.doesNotMatch(page, />Posted<\/button>/);
+});
+
+test("merchant approval queue has a short durable polling loop, immediate wakeup, and no synchronous QBO work in approval route", () => {
   const routeSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
   const workerSource = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
   const serviceSource = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
   assert.doesNotMatch(routeSource, /setImmediate|runMerchantBacklogApprovalOperation|persistMerchantBacklogGroupApprovalDecision/);
   assert.match(workerSource, /BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS/);
+  assert.match(routeSource, /signalMerchantApprovalQueueWakeup\(\{ businessId, limit: 25 \}\)/);
+  assert.match(workerSource, /merchantApprovalQueueWakeupQueued/);
   assert.match(workerSource, /runMerchantApprovalQueueOnce/);
   assert.match(workerSource, /skipMerchantApprovalOperations/);
   assert.match(serviceSource, /let candidateIds = explicitCandidateIds/);

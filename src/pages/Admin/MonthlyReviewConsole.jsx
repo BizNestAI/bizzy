@@ -61,6 +61,7 @@ const QUEUE_STATUS_OPTIONS = [
 
 const BOOKKEEPING_FEED_PAGE_SIZE = 25;
 const QBO_PNL_DETAIL_PAGE_SIZE = 25;
+const POSTING_REVIEW_DELAYED_MS = 45_000;
 const QBO_PNL_RECLASSIFIABLE_TYPES = new Set(["Purchase", "Deposit", "CreditCardCharge"]);
 const EXPENSE_SIDE_RECLASS_ACCOUNT_TYPES = new Set(["expense", "costofgoodssold", "otherexpense"]);
 const DEPOSIT_RECLASS_ACCOUNT_TYPES = new Set(["income", "revenue", "otherincome"]);
@@ -154,6 +155,48 @@ function removePostedPostingReviewTransactions(current, transactionIds = []) {
   };
 }
 
+function extractReceiptConfirmedPostedIds(operation = {}) {
+  const explicitIds = Array.isArray(operation.posted_transaction_ids) ? operation.posted_transaction_ids : [];
+  const rowIds = Array.isArray(operation.rows)
+    ? operation.rows.filter((row) => row?.posted && row?.qbo_txn_id).map((row) => row.transaction_id).filter(Boolean)
+    : [];
+  return Array.from(new Set([...explicitIds, ...rowIds].filter(Boolean)));
+}
+
+function firstOperationFailureMessage(operation = {}) {
+  const row = Array.isArray(operation.rows)
+    ? operation.rows.find((candidate) => candidate?.failure_message || candidate?.failure_code || candidate?.post_error)
+    : null;
+  return row?.failure_message || row?.post_error || humanizePostingReviewReason(row?.failure_code || operation?.error);
+}
+
+function humanizePostingReviewReason(value = "") {
+  const normalized = String(value || "").replace(/[_-]+/g, " ").trim();
+  if (!normalized) return "";
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function mapPostingReviewOperationToUiState(operation = {}, startedAt = Date.now()) {
+  const states = operation?.states || {};
+  if (operation?.terminal) {
+    if (extractReceiptConfirmedPostedIds(operation).length) return "success";
+    if (states.retry_scheduled) return "retryable_failure";
+    return "terminal_failure";
+  }
+  if (operation?.stale || Date.now() - startedAt > POSTING_REVIEW_DELAYED_MS) return "delayed";
+  return "posting";
+}
+
+function showPostingReviewNotice(setNotice, timerRef, message) {
+  if (!message) return;
+  if (timerRef.current) clearTimeout(timerRef.current);
+  setNotice({ id: `${Date.now()}`, message });
+  timerRef.current = setTimeout(() => {
+    setNotice(null);
+    timerRef.current = null;
+  }, 4800);
+}
+
 export default function MonthlyReviewConsole() {
   const [month, setMonth] = useState(() => initialMonthValue());
   const [businesses, setBusinesses] = useState([]);
@@ -183,9 +226,14 @@ export default function MonthlyReviewConsole() {
     loaded: false,
   });
   const [postingReviewOptions, setPostingReviewOptions] = useState({});
-  const [postingReviewAction, setPostingReviewAction] = useState(null);
+  const [postingReviewAction, setPostingReviewAction] = useState({});
   const [postingReviewProgress, setPostingReviewProgress] = useState({});
+  const [postingReviewNotice, setPostingReviewNotice] = useState(null);
   const [postingReviewItemActions, setPostingReviewItemActions] = useState({});
+  const postingReviewPollsRef = useRef(new Map());
+  const postingReviewSubmittingRef = useRef(new Set());
+  const postingReviewNoticeTimerRef = useRef(null);
+  const postedPostingReviewIdsRef = useRef(new Set());
   const [expandedPostingReviewGroup, setExpandedPostingReviewGroup] = useState(null);
   const [busyFeedActions, setBusyFeedActions] = useState({});
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
@@ -617,18 +665,22 @@ export default function MonthlyReviewConsole() {
       ]);
       const groups = Array.isArray(detailsResult?.groups) ? detailsResult.groups : [];
       const items = Array.isArray(detailsResult?.items) ? detailsResult.items : [];
+      const suppressedIds = Array.from(postedPostingReviewIdsRef.current || []);
+      const filtered = suppressedIds.length
+        ? removePostedPostingReviewTransactions({ summary, groups, items }, suppressedIds)
+        : { summary, groups, items };
       setPostingReview((current) => ({
         ...current,
-        summary,
-        groups,
-        items,
+        summary: filtered.summary,
+        groups: filtered.groups,
+        items: filtered.items,
         loading: false,
         error: "",
         loaded: true,
       }));
       setPostingReviewOptions((current) => {
         const next = { ...(current || {}) };
-        groups.forEach((group) => {
+        filtered.groups.forEach((group) => {
           if (!next[group.group_id]) {
             next[group.group_id] = {
               qboAccountId: group.proposed_qbo_account_id,
@@ -655,7 +707,9 @@ export default function MonthlyReviewConsole() {
   }, [loadPostingReview, postingReview.expanded, postingReview.loaded, postingReview.loading]);
 
   const approvePostingReviewGroup = useCallback(async (group, approval = {}) => {
-    if (!selectedBusinessId || !group || postingReviewAction) return;
+    const existingUiState = postingReviewAction?.[group?.group_id]?.uiState;
+    if (!selectedBusinessId || !group || postingReviewSubmittingRef.current.has(group.group_id) || ["submitting", "posting", "delayed"].includes(existingUiState)) return;
+    postingReviewSubmittingRef.current.add(group.group_id);
     const options = postingReviewOptions[group.group_id] || {};
     const includedIds = Array.isArray(approval.transactionIds) && approval.transactionIds.length
       ? approval.transactionIds
@@ -663,8 +717,11 @@ export default function MonthlyReviewConsole() {
     const excludedIds = Array.isArray(approval.exclusionIds)
       ? approval.exclusionIds
       : Array.from(options.excludedIds || []);
-    setPostingReviewAction(group.group_id);
-    setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Saving decision" }));
+    setPostingReviewAction((current) => ({
+      ...current,
+      [group.group_id]: { uiState: "submitting", selectedTransactionIds: includedIds, operationId: null },
+    }));
+    setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "" }));
     try {
       const decision = await safeFetch("/api/bookkeeping/posting/backlog/merchant-groups/approve", {
         method: "POST",
@@ -679,85 +736,106 @@ export default function MonthlyReviewConsole() {
           idempotency_key: `monthly-review-posting-group-${group.snapshot_token}`,
         },
       });
-      setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "Decision accepted" }));
       const statusUrl = decision?.status_url || (decision?.operation_id
         ? `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(selectedBusinessId)}`
         : null);
-      let terminal = false;
-      let lastOperationLabel = "Decision accepted";
-      let confirmedPostedIds = [];
       if (statusUrl) {
-        let latestOperation = null;
-        for (let attempt = 0; attempt < 30; attempt += 1) {
-          await new Promise((resolve) => setTimeout(resolve, attempt === 0 ? 600 : 1500));
-          const operation = await safeFetch(statusUrl, { cache: "no-store" });
-          latestOperation = operation;
-          const states = operation?.states || {};
-          const firstRow = Array.isArray(operation?.rows) ? operation.rows[0] : null;
-          const postedIds = Array.isArray(operation?.rows)
-            ? operation.rows.filter((row) => row?.posted && row?.qbo_txn_id).map((row) => row.transaction_id).filter(Boolean)
-            : [];
-          if (states.posted || firstRow?.posted) {
-            lastOperationLabel = "Posted";
-            confirmedPostedIds = postedIds;
-          } else if (states.posting) {
-            lastOperationLabel = "Posting to QuickBooks";
-          } else if (states.retry_scheduled) {
-            lastOperationLabel = firstRow?.next_post_attempt_at ? `Retry scheduled ${formatShortTime(firstRow.next_post_attempt_at)}` : "Retry scheduled";
-          } else if (states.scheduled) {
-            lastOperationLabel = firstRow?.post_after ? `Scheduled ${formatShortTime(firstRow.post_after)}` : "Scheduled";
-          } else if (states.ready_to_post) {
-            lastOperationLabel = "Ready to post";
-          } else if (states.safety_checking || states.checking_duplicates) {
-            lastOperationLabel = "Checking posting safety";
-          } else if (states.claimed || states.decision_processing) {
-            lastOperationLabel = "Preparing to post";
-          } else if (states.blocked) {
-            lastOperationLabel = firstRow?.failure_code ? `Needs attention: ${firstRow.failure_code}` : "Needs attention";
-          } else if (states.failed) {
-            lastOperationLabel = firstRow?.failure_code ? `Could not prepare posting: ${firstRow.failure_code}` : "Could not prepare posting";
-          } else if (states.accepted) {
-            lastOperationLabel = "Decision accepted";
-          } else if (operation?.row_count === 0) {
-            lastOperationLabel = "Status unavailable";
+        const operationId = decision?.operation_id || statusUrl.match(/operations\/([^?]+)/)?.[1] || null;
+        setPostingReviewAction((current) => ({
+          ...current,
+          [group.group_id]: { ...(current[group.group_id] || {}), uiState: "posting", operationId, statusUrl },
+        }));
+        if (operationId && postingReviewPollsRef.current.has(operationId)) {
+          postingReviewSubmittingRef.current.delete(group.group_id);
+          return;
+        }
+        const poll = { timer: null, controller: null };
+        if (operationId) postingReviewPollsRef.current.set(operationId, poll);
+        const startedAt = Date.now();
+        const pollOnce = async () => {
+          poll.controller = new AbortController();
+          try {
+            const operation = await safeFetch(statusUrl, { cache: "no-store", signal: poll.controller.signal });
+            const uiState = mapPostingReviewOperationToUiState(operation, startedAt);
+            if (operation?.terminal) {
+              if (operationId) postingReviewPollsRef.current.delete(operationId);
+              const confirmedPostedIds = extractReceiptConfirmedPostedIds(operation);
+              if (confirmedPostedIds.length) {
+                confirmedPostedIds.forEach((id) => postedPostingReviewIdsRef.current.add(id));
+                setPostingReview((current) => removePostedPostingReviewTransactions(current, confirmedPostedIds));
+                setPostingReviewProgress((current) => {
+                  const next = { ...current };
+                  delete next[group.group_id];
+                  return next;
+                });
+                setPostingReviewAction((current) => {
+                  const next = { ...current };
+                  delete next[group.group_id];
+                  return next;
+                });
+                postingReviewSubmittingRef.current.delete(group.group_id);
+                showPostingReviewNotice(
+                  setPostingReviewNotice,
+                  postingReviewNoticeTimerRef,
+                  confirmedPostedIds.length === 1 ? "1 transaction posted to QuickBooks." : `${confirmedPostedIds.length} transactions posted to QuickBooks.`
+                );
+                Promise.all([loadPostingReview(), loadBookkeepingFeedCounts()]).catch((error) => {
+                  console.warn("[monthly-review][posting-review-refresh-after-post] failed", error?.body || error?.message || error);
+                });
+                return;
+              }
+              const message = operation?.user_message || firstOperationFailureMessage(operation) || "Posting needs attention before it can continue.";
+              setPostingReviewProgress((current) => ({ ...current, [group.group_id]: message }));
+              setPostingReviewAction((current) => ({
+                ...current,
+                [group.group_id]: { ...(current[group.group_id] || {}), uiState: uiState === "retryable_failure" ? "retryable_failure" : "terminal_failure" },
+              }));
+              postingReviewSubmittingRef.current.delete(group.group_id);
+              return;
+            }
+            setPostingReviewAction((current) => ({
+              ...current,
+              [group.group_id]: { ...(current[group.group_id] || {}), uiState },
+            }));
+            const delayMs = uiState === "delayed" ? 4000 : 1000;
+            poll.timer = setTimeout(pollOnce, delayMs);
+          } catch (pollError) {
+            if (pollError?.name === "AbortError") return;
+            const delayed = Date.now() - startedAt > POSTING_REVIEW_DELAYED_MS;
+            setPostingReviewAction((current) => ({
+              ...current,
+              [group.group_id]: { ...(current[group.group_id] || {}), uiState: delayed ? "delayed" : "posting" },
+            }));
+            poll.timer = setTimeout(pollOnce, delayed ? 5000 : 1500);
           }
-          setPostingReviewProgress((current) => ({ ...current, [group.group_id]: lastOperationLabel }));
-          if (operation?.terminal) {
-            terminal = true;
-            break;
-          }
-        }
-        if (!terminal) {
-          const states = latestOperation?.states || {};
-          const stillActive = latestOperation?.active === true
-            || Boolean(states.accepted || states.decision_saved || states.decision_processing || states.checking_duplicates || states.safety_checking || states.posting);
-          const stale = latestOperation?.stale === true;
-          setPostingReviewProgress((current) => ({
-            ...current,
-            [group.group_id]: stillActive && !stale ? lastOperationLabel : "Processing interrupted",
-          }));
-        }
-      }
-      if (terminal) {
-        if (confirmedPostedIds.length) {
-          setPostingReview((current) => removePostedPostingReviewTransactions(current, confirmedPostedIds));
-        }
-        await Promise.all([
-          loadPostingReview(),
-          loadBookkeepingFeedCounts(),
-        ]);
+        };
+        poll.timer = setTimeout(pollOnce, 1000);
+      } else {
+        setPostingReviewAction((current) => {
+          const next = { ...current };
+          delete next[group.group_id];
+          return next;
+        });
+        postingReviewSubmittingRef.current.delete(group.group_id);
+        setPostingReviewProgress((current) => ({
+          ...current,
+          [group.group_id]: "Posting status is unavailable. Refresh Posting Review to check status.",
+        }));
       }
     } catch (e) {
       console.warn("[monthly-review][posting-review-approval] failed", e?.body || e?.message || e);
-      setPostingReview((current) => ({
+      setPostingReviewAction((current) => {
+        const next = { ...current };
+        delete next[group.group_id];
+        return next;
+      });
+      postingReviewSubmittingRef.current.delete(group.group_id);
+      setPostingReviewProgress((current) => ({
         ...current,
-        error: "Bizzi could not finish this posting decision. Nothing was posted automatically. Refresh Posting Review and try again.",
+        [group.group_id]: e?.body?.message || e?.message || "Bizzi could not save this posting decision.",
       }));
-    } finally {
-      setPostingReviewAction(null);
     }
   }, [loadBookkeepingFeedCounts, loadPostingReview, postingReviewAction, postingReviewOptions, selectedBusinessId]);
-
   const retryPostingReviewItem = useCallback(async (item) => {
     if (!selectedBusinessId || !item?.operation_id || !item?.transaction_id || postingReviewItemActions[item.transaction_id]) return;
     setPostingReviewItemActions((current) => ({ ...current, [item.transaction_id]: "Retry requested" }));
@@ -804,6 +882,16 @@ export default function MonthlyReviewConsole() {
   useEffect(() => {
     loadBusinesses();
   }, [loadBusinesses]);
+
+  useEffect(() => () => {
+    postingReviewPollsRef.current.forEach((poll) => {
+      if (poll?.timer) clearTimeout(poll.timer);
+      if (poll?.controller) poll.controller.abort();
+    });
+    postingReviewPollsRef.current.clear();
+    postingReviewSubmittingRef.current.clear();
+    if (postingReviewNoticeTimerRef.current) clearTimeout(postingReviewNoticeTimerRef.current);
+  }, []);
 
   useEffect(() => {
     loadDetail();
@@ -1871,6 +1959,7 @@ export default function MonthlyReviewConsole() {
                   postingReviewOptions={postingReviewOptions}
                   postingReviewAction={postingReviewAction}
                   postingReviewProgress={postingReviewProgress}
+                  postingReviewNotice={postingReviewNotice}
                   expandedPostingReviewGroup={expandedPostingReviewGroup}
                   onToggle={toggleBookkeepingFeed}
                   onLoadMore={(status) => loadBookkeepingFeed(status)}
@@ -1998,6 +2087,7 @@ function BookkeepingFeedMirrorPanels({
   postingReviewOptions,
   postingReviewAction,
   postingReviewProgress,
+  postingReviewNotice,
   postingReviewItemActions,
   expandedPostingReviewGroup,
   onToggle,
@@ -2069,6 +2159,12 @@ function BookkeepingFeedMirrorPanels({
       {reconsideration?.error ? (
         <div className="mt-3 rounded-xl border border-rose-300/20 bg-rose-300/[0.08] px-3 py-2 text-xs text-rose-100">
           {reconsideration.error}
+        </div>
+      ) : null}
+      {postingReviewNotice?.message ? (
+        <div className="mt-3 inline-flex items-center gap-2 rounded-xl border border-emerald-300/20 bg-emerald-300/[0.08] px-3 py-2 text-xs font-semibold text-emerald-100 transition-opacity">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          {postingReviewNotice.message}
         </div>
       ) : null}
       <div className="mt-3 space-y-3">
@@ -2251,8 +2347,12 @@ function PostingReviewMirrorSection({
                 const includedTransactions = (group.transactions || []).filter((txn) => !excludedIds.has(txn.transaction_id));
                 const leftInReview = Math.max(0, Number(group.transaction_count || 0) - includedTransactions.length);
                 const primaryLabel = buildPostingReviewPrimaryLabel(selectedFilter, includedTransactions.length);
+                const actionState = postingReviewAction?.[group.group_id]?.uiState || "idle";
                 const progressLabel = postingReviewProgress?.[group.group_id] || "";
-                const progressActive = postingReviewAction === group.group_id || Boolean(progressLabel);
+                const progressActive = ["submitting", "posting"].includes(actionState);
+                const delayed = actionState === "delayed";
+                const failed = ["retryable_failure", "terminal_failure"].includes(actionState);
+                const controlsDisabled = progressActive || delayed;
                 const isExpanded = expandedPostingReviewGroup === group.group_id;
                 const techExpanded = technicalGroup === group.group_id;
                 const warning = shouldWarnVariableMerchantGroup(group);
@@ -2278,6 +2378,7 @@ function PostingReviewMirrorSection({
                           aria-label={`Pending category for ${group.display_merchant}`}
                           value={selectedAccountId}
                           onChange={(event) => onOptionChange(group.group_id, { qboAccountId: event.target.value })}
+                          disabled={controlsDisabled}
                           className="min-h-9 rounded-lg border border-white/10 bg-[#0f1115] px-2 text-xs text-white"
                         >
                           {accounts.map((acct) => (
@@ -2287,13 +2388,15 @@ function PostingReviewMirrorSection({
                         <button
                           type="button"
                           onClick={() => setConfirmGroup(group)}
-                          disabled={progressActive || includedTransactions.length === 0}
-                          className="rounded-lg bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-[#06100c] hover:bg-emerald-200 disabled:opacity-50"
+                          disabled={controlsDisabled || includedTransactions.length === 0}
+                          className="inline-flex min-w-[128px] items-center justify-center gap-2 rounded-lg bg-emerald-300 px-3 py-1.5 text-xs font-semibold text-[#06100c] hover:bg-emerald-200 disabled:opacity-50"
                         >
-                          {progressLabel || (postingReviewAction === group.group_id ? "Scheduling..." : primaryLabel)}
+                          {progressActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                          {progressActive ? "Posting..." : primaryLabel}
                         </button>
                         <button
                           type="button"
+                          disabled={controlsDisabled}
                           className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-white/65 hover:bg-white/[0.06]"
                         >
                           Leave in review
@@ -2302,13 +2405,26 @@ function PostingReviewMirrorSection({
                     </div>
                     <div className="mt-3 flex flex-wrap gap-3 text-xs text-white/60">
                       <label className="flex items-center gap-2">
-                        <input type="checkbox" checked={options.rememberForFuture !== false} onChange={(event) => onOptionChange(group.group_id, { rememberForFuture: event.target.checked })} />
+                        <input type="checkbox" checked={options.rememberForFuture !== false} disabled={controlsDisabled} onChange={(event) => onOptionChange(group.group_id, { rememberForFuture: event.target.checked })} />
                         {`Remember ${selectedAccount?.name || group.proposed_qbo_account_name || "this category"} for future matching ${group.display_merchant} transactions`}
                       </label>
                       {group.transaction_count > 1 && excludedIds.size ? (
                         <span className="text-white/45">{leftInReview} left in review</span>
                       ) : null}
                     </div>
+                    {delayed ? (
+                      <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300/18 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-100/90">
+                        <span>Posting is taking longer than expected.</span>
+                        <button type="button" onClick={onRefresh} className="font-semibold text-amber-50 hover:text-white">
+                          Check status
+                        </button>
+                      </div>
+                    ) : null}
+                    {failed && progressLabel ? (
+                      <div className="mt-3 rounded-lg border border-rose-300/18 bg-rose-300/[0.07] px-3 py-2 text-xs text-rose-100/90">
+                        {progressLabel}
+                      </div>
+                    ) : null}
                     <button
                       type="button"
                       onClick={() => onToggleGroup(isExpanded ? null : group.group_id)}
@@ -2338,6 +2454,7 @@ function PostingReviewMirrorSection({
                                 type="checkbox"
                                 aria-label={`Include ${txn.description || txn.memo || txn.transaction_id}`}
                                 checked={!excludedIds.has(txn.transaction_id)}
+                                disabled={controlsDisabled}
                                 onChange={(event) => {
                                   const next = new Set(excludedIds);
                                   if (event.target.checked) next.delete(txn.transaction_id);

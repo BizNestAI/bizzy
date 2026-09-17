@@ -3,7 +3,7 @@ import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
-import { postSingleBookkeepingTransactionNow, runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
+import { postSingleBookkeepingTransactionNow, runBooksPostOnce, signalMerchantApprovalQueueWakeup } from "../../../jobs/booksPost.cron.js";
 import {
   getAutoPostSettings,
   getCanonicalPostingBacklogSummary,
@@ -256,8 +256,10 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
     stageStartMs = nowMs();
     const decision = await persistMerchantBacklogGroupApprovalOperation(common);
     stageTimings.accept_operation_ms = routeTiming(stageStartMs);
+    signalMerchantApprovalQueueWakeup({ businessId, limit: 25 });
     return res.status(202).json({
       ...decision,
+      worker_wakeup: "signaled",
       stage_timings_ms: stageTimings,
       response_ms: routeTiming(routeStartMs),
       status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(businessId)}`,
@@ -328,6 +330,9 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
     };
     const active = rows.some(rowIsActive);
     const stale = rows.length > 0 && rows.every((row) => rowIsActive(row) && rowLeaseExpired(row));
+    const postedTransactionIds = rows.filter((row) => Boolean(row.qbo_txn_id)).map((row) => row.transaction_id).filter(Boolean);
+    const blockedTransactionIds = rows.filter((row) => rowOperationState(row) === "blocked").map((row) => row.transaction_id).filter(Boolean);
+    const failedTransactionIds = rows.filter((row) => rowOperationState(row) === "failed").map((row) => row.transaction_id).filter(Boolean);
     const terminal = rows.length > 0 && rows.every((row) => {
       const state = rowOperationState(row);
       if (row.qbo_txn_id || terminalStates.has(state)) return true;
@@ -343,6 +348,11 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
       active,
       stale,
       last_update_at: lastUpdatedAtMs ? new Date(lastUpdatedAtMs).toISOString() : null,
+      selected_transaction_ids: rows.map((row) => row.transaction_id).filter(Boolean),
+      posted_transaction_ids: postedTransactionIds,
+      blocked_transaction_ids: blockedTransactionIds,
+      failed_transaction_ids: failedTransactionIds,
+      user_message: buildMerchantApprovalOperationUserMessage({ rows, states, postedTransactionIds, blockedTransactionIds, failedTransactionIds }),
       rows: rows.map((row) => ({
         transaction_id: row.transaction_id,
         state: rowOperationState(row),
@@ -372,6 +382,33 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
     });
   }
 });
+
+function buildMerchantApprovalOperationUserMessage({
+  rows = [],
+  states = {},
+  postedTransactionIds = [],
+  blockedTransactionIds = [],
+  failedTransactionIds = [],
+} = {}) {
+  if (postedTransactionIds.length > 0 && postedTransactionIds.length === rows.length) {
+    return postedTransactionIds.length === 1 ? "1 transaction posted to QuickBooks." : `${postedTransactionIds.length} transactions posted to QuickBooks.`;
+  }
+  if (blockedTransactionIds.length) return "Posting needs attention before it can continue.";
+  if (failedTransactionIds.length || states.failed) return "Posting could not finish. Review the transaction and retry when safe.";
+  if (states.retry_scheduled) return "Posting will retry automatically.";
+  if (
+    states.accepted ||
+    states.decision_processing ||
+    states.decision_saved ||
+    states.checking_duplicates ||
+    states.safety_checking ||
+    states.scheduled ||
+    states.posting
+  ) {
+    return "Posting to QuickBooks.";
+  }
+  return rows.length ? "Checking posting status." : "Posting status is unavailable.";
+}
 
 router.post("/posting/backlog/merchant-groups/operations/:operationId/retry-now", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
   const routeStartMs = nowMs();

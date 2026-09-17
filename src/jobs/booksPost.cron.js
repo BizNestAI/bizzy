@@ -63,6 +63,7 @@ const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
 let postAttemptsTableAvailable = true;
 let booksPostSweepRunning = false;
 let merchantApprovalQueueRunning = false;
+let merchantApprovalQueueWakeupQueued = false;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -2785,6 +2786,27 @@ export function startBooksPostingCron() {
 }
 
 export const runBooksPostOnce = runOnce;
+
+export function signalMerchantApprovalQueueWakeup(options = {}) {
+  if (process.env.DISABLE_MERCHANT_APPROVAL_QUEUE === "true") return { queued: false, reason: "disabled" };
+  if (merchantApprovalQueueWakeupQueued || merchantApprovalQueueRunning) return { queued: false, reason: "already_queued" };
+  merchantApprovalQueueWakeupQueued = true;
+  const businessId = options?.businessId || null;
+  setTimeout(() => {
+    if (merchantApprovalQueueRunning) {
+      merchantApprovalQueueWakeupQueued = false;
+      return;
+    }
+    merchantApprovalQueueRunning = true;
+    runMerchantApprovalQueueOnce({ businessId, limit: options?.limit || 25 })
+      .catch((err) => log.error("[books-post] merchant approval wakeup error", err))
+      .finally(() => {
+        merchantApprovalQueueRunning = false;
+        merchantApprovalQueueWakeupQueued = false;
+      });
+  }, 0);
+  return { queued: true };
+}
 
 export async function runMerchantApprovalQueueOnce(options = {}) {
   const businessId = options?.businessId || null;
