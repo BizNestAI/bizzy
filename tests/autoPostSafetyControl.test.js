@@ -257,7 +257,7 @@ test("auto-post settings service reads, updates, and preserves historical backlo
   const initialSettings = await getAutoPostSettings({ db, businessId: "biz-1", graceHours: 24 });
   assert.equal(initialSettings.enabled, false);
   assert.equal(initialSettings.auto_post_to_quickbooks, false);
-  assert.equal(initialSettings.handled_backlog_count, 2);
+  assert.equal(initialSettings.handled_backlog_count, 1);
   assert.equal(initialSettings.posting_grace_hours, 24);
   assert.equal(initialSettings.auto_post_scope_mode, "new_activity_only");
   assert.equal(initialSettings.worker.enabled, true);
@@ -278,7 +278,7 @@ test("auto-post settings service reads, updates, and preserves historical backlo
 
   const on = await setAutoPostEnabled({ db, businessId: "biz-1", enabled: true, confirmBacklog: true, graceHours: 24, nowMs });
   assert.equal(on.auto_post_to_quickbooks, true);
-  assert.equal(on.handled_backlog_count, 2);
+  assert.equal(on.handled_backlog_count, 1);
   assert.equal(on.scheduled_backlog_count, 0);
   assert.equal(on.historical_backlog_status, "review_required");
   assert.equal(db.table("business_profiles").find((row) => row.id === "biz-1").auto_post_to_quickbooks, true);
@@ -1225,6 +1225,18 @@ test("retry now resumes an existing merchant operation without re-approving or d
       },
       updated_at: "2026-09-16T20:00:45.000Z",
     }],
+    bank_transactions: [{
+      business_id: "biz-1",
+      id: "exchange-1",
+      plaid_account_id: "pa-1",
+      date: "2026-09-09",
+      amount: -5.4,
+      direction: "OUTFLOW",
+      name: "AplPay THE EXCHANGE",
+      merchant_name: "the exchange",
+      pending: false,
+      is_archived: false,
+    }],
     vendor_rules: [{ id: "rule-1", business_id: "biz-1", source_type: "business_merchant_rule" }],
     qbo_posted_transactions: [{ business_id: "biz-1", transaction_id: "exchange-1", status: "processing", qbo_txn_id: null }],
   });
@@ -1334,6 +1346,81 @@ test("merchant groups use exact identity and grouped approval schedules only pas
   assert.equal(db.cat("biz-1", "openai-2").meta.safe_to_auto_post, true);
   assert.equal(db.cat("biz-1", "openai-pending").meta.safe_to_auto_post, undefined);
   assert.equal(result.scheduled_count, 2);
+});
+
+test("retry now skips pending Plaid rows before scheduling", async () => {
+  const db = makeSupabase({
+    transaction_categorizations: [
+      {
+        business_id: "biz-1",
+        transaction_id: "finalized-1",
+        status: "failed",
+        final_qbo_account_id: "1150040001",
+        final_qbo_account_name: "Meals",
+        qbo_txn_id: null,
+        post_after: null,
+        post_error: "temporary_qbo_error",
+        meta: {
+          merchant_group_operation_id: "op-1",
+          merchant_group_operation_state: "failed",
+        },
+      },
+      {
+        business_id: "biz-1",
+        transaction_id: "pending-1",
+        status: "failed",
+        final_qbo_account_id: "1150040001",
+        final_qbo_account_name: "Meals",
+        qbo_txn_id: null,
+        post_after: null,
+        post_error: "temporary_qbo_error",
+        meta: {
+          merchant_group_operation_id: "op-1",
+          merchant_group_operation_state: "failed",
+        },
+      },
+    ],
+    bank_transactions: [
+      { business_id: "biz-1", id: "finalized-1", plaid_account_id: "pa-1", date: "2026-09-08", pending: false, is_archived: false },
+      { business_id: "biz-1", id: "pending-1", plaid_account_id: "pa-1", date: "2026-09-09", pending: true, is_archived: false },
+    ],
+  });
+
+  const result = await requestMerchantGroupPostingRetryNow({
+    db,
+    businessId: "biz-1",
+    operationId: "op-1",
+    transactionIds: ["finalized-1", "pending-1"],
+    actorId: "user-1",
+  });
+
+  assert.equal(result.retried_count, 1);
+  assert.equal(result.skipped_count, 1);
+  assert.deepEqual(result.skipped, [{ transaction_id: "pending-1", reason: "pending_transaction_not_postable" }]);
+  assert.ok(db.cat("biz-1", "finalized-1").post_after);
+  assert.equal(db.cat("biz-1", "pending-1").post_after, null);
+  assert.equal(db.cat("biz-1", "pending-1").meta.safe_to_auto_post, undefined);
+});
+
+test("all QBO posting entry points flow through finalized bank-transaction guards", () => {
+  const cron = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+  const autoPost = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
+  const postingRoutes = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+  const monthlyReviewRoutes = readFileSync(join(root, "src/api/admin/monthlyReview.routes.js"), "utf8");
+
+  assert.match(cron, /if \(bank\.pending === true\) \{[\s\S]*?markTransactionNonPostable\(item, "pending_transaction_not_postable"\)/);
+  assert.match(cron, /await handleItem\(item, \{ manual: true, confirmPostAnyway \}\)/);
+  assert.match(cron, /await handleItem\(item\)/);
+  assert.match(cron, /if \(item\?\.meta\?\.taxonomy_type === "cc_payment" && item\?\.meta\?\.cc_payment_pair_id\)[\s\S]*?handleCreditCardPaymentPairItem/);
+  assert.match(cron, /fetchBankTransactions[\s\S]*pending,is_archived/);
+  assert.match(autoPost, /\.eq\("pending", false\)[\s\S]*?\.in\("id", ids\)/);
+  assert.match(autoPost, /bankTxn\?\.pending === true \|\| item\?\.meta\?\.pending === true/);
+  assert.match(autoPost, /pending_transaction_not_postable/);
+  assert.match(postingRoutes, /postSingleBookkeepingTransactionNow\(\{ businessId, transactionId, confirmPostAnyway \}\)/);
+  assert.match(postingRoutes, /runBooksPostOnce\(\{ businessId, force \}\)/);
+  assert.match(monthlyReviewRoutes, /postSingleBookkeepingTransactionNow\(/);
+  assert.doesNotMatch(postingRoutes, /postToQbo|createQboPurchase|createQboDeposit|createQboTransfer/);
+  assert.doesNotMatch(monthlyReviewRoutes, /postToQbo|createQboPurchase|createQboDeposit|createQboTransfer/);
 });
 
 function makeSupabase(tables = {}, options = {}) {

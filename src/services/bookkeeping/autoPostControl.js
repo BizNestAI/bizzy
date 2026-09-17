@@ -324,6 +324,7 @@ async function filterActiveBacklogTransactionIds(db, businessId, transactionIds 
       .select("id")
       .eq("business_id", businessId)
       .eq("is_archived", false)
+      .eq("pending", false)
       .in("id", ids);
     if (bookkeepingStartDate) query = query.gte("date", bookkeepingStartDate);
     const { data, error } = await query;
@@ -2175,9 +2176,19 @@ export async function requestMerchantGroupPostingRetryNow({
     throw err;
   }
   const nowIso = new Date().toISOString();
+  const bankRows = await fetchBacklogBankRows(db, businessId, rows.map((row) => row.transaction_id));
   const retried = [];
   const skipped = [];
   for (const row of rows) {
+    const bankTxn = bankRows.map.get(row.transaction_id);
+    if (!bankTxn) {
+      skipped.push({ transaction_id: row.transaction_id, reason: "missing_transaction" });
+      continue;
+    }
+    if (bankTxn.pending === true) {
+      skipped.push({ transaction_id: row.transaction_id, reason: "pending_transaction_not_postable" });
+      continue;
+    }
     if (row.qbo_txn_id) {
       skipped.push({ transaction_id: row.transaction_id, reason: "already_posted" });
       continue;
