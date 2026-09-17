@@ -846,7 +846,8 @@ test("merchant approval queue is promptly polled and still durable through the d
   assert.match(cron, /BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS \|\| 1/);
   assert.match(cron, /runMerchantApprovalQueueOnce/);
   assert.match(cron, /processPendingMerchantBacklogApprovalOperations/);
-  assert.match(cron, /postingSweep = await runOnce\(\{/);
+  assert.match(cron, /collectImmediateMerchantApprovalPostingIds\(approvalOps\)/);
+  assert.match(cron, /transactionIds:\s*group\.transaction_ids/);
   assert.match(route, /persistMerchantBacklogGroupApprovalOperation\(common\)/);
   assert.doesNotMatch(route, /persistMerchantBacklogGroupApprovalDecision\(common\)/);
   assert.doesNotMatch(route, /setImmediate|postToQbo|claim_qbo_posting_intent/);
@@ -1426,6 +1427,7 @@ test("posting review UI presents merchant approval as one posting lifecycle and 
   assert.doesNotMatch(page, /"Scheduling\.\.\."/);
   assert.doesNotMatch(page, /progressLabel \|\| \(postingReviewAction === group\.group_id/);
   assert.doesNotMatch(page, /for \(let attempt = 0; attempt < 8/);
+  assert.match(page, /if \(includedCount <= 0\) return filterKey === "ready_to_post" \? "Schedule posting" : "Approve & post"/);
 });
 
 test("posting review polling is keyed by operation id and cleaned up", () => {
@@ -1457,9 +1459,24 @@ test("merchant approval queue has a short durable polling loop, immediate wakeup
   assert.match(workerSource, /merchantApprovalQueueWakeupQueued/);
   assert.match(workerSource, /runMerchantApprovalQueueOnce/);
   assert.match(workerSource, /skipMerchantApprovalOperations/);
+  assert.match(workerSource, /collectImmediateMerchantApprovalPostingIds/);
+  assert.match(workerSource, /merchant_approval_exact_posting_dispatch/);
+  assert.match(workerSource, /transactionIds:\s*group\.transaction_ids/);
+  assert.match(workerSource, /if \(transactionIds\.length\) query = query\.in\("transaction_id", transactionIds\)/);
+  assert.doesNotMatch(workerSource, /processed_count \|\| 0\) > 0\)[\s\S]{0,180}?runOnce\(\{\s*businessId,\s*force:\s*false,\s*skipMerchantApprovalOperations:\s*true,\s*\}\)/);
   assert.match(serviceSource, /let candidateIds = explicitCandidateIds/);
   assert.match(serviceSource, /if \(!candidateIds\.length\)[\s\S]*?getMerchantBacklogGroups/);
   assert.match(serviceSource, /buildExplicitMerchantApprovalGroup\(\{[\s\S]*?transactionIds: candidateIds/);
+});
+
+test("merchant approval dispatch waits for due exact rows and leaves recovery cron available", () => {
+  const workerSource = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+  assert.match(workerSource, /const postAfterMs = Date\.parse\(row\.post_after \|\| ""\)/);
+  assert.match(workerSource, /if \(!Number\.isFinite\(postAfterMs\) \|\| postAfterMs > nowMs \+ 1000\) continue/);
+  assert.match(workerSource, /postingSweep = \[\]/);
+  assert.match(workerSource, /for \(const group of immediatePostingGroups\)/);
+  assert.match(workerSource, /runOnce\(\{[\s\S]*?transactionIds:\s*group\.transaction_ids[\s\S]*?skipMerchantApprovalOperations:\s*true[\s\S]*?\}\)/);
+  assert.match(workerSource, /setInterval\(\(\) => \{[\s\S]*?runMerchantApprovalQueueOnce\(\)/);
 });
 
 test("merchant groups use exact identity and grouped approval schedules only passing rows", async () => {

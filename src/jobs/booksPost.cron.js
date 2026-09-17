@@ -1059,6 +1059,7 @@ async function fetchPending(businessId = null, options = {}) {
   const nowIso = new Date().toISOString();
   const pageSize = Math.max(1, Math.min(Number(options?.pageSize || DUE_QUERY_PAGE_SIZE) || 250, 500));
   const maxRows = Math.max(pageSize, Number(options?.maxRows || MAX_DUE_ROWS_PER_SWEEP) || pageSize);
+  const transactionIds = uniqueValues(options?.transactionIds || []);
   const rows = [];
   for (let from = 0; from < maxRows; from += pageSize) {
     const to = Math.min(from + pageSize - 1, maxRows - 1);
@@ -1076,6 +1077,7 @@ async function fetchPending(businessId = null, options = {}) {
       query = query.not("post_after", "is", null).lte("post_after", nowIso);
     }
     if (businessId) query = query.eq("business_id", businessId);
+    if (transactionIds.length) query = query.in("transaction_id", transactionIds);
     const { data, error } = await query;
 
     if (error) throw error;
@@ -2381,6 +2383,7 @@ async function runOnce(options = {}) {
   const businessId = options?.businessId || null;
   const force = options?.force === true;
   const skipMerchantApprovalOperations = options?.skipMerchantApprovalOperations === true;
+  const transactionIds = uniqueValues(options?.transactionIds || []);
   const summary = {
     ok: true,
     forced: force,
@@ -2398,6 +2401,7 @@ async function runOnce(options = {}) {
     auto_post_disabled: 0,
     merchant_approval_operations: 0,
     merchant_approval_operations_failed: 0,
+    exact_transaction_count: transactionIds.length,
     businesses_failed: 0,
   };
   try {
@@ -2418,7 +2422,7 @@ async function runOnce(options = {}) {
       summary.merchant_approval_operations = approvalOps.processed_count || 0;
       summary.merchant_approval_operations_failed = approvalOps.failed_count || 0;
     }
-    const pending = await fetchPending(businessId, { force });
+    const pending = await fetchPending(businessId, { force, transactionIds });
     summary.pending = pending.length;
     if (!pending.length) return summary;
 
@@ -2787,6 +2791,26 @@ export function startBooksPostingCron() {
 
 export const runBooksPostOnce = runOnce;
 
+function collectImmediateMerchantApprovalPostingIds(approvalOps = {}) {
+  const nowMs = Date.now();
+  const byBusiness = new Map();
+  for (const processed of approvalOps?.processed || []) {
+    const businessId = processed?.business_id || null;
+    if (!businessId) continue;
+    for (const row of processed?.result?.scheduled || []) {
+      if (!row?.transaction_id) continue;
+      const postAfterMs = Date.parse(row.post_after || "");
+      if (!Number.isFinite(postAfterMs) || postAfterMs > nowMs + 1000) continue;
+      if (!byBusiness.has(businessId)) byBusiness.set(businessId, new Set());
+      byBusiness.get(businessId).add(row.transaction_id);
+    }
+  }
+  return Array.from(byBusiness.entries()).map(([business_id, ids]) => ({
+    business_id,
+    transaction_ids: Array.from(ids).sort(),
+  }));
+}
+
 export function signalMerchantApprovalQueueWakeup(options = {}) {
   if (process.env.DISABLE_MERCHANT_APPROVAL_QUEUE === "true") return { queued: false, reason: "disabled" };
   if (merchantApprovalQueueWakeupQueued || merchantApprovalQueueRunning) return { queued: false, reason: "already_queued" };
@@ -2818,16 +2842,27 @@ export async function runMerchantApprovalQueueOnce(options = {}) {
     limit: options?.limit || 25,
   });
   let postingSweep = null;
-  if ((approvalOps.processed_count || 0) > 0) {
-    postingSweep = await runOnce({
-      businessId,
-      force: false,
-      skipMerchantApprovalOperations: true,
-    });
+  const immediatePostingGroups = collectImmediateMerchantApprovalPostingIds(approvalOps);
+  if (immediatePostingGroups.length) {
+    postingSweep = [];
+    for (const group of immediatePostingGroups) {
+      log.info("[books-post] merchant approval exact posting dispatch", {
+        stage: "merchant_approval_exact_posting_dispatch",
+        business_id: group.business_id,
+        transaction_count: group.transaction_ids.length,
+      });
+      postingSweep.push(await runOnce({
+        businessId: group.business_id,
+        transactionIds: group.transaction_ids,
+        force: false,
+        skipMerchantApprovalOperations: true,
+      }));
+    }
   }
   return {
-    ok: approvalOps.ok !== false && (postingSweep?.ok !== false),
+    ok: approvalOps.ok !== false && (Array.isArray(postingSweep) ? postingSweep.every((sweep) => sweep?.ok !== false) : postingSweep?.ok !== false),
     merchant_approval_operations: approvalOps,
     posting_sweep: postingSweep,
+    immediate_posting_groups: immediatePostingGroups,
   };
 }

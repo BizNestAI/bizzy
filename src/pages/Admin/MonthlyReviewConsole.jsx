@@ -4882,6 +4882,7 @@ function buildPostingReviewApproval(group = {}, options = {}) {
 }
 
 function buildPostingReviewPrimaryLabel(filterKey = "all", includedCount = 0) {
+  if (includedCount <= 0) return filterKey === "ready_to_post" ? "Schedule posting" : "Approve & post";
   if (filterKey === "ready_to_post") return includedCount === 1 ? "Schedule posting" : `Schedule ${includedCount}`;
   return includedCount === 1 ? "Approve & post" : `Approve & post ${includedCount}`;
 }
