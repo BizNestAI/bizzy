@@ -1,6 +1,6 @@
 import React from "react";
 import { CoaDropdown, CreditCardPaymentMatchControl } from "./BookkeepingFeed.jsx";
-import LoanPaymentSplitDrawer, { buildInitialLoanSplitDraft } from "./LoanPaymentSplitDrawer.jsx";
+import LoanPaymentSplitModal, { buildInitialLoanSplitDraft } from "./LoanPaymentSplitModal.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
@@ -366,7 +366,7 @@ function BookkeepingTransactionMirrorRow({
         ) : null}
       </div>
     </div>
-    <LoanPaymentSplitDrawer
+    <LoanPaymentSplitModal
       open={Boolean(loanSplitDraft)}
       txn={row}
       accounts={accounts || []}

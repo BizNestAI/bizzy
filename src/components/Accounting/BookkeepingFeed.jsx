@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom";
 import { CheckCircle2, CreditCard, Landmark, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
-import LoanPaymentSplitDrawer, { buildInitialLoanSplitDraft } from "./LoanPaymentSplitDrawer.jsx";
+import LoanPaymentSplitModal, { buildInitialLoanSplitDraft } from "./LoanPaymentSplitModal.jsx";
 import {
   deriveCreditCardPaymentOrientation,
   deriveCreditCardPaymentStatus,
@@ -1598,7 +1598,7 @@ export default function BookkeepingFeed({
           </button>
         </div>
       </div>
-      <LoanPaymentSplitDrawer
+      <LoanPaymentSplitModal
         open={Boolean(activeLoanSplitEntry)}
         txn={activeLoanSplitEntry?.txn}
         accounts={accounts}

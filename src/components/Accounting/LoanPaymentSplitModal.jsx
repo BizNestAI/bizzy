@@ -44,6 +44,14 @@ export function findSafeDefaultInterestAccountId(accounts = [], loanProfile = nu
   return exact?.id ? String(exact.id) : "";
 }
 
+function metadataDateLabel(txn = {}) {
+  const raw = txn?.date || txn?.txn_date || "";
+  if (!raw) return "Date unavailable";
+  const date = new Date(`${raw}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
 export function cleanLoanLenderSuggestion(txn = {}) {
   const raw = txn.vendor || txn.payee || txn.merchant || txn.counterparty_name || txn.merchant_name || "";
   return String(raw || "")
@@ -159,8 +167,17 @@ function AccountSelect({ label, value, accounts = [], placeholder, disabled, onC
     const sync = () => {
       const rect = buttonRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const maxHeight = Math.min(320, Math.max(180, window.innerHeight - rect.bottom - 16));
-      setPos({ top: rect.bottom + 6, left: Math.max(8, rect.left), width: Math.min(rect.width, window.innerWidth - 16), maxHeight });
+      const viewportPadding = 12;
+      const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
+      const spaceAbove = rect.top - viewportPadding;
+      const openAbove = spaceBelow < 220 && spaceAbove > spaceBelow;
+      const maxHeight = Math.min(320, Math.max(180, openAbove ? spaceAbove - 6 : spaceBelow - 6));
+      setPos({
+        top: openAbove ? Math.max(viewportPadding, rect.top - maxHeight - 6) : rect.bottom + 6,
+        left: Math.max(viewportPadding, Math.min(rect.left, window.innerWidth - rect.width - viewportPadding)),
+        width: Math.min(rect.width, window.innerWidth - viewportPadding * 2),
+        maxHeight,
+      });
     };
     sync();
     window.addEventListener("resize", sync);
@@ -246,7 +263,7 @@ function AccountSelect({ label, value, accounts = [], placeholder, disabled, onC
   );
 }
 
-export default function LoanPaymentSplitDrawer({
+export default function LoanPaymentSplitModal({
   open = false,
   txn,
   accounts = [],
@@ -291,7 +308,7 @@ export default function LoanPaymentSplitDrawer({
     (!isNewLoan || (String(draft.lenderName || "").trim() && String(draft.loanName || "").trim()));
   const sourceLabel = txn?.source_account_name || txn?.sourceAccountName || txn?.account_name || txn?.accountName || txn?.plaid_account_name || "Source account";
   const description = txn?.description || txn?.name || txn?.vendor || txn?.payee || "Transaction";
-  const dateLabel = txn?.date || txn?.txn_date || "Date unavailable";
+  const dateLabel = metadataDateLabel(txn);
   const update = React.useCallback((patch) => onChange?.({ ...draft, ...patch }), [draft, onChange]);
   const requestClose = React.useCallback(() => {
     if (saving) return;
@@ -355,147 +372,167 @@ export default function LoanPaymentSplitDrawer({
 
   return ReactDOM.createPortal(
     <div className="fixed inset-0 z-[10000]" role="presentation">
-      <button type="button" aria-label="Close loan split drawer" className="absolute inset-0 cursor-default bg-black/58 backdrop-blur-[2px]" onClick={requestClose} />
-      <section
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="loan-split-title"
-        className="absolute right-0 top-0 flex h-dvh w-full max-w-[min(700px,92vw)] flex-col border-l border-emerald-300/20 bg-[#0d100f] text-white shadow-[0_0_80px_rgba(0,0,0,0.72)] max-[640px]:max-w-none"
-      >
-        <header className="sticky top-0 z-10 border-b border-white/10 bg-[#0d100f]/96 px-5 py-4 backdrop-blur">
-          <div className="flex items-start justify-between gap-4">
+      <button type="button" aria-label="Close loan split modal" className="absolute inset-0 cursor-default bg-black/62 backdrop-blur-[3px]" onClick={requestClose} />
+      <div className="relative z-10 flex min-h-dvh items-center justify-center p-8 max-[850px]:p-4">
+        <section
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="loan-split-title"
+          className="flex max-h-[min(820px,calc(100vh-64px))] min-w-[min(760px,calc(100vw-64px))] w-[min(1180px,calc(100vw-64px))] flex-col overflow-hidden rounded-2xl border border-emerald-300/20 bg-[#0d100f] text-white shadow-[0_34px_110px_rgba(0,0,0,0.78)] max-[850px]:h-[calc(100dvh-32px)] max-[850px]:max-h-[calc(100dvh-32px)] max-[850px]:min-w-0 max-[850px]:w-[calc(100vw-32px)] max-[640px]:rounded-xl"
+        >
+        <header className="shrink-0 border-b border-white/10 bg-[#0d100f]/98 px-6 py-4 backdrop-blur max-[850px]:px-4">
+          <div className="flex items-start justify-between gap-5">
             <div className="min-w-0">
               <h2 id="loan-split-title" className="text-lg font-semibold text-white">Split loan payment</h2>
-              <p className="mt-1 truncate text-sm text-white/62" title={description}>{description}</p>
-              <p className="mt-1 text-xs text-white/45">{dateLabel} - {sourceLabel} - {formatMoney(totalMinor)}</p>
+              <p className="mt-1 max-w-[760px] truncate text-sm text-white/62" title={description}>{description}</p>
+              <p className="mt-1 truncate text-xs text-white/45">{dateLabel} - {sourceLabel} - {formatMoney(totalMinor)}</p>
             </div>
-            <button type="button" onClick={requestClose} className="rounded-full border border-white/10 p-2 text-white/70 hover:bg-white/8 hover:text-white">
+            <button type="button" onClick={requestClose} aria-label="Close loan split modal" className="shrink-0 rounded-full border border-white/10 p-2 text-white/70 hover:bg-white/8 hover:text-white">
               <X className="h-4 w-4" />
             </button>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          <div className="grid grid-cols-3 gap-2 rounded-xl border border-white/10 bg-black/24 p-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 max-[850px]:px-4">
+          <div className="grid grid-cols-3 gap-3 rounded-xl border border-white/10 bg-black/24 px-4 py-3 max-[640px]:grid-cols-1">
             <SummaryItem label="Payment total" value={formatMoney(totalMinor)} />
             <SummaryItem label="Allocated" value={formatMoney(allocatedMinor)} tone="accent" />
-            <SummaryItem label="Remaining" value={`${remainingMinor === 0 ? "✓ " : ""}${formatMoney(remainingMinor)}`} tone={remainingMinor === 0 ? "good" : remainingMinor < 0 ? "bad" : "warn"} />
+            <SummaryItem label="Remaining" value={formatMoney(remainingMinor)} icon={remainingMinor === 0 ? Check : null} tone={remainingMinor === 0 ? "good" : remainingMinor < 0 ? "bad" : "warn"} />
           </div>
 
-          <p className="mt-4 rounded-lg border border-white/10 bg-white/[0.035] px-3 py-2 text-sm text-white/62">
-            Enter the principal and interest shown on the lender statement. The allocation must equal the payment total.
-          </p>
+          <div className="mt-5 grid grid-cols-[minmax(300px,0.4fr)_minmax(420px,0.6fr)] gap-5 max-[1024px]:grid-cols-[minmax(290px,0.42fr)_minmax(360px,0.58fr)] max-[1024px]:gap-4 max-[850px]:grid-cols-1">
+            <section className="min-w-0">
+              <h3 className="text-sm font-semibold text-white">Loan details</h3>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 min-[851px]:grid-cols-1">
+                <label className="block min-w-0">
+                  <span className="mb-1 block text-xs font-semibold text-white/55">Loan</span>
+                  <select value={draft.lenderProfileId || "new"} onChange={(event) => setProfile(event.target.value)} className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-300/55">
+                    <option value="new">Set up new loan</option>
+                    {loanProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}
+                  </select>
+                </label>
+                {!isNewLoan && selectedProfile ? (
+                  <div className="min-w-0 rounded-lg border border-emerald-300/15 bg-emerald-300/[0.05] px-3 py-2 text-xs text-emerald-50/75 sm:col-span-2 min-[851px]:col-span-1">
+                    <div className="truncate font-semibold text-emerald-50" title={profileLabel(selectedProfile)}>{profileLabel(selectedProfile)}</div>
+                    <div className="mt-1 truncate" title={selectedProfile.default_principal_qbo_account_name || selectedProfile.default_principal_qbo_account_id || "Not set"}>Principal account: {selectedProfile.default_principal_qbo_account_name || selectedProfile.default_principal_qbo_account_id || "Not set"}</div>
+                    <div className="mt-1 truncate" title={selectedProfile.default_interest_qbo_account_name || selectedProfile.default_interest_qbo_account_id || "Not set"}>Interest account: {selectedProfile.default_interest_qbo_account_name || selectedProfile.default_interest_qbo_account_id || "Not set"}</div>
+                  </div>
+                ) : null}
+                {isNewLoan ? (
+                  <>
+                    <TextField label="Lender name" value={draft.lenderName || ""} onChange={(value) => update({ lenderName: value })} />
+                    <TextField label="Loan name/identifier" value={draft.loanName || ""} onChange={(value) => update({ loanName: value })} />
+                    <TextField label="Last four/reference, optional" value={draft.referenceLastFour || ""} inputMode="numeric" onChange={(value) => update({ referenceLastFour: value.replace(/\D/g, "").slice(0, 4) })} />
+                    <label className="block min-w-0">
+                      <span className="mb-1 block text-xs font-semibold text-white/55">Expected cadence</span>
+                      <select value={draft.expectedCadence || ""} onChange={(event) => update({ expectedCadence: event.target.value })} className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-300/55">
+                        <option value="">Cadence optional</option>
+                        <option value="monthly">Monthly</option>
+                        <option value="biweekly">Biweekly</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="irregular">Irregular</option>
+                      </select>
+                    </label>
+                    <label className="inline-flex items-start gap-2 text-sm text-white/72 sm:col-span-2 min-[851px]:col-span-1">
+                      <input type="checkbox" checked={draft.rememberProfile !== false} onChange={(event) => update({ rememberProfile: event.target.checked })} className="mt-0.5" />
+                      <span>
+                        <span className="block font-semibold text-white/78">Remember this loan and description</span>
+                        <span className="block text-xs text-white/42">Use this mapping when the same lender appears again.</span>
+                      </span>
+                    </label>
+                  </>
+                ) : null}
+              </div>
+            </section>
 
-          <section className="mt-5">
-            <h3 className="text-sm font-semibold text-white">Loan details</h3>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold text-white/55">Loan</span>
-                <select value={draft.lenderProfileId || "new"} onChange={(event) => setProfile(event.target.value)} className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-300/55">
-                  <option value="new">Set up new loan</option>
-                  {loanProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profileLabel(profile)}</option>)}
-                </select>
-              </label>
-              {!isNewLoan && selectedProfile ? (
-                <div className="rounded-lg border border-emerald-300/15 bg-emerald-300/[0.05] px-3 py-2 text-xs text-emerald-50/75">
-                  <div className="font-semibold text-emerald-50">{profileLabel(selectedProfile)}</div>
-                  <div className="mt-1">Principal account: {selectedProfile.default_principal_qbo_account_name || selectedProfile.default_principal_qbo_account_id || "Not set"}</div>
+            <section className="min-w-0 border-l border-white/10 pl-5 max-[850px]:border-l-0 max-[850px]:border-t max-[850px]:pl-0 max-[850px]:pt-5">
+              <h3 className="text-sm font-semibold text-white">Payment allocation</h3>
+              <p className="mt-2 text-sm leading-5 text-white/58">
+                Enter the principal and interest shown on the lender statement. The allocation must equal the payment total.
+              </p>
+              <div className="mt-3 overflow-x-hidden rounded-xl border border-white/10 bg-black/18">
+                <div className="grid grid-cols-[112px_minmax(220px,1fr)_128px_44px] gap-2 border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/36 max-[640px]:hidden">
+                  <span>Type</span>
+                  <span>QuickBooks account</span>
+                  <span className="text-right">Amount</span>
+                  <span />
                 </div>
-              ) : null}
-              {isNewLoan ? (
-                <>
-                  <TextField label="Lender name" value={draft.lenderName || ""} onChange={(value) => update({ lenderName: value })} />
-                  <TextField label="Loan name/identifier" value={draft.loanName || ""} onChange={(value) => update({ loanName: value })} />
-                  <TextField label="Last four/reference, optional" value={draft.referenceLastFour || ""} inputMode="numeric" onChange={(value) => update({ referenceLastFour: value.replace(/\D/g, "").slice(0, 4) })} />
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-semibold text-white/55">Expected cadence</span>
-                    <select value={draft.expectedCadence || ""} onChange={(event) => update({ expectedCadence: event.target.value })} className="h-11 w-full rounded-lg border border-white/10 bg-black/30 px-3 text-sm text-white outline-none focus:border-emerald-300/55">
-                      <option value="">Cadence optional</option>
-                      <option value="monthly">Monthly</option>
-                      <option value="biweekly">Biweekly</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="irregular">Irregular</option>
-                    </select>
-                  </label>
-                  <label className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/70 sm:col-span-2">
-                    <input type="checkbox" checked={draft.rememberProfile !== false} onChange={(event) => update({ rememberProfile: event.target.checked })} />
-                    Remember this loan and description
-                  </label>
-                </>
-              ) : null}
-            </div>
-          </section>
-
-          <section className="mt-6">
-            <h3 className="text-sm font-semibold text-white">Payment allocation</h3>
-            <div className="mt-3 space-y-3">
-              <AllocationRow
-                type="Principal"
-                accountLabel="Principal liability account"
-                accountValue={draft.principalQboAccountId || ""}
-                accounts={liabilityAccounts}
-                accountPlaceholder="Liability account"
-                amount={draft.principalAmount || ""}
-                onAccountChange={(value) => update({ principalQboAccountId: value })}
-                onAmountChange={(value) => update({ principalAmount: value })}
-              />
-              <AllocationRow
-                type="Interest"
-                accountLabel="Interest expense account"
-                accountValue={draft.interestQboAccountId || ""}
-                accounts={expenseAccounts}
-                accountPlaceholder="Select interest account"
-                amount={draft.interestAmount || ""}
-                onAccountChange={(value) => update({ interestQboAccountId: value })}
-                onAmountChange={(value) => update({ interestAmount: value })}
-              />
-              {feeLines.map((line, index) => (
-                <AllocationRow
-                  key={line.id || index}
-                  type={line.label || "Fee"}
-                  accountLabel="Fee expense account"
-                  accountValue={line.qboAccountId || ""}
-                  accounts={expenseAccounts}
-                  accountPlaceholder="Expense account"
-                  amount={line.amount || ""}
-                  onLabelChange={(value) => updateFeeLine(index, { label: value })}
-                  onAccountChange={(value) => updateFeeLine(index, { qboAccountId: value })}
-                  onAmountChange={(value) => updateFeeLine(index, { amount: value })}
-                  onRemove={() => removeFeeLine(index)}
-                />
-              ))}
-              <button type="button" onClick={() => update({ feeLines: [...feeLines, { id: `fee-${Date.now()}`, label: "Fee", qboAccountId: "", amount: "" }] })} className="inline-flex items-center gap-2 rounded-lg border border-white/12 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/5">
+                <div className="divide-y divide-white/10">
+                  <AllocationRow
+                    type="Principal"
+                    accountLabel="Principal liability account"
+                    accountValue={draft.principalQboAccountId || ""}
+                    accounts={liabilityAccounts}
+                    accountPlaceholder="Liability account"
+                    amount={draft.principalAmount || ""}
+                    onAccountChange={(value) => update({ principalQboAccountId: value })}
+                    onAmountChange={(value) => update({ principalAmount: value })}
+                  />
+                  <AllocationRow
+                    type="Interest"
+                    accountLabel="Interest expense account"
+                    accountValue={draft.interestQboAccountId || ""}
+                    accounts={expenseAccounts}
+                    accountPlaceholder="Select interest account"
+                    amount={draft.interestAmount || ""}
+                    onAccountChange={(value) => update({ interestQboAccountId: value })}
+                    onAmountChange={(value) => update({ interestAmount: value })}
+                  />
+                  {feeLines.map((line, index) => (
+                    <AllocationRow
+                      key={line.id || index}
+                      type={line.label || "Fee"}
+                      accountLabel="Fee expense account"
+                      accountValue={line.qboAccountId || ""}
+                      accounts={expenseAccounts}
+                      accountPlaceholder="Expense account"
+                      amount={line.amount || ""}
+                      onLabelChange={(value) => updateFeeLine(index, { label: value })}
+                      onAccountChange={(value) => updateFeeLine(index, { qboAccountId: value })}
+                      onAmountChange={(value) => updateFeeLine(index, { amount: value })}
+                      onRemove={() => removeFeeLine(index)}
+                    />
+                  ))}
+                </div>
+              </div>
+              <button type="button" onClick={() => update({ feeLines: [...feeLines, { id: `fee-${Date.now()}`, label: "Fee", qboAccountId: "", amount: "" }] })} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-white/12 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/5">
                 <Plus className="h-4 w-4" />
                 Add fee or another line
               </button>
-            </div>
-            {!canConfirm ? <ValidationText remainingMinor={remainingMinor} principalMinor={principalMinor} principalAccount={principalAccount} isNewLoan={isNewLoan} draft={draft} /> : null}
-          </section>
+              {!canConfirm ? <ValidationText remainingMinor={remainingMinor} principalMinor={principalMinor} principalAccount={principalAccount} interestMinor={interestMinor} interestAccount={interestAccount} isNewLoan={isNewLoan} draft={draft} /> : null}
+            </section>
+          </div>
         </div>
 
-        <footer className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 bg-[#0d100f]/96 px-5 py-4 backdrop-blur">
-          <button type="button" disabled={saving || disabled} onClick={onTreatAsRegular} className="rounded-lg px-3 py-2 text-sm font-semibold text-white/65 hover:bg-white/5 disabled:opacity-45">Treat as regular transaction</button>
-          <div className="flex items-center gap-2">
-            <button type="button" disabled={saving} onClick={requestClose} className="rounded-lg border border-white/12 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/5 disabled:opacity-45">Cancel</button>
-            <button type="button" disabled={!canConfirm} onClick={confirm} className="inline-flex items-center gap-2 rounded-lg border border-emerald-300/35 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-500/24 disabled:cursor-not-allowed disabled:opacity-45">
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {saving ? "Saving..." : "Confirm split"}
-            </button>
+        <footer className="shrink-0 border-t border-white/10 bg-[#0d100f]/98 px-6 py-4 backdrop-blur max-[850px]:px-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <button type="button" disabled={saving || disabled} onClick={onTreatAsRegular} className="rounded-lg px-3 py-2 text-sm font-semibold text-white/65 hover:bg-white/5 disabled:opacity-45">Treat as regular transaction</button>
+            <div className="flex items-center gap-2">
+              <button type="button" disabled={saving} onClick={requestClose} className="rounded-lg border border-white/12 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/5 disabled:opacity-45">Cancel</button>
+              <button type="button" disabled={!canConfirm} onClick={confirm} className="inline-flex items-center gap-2 rounded-lg border border-emerald-300/35 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-500/24 disabled:cursor-not-allowed disabled:opacity-45">
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {saving ? "Saving..." : "Confirm split"}
+              </button>
+            </div>
           </div>
         </footer>
       </section>
+      </div>
     </div>,
     document.body
   );
 }
 
-function SummaryItem({ label, value, tone }) {
+function SummaryItem({ label, value, tone, icon: Icon }) {
   const toneClass = tone === "good" ? "text-emerald-200" : tone === "bad" ? "text-rose-300" : tone === "warn" ? "text-amber-200" : tone === "accent" ? "text-emerald-100" : "text-white";
   return (
     <div>
       <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/36">{label}</div>
-      <div className={`mt-1 text-sm font-semibold ${toneClass}`}>{value}</div>
+      <div className={`mt-1 inline-flex items-center gap-1.5 text-sm font-semibold ${toneClass}`}>
+        {Icon ? <Icon className="h-4 w-4" /> : null}
+        {value}
+      </div>
     </div>
   );
 }
@@ -511,9 +548,9 @@ function TextField({ label, value, onChange, inputMode }) {
 
 function AllocationRow({ type, accountLabel, accountValue, accounts, accountPlaceholder, amount, onLabelChange, onAccountChange, onAmountChange, onRemove }) {
   return (
-    <div className="grid gap-2 rounded-xl border border-white/10 bg-black/18 p-3 sm:grid-cols-[140px_minmax(0,1fr)_140px_auto] sm:items-center">
+    <div className="grid grid-cols-[112px_minmax(220px,1fr)_128px_44px] items-center gap-2 px-3 py-3 max-[640px]:grid-cols-1">
       {onLabelChange ? (
-        <input value={type} onChange={(event) => onLabelChange(event.target.value)} className="h-10 rounded-lg border border-white/10 bg-black/30 px-3 text-sm font-semibold text-white outline-none focus:border-emerald-300/55" />
+        <input value={type} aria-label="Line type" onChange={(event) => onLabelChange(event.target.value)} className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 text-sm font-semibold text-white outline-none focus:border-emerald-300/55" />
       ) : (
         <div className="text-sm font-semibold text-white/84">{type}</div>
       )}
@@ -523,7 +560,7 @@ function AllocationRow({ type, accountLabel, accountValue, accounts, accountPlac
         inputMode="decimal"
         placeholder="0.00"
         onChange={(event) => onAmountChange(event.target.value.replace(/[^0-9.]/g, ""))}
-        className="h-11 rounded-lg border border-white/10 bg-black/30 px-3 text-right text-sm text-white outline-none placeholder:text-white/35 focus:border-emerald-300/55"
+        className="h-11 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 text-right text-sm text-white outline-none placeholder:text-white/35 focus:border-emerald-300/55"
       />
       {onRemove ? (
         <button type="button" onClick={onRemove} aria-label={`Remove ${type}`} className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/12 text-white/60 hover:bg-white/5">
@@ -534,12 +571,13 @@ function AllocationRow({ type, accountLabel, accountValue, accounts, accountPlac
   );
 }
 
-function ValidationText({ remainingMinor, principalMinor, principalAccount, isNewLoan, draft }) {
+function ValidationText({ remainingMinor, principalMinor, principalAccount, interestMinor, interestAccount, isNewLoan, draft }) {
   let message = "";
-  if (remainingMinor !== 0) message = remainingMinor < 0 ? "Allocation is greater than the payment total." : `${formatMoney(remainingMinor)} still needs to be allocated.`;
+  if (remainingMinor !== 0) message = remainingMinor < 0 ? `Allocation exceeds payment total by ${formatMoney(Math.abs(remainingMinor))}.` : `${formatMoney(remainingMinor)} remains to be allocated.`;
   else if (principalMinor <= 0) message = "Principal must be greater than zero.";
   else if (!principalAccount) message = "Select the loan liability account for principal.";
+  else if (interestMinor > 0 && !interestAccount) message = "Select an expense account for interest.";
   else if (isNewLoan && (!String(draft.lenderName || "").trim() || !String(draft.loanName || "").trim())) message = "Enter the lender and loan name for the new loan.";
   if (!message) return null;
-  return <div className="mt-3 rounded-lg border border-amber-300/18 bg-amber-300/[0.08] px-3 py-2 text-sm text-amber-100">{message}</div>;
+  return <div className="mt-3 text-sm font-medium text-amber-100">{message}</div>;
 }
