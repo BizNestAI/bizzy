@@ -233,6 +233,7 @@ test("posting worker has loan split guard before QBO writes and still blocks pen
 test("Books Review account dropdown exposes a manual loan split workflow safely", () => {
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
   const mirror = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  const drawer = read("src/components/Accounting/LoanPaymentSplitDrawer.jsx");
   const monthlyReview = read("src/pages/Admin/MonthlyReviewConsole.jsx");
   const client = read("src/services/bookkeeping/bookkeepingClient.js");
   const approvals = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
@@ -245,37 +246,20 @@ test("Books Review account dropdown exposes a manual loan split workflow safely"
   assert.match(feed, /status === "posted" \|\| txn\.qbo_txn_id/);
   assert.match(feed, /signedAmount < 0/);
   assert.match(feed, /workflow === "loan_payment"/);
-  assert.match(feed, /function LoanPaymentSplitEditor/);
-  assert.match(feed, /Split loan payment/);
-  assert.match(feed, /Payment total/);
-  assert.match(feed, /Allocated/);
-  assert.match(feed, /Remaining/);
-  assert.match(feed, /Set up new loan/);
-  assert.match(feed, /Liability account/);
-  assert.match(feed, /Interest expense account/);
-  assert.match(feed, /Add another line/);
-  assert.match(feed, /Lender name/);
-  assert.match(feed, /Loan name or identifier/);
-  assert.match(feed, /Last four optional/);
-  assert.match(feed, /Remember lender\/description/);
-  assert.match(feed, /Confirm split/);
-  assert.match(feed, /Treat as regular transaction/);
-  assert.match(feed, /isLoanPrincipalAccountOption/);
-  assert.match(feed, /longtermliability/);
-  assert.match(feed, /othercurrentliability/);
-  assert.match(feed, /isLoanInterestAccountOption/);
-  assert.match(feed, /canConfirm[\s\S]*balanced/);
-  assert.match(feed, /transactionTotalMinor/);
-  assert.match(feed, /feeLines/);
+  assert.match(feed, /LoanPaymentSplitDrawer/);
+  assert.match(feed, /buildInitialLoanSplitDraft\(txn, accounts\)/);
   assert.match(feed, /onConfirmLoanPaymentSplit/);
   assert.match(feed, /onTreatLoanPaymentAsRegular/);
-  assert.match(feed, /principalAmount:\s*""/);
-  assert.match(feed, /interestQboAccountId:\s*findDefaultInterestAccountId\(accounts\)/);
+  assert.doesNotMatch(feed, /function LoanPaymentSplitEditor/);
+  assert.doesNotMatch(feed, /min-w-\[420px\] max-w-\[680px\]/);
 
   assert.match(mirror, /BookkeepingTransactionMirrorRow/);
   assert.match(mirror, /onUseCreditCardPayment[\s\S]*onUseLoanPayment/);
   assert.match(mirror, /onUseLoanPayment=\{canUseLoanSplit \? startLoanSplit : null\}/);
-  assert.match(mirror, /LoanPaymentSplitEditor/);
+  assert.match(mirror, /LoanPaymentSplitDrawer/);
+  assert.match(mirror, /buildInitialLoanSplitDraft\(row, accounts\)/);
+  assert.doesNotMatch(mirror, /LoanPaymentSplitEditor/);
+  assert.doesNotMatch(mirror, /function findDefaultInterestAccountId/);
   assert.match(mirror, /isEligibleForMirrorLoanSplit/);
   assert.match(mirror, /row\.pending === true/);
   assert.match(mirror, /status === "posted" \|\| row\.qbo_txn_id/);
@@ -286,6 +270,24 @@ test("Books Review account dropdown exposes a manual loan split workflow safely"
   assert.match(monthlyReview, /handleMirrorTreatLoanPaymentAsRegular/);
   assert.match(monthlyReview, /onConfirmLoanPaymentSplit=\{handleMirrorConfirmLoanPaymentSplit\}/);
   assert.match(monthlyReview, /onTreatLoanPaymentAsRegular=\{handleMirrorTreatLoanPaymentAsRegular\}/);
+
+  assert.match(drawer, /export default function LoanPaymentSplitDrawer/);
+  assert.match(drawer, /ReactDOM\.createPortal/);
+  assert.match(drawer, /role="dialog"/);
+  assert.match(drawer, /aria-modal="true"/);
+  assert.match(drawer, /Payment total/);
+  assert.match(drawer, /Allocated/);
+  assert.match(drawer, /Remaining/);
+  assert.match(drawer, /Loan details/);
+  assert.match(drawer, /Payment allocation/);
+  assert.match(drawer, /Add fee or another line/);
+  assert.match(drawer, /Remember this loan and description/);
+  assert.match(drawer, /Confirm split/);
+  assert.match(drawer, /Saving\.\.\./);
+  assert.match(drawer, /findSafeDefaultInterestAccountId/);
+  assert.match(drawer, /isExactInterestExpenseAccount/);
+  assert.doesNotMatch(drawer, /find\(\(account\) => isLoanInterestAccountOption\(account\)\)/);
+  assert.doesNotMatch(drawer, /Alcohol\/Nightlife/);
 
   assert.match(client, /confirmLoanPaymentSplit/);
   assert.match(client, /treatLoanPaymentAsRegularTransaction/);

@@ -1,5 +1,6 @@
 import React from "react";
-import { CoaDropdown, CreditCardPaymentMatchControl, LoanPaymentSplitEditor } from "./BookkeepingFeed.jsx";
+import { CoaDropdown, CreditCardPaymentMatchControl } from "./BookkeepingFeed.jsx";
+import LoanPaymentSplitDrawer, { buildInitialLoanSplitDraft } from "./LoanPaymentSplitDrawer.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
@@ -169,23 +170,11 @@ function BookkeepingTransactionMirrorRow({
     isEligibleForMirrorLoanSplit(row);
   const startLoanSplit = () => {
     if (!canUseLoanSplit) return;
-    setLoanSplitDraft({
-      lenderProfileId: "new",
-      lenderName: row.vendor || row.payee || row.description || "",
-      loanName: "",
-      referenceLastFour: "",
-      expectedCadence: "",
-      rememberProfile: true,
-      principalAmount: "",
-      interestAmount: "",
-      principalQboAccountId: "",
-      interestQboAccountId: findDefaultInterestAccountId(accounts),
-      feeLines: [],
-      loanProfiles: row.loan_profiles || row.loanProfiles || [],
-    });
+    setLoanSplitDraft(buildInitialLoanSplitDraft(row, accounts));
   };
 
   return (
+    <>
     <div className={`${MIRROR_TABLE_GRID} items-center gap-3 px-4 py-3 text-sm text-white/75`}>
       <div className="text-white/45">{formatShortDate(row.date)}</div>
 
@@ -218,18 +207,9 @@ function BookkeepingTransactionMirrorRow({
 
       <div className="min-w-0">
         {loanSplitDraft ? (
-          <LoanPaymentSplitEditor
-            txn={row}
-            accounts={accounts || []}
-            draft={loanSplitDraft}
-            onChange={setLoanSplitDraft}
-            onConfirm={(split) => onConfirmLoanPaymentSplit?.(row, split)}
-            onTreatAsRegular={() => {
-              setLoanSplitDraft(null);
-              onTreatLoanPaymentAsRegular?.(row);
-            }}
-            onCancel={() => setLoanSplitDraft(null)}
-          />
+          <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">
+            Loan Payment · Needs Split
+          </div>
         ) : isLoanSplitWorkflow ? (
           <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">
             Loan Payment · Needs Split
@@ -386,6 +366,23 @@ function BookkeepingTransactionMirrorRow({
         ) : null}
       </div>
     </div>
+    <LoanPaymentSplitDrawer
+      open={Boolean(loanSplitDraft)}
+      txn={row}
+      accounts={accounts || []}
+      draft={loanSplitDraft || {}}
+      onChange={setLoanSplitDraft}
+      onConfirm={async (split) => {
+        await onConfirmLoanPaymentSplit?.(row, split);
+        setLoanSplitDraft(null);
+      }}
+      onTreatAsRegular={async () => {
+        await onTreatLoanPaymentAsRegular?.(row);
+        setLoanSplitDraft(null);
+      }}
+      onClose={() => setLoanSplitDraft(null)}
+    />
+    </>
   );
 }
 
@@ -407,10 +404,6 @@ function selectedAccountName(accountId, accounts = []) {
   return found?.name || found?.fullyQualifiedName || "";
 }
 
-function normalizeAccountType(value = "") {
-  return String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
-}
-
 function isEligibleForMirrorLoanSplit(row = {}) {
   if (!row || row.pending === true) return false;
   const status = String(row.status || "").toLowerCase();
@@ -422,16 +415,6 @@ function isEligibleForMirrorLoanSplit(row = {}) {
   const workflow = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
   if (!workflow || workflow === "ordinary_expense" || workflow === "expense" || workflow === "loan_payment") return true;
   return false;
-}
-
-function findDefaultInterestAccountId(accounts = []) {
-  const exact = (accounts || []).find((account) => /interest expense/i.test(account.name || account.fullyQualifiedName || ""));
-  if (exact?.id) return String(exact.id);
-  const expense = (accounts || []).find((account) => {
-    const type = normalizeAccountType(account.type || account.accountType || account.account_type || account.AccountType);
-    return type === "expense" || type === "otherexpense";
-  });
-  return expense?.id ? String(expense.id) : "";
 }
 
 export function deriveMirrorQboPostingStatus(row = {}) {
