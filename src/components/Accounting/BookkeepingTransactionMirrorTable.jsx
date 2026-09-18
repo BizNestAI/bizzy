@@ -171,13 +171,16 @@ function BookkeepingTransactionMirrorRow({
     if (!canUseLoanSplit) return;
     setLoanSplitDraft({
       lenderProfileId: "new",
+      lenderName: row.vendor || row.payee || row.description || "",
+      loanName: "",
+      referenceLastFour: "",
+      expectedCadence: "",
+      rememberProfile: true,
       principalAmount: "",
       interestAmount: "",
-      feeAmount: "",
       principalQboAccountId: "",
       interestQboAccountId: findDefaultInterestAccountId(accounts),
-      feeQboAccountId: "",
-      showFeeLine: false,
+      feeLines: [],
       loanProfiles: row.loan_profiles || row.loanProfiles || [],
     });
   };

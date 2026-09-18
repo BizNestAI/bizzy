@@ -10,6 +10,7 @@ import {
   detectPossibleLoanPayment,
   findActiveLenderProfileForTransaction,
   getLoanPaymentIdentity,
+  markLoanPaymentSplitPosted,
   recordLoanPaymentRegularOverride,
   validateLoanPaymentSplit,
 } from "../src/services/bookkeeping/loanPaymentWorkflow.js";
@@ -93,6 +94,7 @@ test("zero-interest payments and fee-only additions still validate by exact cent
 test("learned lender helpers exist for tenant-scoped profile matching, confirmation, and override audit", () => {
   assert.equal(typeof findActiveLenderProfileForTransaction, "function");
   assert.equal(typeof confirmLoanPaymentSplit, "function");
+  assert.equal(typeof markLoanPaymentSplitPosted, "function");
   assert.equal(typeof recordLoanPaymentRegularOverride, "function");
 });
 
@@ -121,6 +123,72 @@ test("loan split fails closed for pending, bad totals, or wrong QBO account type
     }),
     /loan_principal_account_must_be_liability/
   );
+
+  assert.throws(
+    () => validateLoanPaymentSplit({
+      transaction: alliantTxn,
+      accountsById: new Map([["other-liability", { id: "other-liability", type: "Long Term Liability" }]]),
+      split: { principal_amount_minor: 51755, principal_qbo_account_id: "missing-liability" },
+    }),
+    /loan_split_line_account_not_found/
+  );
+});
+
+test("manual first-time loan split can provide loan-specific identity without classifier recognition", async () => {
+  const db = {
+    from(table) {
+      const state = { table, op: "select", payload: null };
+      const chain = {
+        select() { return chain; },
+        eq() { return chain; },
+        order() { return chain; },
+        limit() { return chain; },
+        insert(payload) {
+          state.op = "insert";
+          state.payload = payload;
+          return chain;
+        },
+        update(payload) {
+          state.op = "update";
+          state.payload = payload;
+          return chain;
+        },
+        maybeSingle: async () => {
+          if (state.table === "loan_lender_profiles" && state.op === "insert") return { data: { id: "profile-1", ...state.payload }, error: null };
+          if (state.table === "loan_payment_splits" && state.op === "insert") return { data: { id: "split-1", ...state.payload }, error: null };
+          if (state.table === "loan_payment_audit_events") return { data: { id: "audit-1" }, error: null };
+          return { data: null, error: null };
+        },
+      };
+      return chain;
+    },
+  };
+
+  const result = await confirmLoanPaymentSplit({
+    db,
+    businessId: "biz-1",
+    transaction: { ...alliantTxn, name: "ONLINE PAYMENT 1918", merchant_name: "" },
+    accountsById: new Map([
+      ["liability-1", { id: "liability-1", type: "Long Term Liability" }],
+      ["interest-1", { id: "interest-1", type: "Expense" }],
+    ]),
+    split: {
+      lender_name: "Alliant Credit Union",
+      loan_name: "Alliant Auto Loan - ending 1918",
+      reference_last_four: "1918",
+      expected_cadence: "monthly",
+      principal_amount_minor: 50000,
+      principal_qbo_account_id: "liability-1",
+      interest_amount_minor: 1755,
+      interest_qbo_account_id: "interest-1",
+      remember_profile: true,
+    },
+  });
+
+  assert.equal(result.lenderProfile.id, "profile-1");
+  assert.equal(result.lenderProfile.lender_display_name, "Alliant Auto Loan - ending 1918");
+  assert.equal(result.lenderProfile.meta.loan_name, "Alliant Auto Loan - ending 1918");
+  assert.equal(result.split.meta.reference_last_four, "1918");
 });
 
 test("confirmed loan split builds one QBO Purchase with principal and interest lines using posted date", () => {
@@ -186,16 +254,23 @@ test("Books Review account dropdown exposes a manual loan split workflow safely"
   assert.match(feed, /Liability account/);
   assert.match(feed, /Interest expense account/);
   assert.match(feed, /Add another line/);
-  assert.match(feed, /Confirm and post/);
+  assert.match(feed, /Lender name/);
+  assert.match(feed, /Loan name or identifier/);
+  assert.match(feed, /Last four optional/);
+  assert.match(feed, /Remember lender\/description/);
+  assert.match(feed, /Confirm split/);
   assert.match(feed, /Treat as regular transaction/);
   assert.match(feed, /isLoanPrincipalAccountOption/);
   assert.match(feed, /longtermliability/);
   assert.match(feed, /othercurrentliability/);
   assert.match(feed, /isLoanInterestAccountOption/);
   assert.match(feed, /canConfirm[\s\S]*balanced/);
+  assert.match(feed, /transactionTotalMinor/);
+  assert.match(feed, /feeLines/);
   assert.match(feed, /onConfirmLoanPaymentSplit/);
   assert.match(feed, /onTreatLoanPaymentAsRegular/);
   assert.match(feed, /principalAmount:\s*""/);
+  assert.match(feed, /interestQboAccountId:\s*findDefaultInterestAccountId\(accounts\)/);
 
   assert.match(mirror, /BookkeepingTransactionMirrorRow/);
   assert.match(mirror, /onUseCreditCardPayment[\s\S]*onUseLoanPayment/);
@@ -220,9 +295,20 @@ test("Books Review account dropdown exposes a manual loan split workflow safely"
   assert.match(approvals, /loan_payment_split_status:\s*"confirmed"/);
   assert.match(approvals, /status:\s*"needs_review"/);
   assert.match(approvals, /post_after:\s*null/);
+  assert.match(approvals, /transaction_already_posted/);
   assert.match(approvals, /loan-payments\/:transactionId\/treat-as-regular/);
   assert.match(page, /handleConfirmLoanPaymentSplit/);
   assert.match(page, /handleTreatLoanPaymentAsRegular/);
+});
+
+test("posting worker marks confirmed loan split posted only after QBO receipt", () => {
+  const worker = read("src/jobs/booksPost.cron.js");
+  assert.match(worker, /recordQboPostingSuccess/);
+  assert.match(worker, /markLoanPaymentSplitPosted/);
+  assert.match(worker, /postedAt:\s*postedIso/);
+  const successIndex = worker.indexOf("recordQboPostingSuccess");
+  const splitPostedIndex = worker.indexOf("markLoanPaymentSplitPosted", successIndex);
+  assert.ok(successIndex >= 0 && splitPostedIndex > successIndex);
 });
 
 test("migration is additive and tenant scoped", () => {

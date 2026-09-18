@@ -590,6 +590,13 @@ function isLoanInterestAccountOption(account = {}) {
   return type === "expense" || type === "otherexpense" || type === "costofgoodssold" || type === "costofgoodsold";
 }
 
+function findDefaultInterestAccountId(accounts = []) {
+  const exact = (accounts || []).find((account) => /interest expense/i.test(account.name || account.fullyQualifiedName || ""));
+  if (exact?.id) return String(exact.id);
+  const expense = (accounts || []).find((account) => isLoanInterestAccountOption(account));
+  return expense?.id ? String(expense.id) : "";
+}
+
 function isEligibleForManualLoanSplit(txn = {}) {
   if (!txn || txn.pending === true) return false;
   const status = String(txn.status || "").toLowerCase();
@@ -611,6 +618,17 @@ function toMinorUnits(value) {
   return Math.round(numeric * 100);
 }
 
+function transactionTotalMinor(txn = {}) {
+  const explicitMinor = Number(txn.signed_amount_minor ?? txn.signedAmountMinor ?? txn.amount_minor ?? txn.amountMinor);
+  if (Number.isInteger(explicitMinor) && explicitMinor !== 0) return Math.abs(explicitMinor);
+  const signed = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0);
+  return Math.abs(Math.round(signed * 100));
+}
+
+function selectedAccount(accounts = [], accountId) {
+  return (accounts || []).find((account) => String(account.id || "") === String(accountId || ""));
+}
+
 export function LoanPaymentSplitEditor({
   txn,
   accounts = [],
@@ -621,24 +639,42 @@ export function LoanPaymentSplitEditor({
   onTreatAsRegular,
   onCancel,
 }) {
-  const totalMinor = Math.abs(Math.round(Number(txn?.signed_amount ?? txn?.signedAmount ?? txn?.amount ?? 0) * 100));
+  const totalMinor = transactionTotalMinor(txn);
   const liabilityAccounts = accounts.filter(isLoanPrincipalAccountOption);
   const interestAccounts = accounts.filter(isLoanInterestAccountOption);
   const principalMinor = toMinorUnits(draft.principalAmount);
   const interestMinor = toMinorUnits(draft.interestAmount);
-  const feeMinor = toMinorUnits(draft.feeAmount);
+  const feeLines = Array.isArray(draft.feeLines) ? draft.feeLines : [];
+  const feeMinor = feeLines.reduce((sum, line) => sum + toMinorUnits(line.amount), 0);
   const splitTotalMinor = principalMinor + interestMinor + feeMinor;
   const remainingMinor = totalMinor - splitTotalMinor;
   const balanced = totalMinor > 0 && remainingMinor === 0;
+  const principalAccount = selectedAccount(accounts, draft.principalQboAccountId);
+  const interestAccount = selectedAccount(accounts, draft.interestQboAccountId);
+  const feeLinesValid = feeLines.every((line) => {
+    const amountMinor = toMinorUnits(line.amount);
+    if (amountMinor === 0) return true;
+    const account = selectedAccount(accounts, line.qboAccountId);
+    return Boolean(account && isLoanInterestAccountOption(account));
+  });
+  const isNewLoan = !draft.lenderProfileId || draft.lenderProfileId === "new";
   const canConfirm =
     balanced &&
     principalMinor > 0 &&
-    draft.principalQboAccountId &&
-    (interestMinor === 0 || draft.interestQboAccountId) &&
-    (feeMinor === 0 || draft.feeQboAccountId);
+    principalAccount &&
+    isLoanPrincipalAccountOption(principalAccount) &&
+    (interestMinor === 0 || (interestAccount && isLoanInterestAccountOption(interestAccount))) &&
+    feeLinesValid &&
+    (!isNewLoan || (String(draft.lenderName || "").trim() && String(draft.loanName || "").trim()));
   const update = (patch) => onChange?.({ ...draft, ...patch });
+  const updateFeeLine = (index, patch) => {
+    const next = feeLines.map((line, idx) => (idx === index ? { ...line, ...patch } : line));
+    update({ feeLines: next });
+  };
+  const removeFeeLine = (index) => update({ feeLines: feeLines.filter((_, idx) => idx !== index) });
   const vendorLabel = txn?.vendor || txn?.payee || txn?.merchant || txn?.description || "Transaction";
   const sourceLabel = txn?.source_account_name || txn?.sourceAccountName || txn?.account_name || txn?.accountName || txn?.plaid_account_name || "Source account";
+  const recognizedProfile = txn?.loan_profile || txn?.loanProfile || (draft.loanProfiles || txn?.loan_profiles || txn?.loanProfiles || []).find((profile) => String(profile.id) === String(draft.lenderProfileId || ""));
   const money = (minor) => `$${Math.abs(Number(minor || 0) / 100).toFixed(2)}`;
 
   return (
@@ -680,7 +716,55 @@ export function LoanPaymentSplitEditor({
             <option key={profile.id} value={profile.id}>{profile.name || profile.lender_display_name || "Loan"}</option>
           ))}
         </select>
+        <input
+          value={draft.lenderName || ""}
+          disabled={disabled || !isNewLoan}
+          onChange={(e) => update({ lenderName: e.target.value })}
+          placeholder="Lender name"
+          className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+        />
+        <input
+          value={draft.loanName || ""}
+          disabled={disabled || !isNewLoan}
+          onChange={(e) => update({ loanName: e.target.value })}
+          placeholder="Loan name or identifier"
+          className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+        />
+        <input
+          value={draft.referenceLastFour || ""}
+          disabled={disabled || !isNewLoan}
+          onChange={(e) => update({ referenceLastFour: e.target.value.replace(/\D/g, "").slice(0, 4) })}
+          placeholder="Last four optional"
+          inputMode="numeric"
+          className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+        />
+        <select
+          value={draft.expectedCadence || ""}
+          disabled={disabled || !isNewLoan}
+          onChange={(e) => update({ expectedCadence: e.target.value })}
+          className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
+        >
+          <option value="">Cadence optional</option>
+          <option value="monthly">Monthly</option>
+          <option value="biweekly">Biweekly</option>
+          <option value="weekly">Weekly</option>
+          <option value="irregular">Irregular</option>
+        </select>
+        <label className="inline-flex h-8 items-center gap-1.5 rounded-md border border-white/10 bg-black/20 px-2 text-[10px] text-white/70">
+          <input
+            type="checkbox"
+            checked={draft.rememberProfile !== false}
+            disabled={disabled || !isNewLoan}
+            onChange={(e) => update({ rememberProfile: e.target.checked })}
+          />
+          Remember lender/description
+        </label>
       </div>
+      {recognizedProfile ? (
+        <div className="mt-2 rounded-md border border-amber-300/18 bg-amber-300/[0.06] px-2 py-1 text-[10px] text-amber-100/80">
+          Existing profile: {recognizedProfile.name || recognizedProfile.loan_name || recognizedProfile.lender_display_name || "Loan profile"}
+        </div>
+      ) : null}
       <div className="mt-3 space-y-2">
         <div className="grid gap-1.5 sm:grid-cols-[110px_1fr_120px] sm:items-center">
           <div className="font-semibold text-white/80">Principal</div>
@@ -726,39 +810,45 @@ export function LoanPaymentSplitEditor({
             className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
           />
         </div>
-        {draft.showFeeLine ? (
-          <div className="grid gap-1.5 sm:grid-cols-[110px_1fr_120px] sm:items-center">
-            <div className="font-semibold text-white/80">Fee</div>
-        <select
-          value={draft.feeQboAccountId || ""}
-          disabled={disabled}
-          onChange={(e) => update({ feeQboAccountId: e.target.value })}
-          className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
-            >
-          <option value="">Fee account optional</option>
-          {interestAccounts.map((account) => (
-            <option key={account.id} value={account.id}>{account.name}</option>
-          ))}
-        </select>
+        {feeLines.map((line, index) => (
+          <div key={line.id || index} className="grid gap-1.5 sm:grid-cols-[110px_1fr_120px_56px] sm:items-center">
             <input
-              value={draft.feeAmount || ""}
+              value={line.label || ""}
               disabled={disabled}
-              onChange={(e) => update({ feeAmount: e.target.value })}
+              onChange={(e) => updateFeeLine(index, { label: e.target.value })}
+              placeholder="Fee"
+              className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] font-semibold text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+            />
+            <select
+              value={line.qboAccountId || ""}
+              disabled={disabled}
+              onChange={(e) => updateFeeLine(index, { qboAccountId: e.target.value })}
+              className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
+            >
+              <option value="">Expense account</option>
+              {interestAccounts.map((account) => (
+                <option key={account.id} value={account.id}>{account.name}</option>
+              ))}
+            </select>
+            <input
+              value={line.amount || ""}
+              disabled={disabled}
+              onChange={(e) => updateFeeLine(index, { amount: e.target.value })}
               inputMode="decimal"
               placeholder="0.00"
               className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
             />
+            <button type="button" disabled={disabled} onClick={() => removeFeeLine(index)} className="h-8 rounded-md border border-white/12 text-[10px] font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-45">Remove</button>
           </div>
-        ) : (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={() => update({ showFeeLine: true })}
-            className="inline-flex w-fit items-center rounded-md border border-white/12 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-45"
-          >
-            Add another line
-          </button>
-        )}
+        ))}
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => update({ feeLines: [...feeLines, { id: `fee-${Date.now()}`, label: "Fee", qboAccountId: "", amount: "" }] })}
+          className="inline-flex w-fit items-center rounded-md border border-white/12 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-45"
+        >
+          Add another line
+        </button>
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
         <button type="button" disabled={disabled} onClick={onTreatAsRegular} className="rounded-md border border-white/12 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-45">Treat as regular transaction</button>
@@ -768,15 +858,26 @@ export function LoanPaymentSplitEditor({
           disabled={disabled || !canConfirm}
           onClick={() => onConfirm?.({
             lender_profile_id: draft.lenderProfileId && draft.lenderProfileId !== "new" ? draft.lenderProfileId : null,
+            lender_name: draft.lenderName?.trim() || null,
+            loan_name: draft.loanName?.trim() || null,
+            reference_last_four: draft.referenceLastFour || null,
+            expected_cadence: draft.expectedCadence || null,
+            remember_profile: draft.rememberProfile !== false,
             principal_amount_minor: principalMinor,
             principal_qbo_account_id: draft.principalQboAccountId,
             interest_amount_minor: interestMinor,
             interest_qbo_account_id: interestMinor > 0 ? draft.interestQboAccountId : null,
-            fee_lines: feeMinor > 0 ? [{ amount_minor: feeMinor, qbo_account_id: draft.feeQboAccountId }] : [],
+            fee_lines: feeLines
+              .map((line) => ({
+                label: line.label || "Fee",
+                amount_minor: toMinorUnits(line.amount),
+                qbo_account_id: line.qboAccountId,
+              }))
+              .filter((line) => line.amount_minor > 0),
           })}
           className="rounded-md border border-emerald-300/35 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45"
         >
-          Confirm and post
+          Confirm split
         </button>
       </div>
     </div>
@@ -1161,13 +1262,16 @@ export default function BookkeepingFeed({
       if (!next.has(txn.id)) {
         next.set(txn.id, {
           lenderProfileId: "new",
+          lenderName: txn.vendor || txn.payee || txn.merchant || "",
+          loanName: "",
+          referenceLastFour: "",
+          expectedCadence: "",
+          rememberProfile: true,
           principalAmount: "",
           interestAmount: "",
-          feeAmount: "",
           principalQboAccountId: "",
-          interestQboAccountId: "",
-          feeQboAccountId: "",
-          showFeeLine: false,
+          interestQboAccountId: findDefaultInterestAccountId(accounts),
+          feeLines: [],
           loanProfiles: txn.loan_profiles || txn.loanProfiles || [],
         });
       }

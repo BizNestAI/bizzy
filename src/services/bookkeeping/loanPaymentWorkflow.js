@@ -94,6 +94,41 @@ export function getLoanPaymentIdentity(transaction = {}) {
   return null;
 }
 
+function buildManualLoanPaymentIdentity(split = {}) {
+  const lenderName = String(split.lender_name || split.lenderName || "").trim();
+  const loanName = String(split.loan_name || split.loanName || "").trim();
+  const referenceLastFour = String(split.reference_last_four || split.referenceLastFour || "").replace(/\D/g, "").slice(-4);
+  if (!lenderName || !loanName) return null;
+  const normalizedLender = normalizeLoanText(lenderName);
+  const normalizedLoan = normalizeLoanText([lenderName, loanName, referenceLastFour].filter(Boolean).join(" "));
+  if (!normalizedLender || !normalizedLoan) return null;
+  return {
+    match_specificity: "exact_descriptor_fingerprint",
+    provider_merchant_id: null,
+    normalized_lender: normalizedLender,
+    fingerprint: stableFingerprint(normalizedLoan),
+    display_lender: loanName,
+    manual: true,
+    loan_name: loanName,
+    lender_name: lenderName,
+    reference_last_four: referenceLastFour || null,
+  };
+}
+
+function buildProfileLoanPaymentIdentity(profile = {}) {
+  if (!profile?.id) return null;
+  return {
+    match_specificity: profile.match_specificity || "exact_descriptor_fingerprint",
+    provider_merchant_id: profile.provider_merchant_id || null,
+    normalized_lender: profile.normalized_lender || normalizeLoanText(profile.lender_display_name || profile.meta?.lender_name || ""),
+    fingerprint: profile.descriptor_fingerprint || stableFingerprint([profile.lender_display_name, profile.meta?.loan_name, profile.meta?.reference_last_four].filter(Boolean).join(" ")),
+    display_lender: profile.meta?.loan_name || profile.lender_display_name || "Loan",
+    lender_name: profile.meta?.lender_name || profile.lender_display_name || null,
+    loan_name: profile.meta?.loan_name || profile.lender_display_name || null,
+    reference_last_four: profile.meta?.reference_last_four || null,
+  };
+}
+
 export function detectPossibleLoanPayment(transaction = {}) {
   const direction = String(transaction.direction || "").toUpperCase();
   const signedMinor = signedAmountMinor(transaction);
@@ -193,7 +228,10 @@ export function validateLoanPaymentSplit({ transaction = {}, split = {}, account
     }
     if (!line.qbo_account_id) throw new LoanPaymentWorkflowError("loan_split_line_missing_account", { role: line.role });
     const account = accountsById.get(String(line.qbo_account_id));
-    if (!account) continue;
+    if (!account) {
+      if (accountsById.size > 0) throw new LoanPaymentWorkflowError("loan_split_line_account_not_found", { role: line.role, qbo_account_id: line.qbo_account_id });
+      continue;
+    }
     if (line.role === "principal" && !isLiabilityQboAccount(account)) {
       throw new LoanPaymentWorkflowError("loan_principal_account_must_be_liability", { qbo_account_id: line.qbo_account_id });
     }
@@ -263,10 +301,36 @@ export async function confirmLoanPaymentSplit({
 } = {}) {
   if (!db || !businessId) throw new LoanPaymentWorkflowError("missing_database_or_business");
   const validation = validateLoanPaymentSplit({ transaction, split, accountsById });
-  const identity = getLoanPaymentIdentity(transaction);
-  if (!identity) throw new LoanPaymentWorkflowError("loan_lender_identity_required");
   const nowIso = new Date().toISOString();
-  const existingProfile = await findActiveLenderProfileForTransaction({ db, businessId, transaction });
+  let existingProfile = null;
+  if (split.lender_profile_id) {
+    const { data, error } = await db
+      .from("loan_lender_profiles")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("id", split.lender_profile_id)
+      .eq("status", "active")
+      .maybeSingle();
+    if (error) throw error;
+    existingProfile = data || null;
+  }
+  const identity = buildManualLoanPaymentIdentity(split) || buildProfileLoanPaymentIdentity(existingProfile) || getLoanPaymentIdentity(transaction);
+  if (!identity) throw new LoanPaymentWorkflowError("loan_lender_identity_required");
+  if (!existingProfile) {
+    let profileQuery = db
+      .from("loan_lender_profiles")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("status", "active")
+      .order("updated_at", { ascending: false })
+      .limit(1);
+    profileQuery = identity.provider_merchant_id
+      ? profileQuery.eq("provider_merchant_id", identity.provider_merchant_id)
+      : profileQuery.eq("descriptor_fingerprint", identity.fingerprint);
+    const { data, error } = await profileQuery.maybeSingle();
+    if (error) throw error;
+    existingProfile = data || null;
+  }
   const profilePayload = compactObject({
     business_id: businessId,
     lender_display_name: identity.display_lender,
@@ -282,13 +346,18 @@ export async function confirmLoanPaymentSplit({
     actor_type: actorType,
     default_principal_qbo_account_id: split.principal_qbo_account_id || null,
     default_interest_qbo_account_id: split.interest_qbo_account_id || null,
-    default_fee_qbo_account_id: split.default_fee_qbo_account_id || null,
+    default_fee_qbo_account_id: split.default_fee_qbo_account_id || split.fee_lines?.[0]?.qbo_account_id || null,
     typical_payment_amount_minor: validation.expected_amount_minor,
+    expected_cadence: split.expected_cadence || existingProfile?.expected_cadence || null,
     first_confirmed_at: existingProfile?.first_confirmed_at || nowIso,
     last_confirmed_at: nowIso,
     updated_at: nowIso,
     meta: {
       ...(existingProfile?.meta || {}),
+      lender_name: identity.lender_name || existingProfile?.meta?.lender_name || identity.display_lender,
+      loan_name: identity.loan_name || existingProfile?.meta?.loan_name || identity.display_lender,
+      reference_last_four: identity.reference_last_four || existingProfile?.meta?.reference_last_four || null,
+      remember_profile: split.remember_profile !== false,
       last_confirmed_transaction_id: transaction.id || transaction.transaction_id || null,
     },
   });
@@ -332,6 +401,10 @@ export async function confirmLoanPaymentSplit({
       match_specificity: identity.match_specificity,
       provider_merchant_id: identity.provider_merchant_id,
       descriptor_fingerprint: identity.fingerprint,
+      lender_name: identity.lender_name || split.lender_name || null,
+      loan_name: identity.loan_name || split.loan_name || null,
+      reference_last_four: identity.reference_last_four || split.reference_last_four || null,
+      remember_profile: split.remember_profile !== false,
     },
   };
   const { data: splitRow, error: splitError } = await db
@@ -398,6 +471,47 @@ export async function fetchConfirmedLoanPaymentSplit({ db, businessId, transacti
     .limit(1)
     .maybeSingle();
   if (error) throw error;
+  return data || null;
+}
+
+export async function markLoanPaymentSplitPosted({
+  db,
+  businessId,
+  transactionId,
+  qboTxnId,
+  postedAt,
+  actorId = null,
+  actorType = "system",
+} = {}) {
+  if (!db || !businessId || !transactionId || !qboTxnId) return null;
+  const postedIso = postedAt || new Date().toISOString();
+  const { data, error } = await db
+    .from("loan_payment_splits")
+    .update({
+      status: "posted",
+      posted_qbo_txn_id: qboTxnId,
+      posted_at: postedIso,
+      updated_at: postedIso,
+    })
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .eq("status", "confirmed")
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  if (data?.id) {
+    await insertLoanAuditEvent({
+      db,
+      businessId,
+      transactionId,
+      lenderProfileId: data.lender_profile_id || null,
+      splitId: data.id,
+      eventType: "split_posted",
+      actorId,
+      actorType,
+      nextState: { qbo_txn_id: qboTxnId, posted_at: postedIso },
+    });
+  }
   return data || null;
 }
 

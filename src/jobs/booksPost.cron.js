@@ -36,6 +36,7 @@ import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/inc
 import {
   buildLoanPaymentPurchasePayload,
   fetchConfirmedLoanPaymentSplit,
+  markLoanPaymentSplitPosted,
   splitRowToExecutableSplit,
 } from "../services/bookkeeping/loanPaymentWorkflow.js";
 
@@ -2169,6 +2170,16 @@ export async function handleItem(item, options = {}) {
         })
         .eq("business_id", businessId)
         .eq("transaction_id", txnId);
+      if (item?.meta?.taxonomy_type === "loan_payment") {
+        await markLoanPaymentSplitPosted({
+          db: supabase,
+          businessId,
+          transactionId: txnId,
+          qboTxnId: linkedResult.id,
+          postedAt: postedIso,
+          actorType: manual === true ? "user" : "system",
+        });
+      }
       return;
     }
     if (
@@ -2312,6 +2323,16 @@ export async function handleItem(item, options = {}) {
     .eq("business_id", businessId)
     .eq("transaction_id", txnId);
   if (error) throw error;
+  if (item?.meta?.taxonomy_type === "loan_payment") {
+    await markLoanPaymentSplitPosted({
+      db: supabase,
+      businessId,
+      transactionId: txnId,
+      qboTxnId: qboId,
+      postedAt: postedIso,
+      actorType: manual === true ? "user" : "system",
+    });
+  }
   logPostingTiming({ businessId, transactionId: txnId, qboTxnType: qboType || intentQboTxnTypeForLog, manual, timing, status: "posted" });
   emitTaxDataChanged({
     businessId,

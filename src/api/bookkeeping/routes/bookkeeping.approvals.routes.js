@@ -244,6 +244,16 @@ router.post("/loan-payments/:transactionId/confirm-split", requireAuth, async (r
       .maybeSingle();
     if (txnErr) throw txnErr;
     if (!transaction) return res.status(404).json({ ok: false, error: "transaction_not_found" });
+    const { data: existingCat, error: catFetchErr } = await supabase
+      .from("transaction_categorizations")
+      .select("status,posted_at,qbo_txn_id,meta")
+      .eq("business_id", businessId)
+      .eq("transaction_id", transactionId)
+      .maybeSingle();
+    if (catFetchErr) throw catFetchErr;
+    if (existingCat?.status === "posted" || existingCat?.posted_at || existingCat?.qbo_txn_id) {
+      return res.status(409).json({ ok: false, error: "transaction_already_posted" });
+    }
 
     const accounts = await fetchChartOfAccounts(businessId);
     const accountsById = new Map((accounts || []).map((account) => [String(account.id), account]));
@@ -258,13 +268,6 @@ router.post("/loan-payments/:transactionId/confirm-split", requireAuth, async (r
       actorType: "user",
     });
     const nowIso = new Date().toISOString();
-    const { data: existingCat, error: catFetchErr } = await supabase
-      .from("transaction_categorizations")
-      .select("meta")
-      .eq("business_id", businessId)
-      .eq("transaction_id", transactionId)
-      .maybeSingle();
-    if (catFetchErr) throw catFetchErr;
     const nextMeta = {
       ...(existingCat?.meta || {}),
       taxonomy_type: "loan_payment",
