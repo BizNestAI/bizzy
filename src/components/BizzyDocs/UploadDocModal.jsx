@@ -1,252 +1,194 @@
 // File: /src/components/BizzyDocs/UploadDocModal.jsx
-import React, { useRef, useState } from 'react';
-import { X, UploadCloud, Loader2 } from 'lucide-react';
-import { supabase } from '../../services/supabaseClient';
-import { uploadFileToBizzyBucket } from '../../services/bizzyDocs/storageUploads';
-import { createUploadedFileDoc } from '../../services/bizzyDocs/docsService';
-import { extractPdfText } from '../../utils/pdfText';
-import { toMarkdownSections } from '../../utils/pdfToBizzyFormat';
-import mammoth from 'mammoth';
-import { htmlToPlainText } from '../../utils/htmlToText';
-import { htmlToMarkdown } from '../../utils/htmlToMd';
-import { formatDocxMarkdown } from '../../utils/docxToBizzyFormat';
+import React, { useMemo, useRef, useState } from "react";
+import { Loader2, UploadCloud, X } from "lucide-react";
 
-const CATEGORIES = [
-  { key: 'general', label: 'General' },
-  { key: 'financials', label: 'Financials' },
-  { key: 'tax', label: 'Tax' },
-  { key: 'marketing', label: 'Marketing' },
-  { key: 'investments', label: 'Investments' },
+import {
+  validateAccountingDocumentFile,
+} from "../../services/bizzyDocs/accountingDocuments";
+import { uploadAccountingDocuments } from "../../services/bizzyDocs/docsService";
+
+const ACCOUNTING_DOCUMENT_TYPES = [
+  { key: "bank_statement", label: "Bank statement", requiresAccount: true },
+  { key: "credit_card_statement", label: "Credit-card statement", requiresAccount: true },
+  { key: "loan_statement", label: "Loan statement", requiresAccount: true },
+  { key: "payroll_report", label: "Payroll report", requiresAccount: false },
+  { key: "receipt_support", label: "Receipt or supporting document", requiresAccount: false },
+  { key: "other_accounting_document", label: "Other accounting document", requiresAccount: false },
 ];
 
-export default function UploadDocModal({
+const ACCEPT = ".pdf,.png,.jpg,.jpeg,.csv,.xls,.xlsx,application/pdf,image/png,image/jpeg,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+function monthName(month) {
+  const date = new Date(2026, Number(month || 1) - 1, 1);
+  return new Intl.DateTimeFormat(undefined, { month: "long" }).format(date);
+}
+
+function fileSummary(files) {
+  if (!files.length) return "Choose files";
+  if (files.length === 1) return files[0].name;
+  return `${files.length} files selected`;
+}
+
+export default function AccountingDocumentUploadModal({
   open,
   onClose,
-  defaultCategory = 'general',
-  onCreated, // (newId) => void
+  onCreated,
+  businessId,
+  year,
+  month,
+  accounts = [],
 }) {
   const inputRef = useRef(null);
-  const [file, setFile] = useState(null);
-  const [title, setTitle] = useState('');
-  const [category, setCategory] = useState(defaultCategory);
-  const [tags, setTags] = useState('');
-  const [progress, setProgress] = useState(0);
+  const [files, setFiles] = useState([]);
+  const [documentType, setDocumentType] = useState("bank_statement");
+  const [financialAccountId, setFinancialAccountId] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
+  const [progressText, setProgressText] = useState("");
+  const [error, setError] = useState("");
+
+  const selectedType = useMemo(
+    () => ACCOUNTING_DOCUMENT_TYPES.find((type) => type.key === documentType) || ACCOUNTING_DOCUMENT_TYPES[0],
+    [documentType]
+  );
 
   if (!open) return null;
 
-  const tagArray = tags
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean);
-
-  function isPdfFile(f) {
-    if (!f) return false;
-    const mime = (f.type || '').toLowerCase();
-    return mime.includes('pdf') || /\.pdf$/i.test(f.name || '');
+  function chooseFiles(event) {
+    const nextFiles = Array.from(event.target.files || []);
+    const validationError = nextFiles.map(validateAccountingDocumentFile).find(Boolean);
+    setError(validationError || "");
+    setFiles(validationError ? [] : nextFiles);
   }
 
-  function isDocxFile(f) {
-    if (!f) return false;
-    const mime = (f.type || '').toLowerCase();
-    return (
-      mime.includes('officedocument.wordprocessingml.document') ||
-      /\.docx$/i.test(f.name || '')
-    );
-  }
+  async function submit(event) {
+    event.preventDefault();
+    if (!businessId) return setError("Missing business context.");
+    if (!year || !month) return setError("Choose a month before uploading.");
+    if (!files.length) return setError("Choose at least one file.");
+    const validationError = files.map(validateAccountingDocumentFile).find(Boolean);
+    if (validationError) return setError(validationError);
 
-  async function handleSubmit(e) {
-    e?.preventDefault?.();
-    if (!file) return setErr('Please choose a file.');
-    setErr('');
     setBusy(true);
-    setProgress(0);
-
+    setError("");
     try {
-      // 1) Upload to Supabase Storage
-      const up = await uploadFileToBizzyBucket(file, { onProgress: setProgress });
-
-      // 2) Build contentOverride:
-      //    - For PDFs: download & extract text -> store as sections/plain_excerpt
-      //    - For DOCX: download -> mammoth (HTML) -> Markdown -> format -> store sections
-      //    - Else: keep minimal 'upload' content (title-only excerpt)
-      let contentOverride = {
-        format: 'upload',
-        sections: [],
-        plain_excerpt: up.filename || '',
-      };
-
-      if (isPdfFile(file)) {
-        const { data, error } = await supabase
-          .storage
-          .from(up.storage_bucket)
-          .download(up.storage_path);
-        if (error) throw error;
-
-        const buf = await data.arrayBuffer();
-        const text = await extractPdfText(buf);
-        const fm = toMarkdownSections(text);
-
-        contentOverride = {
-          format: 'sections',
-          sections: fm.sections,
-          plain_excerpt: (text || '').slice(0, 600),
-        };
-
-      } else if (isDocxFile(file)) {
-        // Download DOCX bytes from storage
-        // Download the file we just uploaded
-    const { data, error } = await supabase
-      .storage.from(up.storage_bucket)
-      .download(up.storage_path);
-    if (error) throw error;
-    const buf = await data.arrayBuffer();
- 
-    // DOCX → HTML (Mammoth)
-    const { value: html } = await mammoth.convertToHtml({ arrayBuffer: buf });
- 
-    // HTML → Markdown
-    let md = htmlToMarkdown(html);
- 
-    // Normalize: remove stray <div align="center">, convert bold-only lines
-    // into proper headings, and turn “Total … $amount” rows into 2-col tables.
-    md = formatDocxMarkdown(md);
- 
-    contentOverride = {
-      format: 'sections',
-      sections: [{ heading: '', body: md }],
-      plain_excerpt: htmlToPlainText(html).slice(0, 600),
-    };
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        setProgressText(`Uploading ${index + 1} of ${files.length}: ${file.name}`);
+        await uploadAccountingDocuments({
+          business_id: businessId,
+          year,
+          month,
+          document_type: documentType,
+          financial_account_id: selectedType.requiresAccount ? financialAccountId || null : financialAccountId || null,
+          file,
+        });
       }
-
-      // 3) Create a doc row linked to that upload
-      const newId = await createUploadedFileDoc({
-        title: title || file.name,
-        category,
-        filename: up.filename,
-        mime_type: up.mime_type,
-        size: up.size,
-        storage_bucket: up.storage_bucket, // optional column
-        storage_path: up.storage_path,     // optional column
-        file_hash: up.file_hash,           // optional column
-        tags: tagArray,
-        contentOverride,                   // <-- use parsed text when available
-      });
-
       setBusy(false);
-      onClose?.();
-      onCreated?.(newId);
-    } catch (e) {
+      setFiles([]);
+      onCreated?.();
+    } catch (err) {
       setBusy(false);
-      setErr(e?.message || 'Upload failed');
+      setError(err?.message || "Upload failed.");
     }
   }
 
   return (
     <div className="bizzy-modal-main-backdrop fixed inset-0 z-[999] grid place-items-center">
-      <div className="w-[92vw] max-w-lg rounded-2xl border border-white/10 bg-[#0B0E13] p-5 shadow-xl">
+      <div className="w-[92vw] max-w-xl rounded-2xl border border-white/10 bg-[#0B0E13] p-5 shadow-xl">
         <div className="flex items-center justify-between">
-          <h3 className="text-white text-lg font-semibold">Upload document</h3>
-          <button onClick={onClose} className="p-1 rounded hover:bg-white/10">
+          <div>
+            <h3 className="text-lg font-semibold text-white">Upload accounting document</h3>
+            <p className="mt-1 text-sm text-white/55">{monthName(month)} {year}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded p-1 hover:bg-white/10" disabled={busy}>
             <X className="h-5 w-5 text-white/70" />
           </button>
         </div>
 
-        {err && (
-          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2 text-sm text-rose-200">
-            {err}
-          </div>
-        )}
+        {error ? (
+          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2 text-sm text-rose-200">{error}</div>
+        ) : null}
 
-        <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
-          <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-            <input
-              ref={inputRef}
-              type="file"
-              id="bizzy-doc-upload-file"
-              name="bizzy-doc-upload-file"
-              className="block w-full text-sm text-white/80"
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                setFile(f || null);
-                if (f && !title) setTitle(f.name.replace(/\.[^.]+$/, ''));
-              }}
-              accept="*/*"
-              disabled={busy}
-            />
-            <div className="mt-2 text-xs text-white/50">
-              PDF, images, spreadsheets, slides, docs…
-            </div>
-          </div>
+        <form className="mt-4 space-y-4" onSubmit={submit}>
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            disabled={busy}
+            className="w-full rounded-lg border border-white/10 bg-white/5 p-4 text-left transition hover:border-[var(--accent)] disabled:opacity-60"
+          >
+            <div className="text-sm font-semibold text-white/85">{fileSummary(files)}</div>
+            <div className="mt-2 text-xs text-white/50">PDF, PNG, JPG, CSV, XLS, or XLSX. Up to 25 MB per file.</div>
+          </button>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            className="hidden"
+            accept={ACCEPT}
+            onChange={chooseFiles}
+            disabled={busy}
+          />
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block">
-              <div className="text-xs text-white/60 mb-1">Title</div>
-              <input
-                id="bizzy-doc-upload-title"
-                name="bizzy-doc-upload-title"
-                className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/90 focus:border-[var(--accent)] outline-none"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Enter a title"
-                disabled={busy}
-              />
-            </label>
-            <label className="block">
-              <div className="text-xs text-white/60 mb-1">Category</div>
+              <div className="mb-1 text-xs text-white/60">Document type</div>
               <select
-                id="bizzy-doc-upload-category"
-                name="bizzy-doc-upload-category"
-                className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/90 focus:border-[var(--accent)] outline-none"
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
+                value={documentType}
+                onChange={(event) => setDocumentType(event.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/90 outline-none focus:border-[var(--accent)]"
                 disabled={busy}
               >
-                {CATEGORIES.map((c) => (
-                  <option key={c.key} value={c.key}>
-                    {c.label}
+                {ACCOUNTING_DOCUMENT_TYPES.map((type) => (
+                  <option key={type.key} value={type.key} className="bg-[#101418] text-white">
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="block">
+              <div className="mb-1 text-xs text-white/60">Financial account</div>
+              <select
+                value={financialAccountId}
+                onChange={(event) => setFinancialAccountId(event.target.value)}
+                className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/90 outline-none focus:border-[var(--accent)]"
+                disabled={busy}
+              >
+                <option value="" className="bg-[#101418] text-white">
+                  {selectedType.requiresAccount ? "Select account" : "No account"}
+                </option>
+                {accounts.map((account) => (
+                  <option key={account.id || account.plaid_account_id} value={account.id || account.plaid_account_id} className="bg-[#101418] text-white">
+                    {[account.name || account.official_name || "Financial account", account.mask ? `••••${account.mask}` : ""].filter(Boolean).join(" ")}
                   </option>
                 ))}
               </select>
             </label>
           </div>
 
-          <label className="block">
-            <div className="text-xs text-white/60 mb-1">Tags (comma separated)</div>
-            <input
-              id="bizzy-doc-upload-tags"
-              name="bizzy-doc-upload-tags"
-              className="w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white/90 focus:border-[var(--accent)] outline-none"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="e.g. estimate, 2025, ACME"
-              disabled={busy}
-            />
-          </label>
-
-          {busy && (
+          {busy ? (
             <div className="flex items-center gap-3 text-sm text-white/70">
-              <Loader2 className="h-4 w-4 animate-spin-slow" />
-              Uploading… {Math.round(progress * 100)}%
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {progressText || "Uploading..."}
             </div>
-          )}
+          ) : null}
 
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-2 rounded-lg border border-white/10 text-white/80 hover:border-[var(--accent)] hover:text-[var(--accent)] transition"
+              className="rounded-lg border border-white/10 px-3 py-2 text-white/80 transition hover:border-[var(--accent)] hover:text-white"
               disabled={busy}
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--accent)]/50 text-[var(--accent)] hover:bg-[var(--accent)]/10 transition disabled:opacity-60"
-              disabled={busy || !file}
+              className="inline-flex items-center gap-2 rounded-lg border border-[var(--accent)]/50 px-3 py-2 text-[var(--accent)] transition hover:bg-[var(--accent)]/10 disabled:opacity-60"
+              disabled={busy || !files.length}
             >
-              <UploadCloud className="h-4 w-4" /> Upload
+              <UploadCloud className="h-4 w-4" />
+              Upload
             </button>
           </div>
         </form>

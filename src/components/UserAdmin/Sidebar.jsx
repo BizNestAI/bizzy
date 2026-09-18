@@ -24,7 +24,7 @@ const tabs = [
   // { label: 'Scheduling', path: '/dashboard/calendar' },
   // { label: 'Email', path: '/dashboard/email' },
   { label: 'Activity', path: '/dashboard/activity', tooltip: 'Activity: Coming Soon!', disableNavigate: true },
-  { label: 'Bizzi Docs', path: '/dashboard/bizzi-docs' },
+  { label: 'Docs', path: '/dashboard/bizzi-docs' },
   { label: 'Settings/Sync', path: '/dashboard/settings' },
 ];
 
@@ -54,7 +54,7 @@ function moduleKeyFromLabel(label) {
   if (k === 'tax') return 'tax';
   if (k === 'investments') return 'investments';
   if (k === 'email') return 'email';
-  if (k === 'bizzi docs') return 'docs';
+  if (k === 'bizzi docs' || k === 'docs') return 'docs';
   if (k === 'meet bizzi') return 'companion';
   if (k === 'settings/sync' || k === 'settings' || k === 'sync') return 'settings';
   if (k === 'scheduling') return 'calendar';
@@ -93,7 +93,7 @@ function normalizeUnreadMap(raw = {}) {
   return totals;
 }
 
-const CHROME_TABS = new Set(['Jobs', 'Bizzi Docs', 'Settings/Sync', 'Calendar', 'Scheduling', 'Activity']);
+const CHROME_TABS = new Set(['Jobs', 'Docs', 'Bizzi Docs', 'Settings/Sync', 'Calendar', 'Scheduling', 'Activity']);
 const CHROME_HEX  = ACCENT_HEX;
 const CHROME_SOFT = ACCENT_SOFT;
 
@@ -139,7 +139,9 @@ function renderIcon(label, size, colorHex, options = {}) {
     case 'Tax':           return <Landmark size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Investments':   return <TrendingUp size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Activity':      return <ActivityIcon size={dim} className={`${marginClass} transition-colors`} style={style} />;
-    case 'Bizzi Docs':    return <FileText size={dim} className={`${marginClass} transition-colors`} style={style} />;
+    case 'Bizzi Docs':
+    case 'Docs':
+      return <FileText size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Settings/Sync': return <Settings size={dim} className={`${marginClass} transition-colors`} style={style} />;
     case 'Meet Bizzi':    return <Brain size={dim} className={`${marginClass} transition-colors`} style={style} />;
     default:              return <Brain size={dim} className={`${marginClass} transition-colors`} style={style} />;
@@ -173,7 +175,7 @@ const PureSidebar = React.memo(function PureSidebar({
   const historyBtnRef = useRef(null);
 
   const SUPPRESS_BADGE_LABELS = useMemo(
-    () => new Set(['Bizzi Docs','Meet Bizzi','Settings/Sync']),
+    () => new Set(['Docs','Bizzi Docs','Meet Bizzi','Settings/Sync']),
     []
   );
 
@@ -212,7 +214,7 @@ const PureSidebar = React.memo(function PureSidebar({
     // Do not highlight Pulse when sitting on ChatHome
     if (tab.label === 'Pulse' && p.startsWith('/dashboard/bizzi/chat')) return false;
     if (tab.label === 'Leads & Jobs') return /\/(leads|jobs)\b/i.test(p);
-    if (tab.label === 'Bizzi Docs Library') return p === DOCS_PATH || p.startsWith(DOCS_PATH + '/');
+    if (tab.label === 'Bizzi Docs Library' || tab.label === 'Bizzi Docs' || tab.label === 'Docs') return p === DOCS_PATH || p.startsWith(DOCS_PATH + '/');
     if (tabModule && currentModule && tabModule === currentModule) return true;
     return pathActive(tab.path, p);
   }, [activePath]);

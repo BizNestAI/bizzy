@@ -1,511 +1,375 @@
 // File: /src/pages/Docs/DocsLibraryPage.jsx
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronLeft, Download, FileText, Folder, Loader2, Trash2, UploadCloud } from "lucide-react";
+
+import AccountingDocumentUploadModal from "../../components/BizzyDocs/UploadDocModal";
 import {
-  FileText, File, Image as ImageIcon, Video,
-  Presentation as SlideIcon, FileSpreadsheet, FileCode,
-  Search, ArrowUpDown, X, MoreVertical, PlusCircle, FileUp
-} from 'lucide-react';
+  ACCOUNTING_DOCUMENT_MONTHS as MONTHS,
+  ACCOUNTING_DOCUMENT_START_YEAR as START_YEAR,
+  buildAccountingMonthFolders,
+  getAccountingDocumentYears,
+} from "../../services/bizzyDocs/accountingDocuments";
+import {
+  deleteAccountingDocument,
+  getAccountingDocumentDownloadUrl,
+  listAccountingDocuments,
+} from "../../services/bizzyDocs/docsService";
+import { apiUrl, safeFetch } from "../../utils/safeFetch";
+import { useAdminView } from "../../context/AdminViewContext.jsx";
+import { useCurrentBusiness } from "../../context/BusinessContext";
 
-import { listDocs, getDocFacets, createDoc } from '../../services/bizzyDocs/docsService';
-import { useCurrentBusiness } from '../../context/BusinessContext';
-import { useAdminView } from '../../context/AdminViewContext.jsx';
-import UploadDocModal from '../../components/BizzyDocs/UploadDocModal';
-
-/* ───────── Graphite tokens / neutrals ───────── */
-const NEUTRAL_BORDER = 'rgba(165,167,169,0.18)';
-const NEUTRAL_BORDER_SOFT = 'rgba(165,167,169,0.12)';
-const PANEL_BG = 'var(--panel)';
-const TEXT_MUTED = 'var(--text-2)';
-const TEXT_MAIN = 'var(--text)';
-
-const CATEGORY_META = [
-  { key: 'all',         label: 'All' },
-  { key: 'financials',  label: 'Financials' },
-  { key: 'tax',         label: 'Tax' },
-  { key: 'marketing',   label: 'Marketing' },
-  { key: 'investments', label: 'Investments' },
-  { key: 'general',     label: 'General' },
-];
-const CATEGORY_LABEL = Object.fromEntries(CATEGORY_META.map(c => [c.key, c.label]));
-const CATEGORY_ACCENTS = {
-  financials: { border: 'rgba(var(--accent-rgb),0.45)', soft: 'rgba(var(--accent-rgb),0.14)', glow: 'rgba(var(--accent-rgb),0.08)' },
-  tax:         { border: 'rgba(var(--accent-rgb),0.45)', soft: 'rgba(var(--accent-rgb),0.14)', glow: 'rgba(var(--accent-rgb),0.08)' },
-  marketing:   { border: 'rgba(var(--accent-rgb),0.45)', soft: 'rgba(var(--accent-rgb),0.14)', glow: 'rgba(var(--accent-rgb),0.08)' },
-  investments: { border: 'rgba(var(--accent-rgb),0.45)', soft: 'rgba(var(--accent-rgb),0.14)', glow: 'rgba(var(--accent-rgb),0.08)' },
-  general:     { border: NEUTRAL_BORDER, soft: 'rgba(255,255,255,0.08)', glow: 'rgba(255,255,255,0.04)' },
-  all:         { border: NEUTRAL_BORDER, soft: 'rgba(255,255,255,0.06)', glow: 'rgba(255,255,255,0.03)' },
+const DOC_TYPE_LABELS = {
+  bank_statement: "Bank statement",
+  credit_card_statement: "Credit-card statement",
+  loan_statement: "Loan statement",
+  payroll_report: "Payroll report",
+  receipt_support: "Receipt or supporting document",
+  other_accounting_document: "Other accounting document",
+  legacy_upload: "Unfiled document",
 };
 
-const SORT_CHOICES = [
-  { key: 'new',  label: 'Newest' },
-  { key: 'old',  label: 'Oldest' },
-  { key: 'az',   label: 'A–Z'    },
-  { key: 'za',   label: 'Z–A'    },
-];
-const SORT_LABEL = Object.fromEntries(SORT_CHOICES.map(s => [s.key, s.label]));
-
-function classNames(...xs){ return xs.filter(Boolean).join(' '); }
-function fmtBytes(n){
-  if (!n && n !== 0) return '';
-  const u = ['B','KB','MB','GB','TB']; let i = 0, v = Math.max(n,0);
-  while (v >= 1024 && i < u.length-1) { v/=1024; i++; }
-  return `${v.toFixed(v<10&&i?1:0)} ${u[i]}`;
+function getStoredBusinessId() {
+  try {
+    return localStorage.getItem("currentBusinessId") || localStorage.getItem("business_id") || "";
+  } catch {
+    return "";
+  }
 }
-function fileIcon(mimeOrExt=''){
-  const s = String(mimeOrExt).toLowerCase();
-  if (s.includes('image') || /\.(png|jpg|jpeg|gif|webp|svg)$/.test(s))  return <ImageIcon className="h-4 w-4" />;
-  if (s.includes('video') || /\.(mp4|mov|webm)$/.test(s))               return <Video className="h-4 w-4" />;
-  if (s.includes('sheet') || /\.(xlsx|csv|xls)$/.test(s))               return <FileSpreadsheet className="h-4 w-4" />;
-  if (s.includes('presentation') || /\.(ppt|pptx)$/.test(s))            return <SlideIcon className="h-4 w-4" />;
-  if (s.includes('pdf') || /\.pdf$/.test(s))                            return <FileText className="h-4 w-4" />;
-  if (s.includes('json') || s.includes('text') || /\.(md|txt|json)$/.test(s)) return <FileCode className="h-4 w-4" />;
-  return <File className="h-4 w-4" />;
+
+function getStoredUserId() {
+  try {
+    return localStorage.getItem("user_id") || "";
+  } catch {
+    return "";
+  }
+}
+
+function idHeaders(businessId) {
+  return {
+    "x-business-id": businessId || getStoredBusinessId(),
+    "x-user-id": getStoredUserId(),
+  };
+}
+
+function formatBytes(n) {
+  if (!Number.isFinite(Number(n))) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = Math.max(0, Number(n));
+  let index = 0;
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024;
+    index += 1;
+  }
+  return `${value.toFixed(value < 10 && index ? 1 : 0)} ${units[index]}`;
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(date);
+}
+
+function normalizeDoc(row = {}) {
+  const meta = row?.content?.accounting_document || {};
+  return {
+    ...row,
+    year: Number(row.year || row.accounting_year || meta.year || new Date(row.created_at || Date.now()).getFullYear()),
+    month: Number(row.month || row.accounting_month || meta.month || new Date(row.created_at || Date.now()).getMonth() + 1),
+    document_type: row.document_type || meta.document_type || "legacy_upload",
+    financial_account_id: row.financial_account_id || meta.financial_account_id || null,
+    financial_account_name: row.financial_account_name || meta.financial_account_name || null,
+    uploaded_by_label: row.uploaded_by_name || row.uploaded_by_label || row.author || "Bizzi user",
+  };
 }
 
 export default function DocsLibraryPage(props) {
-  const navigate = useNavigate();
   const adminView = useAdminView();
   const readOnly = adminView.active && adminView.readOnly;
+  const ctx = useCurrentBusiness() || {};
+  const effectiveBusinessId = adminView.active
+    ? adminView.businessId
+    : props?.businessId || ctx?.businessId || getStoredBusinessId();
 
-  const [showUpload, setShowUpload] = useState(false);
-  const [showNewMenu, setShowNewMenu] = useState(false);
-  const [showSortMenu, setShowSortMenu] = useState(false);
-  const newMenuRef = useRef(null);
-  const sortMenuRef = useRef(null);
-  const closeNewMenu = useCallback(() => setShowNewMenu(false), []);
-  const closeSortMenu = useCallback(() => setShowSortMenu(false), []);
-  useEffect(() => {
-    function onDocClick(e) {
-      if (newMenuRef.current && !newMenuRef.current.contains(e.target)) setShowNewMenu(false);
-      if (sortMenuRef.current && !sortMenuRef.current.contains(e.target)) setShowSortMenu(false);
-    }
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, []);
-
-  // Prefer context -> prop -> localStorage
-  const ctx = (typeof useCurrentBusiness === 'function' ? useCurrentBusiness() : null) || {};
-  const ctxBusinessId = ctx?.businessId;
-  const propBusinessId = props?.businessId;
-  const lsBusinessId =
-    (typeof window !== 'undefined' && (localStorage.getItem('currentBusinessId') || localStorage.getItem('business_id'))) || '';
-  const effectiveBusinessId = adminView.active ? adminView.businessId : (propBusinessId || ctxBusinessId || lsBusinessId);
-
-  // State
+  const years = useMemo(() => getAccountingDocumentYears(), []);
+  const [selectedYear, setSelectedYear] = useState(() => Math.max(START_YEAR, new Date().getFullYear()));
+  const [selectedMonth, setSelectedMonth] = useState(null);
   const [docs, setDocs] = useState([]);
-  const [count, setCount] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
+  const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-  const [requestId, setRequestId] = useState('');
-  const [category, setCategory] = useState('all');
-  const [q, setQ] = useState('');
-  const [qDebounced, setQDebounced] = useState('');
-  const [facets, setFacets] = useState(null);
-  const [sort, setSort] = useState('new');
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [showUpload, setShowUpload] = useState(false);
+  const [busyDocId, setBusyDocId] = useState("");
 
-  const offsetRef = useRef(0);
-  const abortRef  = useRef(null);
+  const loadDocs = useCallback(async () => {
+    if (!effectiveBusinessId) return;
+    setLoading(true);
+    setError("");
+    try {
+      const out = await listAccountingDocuments({ business_id: effectiveBusinessId, year: selectedYear });
+      setDocs((out?.data || []).map(normalizeDoc));
+    } catch (err) {
+      setError(err?.message || "Failed to load accounting documents.");
+      setDocs([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [effectiveBusinessId, selectedYear]);
 
-  // Debounce search
   useEffect(() => {
-    const id = setTimeout(() => setQDebounced(q.trim()), 220);
-    return () => clearTimeout(id);
-  }, [q]);
+    loadDocs();
+  }, [loadDocs]);
 
-  // Load facets
   useEffect(() => {
     let alive = true;
-    async function loadFacets() {
-      if (!effectiveBusinessId) { setFacets(null); return; }
-      try {
-        const data = await getDocFacets(effectiveBusinessId);
-        if (alive) setFacets(data || null);
-      } catch {
-        if (alive) setFacets(null);
-      }
-    }
-    loadFacets();
-    return () => { alive = false; };
-  }, [effectiveBusinessId]);
-
-  // Params
-  const baseParams = useMemo(
-    () => ({
-      business_id: effectiveBusinessId || '',
-      category,
-      q: qDebounced,
-      limit: 30,
-      sort,
-    }),
-    [effectiveBusinessId, category, qDebounced, sort]
-  );
-
-  // Reset paging when filters change
-  useEffect(() => {
-    offsetRef.current = 0;
-    setDocs([]); setCount(0); setHasMore(false);
-  }, [baseParams.business_id, baseParams.category, baseParams.q, baseParams.sort]);
-
-  // First page load
-  useEffect(() => {
-    if (!effectiveBusinessId) return;
-
-    if (abortRef.current) abortRef.current.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    async function loadFirstPage() {
-      setError(''); setRequestId(''); setLoading(true);
-      try {
-        const out = await listDocs({ ...baseParams, offset: 0, signal: controller.signal });
-        const data = Array.isArray(out?.data) ? out.data : [];
-        setDocs(data);
-        setCount(out?.count ?? data.length);
-        setHasMore(!!out?.hasMore);
-        setRequestId(out?.request_id || '');
-        offsetRef.current = data.length;
-        getDocFacets(baseParams.business_id, { force: true }).then(setFacets).catch(()=>{});
-      } catch (e) {
-        if (controller.signal.aborted) return;
-        setDocs([]); setCount(0); setHasMore(false);
-        setError(e?.message || 'Failed to load documents');
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
-      }
-    }
-    loadFirstPage();
-    return () => controller.abort();
-  }, [baseParams, effectiveBusinessId]);
-
-  // Load more
-  async function loadMore() {
-    if (!hasMore || loadingMore) return;
-    if (abortRef.current) abortRef.current.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    setLoadingMore(true);
-    try {
-      const out = await listDocs({ ...baseParams, offset: offsetRef.current, signal: controller.signal });
-      const page = Array.isArray(out?.data) ? out.data : [];
-      setDocs(prev => [...prev, ...page]);
-      setHasMore(!!out?.hasMore);
-      offsetRef.current += page.length;
-      setRequestId(out?.request_id || requestId);
-    } catch (e) {
-      if (controller.signal.aborted) return;
-      setError(e?.message || 'Failed to load more');
-    } finally {
-      if (!controller.signal.aborted) setLoadingMore(false);
-    }
-  }
-
-  // Open modal
-  const onUpload = () => setShowUpload(true);
-
-  // Create a Bizzy-native blank note and jump to it
-  async function createBlankNote(editImmediately = false) {
-    try {
-      setError('');
-      setNotice('');
-      const newDoc = await createDoc({
-        business_id: effectiveBusinessId,
-        title: 'Untitled Note',
-        category: category === 'all' ? 'general' : category,
-        content: { format: 'sections', sections: [{ heading: '', body: '' }], plain_excerpt: '' },
-        tags: []
-      });
-      // refresh and navigate
-      setDocs([]); setCount(0); setHasMore(false);
-      if (newDoc?.id) {
-        navigate(`/dashboard/bizzi-docs/${newDoc.id}${editImmediately ? '?edit=1' : ''}`);
-      }
-    } catch (e) {
-      const message = e?.message || 'Could not create the note.';
-      if (/read-only in demo mode/i.test(message)) {
-        setNotice('Demo Docs are read-only. Switch to a live business to create notes.');
+    async function loadAccounts() {
+      if (!effectiveBusinessId) {
+        setAccounts([]);
         return;
       }
-      setError(message);
+      try {
+        const res = await safeFetch(apiUrl(`/api/bookkeeping/accounts?business_id=${encodeURIComponent(effectiveBusinessId)}`), {
+          headers: idHeaders(effectiveBusinessId),
+          cache: "no-store",
+        });
+        if (!alive) return;
+        setAccounts(Array.isArray(res?.accounts) ? res.accounts : []);
+      } catch {
+        if (alive) setAccounts([]);
+      }
+    }
+    loadAccounts();
+    return () => {
+      alive = false;
+    };
+  }, [effectiveBusinessId]);
+
+  const monthFolders = useMemo(() => buildAccountingMonthFolders(docs), [docs]);
+  const currentMonthDocs = useMemo(() => {
+    if (!selectedMonth) return [];
+    return docs
+      .filter((doc) => Number(doc.month) === Number(selectedMonth))
+      .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  }, [docs, selectedMonth]);
+
+  const selectedMonthName = selectedMonth ? MONTHS[selectedMonth - 1] : "";
+
+  async function openDocument(doc) {
+    if (!doc?.id) return;
+    setBusyDocId(doc.id);
+    setError("");
+    try {
+      const out = await getAccountingDocumentDownloadUrl({ id: doc.id, business_id: effectiveBusinessId });
+      if (!out?.signed_url) throw new Error("Download link could not be created.");
+      window.open(out.signed_url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(err?.message || "Download failed.");
+    } finally {
+      setBusyDocId("");
     }
   }
 
+  async function deleteDocument(doc) {
+    if (!doc?.id) return;
+    const ok = window.confirm(`Delete ${doc.original_filename || doc.filename || doc.title || "this document"}?`);
+    if (!ok) return;
+    setBusyDocId(doc.id);
+    setError("");
+    try {
+      await deleteAccountingDocument({ id: doc.id, business_id: effectiveBusinessId });
+      setNotice("Document deleted.");
+      await loadDocs();
+    } catch (err) {
+      setError(err?.message || "Delete failed.");
+    } finally {
+      setBusyDocId("");
+    }
+  }
+
+  const selectedAccountName = useCallback((doc) => {
+    if (doc.financial_account_name) return doc.financial_account_name;
+    const hit = accounts.find((account) => account.id === doc.financial_account_id || account.plaid_account_id === doc.financial_account_id);
+    if (!hit) return "";
+    return [hit.name, hit.mask ? `••••${hit.mask}` : ""].filter(Boolean).join(" ");
+  }, [accounts]);
+
   return (
-    <div className="w-full pt-2 pb-28 bg-app text-primary min-h-screen">
+    <div className="w-full min-h-screen bg-app pb-28 pt-2 text-primary">
       <div className="bizzy-page-width bizzy-page-width--workspace">
-        <div className="mb-6">
-          <h1 className="text-[20px] sm:text-[22px] font-semibold leading-tight tracking-[0.2em] text-[color:var(--text)] text-left">
-            Bizzi Docs Library
-          </h1>
-          <p className="mt-3 text-sm text-left text-white/70">
-            Your summaries, uploads, and references - searchable and organized.
-          </p>
-        </div>
-
-        {/* Controls bar */}
-        <div className="mt-6 mb-6">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-2 top-2.5 h-4 w-4" style={{ color: TEXT_MUTED }} />
-              <input
-                id="docs-library-search"
-                name="docs-library-search"
-                value={q}
-                onChange={(e)=>setQ(e.target.value)}
-                placeholder="Search title or content…"
-                className="pl-8 pr-7 py-2 rounded-lg text-sm outline-none shadow-inner"
-                style={{
-                  background: 'rgba(24,26,31,0.9)',
-                  border: `1px solid ${NEUTRAL_BORDER}`,
-                  color: TEXT_MAIN
-                }}
-                onKeyDown={(e) => { if (e.key === 'Escape') setQ(''); }}
-                aria-label="Search documents"
-              />
-              {q && (
-                <button
-                  aria-label="Clear search"
-                  className="absolute right-1.5 top-1.5 p-1 rounded hover:bg-white/10"
-                  onClick={()=>setQ('')}
-                  style={{ color: TEXT_MUTED }}
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              )}
-            </div>
-
-            {!readOnly ? (
-              <div className="relative" ref={newMenuRef}>
-                <button
-                  onClick={() => setShowNewMenu(v => !v)}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition shadow-[0_10px_28px_rgba(0,0,0,0.35)]"
-                  style={{
-                    background: 'rgba(255,255,255,0.02)',
-                    border: `1px solid rgba(var(--accent-rgb),0.16)`,
-                    boxShadow: '0 0 0 1px rgba(var(--accent-rgb),0.06), 0 10px 28px rgba(0,0,0,0.35)',
-                    color: TEXT_MAIN
-                  }}
-                >
-                  <PlusCircle className="h-4 w-4" />
-                  New
-                  <MoreVertical className="h-4 w-4 opacity-70" />
-                </button>
-                {showNewMenu ? (
-                  <div
-                    className="absolute right-0 mt-2 w-44 rounded-lg p-1 shadow-2xl z-10 border transition-all duration-150 ease-out"
-                    style={{ background: PANEL_BG, borderColor: `rgba(var(--accent-rgb),0.16)`, boxShadow: '0 0 0 1px rgba(var(--accent-rgb),0.06), 0 18px 40px rgba(0,0,0,0.45)', transformOrigin: 'top right' }}
-                  >
-                    <button
-                      onClick={() => { closeNewMenu(); setShowUpload(true); }}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
-                      style={{ color: TEXT_MAIN }}
-                    >
-                      <FileUp className="h-4 w-4" /> Upload file
-                    </button>
-                    <button
-                      onClick={() => { closeNewMenu(); createBlankNote(true); }}
-                      className="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/5"
-                      style={{ color: TEXT_MAIN }}
-                    >
-                      <FileText className="h-4 w-4" /> New note
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-left text-[20px] font-semibold leading-tight tracking-[0.2em] text-[color:var(--text)] sm:text-[22px]">
+              Accounting Documents
+            </h1>
+            <p className="mt-3 max-w-3xl text-left text-sm text-white/70">
+              Upload monthly bank statements and supporting accounting documents so Bizzi can complete your bookkeeping and reconciliations.
+            </p>
           </div>
-        </div>
-
-        {/* Content states */}
-        <div className="mt-4">
-          {effectiveBusinessId && notice ? (
-            <div
-              className="mb-4 flex items-start justify-between gap-4 rounded-xl px-4 py-3"
-              style={{
-                background: 'linear-gradient(135deg, rgba(var(--accent-rgb),0.11), rgba(255,255,255,0.025))',
-                border: '1px solid rgba(var(--accent-rgb),0.22)',
-                boxShadow: '0 18px 42px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.05)',
-                color: TEXT_MAIN,
+          <label className="min-w-[160px]">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-white/45">Year</span>
+            <select
+              value={selectedYear}
+              onChange={(event) => {
+                setSelectedYear(Number(event.target.value));
+                setSelectedMonth(null);
               }}
+              className="w-full rounded-lg border border-white/10 bg-[#101418] px-3 py-2 text-sm text-white outline-none focus:border-[var(--accent)]"
             >
-              <div className="min-w-0">
-                <div className="text-sm font-semibold text-white/90">{notice}</div>
-                <div className="mt-1 text-xs text-white/48">
-                  The sample documents remain available for preview.
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setNotice('')}
-                aria-label="Dismiss demo docs notice"
-                className="rounded-full border border-white/10 bg-black/20 p-1 text-white/52 transition hover:bg-white/10 hover:text-white"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ) : null}
+              {years.map((year) => (
+                <option key={year} value={year} className="bg-[#101418] text-white">
+                  {year}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
-          {!effectiveBusinessId && (
-            <div
-              className="rounded-xl p-5"
-              style={{ background: PANEL_BG, border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MUTED }}
-            >
-              No business selected. Choose a business to see its documents.
-            </div>
-          )}
+        {!effectiveBusinessId ? (
+          <div className="rounded-2xl border border-white/10 bg-[var(--panel)] p-5 text-sm text-white/65">
+            No business selected. Choose a business to see its accounting documents.
+          </div>
+        ) : null}
 
-            {effectiveBusinessId && loading && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {Array.from({ length: 6 }).map((_,i)=>(
-                  <div
-                    key={i}
-                    className="rounded-2xl p-4 animate-pulse shadow-bizzi border"
-                    style={{ background: 'linear-gradient(145deg, rgba(24,26,30,0.85), rgba(14,16,20,0.9))', borderColor: NEUTRAL_BORDER }}
-                  >
-                    <div className="h-4 w-24 rounded" style={{ background: 'rgba(255,255,255,0.06)' }} />
-                    <div className="mt-3 h-6 w-3/4 rounded" style={{ background: 'rgba(255,255,255,0.06)' }} />
-                    <div className="mt-2 h-3 w-1/2 rounded" style={{ background: 'rgba(255,255,255,0.06)' }} />
+        {error ? (
+          <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">{error}</div>
+        ) : null}
+        {notice ? (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-[rgba(var(--accent-rgb),0.28)] bg-[rgba(var(--accent-rgb),0.10)] px-4 py-3 text-sm text-white/85">
+            <span>{notice}</span>
+            <button type="button" className="text-white/55 hover:text-white" onClick={() => setNotice("")}>Dismiss</button>
+          </div>
+        ) : null}
+
+        {effectiveBusinessId && !selectedMonth ? (
+          <div className="rounded-2xl border border-white/10 bg-[var(--panel)] p-4 shadow-bizzi sm:p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="text-sm text-white/55">{selectedYear} document folders</div>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin text-white/45" /> : null}
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {monthFolders.map((folder) => (
+                <button
+                  key={folder.month}
+                  type="button"
+                  onClick={() => setSelectedMonth(folder.month)}
+                  className="group rounded-xl border border-white/10 bg-white/[0.025] p-4 text-left transition hover:border-[rgba(var(--accent-rgb),0.45)] hover:bg-[rgba(var(--accent-rgb),0.08)]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-base font-semibold text-white">
+                        <Folder className="h-4 w-4 text-[var(--accent)]" />
+                        {folder.name}
+                      </div>
+                      <div className="mt-2 text-sm text-white/55">
+                        {folder.count ? `${folder.count} ${folder.count === 1 ? "file" : "files"}` : "No documents"}
+                      </div>
+                    </div>
+                    <span className="rounded-full border border-white/10 px-2 py-1 text-xs text-white/55">{folder.count}</span>
                   </div>
-            ))}
-          </div>
-        )}
-
-        {effectiveBusinessId && !loading && error && (
-          <div
-            className="rounded-xl p-4"
-            style={{ background: 'rgba(244,63,94,0.10)', border: '1px solid rgba(244,63,94,0.30)', color: 'rgb(252,165,165)' }}
-          >
-            {error}
-            {requestId ? <div className="text-xs mt-1" style={{ color: 'rgb(248,113,113)' }}>Request ID: {requestId}</div> : null}
-          </div>
-        )}
-
-        {effectiveBusinessId && !loading && !error && docs.length === 0 && (
-          <div
-            className="rounded-2xl p-8 text-center shadow-bizzi border"
-            style={{ background: PANEL_BG, borderColor: NEUTRAL_BORDER }}
-          >
-            <div
-              className="mx-auto mb-3 h-10 w-10 rounded-full grid place-items-center"
-              style={{ border: `1px solid ${NEUTRAL_BORDER}`, background: 'rgba(255,255,255,0.06)' }}
-            >
-              <FileText className="h-5 w-5" style={{ color: TEXT_MUTED }} />
-            </div>
-            <div className="font-medium" style={{ color: TEXT_MAIN }}>No docs yet</div>
-            <div className="text-sm mt-1" style={{ color: TEXT_MUTED }}>
-              {readOnly ? "No persisted business documents are available for this Admin View session." : "Upload files or create a note to get started."}
-            </div>
-            {!readOnly ? (
-              <div className="mt-4 flex items-center justify-center gap-2">
-                <button
-                  onClick={() => setShowUpload(true)}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
-                  style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
-                >
-                  <FileUp className="h-4 w-4" /> Upload
                 </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {effectiveBusinessId && selectedMonth ? (
+          <div className="rounded-2xl border border-white/10 bg-[var(--panel)] p-4 shadow-bizzi sm:p-5">
+            <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
                 <button
-                  onClick={() => createBlankNote(true)}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition"
-                  style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
+                  type="button"
+                  onClick={() => setSelectedMonth(null)}
+                  className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-[var(--accent)] hover:text-white"
                 >
-                  <FileText className="h-4 w-4" /> New note
+                  <ChevronLeft className="h-4 w-4" />
+                  Accounting Documents / {selectedYear}
                 </button>
+                <h2 className="text-2xl font-semibold text-white">{selectedMonthName} {selectedYear}</h2>
+                <p className="mt-2 text-sm text-white/60">
+                  Upload bank, credit-card, loan, and other accounting documents for {selectedMonthName} {selectedYear}.
+                </p>
               </div>
-            ) : null}
-          </div>
-        )}
-
-        {effectiveBusinessId && !loading && !error && docs.length > 0 && (
-          <>
-            <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mt-2">
-              {docs.map((d, i) => {
-                const title = d.title || d.filename || 'Untitled';
-                const extOrMime = (d.mime_type || d.extension || '').toString();
-                const href = `/dashboard/bizzi-docs/${d.id ?? d.doc_id ?? i}`;
-                const created = d.created_at ? new Date(d.created_at) : null;
-                const categoryKey = (d.category || 'general').toString();
-                const categoryLabel = CATEGORY_LABEL[categoryKey] || categoryKey;
-                const accent = CATEGORY_ACCENTS[categoryKey] || CATEGORY_ACCENTS.general;
-
-                return (
-                  <li key={d.id ?? d.doc_id ?? `${title}-${i}`}>
-                    <Link
-                      to={href}
-                      className="group block rounded-2xl border transition p-4 hover:-translate-y-1 hover:shadow-[0_22px_60px_rgba(0,0,0,0.48)] hover:border-white/30 hover:bg-white/5"
-                      style={{
-                        background: 'linear-gradient(150deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))',
-                        borderColor: NEUTRAL_BORDER,
-                        boxShadow: '0 18px 45px rgba(0,0,0,0.38)',
-                      }}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="inline-flex items-center gap-2 text-xs" style={{ color: TEXT_MUTED }}>
-                          <span
-                            className="grid place-items-center h-6 w-6 rounded-md"
-                            style={{ border: `1px solid ${NEUTRAL_BORDER}`, background: 'rgba(255,255,255,0.04)' }}
-                          >
-                            {fileIcon(extOrMime)}
-                          </span>
-                          <span className="uppercase tracking-wide">{categoryLabel}</span>
-                        </span>
-                        {created && (
-                          <span className="text-xs" style={{ color: TEXT_MUTED }}>
-                            {new Intl.DateTimeFormat(undefined, { year:'numeric', month:'short', day:'2-digit' }).format(created)}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="mt-2 line-clamp-2 font-medium group-hover:text-[var(--text)]">
-                        {title}
-                      </div>
-
-                      <div className="mt-1 text-xs flex items-center gap-2" style={{ color: TEXT_MUTED }}>
-                        <span
-                          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]"
-                          style={{ background: 'rgba(255,255,255,0.06)', border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
-                        >
-                          <File className="h-3 w-3" />
-                          {categoryLabel}
-                        </span>
-                        {d.size ? fmtBytes(d.size) : ''} {d.author ? `• ${d.author}` : ''}
-                      </div>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-
-            {hasMore && (
-              <div className="flex justify-center mt-4">
+              {!readOnly ? (
                 <button
-                  onClick={loadMore}
-                  disabled={loadingMore}
-                  className="px-4 py-2 rounded-lg transition disabled:opacity-60"
-                  style={{ border: `1px solid ${NEUTRAL_BORDER}`, color: TEXT_MAIN }}
+                  type="button"
+                  onClick={() => setShowUpload(true)}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-[rgba(var(--accent-rgb),0.42)] bg-[rgba(var(--accent-rgb),0.12)] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[rgba(var(--accent-rgb),0.20)]"
                 >
-                  {loadingMore ? 'Loading…' : 'Load more'}
+                  <UploadCloud className="h-4 w-4" />
+                  Upload
                 </button>
+              ) : null}
+            </div>
+
+            {loading ? (
+              <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-white/60">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading documents...
+              </div>
+            ) : currentMonthDocs.length === 0 ? (
+              <div className="rounded-xl border border-white/10 bg-white/[0.03] p-8 text-center">
+                <FileText className="mx-auto h-8 w-8 text-white/35" />
+                <div className="mt-3 font-semibold text-white">No documents</div>
+                <div className="mt-1 text-sm text-white/55">Upload statements and supporting files for this month.</div>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-xl border border-white/10">
+                {currentMonthDocs.map((doc) => {
+                  const filename = doc.original_filename || doc.filename || doc.title || "Document";
+                  const typeLabel = DOC_TYPE_LABELS[doc.document_type] || doc.document_type || "Accounting document";
+                  const accountName = selectedAccountName(doc);
+                  return (
+                    <div key={doc.id} className="grid gap-3 border-b border-white/10 p-4 last:border-b-0 lg:grid-cols-[minmax(0,1.3fr)_180px_170px_150px_120px] lg:items-center">
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-white">{filename}</div>
+                        <div className="mt-1 text-xs text-white/45">Uploaded by {doc.uploaded_by_label}</div>
+                      </div>
+                      <div className="text-sm text-white/65">{typeLabel}</div>
+                      <div className="truncate text-sm text-white/55">{accountName || "No account selected"}</div>
+                      <div className="text-sm text-white/55">{formatBytes(doc.file_size || doc.size)}{doc.created_at ? ` • ${formatDate(doc.created_at)}` : ""}</div>
+                      <div className="flex items-center gap-2 lg:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => openDocument(doc)}
+                          disabled={busyDocId === doc.id}
+                          className="rounded-lg border border-white/10 p-2 text-white/70 transition hover:border-[var(--accent)] hover:text-white disabled:opacity-50"
+                          aria-label={`Open ${filename}`}
+                        >
+                          <Download className="h-4 w-4" />
+                        </button>
+                        {!readOnly ? (
+                          <button
+                            type="button"
+                            onClick={() => deleteDocument(doc)}
+                            disabled={busyDocId === doc.id}
+                            className="rounded-lg border border-white/10 p-2 text-white/55 transition hover:border-rose-400/50 hover:text-rose-200 disabled:opacity-50"
+                            aria-label={`Delete ${filename}`}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
-          </>
-        )}
-      </div>
+          </div>
+        ) : null}
       </div>
 
-      {/* Upload modal lives at page root */}
-      <UploadDocModal
+      <AccountingDocumentUploadModal
         open={showUpload}
         onClose={() => setShowUpload(false)}
-        onCreated={(newId) => {
+        businessId={effectiveBusinessId}
+        year={selectedYear}
+        month={selectedMonth}
+        accounts={accounts}
+        onCreated={async () => {
           setShowUpload(false);
-          setDocs([]); setCount(0); setHasMore(false);
-          if (newId) navigate(`/dashboard/bizzi-docs/${newId}`);
+          setNotice("Document uploaded.");
+          await loadDocs();
         }}
       />
     </div>

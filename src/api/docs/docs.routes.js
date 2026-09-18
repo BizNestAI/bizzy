@@ -1,15 +1,26 @@
 // File: /src/api/docs/docs.routes.js
+/* global process */
 import { Router } from 'express';
 import {
+  deleteAccountingDocController,
+  getAccountingDocDownloadController,
   summarizeAndSaveDoc,
+  listAccountingDocsController,
   listDocsController,
   getDocController,
   getFacetsController,
+  uploadAccountingDocController,
 } from './docs.controller.js';
 import { supabase } from '../../services/supabaseAdmin.js';
 import { generateThreadSummaryLLM } from '../gpt/brain/generateThreadSummary.js';
+import { requireAuth } from '../gpt/middlewares/requireAuth.js';
 
 export const docsRouter = Router();
+
+const requireRouteAuth = (req, res, next) => {
+  if (req.tenantContext?.mode === 'admin_view' || req.tenantContext?.mode === 'customer') return next();
+  return requireAuth(req, res, next);
+};
 
 /* ──────────────────────────────────────────────────────────────
  * Helpers: request id / id normalization / cache policy
@@ -99,6 +110,42 @@ docsRouter.get('/list', attachRequestId, normalizeIds, noStore, async (req, res)
   } catch (e) {
     console.error('[docs:list] error:', e, 'req_id=', req.requestId);
     return res.status(500).json({ error: 'list_failed', request_id: req.requestId });
+  }
+});
+
+docsRouter.get('/accounting', attachRequestId, requireRouteAuth, normalizeIds, noStore, async (req, res) => {
+  try {
+    return await listAccountingDocsController(req, res);
+  } catch (e) {
+    console.error('[docs:accounting:list] error:', e, 'req_id=', req.requestId);
+    return res.status(500).json({ error: 'accounting_docs_list_failed', request_id: req.requestId });
+  }
+});
+
+docsRouter.post('/accounting/upload', attachRequestId, requireRouteAuth, normalizeIds, noStore, async (req, res) => {
+  try {
+    return await uploadAccountingDocController(req, res);
+  } catch (e) {
+    console.error('[docs:accounting:upload] error:', e, 'req_id=', req.requestId);
+    return res.status(500).json({ error: 'accounting_doc_upload_failed', request_id: req.requestId });
+  }
+});
+
+docsRouter.get('/accounting/:id/download', attachRequestId, requireRouteAuth, normalizeIds, noStore, async (req, res) => {
+  try {
+    return await getAccountingDocDownloadController(req, res);
+  } catch (e) {
+    console.error('[docs:accounting:download] error:', e, 'req_id=', req.requestId);
+    return res.status(500).json({ error: 'download_failed', request_id: req.requestId });
+  }
+});
+
+docsRouter.delete('/accounting/:id', attachRequestId, requireRouteAuth, normalizeIds, noStore, async (req, res) => {
+  try {
+    return await deleteAccountingDocController(req, res);
+  } catch (e) {
+    console.error('[docs:accounting:delete] error:', e, 'req_id=', req.requestId);
+    return res.status(500).json({ error: 'delete_failed', request_id: req.requestId });
   }
 });
 

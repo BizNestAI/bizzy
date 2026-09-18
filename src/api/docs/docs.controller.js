@@ -1,5 +1,7 @@
 // File: /src/api/docs/docs.controller.js
+/* global process */
 import { z } from 'zod';
+import { randomUUID } from 'crypto';
 import { supabase } from '../../services/supabaseAdmin.js';
 import { summarizeWithLLM } from './summarizer.js';
 
@@ -25,6 +27,122 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100),
   offset: z.coerce.number().int().min(0).max(10_000).default(0),
 });
+
+const DOCS_BUCKET = process.env.SUPABASE_ACCOUNTING_DOCS_BUCKET || process.env.STORAGE_DOCS_BUCKET || 'bizzy-docs';
+const MAX_ACCOUNTING_DOC_BYTES = 25 * 1024 * 1024;
+const ALLOWED_ACCOUNTING_EXTENSIONS = new Set(['pdf', 'png', 'jpg', 'jpeg', 'csv', 'xls', 'xlsx']);
+const ALLOWED_ACCOUNTING_TYPES = new Set([
+  'bank_statement',
+  'credit_card_statement',
+  'loan_statement',
+  'payroll_report',
+  'receipt_support',
+  'other_accounting_document',
+]);
+
+const accountingListQuery = z.object({
+  business_id: z.string().uuid().optional(),
+  year: z.coerce.number().int().min(2026).max(2200).optional(),
+  month: z.coerce.number().int().min(1).max(12).optional(),
+});
+
+const accountingUploadBody = z.object({
+  business_id: z.string().uuid().optional(),
+  year: z.coerce.number().int().min(2026).max(2200),
+  month: z.coerce.number().int().min(1).max(12),
+  document_type: z.enum([
+    'bank_statement',
+    'credit_card_statement',
+    'loan_statement',
+    'payroll_report',
+    'receipt_support',
+    'other_accounting_document',
+  ]),
+  financial_account_id: z.string().max(200).optional().nullable(),
+});
+
+function getTrustedBusinessId(req) {
+  return req.business?.id || req.auth?.businessId || req?.ctx?.businessId || req?.query?.business_id || req?.body?.business_id;
+}
+
+function getTrustedUserId(req) {
+  return req.auth?.userId || req.user?.id || req?.ctx?.userId || null;
+}
+
+function sanitizeFilename(filename = 'document') {
+  const safe = String(filename || 'document')
+    .normalize('NFKD')
+    .replace(/[^\w.\- ]+/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 140);
+  return safe || 'document';
+}
+
+function getFileExtension(filename = '') {
+  const pieces = String(filename || '').split('.');
+  return pieces.length > 1 ? pieces.pop().toLowerCase() : '';
+}
+
+function getUploadedFile(req) {
+  const raw = req.files?.file || req.files?.document || null;
+  return Array.isArray(raw) ? raw[0] : raw;
+}
+
+function accountingMetaFromDoc(row = {}) {
+  const meta = row?.content?.accounting_document || {};
+  const created = row.created_at ? new Date(row.created_at) : new Date();
+  const fallbackYear = Number.isFinite(created.getFullYear()) ? created.getFullYear() : new Date().getFullYear();
+  const fallbackMonth = Number.isFinite(created.getMonth()) ? created.getMonth() + 1 : 1;
+  return {
+    year: Number(row.year || row.accounting_year || meta.year || fallbackYear),
+    month: Number(row.month || row.accounting_month || meta.month || fallbackMonth),
+    document_type: row.document_type || meta.document_type || 'legacy_upload',
+    financial_account_id: row.financial_account_id || meta.financial_account_id || null,
+    financial_account_name: row.financial_account_name || meta.financial_account_name || null,
+    original_filename: row.original_filename || row.filename || meta.original_filename || row.title,
+    file_size: row.file_size || row.size || null,
+    uploaded_by_user_id: row.uploaded_by_user_id || row.user_id || null,
+  };
+}
+
+function mapAccountingDoc(row = {}) {
+  const meta = accountingMetaFromDoc(row);
+  return {
+    id: row.id,
+    business_id: row.business_id,
+    title: row.title,
+    filename: row.filename,
+    original_filename: meta.original_filename,
+    year: meta.year,
+    month: meta.month,
+    document_type: meta.document_type,
+    financial_account_id: meta.financial_account_id,
+    financial_account_name: meta.financial_account_name,
+    mime_type: row.mime_type,
+    size: row.size,
+    file_size: meta.file_size,
+    storage_bucket: row.storage_bucket,
+    storage_path: row.storage_path,
+    uploaded_by_user_id: meta.uploaded_by_user_id,
+    uploaded_by_name: row.author || null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    content: row.content,
+  };
+}
+
+async function fetchFinancialAccountName(businessId, financialAccountId) {
+  if (!businessId || !financialAccountId) return null;
+  const { data } = await supabase
+    .from('plaid_accounts')
+    .select('name,official_name,mask')
+    .eq('business_id', businessId)
+    .eq('plaid_account_id', financialAccountId)
+    .maybeSingle();
+  if (!data) return null;
+  return [data.name || data.official_name || 'Financial account', data.mask ? `••••${data.mask}` : ''].filter(Boolean).join(' ');
+}
 
 function stripHtml(html = '') {
   return html
@@ -218,5 +336,194 @@ export async function getFacetsController(req, res) {
   } catch (err) {
     const status = err?.status || 400;
     return res.status(status).json({ error: err?.message || 'facets_failed', request_id: req.requestId });
+  }
+}
+
+export async function listAccountingDocsController(req, res) {
+  try {
+    const businessId = getTrustedBusinessId(req);
+    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    const parsed = accountingListQuery.safeParse({ ...(req.query || {}), business_id: businessId });
+    if (!parsed.success) return fail(req, res, 400, 'invalid_query', { issues: parsed.error.issues });
+
+    const { year, month } = parsed.data;
+    let query = supabase
+      .from('bizzy_docs')
+      .select('*')
+      .eq('business_id', businessId)
+      .not('storage_path', 'is', null)
+      .order('created_at', { ascending: false });
+
+    if (year) query = query.eq('year', year);
+    if (month) query = query.eq('month', month);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const docs = (data || [])
+      .map(mapAccountingDoc)
+      .filter((row) => {
+        if (year && Number(row.year) !== Number(year)) return false;
+        if (month && Number(row.month) !== Number(month)) return false;
+        return true;
+      });
+
+    return ok(req, res, { data: docs, count: docs.length });
+  } catch (err) {
+    console.error('[docs:accounting:list] error', err);
+    return fail(req, res, err?.status || 400, err?.message || 'accounting_docs_list_failed');
+  }
+}
+
+export async function uploadAccountingDocController(req, res) {
+  let uploadedPath = null;
+  try {
+    const businessId = getTrustedBusinessId(req);
+    const userId = getTrustedUserId(req);
+    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    if (!userId) return fail(req, res, 401, 'missing_or_invalid_user_id');
+
+    const parsed = accountingUploadBody.safeParse({ ...(req.body || {}), business_id: businessId });
+    if (!parsed.success) return fail(req, res, 400, 'invalid_upload_metadata', { issues: parsed.error.issues });
+
+    const file = getUploadedFile(req);
+    if (!file) return fail(req, res, 400, 'missing_file');
+    const ext = getFileExtension(file.name);
+    if (!ALLOWED_ACCOUNTING_EXTENSIONS.has(ext)) return fail(req, res, 400, 'unsupported_file_type');
+    if (Number(file.size || 0) > MAX_ACCOUNTING_DOC_BYTES) return fail(req, res, 400, 'file_too_large');
+
+    const { year, month, document_type, financial_account_id } = parsed.data;
+    if (!ALLOWED_ACCOUNTING_TYPES.has(document_type)) return fail(req, res, 400, 'unsupported_document_type');
+
+    const documentId = randomUUID();
+    const originalFilename = file.name || `document.${ext}`;
+    const storagePath = `${businessId}/${year}/${String(month).padStart(2, '0')}/${documentId}-${sanitizeFilename(originalFilename)}`;
+    const financialAccountName = await fetchFinancialAccountName(businessId, financial_account_id);
+
+    const { error: uploadError } = await supabase.storage.from(DOCS_BUCKET).upload(storagePath, file.data, {
+      cacheControl: '3600',
+      contentType: file.mimetype || 'application/octet-stream',
+      upsert: false,
+    });
+    if (uploadError) throw uploadError;
+    uploadedPath = storagePath;
+
+    const accountingDocument = {
+      version: 1,
+      year,
+      month,
+      document_type,
+      financial_account_id: financial_account_id || null,
+      financial_account_name: financialAccountName,
+      original_filename: originalFilename,
+      storage_bucket: DOCS_BUCKET,
+      storage_path: storagePath,
+      file_size: file.size,
+    };
+
+    const insertPayload = {
+      id: documentId,
+      business_id: businessId,
+      user_id: userId,
+      uploaded_by_user_id: userId,
+      year,
+      month,
+      document_type,
+      financial_account_id: financial_account_id || null,
+      original_filename: originalFilename,
+      file_size: file.size,
+      title: originalFilename,
+      category: 'financials',
+      filename: originalFilename,
+      mime_type: file.mimetype || 'application/octet-stream',
+      size: file.size,
+      storage_bucket: DOCS_BUCKET,
+      storage_path: storagePath,
+      content: {
+        format: 'accounting_document',
+        plain_excerpt: originalFilename,
+        sections: [],
+        accounting_document: accountingDocument,
+      },
+      tags: [],
+    };
+
+    const { data, error: insertError } = await supabase
+      .from('bizzy_docs')
+      .insert(insertPayload)
+      .select('*')
+      .single();
+
+    if (insertError) {
+      await supabase.storage.from(DOCS_BUCKET).remove([storagePath]);
+      uploadedPath = null;
+      throw insertError;
+    }
+
+    return ok(req, res, { ok: true, data: mapAccountingDoc(data) });
+  } catch (err) {
+    if (uploadedPath) {
+      await supabase.storage.from(DOCS_BUCKET).remove([uploadedPath]).catch?.(() => {});
+    }
+    console.error('[docs:accounting:upload] error', err);
+    return fail(req, res, err?.status || 400, err?.message || 'accounting_doc_upload_failed');
+  }
+}
+
+export async function getAccountingDocDownloadController(req, res) {
+  try {
+    const businessId = getTrustedBusinessId(req);
+    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    const { id } = req.params;
+    const { data: doc, error } = await supabase
+      .from('bizzy_docs')
+      .select('id,business_id,storage_bucket,storage_path')
+      .eq('business_id', businessId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!doc?.storage_path) return fail(req, res, 404, 'not_found');
+
+    const { data, error: signedError } = await supabase.storage
+      .from(doc.storage_bucket || DOCS_BUCKET)
+      .createSignedUrl(doc.storage_path, 60 * 5);
+    if (signedError || !data?.signedUrl) throw signedError || new Error('signed_url_failed');
+    return ok(req, res, { ok: true, signed_url: data.signedUrl });
+  } catch (err) {
+    console.error('[docs:accounting:download] error', err);
+    return fail(req, res, err?.status || 400, err?.message || 'download_failed');
+  }
+}
+
+export async function deleteAccountingDocController(req, res) {
+  try {
+    const businessId = getTrustedBusinessId(req);
+    if (!businessId) return fail(req, res, 400, 'missing_or_invalid_business_id');
+    const { id } = req.params;
+    const { data: doc, error } = await supabase
+      .from('bizzy_docs')
+      .select('id,business_id,storage_bucket,storage_path')
+      .eq('business_id', businessId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    if (!doc) return fail(req, res, 404, 'not_found');
+
+    if (doc.storage_path) {
+      const { error: storageError } = await supabase.storage.from(doc.storage_bucket || DOCS_BUCKET).remove([doc.storage_path]);
+      if (storageError) throw storageError;
+    }
+
+    const { error: deleteError } = await supabase
+      .from('bizzy_docs')
+      .delete()
+      .eq('business_id', businessId)
+      .eq('id', id);
+    if (deleteError) throw deleteError;
+
+    return ok(req, res, { ok: true });
+  } catch (err) {
+    console.error('[docs:accounting:delete] error', err);
+    return fail(req, res, err?.status || 400, err?.message || 'delete_failed');
   }
 }

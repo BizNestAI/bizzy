@@ -262,8 +262,82 @@ export async function listDocs({
   return out;
 }
 
+export async function listAccountingDocuments({
+  business_id,
+  year,
+  month,
+  signal,
+} = {}) {
+  const biz = business_id || getBizId();
+  const url = new URL(apiUrl('/api/docs/accounting'));
+  if (biz) url.searchParams.set('business_id', biz);
+  if (year) url.searchParams.set('year', String(year));
+  if (month) url.searchParams.set('month', String(month));
+
+  const res = await safeFetch(url.toString(), {
+    headers: { ...idHeaders(), 'x-request-id': cryptoRandomId() },
+    cache: 'no-store',
+    signal,
+  });
+  return {
+    data: Array.isArray(res?.data) ? res.data : [],
+    count: Number.isFinite(res?.count) ? res.count : 0,
+    request_id: res?.request_id,
+  };
+}
+
+export async function uploadAccountingDocuments({
+  business_id,
+  year,
+  month,
+  document_type,
+  financial_account_id,
+  file,
+} = {}) {
+  const biz = business_id || getBizId();
+  if (!file) throw new Error('Choose a file.');
+
+  const form = new FormData();
+  form.append('business_id', biz);
+  form.append('year', String(year || ''));
+  form.append('month', String(month || ''));
+  form.append('document_type', document_type || '');
+  if (financial_account_id) form.append('financial_account_id', financial_account_id);
+  form.append('file', file, file.name);
+
+  return safeFetch(apiUrl('/api/docs/accounting/upload'), {
+    method: 'POST',
+    headers: { ...idHeaders(), 'x-request-id': cryptoRandomId() },
+    body: form,
+  });
+}
+
+export async function getAccountingDocumentDownloadUrl({ id, business_id } = {}) {
+  if (!id) throw new Error('Missing document id.');
+  const biz = business_id || getBizId();
+  const url = new URL(apiUrl(`/api/docs/accounting/${id}/download`));
+  if (biz) url.searchParams.set('business_id', biz);
+  return safeFetch(url.toString(), {
+    headers: { ...idHeaders(), 'x-request-id': cryptoRandomId() },
+    cache: 'no-store',
+  });
+}
+
+export async function deleteAccountingDocument({ id, business_id } = {}) {
+  if (!id) throw new Error('Missing document id.');
+  const biz = business_id || getBizId();
+  const url = new URL(apiUrl(`/api/docs/accounting/${id}`));
+  if (biz) url.searchParams.set('business_id', biz);
+  const res = await safeFetch(url.toString(), {
+    method: 'DELETE',
+    headers: { ...idHeaders(), 'x-request-id': cryptoRandomId() },
+  });
+  _cache.clear();
+  return res;
+}
+
 /** GET /api/docs/detail/:id (includes business_id) */
-export async function getDoc(id, { business_id, signal } = {}) {
+export async function getDoc(id, { business_id } = {}) {
   const biz = business_id || getBizId();
   if (!id) throw new Error('Missing id or business_id for getDoc');
   if (inDemoDocsMode(biz)) {

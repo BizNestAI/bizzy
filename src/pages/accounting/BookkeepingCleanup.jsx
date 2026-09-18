@@ -2089,15 +2089,6 @@ function BookkeepingCleanup() {
         {({ gateBanner }) => (
           <>
             {gateBanner}
-            <div className="flex items-center gap-3 mb-3 text-xs text-slate-400">
-              <div>
-                {lastSyncAt ? (
-                  <span>Last sync {new Date(lastSyncAt).toLocaleString()}</span>
-                ) : (
-                  <span>Last sync not available</span>
-                )}
-              </div>
-            </div>
 
             {!usingDemo && !loadingMappingStatus && mappingStatus?.needs_mapping && (activeTab === "handled" || activeTab === "needs_review") ? (
               <div className="mb-4 rounded-xl border border-[var(--accent-line)] bg-[var(--panel)] px-4 py-3 shadow-lg">

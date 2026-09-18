@@ -220,8 +220,6 @@ const MainLayoutCore = ({ children }) => {
       return [
         { label: "Job Costing", path: `${base}/job-costing`, activePaths: [base] },
         { label: "Collections", path: `${base}/collections` },
-        { label: "Bid Builder", path: `${base}/bid-builder`, tooltip: "Bid Builder: Coming Soon!", disableNavigate: true },
-        { label: "Change Orders", path: `${base}/change-orders`, tooltip: "Change Orders: Coming Soon!", disableNavigate: true },
       ];
     }
     if (path.startsWith("/dashboard/marketing")) {
