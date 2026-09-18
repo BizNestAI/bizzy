@@ -30,6 +30,7 @@ import qboJobCostingWebhooksRouter from "./api/qbo/qboJobCostingWebhooks.routes.
 import arRouter from "./api/ar/ar.routes.js";
 import bookkeepingPlaidRouter from "./api/bookkeeping/bookkeeping.routes.js";
 import { startBooksPostingCron } from "./jobs/booksPost.cron.js";
+import { startInteractivePostingCommandWorker } from "./jobs/interactivePostingCommands.worker.js";
 import { startPlaidDailySyncCron } from "./cron/plaidSync.cron.js";
 import { startBookkeepingProcessingWorker } from "./cron/bookkeepingProcessing.cron.js";
 import { startOperatorRequestSummaryCron } from "./cron/operatorRequestSummary.cron.js";
@@ -344,6 +345,7 @@ app.listen(PORT, () => {
 
 startForecastCron();
 startBooksPostingCron();
+startInteractivePostingCommandWorker();
 startBookkeepingProcessingWorker();
 startOperatorRequestSummaryCron();
 startPlaidDailySyncCron();

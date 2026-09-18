@@ -3,18 +3,21 @@ import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
-import { postSingleBookkeepingTransactionNow, runBooksPostOnce, signalMerchantApprovalQueueWakeup } from "../../../jobs/booksPost.cron.js";
+import { postSingleBookkeepingTransactionNow, runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
 import {
   getAutoPostSettings,
   getCanonicalPostingBacklogSummary,
   getMerchantBacklogGroups,
-  persistMerchantBacklogGroupApprovalOperation,
   postReadyBacklogTransactions,
   previewAutoPostBacklog,
   releaseAutoPostBacklogScope,
   requestMerchantGroupPostingRetryNow,
   setAutoPostEnabled,
 } from "../../../services/bookkeeping/autoPostControl.js";
+import {
+  createInteractivePostingCommand,
+  getInteractivePostingCommandStatus,
+} from "../../../services/bookkeeping/interactivePostingCommandService.js";
 import { assertTaxBusinessAccess } from "../../tax/taxRouteUtils.js";
 import { getQBOClient } from "../../../utils/qboClient.js";
 import { getLatestQuickBooksTokenRow } from "../../../services/quickbooksTokenService.js";
@@ -264,10 +267,16 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       idempotencyKey: req.get("Idempotency-Key") || req.body?.idempotency_key || null,
     };
     stageStartMs = nowMs();
-    const decision = await persistMerchantBacklogGroupApprovalOperation(common);
+    const decision = await createInteractivePostingCommand({
+      ...common,
+      merchantSnapshot: {
+        group_snapshot_token: common.groupSnapshotToken,
+        exclusion_ids: common.exclusionIds,
+      },
+    });
     stageTimings.accept_operation_ms = routeTiming(stageStartMs);
     console.info("[merchant-approval-timeline]", {
-      stage: "approval_operation_committed",
+      stage: "command_committed",
       operation_id: decision.operation_id,
       business_id: businessId,
       transaction_ids: common.transactionIds,
@@ -276,15 +285,9 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       worker: `${process.env.RAILWAY_SERVICE_NAME || process.env.HOSTNAME || "api"}:${process.pid || "worker"}`,
       deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,
     });
-    const wake = signalMerchantApprovalQueueWakeup({
-      businessId,
-      operationId: decision.operation_id,
-      transactionIds: decision.saved?.map((row) => row.transaction_id).filter(Boolean) || common.transactionIds,
-      limit: 25,
-    });
     return res.status(202).json({
       ...decision,
-      worker_wakeup: wake.queued ? "signaled" : wake.reason || "not_signaled",
+      worker_wakeup: "durable_command",
       stage_timings_ms: stageTimings,
       response_ms: routeTiming(routeStartMs),
       status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(businessId)}`,
@@ -314,6 +317,11 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const operationId = String(req.params?.operationId || "").trim();
     if (!operationId) return res.status(400).json({ ok: false, error: "missing_operation_id", message: "Missing operation id." });
+    const durableStatus = await getInteractivePostingCommandStatus({ db: supabase, businessId, operationId }).catch((err) => {
+      if (err?.status === 404 || err?.message === "interactive_posting_command_not_found") return null;
+      throw err;
+    });
+    if (durableStatus) return res.json(durableStatus);
     const { data, error } = await supabase
       .from("transaction_categorizations")
       .select("transaction_id,status,post_after,qbo_txn_id,post_error,meta,updated_at")
