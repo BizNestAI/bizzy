@@ -734,6 +734,7 @@ function protectedCustomerBucket(item = {}, bankTxn = {}) {
     taxonomy === "tax_payment" ||
     taxonomy === "owner_draw" ||
     taxonomy === "owner_contribution" ||
+    taxonomy === "loan_payment" ||
     taxonomy === "loan_movement" ||
     /refund|reversal|chargeback|payroll|salary|wages|\birs\b|tax payment|loan|liability|owner draw|owner contribution|fixed asset/.test(text)
   ) {
@@ -1044,6 +1045,7 @@ function postingReviewPlainStatus({ bucket, item = {}, reason = "" } = {}) {
   if (bucket === "protected_credit_card_payment") return "Needs payment match";
   if (bucket === "protected_transfer") return "Needs transfer review";
   if (bucket === "protected_check") return "Needs check review";
+  if (bucket === "protected_other" && String(item?.meta?.taxonomy_type || "").toLowerCase() === "loan_payment") return "Needs loan split";
   if (bucket === "protected_other") return "Protected workflow";
   return reason || "Needs merchant review";
 }

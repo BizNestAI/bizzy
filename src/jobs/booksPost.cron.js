@@ -33,6 +33,11 @@ import {
   markCreditCardPaymentPairPosted,
 } from "../services/bookkeeping/creditCardPaymentPairService.js";
 import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/incomingDepositMatchService.js";
+import {
+  buildLoanPaymentPurchasePayload,
+  fetchConfirmedLoanPaymentSplit,
+  splitRowToExecutableSplit,
+} from "../services/bookkeeping/loanPaymentWorkflow.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 1);
@@ -55,6 +60,7 @@ const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
   "owner_contribution",
   "owner_distribution",
   "refund",
+  "loan_payment",
   "loan_movement",
   "tax_payment",
   "payroll",
@@ -1574,6 +1580,49 @@ async function postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, 
   return createQboPurchase(qbo, payload);
 }
 
+async function markLoanPaymentSplitRequired(item, reason = "loan_payment_split_required") {
+  await supabase
+    .from("transaction_categorizations")
+    .update({
+      status: "needs_review",
+      post_after: null,
+      post_error: reason,
+      last_post_attempt_at: new Date().toISOString(),
+      meta: {
+        ...(item.meta || {}),
+        taxonomy_type: "loan_payment",
+        post_block_reason: reason,
+        posting_in_progress: false,
+        next_post_attempt_at: null,
+        post_retry_count: null,
+      },
+    })
+    .eq("business_id", item.business_id)
+    .eq("transaction_id", item.transaction_id);
+}
+
+async function postLoanPaymentSplitPurchase(item, bankTxn, qbo, mapping, requestId) {
+  const splitRow = await fetchConfirmedLoanPaymentSplit({
+    db: supabase,
+    businessId: item.business_id,
+    transactionId: item.transaction_id,
+  });
+  if (!splitRow) {
+    await markLoanPaymentSplitRequired(item, "loan_payment_split_required");
+    return null;
+  }
+  const { note, lineDescription } = buildQboPostText(bankTxn, "Loan payment", requestId);
+  const payload = buildLoanPaymentPurchasePayload({
+    transaction: bankTxn,
+    split: splitRowToExecutableSplit(splitRow),
+    mapping,
+    requestId,
+    lineDescription,
+    privateNote: note,
+  });
+  return createQboPurchase(qbo, payload);
+}
+
 async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
   if (!qbo) throw new Error("qbo_client_unavailable");
   if (!bankTxn) throw new Error("missing_bank_transaction");
@@ -1591,6 +1640,9 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
 
   if (looksCcMeta) {
     return postCcPaymentToQbo(item, bankTxn, qbo, mapping, requestId);
+  }
+  if (item?.meta?.taxonomy_type === "loan_payment") {
+    return postLoanPaymentSplitPurchase(item, bankTxn, qbo, mapping, requestId);
   }
   if (taxonomyRequiresBookkeepingPostingReview(item)) {
     await supabase
@@ -1796,6 +1848,28 @@ export async function handleItem(item, options = {}) {
   if (item?.meta?.taxonomy_type === "cc_payment" && item?.meta?.cc_payment_pair_id) {
     await handleCreditCardPaymentPairItem({ item, bank, mapping, timing, manual, confirmPostAnyway });
     return;
+  }
+
+  if (item?.meta?.taxonomy_type === "loan_payment") {
+    const confirmedSplit = await fetchConfirmedLoanPaymentSplit({
+      db: supabase,
+      businessId,
+      transactionId: txnId,
+    });
+    if (!confirmedSplit) {
+      await markLoanPaymentSplitRequired(item, "loan_payment_split_required");
+      await insertPostAttempt({
+        businessId,
+        transactionId: txnId,
+        status: "skipped",
+        errorMessage: "loan_payment_split_required",
+        retryCount: Number(item?.meta?.post_retry_count || 0) || null,
+        postAfter: item?.post_after || null,
+        payloadSummary: summarizePayload(item, bank, mapping),
+        responseSummary: { reason: "loan_payment_split_required" },
+      });
+      return;
+    }
   }
 
   const idempotencyKey = buildPostIdempotencyKey({

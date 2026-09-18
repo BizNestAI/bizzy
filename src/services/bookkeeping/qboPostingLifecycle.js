@@ -133,6 +133,14 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
       detail: "This transaction type needs review before QuickBooks posting.",
     };
   }
+  if (meta.taxonomy_type === "loan_payment" || blockReason === "loan_payment_split_required") {
+    return {
+      key: "loan_payment_needs_split",
+      label: "Loan Payment · Needs Split",
+      tone: "warning",
+      detail: "Confirm principal, interest, and fee lines before posting this loan payment.",
+    };
+  }
   if (meta.safe_to_auto_post === false && meta.auto_approve_reason !== "manual_user" && (status === "approved" || status === "auto_approved")) {
     return {
       key: "blocked_unsafe_auto_post",

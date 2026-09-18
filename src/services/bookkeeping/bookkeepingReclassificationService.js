@@ -31,6 +31,7 @@ const GENERIC_RECLASS_BLOCKED_TAXONOMIES = new Set([
   "owner_contribution",
   "owner_distribution",
   "refund",
+  "loan_payment",
   "loan_movement",
   "tax_payment",
   "payroll",

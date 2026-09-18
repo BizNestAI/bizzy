@@ -48,6 +48,7 @@ const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
   "owner_contribution",
   "owner_distribution",
   "refund",
+  "loan_payment",
   "loan_movement",
   "tax_payment",
   "payroll",

@@ -826,7 +826,7 @@ test("canonical posting backlog summary is exhaustive and frontend renders backe
   assert.match(monthlyReviewRoutes, /getCanonicalPostingBacklogSummary/);
   assert.match(monthlyReviewRoutes, /getMerchantBacklogGroups/);
   assert.match(postingRoutes, /requireInternalRole\(MONTHLY_REVIEW_STAFF_ROLES\)/);
-  assert.match(postingRoutes, /persistMerchantBacklogGroupApprovalOperation\(common\)/);
+  assert.match(postingRoutes, /createInteractivePostingCommand\(\{[\s\S]*?\.\.\.common/);
   assert.doesNotMatch(postingRoutes, /const decision = await persistMerchantBacklogGroupApprovalDecision\(common\)/);
   assert.match(postingRoutes, /res\.status\(202\)\.json/);
   assert.doesNotMatch(postingRoutes, /setImmediate/);
@@ -848,7 +848,7 @@ test("merchant approval queue is promptly polled and still durable through the d
   assert.match(cron, /processPendingMerchantBacklogApprovalOperations/);
   assert.match(cron, /collectImmediateMerchantApprovalPostingIds\(approvalOps\)/);
   assert.match(cron, /transactionIds:\s*group\.transaction_ids/);
-  assert.match(route, /persistMerchantBacklogGroupApprovalOperation\(common\)/);
+  assert.match(route, /createInteractivePostingCommand\(\{[\s\S]*?\.\.\.common/);
   assert.doesNotMatch(route, /persistMerchantBacklogGroupApprovalDecision\(common\)/);
   assert.doesNotMatch(route, /setImmediate|postToQbo|claim_qbo_posting_intent/);
 });
@@ -1505,7 +1505,8 @@ test("merchant approval queue has a short durable polling loop, immediate wakeup
   const serviceSource = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
   assert.doesNotMatch(routeSource, /setImmediate|runMerchantBacklogApprovalOperation|persistMerchantBacklogGroupApprovalDecision/);
   assert.match(workerSource, /BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS/);
-  assert.match(routeSource, /signalMerchantApprovalQueueWakeup\(\{[\s\S]*?businessId[\s\S]*?operationId:\s*decision\.operation_id[\s\S]*?transactionIds:/);
+  assert.match(routeSource, /createInteractivePostingCommand\(\{[\s\S]*?\.\.\.common[\s\S]*?merchantSnapshot:/);
+  assert.match(routeSource, /worker_wakeup:\s*"durable_command"/);
   assert.match(workerSource, /merchantApprovalQueueWakeupQueued/);
   assert.match(workerSource, /pendingMerchantApprovalWakeups/);
   assert.match(workerSource, /merchantApprovalWakeupRunning/);

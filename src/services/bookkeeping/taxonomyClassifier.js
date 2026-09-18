@@ -6,6 +6,7 @@ export const TAXONOMY_TYPES = {
   REFUND: "refund",
   PAYROLL: "payroll",
   PEER_TO_PEER_TRANSFER: "peer_to_peer_transfer",
+  LOAN_PAYMENT: "loan_payment",
 };
 
 export function normalizeText(value = "") {
@@ -210,6 +211,22 @@ export function looksLikePayroll(tx = {}) {
   return null;
 }
 
+export function looksLikeLoanPayment(tx = {}) {
+  const memo = getMemo(tx);
+  const outflow = isOutflow(tx);
+  const pfcPrimary = (tx.personal_finance_category?.primary || tx.category_primary || "").toUpperCase();
+  const pfcDetailed = (tx.personal_finance_category?.detailed || tx.category_detailed || "").toUpperCase();
+  const explicitLoan =
+    /\b(?:loan payment|loan principal|principal payment|mortgage payment|auto loan|student loan|business loan|installment loan)\b/.test(memo) ||
+    /\b(?:alliant cu|navient|nelnet|sba loan|kabbage|fundbox|ondeck)\b/.test(memo) ||
+    pfcPrimary.includes("LOAN") ||
+    pfcDetailed.includes("LOAN");
+  if (outflow && explicitLoan) {
+    return { confidence: "high", notes: "Loan payment language requires protected split review" };
+  }
+  return null;
+}
+
 export function looksLikePeerToPeerTransfer(tx = {}) {
   const memo = getMemo(tx);
   const issuerOrCardPayment =
@@ -274,7 +291,6 @@ export function looksLikeOwnerMove(tx = {}, context = {}) {
   const inflow = isInflow(tx);
   const outflow = isOutflow(tx);
   const hasMerchantSignal = Boolean(normalizeText(tx.merchant_name) || normalizeText(tx.counterparty_name));
-  const subtype = inflow ? TAXONOMY_TYPES.OWNER_CONTRIBUTION : TAXONOMY_TYPES.OWNER_DRAW;
   const ownerTokens = Array.isArray(context?.ownerTokens) ? context.ownerTokens : [];
 
   const memoContainsOwner = () => {
@@ -353,6 +369,7 @@ export function classifyTaxonomy(tx = {}, context = {}) {
   const classifiers = [
     { fn: looksLikeTransfer, type: TAXONOMY_TYPES.TRANSFER_INTERNAL },
     { fn: looksLikePayroll, type: TAXONOMY_TYPES.PAYROLL },
+    { fn: looksLikeLoanPayment, type: TAXONOMY_TYPES.LOAN_PAYMENT },
     { fn: looksLikePeerToPeerTransfer, type: TAXONOMY_TYPES.PEER_TO_PEER_TRANSFER },
     suppressCcPayment ? null : { fn: looksLikeCcPayment, type: TAXONOMY_TYPES.CC_PAYMENT },
     { fn: looksLikeRefund, type: TAXONOMY_TYPES.REFUND },

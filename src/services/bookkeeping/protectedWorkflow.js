@@ -25,6 +25,12 @@ export function isProtectedCreditCardPaymentWorkflow(row = {}) {
   return durablePair || durableTaxonomy;
 }
 
+export function isProtectedLoanPaymentWorkflow(row = {}) {
+  const meta = row.meta || {};
+  const taxonomy = String(row.taxonomy_type || meta.taxonomy_type || "").toLowerCase();
+  return taxonomy === "loan_payment" || taxonomy === "loan_movement" || Boolean(meta.loan_payment_profile_id || meta.loan_payment_split_id);
+}
+
 export function getProtectedWorkflowReason(row = {}) {
   const taxonomy = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
   const reason = String(row.accounting_review_reason || row.meta?.accounting_review_reason || "").toLowerCase();
@@ -39,6 +45,12 @@ export function getProtectedWorkflowReason(row = {}) {
   if (["transfer_internal", "bank_transfer"].includes(taxonomy)) return { label: "Transfer", detail: "Transfers use the protected transfer workflow." };
   if (["owner_draw", "owner_contribution", "owner_distribution"].includes(taxonomy)) return { label: "Owner movement", detail: "Owner equity movements use a protected workflow." };
   if (taxonomy === "refund") return { label: "Refund", detail: "Refunds use a protected workflow." };
+  if (isProtectedLoanPaymentWorkflow(row)) {
+    const splitConfirmed = row.loan_payment_split_status === "confirmed" || row.meta?.loan_payment_split_status === "confirmed";
+    return splitConfirmed
+      ? { label: "Loan Payment · Ready to post", detail: "Principal, interest, and fees use the protected loan split workflow." }
+      : { label: "Loan Payment · Needs Split", detail: "Confirm principal, interest, and fee lines before posting this loan payment." };
+  }
   if (taxonomy === "loan_movement") return { label: "Loan movement", detail: "Loan movements use a protected workflow." };
   if (taxonomy === "tax_payment") return { label: "Tax payment", detail: "Tax payments use a protected workflow." };
   if (taxonomy === "payroll") return { label: "Payroll", detail: "Payroll uses a protected workflow." };
@@ -55,4 +67,5 @@ export function getProtectedWorkflowReason(row = {}) {
 export default {
   getProtectedWorkflowReason,
   isProtectedCreditCardPaymentWorkflow,
+  isProtectedLoanPaymentWorkflow,
 };
