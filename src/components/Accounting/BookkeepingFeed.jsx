@@ -611,7 +611,7 @@ function toMinorUnits(value) {
   return Math.round(numeric * 100);
 }
 
-function LoanPaymentSplitEditor({
+export function LoanPaymentSplitEditor({
   txn,
   accounts = [],
   draft = {},
@@ -632,20 +632,43 @@ function LoanPaymentSplitEditor({
   const balanced = totalMinor > 0 && remainingMinor === 0;
   const canConfirm =
     balanced &&
+    principalMinor > 0 &&
     draft.principalQboAccountId &&
     (interestMinor === 0 || draft.interestQboAccountId) &&
     (feeMinor === 0 || draft.feeQboAccountId);
   const update = (patch) => onChange?.({ ...draft, ...patch });
+  const vendorLabel = txn?.vendor || txn?.payee || txn?.merchant || txn?.description || "Transaction";
+  const sourceLabel = txn?.source_account_name || txn?.sourceAccountName || txn?.account_name || txn?.accountName || txn?.plaid_account_name || "Source account";
+  const money = (minor) => `$${Math.abs(Number(minor || 0) / 100).toFixed(2)}`;
 
   return (
-    <div className="min-w-[340px] rounded-lg border border-amber-300/30 bg-[#121410] p-2 text-[10px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.28)]" onClick={(e) => e.stopPropagation()}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-semibold text-amber-100">Loan Payment · Needs Split</span>
+    <div className="min-w-[420px] max-w-[680px] rounded-xl border border-amber-300/30 bg-[#121410] p-3 text-[11px] text-amber-50 shadow-[0_18px_44px_rgba(0,0,0,0.38)]" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold text-white">Split loan payment</div>
+          <div className="mt-1 text-[11px] text-white/55">
+            {vendorLabel} · {txn?.date || "Date unavailable"} · {sourceLabel}
+          </div>
+        </div>
         <span className={balanced ? "text-emerald-200" : "text-amber-200"}>
-          {balanced ? "Balanced" : `${remainingMinor < 0 ? "-" : ""}$${Math.abs(remainingMinor / 100).toFixed(2)} remaining`}
+          {balanced ? "Balanced" : `${remainingMinor < 0 ? "-" : ""}${money(remainingMinor)} remaining`}
         </span>
       </div>
-      <div className="mt-2 grid grid-cols-2 gap-1.5">
+      <div className="mt-3 grid gap-2 rounded-lg border border-white/10 bg-black/20 p-2 sm:grid-cols-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.12em] text-white/35">Payment total</div>
+          <div className="mt-0.5 font-semibold text-white">{money(totalMinor)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.12em] text-white/35">Allocated</div>
+          <div className="mt-0.5 font-semibold text-white">{money(splitTotalMinor)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.12em] text-white/35">Remaining</div>
+          <div className={`mt-0.5 font-semibold ${balanced ? "text-emerald-100" : "text-amber-100"}`}>{remainingMinor < 0 ? "-" : ""}{money(remainingMinor)}</div>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-1.5">
         <select
           value={draft.lenderProfileId || "new"}
           disabled={disabled}
@@ -657,65 +680,85 @@ function LoanPaymentSplitEditor({
             <option key={profile.id} value={profile.id}>{profile.name || profile.lender_display_name || "Loan"}</option>
           ))}
         </select>
+      </div>
+      <div className="mt-3 space-y-2">
+        <div className="grid gap-1.5 sm:grid-cols-[110px_1fr_120px] sm:items-center">
+          <div className="font-semibold text-white/80">Principal</div>
         <select
           value={draft.principalQboAccountId || ""}
           disabled={disabled}
           onChange={(e) => update({ principalQboAccountId: e.target.value })}
           className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
-        >
+          >
           <option value="">Liability account</option>
           {liabilityAccounts.map((account) => (
             <option key={account.id} value={account.id}>{account.name}</option>
           ))}
         </select>
+          <input
+            value={draft.principalAmount || ""}
+            disabled={disabled}
+            onChange={(e) => update({ principalAmount: e.target.value })}
+            inputMode="decimal"
+            placeholder="0.00"
+            className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+          />
+        </div>
+        <div className="grid gap-1.5 sm:grid-cols-[110px_1fr_120px] sm:items-center">
+          <div className="font-semibold text-white/80">Interest</div>
         <select
           value={draft.interestQboAccountId || ""}
           disabled={disabled}
           onChange={(e) => update({ interestQboAccountId: e.target.value })}
           className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
-        >
+          >
           <option value="">Interest expense account</option>
           {interestAccounts.map((account) => (
             <option key={account.id} value={account.id}>{account.name}</option>
           ))}
         </select>
+          <input
+            value={draft.interestAmount || ""}
+            disabled={disabled}
+            onChange={(e) => update({ interestAmount: e.target.value })}
+            inputMode="decimal"
+            placeholder="0.00"
+            className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+          />
+        </div>
+        {draft.showFeeLine ? (
+          <div className="grid gap-1.5 sm:grid-cols-[110px_1fr_120px] sm:items-center">
+            <div className="font-semibold text-white/80">Fee</div>
         <select
           value={draft.feeQboAccountId || ""}
           disabled={disabled}
           onChange={(e) => update({ feeQboAccountId: e.target.value })}
           className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
-        >
+            >
           <option value="">Fee account optional</option>
           {interestAccounts.map((account) => (
             <option key={account.id} value={account.id}>{account.name}</option>
           ))}
         </select>
-      </div>
-      <div className="mt-2 grid grid-cols-3 gap-1.5">
-        <input
-          value={draft.principalAmount || ""}
-          disabled={disabled}
-          onChange={(e) => update({ principalAmount: e.target.value })}
-          inputMode="decimal"
-          placeholder="Principal"
-          className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
-        />
-        <input
-          value={draft.interestAmount || ""}
-          disabled={disabled}
-          onChange={(e) => update({ interestAmount: e.target.value })}
-          inputMode="decimal"
-          placeholder="Interest"
-          className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
-        />
-        <input
-          value={draft.feeAmount || ""}
-          disabled={disabled}
-          onChange={(e) => update({ feeAmount: e.target.value })}
-          inputMode="decimal"
-          placeholder="Fees"
-          className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
-        />
+            <input
+              value={draft.feeAmount || ""}
+              disabled={disabled}
+              onChange={(e) => update({ feeAmount: e.target.value })}
+              inputMode="decimal"
+              placeholder="0.00"
+              className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+            />
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => update({ showFeeLine: true })}
+            className="inline-flex w-fit items-center rounded-md border border-white/12 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-45"
+          >
+            Add another line
+          </button>
+        )}
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
         <button type="button" disabled={disabled} onClick={onTreatAsRegular} className="rounded-md border border-white/12 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-45">Treat as regular transaction</button>
@@ -733,7 +776,7 @@ function LoanPaymentSplitEditor({
           })}
           className="rounded-md border border-emerald-300/35 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45"
         >
-          Confirm split
+          Confirm and post
         </button>
       </div>
     </div>
@@ -1113,18 +1156,18 @@ export default function BookkeepingFeed({
 
   const startLoanSplit = (txn) => {
     if (readOnly || !isEligibleForManualLoanSplit(txn)) return;
-    const total = Math.abs(Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0).toFixed(2);
     setLoanSplitDrafts((prev) => {
       const next = new Map(prev);
       if (!next.has(txn.id)) {
         next.set(txn.id, {
           lenderProfileId: "new",
-          principalAmount: total,
+          principalAmount: "",
           interestAmount: "",
           feeAmount: "",
           principalQboAccountId: "",
           interestQboAccountId: "",
           feeQboAccountId: "",
+          showFeeLine: false,
           loanProfiles: txn.loan_profiles || txn.loanProfiles || [],
         });
       }

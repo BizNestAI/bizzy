@@ -1300,6 +1300,65 @@ export default function MonthlyReviewConsole() {
     }
   }, [bookkeepingRulePreferences, detail?.run?.id, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction]);
 
+  const handleMirrorConfirmLoanPaymentSplit = useCallback(async (row, split) => {
+    if (!selectedBusinessId || !row?.id) return;
+    const transactionId = row.id;
+    const actionId = `loan-split:${transactionId}`;
+    setBusyFeedActions((current) => ({ ...current, [actionId]: true }));
+    setBusyFeedAction(actionId);
+    setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: "" }));
+    try {
+      await safeFetch(`/api/bookkeeping/loan-payments/${encodeURIComponent(transactionId)}/confirm-split`, {
+        method: "POST",
+        body: {
+          businessId: selectedBusinessId,
+          ...split,
+        },
+      });
+      await refreshExpandedBookkeepingFeeds();
+    } catch (e) {
+      setBookkeepingFeedActionErrors((current) => ({
+        ...current,
+        [transactionId]: e?.body?.message || e?.message || "Could not save loan split.",
+      }));
+    } finally {
+      setBusyFeedActions((current) => {
+        const next = { ...current };
+        delete next[actionId];
+        return next;
+      });
+      setBusyFeedAction("");
+    }
+  }, [refreshExpandedBookkeepingFeeds, selectedBusinessId]);
+
+  const handleMirrorTreatLoanPaymentAsRegular = useCallback(async (row) => {
+    if (!selectedBusinessId || !row?.id) return;
+    const transactionId = row.id;
+    const actionId = `loan-regular:${transactionId}`;
+    setBusyFeedActions((current) => ({ ...current, [actionId]: true }));
+    setBusyFeedAction(actionId);
+    setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: "" }));
+    try {
+      await safeFetch(`/api/bookkeeping/loan-payments/${encodeURIComponent(transactionId)}/treat-as-regular`, {
+        method: "POST",
+        body: { businessId: selectedBusinessId },
+      });
+      await refreshExpandedBookkeepingFeeds();
+    } catch (e) {
+      setBookkeepingFeedActionErrors((current) => ({
+        ...current,
+        [transactionId]: e?.body?.message || e?.message || "Could not switch back to regular transaction handling.",
+      }));
+    } finally {
+      setBusyFeedActions((current) => {
+        const next = { ...current };
+        delete next[actionId];
+        return next;
+      });
+      setBusyFeedAction("");
+    }
+  }, [refreshExpandedBookkeepingFeeds, selectedBusinessId]);
+
   useEffect(() => {
     if (!detail?.run?.id) return undefined;
     let cancelled = false;
@@ -1992,6 +2051,8 @@ export default function MonthlyReviewConsole() {
                   onConfirmCcPaymentMatch={handleMirrorConfirmCreditCardPaymentMatch}
                   onMarkCcPayment={handleMirrorMarkCreditCardPayment}
                   onRejectCcPayment={handleMirrorRejectCreditCardPayment}
+                  onConfirmLoanPaymentSplit={handleMirrorConfirmLoanPaymentSplit}
+                  onTreatLoanPaymentAsRegular={handleMirrorTreatLoanPaymentAsRegular}
                   ccPaymentActionState={ccPaymentActionState}
                   onCreateAccount={createMonthlyReviewQboAccount}
                   onCreatedAccountSelect={injectSourceLedgerAccount}
@@ -2113,6 +2174,8 @@ function BookkeepingFeedMirrorPanels({
   onConfirmCcPaymentMatch,
   onMarkCcPayment,
   onRejectCcPayment,
+  onConfirmLoanPaymentSplit,
+  onTreatLoanPaymentAsRegular,
   ccPaymentActionState,
   onCreateAccount,
   onCreatedAccountSelect,
@@ -2190,6 +2253,8 @@ function BookkeepingFeedMirrorPanels({
             onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
             onMarkCcPayment={onMarkCcPayment}
             onRejectCcPayment={onRejectCcPayment}
+            onConfirmLoanPaymentSplit={onConfirmLoanPaymentSplit}
+            onTreatLoanPaymentAsRegular={onTreatLoanPaymentAsRegular}
             ccPaymentActionState={ccPaymentActionState}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
@@ -2642,6 +2707,8 @@ function BookkeepingFeedMirrorSection({
   onConfirmCcPaymentMatch,
   onMarkCcPayment,
   onRejectCcPayment,
+  onConfirmLoanPaymentSplit,
+  onTreatLoanPaymentAsRegular,
   ccPaymentActionState,
   onCreateAccount,
   onCreatedAccountSelect,
@@ -2699,6 +2766,8 @@ function BookkeepingFeedMirrorSection({
               onConfirmCcPaymentMatch={onConfirmCcPaymentMatch}
               onMarkCcPayment={onMarkCcPayment}
               onRejectCcPayment={onRejectCcPayment}
+              onConfirmLoanPaymentSplit={onConfirmLoanPaymentSplit}
+              onTreatLoanPaymentAsRegular={onTreatLoanPaymentAsRegular}
               ccPaymentActionState={ccPaymentActionState}
               onCreateAccount={onCreateAccount}
               onCreatedAccountSelect={onCreatedAccountSelect}
