@@ -1,6 +1,6 @@
 // File: /src/pages/Docs/DocsLibraryPage.jsx
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, Download, FileText, Folder, Loader2, Trash2, UploadCloud } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronLeft, Download, FileText, Folder, Loader2, Trash2, UploadCloud } from "lucide-react";
 
 import AccountingDocumentUploadModal from "../../components/BizzyDocs/UploadDocModal";
 import {
@@ -101,6 +101,8 @@ export default function DocsLibraryPage(props) {
   const [notice, setNotice] = useState("");
   const [showUpload, setShowUpload] = useState(false);
   const [busyDocId, setBusyDocId] = useState("");
+  const [showYearMenu, setShowYearMenu] = useState(false);
+  const yearMenuRef = useRef(null);
 
   const loadDocs = useCallback(async () => {
     if (!effectiveBusinessId) return;
@@ -120,6 +122,16 @@ export default function DocsLibraryPage(props) {
   useEffect(() => {
     loadDocs();
   }, [loadDocs]);
+
+  useEffect(() => {
+    function handlePointerDown(event) {
+      if (yearMenuRef.current && !yearMenuRef.current.contains(event.target)) {
+        setShowYearMenu(false);
+      }
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -206,23 +218,51 @@ export default function DocsLibraryPage(props) {
               Upload monthly bank statements and supporting accounting documents so Bizzi can complete your bookkeeping and reconciliations.
             </p>
           </div>
-          <label className="min-w-[160px]">
+          <div className="relative min-w-[160px]" ref={yearMenuRef}>
             <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-white/45">Year</span>
-            <select
-              value={selectedYear}
-              onChange={(event) => {
-                setSelectedYear(Number(event.target.value));
-                setSelectedMonth(null);
-              }}
-              className="w-full rounded-lg border border-white/10 bg-[#101418] px-3 py-2 text-sm text-white outline-none focus:border-[var(--accent)]"
+            <button
+              type="button"
+              onClick={() => setShowYearMenu((value) => !value)}
+              className="flex w-full items-center justify-between gap-3 rounded-lg border border-white/10 bg-[#0B0E13] px-3 py-2 text-sm font-semibold text-white outline-none transition hover:border-[rgba(var(--accent-rgb),0.38)] focus:border-[var(--accent)] focus:ring-2 focus:ring-[rgba(var(--accent-rgb),0.18)]"
+              aria-haspopup="listbox"
+              aria-expanded={showYearMenu}
             >
-              {years.map((year) => (
-                <option key={year} value={year} className="bg-[#101418] text-white">
-                  {year}
-                </option>
-              ))}
-            </select>
-          </label>
+              <span>{selectedYear}</span>
+              <ChevronDown className={`h-4 w-4 text-white/55 transition ${showYearMenu ? "rotate-180" : ""}`} />
+            </button>
+            {showYearMenu ? (
+              <div
+                className="absolute right-0 z-30 mt-2 min-w-full overflow-hidden rounded-lg border border-[rgba(var(--accent-rgb),0.28)] bg-[#0B0E13] py-1 shadow-[0_18px_44px_rgba(0,0,0,0.55)]"
+                role="listbox"
+                aria-label="Year"
+              >
+                {years.map((year) => {
+                  const active = Number(year) === Number(selectedYear);
+                  return (
+                    <button
+                      key={year}
+                      type="button"
+                      role="option"
+                      aria-selected={active}
+                      onClick={() => {
+                        setSelectedYear(Number(year));
+                        setSelectedMonth(null);
+                        setShowYearMenu(false);
+                      }}
+                      className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition ${
+                        active
+                          ? "bg-[rgba(var(--accent-rgb),0.16)] text-white"
+                          : "text-white/72 hover:bg-white/5 hover:text-white"
+                      }`}
+                    >
+                      <span>{year}</span>
+                      {active ? <Check className="h-4 w-4 text-[var(--accent)]" /> : null}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
         </div>
 
         {!effectiveBusinessId ? (
