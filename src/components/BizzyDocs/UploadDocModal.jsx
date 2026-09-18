@@ -192,19 +192,19 @@ export default function AccountingDocumentUploadModal({
 
   return (
     <div
-      className={`fixed inset-0 z-[9999] flex items-center justify-center p-4 transition-opacity duration-200 ${visible ? "opacity-100" : "opacity-0"}`}
+      className={`fixed inset-0 z-[9999] flex items-start justify-center px-4 pb-4 pt-[18vh] transition-opacity duration-200 sm:pt-[16vh] ${visible ? "opacity-100" : "opacity-0"}`}
       aria-modal="true"
       role="dialog"
     >
       <button
         type="button"
         aria-label="Close upload modal"
-        className="absolute inset-0 bg-black/72 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/45 backdrop-blur-md"
         onClick={requestClose}
         disabled={busy}
       />
       <div
-        className={`relative max-h-[calc(100vh-2rem)] w-[92vw] max-w-xl overflow-visible rounded-2xl border border-white/10 bg-[#0B0E13] p-5 shadow-2xl shadow-black/50 transition duration-200 ease-out ${visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-3 scale-95 opacity-0"}`}
+        className={`relative max-h-[calc(100vh-20vh)] w-[92vw] max-w-xl overflow-visible rounded-2xl border border-white/10 bg-[#0B0E13] p-5 shadow-[0_24px_90px_rgba(0,0,0,0.62)] transition duration-200 ease-out ${visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-3 scale-95 opacity-0"}`}
       >
         <div className="flex items-center justify-between">
           <div>
@@ -281,7 +281,7 @@ export default function AccountingDocumentUploadModal({
               disabled={busy}
             >
               <UploadCloud className="h-4 w-4" />
-              {files.length ? "Upload" : "Choose files"}
+              {files.length ? "Confirm upload" : "Choose files"}
             </button>
           </div>
         </form>

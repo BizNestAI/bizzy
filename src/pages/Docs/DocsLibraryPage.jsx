@@ -1,6 +1,6 @@
 // File: /src/pages/Docs/DocsLibraryPage.jsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronLeft, Download, FileText, Folder, Loader2, Trash2, UploadCloud } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, Download, ExternalLink, FileText, Folder, Loader2, Trash2, UploadCloud } from "lucide-react";
 
 import AccountingDocumentUploadModal from "../../components/BizzyDocs/UploadDocModal";
 import {
@@ -167,14 +167,25 @@ export default function DocsLibraryPage(props) {
 
   const selectedMonthName = selectedMonth ? MONTHS[selectedMonth - 1] : "";
 
-  async function openDocument(doc) {
+  async function openDocument(doc, { download = false } = {}) {
     if (!doc?.id) return;
     setBusyDocId(doc.id);
     setError("");
     try {
       const out = await getAccountingDocumentDownloadUrl({ id: doc.id, business_id: effectiveBusinessId });
       if (!out?.signed_url) throw new Error("Download link could not be created.");
-      window.open(out.signed_url, "_blank", "noopener,noreferrer");
+      if (download) {
+        const link = document.createElement("a");
+        link.href = out.signed_url;
+        link.download = doc.original_filename || doc.filename || doc.title || "accounting-document";
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } else {
+        window.open(out.signed_url, "_blank", "noopener,noreferrer");
+      }
     } catch (err) {
       setError(err?.message || "Download failed.");
     } finally {
@@ -362,7 +373,16 @@ export default function DocsLibraryPage(props) {
                   return (
                     <div key={doc.id} className="grid gap-3 border-b border-white/10 p-4 last:border-b-0 lg:grid-cols-[minmax(0,1.3fr)_180px_170px_150px_120px] lg:items-center">
                       <div className="min-w-0">
-                        <div className="truncate font-semibold text-white">{filename}</div>
+                        <button
+                          type="button"
+                          onClick={() => openDocument(doc)}
+                          disabled={busyDocId === doc.id}
+                          className="inline-flex max-w-full items-center gap-2 text-left font-semibold text-white transition hover:text-[var(--accent)] disabled:opacity-50"
+                          title={`Open ${filename}`}
+                        >
+                          <span className="truncate">{filename}</span>
+                          <ExternalLink className="h-3.5 w-3.5 shrink-0 text-white/40" />
+                        </button>
                         <div className="mt-1 text-xs text-white/45">Uploaded by {doc.uploaded_by_label}</div>
                       </div>
                       <div className="text-sm text-white/65">{typeLabel}</div>
@@ -371,10 +391,10 @@ export default function DocsLibraryPage(props) {
                       <div className="flex items-center gap-2 lg:justify-end">
                         <button
                           type="button"
-                          onClick={() => openDocument(doc)}
+                          onClick={() => openDocument(doc, { download: true })}
                           disabled={busyDocId === doc.id}
                           className="rounded-lg border border-white/10 p-2 text-white/70 transition hover:border-[var(--accent)] hover:text-white disabled:opacity-50"
-                          aria-label={`Open ${filename}`}
+                          aria-label={`Download ${filename}`}
                         >
                           <Download className="h-4 w-4" />
                         </button>
