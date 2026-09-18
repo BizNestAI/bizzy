@@ -236,6 +236,16 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
   const stageTimings = {};
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  console.info("[merchant-approval-timeline]", {
+    stage: "approval_accept_started",
+    operation_id: null,
+    business_id: businessId,
+    transaction_ids: Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids : [],
+    transaction_count: Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids.length : 0,
+    elapsed_ms: 0,
+    worker: `${process.env.RAILWAY_SERVICE_NAME || process.env.HOSTNAME || "api"}:${process.pid || "worker"}`,
+    deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,
+  });
 
   try {
     let stageStartMs = nowMs();
@@ -256,10 +266,25 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
     stageStartMs = nowMs();
     const decision = await persistMerchantBacklogGroupApprovalOperation(common);
     stageTimings.accept_operation_ms = routeTiming(stageStartMs);
-    signalMerchantApprovalQueueWakeup({ businessId, limit: 25 });
+    console.info("[merchant-approval-timeline]", {
+      stage: "approval_operation_committed",
+      operation_id: decision.operation_id,
+      business_id: businessId,
+      transaction_ids: common.transactionIds,
+      transaction_count: common.transactionIds.length,
+      elapsed_ms: routeTiming(routeStartMs),
+      worker: `${process.env.RAILWAY_SERVICE_NAME || process.env.HOSTNAME || "api"}:${process.pid || "worker"}`,
+      deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,
+    });
+    const wake = signalMerchantApprovalQueueWakeup({
+      businessId,
+      operationId: decision.operation_id,
+      transactionIds: decision.saved?.map((row) => row.transaction_id).filter(Boolean) || common.transactionIds,
+      limit: 25,
+    });
     return res.status(202).json({
       ...decision,
-      worker_wakeup: "signaled",
+      worker_wakeup: wake.queued ? "signaled" : wake.reason || "not_signaled",
       stage_timings_ms: stageTimings,
       response_ms: routeTiming(routeStartMs),
       status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(businessId)}`,

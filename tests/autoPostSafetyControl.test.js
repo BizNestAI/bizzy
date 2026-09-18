@@ -1140,6 +1140,56 @@ test("durable worker processes only immutable selected transaction ids after a p
   }
 });
 
+test("targeted merchant approval processing claims only the requested operation", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
+    transaction_categorizations: ["selected-1", "other-1"].map((id) => ({
+      business_id: "biz-1",
+      transaction_id: id,
+      status: "auto_approved",
+      final_qbo_account_id: "1150040001",
+      final_qbo_account_name: "Meals",
+      qbo_txn_id: null,
+      post_after: null,
+      meta: {
+        auto_approve_reason: "universal_hint",
+        merchant_group_operation_id: id === "selected-1" ? "op-selected" : "op-other",
+        merchant_group_operation_state: "accepted",
+        merchant_group_requested_decision: {
+          selected_qbo_account_id: "1150040001",
+          selected_qbo_account_name: "Meals",
+          remember_for_future: false,
+        },
+      },
+      updated_at: id === "other-1" ? "2026-09-16T02:00:00.000Z" : "2026-09-16T02:15:00.000Z",
+    })),
+    bank_transactions: [
+      { business_id: "biz-1", id: "selected-1", plaid_account_id: "pa-1", date: "2026-09-06", amount: -13.65, direction: "OUTFLOW", name: "CHEX GRILL", merchant_name: "Chex Grill", pending: false, is_archived: false },
+      { business_id: "biz-1", id: "other-1", plaid_account_id: "pa-1", date: "2026-09-07", amount: -5.4, direction: "OUTFLOW", name: "THE EXCHANGE", merchant_name: "The Exchange", pending: false, is_archived: false },
+    ],
+    plaid_qbo_account_mappings: [{ business_id: "biz-1", plaid_account_id: "pa-1", qbo_account_id: "20", qbo_account_name: "Blue Cash Everyday", qbo_account_type: "CreditCard" }],
+    vendor_rules: [],
+  });
+
+  const result = await processPendingMerchantBacklogApprovalOperations({
+    db,
+    businessId: "biz-1",
+    graceHours: 0,
+    operationIds: ["op-selected"],
+    transactionIds: ["selected-1"],
+    duplicatePreflight: async () => ({ confidence: "NO_MATCH", candidates: [] }),
+  });
+
+  assert.equal(result.processed_count, 1);
+  assert.equal(result.processed[0].operation_id, "op-selected");
+  assert.equal(db.cat("biz-1", "selected-1").meta.merchant_group_operation_state, "scheduled");
+  assert.equal(db.cat("biz-1", "selected-1").meta.safe_to_auto_post, true);
+  assert.equal(db.cat("biz-1", "other-1").meta.merchant_group_operation_state, "accepted");
+  assert.equal(db.cat("biz-1", "other-1").meta.safe_to_auto_post, undefined);
+  assert.equal(db.cat("biz-1", "other-1").post_after, null);
+});
+
 test("durable worker resumes prior decision_saved merchant operations without duplicate rules", async () => {
   const db = makeSupabase({
     business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01", auto_post_effective_date: "2026-05-01", auto_post_scope_mode: "effective_date" }],
@@ -1455,14 +1505,31 @@ test("merchant approval queue has a short durable polling loop, immediate wakeup
   const serviceSource = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
   assert.doesNotMatch(routeSource, /setImmediate|runMerchantBacklogApprovalOperation|persistMerchantBacklogGroupApprovalDecision/);
   assert.match(workerSource, /BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS/);
-  assert.match(routeSource, /signalMerchantApprovalQueueWakeup\(\{ businessId, limit: 25 \}\)/);
+  assert.match(routeSource, /signalMerchantApprovalQueueWakeup\(\{[\s\S]*?businessId[\s\S]*?operationId:\s*decision\.operation_id[\s\S]*?transactionIds:/);
   assert.match(workerSource, /merchantApprovalQueueWakeupQueued/);
+  assert.match(workerSource, /pendingMerchantApprovalWakeups/);
+  assert.match(workerSource, /merchantApprovalWakeupRunning/);
+  assert.match(workerSource, /runMerchantApprovalWakeups/);
+  assert.doesNotMatch(workerSource, /merchantApprovalQueueWakeupQueued \|\| merchantApprovalQueueRunning/);
+  assert.doesNotMatch(workerSource, /queued:\s*false,\s*reason:\s*"already_queued"/);
   assert.match(workerSource, /runMerchantApprovalQueueOnce/);
   assert.match(workerSource, /skipMerchantApprovalOperations/);
   assert.match(workerSource, /collectImmediateMerchantApprovalPostingIds/);
   assert.match(workerSource, /merchant_approval_exact_posting_dispatch/);
   assert.match(workerSource, /transactionIds:\s*group\.transaction_ids/);
+  assert.match(workerSource, /operationIds:\s*targetedOperationIds/);
+  assert.match(workerSource, /transactionIds:\s*targetedTransactionIds/);
+  assert.match(workerSource, /approval_wake_requested/);
+  assert.match(workerSource, /approval_wake_received/);
+  assert.match(workerSource, /approval_claim_attempted/);
   assert.match(workerSource, /if \(transactionIds\.length\) query = query\.in\("transaction_id", transactionIds\)/);
+  assert.match(serviceSource, /approval_claim_succeeded/);
+  assert.match(serviceSource, /approval_processing_started/);
+  assert.match(serviceSource, /approval_decision_saved/);
+  assert.match(serviceSource, /operationIds = \[\]/);
+  assert.match(serviceSource, /transactionIds = \[\]/);
+  assert.match(serviceSource, /if \(transactionFilter\.length\) query = query\.in\("transaction_id", transactionFilter\)/);
+  assert.match(serviceSource, /operationFilter\.size && !operationFilter\.has\(operationId\)/);
   assert.doesNotMatch(workerSource, /processed_count \|\| 0\) > 0\)[\s\S]{0,180}?runOnce\(\{\s*businessId,\s*force:\s*false,\s*skipMerchantApprovalOperations:\s*true,\s*\}\)/);
   assert.match(serviceSource, /let candidateIds = explicitCandidateIds/);
   assert.match(serviceSource, /if \(!candidateIds\.length\)[\s\S]*?getMerchantBacklogGroups/);

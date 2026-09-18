@@ -38,6 +38,28 @@ const CUSTOMER_BACKLOG_BUCKETS = Object.freeze([
   "missing_mapping",
 ]);
 
+function merchantApprovalWorkerIdentity() {
+  return `${process.env.RAILWAY_SERVICE_NAME || process.env.HOSTNAME || "auto-post-control"}:${process.pid || "worker"}`;
+}
+
+function logMerchantApprovalServiceTimeline(stage, details = {}) {
+  const acceptedAt = Date.parse(details.accepted_at || details.requested_at || "");
+  const elapsedMs = Number.isFinite(acceptedAt) ? Date.now() - acceptedAt : null;
+  console.info("[merchant-approval-timeline]", {
+    stage,
+    operation_id: details.operation_id || null,
+    business_id: details.business_id || null,
+    transaction_ids: Array.isArray(details.transaction_ids) ? details.transaction_ids : [],
+    transaction_count: Array.isArray(details.transaction_ids) ? details.transaction_ids.length : Number(details.transaction_count || 0),
+    elapsed_ms: elapsedMs,
+    worker: merchantApprovalWorkerIdentity(),
+    deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,
+    lease_owner: details.lease_owner || null,
+    attempt_count: details.attempt_count ?? null,
+    reason: details.reason || null,
+  });
+}
+
 function normalizeScopeMode(value) {
   const normalized = String(value || "").toLowerCase();
   if (normalized === AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE) return AUTO_POST_SCOPE_MODES.EFFECTIVE_DATE;
@@ -1797,8 +1819,16 @@ export async function runMerchantBacklogApprovalOperation({
   };
 }
 
-async function fetchPendingMerchantApprovalOperationRows({ db, businessId = null, limit = 25 } = {}) {
+async function fetchPendingMerchantApprovalOperationRows({
+  db,
+  businessId = null,
+  limit = 25,
+  operationIds = [],
+  transactionIds = [],
+} = {}) {
   const byKey = new Map();
+  const operationFilter = new Set((operationIds || []).filter(Boolean));
+  const transactionFilter = Array.from(new Set((transactionIds || []).filter(Boolean)));
   for (const state of MERCHANT_APPROVAL_RESUMABLE_STATES) {
     let query = db
       .from("transaction_categorizations")
@@ -1810,11 +1840,13 @@ async function fetchPendingMerchantApprovalOperationRows({ db, businessId = null
       .order("transaction_id", { ascending: true })
       .limit(limit);
     if (businessId) query = query.eq("business_id", businessId);
+    if (transactionFilter.length) query = query.in("transaction_id", transactionFilter);
     const { data, error } = await query;
     if (error) throw wrapAutoPostDbError("merchant_group_pending_operations_fetch_failed", error);
     for (const row of data || []) {
       const operationId = row?.meta?.merchant_group_operation_id || null;
       if (!operationId) continue;
+      if (operationFilter.size && !operationFilter.has(operationId)) continue;
       byKey.set(`${row.business_id}:${operationId}:${row.transaction_id}`, row);
     }
   }
@@ -1920,6 +1952,16 @@ async function claimMerchantBacklogApprovalOperation({
     if (updateErr) throw wrapAutoPostDbError("merchant_group_claim_update_failed", updateErr);
     if (updated?.transaction_id) claimed.push(updated);
   }
+  if (claimed.length) {
+    logMerchantApprovalServiceTimeline("approval_claim_succeeded", {
+      operation_id: operation.operation_id,
+      business_id: businessId,
+      transaction_ids: claimed.map((row) => row.transaction_id),
+      requested_at: claimed[0]?.meta?.merchant_group_requested_at || null,
+      lease_owner: leaseOwner,
+      attempt_count: claimed[0]?.meta?.merchant_group_operation_attempt_count || null,
+    });
+  }
   return { claimed: claimed.length > 0, rows: claimed, lease_owner: leaseOwner, lease_expires_at: leaseExpiresAt };
 }
 
@@ -1929,6 +1971,8 @@ export async function processPendingMerchantBacklogApprovalOperations({
   duplicatePreflight = defaultDuplicatePreflight,
   graceHours = 0,
   limit = 25,
+  operationIds = [],
+  transactionIds = [],
 } = {}) {
   if (!db) {
     const err = new Error("db is required.");
@@ -1936,7 +1980,7 @@ export async function processPendingMerchantBacklogApprovalOperations({
     err.code = "missing_db";
     throw err;
   }
-  const rows = (await fetchPendingMerchantApprovalOperationRows({ db, businessId, limit }))
+  const rows = (await fetchPendingMerchantApprovalOperationRows({ db, businessId, limit, operationIds, transactionIds }))
     .filter((row) => merchantApprovalLeaseExpired(row));
   const operations = buildPendingMerchantApprovalOperations(rows);
   const processed = [];
@@ -1954,6 +1998,14 @@ export async function processPendingMerchantBacklogApprovalOperations({
         continue;
       }
       operation.transaction_ids = claim.rows.map((row) => row.transaction_id).sort();
+      logMerchantApprovalServiceTimeline("approval_processing_started", {
+        operation_id: operation.operation_id,
+        business_id: operation.business_id,
+        transaction_ids: operation.transaction_ids,
+        requested_at: claim.rows[0]?.meta?.merchant_group_requested_at || null,
+        lease_owner: claim.lease_owner || null,
+        attempt_count: claim.rows[0]?.meta?.merchant_group_operation_attempt_count || null,
+      });
       if (!operation.selected_qbo_account_id) {
         await markMerchantBacklogApprovalOperationFailed({
           db,
@@ -1978,6 +2030,15 @@ export async function processPendingMerchantBacklogApprovalOperations({
         duplicatePreflight,
         graceHours,
         operationId: operation.operation_id,
+      });
+      logMerchantApprovalServiceTimeline("approval_decision_saved", {
+        operation_id: operation.operation_id,
+        business_id: operation.business_id,
+        transaction_ids: operation.transaction_ids,
+        requested_at: claim.rows[0]?.meta?.merchant_group_requested_at || null,
+        lease_owner: claim.lease_owner || null,
+        attempt_count: claim.rows[0]?.meta?.merchant_group_operation_attempt_count || null,
+        reason: `scheduled:${result.scheduled_count || 0},ready:${result.ready_count || 0},blocked:${result.blocked_count || 0}`,
       });
       processed.push({ operation_id: operation.operation_id, business_id: operation.business_id, result });
     } catch (err) {

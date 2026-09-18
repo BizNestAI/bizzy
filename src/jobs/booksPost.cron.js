@@ -63,10 +63,34 @@ const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
 let postAttemptsTableAvailable = true;
 let booksPostSweepRunning = false;
 let merchantApprovalQueueRunning = false;
+let merchantApprovalWakeupRunning = false;
 let merchantApprovalQueueWakeupQueued = false;
+const pendingMerchantApprovalWakeups = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function serviceIdentity() {
+  return `${process.env.RAILWAY_SERVICE_NAME || process.env.HOSTNAME || "books-post"}:${process.pid || "worker"}`;
+}
+
+function logMerchantApprovalTimeline(stage, details = {}) {
+  const acceptedAt = Date.parse(details.accepted_at || details.requested_at || "");
+  const elapsedMs = Number.isFinite(acceptedAt) ? Date.now() - acceptedAt : null;
+  log.info("[merchant-approval-timeline]", {
+    stage,
+    operation_id: details.operation_id || null,
+    business_id: details.business_id || null,
+    transaction_ids: Array.isArray(details.transaction_ids) ? details.transaction_ids : [],
+    transaction_count: Array.isArray(details.transaction_ids) ? details.transaction_ids.length : Number(details.transaction_count || 0),
+    elapsed_ms: elapsedMs,
+    worker: serviceIdentity(),
+    deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,
+    lease_owner: details.lease_owner || null,
+    attempt_count: details.attempt_count ?? null,
+    reason: details.reason || null,
+  });
 }
 
 function buildPostIdempotencyKey({ businessId, transactionId, plaidTransactionId, amount, date }) {
@@ -2791,6 +2815,37 @@ export function startBooksPostingCron() {
 
 export const runBooksPostOnce = runOnce;
 
+function mergeMerchantApprovalWakeup(options = {}) {
+  const businessId = options?.businessId || null;
+  const key = businessId || "*";
+  const existing = pendingMerchantApprovalWakeups.get(key) || {
+    businessId,
+    limit: 25,
+    operationIds: new Set(),
+    transactionIds: new Set(),
+    requestedAt: new Date().toISOString(),
+  };
+  existing.limit = Math.max(existing.limit || 25, Number(options?.limit || 25));
+  if (options?.operationId) existing.operationIds.add(options.operationId);
+  for (const id of options?.transactionIds || []) {
+    if (id) existing.transactionIds.add(id);
+  }
+  pendingMerchantApprovalWakeups.set(key, existing);
+  return existing;
+}
+
+function drainMerchantApprovalWakeups() {
+  const targets = Array.from(pendingMerchantApprovalWakeups.values()).map((target) => ({
+    businessId: target.businessId || null,
+    limit: target.limit || 25,
+    operationIds: Array.from(target.operationIds || []),
+    transactionIds: Array.from(target.transactionIds || []),
+    requestedAt: target.requestedAt || null,
+  }));
+  pendingMerchantApprovalWakeups.clear();
+  return targets.length ? targets : [{ businessId: null, limit: 25, operationIds: [], transactionIds: [], requestedAt: null }];
+}
+
 function collectImmediateMerchantApprovalPostingIds(approvalOps = {}) {
   const nowMs = Date.now();
   const byBusiness = new Map();
@@ -2811,45 +2866,103 @@ function collectImmediateMerchantApprovalPostingIds(approvalOps = {}) {
   }));
 }
 
-export function signalMerchantApprovalQueueWakeup(options = {}) {
-  if (process.env.DISABLE_MERCHANT_APPROVAL_QUEUE === "true") return { queued: false, reason: "disabled" };
-  if (merchantApprovalQueueWakeupQueued || merchantApprovalQueueRunning) return { queued: false, reason: "already_queued" };
+function scheduleMerchantApprovalWakeup() {
+  if (merchantApprovalQueueWakeupQueued || merchantApprovalWakeupRunning) return;
   merchantApprovalQueueWakeupQueued = true;
-  const businessId = options?.businessId || null;
   setTimeout(() => {
-    if (merchantApprovalQueueRunning) {
-      merchantApprovalQueueWakeupQueued = false;
-      return;
-    }
-    merchantApprovalQueueRunning = true;
-    runMerchantApprovalQueueOnce({ businessId, limit: options?.limit || 25 })
+    merchantApprovalQueueWakeupQueued = false;
+    runMerchantApprovalWakeups()
       .catch((err) => log.error("[books-post] merchant approval wakeup error", err))
       .finally(() => {
-        merchantApprovalQueueRunning = false;
-        merchantApprovalQueueWakeupQueued = false;
+        if (pendingMerchantApprovalWakeups.size) scheduleMerchantApprovalWakeup();
       });
   }, 0);
-  return { queued: true };
+}
+
+export function signalMerchantApprovalQueueWakeup(options = {}) {
+  if (process.env.DISABLE_MERCHANT_APPROVAL_QUEUE === "true") return { queued: false, reason: "disabled" };
+  const target = mergeMerchantApprovalWakeup(options);
+  logMerchantApprovalTimeline("approval_wake_requested", {
+    operation_id: options?.operationId || null,
+    business_id: target.businessId,
+    transaction_ids: Array.from(target.transactionIds || []),
+    requested_at: target.requestedAt,
+    reason: merchantApprovalWakeupRunning ? "wakeup_runner_busy" : merchantApprovalQueueWakeupQueued ? "wakeup_queued" : "wakeup_scheduled",
+  });
+  scheduleMerchantApprovalWakeup();
+  return {
+    queued: true,
+    reason: merchantApprovalWakeupRunning ? "queued_after_active_wakeup" : merchantApprovalQueueWakeupQueued ? "queued" : "scheduled",
+  };
+}
+
+async function runMerchantApprovalWakeups() {
+  if (merchantApprovalWakeupRunning) return { ok: true, skipped: true, reason: "targeted_wakeup_already_running" };
+  merchantApprovalWakeupRunning = true;
+  const results = [];
+  try {
+    const targets = drainMerchantApprovalWakeups();
+    for (const target of targets) {
+      logMerchantApprovalTimeline("approval_wake_received", {
+        operation_id: target.operationIds[0] || null,
+        business_id: target.businessId,
+        transaction_ids: target.transactionIds,
+        requested_at: target.requestedAt,
+      });
+      results.push(await runMerchantApprovalQueueOnce({
+        businessId: target.businessId,
+        limit: target.limit,
+        operationIds: target.operationIds,
+        transactionIds: target.transactionIds,
+        requestedAt: target.requestedAt,
+        targeted: true,
+      }));
+    }
+    return { ok: true, results };
+  } finally {
+    merchantApprovalWakeupRunning = false;
+  }
 }
 
 export async function runMerchantApprovalQueueOnce(options = {}) {
   const businessId = options?.businessId || null;
+  const targetedTransactionIds = Array.isArray(options?.transactionIds) ? options.transactionIds : [];
+  const targetedOperationIds = Array.isArray(options?.operationIds) ? options.operationIds : [];
+  for (const operationId of targetedOperationIds.length ? targetedOperationIds : [null]) {
+    logMerchantApprovalTimeline("approval_claim_attempted", {
+      operation_id: operationId,
+      business_id: businessId,
+      transaction_ids: targetedTransactionIds,
+      requested_at: options?.requestedAt || null,
+      reason: options?.targeted ? "targeted_wakeup" : "periodic_sweep",
+    });
+  }
   const approvalOps = await processPendingMerchantBacklogApprovalOperations({
     db: supabase,
     businessId,
     duplicatePreflight: options?.duplicatePreflight || createCachedLiveDuplicatePreflight(),
     graceHours: 0,
     limit: options?.limit || 25,
+    operationIds: targetedOperationIds,
+    transactionIds: targetedTransactionIds,
   });
   let postingSweep = null;
   const immediatePostingGroups = collectImmediateMerchantApprovalPostingIds(approvalOps);
   if (immediatePostingGroups.length) {
     postingSweep = [];
     for (const group of immediatePostingGroups) {
+      const operation = approvalOps?.processed?.find((item) => item.business_id === group.business_id && (item.result?.scheduled || []).some((row) => group.transaction_ids.includes(row.transaction_id)));
       log.info("[books-post] merchant approval exact posting dispatch", {
         stage: "merchant_approval_exact_posting_dispatch",
         business_id: group.business_id,
+        operation_id: operation?.operation_id || null,
         transaction_count: group.transaction_ids.length,
+      });
+      logMerchantApprovalTimeline("merchant_approval_exact_posting_dispatch", {
+        operation_id: operation?.operation_id || null,
+        business_id: group.business_id,
+        transaction_ids: group.transaction_ids,
+        requested_at: options?.requestedAt || null,
       });
       postingSweep.push(await runOnce({
         businessId: group.business_id,
