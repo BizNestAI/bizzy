@@ -22,6 +22,8 @@ import {
   rejectCreditCardPayment,
   markCreditCardPayment,
   confirmCreditCardPaymentMatch,
+  confirmLoanPaymentSplit,
+  treatLoanPaymentAsRegularTransaction,
   updateHandledTransaction,
   getBookkeepingProcessingStatus,
   getMappingStatus,
@@ -1476,6 +1478,72 @@ function BookkeepingCleanup() {
     }
   };
 
+  const handleConfirmLoanPaymentSplit = async (id, split) => {
+    if (!canRunAI || !businessId || !id || !split) return;
+    if (usingDemo) {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                status: "needs_review",
+                taxonomy_type: "loan_payment",
+                meta: {
+                  ...(t.meta || {}),
+                  taxonomy_type: "loan_payment",
+                  loan_payment_split_status: "confirmed",
+                },
+              }
+            : t
+        )
+      );
+      return;
+    }
+    try {
+      await confirmLoanPaymentSplit(businessId, id, split);
+      accountOverrides.current?.delete?.(id);
+      await reloadTransactions();
+      setCountsRefreshKey((value) => value + 1);
+      await loadMappingStatus();
+    } catch (e) {
+      const message = e?.body?.message || e?.message || "Could not save this loan split.";
+      console.warn("[bookkeeping] loan payment split failed", message);
+      window.alert(message);
+    }
+  };
+
+  const handleTreatLoanPaymentAsRegular = async (id) => {
+    if (!canRunAI || !businessId || !id) return;
+    if (usingDemo) {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                taxonomy_type: null,
+                meta: {
+                  ...(t.meta || {}),
+                  taxonomy_override: "not_loan_payment",
+                  loan_payment_rejected: true,
+                },
+              }
+            : t
+        )
+      );
+      return;
+    }
+    try {
+      await treatLoanPaymentAsRegularTransaction(businessId, id);
+      await reloadTransactions();
+      setCountsRefreshKey((value) => value + 1);
+      await loadMappingStatus();
+    } catch (e) {
+      const message = e?.body?.message || e?.message || "Could not switch this back to regular review.";
+      console.warn("[bookkeeping] loan payment regular override failed", message);
+      window.alert(message);
+    }
+  };
+
   const withIncomingDepositMatchAction = async (id, action) => {
     if (!canRunAI || !businessId || !id || usingDemo) return;
     const key = String(id);
@@ -2475,6 +2543,8 @@ function BookkeepingCleanup() {
               onRejectCcPayment={handleRejectCreditCardPayment}
               onMarkCcPayment={handleMarkCreditCardPayment}
               onConfirmCcPaymentMatch={handleConfirmCreditCardPaymentMatch}
+              onConfirmLoanPaymentSplit={handleConfirmLoanPaymentSplit}
+              onTreatLoanPaymentAsRegular={handleTreatLoanPaymentAsRegular}
               onInspectIncomingDepositMatch={handleInspectIncomingDepositMatch}
               onConfirmIncomingDepositMatch={handleConfirmIncomingDepositMatch}
               onRejectIncomingDepositMatch={handleRejectIncomingDepositMatch}

@@ -368,6 +368,38 @@ export async function confirmCreditCardPaymentMatch(businessId, txnId, targetQbo
   return res;
 }
 
+export async function confirmLoanPaymentSplit(businessId, txnId, split = {}) {
+  const payload = { business_id: businessId, split };
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/loan-payments/${encodeURIComponent(txnId)}/confirm-split`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  if (res && res.ok === false) {
+    const err = new Error(res.message || res.error || "loan_payment_confirm_split_failed");
+    err.code = res.error || null;
+    err.body = res;
+    throw err;
+  }
+  return res;
+}
+
+export async function treatLoanPaymentAsRegularTransaction(businessId, txnId) {
+  const payload = { business_id: businessId };
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/loan-payments/${encodeURIComponent(txnId)}/treat-as-regular`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  if (res && res.ok === false) {
+    const err = new Error(res.message || res.error || "loan_payment_regular_override_failed");
+    err.code = res.error || null;
+    err.body = res;
+    throw err;
+  }
+  return res;
+}
+
 export async function updateHandledTransaction(businessId, transactionId, payload = {}) {
   const body = {
     ...payload,
@@ -815,6 +847,8 @@ export default {
   rejectCreditCardPayment,
   markCreditCardPayment,
   confirmCreditCardPaymentMatch,
+  confirmLoanPaymentSplit,
+  treatLoanPaymentAsRegularTransaction,
   updateHandledTransaction,
   suggestTransactions,
   getBookkeepingProcessingStatus,

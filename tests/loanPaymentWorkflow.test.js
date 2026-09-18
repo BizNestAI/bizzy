@@ -162,6 +162,47 @@ test("posting worker has loan split guard before QBO writes and still blocks pen
   assert.match(worker, /createQboPurchase\(qbo, payload\)/);
 });
 
+test("Books Review account dropdown exposes a manual loan split workflow safely", () => {
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const approvals = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+
+  assert.match(feed, /Split as loan payment/);
+  assert.match(feed, /onUseCreditCardPayment[\s\S]*Match as credit card payment[\s\S]*onUseLoanPayment[\s\S]*Split as loan payment/);
+  assert.match(feed, /function isEligibleForManualLoanSplit/);
+  assert.match(feed, /txn\.pending === true/);
+  assert.match(feed, /status === "posted" \|\| txn\.qbo_txn_id/);
+  assert.match(feed, /signedAmount < 0/);
+  assert.match(feed, /workflow === "loan_payment"/);
+  assert.match(feed, /function LoanPaymentSplitEditor/);
+  assert.match(feed, /Loan Payment · Needs Split/);
+  assert.match(feed, /Set up new loan/);
+  assert.match(feed, /Liability account/);
+  assert.match(feed, /Interest expense account/);
+  assert.match(feed, /Confirm split/);
+  assert.match(feed, /Treat as regular transaction/);
+  assert.match(feed, /isLoanPrincipalAccountOption/);
+  assert.match(feed, /longtermliability/);
+  assert.match(feed, /othercurrentliability/);
+  assert.match(feed, /isLoanInterestAccountOption/);
+  assert.match(feed, /canConfirm[\s\S]*balanced/);
+  assert.match(feed, /onConfirmLoanPaymentSplit/);
+  assert.match(feed, /onTreatLoanPaymentAsRegular/);
+
+  assert.match(client, /confirmLoanPaymentSplit/);
+  assert.match(client, /treatLoanPaymentAsRegularTransaction/);
+  assert.match(approvals, /loan-payments\/:transactionId\/confirm-split/);
+  assert.match(approvals, /confirmLoanPaymentSplit/);
+  assert.match(approvals, /taxonomy_type:\s*"loan_payment"/);
+  assert.match(approvals, /loan_payment_split_status:\s*"confirmed"/);
+  assert.match(approvals, /status:\s*"needs_review"/);
+  assert.match(approvals, /post_after:\s*null/);
+  assert.match(approvals, /loan-payments\/:transactionId\/treat-as-regular/);
+  assert.match(page, /handleConfirmLoanPaymentSplit/);
+  assert.match(page, /handleTreatLoanPaymentAsRegular/);
+});
+
 test("migration is additive and tenant scoped", () => {
   const migration = read("supabase/migrations/20261013_loan_payment_workflow.sql");
   assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.loan_lender_profiles/i);

@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom";
-import { CheckCircle2, CreditCard, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
+import { CheckCircle2, CreditCard, Landmark, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
 import {
   deriveCreditCardPaymentOrientation,
@@ -55,6 +55,7 @@ export function CoaDropdown({
   status,
   disabled,
   onUseCreditCardPayment,
+  onUseLoanPayment,
 }) {
   const [open, setOpen] = React.useState(false);
   const [renderMenu, setRenderMenu] = React.useState(false);
@@ -226,6 +227,19 @@ export function CoaDropdown({
                   >
                     <CreditCard className="h-3.5 w-3.5" />
                     Match as credit card payment
+                  </button>
+                ) : null}
+                {onUseLoanPayment ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 border-b border-amber-300/20 bg-[rgba(24,19,10,0.98)] px-3.5 py-2 text-left text-[12px] font-semibold text-amber-100 hover:bg-amber-400/10"
+                    onClick={() => {
+                      setOpen(false);
+                      onUseLoanPayment();
+                    }}
+                  >
+                    <Landmark className="h-3.5 w-3.5" />
+                    Split as loan payment
                   </button>
                 ) : null}
                 <div className="px-3.5 py-2 border-b border-[var(--accent-line)]/60 bg-white/5">
@@ -562,6 +576,170 @@ function humanizeReason(code = "") {
   return labels[code] || String(code || "").replace(/_/g, " ");
 }
 
+function normalizeAccountType(value = "") {
+  return String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
+}
+
+function isLoanPrincipalAccountOption(account = {}) {
+  const type = normalizeAccountType(account.type || account.accountType || account.account_type || account.AccountType);
+  return type === "longtermliability" || type === "othercurrentliability";
+}
+
+function isLoanInterestAccountOption(account = {}) {
+  const type = normalizeAccountType(account.type || account.accountType || account.account_type || account.AccountType);
+  return type === "expense" || type === "otherexpense" || type === "costofgoodssold" || type === "costofgoodsold";
+}
+
+function isEligibleForManualLoanSplit(txn = {}) {
+  if (!txn || txn.pending === true) return false;
+  const status = String(txn.status || "").toLowerCase();
+  if (status === "posted" || txn.qbo_txn_id || txn.qboTxnId || txn.posted_at) return false;
+  const signedAmount = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0);
+  const direction = String(txn.direction || "").toUpperCase();
+  const isOutflow = direction === "OUTFLOW" || (direction !== "INFLOW" && Number.isFinite(signedAmount) && signedAmount < 0);
+  if (!isOutflow) return false;
+  const workflow = String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase();
+  if (!workflow || workflow === "ordinary_expense" || workflow === "expense" || workflow === "loan_payment") return true;
+  return false;
+}
+
+function toMinorUnits(value) {
+  const cleaned = String(value ?? "").replace(/[^0-9.]/g, "");
+  if (!cleaned) return 0;
+  const numeric = Number(cleaned);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.round(numeric * 100);
+}
+
+function LoanPaymentSplitEditor({
+  txn,
+  accounts = [],
+  draft = {},
+  disabled = false,
+  onChange,
+  onConfirm,
+  onTreatAsRegular,
+  onCancel,
+}) {
+  const totalMinor = Math.abs(Math.round(Number(txn?.signed_amount ?? txn?.signedAmount ?? txn?.amount ?? 0) * 100));
+  const liabilityAccounts = accounts.filter(isLoanPrincipalAccountOption);
+  const interestAccounts = accounts.filter(isLoanInterestAccountOption);
+  const principalMinor = toMinorUnits(draft.principalAmount);
+  const interestMinor = toMinorUnits(draft.interestAmount);
+  const feeMinor = toMinorUnits(draft.feeAmount);
+  const splitTotalMinor = principalMinor + interestMinor + feeMinor;
+  const remainingMinor = totalMinor - splitTotalMinor;
+  const balanced = totalMinor > 0 && remainingMinor === 0;
+  const canConfirm =
+    balanced &&
+    draft.principalQboAccountId &&
+    (interestMinor === 0 || draft.interestQboAccountId) &&
+    (feeMinor === 0 || draft.feeQboAccountId);
+  const update = (patch) => onChange?.({ ...draft, ...patch });
+
+  return (
+    <div className="min-w-[340px] rounded-lg border border-amber-300/30 bg-[#121410] p-2 text-[10px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.28)]" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-semibold text-amber-100">Loan Payment · Needs Split</span>
+        <span className={balanced ? "text-emerald-200" : "text-amber-200"}>
+          {balanced ? "Balanced" : `${remainingMinor < 0 ? "-" : ""}$${Math.abs(remainingMinor / 100).toFixed(2)} remaining`}
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-1.5">
+        <select
+          value={draft.lenderProfileId || "new"}
+          disabled={disabled}
+          onChange={(e) => update({ lenderProfileId: e.target.value })}
+          className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
+        >
+          <option value="new">Set up new loan</option>
+          {(draft.loanProfiles || txn?.loan_profiles || []).map((profile) => (
+            <option key={profile.id} value={profile.id}>{profile.name || profile.lender_display_name || "Loan"}</option>
+          ))}
+        </select>
+        <select
+          value={draft.principalQboAccountId || ""}
+          disabled={disabled}
+          onChange={(e) => update({ principalQboAccountId: e.target.value })}
+          className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
+        >
+          <option value="">Liability account</option>
+          {liabilityAccounts.map((account) => (
+            <option key={account.id} value={account.id}>{account.name}</option>
+          ))}
+        </select>
+        <select
+          value={draft.interestQboAccountId || ""}
+          disabled={disabled}
+          onChange={(e) => update({ interestQboAccountId: e.target.value })}
+          className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
+        >
+          <option value="">Interest expense account</option>
+          {interestAccounts.map((account) => (
+            <option key={account.id} value={account.id}>{account.name}</option>
+          ))}
+        </select>
+        <select
+          value={draft.feeQboAccountId || ""}
+          disabled={disabled}
+          onChange={(e) => update({ feeQboAccountId: e.target.value })}
+          className="h-8 rounded-md border border-white/10 bg-[#070A09] px-2 text-[10px] text-white outline-none focus:border-emerald-400/55"
+        >
+          <option value="">Fee account optional</option>
+          {interestAccounts.map((account) => (
+            <option key={account.id} value={account.id}>{account.name}</option>
+          ))}
+        </select>
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-1.5">
+        <input
+          value={draft.principalAmount || ""}
+          disabled={disabled}
+          onChange={(e) => update({ principalAmount: e.target.value })}
+          inputMode="decimal"
+          placeholder="Principal"
+          className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+        />
+        <input
+          value={draft.interestAmount || ""}
+          disabled={disabled}
+          onChange={(e) => update({ interestAmount: e.target.value })}
+          inputMode="decimal"
+          placeholder="Interest"
+          className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+        />
+        <input
+          value={draft.feeAmount || ""}
+          disabled={disabled}
+          onChange={(e) => update({ feeAmount: e.target.value })}
+          inputMode="decimal"
+          placeholder="Fees"
+          className="h-8 rounded-md border border-white/10 bg-black/30 px-2 text-[10px] text-white placeholder:text-white/40 outline-none focus:border-emerald-400/55"
+        />
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+        <button type="button" disabled={disabled} onClick={onTreatAsRegular} className="rounded-md border border-white/12 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-45">Treat as regular transaction</button>
+        <button type="button" disabled={disabled} onClick={onCancel} className="rounded-md border border-white/12 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-45">Cancel</button>
+        <button
+          type="button"
+          disabled={disabled || !canConfirm}
+          onClick={() => onConfirm?.({
+            lender_profile_id: draft.lenderProfileId && draft.lenderProfileId !== "new" ? draft.lenderProfileId : null,
+            principal_amount_minor: principalMinor,
+            principal_qbo_account_id: draft.principalQboAccountId,
+            interest_amount_minor: interestMinor,
+            interest_qbo_account_id: interestMinor > 0 ? draft.interestQboAccountId : null,
+            fee_lines: feeMinor > 0 ? [{ amount_minor: feeMinor, qbo_account_id: draft.feeQboAccountId }] : [],
+          })}
+          className="rounded-md border border-emerald-300/35 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          Confirm split
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function isTruthy(value) {
   return value === true || String(value || "").toLowerCase() === "true";
 }
@@ -761,6 +939,8 @@ export default function BookkeepingFeed({
   onRejectCcPayment,
   onMarkCcPayment,
   onConfirmCcPaymentMatch,
+  onConfirmLoanPaymentSplit,
+  onTreatLoanPaymentAsRegular,
   onInspectIncomingDepositMatch,
   onConfirmIncomingDepositMatch,
   onRejectIncomingDepositMatch,
@@ -894,6 +1074,7 @@ export default function BookkeepingFeed({
     "after:pointer-events-none after:absolute after:content-[''] after:h-2 after:w-1 after:border-b-2 after:border-r-2 after:border-white after:rotate-45 after:left-[6px] after:top-[2px] after:opacity-0 after:transition-opacity " +
     "checked:after:opacity-100";
   const [accountSelections, setAccountSelections] = React.useState(() => new Map());
+  const [loanSplitDrafts, setLoanSplitDrafts] = React.useState(() => new Map());
   const [sort, setSort] = React.useState({ column: null, direction: null }); // direction: 'asc' | 'desc' | null
   const [expandedRowId, setExpandedRowId] = React.useState(null);
 
@@ -928,6 +1109,43 @@ export default function BookkeepingFeed({
       return next;
     });
     if (onAccountChange) onAccountChange(txnId, accountId);
+  };
+
+  const startLoanSplit = (txn) => {
+    if (readOnly || !isEligibleForManualLoanSplit(txn)) return;
+    const total = Math.abs(Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0).toFixed(2);
+    setLoanSplitDrafts((prev) => {
+      const next = new Map(prev);
+      if (!next.has(txn.id)) {
+        next.set(txn.id, {
+          lenderProfileId: "new",
+          principalAmount: total,
+          interestAmount: "",
+          feeAmount: "",
+          principalQboAccountId: "",
+          interestQboAccountId: "",
+          feeQboAccountId: "",
+          loanProfiles: txn.loan_profiles || txn.loanProfiles || [],
+        });
+      }
+      return next;
+    });
+  };
+
+  const clearLoanSplit = (txnId) => {
+    setLoanSplitDrafts((prev) => {
+      const next = new Map(prev);
+      next.delete(txnId);
+      return next;
+    });
+  };
+
+  const updateLoanSplitDraft = (txnId, draft) => {
+    setLoanSplitDrafts((prev) => {
+      const next = new Map(prev);
+      next.set(txnId, draft);
+      return next;
+    });
   };
 
   const fmtDate = (iso) => {
@@ -1162,7 +1380,9 @@ export default function BookkeepingFeed({
               (isCcPaymentSuspected || (isCcPayment && !["confirmed", "posted"].includes(String(txn.cc_payment_pair_status || txn.meta?.cc_payment_pair_status || "").toLowerCase())));
             const ccAction = ccPaymentActionState?.[txn.id] || {};
             const ccConfirmBusy = ccAction.loading === true;
-            const rowSelectable = !isPosted && !isPending && !isCcPaymentWorkflow && !incomingMatch.active && !readOnly;
+            const loanSplitDraft = loanSplitDrafts.get(txn.id) || null;
+            const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
+            const rowSelectable = !isPosted && !isPending && !isCcPaymentWorkflow && !incomingMatch.active && !isLoanSplitWorkflow && !readOnly;
 
             return (
               <React.Fragment key={txn.id}>
@@ -1305,7 +1525,25 @@ export default function BookkeepingFeed({
                     Possible credit card payment
                   </span>
                 ) : null}
-                {!isPending && !isCcPaymentWorkflow && !incomingMatch.active && accounts.length > 0 ? (
+                {loanSplitDraft ? (
+                  <LoanPaymentSplitEditor
+                    txn={txn}
+                    accounts={accounts}
+                    draft={loanSplitDraft}
+                    disabled={readOnly}
+                    onChange={(draft) => updateLoanSplitDraft(txn.id, draft)}
+                    onConfirm={(split) => onConfirmLoanPaymentSplit?.(txn.id, split)}
+                    onTreatAsRegular={() => {
+                      clearLoanSplit(txn.id);
+                      onTreatLoanPaymentAsRegular?.(txn.id);
+                    }}
+                    onCancel={() => clearLoanSplit(txn.id)}
+                  />
+                ) : isLoanSplitWorkflow ? (
+                  <span className="inline-flex w-fit max-w-full rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
+                    Loan Payment · Needs Split
+                  </span>
+                ) : !isPending && !isCcPaymentWorkflow && !incomingMatch.active && accounts.length > 0 ? (
                   <CoaDropdown
                     value={selectedAccountValue}
                     suggestedId={txn.suggestedAccountId}
@@ -1316,6 +1554,11 @@ export default function BookkeepingFeed({
                     onUseCreditCardPayment={
                       !readOnly && !isPosted
                         ? () => onMarkCcPayment?.(txn.id)
+                        : null
+                    }
+                    onUseLoanPayment={
+                      !readOnly && isEligibleForManualLoanSplit(txn)
+                        ? () => startLoanSplit(txn)
                         : null
                     }
                     accountTypes={accountTypes}
@@ -1384,6 +1627,8 @@ export default function BookkeepingFeed({
                   )
                 ) : isCcPaymentWorkflow ? (
                   <span className="text-[10px] text-slate-400">{ccWorkflowStatus?.matched ? "Matched" : "Needs match"}</span>
+                ) : isLoanSplitWorkflow ? (
+                  <span className="text-[10px] text-slate-400">{loanSplitDraft ? "Needs split" : "Loan split"}</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
                   <div className="flex items-center justify-center gap-1.5">
                     <button
