@@ -94,7 +94,8 @@ export default function DocsLibraryPage(props) {
   const years = useMemo(() => getAccountingDocumentYears(), []);
   const [selectedYear, setSelectedYear] = useState(() => Math.max(START_YEAR, new Date().getFullYear()));
   const [selectedMonth, setSelectedMonth] = useState(null);
-  const [docs, setDocs] = useState([]);
+  const [docs, setDocs] = useState(null);
+  const [docsScope, setDocsScope] = useState("");
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -105,15 +106,22 @@ export default function DocsLibraryPage(props) {
   const yearMenuRef = useRef(null);
 
   const loadDocs = useCallback(async () => {
-    if (!effectiveBusinessId) return;
+    const scope = effectiveBusinessId ? `${effectiveBusinessId}:${selectedYear}` : "";
+    if (!effectiveBusinessId) {
+      setDocs(null);
+      setDocsScope("");
+      return;
+    }
     setLoading(true);
     setError("");
     try {
       const out = await listAccountingDocuments({ business_id: effectiveBusinessId, year: selectedYear });
       setDocs((out?.data || []).map(normalizeDoc));
+      setDocsScope(scope);
     } catch (err) {
       setError(err?.message || "Failed to load accounting documents.");
       setDocs([]);
+      setDocsScope(scope);
     } finally {
       setLoading(false);
     }
@@ -157,13 +165,16 @@ export default function DocsLibraryPage(props) {
     };
   }, [effectiveBusinessId]);
 
-  const monthFolders = useMemo(() => buildAccountingMonthFolders(docs), [docs]);
+  const currentDocsScope = effectiveBusinessId ? `${effectiveBusinessId}:${selectedYear}` : "";
+  const docsLoaded = Array.isArray(docs) && docsScope === currentDocsScope;
+  const scopedDocs = useMemo(() => (docsLoaded ? docs : []), [docs, docsLoaded]);
+  const monthFolders = useMemo(() => buildAccountingMonthFolders(scopedDocs), [scopedDocs]);
   const currentMonthDocs = useMemo(() => {
     if (!selectedMonth) return [];
-    return docs
+    return scopedDocs
       .filter((doc) => Number(doc.month) === Number(selectedMonth))
       .sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-  }, [docs, selectedMonth]);
+  }, [scopedDocs, selectedMonth]);
 
   const selectedMonthName = selectedMonth ? MONTHS[selectedMonth - 1] : "";
 
@@ -298,29 +309,36 @@ export default function DocsLibraryPage(props) {
               <div className="text-sm text-white/55">{selectedYear} document folders</div>
               {loading ? <Loader2 className="h-4 w-4 animate-spin text-white/45" /> : null}
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {monthFolders.map((folder) => (
-                <button
-                  key={folder.month}
-                  type="button"
-                  onClick={() => setSelectedMonth(folder.month)}
-                  className="group rounded-xl border border-white/10 bg-white/[0.025] p-4 text-left transition hover:border-[rgba(var(--accent-rgb),0.45)] hover:bg-[rgba(var(--accent-rgb),0.08)]"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 text-base font-semibold text-white">
-                        <Folder className="h-4 w-4 text-[var(--accent)]" />
-                        {folder.name}
+            {!docsLoaded && loading ? (
+              <div className="flex min-h-[260px] items-center justify-center rounded-xl border border-white/10 bg-white/[0.025] text-sm text-white/55">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading document folders...
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {monthFolders.map((folder) => (
+                  <button
+                    key={folder.month}
+                    type="button"
+                    onClick={() => setSelectedMonth(folder.month)}
+                    className="group rounded-xl border border-white/10 bg-white/[0.025] p-4 text-left transition hover:border-[rgba(var(--accent-rgb),0.45)] hover:bg-[rgba(var(--accent-rgb),0.08)]"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-base font-semibold text-white">
+                          <Folder className="h-4 w-4 text-[var(--accent)]" />
+                          {folder.name}
+                        </div>
+                        <div className="mt-2 text-sm text-white/55">
+                          {folder.count ? `${folder.count} ${folder.count === 1 ? "file" : "files"}` : "No documents"}
+                        </div>
                       </div>
-                      <div className="mt-2 text-sm text-white/55">
-                        {folder.count ? `${folder.count} ${folder.count === 1 ? "file" : "files"}` : "No documents"}
-                      </div>
+                      <span className="rounded-full border border-white/10 px-2 py-1 text-xs text-white/55">{folder.count}</span>
                     </div>
-                    <span className="rounded-full border border-white/10 px-2 py-1 text-xs text-white/55">{folder.count}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : null}
 
