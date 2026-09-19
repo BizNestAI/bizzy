@@ -29,6 +29,8 @@ const PROTECTED_TAXONOMY_RE = /cc_payment|transfer|owner|loan|payroll|tax|refund
 const SAFE_SEMANTIC_FALLBACK_INTENTS = new Set([
   "bank_fees",
   "payment_processing",
+  "credit_card_interest",
+  "interest_expense",
   "parking_tolls",
   "transportation",
   "gas_charging",
@@ -173,6 +175,9 @@ const PROTECTED_REVIEW_INTENTS = new Map([
 
 function protectedReviewForIntent({ intent, source, meta = {} } = {}) {
   const normalizedSource = String(source || "").toLowerCase();
+  if (meta.deterministic_intent_auto_handle === true) {
+    return { protectedReviewRequired: false, protectedReviewReason: null };
+  }
   if (["approved_business_rule", "business_history"].includes(normalizedSource)) {
     return { protectedReviewRequired: false, protectedReviewReason: null };
   }
@@ -288,6 +293,7 @@ function deriveIntentFromTransaction(bankTxn = {}, meta = {}) {
   const text = transactionText(bankTxn);
   if (!text) return null;
   if (/\bstatement credit\b|\bautomatic statement credit\b|\bcash ?back\b|\brewards?\b/.test(text)) return "other_income";
+  if (/\b(?:interest charge(?: on purchases)?|purchase interest|purchases? interest|finance charge)\b/.test(text)) return "credit_card_interest";
   if (/\btran fee\b|\btransaction fee\b|\bbank fee\b|\bbank fees\b|\blate fee\b|\bfinance charge\b|\bservice charge\b|\bprocessing fee\b|\bmerchant fee\b/.test(text)) return "bank_fees";
   if (/\bparkmobile\b|\bpark mobile\b|\bparking\b|\bparking lot\b|\bsurface lot\b|\btoll\b|\btolls\b|\bcdot pay\b|\bpps\b/.test(text)) return "parking_tolls";
   if (/\bchargeonsite\b|\bcharging\b|\bev charge\b|\bgas\b|\bfuel\b|\bquiktrip\b|\bquicktrip\b|\bqt\b/.test(text)) return "gas_charging";
@@ -297,9 +303,50 @@ function deriveIntentFromTransaction(bankTxn = {}, meta = {}) {
   if (/\bgreenpeace\b|\bdonation\b|\bcharity\b|\bcharitable\b/.test(text)) return "charity";
   if (/\btst\b|\bcafe\b|\bcoffee\b|\bcocktail\b|\bbar\b|\bwhiskey\b|\brestaurant\b|\brestaurants\b|\bfood\b|\bdining\b|\bgrill\b|\bkitchen\b|\bchick\b|\bchipotle\b|\bcava\b|\bamelie\b|\byamazaru\b|\bsumaq\b|\bcarillon\b|\bexchange\b|\bbarcelona\b|\bsloan\b|\bpub\b|\bbistro\b|\btavern\b/.test(text)) return "meals";
   if (/\bentertainment\b|\bmovie\b|\bmovies\b|\btheater\b|\btheatre\b|\bcinema\b|\bamc\b/.test(text)) return "entertainment";
-  if (/\bcostco\b|\btarget\b|\bwalmart\b|\bwalgreens\b|\bsupplies\b|\bsupply\b|\bmaterials\b/.test(text)) return "supplies_materials";
+  if (/\btarget\b|\bwalmart\b|\bwalgreens\b|\bsupplies\b|\bsupply\b|\bmaterials\b/.test(text)) return "supplies_materials";
   if (/\bsales\b|\brevenue\b|\bincome\b/.test(text) && transactionDirection(bankTxn) === "INFLOW") return "sales";
   return meta?.suggested_intent || null;
+}
+
+function hasDeterministicIntentAutoHandleEvidence({ bankTxn = {}, intent, universalHint = null } = {}) {
+  const normalizedIntent = String(intent || "");
+  const text = transactionText(bankTxn);
+  const hintConfidence = String(universalHint?.confidence || "").toLowerCase();
+  const pfcPrimary = String(bankTxn.personal_finance_category?.primary || bankTxn.category_primary || "").toUpperCase();
+  const pfcDetailed = String(bankTxn.personal_finance_category?.detailed || bankTxn.category_detailed || "").toUpperCase();
+  const categoryText = `${pfcPrimary} ${pfcDetailed}`;
+
+  if (normalizedIntent === "software" || normalizedIntent === "software_subscription") {
+    return (
+      hintConfidence === "high" ||
+      /\b(?:claude(?:\s*\.?\s*ai)?|anthropic|openai|chatgpt|software|saas|subscription)\b/.test(text)
+    );
+  }
+  if (normalizedIntent === "bank_fees" || normalizedIntent === "payment_processing") {
+    return /\b(?:tran(?:saction)? fee|bank fee|bank charge|service fee|service charge|monthly fee|merchant fee|processing fee|late fee)\b/.test(text);
+  }
+  if (normalizedIntent === "credit_card_interest" || normalizedIntent === "interest_expense") {
+    const issuerOrCreditContext =
+      /\b(?:credit card|credit crd|amex|american express|discover|chase|visa|mastercard|master card|cardmember|card member)\b/.test(text) ||
+      /CREDIT|CARD|INTEREST|FINANCE/.test(categoryText);
+    return issuerOrCreditContext && /\b(?:interest charge(?: on purchases)?|purchase interest|purchases? interest|finance charge)\b/.test(text);
+  }
+  if (normalizedIntent === "parking_tolls") {
+    return (
+      hintConfidence === "high" ||
+      /PARKING|TOLL/.test(categoryText) ||
+      /\b(?:parkmobile|park mobile|parking|parking lot|surface lot|cdot pay|paybyphone|parkwhiz|laz parking|sp plus|impark|ezpass|sunpass|fastrak|quick pass)\b/.test(text)
+    );
+  }
+  if (normalizedIntent === "meals") {
+    const mixedUse = /\b(?:costco|walmart|target|walgreens|cvs|grocery|supermarket|warehouse|gas|fuel|convenience)\b/.test(text);
+    return !mixedUse && (
+      hintConfidence === "high" ||
+      /FOOD_AND_DRINK|RESTAURANT|DINING|FAST_FOOD|COFFEE|BAKERY/.test(categoryText) ||
+      /\b(?:tst|restaurant|restaurants|cafe|coffee|grill|kitchen|bistro|tavern|barbecue|bbq|diner|pizza|sushi|taqueria|doordash|uber eats|grubhub)\b/.test(text)
+    );
+  }
+  return false;
 }
 
 function statementCreditRewardsEvidence({ bankTxn = {}, account = {}, meta = {}, universalHint = null }) {
@@ -435,7 +482,7 @@ function findBusinessHistoryAccount({ historyIndex, bankTxn = {} }) {
 function canUseUniversalIntentForResolution(hint = null) {
   if (!hint?.primary_intent) return false;
   if (hint.confidence === "high") return true;
-  return ["supplies", "supplies_materials", "materials", "software", "software_subscription", "insurance"].includes(String(hint.primary_intent));
+  return ["supplies", "supplies_materials", "materials", "software", "software_subscription", "insurance", "credit_card_interest", "interest_expense"].includes(String(hint.primary_intent));
 }
 
 function emptyBuckets() {
@@ -1239,6 +1286,11 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         },
       });
       const allowStatementCredit = statementCreditRewardsEvidence({ bankTxn, account, meta, universalHint });
+      const deterministicIntentAutoHandle = hasDeterministicIntentAutoHandleEvidence({
+        bankTxn,
+        intent: universalHint.primary_intent,
+        universalHint,
+      });
       const exactCanonicalAccountResolved = Boolean(canonicalResolvedAccount.id && account?.id && !semanticResolution);
       const resolvedAccount = Boolean(account.id && account.name);
       const semanticAccountResolved = Boolean(semanticResolution?.id && semanticResolution?.name);
@@ -1253,7 +1305,10 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           : semanticAccountResolved
           ? "universal_hint_semantic_coa"
           : "universal_hint",
-        meta,
+        meta: {
+          ...meta,
+          deterministic_intent_auto_handle: deterministicIntentAutoHandle,
+        },
       });
       const merchantNormalization = normalizeMerchantIdentity(
         bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || ""
@@ -1282,6 +1337,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
             Boolean(bankTxn.merchant_entity_id || bankTxn.merchant_name || bankTxn.counterparty_name),
           protectedReviewRequired: protectedReview.protectedReviewRequired,
           protectedReviewReason: protectedReview.protectedReviewReason,
+          deterministicMediumEvidence: deterministicIntentAutoHandle,
+          safeToAutoHandle: deterministicIntentAutoHandle,
           allowTaxonomyAutoHandle: allowStatementCredit,
           taxonomyAutoHandleReason: allowStatementCredit ? "statement_credit_rewards_income" : null,
           conflictingEvidence: meta.conflicting_categorization_evidence === true,
@@ -1323,6 +1380,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         merchant_normalization_evidence: merchantNormalization.evidence,
         protected_review_required: protectedReview.protectedReviewRequired,
         protected_review_reason: protectedReview.protectedReviewReason,
+        deterministic_intent_auto_handle: deterministicIntentAutoHandle,
         merchant_account_intent_conflict: merchantAccountConflict,
         taxonomy_auto_handle_reason: allowStatementCredit ? "statement_credit_rewards_income" : null,
         evidence_source: decision.evidence_source,
@@ -1457,17 +1515,30 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       universalHint,
     });
     const allowStatementCredit = statementCreditRewardsEvidence({ bankTxn, account, meta, universalHint });
+    const deterministicIntentAutoHandle = hasDeterministicIntentAutoHandleEvidence({
+      bankTxn,
+      intent: semanticIntent,
+      universalHint,
+    });
     const canonicalAccountResolved =
       canonicalAccount.canonicalAccountResolved === true ||
       Boolean(semanticResolution?.id) ||
       deterministicMediumEvidence === true ||
+      deterministicIntentAutoHandle === true ||
       allowStatementCredit === true;
     const semanticAccountResolved = Boolean(semanticResolution?.id);
     const source = semanticAccountResolved
       ? "semantic_coa_fallback"
       : normalizeSource(meta.suggestion_source || cat.decided_by || "backlog_reconsideration");
     const confidenceTier = semanticAccountResolved || allowStatementCredit ? "high" : cat.confidence || meta.confidence || "medium";
-    const protectedReview = protectedReviewForIntent({ intent: semanticIntent, source, meta });
+    const protectedReview = protectedReviewForIntent({
+      intent: semanticIntent,
+      source,
+      meta: {
+        ...meta,
+        deterministic_intent_auto_handle: deterministicIntentAutoHandle,
+      },
+    });
     const merchantAccountConflict = accountIntentConflictsWithMerchant({ semanticIntent, account });
     const merchantNormalization = normalizeMerchantIdentity(
       bankTxn.merchant_name || bankTxn.counterparty_name || bankTxn.name || ""
@@ -1493,12 +1564,14 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         merchantEvidenceStrong:
           vendorEvidence.merchantEvidenceStrong === true ||
           deterministicMediumEvidence === true ||
+          deterministicIntentAutoHandle === true ||
           semanticAccountResolved === true ||
           allowStatementCredit === true ||
           Boolean(bankTxn.merchant_name && meta.suggestion_source === "universal_hint"),
         protectedReviewRequired: protectedReview.protectedReviewRequired,
         protectedReviewReason: protectedReview.protectedReviewReason,
-        deterministicMediumEvidence,
+        deterministicMediumEvidence: deterministicMediumEvidence || deterministicIntentAutoHandle,
+        safeToAutoHandle: deterministicIntentAutoHandle,
         allowTaxonomyAutoHandle: allowStatementCredit,
         taxonomyAutoHandleReason: allowStatementCredit ? "statement_credit_rewards_income" : null,
         conflictingEvidence: meta.conflicting_categorization_evidence === true || merchantAccountConflict,
@@ -1506,6 +1579,8 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           ? "statement_credit_rewards_income"
           : semanticAccountResolved
           ? "safe_semantic_coa_fallback"
+          : deterministicIntentAutoHandle
+          ? "deterministic_intent_auto_handle"
           : deterministicMediumEvidence
           ? "deterministic_medium_suggestion"
           : undefined,
@@ -1535,6 +1610,7 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
       protected_review_reason: protectedReview.protectedReviewReason,
       merchant_account_intent_conflict: merchantAccountConflict,
       deterministic_medium_evidence: deterministicMediumEvidence,
+      deterministic_intent_auto_handle: deterministicIntentAutoHandle,
       semantic_coa_resolved: Boolean(semanticResolution?.id),
       semantic_intent: semanticIntent || null,
       semantic_intent_source: universalHint?.primary_intent ? "universal_hint" : derivedIntent ? "transaction_evidence" : null,

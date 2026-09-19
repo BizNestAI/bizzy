@@ -14,6 +14,7 @@ const coa = [
   { id: "other_income", name: "Other Income", type: "Income" },
   { id: "rewards", name: "Credit Card Rewards", type: "Other Income" },
   { id: "fees", name: "Bank Charges & Fees", type: "Expense" },
+  { id: "cc_interest", name: "Credit Card Interest", type: "Expense" },
   { id: "internet", name: "Internet Services", type: "Expense" },
   { id: "electric", name: "Electric", type: "Expense" },
   { id: "charging", name: "Gas/Charging", type: "Expense" },
@@ -78,14 +79,13 @@ test("specific utility vendors prefer specific utility accounts", () => {
   assert.equal(mapIntentToCoa({ intent: duke.primary_intent, coaAccounts: coa }).qbo_account_name, "Electric");
 });
 
-test("Tesla charging, Costco, and Secretary of State filings map to the intended accounts", () => {
+test("Tesla charging and Secretary of State filings map while Costco stays business-specific", () => {
   const tesla = hintFor("TESLA MOTO TESLA MOTORS 2WOADE1");
   assert.equal(tesla.primary_intent, "gas_charging");
   assert.equal(mapIntentToCoa({ intent: tesla.primary_intent, coaAccounts: coa }).qbo_account_name, "Gas/Charging");
 
   const costco = hintFor("COSTCO WHSE 1234");
-  assert.equal(costco.primary_intent, "supplies_materials");
-  assert.equal(mapIntentToCoa({ intent: costco.primary_intent, coaAccounts: coa }).qbo_account_name, "Supplies & Materials");
+  assert.equal(costco, null);
 
   const filing = hintFor("FILINGS NC SECRETARY OF STATE");
   assert.equal(filing.primary_intent, "business_licensing_fees");
@@ -310,7 +310,7 @@ test("gas station vendors do not blindly become Meals based only on small amount
 });
 
 test("retail and grocery vendors map to the requested materials or meals accounts", () => {
-  const materialsNames = ["Costco", "Costco Wholesale", "Walmart", "Target", "Walgreens"];
+  const materialsNames = ["Walmart", "Target", "Walgreens"];
   for (const name of materialsNames) {
     const hint = hintFor(name);
     assert.equal(hint.primary_intent, "supplies_materials", name);
@@ -338,11 +338,22 @@ test("retail and grocery vendors map to the requested materials or meals account
   }
 });
 
+test("explicit credit-card interest descriptors map to Credit Card Interest", () => {
+  for (const name of ["INTEREST CHARGE ON PURCHASES", "PURCHASE INTEREST", "DISCOVER INTEREST CHARGE"]) {
+    const hint = hintFor(name, {
+      category_primary: "BANK_FEES",
+      category_detailed: "CREDIT_CARD_INTEREST",
+    });
+    assert.ok(["credit_card_interest", "interest_expense"].includes(hint.primary_intent), name);
+    assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Credit Card Interest", name);
+  }
+});
+
 test("entertainment and clothing vendors map to their dedicated accounts", () => {
   const entertainmentNames = ["Ticketmaster", "Fandango", "Monster Mini Golf", "Rebill Gametime", "Gametime"];
   for (const name of entertainmentNames) {
     const hint = hintFor(name);
-    assert.equal(hint.primary_intent, "entertainment", name);
+    assert.ok(["entertainment", "gaming"].includes(hint.primary_intent), name);
     assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Entertainment", name);
   }
 
@@ -362,7 +373,7 @@ test("movie, gaming, charging, toll, cashback, and Amazon batch rules map correc
   ];
   for (const name of entertainmentNames) {
     const hint = hintFor(name);
-    assert.equal(hint.primary_intent, "entertainment", name);
+    assert.ok(["entertainment", "gaming"].includes(hint.primary_intent), name);
     assert.equal(mapIntentToCoa({ intent: hint.primary_intent, coaAccounts: coa }).qbo_account_name, "Entertainment", name);
   }
 

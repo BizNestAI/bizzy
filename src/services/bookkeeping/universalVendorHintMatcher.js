@@ -50,15 +50,30 @@ function indexHints() {
 indexHints();
 
 function buildCandidateStrings(bankTxn = {}) {
-  const parts = [
+  const rawParts = [
     bankTxn.counterparty_name,
     bankTxn.merchant_name,
     bankTxn.name,
+    bankTxn.original_description,
+    bankTxn.originalDescription,
+    bankTxn.description,
     bankTxn?.raw?.name,
-  ]
-    .filter(Boolean)
-    .map((p) => normalizeVendorString(p));
-  return [...new Set(parts.filter((p) => p))];
+    bankTxn?.raw?.original_description,
+    bankTxn?.raw?.originalDescription,
+    bankTxn?.raw?.original_name,
+    bankTxn?.raw?.originalName,
+    bankTxn?.raw?.merchant_name,
+  ].filter(Boolean);
+  const merchantCandidates = rawParts.map((p) => normalizeVendorString(p));
+  const descriptorCandidates = rawParts.map((p) =>
+    String(p || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\b\d{5,}[a-z]*\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
+  return [...new Set([...merchantCandidates, ...descriptorCandidates].filter((p) => p))];
 }
 
 function matchHint(candidates) {

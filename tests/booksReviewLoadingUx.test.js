@@ -6,8 +6,11 @@ import { join } from "node:path";
 
 const root = process.cwd();
 const source = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+const clientSource = readFileSync(join(root, "src/services/bookkeeping/bookkeepingClient.js"), "utf8");
 const routeSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.transactions.routes.js"), "utf8");
 const feedServiceSource = readFileSync(join(root, "src/services/bookkeeping/bookkeepingTransactionFeedService.js"), "utf8");
+const approvalRouteSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.approvals.routes.js"), "utf8");
+const approvalServiceSource = readFileSync(join(root, "src/services/bookkeeping/bookkeepingApprovalService.js"), "utf8");
 
 test("Books Review keeps loaded rows visible while categorization continues", () => {
   assert.match(source, /const hasVisibleRows = feedRows\.length > 0/);
@@ -28,7 +31,8 @@ test("Books Review caches the current transaction page across quick re-entry", (
   assert.match(source, /lastSuccessfulTransactionPagesRef/);
   assert.match(source, /lastSuccessfulTransactionPagesRef\.current\.get\(cacheKey\)/);
   assert.match(source, /lastSuccessfulTransactionPagesRef\.current\.set\(cacheKey/);
-  assert.match(source, /setBackgroundRefreshingTxns\(true\)/);
+  assert.match(source, /showBackgroundRefresh = true/);
+  assert.match(source, /setBackgroundRefreshingTxns\(shouldShowBackgroundRefresh\)/);
   assert.match(source, /Updating this feed in the background without hiding your current rows/);
 });
 
@@ -76,7 +80,7 @@ test("Books Review full loading state is reserved for true first load without re
   assert.match(source, /const showLoadingState =[\s\S]*?!hasVisibleRows[\s\S]*?\(loadingTxns \|\| isPreparingCategories/);
   assert.match(source, /setTransactions\(\[\]\);[\s\S]*?setTotalCount\(null\);[\s\S]*?setLoadingTxns\(true\)/);
   assert.match(source, /const cachedPage = readTransactionPageCache\(cacheKey\) \|\| previousPage/);
-  assert.match(source, /if \(cachedPage && Array\.isArray\(cachedPage\.rows\)\) \{[\s\S]*?setTransactions\(cached\.rows\)[\s\S]*?setBackgroundRefreshingTxns\(true\)/);
+  assert.match(source, /if \(cachedPage && Array\.isArray\(cachedPage\.rows\)\) \{[\s\S]*?setTransactions\(cached\.rows\)[\s\S]*?setBackgroundRefreshingTxns\(shouldShowBackgroundRefresh\)/);
 });
 
 test("Books Review bulk approval uses live COA accounts and selected vendors instead of mock placeholders", () => {
@@ -109,6 +113,40 @@ test("Books Review immediately flips Needs Review and Handled counts for approve
   assert.match(source, /applyOptimisticCountTransition\(needsReviewTxn, txn\)/);
   assert.match(source, /approvedTxnsById\.forEach\(\(approvedTxn, txnId\) => \{[\s\S]*?applyOptimisticCountTransition\(selectedTxnById\.get\(txnId\), approvedTxn\)/);
   assert.match(source, /approvedTxnsById\.forEach\(\(approvedTxn, txnId\) => \{[\s\S]*?applyOptimisticCountTransition\(approvedTxn, selectedTxnById\.get\(txnId\)\)/);
+});
+
+test("Books Review manual categorization uses a silent row-scoped refetch without feed-wide banners", () => {
+  const approveStart = source.indexOf("const handleApprove = async");
+  const approveEnd = source.indexOf("const handleUndo = async", approveStart);
+  const approveBody = source.slice(approveStart, approveEnd);
+  const bulkStart = source.indexOf("const handleBulkApprove = async");
+  const bulkEnd = source.indexOf("const handleManualPostTransaction", bulkStart);
+  const bulkBody = source.slice(bulkStart, bulkEnd);
+
+  assert.match(approveBody, /await approveTransactions\(businessId/);
+  assert.match(approveBody, /await reloadTransactions\(\{ showBackgroundRefresh: false, refreshProcessingStatus: false \}\)/);
+  assert.match(bulkBody, /await approveTransactions\(/);
+  assert.match(bulkBody, /await reloadTransactions\(\{ showBackgroundRefresh: false, refreshProcessingStatus: false \}\)/);
+  assert.doesNotMatch(approveBody, /triggerPlaidSync|reconsiderNeedsReviewTransactions|retryBookkeepingProcessing|setCategorizationStatus|setBackgroundRefreshingTxns/);
+  assert.doesNotMatch(bulkBody, /triggerPlaidSync|reconsiderNeedsReviewTransactions|retryBookkeepingProcessing|setCategorizationStatus|setBackgroundRefreshingTxns/);
+});
+
+test("Books Review approval API is narrow and does not start feed sync or broad reprocessing", () => {
+  const approveClientStart = clientSource.indexOf("export async function approveTransactions");
+  const approveClientEnd = clientSource.indexOf("export async function undoTransaction", approveClientStart);
+  const approveClientBody = clientSource.slice(approveClientStart, approveClientEnd);
+  const approveRouteStart = approvalRouteSource.indexOf("router.post(\"/approve\"");
+  const approveRouteEnd = approvalRouteSource.indexOf("router.post(\"/undo\"", approveRouteStart);
+  const approveRouteBody = approvalRouteSource.slice(approveRouteStart, approveRouteEnd);
+
+  assert.match(approveClientBody, /apiUrl\("\/api\/bookkeeping\/approve"\)/);
+  assert.match(approveRouteBody, /approveBookkeepingTransactions\(\{/);
+  assert.match(approvalServiceSource, /\.in\("transaction_id", txnIds\)/);
+  assert.match(approvalServiceSource, /await learnVendorRuleFromTransaction\(\{/);
+  assert.match(approvalServiceSource, /post_after:\s*item\.post_after === undefined \? postAfter : item\.post_after/);
+  assert.doesNotMatch(approveClientBody, /triggerPlaidSync|suggest\/reconsider|processing\/retry|plaid\/sync/);
+  assert.doesNotMatch(approveRouteBody, /triggerPlaidSync|reconsiderNeedsReviewTransactions|retryBookkeepingProcessing|enqueueUnresolvedBookkeepingBacklog|plaid\/sync/);
+  assert.doesNotMatch(approvalServiceSource, /enqueueUnresolvedBookkeepingBacklog|reconsiderNeedsReviewTransactions|triggerPlaidSync|plaid\/sync/);
 });
 
 test("Books Review transaction loading is database-bounded before pagination", () => {

@@ -377,7 +377,7 @@ test("old Needs Review ParkMobile Transportation row is reconsidered to Parking/
   assert.equal(state.createCount, 0);
 });
 
-test("old exact restaurant Select account row is suggested but held without business-purpose authorization", async () => {
+test("exact restaurant evidence auto-approves to resolved Meals account", async () => {
   const db = makeDb();
   const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);
   addMapping(db, {
@@ -405,11 +405,11 @@ test("old exact restaurant Select account row is suggested but held without busi
   const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
   const row = db.rows.transaction_categorizations[0];
 
-  assert.equal(result.promoted, 0);
-  assert.equal(row.status, "needs_review");
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
   assert.equal(row.suggested_canonical_account_key, "meals");
-  assert.equal(row.final_qbo_account_id, null);
-  assert.equal(row.meta.protected_review_reason, "business_personal_ambiguity");
+  assert.equal(row.final_qbo_account_id, "meals-current");
+  assert.equal(row.meta.protected_review_required, false);
   assert.equal(row.post_after, null);
 });
 
@@ -688,7 +688,7 @@ test("statement credit can promote to Credit Card Rewards without opening transf
   assert.match(payment.meta.auto_handle_decision.reason, /transfer_internal|review|missing_source|cc_payment/);
 });
 
-test("Plaid medium Meals row with deterministic restaurant evidence stays reviewable without business-purpose history", async () => {
+test("Plaid medium Meals row with deterministic restaurant evidence auto-approves", async () => {
   const db = makeDb();
   const { qbo } = makeQbo([{ id: "meals-current", name: "Meals", type: "Expense", subType: "Meals" }]);
   addMapping(db, {
@@ -718,15 +718,15 @@ test("Plaid medium Meals row with deterministic restaurant evidence stays review
   const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
   const row = db.rows.transaction_categorizations[0];
 
-  assert.equal(result.promoted, 0);
-  assert.equal(row.status, "needs_review");
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
   assert.equal(row.suggested_qbo_account_id, "meals-current");
-  assert.equal(row.final_qbo_account_id, null);
-  assert.equal(row.decided_by, "plaid_mapping");
+  assert.equal(row.final_qbo_account_id, "meals-current");
+  assert.equal(row.decided_by, "bizzi");
   assert.equal(row.post_after, null);
   assert.equal(row.qbo_txn_id || null, null);
-  assert.equal(row.meta.deterministic_medium_evidence, true);
-  assert.equal(row.meta.protected_review_reason, "business_personal_ambiguity");
+  assert.equal(row.meta.deterministic_intent_auto_handle, true);
+  assert.equal(row.meta.protected_review_required, false);
 });
 
 test("medium deterministic suggestion with conflicting evidence remains Needs Review", async () => {
@@ -1054,9 +1054,13 @@ test("stale suspense retail rows stay reviewable while Claude reconsiders to det
   for (const id of ["txn-target", "txn-costco", "txn-walmart", "txn-walgreens"]) {
     const row = db.rows.transaction_categorizations.find((cat) => cat.transaction_id === id);
     assert.equal(row.status, "needs_review", id);
-    assert.equal(row.suggested_qbo_account_name, "Supplies & Materials", id);
+    assert.equal(row.suggested_qbo_account_name, id === "txn-costco" ? "Uncategorized Expense" : "Supplies & Materials", id);
     assert.equal(row.final_qbo_account_id, null, id);
-    assert.equal(row.meta.protected_review_reason, "business_personal_ambiguity", id);
+    if (id === "txn-costco") {
+      assert.equal(row.meta.protected_review_reason || null, null, id);
+    } else {
+      assert.equal(row.meta.protected_review_reason, "business_personal_ambiguity", id);
+    }
     assert.equal(row.post_after, null, id);
   }
   const claude = db.rows.transaction_categorizations.find((cat) => cat.transaction_id === "txn-claude");
@@ -1064,6 +1068,100 @@ test("stale suspense retail rows stay reviewable while Claude reconsiders to det
   assert.equal(claude.final_qbo_account_name, "Software");
   assert.equal(claude.decided_by, "bizzi");
   assert.equal(claude.post_after, null);
+});
+
+test("Costco auto-approves only from business-specific confirmed history", async () => {
+  const db = makeDb();
+  db.rows.business_profiles[0].auto_post_to_quickbooks = true;
+  const { qbo } = makeQbo([{ id: "materials-current", name: "Supplies & Materials", type: "Expense", subType: "SuppliesMaterials" }]);
+
+  addRoutineRow(db, "txn-costco-confirmed", {
+    bankTxn: {
+      name: "COSTCO WHSE 1234",
+      merchant_name: "Costco",
+      merchant_entity_id: "ent-costco",
+      amount: -122.17,
+      signed_amount: -122.17,
+    },
+    cat: {
+      status: "approved",
+      suggested_qbo_account_id: "materials-current",
+      suggested_qbo_account_name: "Supplies & Materials",
+      final_qbo_account_id: "materials-current",
+      final_qbo_account_name: "Supplies & Materials",
+      confidence: "high",
+      decided_by: "user",
+      meta: { suggestion_source: "manual_user" },
+    },
+  });
+  addRoutineRow(db, "txn-costco-new", {
+    bankTxn: {
+      name: "COSTCO WHSE 5678",
+      merchant_name: "Costco",
+      merchant_entity_id: "ent-costco",
+      amount: -215.84,
+      signed_amount: -215.84,
+    },
+    cat: {
+      suggested_qbo_account_id: "uncat",
+      suggested_qbo_account_name: "Uncategorized Expense",
+      suggested_canonical_account_key: null,
+      confidence: "medium",
+      meta: { suggestion_source: "plaid_baseline" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations.find((cat) => cat.transaction_id === "txn-costco-new");
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "materials-current");
+  assert.equal(row.final_qbo_account_name, "Supplies & Materials");
+  assert.equal(row.meta.evidence_source, "business_history");
+  assert.equal(row.meta.business_history_account_id, "materials-current");
+  assert.ok(row.post_after);
+});
+
+test("explicit credit-card interest resolves to Credit Card Interest and schedules auto-post", async () => {
+  const db = makeDb();
+  db.rows.business_profiles[0].auto_post_to_quickbooks = true;
+  const { qbo } = makeQbo([{ id: "cc-interest-current", name: "Credit Card Interest", type: "Expense", subType: "InterestPaid" }]);
+  addMapping(db, {
+    canonical_account_key: "credit_card_interest",
+    qbo_account_id: "cc-interest-current",
+    qbo_account_name: "Credit Card Interest",
+    qbo_account_subtype: "InterestPaid",
+  });
+  addRoutineRow(db, "txn-interest", {
+    bankTxn: {
+      name: "DISCOVER INTEREST CHARGE ON PURCHASES",
+      merchant_name: "Discover",
+      merchant_entity_id: "ent-discover",
+      amount: -42.17,
+      signed_amount: -42.17,
+      category_primary: "BANK_FEES",
+      category_detailed: "CREDIT_CARD_INTEREST",
+    },
+    cat: {
+      suggested_qbo_account_id: "uncat",
+      suggested_qbo_account_name: "Uncategorized Expense",
+      suggested_canonical_account_key: null,
+      confidence: "medium",
+      meta: { suggestion_source: "plaid_baseline" },
+    },
+  });
+
+  const result = await reconsiderNeedsReviewTransactions(BUSINESS_ID, { db, range: "all", dependencies: deps(db, qbo) });
+  const row = db.rows.transaction_categorizations.find((cat) => cat.transaction_id === "txn-interest");
+
+  assert.equal(result.promoted, 1);
+  assert.equal(row.status, "auto_approved");
+  assert.equal(row.final_qbo_account_id, "cc-interest-current");
+  assert.equal(row.final_qbo_account_name, "Credit Card Interest");
+  assert.equal(row.suggested_canonical_account_key, "credit_card_interest");
+  assert.equal(row.meta.deterministic_intent_auto_handle, true);
+  assert.ok(row.post_after);
 });
 
 test("approved final rows are not overwritten by reconsideration", async () => {

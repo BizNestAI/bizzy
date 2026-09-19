@@ -21,6 +21,7 @@ const PHRASE_NORMALIZERS = [
   { pattern: /\b(uber)\s*trip\b/i, replace: "$1" },
   { pattern: /\b(lyft)\s*ride\b/i, replace: "$1" },
   { pattern: /\bapple\.?com\/?bill\b/i, replace: "apple" },
+  { pattern: /\batt\b/i, replace: "at t" },
   { pattern: /\bmicro\s*mart\b/i, replace: "micro mart" },
 ];
 
@@ -320,8 +321,8 @@ addVendors(
 
 // Big box / retail / warehouse
 addVendors(
-  ["Amazon Marketplace", "Amazon Mktplace", "AMZN Mktplace", "AMAZON MKTPLACE PMTS", "Costco", "Costco Wholesale"],
-  { intents: ["supplies_materials"], primary: "supplies_materials", confidence: "high", notes: "Warehouse supplies and business materials default" }
+  ["Amazon Marketplace", "Amazon Mktplace", "AMZN Mktplace", "AMAZON MKTPLACE PMTS"],
+  { intents: ["supplies_materials"], primary: "supplies_materials", confidence: "high", notes: "Marketplace supplies and business materials default" }
 );
 
 addVendors(
@@ -980,6 +981,42 @@ addVendors(
 // Banking / merchant fees signals (regex / contains)
 UNIVERSAL_VENDOR_HINTS.push(
   {
+    key: "bank_fee_transaction_explicit",
+    match: { type: "regex", value: "\\b(?:tran(?:saction)?\\s+fee|bank\\s+fee|bank\\s+charge|service\\s+fee|service\\s+charge|monthly\\s+fee)\\b" },
+    canonical: "Bank Transaction Fee",
+    intents: ["bank_fees"],
+    primary_intent: "bank_fees",
+    confidence: "high",
+    notes: "Explicit bank or transaction fee descriptor",
+  },
+  {
+    key: "credit_card_interest_explicit",
+    match: { type: "regex", value: "\\b(?:interest\\s+charge(?:\\s+on\\s+purchases)?|purchase\\s+interest|purchases?\\s+interest|finance\\s+charge)\\b" },
+    canonical: "Credit Card Interest",
+    intents: ["credit_card_interest", "interest_expense"],
+    primary_intent: "credit_card_interest",
+    confidence: "high",
+    notes: "Explicit credit-card interest or finance charge descriptor",
+  },
+  {
+    key: "credit_card_purchase_interest",
+    match: { type: "contains", value: "purchase interest" },
+    canonical: "Credit Card Interest",
+    intents: ["credit_card_interest", "interest_expense"],
+    primary_intent: "credit_card_interest",
+    confidence: "high",
+    notes: "Explicit credit-card purchase interest descriptor",
+  },
+  {
+    key: "credit_card_finance_charge",
+    match: { type: "contains", value: "finance charge" },
+    canonical: "Credit Card Interest",
+    intents: ["credit_card_interest", "interest_expense"],
+    primary_intent: "credit_card_interest",
+    confidence: "high",
+    notes: "Explicit credit-card finance charge descriptor",
+  },
+  {
     key: "bank_fee_monthly",
     match: { type: "contains", value: "monthly fee" },
     canonical: "Monthly Bank Fee",
@@ -987,14 +1024,6 @@ UNIVERSAL_VENDOR_HINTS.push(
     primary_intent: "bank_fees",
     confidence: "medium",
     notes: "Bank service fee",
-  },
-  {
-    key: "bank_fee_service",
-    match: { type: "contains", value: "service fee" },
-    canonical: "Service Fee",
-    intents: ["bank_fees"],
-    primary_intent: "bank_fees",
-    confidence: "medium",
   },
   {
     key: "bank_fee_interest",

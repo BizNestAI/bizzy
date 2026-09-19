@@ -42,6 +42,8 @@ const INTENT_ALIASES = {
   rewards: "other_income",
   credit_card_rewards: "credit_card_rewards",
   bank_deposit_receipt: "sales",
+  interest_expense: "credit_card_interest",
+  gaming: "entertainment",
 };
 
 export function resolveIntentKey(intent = "") {
@@ -74,6 +76,7 @@ const INTENT_KEYWORDS = {
   safety_ppe: ["safety", "ppe", "personal protective equipment", "gloves", "hard hats", "respirators"],
   bank_fees: ["bank fees", "bank charges", "bank charges and fees", "service charge", "service fee", "bank charge", "processing fees", "transaction fee", "tran fee", "late fee", "finance charge", "cc fees", "credit card fees", "fees"],
   payment_processing: ["processing", "merchant fees", "payment processing", "stripe", "square", "paypal fees"],
+  credit_card_interest: ["credit card interest", "card interest", "interest expense", "purchase interest", "interest charge", "finance charge"],
   payroll: ["payroll", "wages"],
   utilities: ["utilities", "telecom", "internet"],
   internet_services: ["wifi", "wi fi", "internet", "internet services", "broadband", "fiber", "telecom"],
@@ -251,6 +254,7 @@ function scoreAccount(intentKey, keywords, acct) {
     "safety_ppe",
     "bank_fees",
     "payment_processing",
+    "credit_card_interest",
     "payroll",
     "utilities",
     "internet_services",
