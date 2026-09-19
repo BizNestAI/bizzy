@@ -12,6 +12,10 @@ import {
   recordLoanPaymentRegularOverride,
   LoanPaymentWorkflowError,
 } from "../../../services/bookkeeping/loanPaymentWorkflow.js";
+import {
+  confirmSplitTransaction,
+  SplitTransactionWorkflowError,
+} from "../../../services/bookkeeping/splitTransactionWorkflow.js";
 import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.js";
 import {
   approveBookkeepingTransactions,
@@ -310,6 +314,91 @@ router.post("/loan-payments/:transactionId/confirm-split", requireAuth, async (r
     }
     console.error("[bookkeeping][loan-payment-confirm-split] failed", err?.message || err);
     return res.status(500).json({ ok: false, error: "loan_payment_split_failed", message: err?.message || "failed" });
+  }
+});
+
+router.post("/transactions/:transactionId/confirm-split", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  const transactionId = req.params?.transactionId;
+  const split = req.body?.split || req.body || {};
+  if (!businessId) return;
+  if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+
+  try {
+    const { data: transaction, error: txnErr } = await supabase
+      .from("bank_transactions")
+      .select("id,business_id,date,name,merchant_name,counterparty_name,transaction_type,merchant_entity_id,amount,direction,pending,plaid_account_id,iso_currency_code,currency")
+      .eq("business_id", businessId)
+      .eq("is_archived", false)
+      .eq("id", transactionId)
+      .maybeSingle();
+    if (txnErr) throw txnErr;
+    if (!transaction) return res.status(404).json({ ok: false, error: "transaction_not_found" });
+    const { data: existingCat, error: catFetchErr } = await supabase
+      .from("transaction_categorizations")
+      .select("status,posted_at,qbo_txn_id,meta")
+      .eq("business_id", businessId)
+      .eq("transaction_id", transactionId)
+      .maybeSingle();
+    if (catFetchErr) throw catFetchErr;
+    if (existingCat?.status === "posted" || existingCat?.posted_at || existingCat?.qbo_txn_id) {
+      return res.status(409).json({ ok: false, error: "transaction_already_posted" });
+    }
+
+    const accounts = await fetchChartOfAccounts(businessId);
+    const accountsById = new Map((accounts || []).map((account) => [String(account.id), account]));
+    const actorId = req.user?.id || req.auth?.userId || null;
+    const result = await confirmSplitTransaction({
+      db: supabase,
+      businessId,
+      transaction,
+      split: { ...split, split_type: "general" },
+      accountsById,
+      actorId,
+      actorType: "user",
+    });
+    const nowIso = new Date().toISOString();
+    const nextMeta = {
+      ...(existingCat?.meta || {}),
+      taxonomy_type: "split_transaction",
+      split_transaction_status: "confirmed",
+      split_transaction_id: result?.split?.id || null,
+      protected_workflow: "split_transaction",
+      safe_to_auto_post: false,
+    };
+    const { data: categorization, error: upsertErr } = await supabase
+      .from("transaction_categorizations")
+      .upsert(
+        {
+          business_id: businessId,
+          transaction_id: transactionId,
+          status: "needs_review",
+          final_qbo_account_id: null,
+          final_qbo_account_name: null,
+          decided_by: "user",
+          decided_at: nowIso,
+          updated_at: nowIso,
+          post_after: null,
+          post_error: null,
+          meta: nextMeta,
+        },
+        { onConflict: "business_id,transaction_id" }
+      )
+      .select("business_id,transaction_id,status,meta,post_after")
+      .maybeSingle();
+    if (upsertErr) throw upsertErr;
+    await refreshOperatorRequestSummaryBestEffort({
+      businessId,
+      reason: "split_transaction_confirmed",
+    });
+    return res.json({ ok: true, split_transaction: true, split: result?.split || null, categorization });
+  } catch (err) {
+    const code = String(err?.message || "split_transaction_failed");
+    if (err instanceof SplitTransactionWorkflowError || code.startsWith("split_transaction_") || code === "pending_transaction_not_postable") {
+      return res.status(err?.status || 400).json({ ok: false, error: code, message: code, details: err?.details || null });
+    }
+    console.error("[bookkeeping][confirm-split-transaction] failed", err?.message || err);
+    return res.status(500).json({ ok: false, error: "split_transaction_failed", message: err?.message || "failed" });
   }
 });
 

@@ -39,6 +39,12 @@ import {
   markLoanPaymentSplitPosted,
   splitRowToExecutableSplit,
 } from "../services/bookkeeping/loanPaymentWorkflow.js";
+import {
+  buildSplitTransactionQboPayload,
+  fetchConfirmedSplitTransaction,
+  markSplitTransactionPosted,
+  splitTransactionRowToExecutableSplit,
+} from "../services/bookkeeping/splitTransactionWorkflow.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 1);
@@ -1624,6 +1630,49 @@ async function postLoanPaymentSplitPurchase(item, bankTxn, qbo, mapping, request
   return createQboPurchase(qbo, payload);
 }
 
+async function markSplitTransactionRequired(item, reason = "split_transaction_required") {
+  await supabase
+    .from("transaction_categorizations")
+    .update({
+      status: "needs_review",
+      post_after: null,
+      post_error: reason,
+      last_post_attempt_at: new Date().toISOString(),
+      meta: {
+        ...(item.meta || {}),
+        taxonomy_type: "split_transaction",
+        post_block_reason: reason,
+        posting_in_progress: false,
+        next_post_attempt_at: null,
+        post_retry_count: null,
+      },
+    })
+    .eq("business_id", item.business_id)
+    .eq("transaction_id", item.transaction_id);
+}
+
+async function postSplitTransactionPurchase(item, bankTxn, qbo, mapping, requestId) {
+  const splitRow = await fetchConfirmedSplitTransaction({
+    db: supabase,
+    businessId: item.business_id,
+    transactionId: item.transaction_id,
+  });
+  if (!splitRow) {
+    await markSplitTransactionRequired(item, "split_transaction_required");
+    return null;
+  }
+  const { note, lineDescription } = buildQboPostText(bankTxn, "Split transaction", requestId);
+  const payload = buildSplitTransactionQboPayload({
+    transaction: bankTxn,
+    split: splitTransactionRowToExecutableSplit(splitRow),
+    mapping,
+    requestId,
+    lineDescription,
+    privateNote: note,
+  });
+  return createQboPurchase(qbo, payload);
+}
+
 async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
   if (!qbo) throw new Error("qbo_client_unavailable");
   if (!bankTxn) throw new Error("missing_bank_transaction");
@@ -1644,6 +1693,9 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
   }
   if (item?.meta?.taxonomy_type === "loan_payment") {
     return postLoanPaymentSplitPurchase(item, bankTxn, qbo, mapping, requestId);
+  }
+  if (item?.meta?.taxonomy_type === "split_transaction" || item?.meta?.split_transaction_status === "confirmed") {
+    return postSplitTransactionPurchase(item, bankTxn, qbo, mapping, requestId);
   }
   if (taxonomyRequiresBookkeepingPostingReview(item)) {
     await supabase
@@ -2180,6 +2232,15 @@ export async function handleItem(item, options = {}) {
           actorType: manual === true ? "user" : "system",
         });
       }
+      if (item?.meta?.taxonomy_type === "split_transaction" || item?.meta?.split_transaction_status === "confirmed") {
+        await markSplitTransactionPosted({
+          db: supabase,
+          businessId,
+          transactionId: txnId,
+          qboTxnId: linkedResult.id,
+          postedAt: postedIso,
+        });
+      }
       return;
     }
     if (
@@ -2331,6 +2392,15 @@ export async function handleItem(item, options = {}) {
       qboTxnId: qboId,
       postedAt: postedIso,
       actorType: manual === true ? "user" : "system",
+    });
+  }
+  if (item?.meta?.taxonomy_type === "split_transaction" || item?.meta?.split_transaction_status === "confirmed") {
+    await markSplitTransactionPosted({
+      db: supabase,
+      businessId,
+      transactionId: txnId,
+      qboTxnId: qboId,
+      postedAt: postedIso,
     });
   }
   logPostingTiming({ businessId, transactionId: txnId, qboTxnType: qboType || intentQboTxnTypeForLog, manual, timing, status: "posted" });

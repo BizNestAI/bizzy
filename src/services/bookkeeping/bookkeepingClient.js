@@ -384,6 +384,22 @@ export async function confirmLoanPaymentSplit(businessId, txnId, split = {}) {
   return res;
 }
 
+export async function confirmSplitTransaction(businessId, txnId, split = {}) {
+  const payload = { business_id: businessId, split };
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/transactions/${encodeURIComponent(txnId)}/confirm-split`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  if (res && res.ok === false) {
+    const err = new Error(res.message || res.error || "split_transaction_confirm_failed");
+    err.code = res.error || null;
+    err.body = res;
+    throw err;
+  }
+  return res;
+}
+
 export async function treatLoanPaymentAsRegularTransaction(businessId, txnId) {
   const payload = { business_id: businessId };
   const res = await safeFetch(apiUrl(`/api/bookkeeping/loan-payments/${encodeURIComponent(txnId)}/treat-as-regular`), {
@@ -847,6 +863,7 @@ export default {
   rejectCreditCardPayment,
   markCreditCardPayment,
   confirmCreditCardPaymentMatch,
+  confirmSplitTransaction,
   confirmLoanPaymentSplit,
   treatLoanPaymentAsRegularTransaction,
   updateHandledTransaction,

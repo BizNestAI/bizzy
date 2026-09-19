@@ -1331,6 +1331,37 @@ export default function MonthlyReviewConsole() {
     }
   }, [refreshExpandedBookkeepingFeeds, selectedBusinessId]);
 
+  const handleMirrorConfirmSplitTransaction = useCallback(async (row, split) => {
+    if (!selectedBusinessId || !row?.id) return;
+    const transactionId = row.id;
+    const actionId = `split-transaction:${transactionId}`;
+    setBusyFeedActions((current) => ({ ...current, [actionId]: true }));
+    setBusyFeedAction(actionId);
+    setBookkeepingFeedActionErrors((current) => ({ ...current, [transactionId]: "" }));
+    try {
+      await safeFetch(`/api/bookkeeping/transactions/${encodeURIComponent(transactionId)}/confirm-split`, {
+        method: "POST",
+        body: {
+          businessId: selectedBusinessId,
+          split,
+        },
+      });
+      await refreshExpandedBookkeepingFeeds();
+    } catch (e) {
+      setBookkeepingFeedActionErrors((current) => ({
+        ...current,
+        [transactionId]: e?.body?.message || e?.message || "Could not save split.",
+      }));
+    } finally {
+      setBusyFeedActions((current) => {
+        const next = { ...current };
+        delete next[actionId];
+        return next;
+      });
+      setBusyFeedAction("");
+    }
+  }, [refreshExpandedBookkeepingFeeds, selectedBusinessId]);
+
   const handleMirrorTreatLoanPaymentAsRegular = useCallback(async (row) => {
     if (!selectedBusinessId || !row?.id) return;
     const transactionId = row.id;
@@ -2052,6 +2083,7 @@ export default function MonthlyReviewConsole() {
                   onMarkCcPayment={handleMirrorMarkCreditCardPayment}
                   onRejectCcPayment={handleMirrorRejectCreditCardPayment}
                   onConfirmLoanPaymentSplit={handleMirrorConfirmLoanPaymentSplit}
+                  onConfirmSplitTransaction={handleMirrorConfirmSplitTransaction}
                   onTreatLoanPaymentAsRegular={handleMirrorTreatLoanPaymentAsRegular}
                   ccPaymentActionState={ccPaymentActionState}
                   onCreateAccount={createMonthlyReviewQboAccount}
@@ -2175,6 +2207,7 @@ function BookkeepingFeedMirrorPanels({
   onMarkCcPayment,
   onRejectCcPayment,
   onConfirmLoanPaymentSplit,
+  onConfirmSplitTransaction,
   onTreatLoanPaymentAsRegular,
   ccPaymentActionState,
   onCreateAccount,
@@ -2254,6 +2287,7 @@ function BookkeepingFeedMirrorPanels({
             onMarkCcPayment={onMarkCcPayment}
             onRejectCcPayment={onRejectCcPayment}
             onConfirmLoanPaymentSplit={onConfirmLoanPaymentSplit}
+            onConfirmSplitTransaction={onConfirmSplitTransaction}
             onTreatLoanPaymentAsRegular={onTreatLoanPaymentAsRegular}
             ccPaymentActionState={ccPaymentActionState}
             onCreateAccount={onCreateAccount}
@@ -2708,6 +2742,7 @@ function BookkeepingFeedMirrorSection({
   onMarkCcPayment,
   onRejectCcPayment,
   onConfirmLoanPaymentSplit,
+  onConfirmSplitTransaction,
   onTreatLoanPaymentAsRegular,
   ccPaymentActionState,
   onCreateAccount,
@@ -2767,6 +2802,7 @@ function BookkeepingFeedMirrorSection({
               onMarkCcPayment={onMarkCcPayment}
               onRejectCcPayment={onRejectCcPayment}
               onConfirmLoanPaymentSplit={onConfirmLoanPaymentSplit}
+              onConfirmSplitTransaction={onConfirmSplitTransaction}
               onTreatLoanPaymentAsRegular={onTreatLoanPaymentAsRegular}
               ccPaymentActionState={ccPaymentActionState}
               onCreateAccount={onCreateAccount}

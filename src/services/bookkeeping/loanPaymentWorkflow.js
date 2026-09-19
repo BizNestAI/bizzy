@@ -315,8 +315,7 @@ export async function confirmLoanPaymentSplit({
     existingProfile = data || null;
   }
   const identity = buildManualLoanPaymentIdentity(split) || buildProfileLoanPaymentIdentity(existingProfile) || getLoanPaymentIdentity(transaction);
-  if (!identity) throw new LoanPaymentWorkflowError("loan_lender_identity_required");
-  if (!existingProfile) {
+  if (identity && !existingProfile) {
     let profileQuery = db
       .from("loan_lender_profiles")
       .select("*")
@@ -331,57 +330,60 @@ export async function confirmLoanPaymentSplit({
     if (error) throw error;
     existingProfile = data || null;
   }
-  const profilePayload = compactObject({
-    business_id: businessId,
-    lender_display_name: identity.display_lender,
-    normalized_lender: identity.normalized_lender,
-    provider_merchant_id: identity.provider_merchant_id,
-    descriptor_fingerprint: identity.fingerprint,
-    match_specificity: identity.match_specificity,
-    source_type: LOAN_PAYMENT_PROFILE_SOURCE_TYPE,
-    authority: actorType === "admin" ? "admin_confirmed" : actorType === "bookkeeper" ? "bookkeeper_confirmed" : "user_confirmed",
-    source_transaction_id: transaction.id || transaction.transaction_id || null,
-    source_plaid_account_id: transaction.plaid_account_id || null,
-    actor_id: actorId,
-    actor_type: actorType,
-    default_principal_qbo_account_id: split.principal_qbo_account_id || null,
-    default_interest_qbo_account_id: split.interest_qbo_account_id || null,
-    default_fee_qbo_account_id: split.default_fee_qbo_account_id || split.fee_lines?.[0]?.qbo_account_id || null,
-    typical_payment_amount_minor: validation.expected_amount_minor,
-    expected_cadence: split.expected_cadence || existingProfile?.expected_cadence || null,
-    first_confirmed_at: existingProfile?.first_confirmed_at || nowIso,
-    last_confirmed_at: nowIso,
-    updated_at: nowIso,
-    meta: {
-      ...(existingProfile?.meta || {}),
-      lender_name: identity.lender_name || existingProfile?.meta?.lender_name || identity.display_lender,
-      loan_name: identity.loan_name || existingProfile?.meta?.loan_name || identity.display_lender,
-      reference_last_four: identity.reference_last_four || existingProfile?.meta?.reference_last_four || null,
-      remember_profile: split.remember_profile !== false,
-      last_confirmed_transaction_id: transaction.id || transaction.transaction_id || null,
-    },
-  });
   let lenderProfile = null;
-  if (existingProfile?.id) {
-    const { data, error } = await db
-      .from("loan_lender_profiles")
-      .update(profilePayload)
-      .eq("business_id", businessId)
-      .eq("id", existingProfile.id)
-      .select("*")
-      .maybeSingle();
-    if (error) throw error;
-    lenderProfile = data || existingProfile;
-  } else {
-    const { data, error } = await db
-      .from("loan_lender_profiles")
-      .insert(profilePayload)
-      .select("*")
-      .maybeSingle();
-    if (error) throw error;
-    lenderProfile = data;
+  if (identity) {
+    const profilePayload = compactObject({
+      business_id: businessId,
+      lender_display_name: identity.display_lender,
+      normalized_lender: identity.normalized_lender,
+      provider_merchant_id: identity.provider_merchant_id,
+      descriptor_fingerprint: identity.fingerprint,
+      match_specificity: identity.match_specificity,
+      source_type: LOAN_PAYMENT_PROFILE_SOURCE_TYPE,
+      authority: actorType === "admin" ? "admin_confirmed" : actorType === "bookkeeper" ? "bookkeeper_confirmed" : "user_confirmed",
+      source_transaction_id: transaction.id || transaction.transaction_id || null,
+      source_plaid_account_id: transaction.plaid_account_id || null,
+      actor_id: actorId,
+      actor_type: actorType,
+      default_principal_qbo_account_id: split.principal_qbo_account_id || null,
+      default_interest_qbo_account_id: split.interest_qbo_account_id || null,
+      default_fee_qbo_account_id: split.default_fee_qbo_account_id || split.fee_lines?.[0]?.qbo_account_id || null,
+      typical_payment_amount_minor: validation.expected_amount_minor,
+      expected_cadence: split.expected_cadence || existingProfile?.expected_cadence || null,
+      first_confirmed_at: existingProfile?.first_confirmed_at || nowIso,
+      last_confirmed_at: nowIso,
+      updated_at: nowIso,
+      meta: {
+        ...(existingProfile?.meta || {}),
+        lender_name: identity.lender_name || existingProfile?.meta?.lender_name || identity.display_lender,
+        loan_name: identity.loan_name || existingProfile?.meta?.loan_name || identity.display_lender,
+        reference_last_four: identity.reference_last_four || existingProfile?.meta?.reference_last_four || null,
+        remember_profile: split.remember_profile !== false,
+        last_confirmed_transaction_id: transaction.id || transaction.transaction_id || null,
+      },
+    });
+    if (existingProfile?.id) {
+      const { data, error } = await db
+        .from("loan_lender_profiles")
+        .update(profilePayload)
+        .eq("business_id", businessId)
+        .eq("id", existingProfile.id)
+        .select("*")
+        .maybeSingle();
+      if (error) throw error;
+      lenderProfile = data || existingProfile;
+    } else {
+      const { data, error } = await db
+        .from("loan_lender_profiles")
+        .insert(profilePayload)
+        .select("*")
+        .maybeSingle();
+      if (error) throw error;
+      lenderProfile = data;
+    }
   }
   const transactionId = transaction.id || transaction.transaction_id || null;
+  const learningSkipped = !identity;
   const splitPayload = {
     business_id: businessId,
     transaction_id: transactionId,
@@ -398,13 +400,15 @@ export async function confirmLoanPaymentSplit({
     confirmed_at: nowIso,
     meta: {
       total_amount_minor: validation.expected_amount_minor,
-      match_specificity: identity.match_specificity,
-      provider_merchant_id: identity.provider_merchant_id,
-      descriptor_fingerprint: identity.fingerprint,
-      lender_name: identity.lender_name || split.lender_name || null,
-      loan_name: identity.loan_name || split.loan_name || null,
-      reference_last_four: identity.reference_last_four || split.reference_last_four || null,
+      match_specificity: identity?.match_specificity || null,
+      provider_merchant_id: identity?.provider_merchant_id || null,
+      descriptor_fingerprint: identity?.fingerprint || null,
+      lender_name: identity?.lender_name || split.lender_name || null,
+      loan_name: identity?.loan_name || split.loan_name || null,
+      reference_last_four: identity?.reference_last_four || split.reference_last_four || null,
       remember_profile: split.remember_profile !== false,
+      lender_learning_skipped: learningSkipped,
+      lender_learning_skip_reason: learningSkipped ? "insufficient_transaction_identity" : null,
     },
   };
   const { data: splitRow, error: splitError } = await db
@@ -413,17 +417,35 @@ export async function confirmLoanPaymentSplit({
     .select("*")
     .maybeSingle();
   if (splitError) throw splitError;
-  await insertLoanAuditEvent({
-    db,
-    businessId,
-    transactionId,
-    lenderProfileId: lenderProfile?.id || null,
-    splitId: splitRow?.id || null,
-    eventType: existingProfile?.id ? "lender_profile_updated" : "lender_profile_created",
-    actorId,
-    actorType,
-    nextState: { profile: lenderProfile, split: splitRow },
-  });
+  if (identity) {
+    await insertLoanAuditEvent({
+      db,
+      businessId,
+      transactionId,
+      lenderProfileId: lenderProfile?.id || null,
+      splitId: splitRow?.id || null,
+      eventType: existingProfile?.id ? "lender_profile_updated" : "lender_profile_created",
+      actorId,
+      actorType,
+      nextState: { profile: lenderProfile, split: splitRow },
+    });
+  } else {
+    await insertLoanAuditEvent({
+      db,
+      businessId,
+      transactionId,
+      lenderProfileId: null,
+      splitId: splitRow?.id || null,
+      eventType: "lender_profile_learning_skipped",
+      actorId,
+      actorType,
+      nextState: {
+        reason: "insufficient_transaction_identity",
+        split: splitRow,
+      },
+      meta: { lender_learning_skipped: true },
+    });
+  }
   await insertLoanAuditEvent({
     db,
     businessId,

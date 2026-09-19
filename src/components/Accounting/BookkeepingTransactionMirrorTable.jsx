@@ -1,6 +1,6 @@
 import React from "react";
 import { CoaDropdown, CreditCardPaymentMatchControl } from "./BookkeepingFeed.jsx";
-import LoanPaymentSplitModal, { buildInitialLoanSplitDraft } from "./LoanPaymentSplitModal.jsx";
+import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
@@ -31,6 +31,7 @@ export default function BookkeepingTransactionMirrorTable({
   onMarkCcPayment,
   onRejectCcPayment,
   onConfirmLoanPaymentSplit,
+  onConfirmSplitTransaction,
   onTreatLoanPaymentAsRegular,
   ccPaymentActionState = {},
   onCreateAccount,
@@ -76,6 +77,7 @@ export default function BookkeepingTransactionMirrorTable({
             onMarkCcPayment={onMarkCcPayment}
             onRejectCcPayment={onRejectCcPayment}
             onConfirmLoanPaymentSplit={onConfirmLoanPaymentSplit}
+            onConfirmSplitTransaction={onConfirmSplitTransaction}
             onTreatLoanPaymentAsRegular={onTreatLoanPaymentAsRegular}
             ccPaymentActionState={ccPaymentActionState}
             onCreateAccount={onCreateAccount}
@@ -105,6 +107,7 @@ function BookkeepingTransactionMirrorRow({
   onMarkCcPayment,
   onRejectCcPayment,
   onConfirmLoanPaymentSplit,
+  onConfirmSplitTransaction,
   onTreatLoanPaymentAsRegular,
   ccPaymentActionState,
   onCreateAccount,
@@ -168,6 +171,17 @@ function BookkeepingTransactionMirrorRow({
     !isActionBusy("approve") &&
     !isActionBusy("reclassify") &&
     isEligibleForMirrorLoanSplit(row);
+  const canUseSplit =
+    !isPosted &&
+    !isPending &&
+    !isQueued &&
+    !isActionBusy("approve") &&
+    !isActionBusy("reclassify") &&
+    isEligibleForMirrorSplit(row);
+  const startSplitTransaction = () => {
+    if (!canUseSplit) return;
+    setLoanSplitDraft(buildInitialSplitTransactionDraft("general", row, accounts));
+  };
   const startLoanSplit = () => {
     if (!canUseLoanSplit) return;
     setLoanSplitDraft(buildInitialLoanSplitDraft(row, accounts));
@@ -250,6 +264,7 @@ function BookkeepingTransactionMirrorRow({
               setSelectedAccountId(String(account.id));
             }}
             onUseCreditCardPayment={!isPosted && !isPending ? () => onMarkCcPayment?.(row) : null}
+            onUseSplitTransaction={canUseSplit ? startSplitTransaction : null}
             onUseLoanPayment={canUseLoanSplit ? startLoanSplit : null}
             accountTypes={accountTypes}
             creationContext={{
@@ -366,14 +381,16 @@ function BookkeepingTransactionMirrorRow({
         ) : null}
       </div>
     </div>
-    <LoanPaymentSplitModal
+    <SplitTransactionModal
+      mode={loanSplitDraft?.mode || "loan_payment"}
       open={Boolean(loanSplitDraft)}
       txn={row}
       accounts={accounts || []}
       draft={loanSplitDraft || {}}
       onChange={setLoanSplitDraft}
       onConfirm={async (split) => {
-        await onConfirmLoanPaymentSplit?.(row, split);
+        if (split?.mode === "general") await onConfirmSplitTransaction?.(row, split);
+        else await onConfirmLoanPaymentSplit?.(row, split);
         setLoanSplitDraft(null);
       }}
       onTreatAsRegular={async () => {
@@ -415,6 +432,14 @@ function isEligibleForMirrorLoanSplit(row = {}) {
   const workflow = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
   if (!workflow || workflow === "ordinary_expense" || workflow === "expense" || workflow === "loan_payment") return true;
   return false;
+}
+
+function isEligibleForMirrorSplit(row = {}) {
+  if (!row || row.pending === true) return false;
+  const status = String(row.status || "").toLowerCase();
+  if (status === "posted" || row.qbo_txn_id || row.qboTxnId || row.posted_at) return false;
+  const signedAmount = Number(row.signed_amount ?? row.signedAmount ?? row.amount ?? 0);
+  return Number.isFinite(signedAmount) && signedAmount !== 0;
 }
 
 export function deriveMirrorQboPostingStatus(row = {}) {

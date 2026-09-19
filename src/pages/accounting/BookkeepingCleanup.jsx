@@ -22,6 +22,7 @@ import {
   rejectCreditCardPayment,
   markCreditCardPayment,
   confirmCreditCardPaymentMatch,
+  confirmSplitTransaction,
   confirmLoanPaymentSplit,
   treatLoanPaymentAsRegularTransaction,
   updateHandledTransaction,
@@ -1512,6 +1513,40 @@ function BookkeepingCleanup() {
     }
   };
 
+  const handleConfirmSplitTransaction = async (id, split) => {
+    if (!canRunAI || !businessId || !id || !split) return;
+    if (usingDemo) {
+      setTransactions((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                status: "needs_review",
+                taxonomy_type: "split_transaction",
+                meta: {
+                  ...(t.meta || {}),
+                  taxonomy_type: "split_transaction",
+                  split_transaction_status: "confirmed",
+                },
+              }
+            : t
+        )
+      );
+      return;
+    }
+    try {
+      await confirmSplitTransaction(businessId, id, split);
+      accountOverrides.current?.delete?.(id);
+      await reloadTransactions();
+      setCountsRefreshKey((value) => value + 1);
+      await loadMappingStatus();
+    } catch (e) {
+      const message = e?.body?.message || e?.message || "Could not save this split.";
+      console.warn("[bookkeeping] split transaction failed", message);
+      window.alert(message);
+    }
+  };
+
   const handleTreatLoanPaymentAsRegular = async (id) => {
     if (!canRunAI || !businessId || !id) return;
     if (usingDemo) {
@@ -2544,6 +2579,7 @@ function BookkeepingCleanup() {
               onMarkCcPayment={handleMarkCreditCardPayment}
               onConfirmCcPaymentMatch={handleConfirmCreditCardPaymentMatch}
               onConfirmLoanPaymentSplit={handleConfirmLoanPaymentSplit}
+              onConfirmSplitTransaction={handleConfirmSplitTransaction}
               onTreatLoanPaymentAsRegular={handleTreatLoanPaymentAsRegular}
               onInspectIncomingDepositMatch={handleInspectIncomingDepositMatch}
               onConfirmIncomingDepositMatch={handleConfirmIncomingDepositMatch}

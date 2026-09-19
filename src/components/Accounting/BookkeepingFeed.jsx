@@ -1,8 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom";
-import { CheckCircle2, CreditCard, Landmark, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
+import { CheckCircle2, CreditCard, GitBranch, Landmark, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
-import LoanPaymentSplitModal, { buildInitialLoanSplitDraft } from "./LoanPaymentSplitModal.jsx";
+import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import {
   deriveCreditCardPaymentOrientation,
   deriveCreditCardPaymentStatus,
@@ -56,6 +56,7 @@ export function CoaDropdown({
   status,
   disabled,
   onUseCreditCardPayment,
+  onUseSplitTransaction,
   onUseLoanPayment,
 }) {
   const [open, setOpen] = React.useState(false);
@@ -228,6 +229,19 @@ export function CoaDropdown({
                   >
                     <CreditCard className="h-3.5 w-3.5" />
                     Match as credit card payment
+                  </button>
+                ) : null}
+                {onUseSplitTransaction ? (
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 border-b border-emerald-300/20 bg-[rgba(10,24,19,0.98)] px-3.5 py-2 text-left text-[12px] font-semibold text-emerald-100 hover:bg-emerald-400/10"
+                    onClick={() => {
+                      setOpen(false);
+                      onUseSplitTransaction();
+                    }}
+                  >
+                    <GitBranch className="h-3.5 w-3.5" />
+                    Split transaction
                   </button>
                 ) : null}
                 {onUseLoanPayment ? (
@@ -590,6 +604,14 @@ function isEligibleForManualLoanSplit(txn = {}) {
   return false;
 }
 
+function isEligibleForManualSplit(txn = {}) {
+  if (!txn || txn.pending === true) return false;
+  const status = String(txn.status || "").toLowerCase();
+  if (status === "posted" || txn.qbo_txn_id || txn.qboTxnId || txn.posted_at) return false;
+  const signedAmount = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0);
+  return Number.isFinite(signedAmount) && signedAmount !== 0;
+}
+
 function isTruthy(value) {
   return value === true || String(value || "").toLowerCase() === "true";
 }
@@ -790,6 +812,7 @@ export default function BookkeepingFeed({
   onMarkCcPayment,
   onConfirmCcPaymentMatch,
   onConfirmLoanPaymentSplit,
+  onConfirmSplitTransaction,
   onTreatLoanPaymentAsRegular,
   onInspectIncomingDepositMatch,
   onConfirmIncomingDepositMatch,
@@ -924,7 +947,7 @@ export default function BookkeepingFeed({
     "after:pointer-events-none after:absolute after:content-[''] after:h-2 after:w-1 after:border-b-2 after:border-r-2 after:border-white after:rotate-45 after:left-[6px] after:top-[2px] after:opacity-0 after:transition-opacity " +
     "checked:after:opacity-100";
   const [accountSelections, setAccountSelections] = React.useState(() => new Map());
-  const [loanSplitDrafts, setLoanSplitDrafts] = React.useState(() => new Map());
+  const [splitDrafts, setSplitDrafts] = React.useState(() => new Map());
   const [sort, setSort] = React.useState({ column: null, direction: null }); // direction: 'asc' | 'desc' | null
   const [expandedRowId, setExpandedRowId] = React.useState(null);
 
@@ -961,19 +984,26 @@ export default function BookkeepingFeed({
     if (onAccountChange) onAccountChange(txnId, accountId);
   };
 
+  const startSplitTransaction = (txn) => {
+    if (readOnly || !isEligibleForManualSplit(txn)) return;
+    setSplitDrafts((prev) => {
+      const next = new Map(prev);
+      next.set(txn.id, buildInitialSplitTransactionDraft("general", txn, accounts));
+      return next;
+    });
+  };
+
   const startLoanSplit = (txn) => {
     if (readOnly || !isEligibleForManualLoanSplit(txn)) return;
-    setLoanSplitDrafts((prev) => {
+    setSplitDrafts((prev) => {
       const next = new Map(prev);
-      if (!next.has(txn.id)) {
-        next.set(txn.id, buildInitialLoanSplitDraft(txn, accounts));
-      }
+      next.set(txn.id, buildInitialLoanSplitDraft(txn, accounts));
       return next;
     });
   };
 
   const clearLoanSplit = (txnId) => {
-    setLoanSplitDrafts((prev) => {
+    setSplitDrafts((prev) => {
       const next = new Map(prev);
       next.delete(txnId);
       return next;
@@ -981,7 +1011,7 @@ export default function BookkeepingFeed({
   };
 
   const updateLoanSplitDraft = (txnId, draft) => {
-    setLoanSplitDrafts((prev) => {
+    setSplitDrafts((prev) => {
       const next = new Map(prev);
       next.set(txnId, draft);
       return next;
@@ -1036,12 +1066,12 @@ export default function BookkeepingFeed({
   };
 
   const activeLoanSplitEntry = React.useMemo(() => {
-    for (const [txnId, draft] of loanSplitDrafts.entries()) {
+    for (const [txnId, draft] of splitDrafts.entries()) {
       const txn = transactions.find((item) => String(item.id) === String(txnId));
       if (txn) return { txnId, txn, draft };
     }
     return null;
-  }, [loanSplitDrafts, transactions]);
+  }, [splitDrafts, transactions]);
 
   return (
     <div
@@ -1228,7 +1258,7 @@ export default function BookkeepingFeed({
               (isCcPaymentSuspected || (isCcPayment && !["confirmed", "posted"].includes(String(txn.cc_payment_pair_status || txn.meta?.cc_payment_pair_status || "").toLowerCase())));
             const ccAction = ccPaymentActionState?.[txn.id] || {};
             const ccConfirmBusy = ccAction.loading === true;
-            const loanSplitDraft = loanSplitDrafts.get(txn.id) || null;
+            const loanSplitDraft = splitDrafts.get(txn.id) || null;
             const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
             const rowSelectable = !isPosted && !isPending && !isCcPaymentWorkflow && !incomingMatch.active && !isLoanSplitWorkflow && !readOnly;
 
@@ -1392,6 +1422,11 @@ export default function BookkeepingFeed({
                     onUseCreditCardPayment={
                       !readOnly && !isPosted
                         ? () => onMarkCcPayment?.(txn.id)
+                        : null
+                    }
+                    onUseSplitTransaction={
+                      !readOnly && isEligibleForManualSplit(txn)
+                        ? () => startSplitTransaction(txn)
                         : null
                     }
                     onUseLoanPayment={
@@ -1598,7 +1633,8 @@ export default function BookkeepingFeed({
           </button>
         </div>
       </div>
-      <LoanPaymentSplitModal
+      <SplitTransactionModal
+        mode={activeLoanSplitEntry?.draft?.mode || "loan_payment"}
         open={Boolean(activeLoanSplitEntry)}
         txn={activeLoanSplitEntry?.txn}
         accounts={accounts}
@@ -1607,7 +1643,8 @@ export default function BookkeepingFeed({
         onChange={(draft) => activeLoanSplitEntry && updateLoanSplitDraft(activeLoanSplitEntry.txnId, draft)}
         onConfirm={async (split) => {
           if (!activeLoanSplitEntry) return;
-          await onConfirmLoanPaymentSplit?.(activeLoanSplitEntry.txnId, split);
+          if (split?.mode === "general") await onConfirmSplitTransaction?.(activeLoanSplitEntry.txnId, split);
+          else await onConfirmLoanPaymentSplit?.(activeLoanSplitEntry.txnId, split);
           clearLoanSplit(activeLoanSplitEntry.txnId);
         }}
         onTreatAsRegular={async () => {
