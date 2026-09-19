@@ -80,7 +80,7 @@ test("Books Review full loading state is reserved for true first load without re
   assert.match(source, /const showLoadingState =[\s\S]*?!hasVisibleRows[\s\S]*?\(loadingTxns \|\| isPreparingCategories/);
   assert.match(source, /setTransactions\(\[\]\);[\s\S]*?setTotalCount\(null\);[\s\S]*?setLoadingTxns\(true\)/);
   assert.match(source, /const cachedPage = readTransactionPageCache\(cacheKey\) \|\| previousPage/);
-  assert.match(source, /if \(cachedPage && Array\.isArray\(cachedPage\.rows\)\) \{[\s\S]*?setTransactions\(cached\.rows\)[\s\S]*?setBackgroundRefreshingTxns\(shouldShowBackgroundRefresh\)/);
+  assert.match(source, /if \(cachedPage && Array\.isArray\(cachedPage\.rows\)\) \{[\s\S]*?const ledgerSuppressed = suppressLedgerRowsFromNeedsReview\(cached\.rows[\s\S]*?setTransactions\(ledgerSuppressed\.rows\)[\s\S]*?setBackgroundRefreshingTxns\(shouldShowBackgroundRefresh\)/);
 });
 
 test("Books Review bulk approval uses live COA accounts and selected vendors instead of mock placeholders", () => {
@@ -124,11 +124,59 @@ test("Books Review manual categorization uses a silent row-scoped refetch withou
   const bulkBody = source.slice(bulkStart, bulkEnd);
 
   assert.match(approveBody, /await approveTransactions\(businessId/);
-  assert.match(approveBody, /await reloadTransactions\(\{ showBackgroundRefresh: false, refreshProcessingStatus: false \}\)/);
+  assert.match(approveBody, /await reloadTransactions\(\{ showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: false \}\)/);
   assert.match(bulkBody, /await approveTransactions\(/);
-  assert.match(bulkBody, /await reloadTransactions\(\{ showBackgroundRefresh: false, refreshProcessingStatus: false \}\)/);
+  assert.match(bulkBody, /await reloadTransactions\(\{ showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: false \}\)/);
   assert.doesNotMatch(approveBody, /triggerPlaidSync|reconsiderNeedsReviewTransactions|retryBookkeepingProcessing|setCategorizationStatus|setBackgroundRefreshingTxns/);
   assert.doesNotMatch(bulkBody, /triggerPlaidSync|reconsiderNeedsReviewTransactions|retryBookkeepingProcessing|setCategorizationStatus|setBackgroundRefreshingTxns/);
+});
+
+test("Books Review protects optimistic approvals from stale and out-of-order transaction refreshes", () => {
+  assert.match(source, /const approvalMutationLedgerRef = useRef\(new Map\(\)\)/);
+  assert.match(source, /const transactionReloadSeqRef = useRef\(0\)/);
+  assert.match(source, /const transactionViewKeyRef = useRef\(""\)/);
+  assert.match(source, /const pendingApprovalIds = useMemo/);
+  assert.match(source, /approvalMutationLedgerRef\.current\.has\(String\(id\)\)/);
+  assert.match(source, /setApprovalLedgerEntry\(id,\s*\{[\s\S]*?status: "pending"[\s\S]*?originalTxn: txn[\s\S]*?optimisticTxn: approvedTxn/);
+  assert.match(source, /setApprovalLedgerEntry\(id,\s*\{[\s\S]*?status: "confirmed"[\s\S]*?serverRow/);
+  assert.match(source, /removeApprovalLedgerEntry\(id\);[\s\S]*?applyOptimisticCountTransition\(approvedTxn, txn\)/);
+  assert.match(source, /function isNeedsReviewTransaction\(txn = \{\}\)/);
+  assert.match(source, /suppressLedgerRowsFromNeedsReview/);
+  assert.match(source, /staleApprovalIds\.add\(String\(txn\.id\)\)/);
+  assert.match(source, /reconcileApprovalLedgerAfterRows\(normalizedList, approvalSuppressed\.staleApprovalIds\)/);
+  assert.match(source, /if \(staleApprovalIds\.has\(id\)\) continue/);
+  assert.match(source, /const requestSeq = transactionReloadSeqRef\.current \+ 1/);
+  assert.match(source, /transactionReloadSeqRef\.current === requestSeq/);
+  assert.match(source, /transactionViewKeyRef\.current === requestViewKey/);
+});
+
+test("Books Review optimistic approval counts are not overwritten by stale count refetches", () => {
+  const countsStart = source.indexOf("const loadTabCounts = useCallback");
+  const countsEnd = source.indexOf("const loadClarifications = useCallback", countsStart);
+  const countsBody = source.slice(countsStart, countsEnd);
+  const approveStart = source.indexOf("const handleApprove = async");
+  const approveEnd = source.indexOf("const handleUndo = async", approveStart);
+  const approveBody = source.slice(approveStart, approveEnd);
+
+  assert.match(source, /overlayPendingApprovalCounts/);
+  assert.match(countsBody, /setTabCounts\(overlayPendingApprovalCounts\(counts\)\)/);
+  assert.match(source, /if \(entry\.status !== "pending"\) return/);
+  assert.match(source, /needs_review: adjustCount\(next\.needs_review, -1\)/);
+  assert.match(source, /handled: matchesBooksTab\(entry\.optimisticTxn, "handled"\) \? adjustCount\(next\.handled, 1\)/);
+  assert.match(approveBody, /applyOptimisticCountTransition\(txn, approvedTxn\)/);
+  assert.match(approveBody, /refreshCounts: false/);
+});
+
+test("Books Review concurrent approval handling is per transaction", () => {
+  const bulkStart = source.indexOf("const handleBulkApprove = async");
+  const bulkEnd = source.indexOf("const handleManualPostTransaction", bulkStart);
+  const bulkBody = source.slice(bulkStart, bulkEnd);
+
+  assert.match(bulkBody, /\.filter\(\(txnId\) => !approvalMutationLedgerRef\.current\.has\(String\(txnId\)\)\)/);
+  assert.match(bulkBody, /selectedTxnIds\.forEach\(\(txnId\) => \{[\s\S]*?setApprovalLedgerEntry\(txnId,\s*\{[\s\S]*?status: "confirmed"/);
+  assert.match(bulkBody, /approvedTxnsById\.forEach\(\(approvedTxn, txnId\) => \{[\s\S]*?removeApprovalLedgerEntry\(txnId\);[\s\S]*?applyOptimisticCountTransition\(approvedTxn, selectedTxnById\.get\(txnId\)\)/);
+  assert.doesNotMatch(bulkBody, /approvalMutationLedgerRef\.current\.clear\(\)/);
+  assert.doesNotMatch(source, /setApprovalLedgerVersion\(0\)/);
 });
 
 test("Books Review approval API is narrow and does not start feed sync or broad reprocessing", () => {
