@@ -5,8 +5,9 @@ import { ArrowUp } from "lucide-react";
 export default function BizzySubmitButton({
   onClick,
   isLoading = false,
-  size = 36,
+  size = 40,
   disabled = false,
+  active = false,
   className = "",
   title,
   withGlow = false,                 // <- NEW: no glow by default
@@ -23,11 +24,14 @@ export default function BizzySubmitButton({
       title={title ?? (isLoading ? "Bizzi is thinking…" : "Send to Bizzi")}
       className={[
         "relative inline-flex items-center justify-center rounded-full",
-        "bg-white/8 border border-white/20 text-white/85 backdrop-blur",
-        "transition-transform duration-200",
+        "border backdrop-blur",
+        "transition-[background-color,border-color,color,transform] duration-150",
+        active && !disabled && !isLoading
+          ? "bg-[rgba(var(--accent-rgb),0.20)] border-[rgba(var(--accent-rgb),0.42)] text-[var(--accent-contrast)]"
+          : "bg-[var(--chat-composer-control-bg)] border-[var(--chat-composer-control-border)] text-white/64",
         disabled || isLoading
-          ? "opacity-90 cursor-not-allowed"
-          : "hover:scale-105 hover:border-[var(--accent-line)] hover:text-[var(--accent-contrast)] cursor-pointer",
+          ? "cursor-not-allowed"
+          : "hover:scale-[1.02] hover:border-[var(--chat-composer-border-hover)] hover:text-white/90 cursor-pointer",
         className,
       ].join(" ")}
       style={{ width: dim, height: dim, outline: "none", boxShadow: "none" }}

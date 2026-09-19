@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Mic } from 'lucide-react';
 
-const BizzyVoiceIcon = ({ setInput }) => {
+const BizzyVoiceIcon = ({ setInput, disabled = false, className = "", title = "Toggle voice", size = 20 }) => {
   const [isRecording, setIsRecording] = useState(false);
   const recognitionRef = useRef(null);
 
@@ -36,6 +36,7 @@ const BizzyVoiceIcon = ({ setInput }) => {
   }, [setInput]);
 
   const toggleRecording = () => {
+    if (disabled) return;
     const recognition = recognitionRef.current;
     if (!recognition) return;
 
@@ -52,11 +53,15 @@ const BizzyVoiceIcon = ({ setInput }) => {
     <button
       type="button"
       onClick={toggleRecording}
-      className={`transition-colors duration-300 ${
-        isRecording ? 'text-red-500 animate-pulse' : 'text-current'
-      }`}
+      disabled={disabled}
+      aria-label={isRecording ? "Stop voice input" : "Start voice input"}
+      aria-pressed={isRecording}
+      title={title}
+      className={`${className} transition-colors duration-150 ${
+        isRecording ? 'text-[var(--accent-contrast)] animate-pulse' : 'text-current'
+      } ${disabled ? 'cursor-not-allowed opacity-45' : ''}`}
     >
-      <Mic size={20} />
+      <Mic size={size} aria-hidden="true" />
     </button>
   );
 };
