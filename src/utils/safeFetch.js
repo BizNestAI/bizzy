@@ -89,13 +89,32 @@ export async function safeFetch(input, init = {}) {
   }
   const body = normalizeBodyAndHeaders(init, headers);
 
+  const timeoutMs = Number(init.timeoutMs || 0);
+  let timeoutId = null;
+  let timeoutController = null;
+  let signal = init.signal;
+  if (timeoutMs > 0 && typeof AbortController !== "undefined") {
+    timeoutController = new AbortController();
+    timeoutId = setTimeout(() => timeoutController.abort(new DOMException("Request timed out", "TimeoutError")), timeoutMs);
+    if (signal) {
+      if (signal.aborted) {
+        timeoutController.abort(signal.reason);
+      } else {
+        signal.addEventListener("abort", () => timeoutController.abort(signal.reason), { once: true });
+      }
+    }
+    signal = timeoutController.signal;
+  }
+
   let fetchInit = {
     method: init.method || (body ? 'POST' : 'GET'),
     credentials: init.credentials ?? "omit",
     ...init,
     headers,
     body,
+    signal,
   };
+  delete fetchInit.timeoutMs;
 
   let res;
   try {
@@ -106,6 +125,8 @@ export async function safeFetch(input, init = {}) {
     err.cause = e;
     err.url = url;
     throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 
   // 2) Retry once on 401 with a forced refresh
@@ -123,7 +144,7 @@ export async function safeFetch(input, init = {}) {
         fetchInit = { ...fetchInit, headers: retryHeaders, body: retryBody };
         res = await fetch(url, fetchInit);
       }
-    } catch (e) {
+    } catch {
       // fall through; we'll parse the 401 below
     }
   }

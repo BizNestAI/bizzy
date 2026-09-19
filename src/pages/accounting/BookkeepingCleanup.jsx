@@ -588,6 +588,7 @@ function BookkeepingCleanup() {
   const [loadingAccounts, setLoadingAccounts] = useState(false);
   const [loadingTxns, setLoadingTxns] = useState(false);
   const [backgroundRefreshingTxns, setBackgroundRefreshingTxns] = useState(false);
+  const [transactionLoadError, setTransactionLoadError] = useState(null);
   const [categorizationStatus, setCategorizationStatus] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
   const [completedProcessingMessage, setCompletedProcessingMessage] = useState(null);
@@ -599,6 +600,7 @@ function BookkeepingCleanup() {
   const approvalMutationLedgerRef = useRef(new Map());
   const transactionReloadSeqRef = useRef(0);
   const transactionViewKeyRef = useRef("");
+  const transactionRequestAbortRef = useRef(null);
   const [approvalLedgerVersion, setApprovalLedgerVersion] = useState(0);
   const accountOverrides = useRef(new Map());
   const accountScrollRef = useRef(null);
@@ -730,6 +732,7 @@ function BookkeepingCleanup() {
 
   useEffect(() => () => {
     mountedRef.current = false;
+    transactionRequestAbortRef.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -2114,8 +2117,14 @@ function BookkeepingCleanup() {
       // Wait until we know which account to show; avoid loading all accounts by default.
       setTransactions([]);
       setTotalCount(0);
+      setLoadingTxns(false);
+      setBackgroundRefreshingTxns(false);
+      setTransactionLoadError(null);
       return;
     }
+    transactionRequestAbortRef.current?.abort();
+    const requestController = new AbortController();
+    transactionRequestAbortRef.current = requestController;
     const shouldShowBackgroundRefresh = showBackgroundRefresh === true;
     const cacheKey = buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage });
     const previousPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
@@ -2144,6 +2153,7 @@ function BookkeepingCleanup() {
       setBackgroundRefreshingTxns(false);
     }
     setCategorizationStatus(null);
+    setTransactionLoadError(null);
     const normalizeTxns = (txns = []) =>
       txns.map((t) => {
         const status = t.status || "needs_review";
@@ -2259,6 +2269,9 @@ function BookkeepingCleanup() {
         range: dateRange,
         page,
         page_size: rowsPerPage,
+      }, {
+        signal: requestController.signal,
+        timeoutMs: 20000,
       });
       if (process.env.NODE_ENV !== "production") {
         console.log("[Books] transactions response", res);
@@ -2285,6 +2298,7 @@ function BookkeepingCleanup() {
         });
       }
       const committedInitialPage = commitTransactionPage(normalized, nextTotal);
+      setTransactionLoadError(null);
       setLoadingTxns(false);
       setBackgroundRefreshingTxns(false);
       if (!committedInitialPage) {
@@ -2298,6 +2312,12 @@ function BookkeepingCleanup() {
     } catch (e) {
       if (!isLatestRequest()) return;
       console.warn("[bookkeeping] transactions load failed", e?.message || e);
+      const timedOut = e?.name === "TimeoutError" || /timed out|abort/i.test(String(e?.message || ""));
+      setTransactionLoadError({
+        message: timedOut
+          ? "This account took too long to load. Try again."
+          : "Transactions couldn't load for this account.",
+      });
       const fallbackPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
       if (fallbackPage?.rows?.length) {
         setTransactions(fallbackPage.rows);
@@ -2317,6 +2337,9 @@ function BookkeepingCleanup() {
         setLoadingTxns(false);
         setBackgroundRefreshingTxns(false);
         setCategorizationStatus(null);
+        if (transactionRequestAbortRef.current === requestController) {
+          transactionRequestAbortRef.current = null;
+        }
         if (refreshCounts === true) {
           setCountsRefreshKey((value) => value + 1);
         }
@@ -2708,6 +2731,21 @@ function BookkeepingCleanup() {
                   Connect Plaid
                 </button>
               </div>
+            </div>
+          ) : !usingDemo && transactionLoadError && !loadingTxns && !hasVisibleRows ? (
+            <div className="mt-10 flex flex-col items-center justify-center gap-3 text-center text-slate-300">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-rose-500/10 text-rose-300">!</div>
+              <p className="text-sm font-medium text-slate-100">Transactions couldn't load.</p>
+              <p className="max-w-md text-xs text-slate-400">
+                {transactionLoadError.message || "Try again to fetch the latest rows for this account."}
+              </p>
+              <button
+                type="button"
+                onClick={() => reloadTransactions({ showBackgroundRefresh: false })}
+                className="rounded-full border border-white/10 px-4 py-2 text-xs font-semibold text-slate-100 transition hover:border-[var(--accent-line)] hover:bg-[var(--panel)]"
+              >
+                Retry
+              </button>
             </div>
           ) : !usingDemo && showLoadingState ? (
             <div className="mt-10 flex flex-col items-center justify-center gap-2 text-center text-slate-300">

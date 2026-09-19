@@ -28,7 +28,7 @@ export async function getAccounts(businessId) {
   });
 }
 
-export async function getTransactions(businessId, params = {}) {
+export async function getTransactions(businessId, params = {}, options = {}) {
   const search = new URLSearchParams();
   Object.entries(params || {}).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== "") search.set(k, v);
@@ -37,6 +37,8 @@ export async function getTransactions(businessId, params = {}) {
   const res = await safeFetch(apiUrl(`/api/bookkeeping/transactions${qs}`), {
     method: "GET",
     headers: withBizHeaders(businessId),
+    signal: options.signal,
+    timeoutMs: options.timeoutMs ?? 20000,
   });
   if (Array.isArray(res)) return res;
   return res || { rows: [] };

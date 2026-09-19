@@ -11,6 +11,7 @@ const routeSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeep
 const feedServiceSource = readFileSync(join(root, "src/services/bookkeeping/bookkeepingTransactionFeedService.js"), "utf8");
 const approvalRouteSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.approvals.routes.js"), "utf8");
 const approvalServiceSource = readFileSync(join(root, "src/services/bookkeeping/bookkeepingApprovalService.js"), "utf8");
+const postingWorkerSource = readFileSync(join(root, "src/jobs/interactivePostingCommands.worker.js"), "utf8");
 
 test("Books Review keeps loaded rows visible while categorization continues", () => {
   assert.match(source, /const hasVisibleRows = feedRows\.length > 0/);
@@ -81,6 +82,42 @@ test("Books Review full loading state is reserved for true first load without re
   assert.match(source, /setTransactions\(\[\]\);[\s\S]*?setTotalCount\(null\);[\s\S]*?setLoadingTxns\(true\)/);
   assert.match(source, /const cachedPage = readTransactionPageCache\(cacheKey\) \|\| previousPage/);
   assert.match(source, /if \(cachedPage && Array\.isArray\(cachedPage\.rows\)\) \{[\s\S]*?const ledgerSuppressed = suppressLedgerRowsFromNeedsReview\(cached\.rows[\s\S]*?setTransactions\(ledgerSuppressed\.rows\)[\s\S]*?setBackgroundRefreshingTxns\(shouldShowBackgroundRefresh\)/);
+});
+
+test("Books Review transaction fetches use timeout, abort cleanup, and Retry instead of endless loading", () => {
+  assert.match(clientSource, /export async function getTransactions\(businessId, params = \{\}, options = \{\}\)/);
+  assert.match(clientSource, /signal: options\.signal/);
+  assert.match(clientSource, /timeoutMs: options\.timeoutMs \?\? 20000/);
+  assert.match(source, /const \[transactionLoadError, setTransactionLoadError\] = useState\(null\)/);
+  assert.match(source, /const transactionRequestAbortRef = useRef\(null\)/);
+  assert.match(source, /transactionRequestAbortRef\.current\?\.abort\(\)/);
+  assert.match(source, /new AbortController\(\)/);
+  assert.match(source, /signal: requestController\.signal/);
+  assert.match(source, /timeoutMs: 20000/);
+  assert.match(source, /setTransactionLoadError\(\{[\s\S]*?This account took too long to load/);
+  assert.match(source, /Transactions couldn't load\./);
+  assert.match(source, />\s*Retry\s*</);
+});
+
+test("Books Review clears loading for success, empty, failure, no-account, and aborted stale requests", () => {
+  assert.match(source, /if \(!accountFilter\) \{[\s\S]*?setLoadingTxns\(false\);[\s\S]*?setBackgroundRefreshingTxns\(false\);[\s\S]*?return;/);
+  assert.match(source, /setTransactionLoadError\(null\);[\s\S]*?setLoadingTxns\(false\);[\s\S]*?setBackgroundRefreshingTxns\(false\)/);
+  assert.match(source, /catch \(e\) \{[\s\S]*?if \(!isLatestRequest\(\)\) return;[\s\S]*?setTransactionLoadError/);
+  assert.match(source, /finally \{[\s\S]*?if \(isLatestRequest\(\)\) \{[\s\S]*?setLoadingTxns\(false\);[\s\S]*?setBackgroundRefreshingTxns\(false\);/);
+  assert.match(source, /transactionReloadSeqRef\.current === requestSeq/);
+  assert.match(source, /transactionViewKeyRef\.current === requestViewKey/);
+});
+
+test("Books Review feed loading is independent of interactive posting workers and background polling", () => {
+  const reloadStart = source.indexOf("const reloadTransactions = useCallback");
+  const reloadEnd = source.indexOf("useEffect(() => {", reloadStart);
+  const reloadBody = source.slice(reloadStart, reloadEnd);
+
+  assert.match(reloadBody, /fetchTransactions\(businessId/);
+  assert.doesNotMatch(reloadBody, /claimInteractivePosting|runInteractivePosting|posting\/backlog|post-ready|plaid\/sync|retryBookkeepingProcessing/);
+  assert.match(source, /hasVisibleRows && \(categorizationMessage \|\| processingMessage \|\| completedProcessingMessage \|\| backgroundRefreshingTxns\)/);
+  assert.match(postingWorkerSource, /isMissingInteractivePostingCommandRpcError/);
+  assert.match(postingWorkerSource, /nextInteractivePostingPollDelayMs/);
 });
 
 test("Books Review bulk approval uses live COA accounts and selected vendors instead of mock placeholders", () => {

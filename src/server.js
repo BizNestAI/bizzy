@@ -30,7 +30,10 @@ import qboJobCostingWebhooksRouter from "./api/qbo/qboJobCostingWebhooks.routes.
 import arRouter from "./api/ar/ar.routes.js";
 import bookkeepingPlaidRouter from "./api/bookkeeping/bookkeeping.routes.js";
 import { startBooksPostingCron } from "./jobs/booksPost.cron.js";
-import { startInteractivePostingCommandWorker } from "./jobs/interactivePostingCommands.worker.js";
+import {
+  getInteractivePostingCommandWorkerHealth,
+  startInteractivePostingCommandWorker,
+} from "./jobs/interactivePostingCommands.worker.js";
 import { startPlaidDailySyncCron } from "./cron/plaidSync.cron.js";
 import { startBookkeepingProcessingWorker } from "./cron/bookkeepingProcessing.cron.js";
 import { startOperatorRequestSummaryCron } from "./cron/operatorRequestSummary.cron.js";
@@ -198,6 +201,9 @@ app.use((req, res, next) => {
 app.get("/healthz", (_req, res) => res.status(200).json({
   ok: true,
   build: getBackendBuildInfo(),
+  workers: {
+    interactive_posting_commands: getInteractivePostingCommandWorkerHealth(),
+  },
 }));
 
 /* ------------------------ Dev bypass for Investments (no token) ------------------------ */

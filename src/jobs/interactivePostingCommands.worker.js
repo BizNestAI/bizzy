@@ -6,8 +6,13 @@ import {
   claimInteractivePostingCommands,
   processInteractivePostingCommand,
 } from "../services/bookkeeping/interactivePostingCommandService.js";
+import {
+  isMissingInteractivePostingCommandRpcError,
+  nextInteractivePostingPollDelayMs,
+} from "./interactivePostingCommandWorkerDiagnostics.js";
 
 const POLL_SECONDS = Number(process.env.INTERACTIVE_POSTING_COMMAND_POLL_SECONDS || 1);
+const MAX_BACKOFF_SECONDS = Number(process.env.INTERACTIVE_POSTING_COMMAND_MAX_BACKOFF_SECONDS || 300);
 const BATCH_SIZE = Number(process.env.INTERACTIVE_POSTING_COMMAND_BATCH_SIZE || 5);
 const DISABLED = String(process.env.DISABLE_INTERACTIVE_POSTING_COMMAND_WORKER || "").toLowerCase() === "true";
 const CHANNEL = "bookkeeping_interactive_posting_commands";
@@ -16,6 +21,38 @@ let pollTimer = null;
 let pollRunning = false;
 let listenClient = null;
 let listenerStarted = false;
+let missingRpcLogged = false;
+let consecutiveMissingRpcFailures = 0;
+
+const workerHealth = {
+  ok: true,
+  degraded: false,
+  reason: null,
+  last_error: null,
+  last_error_code: null,
+  last_error_at: null,
+  consecutive_missing_rpc_failures: 0,
+  next_poll_delay_ms: null,
+};
+
+export function getInteractivePostingCommandWorkerHealth() {
+  return { ...workerHealth };
+}
+
+export function resetInteractivePostingCommandWorkerDiagnosticsForTest() {
+  missingRpcLogged = false;
+  consecutiveMissingRpcFailures = 0;
+  Object.assign(workerHealth, {
+    ok: true,
+    degraded: false,
+    reason: null,
+    last_error: null,
+    last_error_code: null,
+    last_error_at: null,
+    consecutive_missing_rpc_failures: 0,
+    next_poll_delay_ms: null,
+  });
+}
 
 function workerId() {
   return `interactive-posting:${process.env.RAILWAY_SERVICE_NAME || process.env.HOSTNAME || "worker"}:${process.pid}`;
@@ -49,6 +86,70 @@ export async function runInteractivePostingCommandWorkerOnce({ operationId = nul
     }));
   }
   return { ok: true, claimed: claimed?.length || 0, results };
+}
+
+function markWorkerHealthy() {
+  missingRpcLogged = false;
+  consecutiveMissingRpcFailures = 0;
+  Object.assign(workerHealth, {
+    ok: true,
+    degraded: false,
+    reason: null,
+    last_error: null,
+    last_error_code: null,
+    last_error_at: null,
+    consecutive_missing_rpc_failures: 0,
+    next_poll_delay_ms: Math.max(1, POLL_SECONDS) * 1000,
+  });
+}
+
+function handlePollFailure(err) {
+  if (!isMissingInteractivePostingCommandRpcError(err)) {
+    console.warn("[interactive-posting-command-worker] poll failed", err?.message || err);
+    workerHealth.ok = false;
+    workerHealth.degraded = true;
+    workerHealth.reason = "poll_failed";
+    workerHealth.last_error = err?.message || String(err);
+    workerHealth.last_error_code = err?.code || err?.status || null;
+    workerHealth.last_error_at = new Date().toISOString();
+    workerHealth.next_poll_delay_ms = Math.max(1, POLL_SECONDS) * 1000;
+    return workerHealth.next_poll_delay_ms;
+  }
+
+  consecutiveMissingRpcFailures += 1;
+  const delayMs = nextInteractivePostingPollDelayMs(consecutiveMissingRpcFailures, {
+    baseSeconds: POLL_SECONDS,
+    maxSeconds: MAX_BACKOFF_SECONDS,
+  });
+  Object.assign(workerHealth, {
+    ok: false,
+    degraded: true,
+    reason: "missing_interactive_posting_claim_rpc",
+    last_error: err?.message || String(err),
+    last_error_code: err?.code || err?.status || null,
+    last_error_at: new Date().toISOString(),
+    consecutive_missing_rpc_failures: consecutiveMissingRpcFailures,
+    next_poll_delay_ms: delayMs,
+  });
+  const payload = {
+    severity: "critical",
+    reason: workerHealth.reason,
+    message: workerHealth.last_error,
+    code: workerHealth.last_error_code,
+    consecutive_failures: consecutiveMissingRpcFailures,
+    next_poll_delay_ms: delayMs,
+  };
+  if (!missingRpcLogged) {
+    console.error("[interactive-posting-command-worker] configuration error", payload);
+    missingRpcLogged = true;
+  } else {
+    console.warn("[interactive-posting-command-worker] poll degraded; backing off", {
+      reason: payload.reason,
+      consecutive_failures: payload.consecutive_failures,
+      next_poll_delay_ms: payload.next_poll_delay_ms,
+    });
+  }
+  return delayMs;
 }
 
 async function startPgListener() {
@@ -100,19 +201,32 @@ export function startInteractivePostingCommandWorker() {
   startPgListener().catch((err) => {
     console.warn("[interactive-posting-command-worker] listener startup failed", err?.message || err);
   });
-  const intervalMs = Math.max(1, POLL_SECONDS) * 1000;
+  const baseIntervalMs = Math.max(1, POLL_SECONDS) * 1000;
+  const scheduleNext = (delayMs = baseIntervalMs) => {
+    const nextDelayMs = delayMs === 0 ? 0 : Math.max(baseIntervalMs, delayMs);
+    pollTimer = setTimeout(tick, nextDelayMs);
+    pollTimer.unref?.();
+  };
   const tick = () => {
-    if (pollRunning) return;
+    if (pollRunning) {
+      scheduleNext(baseIntervalMs);
+      return;
+    }
     pollRunning = true;
     runInteractivePostingCommandWorkerOnce()
-      .catch((err) => console.warn("[interactive-posting-command-worker] poll failed", err?.message || err))
+      .then(() => {
+        markWorkerHealthy();
+        scheduleNext(baseIntervalMs);
+      })
+      .catch((err) => {
+        const delayMs = handlePollFailure(err);
+        scheduleNext(delayMs);
+      })
       .finally(() => {
         pollRunning = false;
       });
   };
-  pollTimer = setInterval(tick, intervalMs);
-  pollTimer.unref?.();
-  tick();
+  scheduleNext(0);
   console.info("[interactive-posting-command-worker] started", {
     interval_seconds: POLL_SECONDS,
     batch_size: BATCH_SIZE,
@@ -121,7 +235,7 @@ export function startInteractivePostingCommandWorker() {
 }
 
 export async function stopInteractivePostingCommandWorker() {
-  if (pollTimer) clearInterval(pollTimer);
+  if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
   if (listenClient) {
     await listenClient.end().catch(() => null);
