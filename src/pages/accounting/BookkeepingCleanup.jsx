@@ -679,6 +679,63 @@ function BookkeepingCleanup() {
     return txn.amount > 0 ? "coa-income-sales" : "coa-other";
   }, []);
 
+  useEffect(() => {
+    if (usingDemo) {
+      const mapped = rawTransactions.map((t) => {
+        const suggestedAccountId = t.suggestedAccountId || guessAccountId(t);
+        return {
+          ...t,
+          suggestedAccountId,
+          glAccountId: t.glAccountId || suggestedAccountId,
+        };
+      });
+      setTransactions(mapped);
+    }
+  }, [rawTransactions, guessAccountId, usingDemo]);
+
+  const [activeTab, setActiveTab] = useState("needs_review");
+  const [dateRange, setDateRange] = useState("all");
+  const [accountFilter, setAccountFilter] = useState(() => (usingDemo ? getAcctKey(DEMO_ACCOUNT_LIST[0]) : null));
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [bulkAccountId, setBulkAccountId] = useState("");
+  const [showCategorized] = useState(false);
+  const [page, setPage] = useState(1);
+  const transactionViewKey = useMemo(
+    () => [businessId || "", accountFilter || "", activeTab || "", dateRange || "", page, rowsPerPage].join("|"),
+    [activeTab, accountFilter, businessId, dateRange, page, rowsPerPage]
+  );
+  const showPostedToast = () => window.alert("Already posted to QuickBooks.");
+  const [mappingStatus, setMappingStatus] = useState(null);
+  const [loadingMappingStatus, setLoadingMappingStatus] = useState(false);
+  const [ccPaymentAccounts, setCcPaymentAccounts] = useState([]);
+  const [ccPaymentAccountsLoaded, setCcPaymentAccountsLoaded] = useState(false);
+  const [loadingCcPaymentAccounts, setLoadingCcPaymentAccounts] = useState(false);
+  const [ccPaymentAccountsError, setCcPaymentAccountsError] = useState("");
+  const [autoPostStatus, setAutoPostStatus] = useState({ auto_post_to_quickbooks: false, handled_backlog_count: 0 });
+  const [loadingAutoPost, setLoadingAutoPost] = useState(false);
+  const [savingAutoPost, setSavingAutoPost] = useState(false);
+  const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
+  const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
+  const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
+  const incomingDepositActionInFlightRef = useRef(new Set());
+  const incomingDepositMatchedSuppressRef = useRef(new Set());
+  const mountedRef = useRef(true);
+  const [incomingDepositUndoTxn, setIncomingDepositUndoTxn] = useState(null);
+  const [manualPostTxn, setManualPostTxn] = useState(null);
+  const [manualPostResult, setManualPostResult] = useState(null);
+  const [clarRequests, setClarRequests] = useState([]);
+  const [clarOpen, setClarOpen] = useState(false);
+  const navigate = useNavigate();
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    transactionViewKeyRef.current = transactionViewKey;
+  }, [transactionViewKey]);
+
   const bumpApprovalLedgerVersion = useCallback(() => {
     setApprovalLedgerVersion((value) => value + 1);
   }, []);
@@ -781,63 +838,6 @@ function BookkeepingCleanup() {
     });
     return next;
   }, [approvalEntryMatchesCurrentScope]);
-
-  useEffect(() => {
-    if (usingDemo) {
-      const mapped = rawTransactions.map((t) => {
-        const suggestedAccountId = t.suggestedAccountId || guessAccountId(t);
-        return {
-          ...t,
-          suggestedAccountId,
-          glAccountId: t.glAccountId || suggestedAccountId,
-        };
-      });
-      setTransactions(mapped);
-    }
-  }, [rawTransactions, guessAccountId, usingDemo]);
-
-  const [activeTab, setActiveTab] = useState("needs_review");
-  const [dateRange, setDateRange] = useState("all");
-  const [accountFilter, setAccountFilter] = useState(() => (usingDemo ? getAcctKey(DEMO_ACCOUNT_LIST[0]) : null));
-  const [rowsPerPage, setRowsPerPage] = useState(25);
-  const [selectedIds, setSelectedIds] = useState(new Set());
-  const [bulkAccountId, setBulkAccountId] = useState("");
-  const [showCategorized] = useState(false);
-  const [page, setPage] = useState(1);
-  const transactionViewKey = useMemo(
-    () => [businessId || "", accountFilter || "", activeTab || "", dateRange || "", page, rowsPerPage].join("|"),
-    [activeTab, accountFilter, businessId, dateRange, page, rowsPerPage]
-  );
-  const showPostedToast = () => window.alert("Already posted to QuickBooks.");
-  const [mappingStatus, setMappingStatus] = useState(null);
-  const [loadingMappingStatus, setLoadingMappingStatus] = useState(false);
-  const [ccPaymentAccounts, setCcPaymentAccounts] = useState([]);
-  const [ccPaymentAccountsLoaded, setCcPaymentAccountsLoaded] = useState(false);
-  const [loadingCcPaymentAccounts, setLoadingCcPaymentAccounts] = useState(false);
-  const [ccPaymentAccountsError, setCcPaymentAccountsError] = useState("");
-  const [autoPostStatus, setAutoPostStatus] = useState({ auto_post_to_quickbooks: false, handled_backlog_count: 0 });
-  const [loadingAutoPost, setLoadingAutoPost] = useState(false);
-  const [savingAutoPost, setSavingAutoPost] = useState(false);
-  const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
-  const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
-  const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
-  const incomingDepositActionInFlightRef = useRef(new Set());
-  const incomingDepositMatchedSuppressRef = useRef(new Set());
-  const mountedRef = useRef(true);
-  const [incomingDepositUndoTxn, setIncomingDepositUndoTxn] = useState(null);
-  const [manualPostTxn, setManualPostTxn] = useState(null);
-  const [manualPostResult, setManualPostResult] = useState(null);
-  const [clarRequests, setClarRequests] = useState([]);
-  const [clarOpen, setClarOpen] = useState(false);
-  const navigate = useNavigate();
-
-  useEffect(() => () => {
-    mountedRef.current = false;
-  }, []);
-
-  useEffect(() => {
-    transactionViewKeyRef.current = transactionViewKey;
-  }, [transactionViewKey]);
 
   const loadMappingStatus = useCallback(async () => {
     if (!businessId || usingDemo) return;
