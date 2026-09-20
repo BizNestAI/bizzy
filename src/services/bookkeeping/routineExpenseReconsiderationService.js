@@ -29,6 +29,7 @@ import {
   isPaymentProcessingFeeIntent,
   isStrongIntuitPaymentProcessingFeeDescriptor,
 } from "./paymentProcessingFeeIntent.js";
+import { hasStrongRewardCreditDescriptor } from "./rewardCreditPolicy.js";
 
 const MAX_RECONSIDERATION_LIMIT = 500;
 const PNL_ACCOUNT_TYPES = new Set(["income", "other income", "expense", "cost of goods sold", "costofgoodssold"]);
@@ -243,7 +244,7 @@ function suggestedIntentFromAccountName(accountName = "") {
   if (/\binsurance\b/.test(name)) return "insurance";
   if (/\bbank fee|bank charge|processing fee|transaction fee\b/.test(name)) return "bank_fees";
   if (/\bsales|service income|revenue|income\b/.test(name)) return "sales";
-  if (/\bcash back|cashback|rewards?|statement credit|credit card rewards?\b/.test(name)) return "other_income";
+  if (hasStrongRewardCreditDescriptor(name)) return "credit_card_rewards";
   if (/\bentertainment|movies|theater|theatre|event\b/.test(name)) return "entertainment";
   if (/\bsupplies|materials\b/.test(name)) return "supplies";
   return null;
@@ -303,7 +304,7 @@ function deriveIntentFromTransaction(bankTxn = {}, meta = {}) {
   const text = transactionText(bankTxn);
   if (!text) return null;
   if (isStrongIntuitPaymentProcessingFeeDescriptor(text)) return "payment_processing_fee";
-  if (/\bstatement credit\b|\bautomatic statement credit\b|\bcash ?back\b|\brewards?\b/.test(text)) return "other_income";
+  if (transactionDirection(bankTxn) === "INFLOW" && hasStrongRewardCreditDescriptor(text)) return "credit_card_rewards";
   if (/\b(?:interest charge(?: on purchases)?|purchase interest|purchases? interest|finance charge)\b/.test(text)) return "credit_card_interest";
   if (/\btran fee\b|\btransaction fee\b|\bbank fee\b|\bbank fees\b|\blate fee\b|\bfinance charge\b|\bservice charge\b|\bprocessing fee\b|\bmerchant fee\b/.test(text)) return "bank_fees";
   if (/\bparkmobile\b|\bpark mobile\b|\bparking\b|\bparking lot\b|\bsurface lot\b|\btoll\b|\btolls\b|\bcdot pay\b|\bpps\b/.test(text)) return "parking_tolls";
@@ -368,13 +369,13 @@ function statementCreditRewardsEvidence({ bankTxn = {}, account = {}, meta = {},
   const text = transactionText(bankTxn);
   const direction = transactionDirection(bankTxn);
   const type = normalizeText(account?.type || account?.accountType || account?.AccountType || "");
-  const rewardText = /\bstatement credit\b|\bautomatic statement credit\b|\bcash ?back\b|\brewards?\b|\bcredit card rewards?\b/.test(text);
+  const rewardText = hasStrongRewardCreditDescriptor(text);
   const rewardHint = ["other_income", "interest_income"].includes(String(universalHint?.primary_intent || "")) ||
-    String(meta?.suggested_intent || "") === "other_income";
+    ["other_income", "credit_card_rewards"].includes(String(meta?.suggested_intent || ""));
   return (
     direction === "INFLOW" &&
     type.includes("income") &&
-    (intent === "other_income" || /\breward|cash back|statement credit\b/.test(normalizeText(account?.name || ""))) &&
+    (intent === "credit_card_rewards" || /\breward|cash back|statement credit\b/.test(normalizeText(account?.name || ""))) &&
     (rewardText || rewardHint)
   );
 }

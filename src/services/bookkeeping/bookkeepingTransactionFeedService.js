@@ -7,6 +7,7 @@ import {
 } from "./creditCardPaymentStatus.js";
 import { classifyAutoPostOperationalScope, getAutoPostPolicy } from "./autoPostControl.js";
 import { discoverIncomingDepositQboMatch } from "./incomingDepositMatchService.js";
+import { isCashBackRewardCredit, rewardCreditIntent } from "./rewardCreditPolicy.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -113,6 +114,54 @@ function normalizeOperatorRequest(row = null) {
   };
 }
 
+const INCOMING_DEPOSIT_META_KEYS = [
+  "incoming_deposit_match_id",
+  "incoming_deposit_match_status",
+  "incoming_deposit_confidence_tier",
+  "incoming_deposit_reason_codes",
+  "incoming_deposit_candidates",
+  "incoming_deposit_confirmable",
+  "incoming_deposit_confirmability_reason",
+  "incoming_deposit_independent_candidate_count",
+  "incoming_deposit_match_correlation_id",
+];
+
+function stripIncomingDepositReviewForRewardCredit(normalized = {}) {
+  if (!isCashBackRewardCredit(normalized)) return normalized;
+  const meta = { ...(normalized.meta || {}) };
+  for (const key of INCOMING_DEPOSIT_META_KEYS) delete meta[key];
+  const shouldClearBlock = [
+    "possible_existing_qbo_match",
+    "incoming_deposit_needs_match",
+    "match_check_unavailable",
+    "incoming_deposit_bank_account_mapping_unverified",
+    "incoming_deposit_match_rejected_review_required",
+  ].includes(String(meta.post_block_reason || normalized.post_error || ""));
+  if (shouldClearBlock) {
+    delete meta.post_block_reason;
+  }
+  const intent = rewardCreditIntent(normalized);
+  if (intent) {
+    meta.taxonomy_type = intent;
+    meta.reward_credit_workflow = "coa_review";
+  }
+  return {
+    ...normalized,
+    incoming_deposit_match_id: null,
+    incoming_deposit_match_status: null,
+    incoming_deposit_confidence_tier: null,
+    incoming_deposit_reason_codes: [],
+    incoming_deposit_candidates: [],
+    incoming_deposit_confirmable: null,
+    incoming_deposit_confirmability_reason: null,
+    incoming_deposit_independent_candidate_count: null,
+    matched_existing_qbo: false,
+    post_error: shouldClearBlock ? null : normalized.post_error,
+    meta,
+    taxonomy_type: intent || normalized.taxonomy_type,
+  };
+}
+
 function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, operatorRequest = null) {
   const specialCcPayment = isCreditCardPaymentWorkflow({
     taxonomy_type: cat.meta?.taxonomy_type || null,
@@ -212,10 +261,11 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     customer_response: operatorRequest?.answer_text || null,
     customer_responded_at: operatorRequest?.answered_at || null,
   };
-  const ccStatus = deriveCreditCardPaymentStatus(normalized);
+  const workflowNormalized = stripIncomingDepositReviewForRewardCredit(normalized);
+  const ccStatus = deriveCreditCardPaymentStatus(workflowNormalized);
   return ccStatus
     ? {
-        ...normalized,
+        ...workflowNormalized,
         credit_card_payment_status: ccStatus,
         glAccountId: null,
         glAccountName: null,
@@ -224,7 +274,7 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
         final_qbo_account_id: null,
         final_qbo_account_name: null,
       }
-    : normalized;
+    : workflowNormalized;
 }
 
 export function normalizeBookkeepingRpcRow(row = {}) {
@@ -400,6 +450,7 @@ function shouldDiscoverIncomingDepositForFeed(row = {}) {
   const amount = Number(row.amount || 0);
   const direction = String(row.direction || "").toUpperCase();
   if (!(amount > 0 && (direction === "INFLOW" || !direction))) return false;
+  if (isCashBackRewardCredit(row)) return false;
   if (row.pending === true || row.status === "posted" || row.status === "matched_existing_qbo") return false;
   const meta = row.meta || {};
   const matchStatus = String(row.incoming_deposit_match_status || meta.incoming_deposit_match_status || "");

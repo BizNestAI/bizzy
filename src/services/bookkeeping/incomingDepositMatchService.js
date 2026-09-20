@@ -6,6 +6,7 @@ import {
   normalizeQboRef,
   normalizeQboRevenueDocument,
 } from "../jobCosting/qboJobCostingParsers.js";
+import { isCashBackRewardCredit } from "./rewardCreditPolicy.js";
 
 const DEFAULT_FRESHNESS_MINUTES = Number(process.env.QBO_INCOMING_DEPOSIT_MATCH_FRESHNESS_MINUTES || 240);
 const DEPOSIT_WINDOW_BEFORE_DAYS = Number(process.env.QBO_DEPOSIT_MATCH_WINDOW_BEFORE_DAYS || 7);
@@ -27,6 +28,7 @@ const CUSTOMER_RECEIPT_EXCLUDED_TAXONOMIES = new Set([
   "loan_proceeds",
   "refund",
   "cc_payment",
+  "credit_card_rewards",
 ]);
 
 export class IncomingDepositMatchError extends Error {
@@ -197,6 +199,19 @@ async function fetchBankTransaction({ db, businessId, bankTransactionId }) {
     .eq("business_id", businessId)
     .eq("id", bankTransactionId)
     .maybeSingle());
+}
+
+async function fetchPlaidAccountContext({ db, businessId, plaidAccountId }) {
+  if (!plaidAccountId) return null;
+  return selectMaybe(db
+    .from("plaid_accounts")
+    .select("plaid_account_id,name,official_name,type,subtype")
+    .eq("business_id", businessId)
+    .eq("plaid_account_id", plaidAccountId)
+    .maybeSingle()).catch((err) => {
+      if (isMissingSchemaError(err)) return null;
+      throw err;
+    });
 }
 
 async function fetchMapping({ db, businessId, plaidAccountId }) {
@@ -1133,6 +1148,21 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
   if (!bankTxn) throw new IncomingDepositMatchError("bank_transaction_not_found", 404);
   if (!isIncomingDeposit(bankTxn)) return { ok: true, status: "not_applicable", posting_eligibility: "ordinary_workflow", reason_codes: ["not_incoming_deposit"] };
   if (bankTxn.pending === true) return { ok: true, status: "pending", posting_eligibility: "blocked", reason_codes: ["pending_bank_transaction"] };
+  const plaidAccount = await fetchPlaidAccountContext({ db, businessId, plaidAccountId: bankTxn.plaid_account_id });
+  if (isCashBackRewardCredit({
+    ...bankTxn,
+    account_type: plaidAccount?.type || null,
+    account_subtype: plaidAccount?.subtype || null,
+    account_name: plaidAccount?.name || null,
+    account_official_name: plaidAccount?.official_name || null,
+  })) {
+    return {
+      ok: true,
+      status: "not_applicable",
+      posting_eligibility: "ordinary_workflow",
+      reason_codes: ["credit_card_rewards_regular_coa_workflow"],
+    };
+  }
 
   const schema = await matchSchemaAvailable({ db });
   if (!schema.ok) {

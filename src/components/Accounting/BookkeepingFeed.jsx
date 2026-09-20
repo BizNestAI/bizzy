@@ -1497,7 +1497,18 @@ export default function BookkeepingFeed({
                       View match details
                     </button>
                   ) : (
-                    <span className="text-[10px] text-slate-400">{incomingMatch.unavailable ? "Retry" : "Needs match"}</span>
+                    <button
+                      type="button"
+                      onClick={() => incomingMatch.unavailable ? onInspectIncomingDepositMatch?.(txn.id, null, txn) : toggleExpandedRow(txn.id)}
+                      disabled={readOnly || incomingMatchAction.loading === true}
+                      className={`inline-flex min-h-8 min-w-[104px] items-center justify-center whitespace-nowrap rounded-full border px-3.5 py-1.5 text-[10px] font-semibold leading-none transition disabled:cursor-not-allowed disabled:opacity-45 ${
+                        incomingMatch.unavailable
+                          ? "border-amber-300/35 bg-amber-400/8 text-amber-100/95 hover:border-amber-300/60 hover:bg-amber-400/14"
+                          : "border-emerald-300/35 bg-emerald-500/10 text-emerald-100/95 hover:border-emerald-300/65 hover:bg-emerald-500/16"
+                      }`}
+                    >
+                      {incomingMatchAction.loading === true ? "Checking..." : incomingMatch.unavailable ? "Retry" : "Review match"}
+                    </button>
                   )
                 ) : isCcPaymentWorkflow ? (
                   canUndoCcPaymentPair ? (
