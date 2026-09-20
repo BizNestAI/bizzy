@@ -1129,6 +1129,11 @@ export default function MonthlyReviewConsole() {
           target_qbo_account_id: targetQboAccountId,
         },
       });
+      if (result?.ok === false) {
+        const err = new Error(result.message || result.error || "No matching opposite-side payment was found yet.");
+        err.body = result;
+        throw err;
+      }
       setCcPaymentActionState((current) => {
         const next = { ...current };
         delete next[row.id];

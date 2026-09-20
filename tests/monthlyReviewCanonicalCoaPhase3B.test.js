@@ -14,10 +14,10 @@ test("canonical COA creation is accountant-gated and background resolution defau
 
   assert.match(resolver, /allowCreate = false/);
   assert.match(resolver, /creationAuthorizedByInternalAccountant/);
-  assert.match(resolver, /\["monthly_review", "internal_monthly_review", "internal_admin"\]/);
+  assert.match(resolver, /"internal_payment_processing_fee"/);
   assert.match(resolver, /creationAuthorizedByInternalAccountant !== true/);
   assert.match(clarification, /allowCreate: allowQboAccountCreate === true && allowProviderWrites === true/);
-  assert.match(reconsideration, /allowCreate: false/);
+  assert.match(reconsideration, /allowCreate: deterministicPaymentProcessingFee && options\.allowQboAccountCreate !== false/);
   assert.match(suggest, /allowCreate: allowQboAccountCreate/);
 });
 

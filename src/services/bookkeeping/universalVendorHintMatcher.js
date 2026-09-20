@@ -86,8 +86,8 @@ function matchHint(candidates) {
     }
   }
 
-  for (const candidate of candidates) {
-    for (const hint of hintsContains) {
+  for (const hint of hintsContains) {
+    for (const candidate of candidates) {
       if (candidate.includes(hint.match.value)) return { hint, candidate };
     }
   }

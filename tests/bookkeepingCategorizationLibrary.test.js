@@ -42,14 +42,53 @@ function hintFor(name, overrides = {}) {
   });
 }
 
-test("Intuit invoice deposits and transaction fees map to Sales and Bank Charges & Fees", () => {
+test("Intuit invoice deposits and transaction fees map to Sales and payment-processing fees", () => {
   const deposit = hintFor("DEPOSIT INTUIT 85873813 OPTIMIST B", { amount: 500, direction: "INFLOW" });
   assert.equal(deposit.primary_intent, "sales");
   assert.equal(mapIntentToCoa({ intent: deposit.primary_intent, coaAccounts: coa }).qbo_account_name, "Sales");
 
   const fee = hintFor("TRAN FEE INTUIT 87361313 OPTIMIST B", { amount: -14, direction: "OUTFLOW" });
-  assert.equal(fee.primary_intent, "bank_fees");
+  assert.equal(fee.primary_intent, "payment_processing_fee");
   assert.equal(mapIntentToCoa({ intent: fee.primary_intent, coaAccounts: coa }).qbo_account_name, "Bank Charges & Fees");
+});
+
+test("Intuit payment-processing fees prefer processing GLs, then bank-fee fallback, never CC Fees", () => {
+  const fee = hintFor("TRAN FEE INTUIT 87361313 OPTIMIST B", { amount: -14, direction: "OUTFLOW" });
+  const withProcessing = [
+    { id: "cc-fees", name: "CC Fees", type: "Expense" },
+    { id: "bank-fees", name: "Bank Charges & Fees", type: "Expense" },
+    { id: "processing", name: "Payment Processing Fees", type: "Expense" },
+  ];
+  const withoutProcessing = [
+    { id: "cc-fees", name: "CC Fees", type: "Expense" },
+    { id: "bank-fees", name: "Bank Charges & Fees", type: "Expense" },
+  ];
+  const onlyCcFees = [{ id: "cc-fees", name: "CC Fees", type: "Expense" }];
+
+  assert.equal(mapIntentToCoa({ intent: fee.primary_intent, coaAccounts: withProcessing }).qbo_account_name, "Payment Processing Fees");
+  assert.equal(mapIntentToCoa({ intent: fee.primary_intent, coaAccounts: withoutProcessing }).qbo_account_name, "Bank Charges & Fees");
+  assert.equal(mapIntentToCoa({ intent: fee.primary_intent, coaAccounts: onlyCcFees }), null);
+});
+
+test("payment-processing fee matching stays narrow for Intuit and QuickBooks descriptors", () => {
+  assert.equal(hintFor("TRANSACTION FEE INTUIT 87361313").primary_intent, "payment_processing_fee");
+  assert.equal(hintFor("INTUIT PAYMENT FEE 87361313").primary_intent, "payment_processing_fee");
+  assert.equal(hintFor("QUICKBOOKS PAYMENTS FEE 87361313").primary_intent, "payment_processing_fee");
+  assert.notEqual(hintFor("INTUIT FEE")?.primary_intent, "payment_processing_fee");
+  assert.equal(hintFor("TRAN FEE BANK 87361313").primary_intent, "bank_fees");
+});
+
+test("supported merchant-processing aliases are reused before creating a new account", () => {
+  const fee = hintFor("TRAN FEE INTUIT 87361313 OPTIMIST B", { amount: -14, direction: "OUTFLOW" });
+  const match = mapIntentToCoa({
+    intent: fee.primary_intent,
+    coaAccounts: [
+      { id: "cc-fees", name: "CC Fees", type: "Expense" },
+      { id: "merchant-fees", name: "Merchant Fees", type: "Expense" },
+    ],
+  });
+  assert.equal(match.qbo_account_id, "merchant-fees");
+  assert.equal(match.qbo_account_name, "Merchant Fees");
 });
 
 test("specific utility vendors prefer specific utility accounts", () => {

@@ -33,6 +33,10 @@ import {
   isStrongUniversalVendorEvidence,
   withCategorizationPolicyVersion,
 } from "../../../services/bookkeeping/categorizationEvidencePolicy.js";
+import {
+  isPaymentProcessingFeeIntent,
+  isStrongIntuitPaymentProcessingFeeDescriptor,
+} from "../../../services/bookkeeping/paymentProcessingFeeIntent.js";
 
 const router = Router();
 
@@ -74,6 +78,7 @@ const UNIVERSAL_COA_ALLOWLIST = new Set([
   "parking_tolls",
   "shipping",
   "bank_fees",
+  "payment_processing_fee",
   "payment_processing",
   "sales",
 ]);
@@ -109,6 +114,7 @@ const UNIVERSAL_AUTO_APPROVE_ALLOWLIST = new Set([
   "parking_tolls",
   "shipping",
   "bank_fees",
+  "payment_processing_fee",
   "payment_processing",
   "sales",
 ]);
@@ -145,6 +151,7 @@ function intentToStandardAccountName(intent = "") {
     parking_tolls: "Parking & Tolls",
     shipping: "Shipping",
     bank_fees: "Bank Fees",
+    payment_processing_fee: "Payment Processing Fees",
     payment_processing: "Payment Processing Fees",
     sales: "Sales",
     travel: "Travel",
@@ -298,6 +305,12 @@ function containsWordBoundary(haystack = "", needle = "") {
 }
 
 function isUniversalHintAutoApproveSafe(universalHint = {}) {
+  if (
+    isPaymentProcessingFeeIntent(universalHint?.primary_intent) &&
+    isStrongIntuitPaymentProcessingFeeDescriptor(universalHint?.matched_value || universalHint?.match_value || "")
+  ) {
+    return true;
+  }
   const mt = String(universalHint?.match_type || "").toLowerCase();
   const matchedValue = universalHint?.matched_value || "";
   const canonical = universalHint?.canonical_vendor || "";
@@ -2524,11 +2537,14 @@ export async function runBookkeepingSuggestionPass({
       if (universalHint) {
         const preferUniversalForTxn =
           !userApprovalContext.hasAnyUserApprovals || !vendorRuleApprovalBacked;
+        const deterministicPaymentProcessingFee =
+          isPaymentProcessingFeeIntent(universalHint.primary_intent) &&
+          isStrongIntuitPaymentProcessingFeeDescriptor(universalHint.matched_value || universalHint.match_value || "");
         const canonicalResolution = await resolveCanonicalQboAccount({
           businessId,
           intent: universalHint.primary_intent,
           transactionId: row.id,
-          source: "suggest",
+          source: deterministicPaymentProcessingFee ? "internal_payment_processing_fee" : "suggest",
           allowCreate: allowQboAccountCreate,
         });
         if (canonicalResolution?.ok && canonicalResolution?.account?.id) {
@@ -2759,14 +2775,18 @@ export async function runBookkeepingSuggestionPass({
               canonical_coa_resolved: false,
               canonical_account_review_required: true,
               canonical_setup_required: true,
-              canonical_setup_required_reason: canonicalResolution?.reason || "canonical_account_requires_review",
+              canonical_setup_required_reason: deterministicPaymentProcessingFee
+                ? "payment_processing_account_unavailable"
+                : canonicalResolution?.reason || "canonical_account_requires_review",
               safe_to_auto_handle: false,
               safe_to_auto_post: false,
               auto_handle_decision: {
                 eligible: false,
                 confidence: universalHint.confidence || "high",
                 source: "universal_hint",
-                reason: canonicalResolution?.reason || "canonical_setup_required",
+                reason: deterministicPaymentProcessingFee
+                  ? "payment_processing_account_unavailable"
+                  : canonicalResolution?.reason || "canonical_setup_required",
                 at: nowIso,
               },
             };

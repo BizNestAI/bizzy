@@ -15,6 +15,10 @@ import {
   normalizeCanonicalName,
   resolveIntentToCanonicalKey,
 } from "./canonicalCoaRegistry.js";
+import {
+  findPaymentProcessingFeeAccount,
+  PROCESSING_FEE_CANONICAL_KEY,
+} from "./paymentProcessingFeeIntent.js";
 
 const ACTIVE_RESOLVED_STATUSES = new Set([
   CANONICAL_MAPPING_STATUSES.EXISTING_EXACT,
@@ -84,6 +88,12 @@ function findExactCanonicalAccount(coa = [], canonical = {}) {
 }
 
 function findApprovedEquivalentAccount(coa = [], canonical = {}) {
+  if (canonical?.canonical_account_key === PROCESSING_FEE_CANONICAL_KEY) {
+    return findPaymentProcessingFeeAccount(coa, {
+      shape: shapeQboAccount,
+      typeCompatible: (acct) => qboTypeCompatible(canonical, acct),
+    });
+  }
   const preferred = normalizeCanonicalName(canonical.preferred_account_name);
   const names = getApprovedEquivalentNames(canonical.canonical_account_key)
     .map(normalizeCanonicalName)
@@ -674,7 +684,12 @@ export async function resolveCanonicalQboAccount({
   if (!canonical || canonical.is_active === false) {
     return { ok: false, status: CANONICAL_MAPPING_STATUSES.NEEDS_REVIEW, reason: "unknown_canonical_account", review_required: true };
   }
-  const internalMappingAuthority = ["monthly_review", "internal_monthly_review", "internal_admin"].includes(String(source || "").toLowerCase());
+  const internalMappingAuthority = [
+    "monthly_review",
+    "internal_monthly_review",
+    "internal_admin",
+    "internal_payment_processing_fee",
+  ].includes(String(source || "").toLowerCase());
 
   const { realmId, qboEnv } = await getRealmContext({ businessId, getLatestQuickBooksTokenRow });
   if (!realmId) {
@@ -683,20 +698,42 @@ export async function resolveCanonicalQboAccount({
 
   const stored = await fetchStoredMapping({ supabase, businessId, realmId, qboEnv, canonicalKey: canonical.canonical_account_key });
   if (stored?.qbo_account_id) {
-    return {
-      ok: true,
-      status: stored.status,
-      canonical,
-      account: {
-        id: stored.qbo_account_id,
-        name: stored.qbo_account_name,
-        type: stored.qbo_account_type,
-        subType: stored.qbo_account_subtype,
-      },
-      mapping: stored,
-      created: stored.status === CANONICAL_MAPPING_STATUSES.CREATED_BY_BIZZI,
-      review_required: false,
+    const storedAccount = {
+      id: stored.qbo_account_id,
+      name: stored.qbo_account_name,
+      type: stored.qbo_account_type,
+      subType: stored.qbo_account_subtype,
+      active: true,
     };
+    if (
+      canonical.canonical_account_key === PROCESSING_FEE_CANONICAL_KEY &&
+      !findPaymentProcessingFeeAccount([storedAccount], {
+        typeCompatible: (acct) => qboTypeCompatible(canonical, acct),
+      })
+    ) {
+      await markNeedsReview({
+        supabase,
+        businessId,
+        realmId,
+        qboEnv,
+        canonical,
+        transactionId,
+        intent,
+        reason: "payment_processing_account_unavailable",
+        candidate: storedAccount,
+        source,
+      });
+    } else {
+      return {
+        ok: true,
+        status: stored.status,
+        canonical,
+        account: storedAccount,
+        mapping: stored,
+        created: stored.status === CANONICAL_MAPPING_STATUSES.CREATED_BY_BIZZI,
+        review_required: false,
+      };
+    }
   }
 
   let qbo = null;
@@ -784,7 +821,20 @@ export async function resolveCanonicalQboAccount({
     internalMappingAuthority === true;
 
   if (canonical.auto_create_policy !== AUTO_CREATE_ALLOWED || canonical.review_required === true || creationAuthorizedByInternalAccountant !== true) {
-    return markNeedsReview({ supabase, businessId, realmId, qboEnv, canonical, transactionId, intent, reason: "canonical_account_requires_review", candidate: ambiguous, source });
+    return markNeedsReview({
+      supabase,
+      businessId,
+      realmId,
+      qboEnv,
+      canonical,
+      transactionId,
+      intent,
+      reason: canonical.canonical_account_key === PROCESSING_FEE_CANONICAL_KEY
+        ? "payment_processing_account_unavailable"
+        : "canonical_account_requires_review",
+      candidate: ambiguous,
+      source,
+    });
   }
 
   const requestId = compactRequestId(`${businessId}|${realmId}|${qboEnv}|${canonical.canonical_account_key}|qbo-account-v1`);

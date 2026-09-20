@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom";
 import { Check, Loader2, Plus, Trash2, X } from "lucide-react";
+import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
 
 function normalizeAccountType(value = "") {
   return String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
@@ -274,6 +275,8 @@ export default function SplitTransactionModal({
   accounts = [],
   draft = {},
   disabled = false,
+  onCreateAccount,
+  accountTypes,
   onChange,
   onConfirm,
   onTreatAsRegular,
@@ -281,6 +284,7 @@ export default function SplitTransactionModal({
 }) {
   const panelRef = React.useRef(null);
   const [saving, setSaving] = React.useState(false);
+  const [createAccountLineIndex, setCreateAccountLineIndex] = React.useState(null);
   const activeMode = draft.mode || mode;
   const isLoanMode = activeMode === "loan_payment";
   const lines = normalizeDraftLines(draft);
@@ -312,9 +316,10 @@ export default function SplitTransactionModal({
   const removeLine = (index) => update({ lines: lines.filter((_, idx) => idx !== index) });
   const requestClose = React.useCallback(() => {
     if (saving) return;
+    if (createAccountLineIndex != null) return;
     if (hasUnsavedInput && !window.confirm("Discard this split?")) return;
     onClose?.();
-  }, [hasUnsavedInput, onClose, saving]);
+  }, [createAccountLineIndex, hasUnsavedInput, onClose, saving]);
   useFocusTrap(open, panelRef, requestClose);
 
   if (!open || !txn) return null;
@@ -409,6 +414,11 @@ export default function SplitTransactionModal({
                         accounts={accountOptions}
                         accountPlaceholder={line.role === "principal" ? "Liability account" : line.role === "interest" ? "Interest expense account" : "Select account"}
                         onChange={(patch) => updateLine(index, patch)}
+                        onCreateAccount={
+                          isLoanMode && line.role === "principal" && onCreateAccount
+                            ? () => setCreateAccountLineIndex(index)
+                            : null
+                        }
                         onRemove={line.fixed ? null : () => removeLine(index)}
                       />
                     );
@@ -437,6 +447,22 @@ export default function SplitTransactionModal({
           </footer>
         </section>
       </div>
+      <CreateQuickBooksAccountModal
+        open={createAccountLineIndex != null}
+        onCreate={onCreateAccount}
+        accountTypes={accountTypes}
+        context={{
+          workflow: "loan_principal",
+          financialStatement: "Balance Sheet",
+          defaultAccountType: "Long Term Liability",
+        }}
+        onClose={(createdAccount) => {
+          const targetIndex = createAccountLineIndex;
+          setCreateAccountLineIndex(null);
+          if (!createdAccount?.id || targetIndex == null) return;
+          updateLine(targetIndex, { qboAccountId: String(createdAccount.id) });
+        }}
+      />
     </div>,
     document.body
   );
@@ -455,7 +481,7 @@ function SummaryItem({ label, value, tone, icon: Icon }) {
   );
 }
 
-function AllocationRow({ line, fixedLabel, accounts, accountPlaceholder, onChange, onRemove }) {
+function AllocationRow({ line, fixedLabel, accounts, accountPlaceholder, onChange, onCreateAccount, onRemove }) {
   return (
     <div className="grid grid-cols-[minmax(160px,1fr)_minmax(220px,1.45fr)_128px_44px] items-center gap-2 px-3 py-3 max-[640px]:grid-cols-1">
       {fixedLabel ? (
@@ -463,7 +489,15 @@ function AllocationRow({ line, fixedLabel, accounts, accountPlaceholder, onChang
       ) : (
         <input value={line.description || ""} aria-label="Line description" placeholder="Description" onChange={(event) => onChange({ description: event.target.value })} className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 text-sm font-semibold text-white outline-none placeholder:text-white/35 focus:border-emerald-300/55" />
       )}
-      <AccountSelect label={`${line.description || "Split line"} account`} value={line.qboAccountId || ""} accounts={accounts} placeholder={accountPlaceholder} onChange={(value) => onChange({ qboAccountId: value })} />
+      <div className="min-w-0">
+        <AccountSelect label={`${line.description || "Split line"} account`} value={line.qboAccountId || ""} accounts={accounts} placeholder={accountPlaceholder} onChange={(value) => onChange({ qboAccountId: value })} />
+        {onCreateAccount ? (
+          <button type="button" onClick={onCreateAccount} className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-300/20 bg-emerald-400/[0.08] px-2.5 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-400/[0.14]">
+            <Plus className="h-3.5 w-3.5" />
+            Add liability account
+          </button>
+        ) : null}
+      </div>
       <input value={line.amount || ""} inputMode="decimal" placeholder="0.00" onChange={(event) => onChange({ amount: event.target.value.replace(/[^0-9.-]/g, "") })} className="h-11 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 text-right text-sm text-white outline-none placeholder:text-white/35 focus:border-emerald-300/55" />
       {onRemove ? (
         <button type="button" onClick={onRemove} aria-label={`Remove ${line.description || "line"}`} className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/12 text-white/60 hover:bg-white/5">

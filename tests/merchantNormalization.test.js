@@ -16,7 +16,7 @@ test("merchant normalization creates stable families without collapsing unrelate
 test("global hints classify named examples conservatively", () => {
   assert.equal(getUniversalVendorHintForTransaction({ bankTxn: { name: "PARK MOBILE CDOT PAY" } }).primary_intent, "parking_tolls");
   assert.equal(getUniversalVendorHintForTransaction({ bankTxn: { name: "Resume.io" } }).primary_intent, "software_subscription");
-  assert.equal(getUniversalVendorHintForTransaction({ bankTxn: { name: "TRAN FEE INTUIT 73857673" } }).primary_intent, "bank_fees");
+  assert.equal(getUniversalVendorHintForTransaction({ bankTxn: { name: "TRAN FEE INTUIT 73857673" } }).primary_intent, "payment_processing_fee");
   assert.equal(getUniversalVendorHintForTransaction({ bankTxn: { name: "DEPOSIT INTUIT 73102173" } }).primary_intent, "sales");
   assert.equal(getUniversalVendorHintForTransaction({ bankTxn: { name: "MINUTECLINIC #21795" } }).primary_intent, "medical");
   assert.equal(getUniversalVendorHintForTransaction({ bankTxn: { name: "Ticketmaster" } }).primary_intent, "entertainment");

@@ -1640,6 +1640,8 @@ export default function BookkeepingFeed({
         accounts={accounts}
         draft={activeLoanSplitEntry?.draft || {}}
         disabled={readOnly}
+        onCreateAccount={onCreateAccount}
+        accountTypes={accountTypes}
         onChange={(draft) => activeLoanSplitEntry && updateLoanSplitDraft(activeLoanSplitEntry.txnId, draft)}
         onConfirm={async (split) => {
           if (!activeLoanSplitEntry) return;

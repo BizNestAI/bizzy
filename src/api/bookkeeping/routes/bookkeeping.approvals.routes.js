@@ -194,6 +194,7 @@ router.post("/credit-card-payments/:transactionId/confirm-match", requireAuth, a
   const businessId = ensureBusinessId(req, res);
   const transactionId = req.params?.transactionId;
   const targetQboAccountId = req.body?.target_qbo_account_id || req.body?.targetQboAccountId || null;
+  const targetTransactionId = req.body?.target_transaction_id || req.body?.targetTransactionId || null;
   if (!businessId) return;
   if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
   if (!targetQboAccountId) return res.status(400).json({ ok: false, error: "missing_target_qbo_account_id" });
@@ -203,10 +204,13 @@ router.post("/credit-card-payments/:transactionId/confirm-match", requireAuth, a
       businessId,
       transactionId,
       targetQboAccountId,
+      targetTransactionId,
     });
     if (result?.matched !== true) {
-      return res.status(result?.code === "cc_payment_pair_ambiguous" ? 409 : 404).json({
+      const status = result?.code === "cc_payment_pair_ambiguous" ? 409 : 200;
+      return res.status(status).json({
         ok: false,
+        matched: false,
         error: result?.code || "cc_payment_no_matching_counterpart",
         message: result?.message || "No matching opposite-side payment was found yet.",
         candidates: result?.candidates || [],

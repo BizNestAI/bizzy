@@ -55,17 +55,26 @@ async function createWith({
   });
 }
 
-test("manual QBO account catalog exposes only supported P&L account types", () => {
+test("manual QBO account catalog exposes supported P&L and balance-sheet account types", () => {
   const types = getManualQboAccountCatalog().map((entry) => entry.accountType);
-  assert.deepEqual(types, ["Income", "Other Income", "Expense", "Cost of Goods Sold"]);
+  assert.deepEqual(types.slice(0, 5), ["Income", "Other Income", "Expense", "Other Expense", "Cost of Goods Sold"]);
+  assert.ok(types.includes("Long Term Liability"));
+  assert.ok(types.includes("Equity"));
+  assert.ok(types.includes("Fixed Asset"));
+  assert.ok(getManualQboAccountCatalog().some((entry) => entry.accountType === "Bank" && entry.unavailable === true));
 });
 
-test("manual QBO account creation accepts valid Expense, COGS, Income, and Other Income accounts", async () => {
+test("manual QBO account creation accepts valid P&L and balance-sheet accounts", async () => {
   const rows = [
     ["Expense", "OtherBusinessExpenses"],
     ["Cost of Goods Sold", "OtherCostsOfServiceCos"],
     ["Income", "ServiceFeeIncome"],
     ["Other Income", "OtherMiscellaneousIncome"],
+    ["Other Expense", "OtherMiscellaneousExpense"],
+    ["Long Term Liability", "NotesPayable"],
+    ["Other Current Liability", "LoanPayable"],
+    ["Fixed Asset", "Vehicles"],
+    ["Equity", "OwnersEquity"],
   ];
   for (const [accountType, accountSubType] of rows) {
     const result = await createWith({ accountType, accountSubType });
@@ -77,8 +86,15 @@ test("manual QBO account creation accepts valid Expense, COGS, Income, and Other
 
 test("manual QBO account creation rejects invalid account type", async () => {
   await assert.rejects(
-    createWith({ accountType: "Bank", accountSubType: "Checking" }),
+    createWith({ accountType: "Balance Sheet", accountSubType: "NotesPayable" }),
     (err) => err instanceof QboManualAccountCreationError && err.error === "invalid_qbo_account_type"
+  );
+});
+
+test("manual QBO account creation rejects system-sensitive account types before QBO request", async () => {
+  await assert.rejects(
+    createWith({ accountType: "Bank", accountSubType: "Checking" }),
+    (err) => err instanceof QboManualAccountCreationError && err.error === "qbo_account_type_restricted"
   );
 });
 
@@ -214,18 +230,18 @@ test("manual account creation modal removes show-all checkbox and native selects
   assert.match(modal, /max-h-56 overflow-y-auto/);
 });
 
-test("manual account creation modal always exposes the four supported P&L account types", () => {
+test("manual account creation modal exposes financial-statement grouping and balance-sheet defaults", () => {
   const modal = fs.readFileSync(new URL("../src/components/Accounting/CreateQuickBooksAccountModal.jsx", import.meta.url), "utf8");
   const catalogTypes = getManualQboAccountCatalog().map((entry) => entry.accountType);
-  assert.deepEqual(catalogTypes, ["Income", "Other Income", "Expense", "Cost of Goods Sold"]);
+  assert.ok(catalogTypes.includes("Income"));
+  assert.ok(catalogTypes.includes("Long Term Liability"));
+  assert.ok(catalogTypes.includes("Fixed Asset"));
   assert.match(modal, /DEFAULT_ACCOUNT_TYPES\.map\(\(fallback\) =>/);
-  assert.match(modal, /fromCatalog \|\| fallback/);
-  assert.doesNotMatch(modal, /Bank/);
-  assert.doesNotMatch(modal, /Credit Card/);
-  assert.doesNotMatch(modal, /Accounts Receivable/);
-  assert.doesNotMatch(modal, /Accounts Payable/);
-  assert.doesNotMatch(modal, /Liabilities/);
-  assert.doesNotMatch(modal, /Equity/);
+  assert.match(modal, /FINANCIAL_STATEMENT_OPTIONS/);
+  assert.match(modal, /Balance Sheet/);
+  assert.match(modal, /Long Term Liability/);
+  assert.match(modal, /NotesPayable/);
+  assert.match(modal, /Creating this account does not record the outstanding loan balance\./);
 });
 
 test("manual account creation modal uses safe transaction-aware defaults without filtering choices", () => {
@@ -234,6 +250,7 @@ test("manual account creation modal uses safe transaction-aware defaults without
   assert.match(modal, /return "Income";/);
   assert.match(modal, /return "Expense";/);
   assert.match(modal, /Expense: "OtherBusinessExpenses"/);
+  assert.match(modal, /"Long Term Liability": "NotesPayable"/);
   assert.match(modal, /"Cost of Goods Sold": "OtherCostsOfServiceCos"/);
   assert.doesNotMatch(modal, /return "Cost of Goods Sold";/);
 });
@@ -241,12 +258,26 @@ test("manual account creation modal uses safe transaction-aware defaults without
 test("manual account creation modal updates detail type when account type changes and preserves success behavior", () => {
   const modal = fs.readFileSync(new URL("../src/components/Accounting/CreateQuickBooksAccountModal.jsx", import.meta.url), "utf8");
   const dropdown = fs.readFileSync(new URL("../src/components/Accounting/BookkeepingFeed.jsx", import.meta.url), "utf8");
-  assert.match(modal, /const selectedType = supportedTypes\.find/);
+  assert.match(modal, /const selectedType = statementTypes\.find/);
   assert.match(modal, /const subTypes = React\.useMemo\(\(\) => selectedType\.subTypes \|\| \[\]/);
   assert.match(modal, /setAccountSubType\(preferredSubTypeForAccountType\(selectedType\.accountType, subTypes\)\)/);
   assert.match(modal, /onChange=\{setAccountType\}/);
   assert.match(modal, /onChange=\{setAccountSubType\}/);
   assert.match(dropdown, /onCreatedAccountSelect \? onCreatedAccountSelect\(createdAccount\) : onChange\(createdAccount\.id\)/);
+});
+
+test("loan split modal can create and select a principal liability account without closing the split", () => {
+  const modal = fs.readFileSync(new URL("../src/components/Accounting/SplitTransactionModal.jsx", import.meta.url), "utf8");
+  const feed = fs.readFileSync(new URL("../src/components/Accounting/BookkeepingFeed.jsx", import.meta.url), "utf8");
+  const mirror = fs.readFileSync(new URL("../src/components/Accounting/BookkeepingTransactionMirrorTable.jsx", import.meta.url), "utf8");
+  assert.match(modal, /CreateQuickBooksAccountModal/);
+  assert.match(modal, /workflow: "loan_principal"/);
+  assert.match(modal, /defaultAccountType: "Long Term Liability"/);
+  assert.match(modal, /updateLine\(targetIndex, \{ qboAccountId: String\(createdAccount\.id\) \}\)/);
+  assert.match(feed, /onCreateAccount=\{onCreateAccount\}/);
+  assert.match(feed, /accountTypes=\{accountTypes\}/);
+  assert.match(mirror, /onCreateAccount=\{onCreateAccount\}/);
+  assert.match(mirror, /accountTypes=\{accountTypes\}/);
 });
 
 test("expected duplicate account conflicts normalize to inline modal state", () => {

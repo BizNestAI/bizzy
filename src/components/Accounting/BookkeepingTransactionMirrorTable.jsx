@@ -387,6 +387,8 @@ function BookkeepingTransactionMirrorRow({
       txn={row}
       accounts={accounts || []}
       draft={loanSplitDraft || {}}
+      onCreateAccount={onCreateAccount}
+      accountTypes={accountTypes}
       onChange={setLoanSplitDraft}
       onConfirm={async (split) => {
         if (split?.mode === "general") await onConfirmSplitTransaction?.(row, split);

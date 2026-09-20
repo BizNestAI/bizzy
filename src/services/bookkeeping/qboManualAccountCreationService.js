@@ -1,5 +1,6 @@
 import { getQBOClient } from "../../utils/qboClient.js";
 import {
+  getManualQboAccountTypeRestriction,
   isSupportedManualQboAccountType,
   isValidManualQboAccountSubType,
   normalizeManualQboAccountType,
@@ -118,10 +119,19 @@ export async function createManualQboAccountForBusiness({
   }
 
   const normalizedType = normalizeManualQboAccountType(accountType);
+  const restrictedType = getManualQboAccountTypeRestriction(accountType);
+  if (restrictedType) {
+    throw new QboManualAccountCreationError(
+      "qbo_account_type_restricted",
+      restrictedType.reason,
+      400,
+      { account_type: restrictedType.accountType }
+    );
+  }
   if (!normalizedType || !isSupportedManualQboAccountType(normalizedType)) {
     throw new QboManualAccountCreationError(
       "invalid_qbo_account_type",
-      "This QuickBooks account type is not available for transaction categorization.",
+      "This QuickBooks account type is not available for manual creation.",
       400
     );
   }

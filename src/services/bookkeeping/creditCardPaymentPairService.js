@@ -3,8 +3,7 @@ import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { validateBusinessQboPaymentAccountType } from "./qboAccounts.js";
 import { getMemo as getTaxonomyMemo, isDefinitelyNotCreditCardPayment } from "./taxonomyClassifier.js";
 
-const DATE_WINDOW_DAYS = 3;
-const EPS = 0.01;
+const DATE_WINDOW_DAYS = 5;
 
 export function normalizeCcPaymentText(value = "") {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
@@ -12,7 +11,7 @@ export function normalizeCcPaymentText(value = "") {
 
 export function detectCardIssuer(value = "") {
   const memo = normalizeCcPaymentText(value);
-  if (/\b(?:amex|american express)\b/.test(memo)) return "amex";
+  if (/\b(?:amex|american express|blue cash everyday|blue cash preferred|cash magnet)\b/.test(memo)) return "amex";
   if (/\bdiscover\b/.test(memo)) return "discover";
   if (/\bchase\b/.test(memo)) return "chase";
   if (/\b(?:mastercard|master card)\b/.test(memo)) return "mastercard";
@@ -72,12 +71,32 @@ function dateDiffDays(a, b) {
   return Math.abs((da - db) / 86_400_000);
 }
 
+function moneyToMinorUnits(value) {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric)) return null;
+  return Math.round(numeric * 100);
+}
+
+function signedAmountMinorUnits(row = {}) {
+  const signed = moneyToMinorUnits(row.signed_amount);
+  if (signed !== null) return signed;
+  const amount = moneyToMinorUnits(row.amount);
+  if (amount === null) return null;
+  if (String(row.direction || "").toUpperCase() === "OUTFLOW") return -Math.abs(amount);
+  if (String(row.direction || "").toUpperCase() === "INFLOW") return Math.abs(amount);
+  return amount;
+}
+
+function amountDollarsFromMinorUnits(cents) {
+  return Math.abs(Number(cents || 0)) / 100;
+}
+
 function stablePairRequestId({ businessId, checkingTransactionId, creditCardTransactionId, amount }) {
   const input = [
     businessId || "",
     checkingTransactionId || "",
     creditCardTransactionId || "manual",
-    Number(amount || 0).toFixed(2),
+    Math.abs(Number(amount || 0)),
     "cc-payment-transfer-v1",
   ].join("|");
   return `bizzi_cc_${crypto.createHash("sha256").update(input).digest("hex").slice(0, 36)}`;
@@ -86,7 +105,7 @@ function stablePairRequestId({ businessId, checkingTransactionId, creditCardTran
 function stablePairIdempotencyKey({ businessId, checkingTransactionId, creditCardTransactionId, amount }) {
   return crypto
     .createHash("sha256")
-    .update([businessId || "", checkingTransactionId || "", creditCardTransactionId || "manual", Number(amount || 0).toFixed(2)].join("|"))
+    .update([businessId || "", checkingTransactionId || "", creditCardTransactionId || "manual", Math.abs(Number(amount || 0))].join("|"))
     .digest("hex");
 }
 
@@ -155,18 +174,25 @@ function issuerMatchesCheckingToCard(checkingRow = {}, cardRow = {}, cardAcct = 
     cardAcct.name,
     cardAcct.official_name,
   ].filter(Boolean).join(" "));
-  if (checkingIssuer === "amex") return /\b(?:amex|american express)\b/.test(haystack);
+  if (detectCardIssuer(haystack) === checkingIssuer) return true;
   if (checkingIssuer === "mastercard") return /\b(?:mastercard|master card)\b/.test(haystack);
   return haystack.includes(checkingIssuer);
 }
 
 function buildPairRecord({ businessId, checkingRow, cardRow = null, checkingAcct, cardAcct = null, checkingMapping, cardMapping, confidence, evidence, status = "needs_review" }) {
-  const amount = Math.abs(Number(checkingRow.signed_amount ?? checkingRow.amount ?? cardRow?.signed_amount ?? cardRow?.amount ?? 0));
+  const amountMinorUnits = Math.abs(
+    signedAmountMinorUnits(checkingRow) ??
+      signedAmountMinorUnits(cardRow) ??
+      moneyToMinorUnits(checkingRow.amount) ??
+      moneyToMinorUnits(cardRow?.amount) ??
+      0
+  );
+  const amount = amountDollarsFromMinorUnits(amountMinorUnits);
   const request_id = stablePairRequestId({
     businessId,
     checkingTransactionId: checkingRow.id,
     creditCardTransactionId: cardRow?.id || null,
-    amount,
+    amount: amountMinorUnits,
   });
   return {
     business_id: businessId,
@@ -189,7 +215,7 @@ function buildPairRecord({ businessId, checkingRow, cardRow = null, checkingAcct
       businessId,
       checkingTransactionId: checkingRow.id,
       creditCardTransactionId: cardRow?.id || null,
-      amount,
+      amount: amountMinorUnits,
     }),
     qbo_txn_type: null,
   };
@@ -469,12 +495,19 @@ export async function findExistingCreditCardPaymentPairForTransaction({ db = def
   return data || null;
 }
 
-export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupabase, businessId, row, targetQboAccountId = null }) {
+export async function createSafeCreditCardPaymentPairForRow({
+  db = defaultSupabase,
+  businessId,
+  row,
+  targetQboAccountId = null,
+  targetTransactionId = null,
+  validateQboAccountType = validateBusinessQboPaymentAccountType,
+} = {}) {
   if (!businessId || !row?.id || !row.plaid_account_id) return { status: "no_match", reason: "missing_source" };
   const existing = await findExistingCreditCardPaymentPairForTransaction({ db, businessId, transactionId: row.id });
   if (existing) return { status: "paired", pair: existing, reason: "existing_pair" };
-  const amount = Number(row.signed_amount ?? row.amount ?? 0);
-  if (!Number.isFinite(amount) || amount === 0) return { status: "no_match", reason: "invalid_amount" };
+  const sourceAmountMinorUnits = signedAmountMinorUnits(row);
+  if (!Number.isFinite(sourceAmountMinorUnits) || sourceAmountMinorUnits === 0) return { status: "no_match", reason: "invalid_amount" };
   if (!hasCreditCardPaymentSignal(row)) return { status: "no_match", reason: "missing_payment_memo" };
 
   const baseDate = dateOnly(row.date);
@@ -483,20 +516,28 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
   start.setUTCDate(start.getUTCDate() - DATE_WINDOW_DAYS);
   const end = new Date(`${baseDate}T00:00:00Z`);
   end.setUTCDate(end.getUTCDate() + DATE_WINDOW_DAYS);
-  const targetAmount = -amount;
 
-  const { data: candidates, error } = await db
+  let candidateQuery = db
     .from("bank_transactions")
     .select("id,plaid_account_id,amount,signed_amount,direction,date,name,merchant_name,counterparty_name,is_archived,pending,accounting_review_required")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .neq("plaid_account_id", row.plaid_account_id)
-    .gte("amount", targetAmount - EPS)
-    .lte("amount", targetAmount + EPS)
     .gte("date", start.toISOString().slice(0, 10))
     .lte("date", end.toISOString().slice(0, 10))
-    .limit(20);
+    .limit(100);
+  if (targetTransactionId) {
+    candidateQuery = candidateQuery.eq("id", targetTransactionId);
+  }
+  const { data: candidateRows, error } = await candidateQuery;
   if (error) throw error;
+  const candidates = (candidateRows || []).filter((candidate) => {
+    const candidateAmountMinorUnits = signedAmountMinorUnits(candidate);
+    return (
+      candidateAmountMinorUnits !== null &&
+      candidateAmountMinorUnits === -sourceAmountMinorUnits
+    );
+  });
   if (!candidates?.length) return { status: "no_match", reason: "no_counterpart" };
   const candidateIds = [row.id, ...(candidates || []).map((candidate) => candidate.id)].filter(Boolean);
   const { data: candidateCats, error: catErr } = await db
@@ -529,7 +570,7 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
     return { status: "no_match", reason: "cc_payment_source_orientation_unknown" };
   }
   if (targetQboAccountId) {
-    const validatedTarget = await validateBusinessQboPaymentAccountType(
+    const validatedTarget = await validateQboAccountType(
       businessId,
       targetQboAccountId,
       sourceOrientation.expectedTargetQboType
@@ -541,7 +582,7 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
 
   const plausible = [];
   for (const candidate of candidates) {
-    if (candidate.pending === true || candidate.accounting_review_required === true || hasFinalAccountingState(candidate.id)) continue;
+    if (candidate.pending === true || hasFinalAccountingState(candidate.id)) continue;
     const candidateAcct = accountMap.get(String(candidate.plaid_account_id));
     const candidateRail = plaidAccountRail(candidateAcct);
     const candidateMapping = mappingMap.get(String(candidate.plaid_account_id));
@@ -589,6 +630,7 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
       matcher: "credit_card_payment_pair_v1",
       date_window_days: DATE_WINDOW_DAYS,
       date_diff_days: hit.dateDiff,
+      amount_minor_units: Math.abs(sourceAmountMinorUnits),
       checking_memo_payment_signal: hasCreditCardPaymentSignal(hit.checkingRow),
       card_memo_payment_signal: hasCreditCardPaymentSignal(hit.cardRow),
       issuer: detectCardIssuer([hit.checkingRow.name, hit.checkingRow.merchant_name, hit.checkingRow.counterparty_name].filter(Boolean).join(" ")),
@@ -614,7 +656,14 @@ export async function createSafeCreditCardPaymentPairForRow({ db = defaultSupaba
   return { status: "paired", pair, reason: "safe_pair_created" };
 }
 
-export async function confirmCreditCardPaymentMatchForTransaction({ db = defaultSupabase, businessId, transactionId, targetQboAccountId }) {
+export async function confirmCreditCardPaymentMatchForTransaction({
+  db = defaultSupabase,
+  businessId,
+  transactionId,
+  targetQboAccountId,
+  targetTransactionId = null,
+  validateQboAccountType = validateBusinessQboPaymentAccountType,
+} = {}) {
   if (!businessId || !transactionId || !targetQboAccountId) {
     const err = new Error("missing_cc_payment_match_target");
     err.status = 400;
@@ -641,6 +690,8 @@ export async function confirmCreditCardPaymentMatchForTransaction({ db = default
     businessId,
     row,
     targetQboAccountId,
+    targetTransactionId,
+    validateQboAccountType,
   });
   if (result.status === "paired" && result.pair?.id) {
     await linkCategorizationToCreditCardPair({ db, businessId, pair: result.pair });

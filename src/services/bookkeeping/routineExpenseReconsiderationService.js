@@ -22,12 +22,20 @@ import {
   withCategorizationPolicyVersion,
 } from "./categorizationEvidencePolicy.js";
 import { normalizeMerchantIdentity, normalizedMerchantKeys } from "./merchantNormalization.js";
+import {
+  isAllowedPaymentProcessingAccountName,
+  isBankFeeFallbackAccountName,
+  isDisallowedPaymentProcessingAccountName,
+  isPaymentProcessingFeeIntent,
+  isStrongIntuitPaymentProcessingFeeDescriptor,
+} from "./paymentProcessingFeeIntent.js";
 
 const MAX_RECONSIDERATION_LIMIT = 500;
 const PNL_ACCOUNT_TYPES = new Set(["income", "other income", "expense", "cost of goods sold", "costofgoodssold"]);
 const PROTECTED_TAXONOMY_RE = /cc_payment|transfer|owner|loan|payroll|tax|refund|check|peer_to_peer/i;
 const SAFE_SEMANTIC_FALLBACK_INTENTS = new Set([
   "bank_fees",
+  "payment_processing_fee",
   "payment_processing",
   "credit_card_interest",
   "interest_expense",
@@ -225,6 +233,8 @@ function transactionDirection(txn = {}) {
 
 function suggestedIntentFromAccountName(accountName = "") {
   const name = normalizeText(accountName);
+  if (isAllowedPaymentProcessingAccountName(accountName)) return "payment_processing_fee";
+  if (isBankFeeFallbackAccountName(accountName)) return "bank_fees";
   if (/\bmeal|restaurant|dining|food|coffee\b/.test(name)) return "meals";
   if (/\btransport|parking|toll|travel|lyft|uber\b/.test(name)) return "transportation";
   if (/\bvehicle|auto|automobile|truck|fleet|tire|maintenance\b/.test(name)) return "vehicle_expense";
@@ -292,6 +302,7 @@ function hasDeterministicMediumSuggestionEvidence({ bankTxn = {}, account = {}, 
 function deriveIntentFromTransaction(bankTxn = {}, meta = {}) {
   const text = transactionText(bankTxn);
   if (!text) return null;
+  if (isStrongIntuitPaymentProcessingFeeDescriptor(text)) return "payment_processing_fee";
   if (/\bstatement credit\b|\bautomatic statement credit\b|\bcash ?back\b|\brewards?\b/.test(text)) return "other_income";
   if (/\b(?:interest charge(?: on purchases)?|purchase interest|purchases? interest|finance charge)\b/.test(text)) return "credit_card_interest";
   if (/\btran fee\b|\btransaction fee\b|\bbank fee\b|\bbank fees\b|\blate fee\b|\bfinance charge\b|\bservice charge\b|\bprocessing fee\b|\bmerchant fee\b/.test(text)) return "bank_fees";
@@ -322,7 +333,10 @@ function hasDeterministicIntentAutoHandleEvidence({ bankTxn = {}, intent, univer
       /\b(?:claude(?:\s*\.?\s*ai)?|anthropic|openai|chatgpt|software|saas|subscription)\b/.test(text)
     );
   }
-  if (normalizedIntent === "bank_fees" || normalizedIntent === "payment_processing") {
+  if (isPaymentProcessingFeeIntent(normalizedIntent)) {
+    return isStrongIntuitPaymentProcessingFeeDescriptor(text);
+  }
+  if (normalizedIntent === "bank_fees") {
     return /\b(?:tran(?:saction)? fee|bank fee|bank charge|service fee|service charge|monthly fee|merchant fee|processing fee|late fee)\b/.test(text);
   }
   if (normalizedIntent === "credit_card_interest" || normalizedIntent === "interest_expense") {
@@ -482,6 +496,12 @@ function findBusinessHistoryAccount({ historyIndex, bankTxn = {} }) {
 function canUseUniversalIntentForResolution(hint = null) {
   if (!hint?.primary_intent) return false;
   if (hint.confidence === "high") return true;
+  if (
+    isPaymentProcessingFeeIntent(hint.primary_intent) &&
+    isStrongIntuitPaymentProcessingFeeDescriptor(hint.matched_value || hint.match_value || "")
+  ) {
+    return true;
+  }
   return ["supplies", "supplies_materials", "materials", "software", "software_subscription", "insurance", "credit_card_interest", "interest_expense"].includes(String(hint.primary_intent));
 }
 
@@ -1224,13 +1244,16 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     const universalHint = await getUniversalVendorHintForTransaction({ bankTxn });
     if (!checkHit.is_check && canUseUniversalIntentForResolution(universalHint)) {
       const specificMediumEvidence = universalHint?.confidence === "medium" && !isStrongUniversalVendorEvidence(universalHint);
+      const deterministicPaymentProcessingFee =
+        isPaymentProcessingFeeIntent(universalHint.primary_intent) &&
+        isStrongIntuitPaymentProcessingFeeDescriptor(universalHint.matched_value || universalHint.match_value || transactionText(bankTxn));
       const canonicalKey = resolveIntentToCanonicalKey(universalHint.primary_intent);
       const canonicalResolution = await resolveCanonicalQboAccount({
         businessId,
         intent: universalHint.primary_intent,
         transactionId: cat.transaction_id,
-        source: options.source || "backlog_reconsideration",
-        allowCreate: false,
+        source: deterministicPaymentProcessingFee ? "internal_payment_processing_fee" : options.source || "backlog_reconsideration",
+        allowCreate: deterministicPaymentProcessingFee && options.allowQboAccountCreate !== false,
         dependencies: {
           ...(dependencies || {}),
           supabase: db,
@@ -1490,8 +1513,23 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
     let semanticResolution = null;
     const derivedIntent = deriveIntentFromTransaction(bankTxn, meta);
     const semanticIntent = universalHint?.primary_intent || derivedIntent;
+    const activeSuggestionInvalidForPaymentProcessing =
+      isPaymentProcessingFeeIntent(semanticIntent) &&
+      isStrongIntuitPaymentProcessingFeeDescriptor(transactionText(bankTxn)) &&
+      (
+        !activeSuggestedAccount?.name ||
+        isDisallowedPaymentProcessingAccountName(activeSuggestedAccount.name) ||
+        (
+          !isAllowedPaymentProcessingAccountName(activeSuggestedAccount.name) &&
+          !isBankFeeFallbackAccountName(activeSuggestedAccount.name)
+        )
+      );
     if (
-      (!activeSuggestedAccount || isReviewAccount({ accountId: activeSuggestedAccount.id, accountName: activeSuggestedAccount.name })) &&
+      (
+        !activeSuggestedAccount ||
+        isReviewAccount({ accountId: activeSuggestedAccount.id, accountName: activeSuggestedAccount.name }) ||
+        activeSuggestionInvalidForPaymentProcessing
+      ) &&
       semanticIntent &&
       SAFE_SEMANTIC_FALLBACK_INTENTS.has(String(semanticIntent))
     ) {

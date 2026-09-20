@@ -4,28 +4,38 @@ import { Check, ChevronDown, Loader2, X } from "lucide-react";
 
 const DEFAULT_ACCOUNT_TYPES = [
   {
+    financialStatement: "Profit & Loss",
     accountType: "Income",
     label: "Income",
     subTypes: [{ value: "ServiceFeeIncome", label: "Service/Fee Income" }],
   },
   {
+    financialStatement: "Profit & Loss",
     accountType: "Other Income",
     label: "Other Income",
     subTypes: [{ value: "OtherMiscellaneousIncome", label: "Other Miscellaneous Income" }],
   },
   {
+    financialStatement: "Profit & Loss",
     accountType: "Expense",
     label: "Expense",
     subTypes: [{ value: "OtherBusinessExpenses", label: "Other Business Expenses" }],
   },
   {
+    financialStatement: "Profit & Loss",
     accountType: "Cost of Goods Sold",
     label: "Cost of Goods Sold",
     subTypes: [{ value: "OtherCostsOfServiceCos", label: "Other Costs of Service" }],
   },
 ];
 
+const FINANCIAL_STATEMENT_OPTIONS = [
+  { value: "Profit & Loss", label: "Profit & Loss" },
+  { value: "Balance Sheet", label: "Balance Sheet" },
+];
+
 function defaultTypeForContext(context = {}) {
+  if (context.workflow === "loan_principal" || context.defaultAccountType === "Long Term Liability") return "Long Term Liability";
   const explicit = Array.isArray(context.allowedAccountTypes) ? context.allowedAccountTypes.filter(Boolean) : [];
   if (explicit.includes("Expense") || explicit.includes("Cost of Goods Sold")) return "Expense";
   if (explicit.includes("Income") || explicit.includes("Other Income")) return "Income";
@@ -53,7 +63,14 @@ function preferredSubTypeForAccountType(accountType, subTypes = []) {
     Income: "ServiceFeeIncome",
     "Other Income": "OtherMiscellaneousIncome",
     Expense: "OtherBusinessExpenses",
+    "Other Expense": "OtherMiscellaneousExpense",
     "Cost of Goods Sold": "OtherCostsOfServiceCos",
+    "Other Current Asset": "OtherCurrentAssets",
+    "Fixed Asset": "Vehicles",
+    "Other Asset": "OtherAssets",
+    "Other Current Liability": "LoanPayable",
+    "Long Term Liability": "NotesPayable",
+    Equity: "OwnersEquity",
   }[accountType];
   return subTypes.find((entry) => entry.value === preferred)?.value || subTypes[0]?.value || "";
 }
@@ -64,6 +81,9 @@ function friendlyCreateAccountError(error) {
   if (code === "qbo_inactive_account_exists") return "An inactive QuickBooks account with this name already exists.";
   if (code === "invalid_qbo_account_type_detail_type" || code === "invalid_qbo_account_type") {
     return "This QuickBooks account type and detail type cannot be used together.";
+  }
+  if (code === "qbo_account_type_restricted") {
+    return error?.message || "This QuickBooks account type is managed by another workflow.";
   }
   if (code === "quickbooks_reconnect_required") return "QuickBooks needs to be reconnected before creating an account.";
   if (error?.status === 403) return "You do not have permission to create QuickBooks accounts here.";
@@ -79,7 +99,11 @@ function focusableElements(container) {
   ).filter((node) => !node.hasAttribute("disabled") && node.getAttribute("aria-hidden") !== "true");
 }
 
-function DarkSelect({ label, value, options, onChange }) {
+function statementForAccountType(type, accountTypes = []) {
+  return accountTypes.find((entry) => entry.accountType === type)?.financialStatement || "Profit & Loss";
+}
+
+function DarkSelect({ label, value, options, onChange, helperText = "" }) {
   const [open, setOpen] = React.useState(false);
   const [activeIndex, setActiveIndex] = React.useState(0);
   const ref = React.useRef(null);
@@ -103,7 +127,7 @@ function DarkSelect({ label, value, options, onChange }) {
 
   const selectIndex = React.useCallback((index) => {
     const option = options[index];
-    if (!option) return;
+    if (!option || option.disabled) return;
     onChange(option.value);
     setOpen(false);
   }, [onChange, options]);
@@ -174,10 +198,13 @@ function DarkSelect({ label, value, options, onChange }) {
                 <button
                   key={option.value}
                   type="button"
+                  disabled={option.disabled}
                   role="option"
                   aria-selected={selectedOption}
                   className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm transition ${
-                    selectedOption
+                    option.disabled
+                      ? "cursor-not-allowed text-white/34"
+                      : selectedOption
                       ? "bg-emerald-400/12 text-emerald-100"
                       : active
                         ? "bg-white/[0.07] text-white"
@@ -186,7 +213,10 @@ function DarkSelect({ label, value, options, onChange }) {
                   onMouseEnter={() => setActiveIndex(index)}
                   onClick={() => selectIndex(index)}
                 >
-                  <span className="truncate">{option.label}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate">{option.label}</span>
+                    {option.description ? <span className="block truncate text-xs text-white/42">{option.description}</span> : null}
+                  </span>
                   {selectedOption ? <Check className="h-4 w-4 shrink-0 text-emerald-300" /> : null}
                 </button>
               );
@@ -194,6 +224,7 @@ function DarkSelect({ label, value, options, onChange }) {
           </div>
         ) : null}
       </div>
+      {helperText ? <p className="mt-1 text-xs text-white/46">{helperText}</p> : null}
     </label>
   );
 }
@@ -208,13 +239,22 @@ export default function CreateQuickBooksAccountModal({
 }) {
   const supportedTypes = React.useMemo(() => {
     const source = Array.isArray(accountTypes) && accountTypes.length ? accountTypes : DEFAULT_ACCOUNT_TYPES;
-    return DEFAULT_ACCOUNT_TYPES.map((fallback) => {
+    const merged = DEFAULT_ACCOUNT_TYPES.map((fallback) => {
       const fromCatalog = source.find((entry) => entry.accountType === fallback.accountType);
       return fromCatalog || fallback;
     });
+    for (const entry of source) {
+      if (entry?.accountType && !merged.some((item) => item.accountType === entry.accountType)) merged.push(entry);
+    }
+    return merged;
   }, [accountTypes]);
   const defaultAccountType = React.useMemo(() => defaultTypeForContext(context), [context]);
+  const defaultFinancialStatement = React.useMemo(
+    () => context.financialStatement || statementForAccountType(defaultAccountType, supportedTypes),
+    [context.financialStatement, defaultAccountType, supportedTypes]
+  );
   const [name, setName] = React.useState("");
+  const [financialStatement, setFinancialStatement] = React.useState(defaultFinancialStatement);
   const [accountType, setAccountType] = React.useState("");
   const [accountSubType, setAccountSubType] = React.useState("");
   const [description, setDescription] = React.useState("");
@@ -231,26 +271,35 @@ export default function CreateQuickBooksAccountModal({
     }
     if (wasOpenRef.current) return;
     wasOpenRef.current = true;
-    const initialType = supportedTypes.find((entry) => entry.accountType === defaultAccountType) || supportedTypes[0] || DEFAULT_ACCOUNT_TYPES[0];
+    const statement = defaultFinancialStatement;
+    const statementTypes = supportedTypes.filter((entry) => (entry.financialStatement || "Profit & Loss") === statement);
+    const initialType = statementTypes.find((entry) => entry.accountType === defaultAccountType) || statementTypes.find((entry) => !entry.unavailable) || supportedTypes[0] || DEFAULT_ACCOUNT_TYPES[0];
+    setFinancialStatement(statementForAccountType(initialType.accountType, supportedTypes));
     setAccountType(initialType.accountType);
     setAccountSubType(preferredSubTypeForAccountType(initialType.accountType, initialType.subTypes));
-    setName("");
+    setName(context.suggestedAccountName || "");
     setDescription("");
     setError("");
     setBusy(false);
-  }, [defaultAccountType, open, supportedTypes]);
+  }, [context.suggestedAccountName, defaultAccountType, defaultFinancialStatement, open, supportedTypes]);
+
+  const statementTypes = React.useMemo(
+    () => supportedTypes.filter((entry) => (entry.financialStatement || "Profit & Loss") === financialStatement),
+    [financialStatement, supportedTypes]
+  );
 
   React.useEffect(() => {
     if (!open) return;
-    if (!supportedTypes.some((entry) => entry.accountType === accountType)) {
-      const first = supportedTypes[0] || DEFAULT_ACCOUNT_TYPES[0];
+    if (!statementTypes.some((entry) => entry.accountType === accountType)) {
+      const first = statementTypes.find((entry) => !entry.unavailable) || statementTypes[0] || DEFAULT_ACCOUNT_TYPES[0];
       setAccountType(first.accountType);
       setAccountSubType(preferredSubTypeForAccountType(first.accountType, first.subTypes));
     }
-  }, [accountType, open, supportedTypes]);
+  }, [accountType, open, statementTypes]);
 
-  const selectedType = supportedTypes.find((entry) => entry.accountType === accountType) || supportedTypes[0] || DEFAULT_ACCOUNT_TYPES[0];
+  const selectedType = statementTypes.find((entry) => entry.accountType === accountType) || statementTypes[0] || DEFAULT_ACCOUNT_TYPES[0];
   const subTypes = React.useMemo(() => selectedType.subTypes || [], [selectedType]);
+  const isLiabilityAccount = /liability|payable|credit card/i.test(accountType);
 
   React.useEffect(() => {
     if (!subTypes.some((entry) => entry.value === accountSubType)) {
@@ -377,10 +426,23 @@ export default function CreateQuickBooksAccountModal({
           </label>
 
           <DarkSelect
+            label="Financial statement"
+            value={financialStatement}
+            options={FINANCIAL_STATEMENT_OPTIONS}
+            onChange={setFinancialStatement}
+          />
+
+          <DarkSelect
             label="Account Type"
             value={accountType}
-            options={supportedTypes.map((entry) => ({ value: entry.accountType, label: entry.label || entry.accountType }))}
+            options={statementTypes.map((entry) => ({
+              value: entry.accountType,
+              label: entry.label || entry.accountType,
+              disabled: entry.unavailable === true,
+              description: entry.unavailable ? entry.unavailableReason || "Managed by another workflow" : "",
+            }))}
             onChange={setAccountType}
+            helperText={selectedType.unavailable ? selectedType.unavailableReason : ""}
           />
 
           <DarkSelect
@@ -389,6 +451,12 @@ export default function CreateQuickBooksAccountModal({
             options={subTypes}
             onChange={setAccountSubType}
           />
+
+          {isLiabilityAccount ? (
+            <div className="rounded-lg border border-amber-300/18 bg-amber-300/[0.07] px-3 py-2 text-xs font-medium text-amber-100">
+              Creating this account does not record the outstanding loan balance.
+            </div>
+          ) : null}
 
           <label className="block">
             <span className="text-xs font-medium text-white/65">Description</span>
@@ -411,7 +479,7 @@ export default function CreateQuickBooksAccountModal({
           <button type="button" onClick={closeModal} disabled={busy} className="rounded-lg border border-white/12 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-white/70 hover:bg-white/[0.08] disabled:opacity-50">
             Cancel
           </button>
-          <button type="submit" disabled={busy || !name.trim() || !accountSubType} className="inline-flex items-center gap-2 rounded-lg border border-emerald-300/25 bg-emerald-400/15 px-3 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-400/20 disabled:opacity-50">
+          <button type="submit" disabled={busy || !name.trim() || !accountSubType || selectedType.unavailable} className="inline-flex items-center gap-2 rounded-lg border border-emerald-300/25 bg-emerald-400/15 px-3 py-2 text-sm font-semibold text-emerald-100 hover:bg-emerald-400/20 disabled:opacity-50">
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Create Account
           </button>

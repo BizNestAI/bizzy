@@ -255,6 +255,48 @@ test("approved equivalent remains an internal review candidate without duplicate
   assert.equal(supabase.db.business_canonical_qbo_account_mappings[0].status, "needs_review");
 });
 
+test("Intuit payment-processing fees use Bank Charges fallback and never CC Fees", async () => {
+  const supabase = makeSupabase();
+  const { qbo, state } = makeQbo([
+    { id: "cc-fees", name: "CC Fees", type: "Expense", subType: "BankCharges" },
+    { id: "bank-fees", name: "Bank Charges & Fees", type: "Expense", subType: "BankCharges" },
+  ]);
+  const result = await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "payment_processing_fee",
+    allowCreate: true,
+    source: "internal_payment_processing_fee",
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "existing_approved_equivalent");
+  assert.equal(result.account.id, "bank-fees");
+  assert.equal(result.account.name, "Bank Charges & Fees");
+  assert.equal(state.createCount, 0);
+});
+
+test("Intuit payment-processing fees create Expense BankCharges when no allowed account exists", async () => {
+  const supabase = makeSupabase();
+  const { qbo, state } = makeQbo([
+    { id: "cc-fees", name: "CC Fees", type: "Expense", subType: "BankCharges" },
+  ]);
+  const result = await resolveCanonicalQboAccount({
+    businessId: BUSINESS_ID,
+    intent: "payment_processing_fee",
+    allowCreate: true,
+    source: "internal_payment_processing_fee",
+    dependencies: deps({ supabase, qbo }),
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "created_by_bizzi");
+  assert.equal(result.account.name, "Payment Processing Fees");
+  assert.equal(result.account.type, "Expense");
+  assert.equal(result.account.subType, "BankCharges");
+  assert.equal(state.createCount, 1);
+  assert.equal(state.accounts.some((account) => account.name === "CC Fees"), true);
+  assert.equal(state.accounts.some((account) => account.name === "Payment Processing Fees"), true);
+});
+
 test("Duke Energy intent creates Electric only from explicit internal Monthly Review approval", async () => {
   const supabase = makeSupabase();
   const { qbo, state } = makeQbo([{ id: "utilities", name: "Utilities", type: "Expense" }]);

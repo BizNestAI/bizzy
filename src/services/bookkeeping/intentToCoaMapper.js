@@ -1,3 +1,10 @@
+import {
+  findPaymentProcessingFeeAccount,
+  isPaymentProcessingFeeIntent,
+  PROCESSING_FEE_ACCOUNT_NAMES,
+  BANK_FEE_FALLBACK_ACCOUNT_NAMES,
+} from "./paymentProcessingFeeIntent.js";
+
 const INTENT_ALIASES = {
   lodging: "travel",
   car_rental: "travel",
@@ -41,6 +48,7 @@ const INTENT_ALIASES = {
   cash_back: "other_income",
   rewards: "other_income",
   credit_card_rewards: "credit_card_rewards",
+  payment_processing_fee: "payment_processing_fee",
   bank_deposit_receipt: "sales",
   interest_expense: "credit_card_interest",
   gaming: "entertainment",
@@ -76,6 +84,10 @@ const INTENT_KEYWORDS = {
   safety_ppe: ["safety", "ppe", "personal protective equipment", "gloves", "hard hats", "respirators"],
   bank_fees: ["bank fees", "bank charges", "bank charges and fees", "service charge", "service fee", "bank charge", "processing fees", "transaction fee", "tran fee", "late fee", "finance charge", "cc fees", "credit card fees", "fees"],
   payment_processing: ["processing", "merchant fees", "payment processing", "stripe", "square", "paypal fees"],
+  payment_processing_fee: [
+    ...PROCESSING_FEE_ACCOUNT_NAMES.map((name) => name.toLowerCase()),
+    ...BANK_FEE_FALLBACK_ACCOUNT_NAMES.map((name) => name.toLowerCase()),
+  ],
   credit_card_interest: ["credit card interest", "card interest", "interest expense", "purchase interest", "interest charge", "finance charge"],
   payroll: ["payroll", "wages"],
   utilities: ["utilities", "telecom", "internet"],
@@ -141,6 +153,7 @@ const STRICT_PRIMARY_ONLY_INTENTS = new Set([
   "meals",
   "parking_tolls",
   "software",
+  "payment_processing_fee",
   "entertainment",
   "clothing",
   "other_income",
@@ -176,6 +189,11 @@ function exactCanonicalAccountForIntent(intentKey, accounts = []) {
     return accounts.find((acct) =>
       ["credit card rewards", "card rewards", "cash back rewards", "cashback rewards", "rewards income"].includes(acct._normName)
     ) || null;
+  }
+  if (isPaymentProcessingFeeIntent(intentKey)) {
+    return findPaymentProcessingFeeAccount(accounts, {
+      typeCompatible: (acct) => normalizeCoaName(acct.type || acct.AccountType || "").includes("expense"),
+    });
   }
   return null;
 }
@@ -254,6 +272,7 @@ function scoreAccount(intentKey, keywords, acct) {
     "safety_ppe",
     "bank_fees",
     "payment_processing",
+    "payment_processing_fee",
     "credit_card_interest",
     "payroll",
     "utilities",
