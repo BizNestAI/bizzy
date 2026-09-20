@@ -7,6 +7,7 @@ import { computePostAfterForAutoPost, getAutoPostToQuickBooks } from "./autoPost
 import {
   confirmCreditCardPaymentPairForTransaction,
   createManualCreditCardPaymentPair,
+  linkCategorizationToCreditCardPair,
 } from "./creditCardPaymentPairService.js";
 import { fetchChartOfAccounts, validateBusinessQboCreditCardAccount } from "./qboAccounts.js";
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
@@ -282,7 +283,7 @@ export async function approveBookkeepingTransactions({
   }
 
   for (const txnId of ccPairConfirmTxnIds) {
-    const pair = await confirmCreditCardPaymentPairForTransaction({ businessId, transactionId: txnId });
+    const pair = await confirmCreditCardPaymentPairForTransaction({ db, businessId, transactionId: txnId });
     confirmedCcPairs.set(String(pair.id), pair);
     const currentMeta = existingMetaMap[txnId] || {};
     existingMetaMap[txnId] = {
@@ -304,8 +305,12 @@ export async function approveBookkeepingTransactions({
         currentMeta.cc_payment_pair_role === "credit_card" ? pair.payment_date || pair.matched_date : pair.matched_date || pair.payment_date,
       cc_payment_pair_counterpart_account_name:
         currentMeta.cc_payment_pair_role === "credit_card" ? pair.checking_qbo_account_name : pair.credit_card_qbo_account_name,
-      safe_to_auto_post: true,
-      auto_approve_reason: "manual_user",
+      cc_payment_pair_confirmed_at: pair.updated_at || nowIso,
+      cc_payment_pair_confirmed_by: actor || "user",
+      cc_payment_pair_confirmation_source: "books_review",
+      match_type: "credit_card_payment_pair",
+      safe_to_auto_handle: false,
+      safe_to_auto_post: false,
     };
   }
 
@@ -323,6 +328,10 @@ export async function approveBookkeepingTransactions({
       };
       const isTransferTaxonomy = mergedMeta?.taxonomy_type === "transfer_internal";
       const isCcPaymentTaxonomy = mergedMeta?.taxonomy_type === "cc_payment";
+      const isConfirmedCcPaymentPair =
+        isCcPaymentTaxonomy &&
+        mergedMeta?.cc_payment_pair_id &&
+        String(mergedMeta?.cc_payment_pair_status || "").toLowerCase() === "confirmed";
       const isOwnerMove = mergedMeta?.taxonomy_type === "owner_draw" || mergedMeta?.taxonomy_type === "owner_contribution";
       const isRefund = mergedMeta?.taxonomy_type === "refund";
       if (isTransferTaxonomy) {
@@ -331,13 +340,12 @@ export async function approveBookkeepingTransactions({
         mergedMeta.post_block_reason = "transfer_posting_not_supported";
         warnings.push({ transaction_id: txnId, code: "transfer_not_scheduled" });
       } else if (isCcPaymentTaxonomy) {
-        const hasSafeMapping =
-          mergedMeta.safe_to_auto_post === true && mergedMeta.cc_payment_bank_qbo_account_id && mergedMeta.cc_payment_cc_qbo_account_id;
-        if (hasSafeMapping) {
-          mergedMeta.auto_approve_reason = "manual_user";
-          mergedMeta.safe_to_auto_post = true;
+        mergedMeta.safe_to_auto_handle = false;
+        mergedMeta.safe_to_auto_post = false;
+        if (isConfirmedCcPaymentPair) {
+          delete mergedMeta.post_block_reason;
+          mergedMeta.match_type = "credit_card_payment_pair";
         } else {
-          mergedMeta.safe_to_auto_post = false;
           mergedMeta.post_block_reason = "cc_payment_mapping_not_safe";
           warnings.push({ transaction_id: txnId, code: "cc_payment_not_scheduled" });
         }
@@ -357,12 +365,17 @@ export async function approveBookkeepingTransactions({
       }
       const postingMeta = resolveManualApprovalBookkeepingMeta(mergedMeta, { explicitFinalAccountId: explicitFinalId });
 
-      const effectiveFinalId = checkHit.is_check ? explicitFinalId : explicitFinalId || suggestedIdMap[txnId] || null;
-      const effectiveFinalName = checkHit.is_check ? explicitFinalName : explicitFinalName || suggestedNameMap[txnId] || null;
+      const effectiveFinalId = isConfirmedCcPaymentPair
+        ? null
+        : checkHit.is_check ? explicitFinalId : explicitFinalId || suggestedIdMap[txnId] || null;
+      const effectiveFinalName = isConfirmedCcPaymentPair
+        ? null
+        : checkHit.is_check ? explicitFinalName : explicitFinalName || suggestedNameMap[txnId] || null;
       if (checkHit.is_check && !explicitFinalId) missingCheckFinals.push(txnId);
 
       return {
         transaction_id: txnId,
+        status: isConfirmedCcPaymentPair ? "matched" : item?.status,
         final_qbo_account_id: effectiveFinalId,
         final_qbo_account_name: effectiveFinalName,
         final_canonical_account_key: explicitCanonicalKey || suggestedCanonicalMap[txnId] || mergedMeta?.canonical_account_key || null,
@@ -372,7 +385,7 @@ export async function approveBookkeepingTransactions({
         only_this_transaction: item?.only_this_transaction === true || item?.learn_reusable_rule === false,
         post_after:
           isTransferTaxonomy ||
-          (isCcPaymentTaxonomy && mergedMeta.safe_to_auto_post !== true) ||
+          isCcPaymentTaxonomy ||
           isOwnerMove ||
           isRefund
             ? null
@@ -386,7 +399,10 @@ export async function approveBookkeepingTransactions({
   if (!approvals.length) throw new BookkeepingApprovalError("missing_items", 400);
   if (approvals.some((a) => !a.transaction_id)) throw new BookkeepingApprovalError("missing_transaction_id", 400, { approvals });
   if (missingCheckFinals.length) throw new BookkeepingApprovalError("missing_final_account_for_check", 400, { transactions: missingCheckFinals });
-  const missingAccounts = approvals.filter((a) => !a.final_qbo_account_id && !a.is_check).map((a) => a.transaction_id);
+  const missingAccounts = approvals
+    .filter((a) => !(a.status === "matched" && a.meta?.taxonomy_type === "cc_payment"))
+    .filter((a) => !a.final_qbo_account_id && !a.is_check)
+    .map((a) => a.transaction_id);
   if (missingAccounts.length) throw new BookkeepingApprovalError("missing_account_id", 400, { transactions: missingAccounts });
 
   for (const approval of approvals) {
@@ -454,70 +470,7 @@ export async function approveBookkeepingTransactions({
   if (error) throw new BookkeepingApprovalError("approve_failed", 500, { message: error.message });
 
   for (const pair of confirmedCcPairs.values()) {
-    const pairRows = [
-      {
-        transaction_id: pair.checking_transaction_id,
-        final_qbo_account_id: pair.credit_card_qbo_account_id,
-        final_qbo_account_name: pair.credit_card_qbo_account_name,
-        role: "checking",
-        counterpart: pair.credit_card_transaction_id || null,
-        targetAccountId: pair.credit_card_qbo_account_id,
-        targetAccountName: pair.credit_card_qbo_account_name,
-      },
-      pair.credit_card_transaction_id
-        ? {
-            transaction_id: pair.credit_card_transaction_id,
-            final_qbo_account_id: pair.checking_qbo_account_id,
-            final_qbo_account_name: pair.checking_qbo_account_name,
-            role: "credit_card",
-            counterpart: pair.checking_transaction_id,
-            targetAccountId: pair.checking_qbo_account_id,
-            targetAccountName: pair.checking_qbo_account_name,
-          }
-        : null,
-    ].filter(Boolean);
-    for (const pairRow of pairRows) {
-      const existingMeta = existingMetaMap[pairRow.transaction_id] || {};
-      await db
-        .from("transaction_categorizations")
-        .upsert({
-          business_id: businessId,
-          transaction_id: pairRow.transaction_id,
-          status: "approved",
-          final_qbo_account_id: pairRow.final_qbo_account_id,
-          final_qbo_account_name: pairRow.final_qbo_account_name,
-          confidence: "high",
-          reason: "Confirmed credit-card payment transfer",
-          decided_by: actor,
-          decided_at: nowIso,
-          updated_at: nowIso,
-          post_after: postAfter,
-          post_error: null,
-          meta: {
-            ...existingMeta,
-            taxonomy_type: "cc_payment",
-            cc_payment_pair_id: pair.id,
-            cc_payment_pair_role: pairRow.role,
-            cc_payment_pair_txn_id: pairRow.counterpart,
-            cc_payment_pair_status: "confirmed",
-            cc_payment_pair_confidence: pair.match_confidence,
-            cc_payment_bank_qbo_account_id: pair.checking_qbo_account_id,
-            cc_payment_bank_qbo_account_name: pair.checking_qbo_account_name,
-            cc_payment_cc_qbo_account_id: pair.credit_card_qbo_account_id,
-            cc_payment_cc_qbo_account_name: pair.credit_card_qbo_account_name,
-            cc_payment_transfer_target_qbo_account_id: pairRow.targetAccountId,
-            cc_payment_transfer_target_qbo_account_name: pairRow.targetAccountName,
-            cc_payment_pair_counterpart_amount:
-              pairRow.role === "credit_card" ? -Math.abs(Number(pair.amount || 0)) : Math.abs(Number(pair.amount || 0)),
-            cc_payment_pair_counterpart_date:
-              pairRow.role === "credit_card" ? pair.payment_date || pair.matched_date : pair.matched_date || pair.payment_date,
-            cc_payment_pair_counterpart_account_name: pairRow.targetAccountName,
-            safe_to_auto_handle: false,
-            safe_to_auto_post: true,
-            auto_approve_reason: "manual_user",
-          },
-        }, { onConflict: "business_id,transaction_id" });
-    }
+    await linkCategorizationToCreditCardPair({ db, businessId, pair });
   }
 
   const vendorRuleResults = [];

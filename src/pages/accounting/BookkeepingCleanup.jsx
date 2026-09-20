@@ -22,6 +22,7 @@ import {
   rejectCreditCardPayment,
   markCreditCardPayment,
   confirmCreditCardPaymentMatch,
+  discoverCreditCardPaymentMatch,
   confirmSplitTransaction,
   confirmLoanPaymentSplit,
   treatLoanPaymentAsRegularTransaction,
@@ -451,7 +452,7 @@ function matchesBooksTab(txn = {}, tabKey = "needs_review") {
     txn.meta?.incoming_deposit_match_status === "confirmed";
   if (tabKey === "all") return true;
   if (tabKey === "pending") return txn.pending === true;
-  if (tabKey === "matched") return txn.pending !== true && matchedExistingQbo;
+  if (tabKey === "matched") return txn.pending !== true && (matchedExistingQbo || status === "matched");
   if (matchedExistingQbo) return false;
   if (txn.pending === true && tabKey !== "posted") return false;
   if (tabKey === "needs_review") {
@@ -721,8 +722,12 @@ function BookkeepingCleanup() {
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [undoingTransactionIds, setUndoingTransactionIds] = useState(() => new Set());
   const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
+  const [ccPaymentActionState, setCcPaymentActionState] = useState({});
   const incomingDepositActionInFlightRef = useRef(new Set());
   const incomingDepositMatchedSuppressRef = useRef(new Set());
+  const ccDiscoverySeqRef = useRef(new Map());
+  const ccDiscoveryAbortRef = useRef(new Map());
+  const ccConfirmInFlightRef = useRef(new Set());
   const mountedRef = useRef(true);
   const [incomingDepositUndoTxn, setIncomingDepositUndoTxn] = useState(null);
   const [manualPostTxn, setManualPostTxn] = useState(null);
@@ -734,6 +739,8 @@ function BookkeepingCleanup() {
   useEffect(() => () => {
     mountedRef.current = false;
     transactionRequestAbortRef.current?.abort();
+    ccDiscoveryAbortRef.current.forEach((controller) => controller?.abort?.());
+    ccDiscoveryAbortRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -1628,26 +1635,198 @@ function BookkeepingCleanup() {
     }
   };
 
-  const handleConfirmCreditCardPaymentMatch = async (id, targetQboAccountId) => {
-    if (!canRunAI || !businessId || !id || !targetQboAccountId) return;
+  const isCreditCardPaymentWorkflowTxn = useCallback((txn = {}) => {
+    const meta = txn.meta || {};
+    return (
+      String(txn.taxonomy_type || meta.taxonomy_type || "").toLowerCase() === "cc_payment" ||
+      Boolean(txn.cc_payment_pair_id || meta.cc_payment_pair_id) ||
+      String(txn.cc_payment_pair_status || meta.cc_payment_pair_status || "").length > 0 ||
+      String(txn.post_error || meta.post_block_reason || "").startsWith("cc_payment_")
+    );
+  }, []);
+
+  const clearCreditCardPaymentDiscovery = useCallback((txnId) => {
+    const key = String(txnId || "");
+    const controller = ccDiscoveryAbortRef.current.get(key);
+    controller?.abort?.();
+    ccDiscoveryAbortRef.current.delete(key);
+    ccDiscoverySeqRef.current.set(key, (ccDiscoverySeqRef.current.get(key) || 0) + 1);
+    setCcPaymentActionState((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }, []);
+
+  const startCreditCardPaymentDiscovery = useCallback(async (txnId, targetQboAccountId) => {
+    if (!canRunAI || usingDemo || !businessId || !txnId || !targetQboAccountId) {
+      clearCreditCardPaymentDiscovery(txnId);
+      return;
+    }
+    const key = String(txnId);
+    const nextSeq = (ccDiscoverySeqRef.current.get(key) || 0) + 1;
+    ccDiscoverySeqRef.current.set(key, nextSeq);
+    ccDiscoveryAbortRef.current.get(key)?.abort?.();
+    const controller = new AbortController();
+    ccDiscoveryAbortRef.current.set(key, controller);
+    const startedAt = Date.now();
+    setCcPaymentActionState((prev) => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] || {}),
+        selectedAccountId: targetQboAccountId,
+        discovering: true,
+        matching: false,
+        error: "",
+        candidate: null,
+        candidates: [],
+        targetTransactionId: null,
+        frontend_selection_started_at: startedAt,
+      },
+    }));
     try {
-      await confirmCreditCardPaymentMatch(businessId, id, targetQboAccountId);
+      const result = await discoverCreditCardPaymentMatch(businessId, txnId, targetQboAccountId, {
+        signal: controller.signal,
+      });
+      if (!mountedRef.current || controller.signal.aborted || ccDiscoverySeqRef.current.get(key) !== nextSeq) return;
+      const candidate = result?.candidate || (Array.isArray(result?.candidates) && result.candidates.length === 1 ? result.candidates[0] : null);
+      setCcPaymentActionState((prev) => {
+        const current = prev[key] || {};
+        if (String(current.selectedAccountId || "") !== String(targetQboAccountId || "")) return prev;
+        return {
+          ...prev,
+          [key]: {
+            ...current,
+            discovering: false,
+            matching: false,
+            candidate,
+            candidates: result?.candidates || (candidate ? [candidate] : []),
+            targetTransactionId: result?.target_transaction_id || candidate?.transaction_id || null,
+            error: result?.candidate_found === false ? (result?.message || "No matching opposite-side payment was found yet.") : "",
+            timings_ms: {
+              ...(result?.timings_ms || {}),
+              frontend_state_update_ms: Date.now() - startedAt,
+            },
+          },
+        };
+      });
+    } catch (e) {
+      if (!mountedRef.current || controller.signal.aborted || ccDiscoverySeqRef.current.get(key) !== nextSeq) return;
+      setCcPaymentActionState((prev) => ({
+        ...prev,
+        [key]: {
+          ...(prev[key] || {}),
+          discovering: false,
+          matching: false,
+          error: e?.body?.message || e?.message || "Could not find a matching payment yet.",
+        },
+      }));
+    } finally {
+      if (ccDiscoverySeqRef.current.get(key) === nextSeq) {
+        ccDiscoveryAbortRef.current.delete(key);
+      }
+    }
+  }, [businessId, canRunAI, clearCreditCardPaymentDiscovery, usingDemo]);
+
+  const buildMatchedCreditCardPaymentTxn = useCallback((txn = {}, pair = {}) => {
+    const txnId = String(txn.id || "");
+    const isCheckingSide = String(pair.checking_transaction_id || "") === txnId;
+    const counterpartId = isCheckingSide ? pair.credit_card_transaction_id : pair.checking_transaction_id;
+    const targetAccountId = isCheckingSide ? pair.credit_card_qbo_account_id : pair.checking_qbo_account_id;
+    const targetAccountName = isCheckingSide ? pair.credit_card_qbo_account_name : pair.checking_qbo_account_name;
+    const counterpartAmount = isCheckingSide ? Math.abs(Number(pair.amount || 0)) : -Math.abs(Number(pair.amount || 0));
+    const counterpartDate = isCheckingSide ? pair.matched_date || pair.payment_date || null : pair.payment_date || pair.matched_date || null;
+    const meta = {
+      ...(txn.meta || {}),
+      taxonomy_type: "cc_payment",
+      cc_payment_pair_id: pair.id || null,
+      cc_payment_pair_role: isCheckingSide ? "checking" : "credit_card",
+      cc_payment_pair_txn_id: counterpartId || null,
+      cc_payment_pair_status: pair.status || "confirmed",
+      cc_payment_transfer_target_qbo_account_id: targetAccountId || null,
+      cc_payment_transfer_target_qbo_account_name: targetAccountName || null,
+      cc_payment_pair_counterpart_amount: counterpartAmount,
+      cc_payment_pair_counterpart_date: counterpartDate,
+      cc_payment_pair_confirmed_at: pair.updated_at || new Date().toISOString(),
+      cc_payment_pair_confirmed_by: "user",
+      cc_payment_pair_confirmation_source: "books_review",
+      match_type: "credit_card_payment_pair",
+      safe_to_auto_handle: false,
+      safe_to_auto_post: false,
+    };
+    return {
+      ...txn,
+      status: "matched",
+      taxonomy_type: "cc_payment",
+      cc_payment_pair_id: pair.id || null,
+      cc_payment_pair_role: meta.cc_payment_pair_role,
+      cc_payment_pair_txn_id: counterpartId || null,
+      cc_payment_pair_status: pair.status || "confirmed",
+      glAccountId: null,
+      glAccountName: null,
+      suggestedAccountId: null,
+      suggestedAccountName: null,
+      final_qbo_account_id: null,
+      final_qbo_account_name: null,
+      cc_payment_match_error: null,
+      post_error: null,
+      post_after: null,
+      match_type: "credit_card_payment_pair",
+      meta,
+    };
+  }, []);
+
+  const handleConfirmCreditCardPaymentMatch = async (id, targetQboAccountId, targetTransactionIdArg = null) => {
+    if (!canRunAI || !businessId || !id || !targetQboAccountId) return;
+    const key = String(id);
+    if (ccConfirmInFlightRef.current.has(key)) return;
+    const ccAction = ccPaymentActionState[key] || {};
+    const targetTransactionId = targetTransactionIdArg || ccAction.targetTransactionId || ccAction.candidate?.transaction_id || null;
+    ccConfirmInFlightRef.current.add(key);
+    setCcPaymentActionState((prev) => ({
+      ...prev,
+      [key]: {
+        ...(prev[key] || {}),
+        selectedAccountId: targetQboAccountId,
+        matching: true,
+        error: "",
+      },
+    }));
+    try {
+      const result = await confirmCreditCardPaymentMatch(businessId, id, targetQboAccountId, targetTransactionId);
+      const pair = result?.pair || null;
+      const affectedIds = new Set([id, pair?.checking_transaction_id, pair?.credit_card_transaction_id].filter(Boolean).map(String));
+      if (pair?.id) {
+        transactions.forEach((txn) => {
+          if (!affectedIds.has(String(txn.id))) return;
+          applyOptimisticCountTransition(txn, buildMatchedCreditCardPaymentTxn(txn, pair));
+        });
+        setTransactions((prev) => {
+          return prev
+            .map((txn) => affectedIds.has(String(txn.id)) ? buildMatchedCreditCardPaymentTxn(txn, pair) : txn)
+            .filter((txn) => activeTab === "matched" || !affectedIds.has(String(txn.id)));
+        });
+      }
       accountOverrides.current?.delete?.(id);
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
-      await loadMappingStatus();
+      setCcPaymentActionState((prev) => {
+        const next = { ...prev };
+        affectedIds.forEach((txnId) => delete next[txnId]);
+        return next;
+      });
     } catch (e) {
       const message = e?.body?.message || e?.message || "No matching opposite-side payment was found yet.";
-      setTransactions((prev) =>
-        prev.map((t) =>
-          t.id === id
-            ? {
-                ...t,
-                cc_payment_match_error: message,
-              }
-            : t
-        )
-      );
+      setCcPaymentActionState((prev) => ({
+        ...prev,
+        [key]: {
+          ...(prev[key] || {}),
+          matching: false,
+          error: message,
+        },
+      }));
+    } finally {
+      ccConfirmInFlightRef.current.delete(key);
     }
   };
 
@@ -2033,6 +2212,13 @@ function BookkeepingCleanup() {
         t.id === txnId ? { ...t, glAccountId: accountId, glAccountName: accountName } : t
       )
     );
+    if (isCreditCardPaymentWorkflowTxn(txn) && txn?.status !== "posted") {
+      if (accountId) {
+        startCreditCardPaymentDiscovery(txnId, accountId);
+      } else {
+        clearCreditCardPaymentDiscovery(txnId);
+      }
+    }
     try {
       if (txn && ["approved", "auto_approved", "failed"].includes(txn.status)) {
         if (txn.canEdit) {
@@ -2536,7 +2722,7 @@ function BookkeepingCleanup() {
       ) : null}
       {activeTab === "matched" ? (
         <div className="mt-2 text-xs text-slate-400">
-          These transactions were matched to records that already existed in QuickBooks. Bizzi did not create new income.
+          These transactions were matched to existing QuickBooks records or internal payment pairs. Bizzi did not create new income.
         </div>
       ) : null}
 
@@ -2839,11 +3025,14 @@ function BookkeepingCleanup() {
               onRejectIncomingDepositMatch={handleRejectIncomingDepositMatch}
               onUndoIncomingDepositMatch={handleUndoIncomingDepositMatch}
               incomingDepositMatchActionState={incomingDepositMatchActionState}
-              ccPaymentActionState={Object.fromEntries(
-                transactions
-                  .filter((txn) => txn.cc_payment_match_error)
-                  .map((txn) => [txn.id, { error: txn.cc_payment_match_error }])
-              )}
+              ccPaymentActionState={{
+                ...Object.fromEntries(
+                  transactions
+                    .filter((txn) => txn.cc_payment_match_error)
+                    .map((txn) => [txn.id, { error: txn.cc_payment_match_error }])
+                ),
+                ...ccPaymentActionState,
+              }}
               postingTransactionIds={new Set([...postingTransactionIds, ...undoingTransactionIds])}
               accounts={groupedChartAccounts}
               ccPaymentAccounts={ccPaymentAccounts}

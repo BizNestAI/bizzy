@@ -217,6 +217,7 @@ function compactCcPaymentCandidateForClient({
     plaid_account_id: candidate.plaid_account_id || null,
     qbo_account_mapping_id: mapping?.id || null,
     qbo_account_id: mapping?.qbo_account_id || null,
+    qbo_account_name: mapping?.qbo_account_name || cat?.final_qbo_account_name || null,
     date: candidate.date || null,
     authorized_date: candidate.authorized_date || null,
     amount_minor_units: signedAmountMinorUnits(candidate),
@@ -457,8 +458,12 @@ export async function linkCategorizationToCreditCardPair({ db = defaultSupabase,
       cc_payment_pair_counterpart_amount: item.counterpartAmount,
       cc_payment_pair_counterpart_date: item.counterpartDate,
       cc_payment_pair_counterpart_account_name: item.counterpartAccountName || item.targetAccountName || null,
+      cc_payment_pair_confirmed_at: isConfirmedPairStatus(pair.status) ? pair.updated_at || nowIso : null,
+      cc_payment_pair_confirmed_by: isConfirmedPairStatus(pair.status) ? "user" : null,
+      cc_payment_pair_confirmation_source: isConfirmedPairStatus(pair.status) ? "books_review" : null,
+      match_type: isConfirmedPairStatus(pair.status) ? "credit_card_payment_pair" : null,
       safe_to_auto_handle: false,
-      safe_to_auto_post: pair.status === "confirmed",
+      safe_to_auto_post: false,
     };
     const status = categorizationStatusForPair(pair);
     await db
@@ -474,6 +479,10 @@ export async function linkCategorizationToCreditCardPair({ db = defaultSupabase,
         final_qbo_account_name: null,
         final_canonical_account_key: null,
         post_after: null,
+        qbo_txn_id: null,
+        qbo_txn_type: null,
+        posted_at: null,
+        reconciled_at: null,
         post_error: isConfirmedPairStatus(pair.status) ? null : "cc_payment_pair_requires_confirmation",
         meta,
         decided_by: isConfirmedPairStatus(pair.status) ? "user" : "taxonomy",
@@ -680,10 +689,18 @@ export async function createSafeCreditCardPaymentPairForRow({
   targetQboAccountId = null,
   targetTransactionId = null,
   validateQboAccountType = validateBusinessQboPaymentAccountType,
+  discoverOnly = false,
 } = {}) {
+  const startedAt = Date.now();
+  const timings = {};
+  const markTiming = (key, valueStartedAt) => {
+    timings[key] = Date.now() - valueStartedAt;
+  };
   if (!businessId || !row?.id || !row.plaid_account_id) return { status: "no_match", reason: "missing_source" };
+  const existingStartedAt = Date.now();
   const existing = await findExistingCreditCardPaymentPairForTransaction({ db, businessId, transactionId: row.id });
-  if (existing) return { status: "paired", pair: existing, reason: "existing_pair" };
+  markTiming("existing_pair_lookup_ms", existingStartedAt);
+  if (existing) return { status: "paired", pair: existing, reason: "existing_pair", timings_ms: { ...timings, total_ms: Date.now() - startedAt } };
   const sourceAmountMinorUnits = signedAmountMinorUnits(row);
   if (!Number.isFinite(sourceAmountMinorUnits) || sourceAmountMinorUnits === 0) return { status: "no_match", reason: "invalid_amount" };
   if (!hasCreditCardPaymentSignal(row)) return { status: "no_match", reason: "missing_payment_memo" };
@@ -707,7 +724,9 @@ export async function createSafeCreditCardPaymentPairForRow({
   if (targetTransactionId) {
     candidateQuery = candidateQuery.eq("id", targetTransactionId);
   }
+  const candidateStartedAt = Date.now();
   const { data: candidateRows, error } = await candidateQuery;
+  markTiming("candidate_query_ms", candidateStartedAt);
   if (error) throw error;
   const candidates = (candidateRows || []).filter((candidate) => {
     const candidateAmountMinorUnits = signedAmountMinorUnits(candidate);
@@ -718,14 +737,18 @@ export async function createSafeCreditCardPaymentPairForRow({
   });
   if (!candidates?.length) return { status: "no_match", reason: "no_counterpart" };
   const candidateIds = [row.id, ...(candidates || []).map((candidate) => candidate.id)].filter(Boolean);
+  const catsStartedAt = Date.now();
   const { data: candidateCats, error: catErr } = await db
     .from("transaction_categorizations")
     .select("transaction_id,status,qbo_txn_id,final_qbo_account_id,is_archived,meta")
     .eq("business_id", businessId)
     .in("transaction_id", candidateIds);
+  markTiming("categorization_query_ms", catsStartedAt);
   if (catErr) throw catErr;
   const catByTxnId = new Map((candidateCats || []).map((cat) => [String(cat.transaction_id), cat]));
+  const activePairsStartedAt = Date.now();
   const activePairByTxnId = await fetchActiveCreditCardPaymentPairsByTransactionIds({ db, businessId, transactionIds: candidateIds });
+  markTiming("active_pair_query_ms", activePairsStartedAt);
   const hasFinalAccountingState = (txnId) => {
     const cat = catByTxnId.get(String(txnId));
     const status = String(cat?.status || "").toLowerCase();
@@ -742,8 +765,10 @@ export async function createSafeCreditCardPaymentPairForRow({
   };
   if (hasFinalAccountingState(row.id)) return { status: "no_match", reason: "source_already_final" };
 
+  const mappingStartedAt = Date.now();
   const accountMap = await fetchPlaidAccounts(db, businessId, [row.plaid_account_id, ...candidates.map((c) => c.plaid_account_id)]);
   const mappingMap = await fetchMappings(db, businessId, [row.plaid_account_id, ...candidates.map((c) => c.plaid_account_id)]);
+  markTiming("account_mapping_lookup_ms", mappingStartedAt);
   const sourceAcct = accountMap.get(String(row.plaid_account_id));
   const sourceMapping = mappingMap.get(String(row.plaid_account_id));
   const sourceOrientation = derivePairSourceOrientation({ row, sourceAcct, sourceMapping });
@@ -792,13 +817,16 @@ export async function createSafeCreditCardPaymentPairForRow({
     if (diff == null || diff > DATE_WINDOW_DAYS) continue;
     plausible.push({ candidate, checkingRow, cardRow, checkingAcct, cardAcct, checkingMapping, cardMapping, dateDiff: diff });
   }
+  const canonicalStartedAt = Date.now();
   const canonicalPlausible = collapseCanonicalCcPaymentCandidates({ plausible, catByTxnId, mappingMap, activePairByTxnId });
+  markTiming("pending_to_posted_canonicalization_ms", canonicalStartedAt);
 
   if (canonicalPlausible.length !== 1) {
     const reason = canonicalPlausible.length > 1 ? "cc_payment_pair_ambiguous" : "no_safe_pair";
     return {
       status: canonicalPlausible.length > 1 ? "ambiguous" : "no_match",
       reason,
+      timings_ms: { ...timings, total_ms: Date.now() - startedAt },
       candidates: canonicalPlausible.map((p) => p.candidate_debug || compactCcPaymentCandidateForClient({
         candidate: p.candidate,
         cat: catByTxnId.get(String(p.candidate.id)),
@@ -809,6 +837,23 @@ export async function createSafeCreditCardPaymentPairForRow({
   }
 
   const hit = canonicalPlausible[0];
+  const hitCandidate = hit.candidate_debug || compactCcPaymentCandidateForClient({
+    candidate: hit.candidate,
+    cat: catByTxnId.get(String(hit.candidate.id)),
+    mapping: mappingMap.get(String(hit.candidate.plaid_account_id)),
+    activePair: activePairByTxnId.get(String(hit.candidate.id)),
+  });
+  if (discoverOnly) {
+    return {
+      status: "candidate_found",
+      reason: "safe_pair_candidate",
+      candidate: hitCandidate,
+      candidates: hitCandidate ? [hitCandidate] : [],
+      target_transaction_id: hit.candidate?.id || null,
+      date_diff_days: hit.dateDiff,
+      timings_ms: { ...timings, total_ms: Date.now() - startedAt },
+    };
+  }
   const pairRecord = buildPairRecord({
     businessId,
     checkingRow: hit.checkingRow,
@@ -831,10 +876,14 @@ export async function createSafeCreditCardPaymentPairForRow({
       selected_target_qbo_type: sourceOrientation.expectedTargetQboType,
     },
   });
+  const pairStartedAt = Date.now();
   const resurrected = await upsertPairFromVoidedRequest({ db, businessId, pairRecord });
   if (resurrected) {
+    const linkStartedAt = Date.now();
     await linkCategorizationToCreditCardPair({ db, businessId, pair: resurrected });
-    return { status: "paired", pair: resurrected, reason: "voided_pair_reused" };
+    markTiming("categorization_update_ms", linkStartedAt);
+    markTiming("pair_creation_or_update_ms", pairStartedAt);
+    return { status: "paired", pair: resurrected, reason: "voided_pair_reused", timings_ms: { ...timings, total_ms: Date.now() - startedAt } };
   }
   const { data: pair, error: pairErr } = await db
     .from("credit_card_payment_pairs")
@@ -860,8 +909,93 @@ export async function createSafeCreditCardPaymentPairForRow({
     }
     throw pairErr;
   }
+  markTiming("pair_creation_or_update_ms", pairStartedAt);
+  const linkStartedAt = Date.now();
   await linkCategorizationToCreditCardPair({ db, businessId, pair });
-  return { status: "paired", pair, reason: "safe_pair_created" };
+  markTiming("categorization_update_ms", linkStartedAt);
+  return { status: "paired", pair, reason: "safe_pair_created", timings_ms: { ...timings, total_ms: Date.now() - startedAt } };
+}
+
+export async function discoverCreditCardPaymentMatchForTransaction({
+  db = defaultSupabase,
+  businessId,
+  transactionId,
+  targetQboAccountId,
+  validateQboAccountType = validateBusinessQboPaymentAccountType,
+} = {}) {
+  const startedAt = Date.now();
+  if (!businessId || !transactionId || !targetQboAccountId) {
+    const err = new Error("missing_cc_payment_match_target");
+    err.status = 400;
+    throw err;
+  }
+  const sourceStartedAt = Date.now();
+  const { data: row, error } = await db
+    .from("bank_transactions")
+    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required")
+    .eq("business_id", businessId)
+    .eq("id", transactionId)
+    .eq("is_archived", false)
+    .maybeSingle();
+  const sourceTransactionQueryMs = Date.now() - sourceStartedAt;
+  if (error) throw error;
+  if (!row) {
+    const err = new Error("cc_payment_source_not_found");
+    err.status = 404;
+    throw err;
+  }
+  if (row.pending === true) {
+    return {
+      ok: true,
+      matched: false,
+      candidate_found: false,
+      code: "pending_transaction_not_matchable",
+      message: "This payment is still pending.",
+      candidates: [],
+      timings_ms: {
+        source_transaction_query_ms: sourceTransactionQueryMs,
+        total_ms: Date.now() - startedAt,
+      },
+    };
+  }
+
+  const result = await createSafeCreditCardPaymentPairForRow({
+    db,
+    businessId,
+    row,
+    targetQboAccountId,
+    validateQboAccountType,
+    discoverOnly: true,
+  });
+  const timings = {
+    source_transaction_query_ms: sourceTransactionQueryMs,
+    ...(result?.timings_ms || {}),
+    total_ms: Date.now() - startedAt,
+  };
+  if (result.status === "candidate_found" && result.target_transaction_id) {
+    return {
+      ok: true,
+      matched: false,
+      candidate_found: true,
+      target_transaction_id: result.target_transaction_id,
+      candidate: result.candidate || null,
+      candidates: result.candidates || [],
+      reason: result.reason,
+      timings_ms: timings,
+    };
+  }
+  const code = result.reason || "cc_payment_no_matching_counterpart";
+  return {
+    ok: true,
+    matched: false,
+    candidate_found: false,
+    code,
+    message: code === "cc_payment_pair_ambiguous"
+      ? "More than one possible opposite-side payment was found."
+      : "No matching opposite-side payment was found yet.",
+    candidates: result.candidates || [],
+    timings_ms: timings,
+  };
 }
 
 export async function confirmCreditCardPaymentMatchForTransaction({
@@ -907,7 +1041,7 @@ export async function confirmCreditCardPaymentMatchForTransaction({
       ? result.pair
       : await confirmCreditCardPaymentPairForTransaction({ db, businessId, transactionId });
     await linkCategorizationToCreditCardPair({ db, businessId, pair: confirmedPair });
-    return { ok: true, matched: true, pair: confirmedPair, reason: result.reason };
+    return { ok: true, matched: true, pair: confirmedPair, reason: result.reason, timings_ms: result.timings_ms || null };
   }
   const code = result.reason || "cc_payment_no_matching_counterpart";
   return {
@@ -918,6 +1052,7 @@ export async function confirmCreditCardPaymentMatchForTransaction({
       ? "More than one possible opposite-side payment was found."
       : "No matching opposite-side payment was found yet.",
     candidates: result.candidates || [],
+    timings_ms: result.timings_ms || null,
   };
 }
 

@@ -203,6 +203,14 @@ test("confirms an Aug 5 checking payment to an Aug 4 credit-card payment", async
   assert.equal(cardCat.status, "matched");
   assert.equal(checkingCat.meta.cc_payment_pair_role, "checking");
   assert.equal(cardCat.meta.cc_payment_pair_role, "credit_card");
+  assert.equal(checkingCat.final_qbo_account_id, null);
+  assert.equal(cardCat.final_qbo_account_id, null);
+  assert.equal(checkingCat.post_after, null);
+  assert.equal(cardCat.post_after, null);
+  assert.equal(checkingCat.meta.safe_to_auto_post, false);
+  assert.equal(cardCat.meta.safe_to_auto_post, false);
+  assert.equal(checkingCat.meta.match_type, "credit_card_payment_pair");
+  assert.equal(cardCat.meta.match_type, "credit_card_payment_pair");
 });
 
 test("confirms the same pair when started from the credit-card side", async () => {
@@ -370,6 +378,14 @@ test("confirms the Sep 7 checking AMEX payment to the Sep 5 card-side payment", 
   assert.equal(result.pair.checking_transaction_id, "checking-sep7-amex-40");
   assert.equal(result.pair.credit_card_transaction_id, "amex-sep5-mobile-payment-40");
   assert.equal(data.credit_card_payment_pairs.length, 1);
+  const checkingCat = data.transaction_categorizations.find((row) => row.transaction_id === "checking-sep7-amex-40");
+  const cardCat = data.transaction_categorizations.find((row) => row.transaction_id === "amex-sep5-mobile-payment-40");
+  assert.equal(checkingCat.status, "matched");
+  assert.equal(cardCat.status, "matched");
+  assert.equal(checkingCat.meta.safe_to_auto_post, false);
+  assert.equal(cardCat.meta.safe_to_auto_post, false);
+  assert.equal(checkingCat.meta.match_type, "credit_card_payment_pair");
+  assert.equal(cardCat.meta.match_type, "credit_card_payment_pair");
 });
 
 test("hidden pending and posted versions collapse to one canonical card-side candidate", async () => {

@@ -133,9 +133,11 @@ test("one confirmation resolves the pair and validates the payment target by sou
   assert.match(qboAccounts, /getQBOClient\(businessId\)/);
   assert.match(qboAccounts, /normalizeQboPaymentAccountType\(resolved\.account\.type\) !== "CreditCard"/);
   assert.match(approvals, /confirmedCcPairs/);
-  assert.match(approvals, /pair\.checking_transaction_id/);
-  assert.match(approvals, /pair\.credit_card_transaction_id/);
-  assert.match(approvals, /status: "approved"[\s\S]*cc_payment_pair_status: "confirmed"/);
+  assert.match(service, /pair\.checking_transaction_id/);
+  assert.match(service, /pair\.credit_card_transaction_id/);
+  assert.match(approvals, /status: isConfirmedCcPaymentPair \? "matched"/);
+  assert.match(approvals, /safe_to_auto_post = false/);
+  assert.match(approvals, /linkCategorizationToCreditCardPair/);
 });
 
 test("manual target validation rejects manipulated or unusable QBO accounts before pair persistence", () => {
@@ -246,7 +248,8 @@ test("credit-card-payment selector uses mapped card destinations and preserves l
   assert.match(feed, /Loading credit-card accounts…/);
   assert.match(feed, /Couldn’t load credit-card accounts/);
   assert.match(feed, /No mapped credit-card accounts/);
-  assert.match(feed, /disabled=\{!currentAccount \|\| loading\}/);
+  assert.match(feed, /disabled=\{!currentAccount \|\| discovering \|\| busy\}/);
+  assert.match(feed, /disabled=\{disabled \|\| matching\}/);
   assert.match(feed, /Not a credit card payment/);
   assert.match(mappingsRoute, /\.from\("plaid_items"\)[\s\S]*\.select\("plaid_item_id,institution_name,institution_id,status,is_active"\)/);
   assert.match(mappingsRoute, /\.from\("plaid_accounts"\)[\s\S]*\.select\("plaid_account_id,plaid_item_id,name,official_name,mask,type,subtype,is_active"\)/);

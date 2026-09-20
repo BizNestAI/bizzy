@@ -371,6 +371,23 @@ export async function confirmCreditCardPaymentMatch(businessId, txnId, targetQbo
   return res;
 }
 
+export async function discoverCreditCardPaymentMatch(businessId, txnId, targetQboAccountId, options = {}) {
+  const payload = { business_id: businessId, target_qbo_account_id: targetQboAccountId };
+  const res = await safeFetch(apiUrl(`/api/bookkeeping/credit-card-payments/${encodeURIComponent(txnId)}/discover-match`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+    signal: options?.signal,
+  });
+  if (res && res.ok === false) {
+    const err = new Error(res.message || res.error || "cc_payment_discover_match_failed");
+    err.code = res.error || null;
+    err.body = res;
+    throw err;
+  }
+  return res;
+}
+
 export async function confirmLoanPaymentSplit(businessId, txnId, split = {}) {
   const payload = { business_id: businessId, split };
   const res = await safeFetch(apiUrl(`/api/bookkeeping/loan-payments/${encodeURIComponent(txnId)}/confirm-split`), {
@@ -866,6 +883,7 @@ export default {
   rejectCreditCardPayment,
   markCreditCardPayment,
   confirmCreditCardPaymentMatch,
+  discoverCreditCardPaymentMatch,
   confirmSplitTransaction,
   confirmLoanPaymentSplit,
   treatLoanPaymentAsRegularTransaction,

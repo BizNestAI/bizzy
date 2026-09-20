@@ -344,6 +344,9 @@ export function CreditCardPaymentMatchControl({
   matchedLabel = "",
   error = "",
   loading = false,
+  discovering = false,
+  matching = false,
+  candidate = null,
   disabled = false,
   onChange,
   onConfirm,
@@ -358,6 +361,19 @@ export function CreditCardPaymentMatchControl({
   const buttonLabel = matched
     ? statusLabel
     : currentAccount?.name || placeholder;
+  const busy = discovering || matching || loading;
+  const candidateAmount = Number(candidate?.amount_minor_units ?? 0) / 100;
+  const candidateAmountLabel = candidate
+    ? `${candidateAmount >= 0 ? "+" : "-"}$${Math.abs(candidateAmount).toFixed(2)}`
+    : "";
+  const candidateSummary = candidate
+    ? [
+        candidate.date,
+        candidate.description,
+        candidate.qbo_account_name,
+        candidateAmountLabel,
+      ].filter(Boolean).join(" · ")
+    : "";
 
   const syncMenuPosition = React.useCallback(() => {
     const el = ref.current;
@@ -398,7 +414,7 @@ export function CreditCardPaymentMatchControl({
   }, [open, syncMenuPosition]);
 
   return (
-    <div className="w-full min-w-0" ref={ref}>
+    <div className="w-full min-w-0" ref={ref} aria-busy={busy ? "true" : undefined}>
       <div className={`min-w-0 rounded-lg border px-2 py-1 shadow-[0_8px_22px_rgba(0,0,0,0.22)] ${
         matched
           ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-100"
@@ -414,7 +430,7 @@ export function CreditCardPaymentMatchControl({
           <div className="mt-1 flex min-w-0 items-center gap-1.5">
             <button
               type="button"
-              disabled={disabled || loading}
+              disabled={disabled || matching}
               onClick={(e) => {
                 e.stopPropagation();
                 setOpen((next) => {
@@ -431,16 +447,32 @@ export function CreditCardPaymentMatchControl({
             {onConfirm ? (
               <button
                 type="button"
-                disabled={!currentAccount || loading}
+                disabled={!currentAccount || discovering || busy}
                 onClick={(e) => {
                   e.stopPropagation();
                   onConfirm();
                 }}
-                className="h-7 shrink-0 rounded-md border border-emerald-300/35 bg-emerald-500/12 px-2 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45"
+                className="inline-flex h-7 min-w-[72px] shrink-0 items-center justify-center gap-1.5 rounded-md border border-emerald-300/35 bg-emerald-500/12 px-2 text-[10px] font-semibold text-emerald-100 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-45"
               >
-                {loading ? "..." : "Confirm"}
+                {matching || loading ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                    Matching…
+                  </>
+                ) : "Confirm"}
               </button>
             ) : null}
+          </div>
+        ) : null}
+        {discovering ? (
+          <div className="mt-1 flex items-center gap-1.5 text-[9px] font-medium text-cyan-100/75" role="status" aria-live="polite">
+            <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            Finding payment…
+          </div>
+        ) : null}
+        {!discovering && candidateSummary ? (
+          <div className="mt-1 whitespace-normal text-[9px] font-medium leading-snug text-cyan-100/70" role="status" aria-live="polite">
+            Matched to {candidateSummary}
           </div>
         ) : null}
         {error ? <div className="mt-1 whitespace-normal text-[9px] text-amber-100/80">{error}</div> : null}
@@ -1259,7 +1291,7 @@ export default function BookkeepingFeed({
               txn.status !== "posted" &&
               (isCcPaymentSuspected || (isCcPayment && !["confirmed", "posted"].includes(String(txn.cc_payment_pair_status || txn.meta?.cc_payment_pair_status || "").toLowerCase())));
             const ccAction = ccPaymentActionState?.[txn.id] || {};
-            const ccConfirmBusy = ccAction.loading === true;
+            const ccConfirmBusy = ccAction.loading === true || ccAction.matching === true;
             const loanSplitDraft = splitDrafts.get(txn.id) || null;
             const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
             const canUndoCcPaymentPair = allowCreditCardPaymentUndo && isCcPaymentWorkflow && hasCcPair && !isPosted && !txn.qbo_txn_id && !txn.qboTxnId && !txn.posted_at;
@@ -1277,6 +1309,7 @@ export default function BookkeepingFeed({
                 }}
                 role="button"
                 tabIndex={0}
+                aria-busy={(ccAction.discovering === true || ccAction.matching === true || ccAction.loading === true) ? "true" : undefined}
                 aria-expanded={isExpanded}
                 aria-label={`Show full memo for ${txn.description || "transaction"}`}
                 onClick={() => toggleExpandedRow(txn.id)}
@@ -1389,9 +1422,12 @@ export default function BookkeepingFeed({
                     matchedLabel={ccMatchedLabel}
                     error={ccAction.error}
                     loading={ccConfirmBusy}
+                    discovering={ccAction.discovering === true}
+                    matching={ccAction.matching === true}
+                    candidate={ccAction.candidate || null}
                     disabled={readOnly}
                     onChange={(id) => handleAccountSelect(txn.id, id)}
-                    onConfirm={() => onConfirmCcPaymentMatch?.(txn.id, selectedCcTargetValue)}
+                    onConfirm={() => onConfirmCcPaymentMatch?.(txn.id, selectedCcTargetValue, ccAction.targetTransactionId || ccAction.candidate?.transaction_id || null)}
                     onUseCoa={canRejectCcPayment ? () => onRejectCcPayment?.(txn.id) : null}
                     onRetryAccounts={onRetryCcPaymentAccounts}
                   />

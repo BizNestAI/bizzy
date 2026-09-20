@@ -4,6 +4,7 @@ import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
 import {
   confirmCreditCardPaymentMatchForTransaction,
+  discoverCreditCardPaymentMatchForTransaction,
   markTransactionAsCreditCardPayment,
   rejectCreditCardPaymentSuggestion,
   undoCreditCardPaymentPairForTransaction,
@@ -211,6 +212,35 @@ router.post("/credit-card-payments/mark", requireAuth, async (req, res) => {
   }
 });
 
+router.post("/credit-card-payments/:transactionId/discover-match", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  const transactionId = req.params?.transactionId;
+  const targetQboAccountId = req.body?.target_qbo_account_id || req.body?.targetQboAccountId || null;
+  if (!businessId) return;
+  if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+  if (!targetQboAccountId) return res.status(400).json({ ok: false, error: "missing_target_qbo_account_id" });
+
+  try {
+    const result = await discoverCreditCardPaymentMatchForTransaction({
+      businessId,
+      transactionId,
+      targetQboAccountId,
+    });
+    return res.json(result);
+  } catch (err) {
+    const code = String(err?.message || "cc_payment_discover_match_failed");
+    if (code.startsWith("cc_payment_") || code === "missing_cc_payment_match_target" || code === "pending_transaction_not_matchable") {
+      return res.status(err?.status || 400).json({ ok: false, error: code, message: code });
+    }
+    console.error("[bookkeeping][cc-payment-discover-match] failed", err?.message || err);
+    return res.status(500).json({
+      ok: false,
+      error: "cc_payment_discover_match_failed",
+      message: err?.message || "failed",
+    });
+  }
+});
+
 router.post("/credit-card-payments/:transactionId/confirm-match", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   const transactionId = req.params?.transactionId;
@@ -221,12 +251,18 @@ router.post("/credit-card-payments/:transactionId/confirm-match", requireAuth, a
   if (!targetQboAccountId) return res.status(400).json({ ok: false, error: "missing_target_qbo_account_id" });
 
   try {
+    const startedAt = Date.now();
     const result = await confirmCreditCardPaymentMatchForTransaction({
       businessId,
       transactionId,
       targetQboAccountId,
       targetTransactionId,
     });
+    result.timings_ms = {
+      ...(result.timings_ms || {}),
+      response_serialization_ms: 0,
+      total_route_ms: Date.now() - startedAt,
+    };
     if (result?.matched !== true) {
       const status = result?.code === "cc_payment_pair_ambiguous" ? 409 : 200;
       return res.status(status).json({

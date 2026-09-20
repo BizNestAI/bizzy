@@ -163,11 +163,12 @@ function stripIncomingDepositReviewForRewardCredit(normalized = {}) {
 }
 
 function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, operatorRequest = null) {
+  const meta = cat.meta || {};
   const specialCcPayment = isCreditCardPaymentWorkflow({
-    taxonomy_type: cat.meta?.taxonomy_type || null,
-    cc_payment_rejected: cat.meta?.cc_payment_rejected,
-    cc_payment_pair_id: cat.meta?.cc_payment_pair_id,
-    meta: cat.meta || {},
+    taxonomy_type: meta.taxonomy_type || null,
+    cc_payment_rejected: meta.cc_payment_rejected,
+    cc_payment_pair_id: meta.cc_payment_pair_id,
+    meta,
   });
   const suggestedId = specialCcPayment ? null : cat.suggested_qbo_account_id || null;
   const suggestedName = specialCcPayment ? null : cat.suggested_qbo_account_name || null;
@@ -175,6 +176,17 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
   const finalName = specialCcPayment ? null : cat.final_qbo_account_name || null;
   const amount = Number(row.amount || 0);
   const dir = row.direction || (amount < 0 ? "OUTFLOW" : amount > 0 ? "INFLOW" : "UNKNOWN");
+  const matchedExistingQbo =
+    cat.status === "matched_existing_qbo" ||
+    meta.matched_existing_qbo === true ||
+    meta.incoming_deposit_match_status === "confirmed";
+  const matchedCreditCardPayment =
+    meta.taxonomy_type === "cc_payment" &&
+    meta.cc_payment_pair_id &&
+    isConfirmedCreditCardPaymentPairStatus(meta.cc_payment_pair_status);
+  const matchType =
+    meta.match_type ||
+    (matchedCreditCardPayment ? "credit_card_payment_pair" : matchedExistingQbo ? "qbo_existing_transaction" : null);
   const normalized = {
     id: row.id,
     plaidTransactionId: row.plaid_transaction_id || null,
@@ -216,46 +228,47 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     canonicalVendorId: row.canonical_vendor_id || null,
     qboEntityType: row.qbo_entity_type || null,
     qboEntityId: row.qbo_entity_id || null,
-    is_check: cat.meta?.is_check === true,
-    check_number: cat.meta?.check_number || null,
-    vendor_rule_id: cat.meta?.vendor_rule_id || null,
-    suggestion_source: cat.meta?.suggestion_source || null,
-    vendor_rule_match_reason: cat.meta?.vendor_rule_match_reason || null,
+    is_check: meta.is_check === true,
+    check_number: meta.check_number || null,
+    vendor_rule_id: meta.vendor_rule_id || null,
+    suggestion_source: meta.suggestion_source || null,
+    vendor_rule_match_reason: meta.vendor_rule_match_reason || null,
     posted_at: cat.posted_at || null,
     reconciled_at: cat.reconciled_at || null,
     qbo_txn_type: cat.qbo_txn_type || null,
     qbo_txn_id: cat.qbo_txn_id || null,
-    incoming_deposit_match_id: cat.meta?.incoming_deposit_match_id || null,
-    incoming_deposit_match_status: cat.meta?.incoming_deposit_match_status || null,
-    incoming_deposit_confidence_tier: cat.meta?.incoming_deposit_confidence_tier || null,
-    incoming_deposit_reason_codes: cat.meta?.incoming_deposit_reason_codes || [],
-    incoming_deposit_candidates: cat.meta?.incoming_deposit_candidates || [],
-    incoming_deposit_confirmable: cat.meta?.incoming_deposit_confirmable ?? null,
-    incoming_deposit_confirmability_reason: cat.meta?.incoming_deposit_confirmability_reason || null,
-    incoming_deposit_independent_candidate_count: cat.meta?.incoming_deposit_independent_candidate_count ?? null,
-    matched_existing_qbo: cat.meta?.matched_existing_qbo === true || cat.status === "matched_existing_qbo",
+    incoming_deposit_match_id: meta.incoming_deposit_match_id || null,
+    incoming_deposit_match_status: meta.incoming_deposit_match_status || null,
+    incoming_deposit_confidence_tier: meta.incoming_deposit_confidence_tier || null,
+    incoming_deposit_reason_codes: meta.incoming_deposit_reason_codes || [],
+    incoming_deposit_candidates: meta.incoming_deposit_candidates || [],
+    incoming_deposit_confirmable: meta.incoming_deposit_confirmable ?? null,
+    incoming_deposit_confirmability_reason: meta.incoming_deposit_confirmability_reason || null,
+    incoming_deposit_independent_candidate_count: meta.incoming_deposit_independent_candidate_count ?? null,
+    matched_existing_qbo: matchedExistingQbo,
+    match_type: matchType,
     post_after: cat.post_after || null,
     post_error: cat.post_error || null,
     last_post_attempt_at: cat.last_post_attempt_at || null,
-    meta: cat.meta || null,
-    taxonomy_type: cat.meta?.taxonomy_type || null,
-    cc_payment_pair_id: cat.meta?.cc_payment_pair_id || null,
-    cc_payment_pair_role: cat.meta?.cc_payment_pair_role || null,
-    cc_payment_pair_txn_id: cat.meta?.cc_payment_pair_txn_id || null,
-    cc_payment_pair_status: cat.meta?.cc_payment_pair_status || null,
-    cc_payment_pair_confidence: cat.meta?.cc_payment_pair_confidence || null,
-    cc_payment_bank_qbo_account_id: cat.meta?.cc_payment_bank_qbo_account_id || null,
-    cc_payment_bank_qbo_account_name: cat.meta?.cc_payment_bank_qbo_account_name || null,
-    cc_payment_cc_qbo_account_id: cat.meta?.cc_payment_cc_qbo_account_id || null,
-    cc_payment_cc_qbo_account_name: cat.meta?.cc_payment_cc_qbo_account_name || null,
-    cc_payment_transfer_target_qbo_account_id: cat.meta?.cc_payment_transfer_target_qbo_account_id || null,
-    cc_payment_transfer_target_qbo_account_name: cat.meta?.cc_payment_transfer_target_qbo_account_name || null,
-    cc_payment_pair_counterpart_amount: cat.meta?.cc_payment_pair_counterpart_amount ?? null,
-    cc_payment_pair_counterpart_date: cat.meta?.cc_payment_pair_counterpart_date || null,
-    cc_payment_pair_counterpart_account_name: cat.meta?.cc_payment_pair_counterpart_account_name || null,
-    cc_payment_rejected: cat.meta?.cc_payment_rejected === true || cat.meta?.taxonomy_override === "not_cc_payment",
-    duplicate_risk: cat.meta?.duplicate_risk === true || cat.meta?.possible_duplicate === true || null,
-    relink_status: cat.meta?.relink_status || null,
+    meta: meta || null,
+    taxonomy_type: meta.taxonomy_type || null,
+    cc_payment_pair_id: meta.cc_payment_pair_id || null,
+    cc_payment_pair_role: meta.cc_payment_pair_role || null,
+    cc_payment_pair_txn_id: meta.cc_payment_pair_txn_id || null,
+    cc_payment_pair_status: meta.cc_payment_pair_status || null,
+    cc_payment_pair_confidence: meta.cc_payment_pair_confidence || null,
+    cc_payment_bank_qbo_account_id: meta.cc_payment_bank_qbo_account_id || null,
+    cc_payment_bank_qbo_account_name: meta.cc_payment_bank_qbo_account_name || null,
+    cc_payment_cc_qbo_account_id: meta.cc_payment_cc_qbo_account_id || null,
+    cc_payment_cc_qbo_account_name: meta.cc_payment_cc_qbo_account_name || null,
+    cc_payment_transfer_target_qbo_account_id: meta.cc_payment_transfer_target_qbo_account_id || null,
+    cc_payment_transfer_target_qbo_account_name: meta.cc_payment_transfer_target_qbo_account_name || null,
+    cc_payment_pair_counterpart_amount: meta.cc_payment_pair_counterpart_amount ?? null,
+    cc_payment_pair_counterpart_date: meta.cc_payment_pair_counterpart_date || null,
+    cc_payment_pair_counterpart_account_name: meta.cc_payment_pair_counterpart_account_name || null,
+    cc_payment_rejected: meta.cc_payment_rejected === true || meta.taxonomy_override === "not_cc_payment",
+    duplicate_risk: meta.duplicate_risk === true || meta.possible_duplicate === true || null,
+    relink_status: meta.relink_status || null,
     operator_request: normalizeOperatorRequest(operatorRequest),
     customer_answered: Boolean(operatorRequest?.answer_text && operatorRequest?.status === "answered" && !operatorRequest?.resolved_at),
     customer_response: operatorRequest?.answer_text || null,
@@ -656,6 +669,12 @@ async function fetchMatchedCreditCardPaymentRows({
         cc_payment_pair_counterpart_amount: pairRole === "checking" ? Math.abs(Number(pair.amount || 0)) : -Math.abs(Number(pair.amount || 0)),
         cc_payment_pair_counterpart_date: pairRole === "checking" ? pair.matched_date || pair.payment_date : pair.payment_date || pair.matched_date,
         cc_payment_pair_counterpart_account_name: pairRole === "checking" ? pair.credit_card_qbo_account_name : pair.checking_qbo_account_name,
+        cc_payment_pair_confirmed_at: pair.updated_at || null,
+        cc_payment_pair_confirmed_by: "user",
+        cc_payment_pair_confirmation_source: "books_review",
+        match_type: "credit_card_payment_pair",
+        safe_to_auto_handle: false,
+        safe_to_auto_post: false,
       };
       return normalizeBookkeepingTransactionRow(bank, { ...cat, status: "matched", meta: mergedMeta });
     })
@@ -800,19 +819,23 @@ export async function fetchBookkeepingTransactions({
 } = {}) {
   const safePage = Math.max(parseInt(page, 10) || 1, 1);
   const safePageSize = Math.min(Math.max(parseInt(pageSize, 10) || 25, 1), 200);
+  const statusKey = String(statusFilter || "needs_review").toLowerCase();
+  const needsCombinedMatchedPagination = statusKey === "matched" || statusKey === "reconciled";
+  const rpcLimit = needsCombinedMatchedPagination ? safePage * safePageSize : safePageSize;
+  const rpcOffset = needsCombinedMatchedPagination ? 0 : (safePage - 1) * safePageSize;
   const { data, error } = await db.rpc("get_bookkeeping_transactions_bounded", {
     p_business_id: businessId,
     p_status_filter: rpcStatusFilter(statusFilter),
     p_account_id: accountId || null,
     p_range_start: resolveRangeStart({ rangeParam, rangeStart }),
     p_range_end: normalizeBookkeepingDate(rangeEnd),
-    p_limit: safePageSize,
-    p_offset: (safePage - 1) * safePageSize,
+    p_limit: rpcLimit,
+    p_offset: rpcOffset,
   });
   if (error) throw error;
   const pageRows = data || [];
   let totalCount = pageRows.length ? Number(pageRows[0].total_count || 0) : 0;
-  if (!pageRows.length && safePage > 1) {
+  if (!pageRows.length && safePage > 1 && !needsCombinedMatchedPagination) {
     totalCount = await countBookkeepingTransactions({
       businessId,
       statusFilter,
@@ -823,7 +846,6 @@ export async function fetchBookkeepingTransactions({
       db,
     });
   }
-  const statusKey = String(statusFilter || "needs_review").toLowerCase();
   let rows = pageRows.map((row) => normalizeBookkeepingRpcRow(row));
   if (statusKey === "handled" || statusKey === "approved") {
     rows = rows.filter((row) => !deriveCreditCardPaymentStatus(row)?.matched);
@@ -844,15 +866,13 @@ export async function fetchBookkeepingTransactions({
       rangeParam,
       rangeStart,
       rangeEnd,
-      page: safePage,
-      pageSize: safePageSize,
+      page: 1,
+      pageSize: safePage * safePageSize,
     });
-    if (ccMatched.rows.length) {
-      rows = [...rows, ...ccMatched.rows]
-        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(a.id || "").localeCompare(String(b.id || "")))
-        .slice(0, safePageSize);
-      totalCount += ccMatched.totalCount;
-    }
+    rows = [...rows, ...ccMatched.rows]
+      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(a.id || "").localeCompare(String(b.id || "")))
+      .slice((safePage - 1) * safePageSize, safePage * safePageSize);
+    totalCount += ccMatched.totalCount;
   }
   const accountDisplayMap = await fetchPlaidAccountDisplayMap({
     db,
