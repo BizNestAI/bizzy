@@ -840,6 +840,8 @@ export default function BookkeepingFeed({
   totalCount,
   readOnly = false,
   showQboSchedule = false,
+  allowCreditCardPaymentUndo = false,
+  allowIncomingDepositUndo = false,
 }) {
   // Column widths (px) — draggable like QuickBooks
   const initialColWidths = React.useMemo(
@@ -1260,7 +1262,7 @@ export default function BookkeepingFeed({
             const ccConfirmBusy = ccAction.loading === true;
             const loanSplitDraft = splitDrafts.get(txn.id) || null;
             const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
-            const canUndoCcPaymentPair = isCcPaymentWorkflow && hasCcPair && !isPosted && !txn.qbo_txn_id && !txn.qboTxnId && !txn.posted_at;
+            const canUndoCcPaymentPair = allowCreditCardPaymentUndo && isCcPaymentWorkflow && hasCcPair && !isPosted && !txn.qbo_txn_id && !txn.qboTxnId && !txn.posted_at;
             const rowSelectable = !isPosted && !isPending && !isCcPaymentWorkflow && !incomingMatch.active && !isLoanSplitWorkflow && !readOnly;
 
             return (
@@ -1488,7 +1490,19 @@ export default function BookkeepingFeed({
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
                 ) : incomingMatch.active ? (
-                  incomingMatch.confirmed ? (
+                  incomingMatch.confirmed && allowIncomingDepositUndo && incomingMatch.matchId ? (
+                    <button
+                      type="button"
+                      onClick={() => onUndoIncomingDepositMatch?.(txn.id, incomingMatch.matchId, txn)}
+                      disabled={readOnly || incomingMatchAction.loading === true}
+                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
+                      title={readOnly ? "Billing required to edit transactions." : "Undo QuickBooks match"}
+                      aria-label="Undo QuickBooks match"
+                    >
+                      <RotateCcw size={11} strokeWidth={2.2} aria-hidden="true" />
+                      Undo
+                    </button>
+                  ) : incomingMatch.confirmed ? (
                     <button
                       type="button"
                       onClick={() => toggleExpandedRow(txn.id)}

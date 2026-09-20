@@ -175,6 +175,9 @@ test("dedicated credit-card payment match routes and UI do not use ordinary COA 
   assert.match(feed, /deriveCreditCardPaymentStatus/);
   assert.match(feed, /deriveCreditCardPaymentOrientation/);
   assert.match(feed, /CreditCardPaymentMatchControl/);
+  assert.match(feed, /allowCreditCardPaymentUndo = false/);
+  assert.match(feed, /allowCreditCardPaymentUndo && isCcPaymentWorkflow && hasCcPair/);
+  assert.match(feed, /allowIncomingDepositUndo = false/);
   assert.match(feed, /counterpartAccountType === "Bank"/);
   assert.match(feed, /counterpartAccountType === "CreditCard"/);
   assert.match(feed, /isQboBankAccount/);

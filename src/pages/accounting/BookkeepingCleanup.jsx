@@ -1318,6 +1318,7 @@ function BookkeepingCleanup() {
     )
   );
   const isHandledTab = activeTab === "handled";
+  const isMatchedTab = activeTab === "matched";
   const hasVisibleRows = feedRows.length > 0;
   const serverProcessingCount = Number(processingStatus?.active_count || 0);
   const hasRelevantProcessing = serverProcessingCount > 0;
@@ -2863,6 +2864,8 @@ function BookkeepingCleanup() {
               panelBorder={PANEL_BORDER}
               readOnly={adminView.active || !canRunAI}
               showQboSchedule={isHandledTab}
+              allowCreditCardPaymentUndo={isHandledTab || isMatchedTab}
+              allowIncomingDepositUndo={isMatchedTab}
             />
           )}
         </motion.div>

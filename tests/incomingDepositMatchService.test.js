@@ -459,6 +459,8 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(page, /hasIncomingDepositMatchWorkflow/);
   assert.match(page, /key: "matched", label: "Matched"/);
   assert.match(page, /status: activeTab === "handled" \|\| activeTab === "posted" \|\| activeTab === "matched" \|\| activeTab === "pending" \? activeTab : "needs_review"/);
+  assert.match(page, /const isMatchedTab = activeTab === "matched"/);
+  assert.match(page, /allowIncomingDepositUndo=\{isMatchedTab\}/);
   assert.match(page, /onConfirmIncomingDepositMatch/);
   assert.match(page, /onUndoIncomingDepositMatch/);
   assert.match(page, /incomingDepositActionInFlightRef/);

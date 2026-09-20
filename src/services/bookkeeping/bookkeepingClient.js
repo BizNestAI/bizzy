@@ -354,8 +354,9 @@ export async function markCreditCardPayment(businessId, txnId) {
   return res;
 }
 
-export async function confirmCreditCardPaymentMatch(businessId, txnId, targetQboAccountId) {
+export async function confirmCreditCardPaymentMatch(businessId, txnId, targetQboAccountId, targetTransactionId = null) {
   const payload = { business_id: businessId, target_qbo_account_id: targetQboAccountId };
+  if (targetTransactionId) payload.target_transaction_id = targetTransactionId;
   const res = await safeFetch(apiUrl(`/api/bookkeeping/credit-card-payments/${encodeURIComponent(txnId)}/confirm-match`), {
     method: "POST",
     headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),

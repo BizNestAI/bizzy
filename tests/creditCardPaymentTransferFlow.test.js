@@ -87,7 +87,9 @@ test("safe matcher requires more than amount and fails ambiguous matches closed"
   assert.match(service, /candidateRail === "credit_card"/);
   assert.match(service, /qboMappingRail\(sourceMapping\)/);
   assert.match(service, /issuerMatchesCheckingToCard/);
-  assert.match(service, /plausible\.length !== 1/);
+  assert.match(service, /collapseCanonicalCcPaymentCandidates/);
+  assert.match(service, /canonicalPlausible\.length !== 1/);
+  assert.match(service, /canonicalPlaidLineageKey/);
   assert.match(service, /"cc_payment_pair_ambiguous"/);
   assert.doesNotMatch(service, /sort\(\(a, b\) => a\.dateDiff - b\.dateDiff\)[\s\S]{0,200}scored\[0\]/);
 });
@@ -332,7 +334,7 @@ test("credit-card payment selector uses dark custom menu and can switch back to 
   assert.doesNotMatch(feed, /Use COA/);
   assert.match(feed, /Match as credit card payment/);
   assert.match(feed, /onUseCreditCardPayment/);
-  assert.match(feed, /canUndoCcPaymentPair = isCcPaymentWorkflow && hasCcPair/);
+  assert.match(feed, /canUndoCcPaymentPair = allowCreditCardPaymentUndo && isCcPaymentWorkflow && hasCcPair/);
   assert.match(feed, /Undo credit-card payment match/);
   assert.match(mirror, /CreditCardPaymentMatchControl/);
   assert.match(client, /markCreditCardPayment/);

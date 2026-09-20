@@ -180,11 +180,138 @@ async function fetchMappings(db, businessId, accountIds = []) {
   if (!businessId || !ids.length) return new Map();
   const { data, error } = await db
     .from("plaid_qbo_account_mappings")
-    .select("plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type")
+    .select("id,plaid_account_id,qbo_account_id,qbo_account_name,qbo_account_type")
     .eq("business_id", businessId)
     .in("plaid_account_id", ids);
   if (error) throw error;
   return new Map((data || []).map((row) => [String(row.plaid_account_id), row]));
+}
+
+function canonicalPlaidLineageKey(row = {}) {
+  return String(row.pending_transaction_id || row.plaid_transaction_id || row.id || "");
+}
+
+function candidateSortScore({ candidate = {}, cat = null } = {}) {
+  let score = 0;
+  if (candidate.pending !== true) score += 100;
+  if (candidate.is_archived !== true) score += 80;
+  if (candidate.pending_transaction_id) score += 30;
+  if (cat?.status && !["posted", "approved", "auto_approved", "matched", "matched_existing_qbo"].includes(String(cat.status).toLowerCase())) score += 10;
+  return score;
+}
+
+function compactCcPaymentCandidateForClient({
+  candidate = {},
+  cat = null,
+  mapping = null,
+  activePair = null,
+  eligibility = "eligible",
+  reason = null,
+} = {}) {
+  return {
+    id: candidate.id || null,
+    transaction_id: candidate.id || null,
+    plaid_transaction_id: candidate.plaid_transaction_id || null,
+    pending_transaction_id: candidate.pending_transaction_id || null,
+    business_id: candidate.business_id || null,
+    plaid_account_id: candidate.plaid_account_id || null,
+    qbo_account_mapping_id: mapping?.id || null,
+    qbo_account_id: mapping?.qbo_account_id || null,
+    date: candidate.date || null,
+    authorized_date: candidate.authorized_date || null,
+    amount_minor_units: signedAmountMinorUnits(candidate),
+    pending: candidate.pending === true,
+    is_archived: candidate.is_archived === true,
+    archived_at: candidate.archived_at || null,
+    archived_reason: candidate.archived_reason || null,
+    canonical_lineage_key: canonicalPlaidLineageKey(candidate),
+    review_status: cat?.status || null,
+    match_pair_id: activePair?.id || cat?.meta?.cc_payment_pair_id || null,
+    previously_matched_or_undone: Boolean(activePair?.id || cat?.meta?.cc_payment_rejected_pair_id || cat?.meta?.cc_payment_marked_at),
+    eligibility,
+    reason,
+    description: candidate.name || candidate.merchant_name || candidate.counterparty_name || null,
+  };
+}
+
+function collapseCanonicalCcPaymentCandidates({ plausible = [], catByTxnId = new Map(), mappingMap = new Map(), activePairByTxnId = new Map() } = {}) {
+  const grouped = new Map();
+  for (const item of plausible || []) {
+    const key = canonicalPlaidLineageKey(item.candidate);
+    if (!key) continue;
+    const current = grouped.get(key);
+    const score = candidateSortScore({ candidate: item.candidate, cat: catByTxnId.get(String(item.candidate.id)) });
+    const currentScore = current ? candidateSortScore({ candidate: current.candidate, cat: catByTxnId.get(String(current.candidate.id)) }) : -Infinity;
+    if (!current || score > currentScore) {
+      grouped.set(key, item);
+    }
+  }
+  return Array.from(grouped.values()).map((item) => ({
+    ...item,
+    candidate_debug: compactCcPaymentCandidateForClient({
+      candidate: item.candidate,
+      cat: catByTxnId.get(String(item.candidate.id)),
+      mapping: mappingMap.get(String(item.candidate.plaid_account_id)),
+      activePair: activePairByTxnId.get(String(item.candidate.id)),
+    }),
+  }));
+}
+
+async function fetchActiveCreditCardPaymentPairsByTransactionIds({ db, businessId, transactionIds = [] }) {
+  const ids = new Set((transactionIds || []).filter(Boolean).map(String));
+  if (!businessId || !ids.size) return new Map();
+  const { data, error } = await db
+    .from("credit_card_payment_pairs")
+    .select("*")
+    .eq("business_id", businessId)
+    .neq("status", "voided");
+  if (error) throw error;
+  const out = new Map();
+  for (const pair of data || []) {
+    for (const id of [pair.checking_transaction_id, pair.credit_card_transaction_id].filter(Boolean)) {
+      if (ids.has(String(id))) out.set(String(id), pair);
+    }
+  }
+  return out;
+}
+
+async function findCreditCardPaymentPairByRequestId({ db, businessId, requestId }) {
+  if (!businessId || !requestId) return null;
+  const { data, error } = await db
+    .from("credit_card_payment_pairs")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("request_id", requestId)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function upsertPairFromVoidedRequest({ db, businessId, pairRecord }) {
+  const existing = await findCreditCardPaymentPairByRequestId({ db, businessId, requestId: pairRecord.request_id });
+  if (!existing || existing.status !== "voided") return null;
+  const nowIso = new Date().toISOString();
+  const { data: updated, error } = await db
+    .from("credit_card_payment_pairs")
+    .update({
+      ...pairRecord,
+      status: "needs_review",
+      post_error: null,
+      posting_started_at: null,
+      lease_expires_at: null,
+      qbo_txn_id: null,
+      qbo_txn_type: null,
+      qbo_sync_token: null,
+      posted_at: null,
+      updated_at: nowIso,
+    })
+    .eq("business_id", businessId)
+    .eq("id", existing.id)
+    .eq("status", "voided")
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  return updated || null;
 }
 
 function qboMappingRail(mapping = {}) {
@@ -570,7 +697,7 @@ export async function createSafeCreditCardPaymentPairForRow({
 
   let candidateQuery = db
     .from("bank_transactions")
-    .select("id,plaid_account_id,amount,signed_amount,direction,date,name,merchant_name,counterparty_name,is_archived,pending,accounting_review_required")
+    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .neq("plaid_account_id", row.plaid_account_id)
@@ -593,11 +720,12 @@ export async function createSafeCreditCardPaymentPairForRow({
   const candidateIds = [row.id, ...(candidates || []).map((candidate) => candidate.id)].filter(Boolean);
   const { data: candidateCats, error: catErr } = await db
     .from("transaction_categorizations")
-    .select("transaction_id,status,qbo_txn_id,final_qbo_account_id,is_archived")
+    .select("transaction_id,status,qbo_txn_id,final_qbo_account_id,is_archived,meta")
     .eq("business_id", businessId)
     .in("transaction_id", candidateIds);
   if (catErr) throw catErr;
   const catByTxnId = new Map((candidateCats || []).map((cat) => [String(cat.transaction_id), cat]));
+  const activePairByTxnId = await fetchActiveCreditCardPaymentPairsByTransactionIds({ db, businessId, transactionIds: candidateIds });
   const hasFinalAccountingState = (txnId) => {
     const cat = catByTxnId.get(String(txnId));
     const status = String(cat?.status || "").toLowerCase();
@@ -607,6 +735,8 @@ export async function createSafeCreditCardPaymentPairForRow({
         cat?.final_qbo_account_id ||
         status === "approved" ||
         status === "auto_approved" ||
+        status === "matched" ||
+        status === "matched_existing_qbo" ||
         status === "posted"
     );
   };
@@ -633,7 +763,8 @@ export async function createSafeCreditCardPaymentPairForRow({
 
   const plausible = [];
   for (const candidate of candidates) {
-    if (candidate.pending === true || hasFinalAccountingState(candidate.id)) continue;
+    if (candidate.id === row.id || candidate.pending === true || candidate.is_archived === true || hasFinalAccountingState(candidate.id)) continue;
+    if (activePairByTxnId.has(String(candidate.id))) continue;
     const candidateAcct = accountMap.get(String(candidate.plaid_account_id));
     const candidateRail = plaidAccountRail(candidateAcct);
     const candidateMapping = mappingMap.get(String(candidate.plaid_account_id));
@@ -661,13 +792,23 @@ export async function createSafeCreditCardPaymentPairForRow({
     if (diff == null || diff > DATE_WINDOW_DAYS) continue;
     plausible.push({ candidate, checkingRow, cardRow, checkingAcct, cardAcct, checkingMapping, cardMapping, dateDiff: diff });
   }
+  const canonicalPlausible = collapseCanonicalCcPaymentCandidates({ plausible, catByTxnId, mappingMap, activePairByTxnId });
 
-  if (plausible.length !== 1) {
-    const reason = plausible.length > 1 ? "cc_payment_pair_ambiguous" : "no_safe_pair";
-    return { status: plausible.length > 1 ? "ambiguous" : "no_match", reason, candidates: plausible.map((p) => p.candidate.id) };
+  if (canonicalPlausible.length !== 1) {
+    const reason = canonicalPlausible.length > 1 ? "cc_payment_pair_ambiguous" : "no_safe_pair";
+    return {
+      status: canonicalPlausible.length > 1 ? "ambiguous" : "no_match",
+      reason,
+      candidates: canonicalPlausible.map((p) => p.candidate_debug || compactCcPaymentCandidateForClient({
+        candidate: p.candidate,
+        cat: catByTxnId.get(String(p.candidate.id)),
+        mapping: mappingMap.get(String(p.candidate.plaid_account_id)),
+        activePair: activePairByTxnId.get(String(p.candidate.id)),
+      })),
+    };
   }
 
-  const hit = plausible[0];
+  const hit = canonicalPlausible[0];
   const pairRecord = buildPairRecord({
     businessId,
     checkingRow: hit.checkingRow,
@@ -690,6 +831,11 @@ export async function createSafeCreditCardPaymentPairForRow({
       selected_target_qbo_type: sourceOrientation.expectedTargetQboType,
     },
   });
+  const resurrected = await upsertPairFromVoidedRequest({ db, businessId, pairRecord });
+  if (resurrected) {
+    await linkCategorizationToCreditCardPair({ db, businessId, pair: resurrected });
+    return { status: "paired", pair: resurrected, reason: "voided_pair_reused" };
+  }
   const { data: pair, error: pairErr } = await db
     .from("credit_card_payment_pairs")
     .insert(pairRecord)
@@ -699,7 +845,18 @@ export async function createSafeCreditCardPaymentPairForRow({
     const existingAfterRace = await findExistingCreditCardPaymentPairForTransaction({ db, businessId, transactionId: row.id });
     if (existingAfterRace) return { status: "paired", pair: existingAfterRace, reason: "existing_pair_after_race" };
     if (pairErr?.code === "23505") {
-      return { status: "ambiguous", reason: "cc_payment_pair_ambiguous", candidates: [hit.cardRow.id] };
+      const retryResurrected = await upsertPairFromVoidedRequest({ db, businessId, pairRecord });
+      if (retryResurrected) return { status: "paired", pair: retryResurrected, reason: "voided_pair_reused_after_conflict" };
+      return {
+        status: "ambiguous",
+        reason: "cc_payment_pair_ambiguous",
+        candidates: [hit.candidate_debug || compactCcPaymentCandidateForClient({
+          candidate: hit.candidate,
+          cat: catByTxnId.get(String(hit.candidate.id)),
+          mapping: mappingMap.get(String(hit.candidate.plaid_account_id)),
+          activePair: activePairByTxnId.get(String(hit.candidate.id)),
+        })],
+      };
     }
     throw pairErr;
   }
@@ -722,7 +879,7 @@ export async function confirmCreditCardPaymentMatchForTransaction({
   }
   const { data: row, error } = await db
     .from("bank_transactions")
-    .select("id,plaid_account_id,amount,signed_amount,direction,date,name,merchant_name,counterparty_name,is_archived,pending,accounting_review_required")
+    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required")
     .eq("business_id", businessId)
     .eq("id", transactionId)
     .eq("is_archived", false)
