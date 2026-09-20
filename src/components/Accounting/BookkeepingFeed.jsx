@@ -1260,6 +1260,7 @@ export default function BookkeepingFeed({
             const ccConfirmBusy = ccAction.loading === true;
             const loanSplitDraft = splitDrafts.get(txn.id) || null;
             const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
+            const canUndoCcPaymentPair = isCcPaymentWorkflow && hasCcPair && !isPosted && !txn.qbo_txn_id && !txn.qboTxnId && !txn.posted_at;
             const rowSelectable = !isPosted && !isPending && !isCcPaymentWorkflow && !incomingMatch.active && !isLoanSplitWorkflow && !readOnly;
 
             return (
@@ -1499,7 +1500,7 @@ export default function BookkeepingFeed({
                     <span className="text-[10px] text-slate-400">{incomingMatch.unavailable ? "Retry" : "Needs match"}</span>
                   )
                 ) : isCcPaymentWorkflow ? (
-                  ccWorkflowStatus?.matched ? (
+                  canUndoCcPaymentPair ? (
                     <button
                       className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
                       disabled={readOnly || isPosting}

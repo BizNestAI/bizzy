@@ -332,6 +332,8 @@ test("credit-card payment selector uses dark custom menu and can switch back to 
   assert.doesNotMatch(feed, /Use COA/);
   assert.match(feed, /Match as credit card payment/);
   assert.match(feed, /onUseCreditCardPayment/);
+  assert.match(feed, /canUndoCcPaymentPair = isCcPaymentWorkflow && hasCcPair/);
+  assert.match(feed, /Undo credit-card payment match/);
   assert.match(mirror, /CreditCardPaymentMatchControl/);
   assert.match(client, /markCreditCardPayment/);
   assert.match(customerRoute, /credit-card-payments\/mark/);
