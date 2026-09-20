@@ -719,6 +719,7 @@ function BookkeepingCleanup() {
   const [savingAutoPost, setSavingAutoPost] = useState(false);
   const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
+  const [undoingTransactionIds, setUndoingTransactionIds] = useState(() => new Set());
   const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
   const incomingDepositActionInFlightRef = useRef(new Set());
   const incomingDepositMatchedSuppressRef = useRef(new Set());
@@ -1330,7 +1331,7 @@ function BookkeepingCleanup() {
   const showLoadingState =
     !plaidNeverConnected &&
     !hasVisibleRows &&
-    (loadingTxns || isPreparingCategories || hasInconsistentEmptyPage || (!accountFilter && !usingDemo));
+    (loadingTxns || isPreparingCategories || (!accountFilter && !usingDemo));
   const categorizationMessage = useMemo(() => {
     if (!categorizationStatus) return null;
     if (categorizationStatus.phase === "enriching") {
@@ -1492,23 +1493,42 @@ function BookkeepingCleanup() {
     if (!businessId) return;
     const txn = transactions.find((t) => t.id === id);
     if (!txn) return;
+    const undoKey = String(id);
+    if (undoingTransactionIds.has(undoKey)) return;
     if (txn.status === "posted") {
       showPostedToast();
       return;
     }
     const needsReviewTxn = { ...txn, status: "needs_review" };
+    const pairId = txn.cc_payment_pair_id || txn.meta?.cc_payment_pair_id || null;
+    const pairedTxnIds = pairId
+      ? transactions
+          .filter((t) => String(t.cc_payment_pair_id || t.meta?.cc_payment_pair_id || "") === String(pairId))
+          .map((t) => String(t.id))
+      : [undoKey];
+    const optimisticTxnIds = new Set(pairedTxnIds.length ? pairedTxnIds : [undoKey]);
+    setUndoingTransactionIds((prev) => {
+      const next = new Set(prev);
+      optimisticTxnIds.forEach((txnId) => next.add(txnId));
+      return next;
+    });
     applyOptimisticCountTransition(txn, needsReviewTxn);
     setTransactions((prev) =>
-      prev.map((t) =>
-        t.id === id
-          ? needsReviewTxn
-          : t
-      )
+      prev
+        .map((t) => (t.id === id ? needsReviewTxn : t))
+        .filter((t) => !optimisticTxnIds.has(String(t.id)) || activeTab === "needs_review")
     );
     try {
-      await undoTransaction(businessId, id);
+      const undoResult = await undoTransaction(businessId, id);
+      const affectedIds = new Set(
+        (undoResult?.transaction_ids || undoResult?.transactionIds || [])
+          .map((txnId) => String(txnId))
+          .filter(Boolean)
+      );
+      optimisticTxnIds.forEach((txnId) => affectedIds.add(txnId));
+      setTransactions((prev) => prev.filter((t) => !affectedIds.has(String(t.id)) || activeTab === "needs_review"));
       await reloadAccounts();
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+      await reloadTransactions({ showBackgroundRefresh: true, refreshProcessingStatus: false });
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] undo failed", e?.message || e);
@@ -1516,6 +1536,12 @@ function BookkeepingCleanup() {
       setTransactions((prev) =>
         prev.map((t) => (t.id === id ? txn : t))
       );
+    } finally {
+      setUndoingTransactionIds((prev) => {
+        const next = new Set(prev);
+        optimisticTxnIds.forEach((txnId) => next.delete(txnId));
+        return next;
+      });
     }
   };
 
@@ -2241,8 +2267,12 @@ function BookkeepingCleanup() {
         if (fallbackPage?.rows?.length) {
           setTransactions(fallbackPage.rows);
           setTotalCount(typeof fallbackPage.totalCount === "number" ? fallbackPage.totalCount : fallbackPage.rows.length);
+        } else if (page > 1) {
+          const lastPage = Math.max(1, Math.ceil(Number(nextTotalValue || 0) / rowsPerPage));
+          const clampedPage = Math.min(page - 1, lastPage);
+          if (clampedPage !== page) setPage(clampedPage);
         }
-        setBackgroundRefreshingTxns(shouldShowBackgroundRefresh);
+        setBackgroundRefreshingTxns(false);
         return false;
       }
       setTransactions(normalizedList);
@@ -2813,7 +2843,7 @@ function BookkeepingCleanup() {
                   .filter((txn) => txn.cc_payment_match_error)
                   .map((txn) => [txn.id, { error: txn.cc_payment_match_error }])
               )}
-              postingTransactionIds={postingTransactionIds}
+              postingTransactionIds={new Set([...postingTransactionIds, ...undoingTransactionIds])}
               accounts={groupedChartAccounts}
               ccPaymentAccounts={ccPaymentAccounts}
               ccPaymentAccountsLoaded={ccPaymentAccountsLoaded}

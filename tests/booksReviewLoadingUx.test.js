@@ -43,9 +43,10 @@ test("Books Review does not render a blank table for empty rows with a positive 
   assert.match(source, /window\.sessionStorage\.removeItem\(cacheKey\)/);
   assert.match(source, /if \(isInconsistentEmptyTransactionPage\(payload\)\) return/);
   assert.match(source, /const fallbackPage = cacheKey \? lastSuccessfulTransactionPagesRef\.current\.get\(cacheKey\) : null/);
+  assert.match(source, /const clampedPage = Math\.min\(page - 1, lastPage\)/);
   assert.doesNotMatch(source, /lastNonEmptyTransactionsRef/);
   assert.match(source, /hasInconsistentEmptyPage/);
-  assert.match(source, /loadingTxns \|\| isPreparingCategories \|\| hasInconsistentEmptyPage/);
+  assert.doesNotMatch(source, /loadingTxns \|\| isPreparingCategories \|\| hasInconsistentEmptyPage/);
 });
 
 test("Books Review refresh cache is scoped by business, account, status, range, page, and page size", () => {
@@ -79,9 +80,26 @@ test("Books Review processing polling is read-only and only stays active while b
 
 test("Books Review full loading state is reserved for true first load without renderable rows", () => {
   assert.match(source, /const showLoadingState =[\s\S]*?!hasVisibleRows[\s\S]*?\(loadingTxns \|\| isPreparingCategories/);
+  assert.doesNotMatch(source, /showLoadingState =[\s\S]*?hasInconsistentEmptyPage/);
   assert.match(source, /setTransactions\(\[\]\);[\s\S]*?setTotalCount\(null\);[\s\S]*?setLoadingTxns\(true\)/);
   assert.match(source, /const cachedPage = readTransactionPageCache\(cacheKey\) \|\| previousPage/);
   assert.match(source, /if \(cachedPage && Array\.isArray\(cachedPage\.rows\)\) \{[\s\S]*?const ledgerSuppressed = suppressLedgerRowsFromNeedsReview\(cached\.rows[\s\S]*?setTransactions\(ledgerSuppressed\.rows\)[\s\S]*?setBackgroundRefreshingTxns\(shouldShowBackgroundRefresh\)/);
+});
+
+test("Books Review undo is row-scoped and reconciles in the background", () => {
+  const undoStart = source.indexOf("const handleUndo = async");
+  const undoEnd = source.indexOf("const handleRejectCreditCardPayment = async", undoStart);
+  const undoBody = source.slice(undoStart, undoEnd);
+
+  assert.match(source, /const \[undoingTransactionIds, setUndoingTransactionIds\] = useState\(\(\) => new Set\(\)\)/);
+  assert.match(undoBody, /const pairId = txn\.cc_payment_pair_id \|\| txn\.meta\?\.cc_payment_pair_id/);
+  assert.match(undoBody, /const optimisticTxnIds = new Set/);
+  assert.match(undoBody, /setUndoingTransactionIds/);
+  assert.match(undoBody, /await undoTransaction\(businessId, id\)/);
+  assert.match(undoBody, /undoResult\?\.transaction_ids \|\| undoResult\?\.transactionIds/);
+  assert.match(undoBody, /await reloadTransactions\(\{ showBackgroundRefresh: true, refreshProcessingStatus: false \}\)/);
+  assert.doesNotMatch(undoBody, /showBackgroundRefresh: false/);
+  assert.match(source, /postingTransactionIds=\{new Set\(\[\.\.\.postingTransactionIds, \.\.\.undoingTransactionIds\]\)\}/);
 });
 
 test("Books Review transaction fetches use timeout, abort cleanup, and Retry instead of endless loading", () => {
