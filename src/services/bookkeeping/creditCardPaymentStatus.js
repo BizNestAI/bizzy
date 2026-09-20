@@ -8,13 +8,17 @@ export function isCreditCardPaymentWorkflow(row = {}) {
   return row.taxonomy_type === "cc_payment" || meta.taxonomy_type === "cc_payment" || Boolean(row.cc_payment_pair_id || meta.cc_payment_pair_id);
 }
 
+export function isConfirmedCreditCardPaymentPairStatus(value = "") {
+  return ["confirmed", "posting", "failed", "posted"].includes(String(value || "").toLowerCase());
+}
+
 export function deriveCreditCardPaymentStatus(row = {}) {
   if (!isCreditCardPaymentWorkflow(row)) return null;
   const meta = row.meta || {};
   const pairId = row.cc_payment_pair_id || meta.cc_payment_pair_id || null;
   const pairStatus = String(row.cc_payment_pair_status || meta.cc_payment_pair_status || "").toLowerCase();
   const posted = Boolean(row.qbo_txn_id) || pairStatus === "posted";
-  const matched = Boolean(pairId) && ["confirmed", "posted", "auto_approved", "matched"].includes(pairStatus || "confirmed");
+  const matched = Boolean(pairId) && isConfirmedCreditCardPaymentPairStatus(pairStatus);
   if (posted) {
     return {
       key: "cc_payment_posted",
@@ -25,12 +29,13 @@ export function deriveCreditCardPaymentStatus(row = {}) {
     };
   }
   if (matched) {
+    const postingNeedsReview = pairStatus === "failed";
     return {
       key: "cc_payment_matched",
-      label: "Credit Card Payment · Matched",
+      label: postingNeedsReview ? "Credit Card Payment · Matched — posting needs review" : "Credit Card Payment · Matched",
       matched: true,
-      postable: true,
-      tone: "good",
+      postable: pairStatus !== "failed",
+      tone: postingNeedsReview ? "warning" : "good",
     };
   }
   return {

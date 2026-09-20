@@ -292,7 +292,7 @@ export default function BizzyChatBar({
               isLoading={!!isLoading}
               inputId="bizzy-chat-input"
               shellClassName={shellClassName}
-              autoFocus={isChatHome && shouldRender && !isCanvasOpen}
+              autoFocus={false}
             />
           </div>
         </div>

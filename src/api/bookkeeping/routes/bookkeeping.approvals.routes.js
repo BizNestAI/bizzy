@@ -6,6 +6,7 @@ import {
   confirmCreditCardPaymentMatchForTransaction,
   markTransactionAsCreditCardPayment,
   rejectCreditCardPaymentSuggestion,
+  undoCreditCardPaymentPairForTransaction,
 } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
 import {
   confirmLoanPaymentSplit,
@@ -63,6 +64,21 @@ router.post("/undo", requireAuth, async (req, res) => {
   }
 
   try {
+    const existingPairResult = await undoCreditCardPaymentPairForTransaction({
+      businessId,
+      transactionId: txnId,
+    }).catch((err) => {
+      if (err?.message === "cc_payment_pair_not_found") return null;
+      throw err;
+    });
+    if (existingPairResult?.undone) {
+      await refreshOperatorRequestSummaryBestEffort({
+        businessId,
+        reason: "cc_payment_pair_undo",
+      });
+      return res.json(existingPairResult);
+    }
+
     const nowIso = new Date().toISOString();
     const { data: updatedRows, error: updateErr } = await supabase
       .from("transaction_categorizations")

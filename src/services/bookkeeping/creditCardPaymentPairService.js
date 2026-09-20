@@ -91,6 +91,60 @@ function amountDollarsFromMinorUnits(cents) {
   return Math.abs(Number(cents || 0)) / 100;
 }
 
+function isConfirmedPairStatus(status = "") {
+  return ["confirmed", "posting", "failed", "posted"].includes(String(status || "").toLowerCase());
+}
+
+function categorizationStatusForPair(pair = {}) {
+  const status = String(pair?.status || "").toLowerCase();
+  if (status === "posted") return "posted";
+  if (isConfirmedPairStatus(status)) return "matched";
+  return "needs_review";
+}
+
+function buildNeedsMatchCreditCardPaymentMeta(meta = {}, { markedAt = new Date().toISOString() } = {}) {
+  const next = { ...(meta || {}) };
+  [
+    "cc_payment_pair_id",
+    "cc_payment_pair_role",
+    "cc_payment_pair_txn_id",
+    "cc_payment_pair_plaid_account_id",
+    "cc_payment_pair_historical_context_only",
+    "cc_payment_pair_status",
+    "cc_payment_pair_confidence",
+    "cc_payment_pair_ambiguous",
+    "cc_payment_pair_candidates",
+    "cc_payment_bank_qbo_account_id",
+    "cc_payment_bank_qbo_account_name",
+    "cc_payment_cc_qbo_account_id",
+    "cc_payment_cc_qbo_account_name",
+    "cc_payment_transfer_target_qbo_account_id",
+    "cc_payment_transfer_target_qbo_account_name",
+    "cc_payment_pair_counterpart_amount",
+    "cc_payment_pair_counterpart_date",
+    "cc_payment_pair_counterpart_account_name",
+    "cc_payment_mapping_confidence",
+    "cc_payment_mapping_notes",
+  ].forEach((key) => {
+    delete next[key];
+  });
+  next.taxonomy_type = "cc_payment";
+  next.taxonomy_subtype = "credit_card_payment";
+  next.taxonomy_override = "cc_payment";
+  next.cc_payment_marked_by_user = next.cc_payment_marked_by_user ?? true;
+  next.cc_payment_marked_at = next.cc_payment_marked_at || markedAt;
+  next.cc_payment_rejected = false;
+  next.cc_payment_mapping_confidence = "manual_review";
+  next.cc_payment_mapping_notes = "pair_undone_requires_rematch";
+  next.post_block_reason = "cc_payment_pair_requires_confirmation";
+  next.safe_to_auto_handle = false;
+  next.safe_to_auto_post = false;
+  next.auto_approve_reason = null;
+  delete next.cc_payment_rejected_at;
+  delete next.cc_payment_rejected_pair_id;
+  return next;
+}
+
 function stablePairRequestId({ businessId, checkingTransactionId, creditCardTransactionId, amount }) {
   const input = [
     businessId || "",
@@ -278,11 +332,7 @@ export async function linkCategorizationToCreditCardPair({ db = defaultSupabase,
       safe_to_auto_handle: false,
       safe_to_auto_post: pair.status === "confirmed",
     };
-    const status = pair.match_confidence === "high"
-      ? "auto_approved"
-      : existing?.status && existing.status !== "uncategorized"
-      ? existing.status
-      : "needs_review";
+    const status = categorizationStatusForPair(pair);
     await db
       .from("transaction_categorizations")
       .upsert({
@@ -296,9 +346,9 @@ export async function linkCategorizationToCreditCardPair({ db = defaultSupabase,
         final_qbo_account_name: null,
         final_canonical_account_key: null,
         post_after: null,
-        post_error: null,
+        post_error: isConfirmedPairStatus(pair.status) ? null : "cc_payment_pair_requires_confirmation",
         meta,
-        decided_by: pair.match_confidence === "high" ? "bizzi" : "taxonomy",
+        decided_by: isConfirmedPairStatus(pair.status) ? "user" : "taxonomy",
         decided_at: nowIso,
         updated_at: nowIso,
       }, { onConflict: "business_id,transaction_id" });
@@ -694,8 +744,12 @@ export async function confirmCreditCardPaymentMatchForTransaction({
     validateQboAccountType,
   });
   if (result.status === "paired" && result.pair?.id) {
-    await linkCategorizationToCreditCardPair({ db, businessId, pair: result.pair });
-    return { ok: true, matched: true, pair: result.pair, reason: result.reason };
+    const pairStatus = String(result.pair.status || "").toLowerCase();
+    const confirmedPair = pairStatus === "confirmed" || pairStatus === "posting" || pairStatus === "failed" || pairStatus === "posted"
+      ? result.pair
+      : await confirmCreditCardPaymentPairForTransaction({ db, businessId, transactionId });
+    await linkCategorizationToCreditCardPair({ db, businessId, pair: confirmedPair });
+    return { ok: true, matched: true, pair: confirmedPair, reason: result.reason };
   }
   const code = result.reason || "cc_payment_no_matching_counterpart";
   return {
@@ -795,6 +849,90 @@ export async function confirmCreditCardPaymentPairForTransaction({ db = defaultS
   if (error) throw error;
   await linkCategorizationToCreditCardPair({ db, businessId, pair: updated });
   return updated;
+}
+
+export async function undoCreditCardPaymentPairForTransaction({ db = defaultSupabase, businessId, transactionId }) {
+  if (!businessId || !transactionId) {
+    const err = new Error("missing_cc_payment_pair_undo_identity");
+    err.status = 400;
+    throw err;
+  }
+  const pair = await findExistingCreditCardPaymentPairForTransaction({ db, businessId, transactionId });
+  if (!pair) {
+    const err = new Error("cc_payment_pair_not_found");
+    err.status = 404;
+    throw err;
+  }
+  if (pair.qbo_txn_id || pair.posted_at || pair.status === "posted") {
+    const err = new Error("cc_payment_pair_already_posted");
+    err.status = 409;
+    throw err;
+  }
+  if (pair.status === "voided") {
+    return { ok: true, undone: true, idempotent: true, pair_id: pair.id, transaction_ids: [] };
+  }
+
+  const nowIso = new Date().toISOString();
+  const transactionIds = [pair.checking_transaction_id, pair.credit_card_transaction_id].filter(Boolean);
+  const { data: cats, error: readErr } = await db
+    .from("transaction_categorizations")
+    .select("transaction_id,meta")
+    .eq("business_id", businessId)
+    .in("transaction_id", transactionIds);
+  if (readErr) throw readErr;
+  const metaByTxnId = new Map((cats || []).map((cat) => [String(cat.transaction_id), cat.meta || {}]));
+
+  const { data: voided, error: pairErr } = await db
+    .from("credit_card_payment_pairs")
+    .update({
+      status: "voided",
+      post_error: "cc_payment_pair_undone_by_user",
+      posting_started_at: null,
+      lease_expires_at: null,
+      updated_at: nowIso,
+    })
+    .eq("business_id", businessId)
+    .eq("id", pair.id)
+    .neq("status", "posted")
+    .is("qbo_txn_id", null)
+    .select("*")
+    .maybeSingle();
+  if (pairErr) throw pairErr;
+  if (!voided) {
+    const err = new Error("cc_payment_pair_undo_conflict");
+    err.status = 409;
+    throw err;
+  }
+
+  const updates = transactionIds.map((id) => ({
+    business_id: businessId,
+    transaction_id: id,
+    status: "needs_review",
+    suggested_qbo_account_id: null,
+    suggested_qbo_account_name: null,
+    suggested_canonical_account_key: null,
+    final_qbo_account_id: null,
+    final_qbo_account_name: null,
+    final_canonical_account_key: null,
+    post_after: null,
+    post_error: "cc_payment_pair_requires_confirmation",
+    qbo_txn_id: null,
+    qbo_txn_type: null,
+    posted_at: null,
+    reconciled_at: null,
+    last_post_attempt_at: null,
+    meta: buildNeedsMatchCreditCardPaymentMeta(metaByTxnId.get(String(id)) || {}, { markedAt: nowIso }),
+    decided_by: "user",
+    decided_at: nowIso,
+    updated_at: nowIso,
+  }));
+  const { data: rows, error: upsertErr } = await db
+    .from("transaction_categorizations")
+    .upsert(updates, { onConflict: "business_id,transaction_id" })
+    .select("business_id,transaction_id,status,meta");
+  if (upsertErr) throw upsertErr;
+
+  return { ok: true, undone: true, idempotent: false, pair_id: pair.id, transaction_ids: transactionIds, rows: rows || [] };
 }
 
 export async function markCreditCardPaymentPairPosted({ db = defaultSupabase, businessId, pair, qboTxnId, qboSyncToken = null, postedAt = new Date().toISOString() }) {
