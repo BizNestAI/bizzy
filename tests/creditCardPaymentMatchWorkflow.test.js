@@ -11,6 +11,12 @@ async function confirmCreditCardPaymentMatchForTransaction(args) {
   return service.confirmCreditCardPaymentMatchForTransaction(args);
 }
 
+async function undoCreditCardPaymentPairForTransaction(args) {
+  servicePromise ||= import("../src/services/bookkeeping/creditCardPaymentPairService.js");
+  const service = await servicePromise;
+  return service.undoCreditCardPaymentPairForTransaction(args);
+}
+
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
@@ -79,16 +85,18 @@ class Query {
       return { data: this.single ? clone(rows[0] || null) : clone(rows), error: null };
     }
     if (this.action === "upsert") {
-      const payload = clone(this.payload);
+      const payloads = Array.isArray(this.payload) ? clone(this.payload) : [clone(this.payload)];
       const rows = this.db[this.table];
-      const idx = rows.findIndex((row) =>
-        String(row.business_id) === String(payload.business_id) &&
-        String(row.transaction_id) === String(payload.transaction_id)
-      );
-      if (idx >= 0) rows[idx] = { ...rows[idx], ...payload };
-      else rows.push(payload);
-      const row = idx >= 0 ? rows[idx] : payload;
-      return { data: this.single ? clone(row) : [clone(row)], error: null };
+      const updated = payloads.map((payload) => {
+        const idx = rows.findIndex((row) =>
+          String(row.business_id) === String(payload.business_id) &&
+          String(row.transaction_id) === String(payload.transaction_id)
+        );
+        if (idx >= 0) rows[idx] = { ...rows[idx], ...payload };
+        else rows.push(payload);
+        return idx >= 0 ? rows[idx] : payload;
+      });
+      return { data: this.single ? clone(updated[0] || null) : clone(updated), error: null };
     }
     const rows = this.rows();
     return { data: this.single ? clone(rows[0] || null) : clone(rows), error: null };
@@ -178,8 +186,13 @@ test("confirms an Aug 5 checking payment to an Aug 4 credit-card payment", async
   assert.equal(result.pair.checking_transaction_id, "checking-aug5");
   assert.equal(result.pair.credit_card_transaction_id, "card-aug4");
   assert.equal(result.pair.amount, 322.57);
-  assert.equal(data.transaction_categorizations.find((row) => row.transaction_id === "checking-aug5").meta.cc_payment_pair_role, "checking");
-  assert.equal(data.transaction_categorizations.find((row) => row.transaction_id === "card-aug4").meta.cc_payment_pair_role, "credit_card");
+  assert.equal(result.pair.status, "confirmed");
+  const checkingCat = data.transaction_categorizations.find((row) => row.transaction_id === "checking-aug5");
+  const cardCat = data.transaction_categorizations.find((row) => row.transaction_id === "card-aug4");
+  assert.equal(checkingCat.status, "matched");
+  assert.equal(cardCat.status, "matched");
+  assert.equal(checkingCat.meta.cc_payment_pair_role, "checking");
+  assert.equal(cardCat.meta.cc_payment_pair_role, "credit_card");
 });
 
 test("confirms the same pair when started from the credit-card side", async () => {
@@ -251,4 +264,37 @@ test("rejects same-sign candidates and wrong selected account identity", async (
     validateQboAccountType: validator,
   });
   assert.equal(wrongAccount.matched, false);
+});
+
+test("undoing a confirmed credit-card payment pair from either side restores both rows to Needs Match", async () => {
+  const { db, data, businessId } = makeDb();
+  const confirmed = await confirmCreditCardPaymentMatchForTransaction({
+    db,
+    businessId,
+    transactionId: "card-aug4",
+    targetQboAccountId: "qbo-bank",
+    validateQboAccountType: validator,
+  });
+  assert.equal(confirmed.matched, true, JSON.stringify(confirmed));
+
+  const undo = await undoCreditCardPaymentPairForTransaction({
+    db,
+    businessId,
+    transactionId: "checking-aug5",
+  });
+
+  assert.equal(undo.ok, true, JSON.stringify(undo));
+  assert.equal(undo.undone, true, JSON.stringify(undo));
+  assert.deepEqual(new Set(undo.transaction_ids), new Set(["checking-aug5", "card-aug4"]));
+  assert.equal(data.credit_card_payment_pairs[0].status, "voided");
+
+  const checkingCat = data.transaction_categorizations.find((row) => row.transaction_id === "checking-aug5");
+  const cardCat = data.transaction_categorizations.find((row) => row.transaction_id === "card-aug4");
+  for (const cat of [checkingCat, cardCat]) {
+    assert.equal(cat.status, "needs_review");
+    assert.equal(cat.post_error, "cc_payment_pair_requires_confirmation");
+    assert.equal(cat.meta.taxonomy_type, "cc_payment");
+    assert.equal(cat.meta.cc_payment_pair_id, undefined);
+    assert.equal(cat.meta.safe_to_auto_post, false);
+  }
 });

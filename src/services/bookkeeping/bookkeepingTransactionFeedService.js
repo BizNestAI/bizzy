@@ -509,14 +509,24 @@ async function fetchMatchedCreditCardPairLegs({
   rangeStart = null,
   rangeEnd = null,
 } = {}) {
-  if (!businessId) return [];
-  const { data, error } = await db
-    .from("credit_card_payment_pairs")
-    .select("*")
-    .eq("business_id", businessId)
-    .in("status", ["confirmed", "posting", "failed"])
-    .is("qbo_txn_id", null)
-    .order("updated_at", { ascending: false });
+  if (!businessId || typeof db?.from !== "function") return [];
+  let data = [];
+  let error = null;
+  try {
+    let query = db
+      .from("credit_card_payment_pairs")
+      .select("*")
+      .eq("business_id", businessId)
+      .in("status", ["confirmed", "posting", "failed"])
+      .is("qbo_txn_id", null);
+    if (typeof query.order === "function") query = query.order("updated_at", { ascending: false });
+    const result = await query;
+    data = result?.data || [];
+    error = result?.error || null;
+  } catch (err) {
+    if (err instanceof TypeError) return [];
+    throw err;
+  }
   if (error) throw error;
   const legs = [];
   for (const pair of data || []) {
@@ -674,7 +684,19 @@ export async function countBookkeepingTransactions({
     p_range_end: normalizeBookkeepingDate(rangeEnd),
   });
   if (error) throw error;
-  return Number(data || 0);
+  const baseCount = Number(data || 0);
+  const statusKey = String(statusFilter || "needs_review").toLowerCase();
+  if (!["matched", "reconciled", "handled", "approved"].includes(statusKey)) return baseCount;
+  const ccMatchedCount = await countMatchedCreditCardPairLegs({
+    db,
+    businessId,
+    accountId,
+    rangeParam,
+    rangeStart,
+    rangeEnd,
+  });
+  if (statusKey === "matched" || statusKey === "reconciled") return baseCount + ccMatchedCount;
+  return Math.max(0, baseCount - ccMatchedCount);
 }
 
 // Job Costing uses posted Books transactions as the source of truth.
@@ -750,7 +772,37 @@ export async function fetchBookkeepingTransactions({
       db,
     });
   }
-  const rows = pageRows.map((row) => normalizeBookkeepingRpcRow(row));
+  const statusKey = String(statusFilter || "needs_review").toLowerCase();
+  let rows = pageRows.map((row) => normalizeBookkeepingRpcRow(row));
+  if (statusKey === "handled" || statusKey === "approved") {
+    rows = rows.filter((row) => !deriveCreditCardPaymentStatus(row)?.matched);
+    const ccMatchedCount = await countMatchedCreditCardPairLegs({
+      db,
+      businessId,
+      accountId,
+      rangeParam,
+      rangeStart,
+      rangeEnd,
+    });
+    if (ccMatchedCount) totalCount = Math.max(0, totalCount - ccMatchedCount);
+  } else if (statusKey === "matched" || statusKey === "reconciled") {
+    const ccMatched = await fetchMatchedCreditCardPaymentRows({
+      db,
+      businessId,
+      accountId,
+      rangeParam,
+      rangeStart,
+      rangeEnd,
+      page: safePage,
+      pageSize: safePageSize,
+    });
+    if (ccMatched.rows.length) {
+      rows = [...rows, ...ccMatched.rows]
+        .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(a.id || "").localeCompare(String(b.id || "")))
+        .slice(0, safePageSize);
+      totalCount += ccMatched.totalCount;
+    }
+  }
   const accountDisplayMap = await fetchPlaidAccountDisplayMap({
     db,
     businessId,

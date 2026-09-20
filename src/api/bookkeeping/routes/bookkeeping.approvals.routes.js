@@ -65,6 +65,7 @@ router.post("/undo", requireAuth, async (req, res) => {
 
   try {
     const existingPairResult = await undoCreditCardPaymentPairForTransaction({
+      db: supabase,
       businessId,
       transactionId: txnId,
     }).catch((err) => {
@@ -135,6 +136,10 @@ router.post("/undo", requireAuth, async (req, res) => {
     console.info("[bookkeeping][undo]", { businessId, txnId, updated_count });
     return res.json({ ok: true, reverted: true, txn_id: txnId, updated_count, rows });
   } catch (err) {
+    const code = String(err?.message || "");
+    if (code.startsWith("cc_payment_") || code === "missing_cc_payment_pair_undo_identity") {
+      return res.status(err?.status || 400).json({ ok: false, error: code, message: code });
+    }
     console.error("[bookkeeping][undo] failed", err?.message || err);
     return res.status(500).json({
       ok: false,

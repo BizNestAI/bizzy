@@ -271,6 +271,7 @@ function buildPairRecord({ businessId, checkingRow, cardRow = null, checkingAcct
       creditCardTransactionId: cardRow?.id || null,
       amount: amountMinorUnits,
     }),
+    qbo_txn_id: null,
     qbo_txn_type: null,
   };
 }

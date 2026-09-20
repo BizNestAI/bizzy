@@ -1452,7 +1452,7 @@ export default function BookkeepingFeed({
                 ) : !isPending && !isCcPaymentWorkflow && !incomingMatch.active ? (
                   <span className="text-slate-400 text-[11px] truncate">{readOnlyGlLabel}</span>
                 ) : null}
-                {txn.status === "auto_approved" ? (
+                {txn.status === "auto_approved" && !isCcPaymentWorkflow ? (
                   <span className="inline-flex w-fit items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-wide text-emerald-200/90">
                     Auto-approved
                   </span>
@@ -1499,7 +1499,23 @@ export default function BookkeepingFeed({
                     <span className="text-[10px] text-slate-400">{incomingMatch.unavailable ? "Retry" : "Needs match"}</span>
                   )
                 ) : isCcPaymentWorkflow ? (
-                  <span className="text-[10px] text-slate-400">{ccWorkflowStatus?.matched ? "Matched" : "Needs match"}</span>
+                  ccWorkflowStatus?.matched ? (
+                    <button
+                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
+                      disabled={readOnly || isPosting}
+                      onClick={() => {
+                        if (readOnly || isPosting) return;
+                        onUndo && onUndo(txn.id);
+                      }}
+                      title={readOnly ? "Billing required to edit transactions." : "Undo credit-card payment match"}
+                      aria-label="Undo credit-card payment match"
+                    >
+                      <RotateCcw size={11} strokeWidth={2.2} aria-hidden="true" />
+                      Undo
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-slate-400">Needs match</span>
+                  )
                 ) : isLoanSplitWorkflow ? (
                   <span className="text-[10px] text-slate-400">{loanSplitDraft ? "Needs split" : "Loan split"}</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
