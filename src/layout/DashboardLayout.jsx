@@ -29,7 +29,7 @@ const BAR_GAP_PX = 32;
 const SPACER_EXTRA = 84;
 const DEFAULT_BAR_HEIGHT = 110;
 const MAX_BAR_HEIGHT = 220;
-const MIN_SPACER_PX = 280; // hard floor so dashboards never sit too high after canvas
+const MIN_SPACER_PX = 180;
 // Max width of the chat thread + bar (desktop)
 const CHAT_MAX_W = CHAT_CONTENT_MAX_W;
 
@@ -37,10 +37,6 @@ const CHAT_MAX_W = CHAT_CONTENT_MAX_W;
 const RIGHT_RAIL_W = 320;
 const HANDLE_W = 46;
 const GRID_GAP = 6;
-
-// Curtain sizing (tuned to start just above the prompt row)
-const CURTAIN_MIN_H = 75;
-const UNDERLAP = 8;          // tuck slightly above the chips so no content peeks through
 
 // This must match the wrapper class "bottom-12"
 const WRAPPER_BOTTOM_OFFSET_PX = 50;
@@ -309,9 +305,8 @@ const DashboardContent = ({ children }) => {
       const next = clampBarHeight(rect?.height);
       if (Date.now() < ignoreBarMeasureUntilRef.current) return;
       if (next === lastBarHeightRef.current && next === barHeight) return;
-      const stable = Math.max(lastBarHeightRef.current || DEFAULT_BAR_HEIGHT, next);
-      lastBarHeightRef.current = stable;
-      setBarHeight((current) => (Math.abs(current - stable) >= 1 ? stable : current));
+      lastBarHeightRef.current = next;
+      setBarHeight((current) => (Math.abs(current - next) >= 1 ? next : current));
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -324,9 +319,8 @@ const DashboardContent = ({ children }) => {
     if (!el) return;
     if (Date.now() < ignoreBarMeasureUntilRef.current) return;
     const next = clampBarHeight(el.getBoundingClientRect()?.height);
-    const stable = Math.max(lastBarHeightRef.current || DEFAULT_BAR_HEIGHT, next);
-    lastBarHeightRef.current = stable;
-    setBarHeight((current) => (Math.abs(current - stable) >= 1 ? stable : current));
+    lastBarHeightRef.current = next;
+    setBarHeight((current) => (Math.abs(current - next) >= 1 ? next : current));
   }, [showPortalBar, isCanvasOpen]);
 
   // When canvas closes, immediately restore the last measured bar height to avoid a temporary shrink
@@ -686,8 +680,6 @@ const DashboardContent = ({ children }) => {
     chatBounds.width > 0 &&
         createPortal(
           (() => {
-            const measured = chatWrapperRef.current?.getBoundingClientRect()?.height || 0;
-            const barH = Math.max(DEFAULT_BAR_HEIGHT, measured || barHeight || DEFAULT_BAR_HEIGHT);
             const navWidthPx =
               showRail && typeof window !== "undefined"
                 ? Number.parseFloat(
@@ -699,9 +691,6 @@ const DashboardContent = ({ children }) => {
             const bandLeft = navWidthPx;
             const barLeft = Math.max(0, chatBounds.left + DASH_BAR_ALIGN_NUDGE_PX - bandLeft);
             const barWidth = Math.max(0, chatBounds.width - DASH_BAR_ALIGN_NUDGE_PX);
-
-            // Cover only the fixed prompt/composer stack and the small gap above it.
-            const curtainH = Math.max(barH + UNDERLAP, CURTAIN_MIN_H);
 
             return (
               <MotionDiv
@@ -717,33 +706,36 @@ const DashboardContent = ({ children }) => {
                   zIndex: LAYERS.BAR,
                   overflow: "visible",
                   isolation: "isolate",
+                  paddingBottom: "32px",
                 }}
                 initial={{ opacity: 0, y: 40 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 40 }}
                 transition={{ duration: 0.25, ease: [0.22, 0.1, 0.25, 1] }}
               >
-                {/* Main-area bottom backdrop; prompts/composer stay constrained inside it. */}
+                {/* The backdrop shares this dock's natural height, so it grows and shrinks
+                    on the same frames as the prompt/composer stack. */}
                 <div
                   data-bizzy-chatbar-measure
                   data-bizzy-curtain
                   aria-hidden
                   style={{
                     position: "absolute",
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    height: `${curtainH}px`,
+                    inset: 0,
                     pointerEvents: "none",
                     zIndex: 0,
+                    background: "var(--bg)",
                   }}
                 >
                   <div
                     style={{
                       position: "absolute",
-                      inset: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: "100%",
+                      height: "32px",
                       background:
-                        "linear-gradient(180deg, rgba(5,6,6,0), rgba(5,6,6,0.96) 12px, var(--bg) 34px, var(--bg) 100%)",
+                        "linear-gradient(180deg, rgba(5,6,6,0), rgba(5,6,6,0.72) 55%, var(--bg) 100%)",
                       pointerEvents: "none",
                     }}
                   />
@@ -757,7 +749,6 @@ const DashboardContent = ({ children }) => {
                     width: `${barWidth}px`,
                     maxWidth: `${CHAT_MAX_W}px`,
                     marginLeft: `${barLeft}px`,
-                    marginBottom: "32px",
                   }}
                   className="pointer-events-auto"
                 >
