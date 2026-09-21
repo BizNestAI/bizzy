@@ -11,6 +11,7 @@ import {
 } from "../../services/bookkeeping/creditCardPaymentStatus.js";
 import { formatQboPostingSchedule } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { detectProcessorSettlementActivity } from "../../services/bookkeeping/processorSettlementProfiles.js";
+import { formatNumericCalendarDate } from "../../utils/dateUtils.js";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
@@ -653,7 +654,7 @@ function independentCandidateCount(candidates = []) {
   return (candidates || []).filter((candidate) => candidate?.candidate_role !== "supporting").length;
 }
 
-function incomingDepositMatchState(txn = {}) {
+export function incomingDepositMatchState(txn = {}) {
   const meta = txn.meta || {};
   const processorActivity = detectProcessorSettlementActivity(txn);
   const processorFee = txn.processor_fee || meta.processor_fee || null;
@@ -680,13 +681,21 @@ function incomingDepositMatchState(txn = {}) {
     active: true,
     isProcessorFee: isProbableProcessorFee,
     processor: processorFee?.processor || processorActivity?.profile?.name || null,
-    processorMatchState: processorFee?.matchState || (isProbableProcessorFee ? "checking_for_qbo_match" : null),
+    processorMatchState: confirmed
+      ? "matched_existing_qbo"
+      : unavailable
+        ? "qbo_match_check_unavailable"
+        : status === "ambiguous"
+          ? "multiple_qbo_matches"
+          : status === "needs_confirmation" && primary
+            ? "qbo_match_found"
+            : processorFee?.matchState || (isProbableProcessorFee ? "checking_for_qbo_match" : null),
     canCreateNewFee: processorFee?.canCreateNewFee === true,
     confirmed,
     unavailable,
     ambiguous,
     needsFreshCheck,
-    confirmable: isTruthy(confirmableValue),
+    confirmable: isTruthy(confirmableValue) || (status === "needs_confirmation" && Boolean(primary) && Boolean(txn.incoming_deposit_match_id || meta.incoming_deposit_match_id)),
     confirmabilityReason: txn.incoming_deposit_confirmability_reason || meta.incoming_deposit_confirmability_reason || null,
     independentCandidateCount: rootCount,
     invoiceOnly,
@@ -699,7 +708,7 @@ function incomingDepositMatchState(txn = {}) {
   };
 }
 
-function IncomingDepositMatchPanel({
+export function IncomingDepositMatchPanel({
   txn,
   state,
   action = {},
@@ -717,7 +726,6 @@ function IncomingDepositMatchPanel({
   const primary = state.primary || {};
   const isProcessorFee = state.isProcessorFee || primary.match_type === "qbo_processing_fee_expense";
   const processorState = state.processorMatchState;
-  const paymentCandidate = (state.candidates || []).find((candidate) => candidate.qbo_entity_type === "Payment") || null;
   const transitionSuccess = action.status === "success";
   const transitionMatching = action.status === "matching" || action.loading === true;
   const heading = state.confirmed || transitionSuccess
@@ -738,7 +746,7 @@ function IncomingDepositMatchPanel({
         ? "Needs match"
       : state.ambiguous
         ? "Needs match"
-        : "Possible QBO match";
+        : isProcessorFee ? "Existing QuickBooks fee found" : "Possible QBO match";
   const description = state.confirmed || transitionSuccess
     ? transitionSuccess ? "Match confirmed. No new QuickBooks transaction was created." : "Confirmed against existing QuickBooks activity. Bizzi did not create a new QuickBooks transaction."
     : action.error
@@ -796,16 +804,14 @@ function IncomingDepositMatchPanel({
       {primary.qbo_entity_type ? (
         <div className="mt-3 grid gap-2 text-[11px] text-slate-100 sm:grid-cols-3">
           <div><span className="text-slate-400">Bank amount</span><br />{formatMinorMoney(Math.round(Math.abs(Number(txn.amount || 0)) * 100), primary.currency || "USD") || "Not available"}</div>
-          <div><span className="text-slate-400">Bank date</span><br />{txn.date || "Not available"}</div>
-          <div><span className="text-slate-400">Match date</span><br />{txn.reconciled_at || action.matchedAt ? new Date(txn.reconciled_at || action.matchedAt).toLocaleDateString() : "Not available"}</div>
+          <div><span className="text-slate-400">Bank date</span><br />{formatNumericCalendarDate(txn.date, { fallback: "Not available" })}</div>
+          <div><span className="text-slate-400">Bank description</span><br />{txn.description || txn.payee || txn.vendor || "Not available"}</div>
           <div><span className="text-slate-400">QBO {primary.qbo_entity_type}</span><br />{formatMinorMoney(primary.amount_minor, primary.currency || "USD") || "Not available"}</div>
-          {primary.txn_date ? <div><span className="text-slate-400">QBO date</span><br />{primary.txn_date}</div> : null}
+          {primary.txn_date ? <div><span className="text-slate-400">QBO date</span><br />{formatNumericCalendarDate(primary.txn_date)}</div> : null}
           {primary.account_names?.length ? <div><span className="text-slate-400">QBO account</span><br />{primary.account_names.join(", ")}</div> : null}
           {primary.description ? <div><span className="text-slate-400">QBO description</span><br />{primary.description}</div> : null}
-          <div><span className="text-slate-400">QBO Payment</span><br />{paymentCandidate ? formatMinorMoney(paymentCandidate.amount_minor, paymentCandidate.currency || primary.currency || "USD") || "Not available" : "Not available"}</div>
           {invoiceText ? <div><span className="text-slate-400">Invoice</span><br />{invoiceText}</div> : null}
           {customerName ? <div><span className="text-slate-400">Customer</span><br />{customerName}</div> : null}
-          <div><span className="text-slate-400">Bank-account evidence</span><br />{bankEvidence}</div>
           {state.confirmed ? <div><span className="text-slate-400">Matched by</span><br />you</div> : null}
         </div>
       ) : null}
@@ -815,13 +821,17 @@ function IncomingDepositMatchPanel({
           {txn.glAccountName || txn.suggestedAccountName || "Payment Processing Fees"}
         </div>
       ) : null}
-      {state.reasons?.length ? (
-        <div className="mt-3 flex flex-wrap gap-1.5">
+      {state.reasons?.length || primary.bank_account_match ? (
+        <details className="mt-3 rounded-md border border-white/10 bg-black/10 px-2.5 py-2">
+          <summary className="cursor-pointer text-[10px] font-semibold text-slate-200">Why this matched</summary>
+          <div className="mt-2 text-[10px] text-slate-300">{bankEvidence}{state.tier ? ` · ${state.tier.replaceAll("_", " ")}` : ""}</div>
+          <div className="mt-2 flex flex-wrap gap-1.5">
           {state.reasons.slice(0, 6).map((reason) => {
             const label = humanizeReason(reason);
             return label ? <span key={reason} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-200">{label}</span> : null;
           })}
-        </div>
+          </div>
+        </details>
       ) : null}
       {state.ambiguous && selectableCandidates.length > 1 ? (
         <label className="mt-3 block text-[10px] font-semibold uppercase tracking-wide text-amber-100">
@@ -1113,13 +1123,7 @@ export default function BookkeepingFeed({
   };
 
   const fmtDate = (iso) => {
-    if (!iso) return "";
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    const yyyy = d.getFullYear();
-    return `${mm}-${dd}-${yyyy}`;
+    return formatNumericCalendarDate(iso, { fallback: String(iso || "") });
   };
 
   const sortedTransactions = React.useMemo(() => {

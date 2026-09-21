@@ -40,3 +40,16 @@ export function formatShortCalendarDate(value, options = {}) {
     ...(options.year ? { year: "numeric" } : {}),
   });
 }
+
+export function formatNumericCalendarDate(value, options = {}) {
+  const raw = String(value || "");
+  const match = raw.slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return `${match[2]}-${match[3]}-${match[1]}`;
+  const date = parseDisplayDate(value);
+  if (!date) return options.fallback ?? "";
+  return date.toLocaleDateString(options.locale, {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  }).replaceAll("/", "-");
+}

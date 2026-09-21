@@ -1,9 +1,10 @@
 import React from "react";
-import { CoaDropdown, CreditCardPaymentMatchControl } from "./BookkeepingFeed.jsx";
+import { CoaDropdown, CreditCardPaymentMatchControl, IncomingDepositMatchPanel, incomingDepositMatchState } from "./BookkeepingFeed.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
+import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import {
   deriveCreditCardPaymentOrientation,
   deriveCreditCardPaymentStatus,
@@ -34,6 +35,9 @@ export default function BookkeepingTransactionMirrorTable({
   onConfirmSplitTransaction,
   onTreatLoanPaymentAsRegular,
   ccPaymentActionState = {},
+  incomingDepositMatchActionState = {},
+  onInspectIncomingDepositMatch,
+  onConfirmIncomingDepositMatch,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -80,6 +84,9 @@ export default function BookkeepingTransactionMirrorTable({
             onConfirmSplitTransaction={onConfirmSplitTransaction}
             onTreatLoanPaymentAsRegular={onTreatLoanPaymentAsRegular}
             ccPaymentActionState={ccPaymentActionState}
+            incomingDepositMatchActionState={incomingDepositMatchActionState}
+            onInspectIncomingDepositMatch={onInspectIncomingDepositMatch}
+            onConfirmIncomingDepositMatch={onConfirmIncomingDepositMatch}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
             accountTypes={accountTypes}
@@ -110,6 +117,9 @@ function BookkeepingTransactionMirrorRow({
   onConfirmSplitTransaction,
   onTreatLoanPaymentAsRegular,
   ccPaymentActionState,
+  incomingDepositMatchActionState,
+  onInspectIncomingDepositMatch,
+  onConfirmIncomingDepositMatch,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -124,6 +134,7 @@ function BookkeepingTransactionMirrorRow({
     "";
   const initialAccountId = rowCcTargetId || row.final_qbo_account_id || row.glAccountId || row.suggestedAccountId || "";
   const [selectedAccountId, setSelectedAccountId] = React.useState(initialAccountId);
+  const [selectedCcCandidateId, setSelectedCcCandidateId] = React.useState("");
   const [loanSplitDraft, setLoanSplitDraft] = React.useState(null);
 
   React.useEffect(() => {
@@ -141,6 +152,7 @@ function BookkeepingTransactionMirrorRow({
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const protectedReason = getProtectedWorkflowReason(row);
+  const incomingMatch = incomingDepositMatchState(row);
   const ccWorkflowStatus = deriveCreditCardPaymentStatus(row);
   const ccOrientation = deriveCreditCardPaymentOrientation(row);
   const isPending = row.pending === true;
@@ -164,6 +176,7 @@ function BookkeepingTransactionMirrorRow({
     return false;
   });
   const ccAction = ccPaymentActionState?.[row.id] || {};
+  const incomingAction = incomingDepositMatchActionState?.[row.id] || {};
   const canUseLoanSplit =
     !isPosted &&
     !isPending &&
@@ -190,7 +203,7 @@ function BookkeepingTransactionMirrorRow({
   return (
     <>
     <div className={`${MIRROR_TABLE_GRID} items-center gap-3 px-4 py-3 text-sm text-white/75`}>
-      <div className="text-white/45">{formatShortDate(row.date)}</div>
+      <div className="text-white/45">{formatShortCalendarDate(row.date, { fallback: "No date" })}</div>
 
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
@@ -240,7 +253,7 @@ function BookkeepingTransactionMirrorRow({
             error={ccAction.error}
             loading={ccAction.loading || isActionBusy("ccmatch")}
             onChange={(id) => setSelectedAccountId(id)}
-            onConfirm={() => onConfirmCcPaymentMatch?.(row, selectedAccountId)}
+            onConfirm={() => onConfirmCcPaymentMatch?.(row, selectedAccountId, selectedCcCandidateId || null)}
             onUseCoa={!isPosted ? () => onRejectCcPayment?.(row) : null}
           />
         ) : isPending || genericActionsBlocked ? (
@@ -292,7 +305,26 @@ function BookkeepingTransactionMirrorRow({
         ) : null}
         <div className="flex flex-wrap gap-1.5">
           {ccWorkflowStatus ? (
-            <span className="text-[11px] text-white/45">{ccWorkflowStatus.matched ? "Matched" : "Needs match"}</span>
+            <>
+              <span className="text-[11px] text-white/45">{ccWorkflowStatus.matched ? "Matched" : "Needs match"}</span>
+              {Array.isArray(ccAction.candidates) && ccAction.candidates.length > 1 ? (
+                <label className="basis-full text-[10px] text-amber-100">
+                  Choose exact opposite-side transaction
+                  <select
+                    value={selectedCcCandidateId}
+                    onChange={(event) => setSelectedCcCandidateId(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-white/15 bg-[#101312] px-2 py-1.5 text-[10px] text-white"
+                  >
+                    <option value="">Select transaction…</option>
+                    {ccAction.candidates.map((candidate) => (
+                      <option key={candidate.transaction_id || candidate.id} value={candidate.transaction_id || candidate.id}>
+                        {candidate.date || "No date"} · {formatMoney(candidate.amount ?? candidate.signed_amount)} · {candidate.description || candidate.payee || candidate.transaction_id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+            </>
           ) : null}
           {isNeedsReviewFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus && !isLoanSplitWorkflow ? (
             <>
@@ -381,6 +413,17 @@ function BookkeepingTransactionMirrorRow({
         ) : null}
       </div>
     </div>
+    {incomingMatch.active ? (
+      <div className="border-t border-white/10 bg-black/20 px-4 pb-4">
+        <IncomingDepositMatchPanel
+          txn={row}
+          state={incomingMatch}
+          action={incomingAction}
+          onInspect={onInspectIncomingDepositMatch}
+          onConfirm={onConfirmIncomingDepositMatch}
+        />
+      </div>
+    ) : null}
     <SplitTransactionModal
       mode={loanSplitDraft?.mode || "loan_payment"}
       open={Boolean(loanSplitDraft)}
@@ -494,13 +537,6 @@ function formatBankAccountMeta(row) {
     .map((value) => String(value || "").replace(/[_-]+/g, " ").trim())
     .filter(Boolean);
   return parts.length ? parts.join(" · ") : "";
-}
-
-function formatShortDate(value) {
-  if (!value) return "No date";
-  const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 10);
-  return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 function formatMoney(value) {

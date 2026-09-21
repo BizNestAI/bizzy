@@ -32,9 +32,19 @@ export function isProtectedLoanPaymentWorkflow(row = {}) {
 }
 
 export function getProtectedWorkflowReason(row = {}) {
+  const meta = row.meta || {};
   const taxonomy = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
   const reason = String(row.accounting_review_reason || row.meta?.accounting_review_reason || "").toLowerCase();
   if (row.pending) return { label: "Pending bank transaction", detail: "Wait for the bank to finalize this transaction before accounting changes." };
+  const incomingStatus = String(row.incoming_deposit_match_status || meta.incoming_deposit_match_status || "").toLowerCase();
+  const incomingBlock = String(row.post_block_reason || meta.post_block_reason || meta.auto_post_block_reason || "").toLowerCase();
+  if (["needs_confirmation", "ambiguous", "match_check_unavailable", "unchecked", "superseded"].includes(incomingStatus) || ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(incomingBlock)) {
+    const unavailable = incomingStatus === "match_check_unavailable" || incomingBlock === "match_check_unavailable";
+    return {
+      label: unavailable ? "Match check unavailable" : incomingStatus === "ambiguous" ? "Choose QBO match" : "Possible QBO match",
+      detail: unavailable ? "Refresh the QuickBooks match check before taking an accounting action." : "Confirm or reject the existing QuickBooks candidate before using the ordinary approval workflow.",
+    };
+  }
   if (isProtectedCreditCardPaymentWorkflow(row)) {
     return { label: "Credit card payment", detail: "Credit card payment handling uses the protected transfer workflow." };
   }

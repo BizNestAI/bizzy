@@ -74,6 +74,10 @@ const BOOKKEEPING_FEED_CONFIG = {
     label: "Handled in Books Review",
     description: "Exact selected-month Books Review Handled population.",
   },
+  matched: {
+    label: "Matched",
+    description: "Transactions confirmed against existing QuickBooks activity without creating duplicates.",
+  },
   pending: {
     label: "Pending Bank Transactions",
     description: "Plaid transactions waiting to settle before bookkeeping action.",
@@ -239,6 +243,7 @@ export default function MonthlyReviewConsole() {
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
   const [bookkeepingRulePreferences, setBookkeepingRulePreferences] = useState({});
   const [ccPaymentActionState, setCcPaymentActionState] = useState({});
+  const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
   const [loadingBusinesses, setLoadingBusinesses] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingLedger, setLoadingLedger] = useState(false);
@@ -1116,7 +1121,7 @@ export default function MonthlyReviewConsole() {
     setSourceLedger((current) => patchSourceLedgerTransaction(current, nextRow));
   }, [sourceLedger]);
 
-  const handleMirrorConfirmCreditCardPaymentMatch = useCallback(async (row, targetQboAccountId) => {
+  const handleMirrorConfirmCreditCardPaymentMatch = useCallback(async (row, targetQboAccountId, targetTransactionId = null) => {
     if (!selectedBusinessId || !row?.id || !targetQboAccountId) return;
     const key = `ccmatch:${row.id}`;
     setBusyFeedActions((current) => ({ ...current, [key]: true }));
@@ -1127,6 +1132,7 @@ export default function MonthlyReviewConsole() {
         body: {
           month,
           target_qbo_account_id: targetQboAccountId,
+          target_transaction_id: targetTransactionId,
         },
       });
       if (result?.ok === false) {
@@ -1152,6 +1158,7 @@ export default function MonthlyReviewConsole() {
         [row.id]: {
           loading: false,
           error: e?.body?.message || e?.message || "No matching opposite-side payment was found yet.",
+          candidates: e?.body?.candidates || [],
         },
       }));
     } finally {
@@ -1169,6 +1176,43 @@ export default function MonthlyReviewConsole() {
       bookkeepingFeeds[status]?.expanded ? loadBookkeepingFeed(status, { reset: true }) : Promise.resolve()
     )));
   }, [bookkeepingFeeds, loadBookkeepingFeed, loadBookkeepingFeedCounts]);
+
+  const handleMirrorInspectIncomingDepositMatch = useCallback(async (transactionId) => {
+    if (!selectedBusinessId || !transactionId) return;
+    setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: true, status: "matching", error: "" } }));
+    try {
+      const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(transactionId)}/incoming-deposit-match/refresh`, {
+        method: "POST",
+        body: { month },
+      });
+      if (result?.ok === false) throw new Error(result.message || result.error || "Could not refresh the QuickBooks match.");
+      setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, status: "success", error: "" } }));
+      await refreshExpandedBookkeepingFeeds();
+    } catch (error) {
+      setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, error: error?.message || "Could not refresh the QuickBooks match." } }));
+    }
+  }, [month, refreshExpandedBookkeepingFeeds, selectedBusinessId]);
+
+  const handleMirrorConfirmIncomingDepositMatch = useCallback(async (transactionId, matchId, row, selection = {}) => {
+    if (!selectedBusinessId || !transactionId || !matchId) return;
+    setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: true, status: "matching", error: "" } }));
+    try {
+      const result = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions/${encodeURIComponent(transactionId)}/incoming-deposit-match/${encodeURIComponent(matchId)}/confirm`, {
+        method: "POST",
+        body: {
+          month,
+          expected_bank_updated_at: row?.updated_at || null,
+          qbo_entity_id: selection?.qboEntityId || null,
+          qbo_entity_type: selection?.qboEntityType || null,
+        },
+      });
+      if (result?.ok === false) throw new Error(result.message || result.error || "Could not confirm the QuickBooks match.");
+      setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, status: "success", matchedAt: new Date().toISOString(), error: "" } }));
+      await refreshExpandedBookkeepingFeeds();
+    } catch (error) {
+      setIncomingDepositMatchActionState((current) => ({ ...current, [transactionId]: { loading: false, error: error?.message || "Could not confirm the QuickBooks match." } }));
+    }
+  }, [month, refreshExpandedBookkeepingFeeds, selectedBusinessId]);
 
   const handleMirrorMarkCreditCardPayment = useCallback(async (row) => {
     if (!selectedBusinessId || !row?.id) return;
@@ -2091,6 +2135,9 @@ export default function MonthlyReviewConsole() {
                   onConfirmSplitTransaction={handleMirrorConfirmSplitTransaction}
                   onTreatLoanPaymentAsRegular={handleMirrorTreatLoanPaymentAsRegular}
                   ccPaymentActionState={ccPaymentActionState}
+                  incomingDepositMatchActionState={incomingDepositMatchActionState}
+                  onInspectIncomingDepositMatch={handleMirrorInspectIncomingDepositMatch}
+                  onConfirmIncomingDepositMatch={handleMirrorConfirmIncomingDepositMatch}
                   onCreateAccount={createMonthlyReviewQboAccount}
                   onCreatedAccountSelect={injectSourceLedgerAccount}
                   accountTypes={qboAccountTypes}
@@ -2215,6 +2262,9 @@ function BookkeepingFeedMirrorPanels({
   onConfirmSplitTransaction,
   onTreatLoanPaymentAsRegular,
   ccPaymentActionState,
+  incomingDepositMatchActionState,
+  onInspectIncomingDepositMatch,
+  onConfirmIncomingDepositMatch,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -2295,6 +2345,9 @@ function BookkeepingFeedMirrorPanels({
             onConfirmSplitTransaction={onConfirmSplitTransaction}
             onTreatLoanPaymentAsRegular={onTreatLoanPaymentAsRegular}
             ccPaymentActionState={ccPaymentActionState}
+            incomingDepositMatchActionState={incomingDepositMatchActionState}
+            onInspectIncomingDepositMatch={onInspectIncomingDepositMatch}
+            onConfirmIncomingDepositMatch={onConfirmIncomingDepositMatch}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
             accountTypes={accountTypes}
@@ -2750,6 +2803,9 @@ function BookkeepingFeedMirrorSection({
   onConfirmSplitTransaction,
   onTreatLoanPaymentAsRegular,
   ccPaymentActionState,
+  incomingDepositMatchActionState,
+  onInspectIncomingDepositMatch,
+  onConfirmIncomingDepositMatch,
   onCreateAccount,
   onCreatedAccountSelect,
   accountTypes,
@@ -2810,6 +2866,9 @@ function BookkeepingFeedMirrorSection({
               onConfirmSplitTransaction={onConfirmSplitTransaction}
               onTreatLoanPaymentAsRegular={onTreatLoanPaymentAsRegular}
               ccPaymentActionState={ccPaymentActionState}
+              incomingDepositMatchActionState={incomingDepositMatchActionState}
+              onInspectIncomingDepositMatch={onInspectIncomingDepositMatch}
+              onConfirmIncomingDepositMatch={onConfirmIncomingDepositMatch}
               onCreateAccount={onCreateAccount}
               onCreatedAccountSelect={onCreatedAccountSelect}
               accountTypes={accountTypes}
