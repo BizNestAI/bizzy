@@ -1245,6 +1245,53 @@ body.pdf-modal-open .bizzy-qprompts {
 }
 
 /* Shared Bizzi chat composer */
+.bizzy-chat-composer-group{
+  width: 100%;
+}
+
+.bizzy-quick-prompts-panel{
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(5px);
+  margin-bottom: 0;
+  visibility: hidden;
+  transition:
+    grid-template-rows 240ms cubic-bezier(.2,.8,.2,1),
+    opacity 200ms ease,
+    transform 240ms cubic-bezier(.2,.8,.2,1),
+    margin-bottom 240ms cubic-bezier(.2,.8,.2,1),
+    visibility 0s linear 240ms;
+}
+
+.bizzy-quick-prompts-panel.is-open{
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
+  margin-bottom: 8px;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.bizzy-quick-prompts-panel__inner{
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bizzy-chat-composer__quick-prompts svg{
+  transition: transform 220ms cubic-bezier(.2,.8,.2,1);
+}
+
+.bizzy-chat-composer__quick-prompts.is-open{
+  color: rgba(105,240,183,0.92);
+  border-color: rgba(62,220,158,0.28);
+  background: rgba(62,220,158,0.09);
+}
+
+.bizzy-chat-composer__quick-prompts.is-open svg{
+  transform: rotate(10deg) scale(1.04);
+}
+
 .bizzy-chat-composer{
   min-height: 64px;
   width: 100%;
@@ -1360,6 +1407,7 @@ body.pdf-modal-open .bizzy-qprompts {
 @media (prefers-reduced-motion: reduce){
   .bizzy-chat-composer,
   .bizzy-chat-composer *,
+  .bizzy-quick-prompts-panel,
   [data-bizzy-chip],
   .bizzy-chathome .bizzy-quickprompt{
     transition-duration: 0ms !important;

@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
+import { Sparkles } from "lucide-react";
 import BizzySubmitButton from "./BizzySubmitButton";
-import BizzyVoiceIcon from "./BizzyVoiceIcon";
+import AskBizzyQuickPrompts from "./AskBizzyQuickPrompts";
 
 const DEFAULT_PLACEHOLDER = "Talk to Bizzi about your books, cash flow, jobs, or taxes…";
 
@@ -15,8 +16,18 @@ export default function BizzyChatComposer({
   inputId = "bizzy-chat-input",
   shellClassName = "",
   autoFocus = false,
+  quickPrompts,
+  quickPromptModule = "general",
+  quickPromptMax,
+  quickPromptClassName = "",
+  quickPromptChipClassName = "",
+  quickPromptAccentColor = null,
+  quickPromptStyle,
+  onQuickPromptClick,
 }) {
   const inputRef = useRef(null);
+  const promptPanelId = `bizzy-quick-prompts-${useId().replace(/:/g, "")}`;
+  const [quickPromptsOpen, setQuickPromptsOpen] = useState(false);
   const trimmed = String(input || "").trim();
   const unavailable = disabled || readOnly;
 
@@ -39,8 +50,42 @@ export default function BizzyChatComposer({
     onSubmit?.(event);
   };
 
+  const handlePromptClick = async (text) => {
+    setQuickPromptsOpen(false);
+    try {
+      await onQuickPromptClick?.(text);
+    } finally {
+      requestAnimationFrame(() => inputRef.current?.focus?.());
+    }
+  };
+
   return (
-    <form onSubmit={handleSubmit} className="mt-1">
+    <form
+      onSubmit={handleSubmit}
+      className="mt-1 bizzy-chat-composer-group"
+      data-bizzy-composer-variant={shellClassName.includes("chathome") ? "centered" : "docked"}
+      style={quickPromptStyle}
+    >
+      <div
+        id={promptPanelId}
+        className={`bizzy-quick-prompts-panel ${quickPromptsOpen ? "is-open" : ""}`}
+        aria-hidden={!quickPromptsOpen}
+        inert={!quickPromptsOpen}
+        data-bizzy-quick-prompts
+        data-state={quickPromptsOpen ? "open" : "closed"}
+      >
+        <div className="bizzy-quick-prompts-panel__inner bizzy-qprompts">
+          <AskBizzyQuickPrompts
+            module={quickPromptModule}
+            prompts={quickPrompts}
+            onPromptClick={handlePromptClick}
+            max={quickPromptMax}
+            accentColor={quickPromptAccentColor}
+            className={quickPromptClassName}
+            chipClassName={quickPromptChipClassName}
+          />
+        </div>
+      </div>
       <div
         data-bizzy-chatbar-form
         data-bizzy-chatbar-pill
@@ -74,12 +119,18 @@ export default function BizzyChatComposer({
         />
 
         <div className="bizzy-chat-composer__actions">
-          <BizzyVoiceIcon
-            setInput={unavailable ? () => {} : setInput}
+          <button
+            type="button"
+            onClick={() => setQuickPromptsOpen((open) => !open)}
             disabled={unavailable}
-            className="bizzy-chat-composer__control"
-            title={unavailable ? "Voice input is unavailable in read-only Admin View." : "Toggle voice"}
-          />
+            className={`bizzy-chat-composer__control bizzy-chat-composer__quick-prompts ${quickPromptsOpen ? "is-open" : ""}`}
+            title="Quick prompts"
+            aria-label={quickPromptsOpen ? "Hide quick prompts" : "Show quick prompts"}
+            aria-expanded={quickPromptsOpen}
+            aria-controls={promptPanelId}
+          >
+            <Sparkles size={19} aria-hidden="true" />
+          </button>
           <BizzySubmitButton
             onClick={handleSubmit}
             isLoading={!!isLoading}

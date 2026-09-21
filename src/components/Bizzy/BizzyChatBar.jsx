@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { useLocation } from "react-router-dom";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
-import AskBizzyQuickPrompts from "./AskBizzyQuickPrompts";
 import useModuleTheme from "../../hooks/useModuleTheme";
 import BizzyChatComposer from "./BizzyChatComposer";
 import ChatGateNotice from "./ChatGateNotice";
@@ -242,33 +241,6 @@ export default function BizzyChatBar({
     <div className={[containerClass, className].join(" ")}>
       <div className="w-full">
         <div className="w-full px-3 py-0 transition-all bg-transparent shadow-none border-0">
-          {!chatReadOnly ? (
-            <div
-              className="pt-2 pb-0 bizzy-qprompts"
-              style={{
-                ...widthWrapperStyle,
-                "--qp-accent": accentHex,
-                "--qp-frame": quickPromptFrame,
-              }}
-              data-bizzy-chatbar-measured
-            >
-              <AskBizzyGuidedPrompts
-                module={currentModule}
-                prompts={
-                  isOnboardingMode
-                    ? ONBOARDING_PROMPTS
-                    : quickPrompts?.length
-                      ? quickPrompts
-                      : undefined
-                }
-                onPromptClick={handlePromptClick}
-                max={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
-                accentColor={quickPromptAccent}
-                className={promptContainerClass}
-                chipClassName={promptChipClass}
-              />
-            </div>
-          ) : null}
           {/* Input bar */}
           <div
             style={widthWrapperStyle}
@@ -293,15 +265,22 @@ export default function BizzyChatBar({
               inputId="bizzy-chat-input"
               shellClassName={shellClassName}
               autoFocus={false}
+              quickPromptModule={currentModule}
+              quickPrompts={
+                !chatReadOnly ? (
+                  isOnboardingMode ? ONBOARDING_PROMPTS : quickPrompts?.length ? quickPrompts : undefined
+                ) : []
+              }
+              quickPromptMax={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
+              quickPromptAccentColor={quickPromptAccent}
+              quickPromptClassName={promptContainerClass}
+              quickPromptChipClassName={promptChipClass}
+              quickPromptStyle={{ "--qp-accent": accentHex, "--qp-frame": quickPromptFrame }}
+              onQuickPromptClick={handlePromptClick}
             />
           </div>
         </div>
       </div>
     </div>
   );
-}
-
-/* ------------ small utils ------------- */
-function AskBizzyGuidedPrompts(props) {
-  return <AskBizzyQuickPrompts {...props} />;
 }

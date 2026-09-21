@@ -21,14 +21,28 @@ test("Bizzi chat bars share the same composer implementation", () => {
   assert.doesNotMatch(chatBar + canvasBar, /no-purple-glow/);
 });
 
-test("shared composer keeps keyboard, multiline, voice, and send affordances", () => {
+test("shared composer keeps keyboard, multiline, quick prompts, and send affordances", () => {
   assert.match(composer, /if \(event\.key === "Enter" && !event\.shiftKey\)/);
   assert.match(composer, /handleSubmit\(event\)/);
   assert.match(composer, /Math\.min\(el\.scrollHeight, 150\)/);
-  assert.match(composer, /<BizzyVoiceIcon/);
+  assert.doesNotMatch(composer, /BizzyVoiceIcon|<Mic/);
+  assert.match(composer, /<Sparkles/);
+  assert.match(composer, /title="Quick prompts"/);
+  assert.match(composer, /aria-expanded=\{quickPromptsOpen\}/);
+  assert.match(composer, /aria-controls=\{promptPanelId\}/);
+  assert.match(composer, /inert=\{!quickPromptsOpen\}/);
+  assert.match(composer, /setQuickPromptsOpen\(false\)/);
   assert.match(composer, /<BizzySubmitButton/);
   assert.match(composer, /aria-disabled/);
   assert.match(composer, /placeholder=\{unavailable \? "Chat is unavailable in read-only Admin View\."/);
+});
+
+test("quick prompts start closed and use a content-sized reduced-motion-safe transition", () => {
+  assert.match(composer, /useState\(false\)/);
+  assert.match(css, /\.bizzy-quick-prompts-panel\{[\s\S]*?grid-template-rows:\s*0fr/);
+  assert.match(css, /\.bizzy-quick-prompts-panel\.is-open\{[\s\S]*?grid-template-rows:\s*1fr/);
+  assert.match(css, /\.bizzy-quick-prompts-panel\.is-open\{[\s\S]*?margin-bottom:\s*8px/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.bizzy-quick-prompts-panel/);
 });
 
 test("composer visual tokens are subtle and green is reserved for focus or send-ready states", () => {

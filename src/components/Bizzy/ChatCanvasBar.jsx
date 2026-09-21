@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import BizzyChatComposer from "./BizzyChatComposer";
-import AskBizzyQuickPrompts from "./AskBizzyQuickPrompts";
 import ChatGateNotice from "./ChatGateNotice";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
 import { ONBOARDING_PROMPTS } from "../../config/chatQuickPrompts";
@@ -68,23 +67,6 @@ export default function ChatCanvasBar({
 
   return (
     <div className="w-full pointer-events-auto">
-      {!chatReadOnly ? (
-        <div className="pt-2 pb-0 bizzy-qprompts">
-          <AskBizzyGuidedPrompts
-            module={currentModule}
-            prompts={
-              isOnboardingMode
-                ? ONBOARDING_PROMPTS
-                : quickPrompts?.length
-                  ? quickPrompts
-                  : undefined
-            }
-            onPromptClick={handlePromptClick}
-            max={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
-            className="px-0"
-          />
-        </div>
-      ) : null}
       {/* Input bar */}
       <div data-bizzy-chatbar-shell data-bizzy-chatbar-measured>
         {chatReadOnly ? (
@@ -107,12 +89,17 @@ export default function ChatCanvasBar({
           readOnly={chatReadOnly}
           isLoading={!!isLoading}
           inputId="bizzy-canvas-chat-input"
+          quickPromptModule={currentModule}
+          quickPrompts={
+            !chatReadOnly ? (
+              isOnboardingMode ? ONBOARDING_PROMPTS : quickPrompts?.length ? quickPrompts : undefined
+            ) : []
+          }
+          quickPromptMax={isOnboardingMode ? ONBOARDING_PROMPTS.length : undefined}
+          quickPromptClassName="px-0"
+          onQuickPromptClick={handlePromptClick}
         />
       </div>
     </div>
   );
-}
-
-function AskBizzyGuidedPrompts(props) {
-  return <AskBizzyQuickPrompts {...props} />;
 }
