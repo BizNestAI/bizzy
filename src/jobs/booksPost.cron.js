@@ -34,6 +34,7 @@ import {
 } from "../services/bookkeeping/creditCardPaymentPairService.js";
 import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/incomingDepositMatchService.js";
 import { postingFailureStatus } from "../services/bookkeeping/bookkeepingLifecycleState.js";
+import { detectProcessorSettlementActivity } from "../services/bookkeeping/processorSettlementProfiles.js";
 import {
   buildLoanPaymentPurchasePayload,
   fetchConfirmedLoanPaymentSplit,
@@ -2038,7 +2039,7 @@ export async function handleItem(item, options = {}) {
     return;
   }
 
-  if (qboTxnType === "Deposit") {
+  if (qboTxnType === "Deposit" || detectProcessorSettlementActivity(bank)?.kind === "fee") {
     const depositGuard = await timePostingStage(timing, "incoming_deposit_match_guard_ms", () =>
       evaluateIncomingDepositPostingGuard({ businessId, bankTransactionId: txnId, actorRole: manual ? "manual_post" : "auto_post" })
     );
@@ -2853,12 +2854,13 @@ async function runOnce(options = {}) {
       const amount = Number(bankTxn?.amount || 0);
       const direction = String(bankTxn?.direction || "").toUpperCase();
       const isIncomingDeposit = amount > 0 && (direction === "INFLOW" || !direction);
+      const isProcessorFee = detectProcessorSettlementActivity(bankTxn)?.kind === "fee";
       const isCcWorkflow =
         item?.meta?.taxonomy_type === "cc_payment" ||
         item?.meta?.cc_payment_bank_qbo_account_id ||
         item?.meta?.cc_payment_cc_qbo_account_id ||
         item?.meta?.cc_payment_mapping_confidence;
-      if (!isIncomingDeposit || isCcWorkflow) {
+      if ((!isIncomingDeposit && !isProcessorFee) || isCcWorkflow) {
         guardedEligible.push(item);
         continue;
       }

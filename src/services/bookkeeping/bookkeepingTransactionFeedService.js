@@ -8,6 +8,7 @@ import {
 import { classifyAutoPostOperationalScope, getAutoPostPolicy } from "./autoPostControl.js";
 import { discoverIncomingDepositQboMatch } from "./incomingDepositMatchService.js";
 import { isCashBackRewardCredit, rewardCreditIntent } from "./rewardCreditPolicy.js";
+import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -462,8 +463,10 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
 function shouldDiscoverIncomingDepositForFeed(row = {}) {
   const amount = Number(row.amount || 0);
   const direction = String(row.direction || "").toUpperCase();
-  if (!(amount > 0 && (direction === "INFLOW" || !direction))) return false;
-  if (isCashBackRewardCredit(row)) return false;
+  const incoming = amount > 0 && (direction === "INFLOW" || !direction);
+  const processorFee = detectProcessorSettlementActivity(row)?.kind === "fee";
+  if (!incoming && !processorFee) return false;
+  if (incoming && isCashBackRewardCredit(row)) return false;
   if (row.pending === true || row.status === "posted" || row.status === "matched_existing_qbo") return false;
   const meta = row.meta || {};
   const matchStatus = String(row.incoming_deposit_match_status || meta.incoming_deposit_match_status || "");
@@ -494,6 +497,10 @@ function incomingDepositOverlayFromResult(result = {}) {
     customer_ref: candidate.customer_ref || null,
     invoice_ids: candidate.invoice_ids || [],
     invoice_refs: candidate.invoice_refs || [],
+    account_names: candidate.account_names || [],
+    description: candidate.description || null,
+    processor_key: candidate.processor_key || null,
+    processor_name: candidate.processor_name || null,
     bank_account_match: candidate.bank_account_match || null,
     reason_codes: candidate.reason_codes || [],
   }));

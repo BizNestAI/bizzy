@@ -24,6 +24,10 @@ const {
   normalizeQboPaymentRecord,
   normalizeQboRevenueDocument,
 } = await import("../src/services/jobCosting/qboJobCostingParsers.js");
+const {
+  detectProcessorSettlementActivity,
+  validateSettlementArithmetic,
+} = await import("../src/services/bookkeeping/processorSettlementProfiles.js");
 
 const root = process.cwd();
 
@@ -60,6 +64,84 @@ test("normalizes QBO sales/payment fields needed for incoming deposit matching",
   assert.equal(payment.payment_ref_num, "73102173");
   assert.deepEqual(payment.linked_invoice_ids, ["1102"]);
   assert.equal(payment.deposit_ref.value, "qbo-bank-1");
+});
+
+test("processor profiles distinguish fee/payout evidence from platform subscription charges", () => {
+  assert.equal(detectProcessorSettlementActivity({ name: "TRAN FEE INTUIT 73857673", amount: -8.4 })?.kind, "fee");
+  assert.equal(detectProcessorSettlementActivity({ name: "STRIPE PAYOUT 9123", amount: 200 })?.kind, "payout");
+  assert.equal(detectProcessorSettlementActivity({ name: "JOBBER MONTHLY SOFTWARE PLAN", amount: -99 })?.kind, "platform_charge");
+  assert.equal(validateSettlementArithmetic({ grossMinor: 10000, feeMinor: 290, adjustmentMinor: 0, netMinor: 9710 }).valid, true);
+  assert.equal(validateSettlementArithmetic({ grossMinor: 10000, feeMinor: 290, adjustmentMinor: 0, netMinor: 9709 }).valid, false);
+});
+
+test("TRAN FEE INTUIT exact amounts match existing QBO processing-fee expenses inside the settlement window", async () => {
+  for (const fixture of [
+    { amount: 8.4, bankDate: "2026-09-09", qboDate: "2026-09-07", id: "fee-840" },
+    { amount: 18.9, bankDate: "2026-09-18", qboDate: "2026-09-17", id: "fee-1890" },
+  ]) {
+    const tables = baseProcessorFeeTables(fixture);
+    const db = fakeDb(tables);
+    const result = await discoverIncomingDepositQboMatch({
+      db,
+      businessId: "b1",
+      bankTransactionId: "txn-fee",
+      persist: true,
+      nowMs: Date.parse("2026-09-21T16:01:00Z"),
+    });
+    assert.equal(result.status, "needs_confirmation");
+    assert.equal(result.candidates[0].qbo_entity_id, fixture.id);
+    assert.equal(result.candidates[0].match_type, "qbo_processing_fee_expense");
+    const confirmed = await confirmIncomingDepositQboMatch({
+      db,
+      businessId: "b1",
+      bankTransactionId: "txn-fee",
+      matchId: result.match.id,
+      idempotencyKey: `confirm-${fixture.id}`,
+    });
+    assert.equal(confirmed.status, "confirmed");
+    assert.equal(db.tables.transaction_categorizations[0].status, "matched_existing_qbo");
+    assert.equal(db.tables.transaction_categorizations[0].meta.qbo_write_performed, false);
+    assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
+  }
+});
+
+test("same-amount QBO fee ambiguity requires and records an exact candidate ID", async () => {
+  const tables = baseProcessorFeeTables({ amount: 8.4, bankDate: "2026-09-09", qboDate: "2026-09-07", id: "fee-a" });
+  tables.qbo_expense_transactions.push({ ...tables.qbo_expense_transactions[0], id: "expense-b", qbo_entity_id: "fee-b", txn_date: "2026-09-08" });
+  const db = fakeDb(tables);
+  const discovered = await discoverIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  assert.equal(discovered.status, "ambiguous");
+  await assert.rejects(
+    () => confirmIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", matchId: discovered.match.id }),
+    /exact_match_candidate_required/
+  );
+  await confirmIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-fee",
+    matchId: discovered.match.id,
+    selectedQboEntityId: "fee-b",
+    selectedQboEntityType: "Purchase",
+    idempotencyKey: "fee-b-confirm",
+  });
+  assert.equal(db.tables.bank_qbo_match_items.find((item) => item.qbo_entity_id === "fee-b").active_confirmed, true);
+  assert.equal(db.tables.bank_qbo_match_items.find((item) => item.qbo_entity_id === "fee-a").active_confirmed, false);
+});
+
+test("processor fee lookup fails closed, while an authoritative empty result keeps normal fee posting", async () => {
+  const emptyTables = baseProcessorFeeTables({ amount: 13.3, bankDate: "2026-08-20", qboDate: "2026-08-20", id: "fee-1330" });
+  emptyTables.qbo_expense_transactions = [];
+  const emptyDb = fakeDb(emptyTables);
+  const noCandidate = await discoverIncomingDepositQboMatch({ db: emptyDb, businessId: "b1", bankTransactionId: "txn-fee", persist: false, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  assert.equal(noCandidate.status, "candidate");
+  assert.equal(noCandidate.posting_eligibility, "ordinary_fee_posting_allowed");
+
+  const unavailableDb = fakeDb(baseProcessorFeeTables({ amount: 13.3, bankDate: "2026-08-20", qboDate: "2026-08-20", id: "fee-1330" }));
+  unavailableDb.failSelectTables.add("qbo_expense_transactions");
+  const unavailable = await discoverIncomingDepositQboMatch({ db: unavailableDb, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  assert.equal(unavailable.status, "match_check_unavailable");
+  assert.equal(unavailable.posting_eligibility, "blocked_match_check_unavailable");
+  assert.equal(unavailableDb.tables.transaction_categorizations[0].status, "needs_review");
 });
 
 test("blocks ordinary posting when one verified QBO Deposit candidate already exists", async () => {
@@ -440,7 +522,7 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(client, /confirmIncomingDepositMatch/);
   assert.match(client, /rejectIncomingDepositMatch/);
   assert.match(client, /undoIncomingDepositMatch/);
-  assert.match(feed, /Possible existing QuickBooks match/);
+  assert.match(feed, /Possible QBO match/);
   assert.match(feed, /Match existing QuickBooks deposit/);
   assert.match(feed, /Match confirmed/);
   assert.match(feed, /View in Matched/);
@@ -451,7 +533,7 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(feed, /independentCandidateCount/);
   assert.match(feed, /Matched to existing QuickBooks/);
   assert.match(feed, /View match details/);
-  assert.match(feed, /This is not the same payment/);
+  assert.match(feed, /Reject match/);
   assert.match(feed, /Match needs to be refreshed/);
   assert.match(feed, /Refresh match/);
   assert.match(feed, /Match check unavailable/);
@@ -847,7 +929,7 @@ test("rejecting a candidate preserves the user decision and does not automatical
 test("frontend unavailable copy avoids raw PGRST204 customer display", () => {
   const feed = readFileSync(join(root, "src/components/Accounting/BookkeepingFeed.jsx"), "utf8");
   assert.match(feed, /QuickBooks match check temporarily unavailable/);
-  assert.match(feed, /Bizzi couldn't safely check whether this deposit is already recorded in QuickBooks/);
+  assert.match(feed, /isProcessorFee \? "fee" : "deposit"/);
   assert.match(feed, /\^PGRST\\d\+/);
   assert.doesNotMatch(feed, /<[^>]*>\{reason\}<\/span>/);
 });
@@ -949,6 +1031,46 @@ function baseMatchTables() {
       meta: {},
     }],
   };
+}
+
+function baseProcessorFeeTables({ amount, bankDate, qboDate, id }) {
+  const tables = baseMatchTables();
+  tables.bank_transactions = [{
+    ...tables.bank_transactions[0],
+    id: "txn-fee",
+    date: bankDate,
+    amount: -Math.abs(amount),
+    signed_amount: -Math.abs(amount),
+    direction: "OUTFLOW",
+    name: `TRAN FEE INTUIT ${id}`,
+  }];
+  tables.transaction_categorizations = [{ business_id: "b1", transaction_id: "txn-fee", status: "needs_review", meta: {} }];
+  tables.job_revenue_evidence = [];
+  tables.job_payment_records = [];
+  tables.job_revenue_documents = [];
+  tables.qbo_expense_transactions = [{
+    id: "expense-a",
+    business_id: "b1",
+    realm_id: "r1",
+    qbo_entity_type: "Purchase",
+    qbo_entity_id: id,
+    txn_date: qboDate,
+    amount_minor: Math.round(Math.abs(amount) * 100),
+    currency: "USD",
+    payment_type: "Cash",
+    payment_account_ref: { value: "qbo-bank-1", name: "Checking" },
+    entity_ref: { value: "intuit", name: "QuickBooks Payments" },
+    account_refs: [{ value: "fee-account", name: "Payment Processing Fees" }],
+    account_names: ["Payment Processing Fees"],
+    descriptions: ["System-recorded fee for QuickBooks Payments"],
+    private_note: null,
+    sync_token: "0",
+    source_snapshot_at: "2026-09-21T16:00:00Z",
+    status: "active",
+  }];
+  tables.qbo_entity_sync_runs[0].started_at = "2026-09-21T15:55:00Z";
+  tables.qbo_entity_sync_runs[0].finished_at = "2026-09-21T16:00:00Z";
+  return tables;
 }
 
 function fakeDb(initial = {}) {

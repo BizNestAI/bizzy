@@ -102,6 +102,8 @@ router.post("/incoming-deposit-matches/:transactionId/:matchId/confirm", require
       actorRole: "user",
       idempotencyKey: req.body?.idempotency_key || req.get("Idempotency-Key") || null,
       expectedBankUpdatedAt: req.body?.expected_bank_updated_at || req.body?.expectedBankUpdatedAt || null,
+      selectedQboEntityId: req.body?.qbo_entity_id || req.body?.qboEntityId || null,
+      selectedQboEntityType: req.body?.qbo_entity_type || req.body?.qboEntityType || null,
     });
     return res.json(result);
   } catch (err) {

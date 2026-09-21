@@ -113,14 +113,14 @@ export async function inspectIncomingDepositMatch(businessId, transactionId, { p
   });
 }
 
-export async function confirmIncomingDepositMatch(businessId, transactionId, matchId, { expectedBankUpdatedAt = null } = {}) {
+export async function confirmIncomingDepositMatch(businessId, transactionId, matchId, { expectedBankUpdatedAt = null, qboEntityId = null, qboEntityType = null } = {}) {
   const res = await safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/${encodeURIComponent(matchId)}/confirm`), {
     method: "POST",
     headers: withBizHeaders(businessId, {
       "Content-Type": "application/json",
-      "Idempotency-Key": `incoming-deposit-confirm-${transactionId}-${matchId}`,
+      "Idempotency-Key": `incoming-deposit-confirm-${transactionId}-${matchId}-${qboEntityId || "primary"}`,
     }),
-    body: JSON.stringify({ business_id: businessId, expected_bank_updated_at: expectedBankUpdatedAt }),
+    body: JSON.stringify({ business_id: businessId, expected_bank_updated_at: expectedBankUpdatedAt, qbo_entity_id: qboEntityId, qbo_entity_type: qboEntityType }),
   });
   if (res && res.ok === false) throw new Error(res.message || res.error || "incoming_deposit_match_confirm_failed");
   return res;

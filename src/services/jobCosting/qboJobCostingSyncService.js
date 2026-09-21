@@ -488,6 +488,46 @@ async function importDepositEvidence({ db, businessId, realmId, deposit, now, di
   return { evidence_id: saved?.id || null, mutation, linked: status === "confirmed" ? 1 : 0, partial: status === "partial" ? 1 : 0 };
 }
 
+async function importExpenseTransaction({ db, businessId, realmId, purchase, now }) {
+  const lines = Array.isArray(purchase.Line) ? purchase.Line : [];
+  const detailRows = lines.map((line) => line.AccountBasedExpenseLineDetail || line.ItemBasedExpenseLineDetail || {});
+  const accountRefs = detailRows.map((detail) => normalizeQboRef(detail.AccountRef)).filter(Boolean);
+  const entityRef = normalizeQboRef(purchase.EntityRef || purchase.PayeeRef);
+  const amount = Math.abs(toNumber(purchase.TotalAmt, 0));
+  const payload = {
+    business_id: businessId,
+    realm_id: realmId,
+    qbo_env: qboEnvName,
+    qbo_entity_type: "Purchase",
+    qbo_entity_id: String(purchase.Id || ""),
+    txn_date: purchase.TxnDate,
+    amount_minor: toMinorUnits(amount, 0),
+    currency: normalizeQboRef(purchase.CurrencyRef)?.value || null,
+    payment_type: purchase.PaymentType || null,
+    payment_account_ref: normalizeQboRef(purchase.AccountRef),
+    entity_ref: entityRef,
+    account_refs: accountRefs,
+    account_names: accountRefs.map((ref) => ref.name).filter(Boolean),
+    descriptions: lines.map((line) => line.Description).filter(Boolean),
+    private_note: purchase.PrivateNote || null,
+    doc_number: purchase.DocNumber || null,
+    sync_token: purchase.SyncToken || null,
+    source_updated_at: purchase.MetaData?.LastUpdatedTime || purchase.MetaData?.CreateTime || now.toISOString(),
+    source_snapshot_at: now.toISOString(),
+    status: purchase.Active === false ? "deleted" : "active",
+    source_snapshot: { purchase },
+    updated_at: now.toISOString(),
+  };
+  const saved = await upsertAndFetch({
+    db,
+    table: "qbo_expense_transactions",
+    payload,
+    onConflict: "business_id,realm_id,qbo_entity_type,qbo_entity_id",
+    select: "id,sync_token,source_updated_at",
+  });
+  return { mutation: saved?.__mutation || "updated" };
+}
+
 async function fetchEntitiesWithTransport({ qboTransport, entity, since, mode }) {
   if (!qboTransport) return null;
   if (typeof qboTransport.fetchAll === "function") return qboTransport.fetchAll({ entity, since, mode });
@@ -537,6 +577,18 @@ export async function runQboJobCostingSync({
         entityRows[entity] = rows || [];
         result.entityCounts[entity] = { ...emptyCounts(), fetched: entityRows[entity].length };
       }
+      // Expense evidence is required by Books Review matching, but webhook/CDC
+      // imports intentionally remain scoped to the entity that triggered them.
+      // The normal full/incremental sync refreshes the read-only Purchase cache.
+      if (!["webhook", "cdc"].includes(mode)) {
+        const purchaseRows = qboTransport
+          ? await fetchEntitiesWithTransport({ qboTransport, entity: "Purchase", since, mode })
+          : await fetchAllQboEntities({ realmId, accessToken, entity: "Purchase", since: mode === "incremental" ? since : null, fetchImpl });
+        entityRows.Purchase = purchaseRows || [];
+        result.entityCounts.Purchase = { ...emptyCounts(), fetched: entityRows.Purchase.length };
+      } else {
+        entityRows.Purchase = [];
+      }
 
       for (const customer of entityRows.Customer) {
         try {
@@ -583,6 +635,16 @@ export async function runQboJobCostingSync({
         } catch (error) {
           increment(result.entityCounts.Deposit, "failed");
           diagnostics.reconciliationFailures.push({ entity: "Deposit", external_id: String(deposit.Id || ""), error: error.message });
+        }
+      }
+
+      for (const purchase of entityRows.Purchase || []) {
+        try {
+          const imported = await importExpenseTransaction({ db, businessId, realmId, purchase, now });
+          increment(result.entityCounts.Purchase, imported.mutation || "updated");
+        } catch (error) {
+          increment(result.entityCounts.Purchase, "failed");
+          diagnostics.reconciliationFailures.push({ entity: "Purchase", external_id: String(purchase.Id || ""), error: error.message });
         }
       }
 

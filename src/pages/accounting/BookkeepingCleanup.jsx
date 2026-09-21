@@ -1330,11 +1330,6 @@ function BookkeepingCleanup() {
   const serverProcessingCount = Number(processingStatus?.active_count || 0);
   const hasRelevantProcessing = serverProcessingCount > 0;
   const isPreparingCategories = Boolean(categorizationStatus);
-  const hasInconsistentEmptyPage =
-    !usingDemo &&
-    !hasVisibleRows &&
-    typeof totalCount === "number" &&
-    totalCount > 0;
   const isEmpty = !loadingTxns && !isPreparingCategories && feedRows.length === 0;
   const showLoadingState =
     !plaidNeverConnected &&
@@ -2009,9 +2004,13 @@ function BookkeepingCleanup() {
     await withIncomingDepositMatchAction(id, () => inspectIncomingDepositMatch(businessId, id, { persist: true }));
   };
 
-  const handleConfirmIncomingDepositMatch = async (id, matchId, txn = {}) => {
+  const handleConfirmIncomingDepositMatch = async (id, matchId, txn = {}, selection = {}) => {
     await withIncomingDepositMatchAction(id, () =>
-      confirmIncomingDepositMatch(businessId, id, matchId, { expectedBankUpdatedAt: txn.updated_at || txn.updatedAt || null })
+      confirmIncomingDepositMatch(businessId, id, matchId, {
+        expectedBankUpdatedAt: txn.updated_at || txn.updatedAt || null,
+        qboEntityId: selection.qboEntityId || null,
+        qboEntityType: selection.qboEntityType || null,
+      })
     );
   };
 

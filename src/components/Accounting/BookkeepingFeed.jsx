@@ -701,8 +701,12 @@ function IncomingDepositMatchPanel({
   onReject,
   onUndo,
 }) {
+  const selectableCandidates = (state?.candidates || []).filter((candidate) => candidate?.candidate_role !== "supporting" && candidate?.qbo_entity_type !== "Invoice");
+  const [selectedCandidateKey, setSelectedCandidateKey] = React.useState("");
+  React.useEffect(() => setSelectedCandidateKey(""), [state?.matchId]);
   if (!state?.active) return null;
   const primary = state.primary || {};
+  const isProcessorFee = primary.match_type === "qbo_processing_fee_expense";
   const paymentCandidate = (state.candidates || []).find((candidate) => candidate.qbo_entity_type === "Payment") || null;
   const transitionSuccess = action.status === "success";
   const transitionMatching = action.status === "matching" || action.loading === true;
@@ -718,22 +722,26 @@ function IncomingDepositMatchPanel({
         ? "Needs match"
       : state.ambiguous
         ? "Needs match"
-        : "Possible existing QuickBooks match";
+        : "Possible QBO match";
   const description = state.confirmed || transitionSuccess
     ? transitionSuccess ? "Match confirmed. No new QuickBooks transaction was created." : "Confirmed against existing QuickBooks activity. Bizzi did not create a new QuickBooks transaction."
     : action.error
       ? action.error
     : state.unavailable
-      ? "Bizzi couldn't safely check whether this deposit is already recorded in QuickBooks. It has not been posted as income."
+      ? `Bizzi couldn't safely check whether this ${isProcessorFee ? "fee" : "deposit"} is already recorded in QuickBooks. It has not been posted.`
       : state.invoiceOnly
         ? "Bizzi found QuickBooks invoice activity that may already explain this deposit, but the payment or bank deposit chain still needs verification."
       : state.needsFreshCheck
         ? "This deposit needs a fresh QuickBooks match check before it can be posted as income."
       : state.ambiguous
         ? "Bizzi found more than one independent QuickBooks transaction that may explain this deposit."
-        : "Bizzi found an existing QuickBooks deposit or payment that may already explain this bank deposit.";
+        : isProcessorFee
+          ? "Bizzi found an existing QuickBooks processing-fee expense that may explain this bank charge."
+          : "Bizzi found an existing QuickBooks deposit or payment that may already explain this bank deposit.";
   const candidateCount = state.independentCandidateCount ?? independentCandidateCount(state.candidates || []);
-  const primaryActionLabel = primary.qbo_entity_type === "Deposit" ? "Match existing QuickBooks deposit" : "Match existing payment";
+  const selectedCandidate = selectableCandidates.find((candidate) => `${candidate.qbo_entity_type}:${candidate.qbo_entity_id}` === selectedCandidateKey) || null;
+  const canConfirmSelected = state.confirmable || (state.ambiguous && Boolean(selectedCandidate));
+  const primaryActionLabel = isProcessorFee ? "Confirm match" : primary.qbo_entity_type === "Deposit" ? "Match existing QuickBooks deposit" : "Match existing payment";
   const refreshable = ["primary_match_item_missing", "fresh_match_check_required", "stale_match_refresh_required"].includes(String(state.confirmabilityReason || action.reason || ""));
   const bankEvidence = primary.bank_account_match === "verified_same_account" ? "Verified bank account" : "Bank account could not be fully verified";
   const customerName = primary.customer_ref?.name || primary.customer_ref?.Name || null;
@@ -768,7 +776,10 @@ function IncomingDepositMatchPanel({
           <div><span className="text-slate-400">Bank amount</span><br />{formatMinorMoney(Math.round(Math.abs(Number(txn.amount || 0)) * 100), primary.currency || "USD") || "Not available"}</div>
           <div><span className="text-slate-400">Bank date</span><br />{txn.date || "Not available"}</div>
           <div><span className="text-slate-400">Match date</span><br />{txn.reconciled_at || action.matchedAt ? new Date(txn.reconciled_at || action.matchedAt).toLocaleDateString() : "Not available"}</div>
-          <div><span className="text-slate-400">QBO Deposit</span><br />{primary.qbo_entity_type === "Deposit" ? formatMinorMoney(primary.amount_minor, primary.currency || "USD") || "Not available" : primary.qbo_entity_type}</div>
+          <div><span className="text-slate-400">QBO {primary.qbo_entity_type}</span><br />{formatMinorMoney(primary.amount_minor, primary.currency || "USD") || "Not available"}</div>
+          {primary.txn_date ? <div><span className="text-slate-400">QBO date</span><br />{primary.txn_date}</div> : null}
+          {primary.account_names?.length ? <div><span className="text-slate-400">QBO account</span><br />{primary.account_names.join(", ")}</div> : null}
+          {primary.description ? <div><span className="text-slate-400">QBO description</span><br />{primary.description}</div> : null}
           <div><span className="text-slate-400">QBO Payment</span><br />{paymentCandidate ? formatMinorMoney(paymentCandidate.amount_minor, paymentCandidate.currency || primary.currency || "USD") || "Not available" : "Not available"}</div>
           {invoiceText ? <div><span className="text-slate-400">Invoice</span><br />{invoiceText}</div> : null}
           {customerName ? <div><span className="text-slate-400">Customer</span><br />{customerName}</div> : null}
@@ -783,6 +794,23 @@ function IncomingDepositMatchPanel({
             return label ? <span key={reason} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-slate-200">{label}</span> : null;
           })}
         </div>
+      ) : null}
+      {state.ambiguous && selectableCandidates.length > 1 ? (
+        <label className="mt-3 block text-[10px] font-semibold uppercase tracking-wide text-amber-100">
+          Choose the exact QuickBooks transaction
+          <select
+            value={selectedCandidateKey}
+            onChange={(event) => setSelectedCandidateKey(event.target.value)}
+            className="mt-1 block w-full rounded-md border border-white/15 bg-[#101312] px-2.5 py-2 text-[11px] font-normal normal-case tracking-normal text-slate-100 focus:border-emerald-300/60 focus:outline-none"
+          >
+            <option value="">Select a candidate…</option>
+            {selectableCandidates.map((candidate) => (
+              <option key={`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`} value={`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`}>
+                {candidate.qbo_entity_type} · {candidate.txn_date || "date unavailable"} · {formatMinorMoney(candidate.amount_minor, candidate.currency || "USD") || "amount unavailable"} · {candidate.description || candidate.qbo_entity_id}
+              </option>
+            ))}
+          </select>
+        </label>
       ) : null}
       <div className="mt-3 flex flex-wrap gap-2">
         {transitionSuccess ? (
@@ -799,8 +827,8 @@ function IncomingDepositMatchPanel({
           <button type="button" disabled={readOnly || transitionMatching} onClick={() => onInspect?.(txn.id, null, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{transitionMatching ? "Checking..." : "Try again"}</button>
         ) : (
           <>
-            {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && state.confirmable ? (
-              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onConfirm?.(txn.id, state.matchId, txn)} className="inline-flex min-w-[190px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
+            {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && canConfirmSelected ? (
+              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onConfirm?.(txn.id, state.matchId, txn, { qboEntityId: selectedCandidate?.qbo_entity_id || null, qboEntityType: selectedCandidate?.qbo_entity_type || null })} className="inline-flex min-w-[190px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
                 {transitionMatching ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
                 {transitionMatching ? "Matching to QuickBooks…" : primaryActionLabel}
               </button>
@@ -811,9 +839,9 @@ function IncomingDepositMatchPanel({
               </button>
             ) : null}
             {state.matchId ? (
-              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">This is not the same payment</button>
+              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onReject?.(txn.id, state.matchId, txn)} className="rounded-md border border-white/15 px-2.5 py-1 text-[10px] font-semibold text-slate-100 disabled:opacity-45">Reject match</button>
             ) : null}
-            {candidateCount > 1 ? <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-300">Review other matches</span> : null}
+            {candidateCount > 1 && !state.ambiguous ? <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-300">Review other matches</span> : null}
           </>
         )}
       </div>
