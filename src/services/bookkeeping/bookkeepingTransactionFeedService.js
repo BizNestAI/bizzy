@@ -197,6 +197,7 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     vendor: row.counterparty_name || row.merchant_name || "",
     payee: row.counterparty_name || row.merchant_name || "",
     description: row.name || "",
+    original_description: row.original_description || row.name || "",
     amount,
     signed_amount: amount,
     direction: dir,
@@ -246,6 +247,7 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     incoming_deposit_confirmable: meta.incoming_deposit_confirmable ?? null,
     incoming_deposit_confirmability_reason: meta.incoming_deposit_confirmability_reason || null,
     incoming_deposit_independent_candidate_count: meta.incoming_deposit_independent_candidate_count ?? null,
+    processor_fee: meta.processor_fee || null,
     matched_existing_qbo: matchedExistingQbo,
     match_type: matchType,
     post_after: cat.post_after || null,
@@ -275,6 +277,22 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     customer_response: operatorRequest?.answer_text || null,
     customer_responded_at: operatorRequest?.answered_at || null,
   };
+  const processorActivity = detectProcessorSettlementActivity(normalized);
+  if (processorActivity?.kind === "fee" && !normalized.processor_fee) {
+    normalized.processor_fee = {
+      isProbable: true,
+      processor: processorActivity.profile?.name || null,
+      matchState: normalized.status === "posted" || normalized.qbo_txn_id
+        ? "posted_duplicate_review_required"
+        : "checking_for_qbo_match",
+      evidenceStatus: "unchecked",
+      candidates: [],
+      selectedCandidateId: null,
+      canCreateNewFee: false,
+      blockingReason: normalized.status === "posted" || normalized.qbo_txn_id ? "existing_bizzi_posting_receipt" : "fresh_match_check_required",
+      lastCheckedAt: null,
+    };
+  }
   const workflowNormalized = stripIncomingDepositReviewForRewardCredit(normalized);
   const ccStatus = deriveCreditCardPaymentStatus(workflowNormalized);
   return ccStatus
@@ -477,10 +495,12 @@ function shouldDiscoverIncomingDepositForFeed(row = {}) {
   if (blockReason === "incoming_deposit_needs_match" && !["unchecked", "superseded"].includes(matchStatus)) return false;
   const taxonomy = String(row.taxonomy_type || meta.taxonomy_type || meta.taxonomy_override || "").toLowerCase();
   if (["transfer_internal", "owner_draw", "owner_contribution", "loan_proceeds", "refund", "cc_payment"].includes(taxonomy)) return false;
-  return ["needs_review", "uncategorized", ""].includes(String(row.status || "needs_review").toLowerCase());
+  const status = String(row.status || "needs_review").toLowerCase();
+  return ["needs_review", "uncategorized", ""].includes(status) ||
+    (processorFee && ["approved", "auto_approved", "failed", "handled"].includes(status) && !row.qbo_txn_id && !row.posted_at);
 }
 
-function incomingDepositOverlayFromResult(result = {}) {
+function incomingDepositOverlayFromResult(result = {}, row = {}) {
   const candidates = (result.candidates || []).map((candidate) => ({
     qbo_entity_type: candidate.qbo_entity_type,
     qbo_entity_id: candidate.qbo_entity_id,
@@ -505,7 +525,32 @@ function incomingDepositOverlayFromResult(result = {}) {
     reason_codes: candidate.reason_codes || [],
   }));
   const status = result.status || null;
-  if (status === "candidate" && result.confidence_tier === "tier_4") return null;
+  const processorActivity = detectProcessorSettlementActivity(row);
+  const probableProcessorFee = processorActivity?.kind === "fee" || (result.reason_codes || []).some((reason) => String(reason).startsWith("processor:")) ||
+    candidates.some((candidate) => candidate.match_type === "qbo_processing_fee_expense");
+  const processorMatchState = status === "match_check_unavailable"
+    ? "qbo_match_check_unavailable"
+    : status === "confirmed"
+      ? "confirmed"
+      : status === "ambiguous"
+        ? "multiple_qbo_matches"
+        : candidates.length
+          ? "qbo_match_found"
+          : status === "candidate" && result.confidence_tier === "tier_4"
+            ? "no_existing_qbo_match"
+            : null;
+  if (status === "candidate" && result.confidence_tier === "tier_4" && !probableProcessorFee) return null;
+  const processorFee = probableProcessorFee ? {
+    isProbable: true,
+    processor: candidates[0]?.processor_name || processorActivity?.profile?.name || null,
+    matchState: processorMatchState,
+    evidenceStatus: status === "candidate" && result.confidence_tier === "tier_4" ? "fresh_complete" : status,
+    candidates,
+    selectedCandidateId: null,
+    canCreateNewFee: processorMatchState === "no_existing_qbo_match",
+    blockingReason: result.confirmability_reason || null,
+    lastCheckedAt: result.source_freshness_at || null,
+  } : null;
   return {
     incoming_deposit_match_id: result.match?.id || null,
     incoming_deposit_match_status: status,
@@ -515,14 +560,19 @@ function incomingDepositOverlayFromResult(result = {}) {
     incoming_deposit_confirmable: result.confirmable === true,
     incoming_deposit_confirmability_reason: result.confirmability_reason || null,
     incoming_deposit_independent_candidate_count: result.independent_candidate_count ?? candidates.filter((candidate) => candidate.candidate_role !== "supporting").length,
-    post_error: status === "match_check_unavailable"
+    processor_fee: processorFee,
+    post_error: processorMatchState === "no_existing_qbo_match"
+      ? "processor_fee_record_new_required"
+      : status === "match_check_unavailable"
       ? "match_check_unavailable"
       : status === "ambiguous"
         ? "incoming_deposit_needs_match"
         : "possible_existing_qbo_match",
     meta: {
       safe_to_auto_post: false,
-      post_block_reason: status === "match_check_unavailable"
+      post_block_reason: processorMatchState === "no_existing_qbo_match"
+        ? "processor_fee_record_new_required"
+        : status === "match_check_unavailable"
         ? "match_check_unavailable"
         : status === "ambiguous"
           ? "incoming_deposit_needs_match"
@@ -535,6 +585,7 @@ function incomingDepositOverlayFromResult(result = {}) {
       incoming_deposit_confirmable: result.confirmable === true,
       incoming_deposit_confirmability_reason: result.confirmability_reason || null,
       incoming_deposit_independent_candidate_count: result.independent_candidate_count ?? candidates.filter((candidate) => candidate.candidate_role !== "supporting").length,
+      processor_fee: processorFee,
     },
   };
 }
@@ -705,7 +756,7 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
         nowMs,
         correlationId,
       });
-      const overlay = incomingDepositOverlayFromResult(result);
+      const overlay = incomingDepositOverlayFromResult(result, row);
       if (overlay) overlays.set(String(row.id), overlay);
     } catch (err) {
       console.warn("[bookkeeping-feed][incoming-deposit-discovery]", {
@@ -722,6 +773,17 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
         incoming_deposit_confirmable: false,
         incoming_deposit_confirmability_reason: "match_check_unavailable",
         incoming_deposit_independent_candidate_count: 0,
+        processor_fee: detectProcessorSettlementActivity(row)?.kind === "fee" ? {
+          isProbable: true,
+          processor: detectProcessorSettlementActivity(row)?.profile?.name || null,
+          matchState: "qbo_match_check_unavailable",
+          evidenceStatus: "unavailable",
+          candidates: [],
+          selectedCandidateId: null,
+          canCreateNewFee: false,
+          blockingReason: "match_check_unavailable",
+          lastCheckedAt: null,
+        } : null,
         post_error: "match_check_unavailable",
         meta: {
           safe_to_auto_post: false,
@@ -733,6 +795,17 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
           incoming_deposit_confirmable: false,
           incoming_deposit_confirmability_reason: "match_check_unavailable",
           incoming_deposit_independent_candidate_count: 0,
+          processor_fee: detectProcessorSettlementActivity(row)?.kind === "fee" ? {
+            isProbable: true,
+            processor: detectProcessorSettlementActivity(row)?.profile?.name || null,
+            matchState: "qbo_match_check_unavailable",
+            evidenceStatus: "unavailable",
+            candidates: [],
+            selectedCandidateId: null,
+            canCreateNewFee: false,
+            blockingReason: "match_check_unavailable",
+            lastCheckedAt: null,
+          } : null,
           incoming_deposit_match_correlation_id: correlationId,
         },
       });

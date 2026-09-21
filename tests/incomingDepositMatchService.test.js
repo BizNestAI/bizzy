@@ -19,6 +19,7 @@ const {
 const {
   fetchBookkeepingTransactions,
   matchesTransactionStatusFilter,
+  normalizeBookkeepingRpcRow,
 } = await import("../src/services/bookkeeping/bookkeepingTransactionFeedService.js");
 const {
   normalizeQboPaymentRecord,
@@ -142,6 +143,41 @@ test("processor fee lookup fails closed, while an authoritative empty result kee
   assert.equal(unavailable.status, "match_check_unavailable");
   assert.equal(unavailable.posting_eligibility, "blocked_match_check_unavailable");
   assert.equal(unavailableDb.tables.transaction_categorizations[0].status, "needs_review");
+});
+
+test("handled unposted processor fees recover into Matched while posted fees require duplicate review", async () => {
+  const tables = baseProcessorFeeTables({ amount: 8.4, bankDate: "2026-09-09", qboDate: "2026-09-07", id: "fee-recovery" });
+  tables.transaction_categorizations[0].status = "approved";
+  const db = fakeDb(tables);
+  const discovered = await discoverIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  assert.equal(db.tables.transaction_categorizations[0].status, "approved", "read-time recovery must not reopen Handled as Needs Review");
+  const confirmed = await confirmIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", matchId: discovered.match.id, idempotencyKey: "handled-recovery" });
+  assert.equal(confirmed.count_delta.handled, -1);
+  assert.equal(confirmed.count_delta.matched, 1);
+  assert.equal(db.tables.transaction_categorizations[0].status, "matched_existing_qbo");
+
+  const posted = normalizeBookkeepingRpcRow({
+    id: "posted-fee",
+    date: "2026-09-17",
+    name: "TRAN FEE INTUIT 02065923",
+    amount: -18.9,
+    direction: "OUTFLOW",
+    cat_status: "posted",
+    qbo_txn_id: "bizzi-created-expense",
+    cat_meta: {},
+  });
+  assert.equal(posted.processor_fee.matchState, "posted_duplicate_review_required");
+  assert.equal(posted.processor_fee.canCreateNewFee, false);
+});
+
+test("rejecting a processor-fee candidate immediately searches alternatives and reaches authoritative no-match", async () => {
+  const db = fakeDb(baseProcessorFeeTables({ amount: 8.4, bankDate: "2026-09-09", qboDate: "2026-09-07", id: "fee-reject" }));
+  const discovered = await discoverIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  const rejected = await rejectIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", matchId: discovered.match.id });
+  assert.equal(rejected.status, "candidate");
+  assert.equal(rejected.posting_eligibility, "ordinary_fee_posting_allowed");
+  assert.equal(rejected.result.candidates.length, 0);
+  assert.equal(db.tables.bank_qbo_matches.find((row) => row.id === discovered.match.id).status, "rejected");
 });
 
 test("blocks ordinary posting when one verified QBO Deposit candidate already exists", async () => {

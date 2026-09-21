@@ -10,6 +10,7 @@ import {
   isQboCreditCardAccount,
 } from "../../services/bookkeeping/creditCardPaymentStatus.js";
 import { formatQboPostingSchedule } from "../../services/bookkeeping/qboPostingLifecycle.js";
+import { detectProcessorSettlementActivity } from "../../services/bookkeeping/processorSettlementProfiles.js";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
@@ -654,6 +655,9 @@ function independentCandidateCount(candidates = []) {
 
 function incomingDepositMatchState(txn = {}) {
   const meta = txn.meta || {};
+  const processorActivity = detectProcessorSettlementActivity(txn);
+  const processorFee = txn.processor_fee || meta.processor_fee || null;
+  const isProbableProcessorFee = processorFee?.isProbable === true || processorActivity?.kind === "fee";
   const status = txn.incoming_deposit_match_status || meta.incoming_deposit_match_status || null;
   const blockReason = meta.post_block_reason || txn.post_error || null;
   const confirmableValue = txn.incoming_deposit_confirmable ?? meta.incoming_deposit_confirmable;
@@ -662,7 +666,7 @@ function incomingDepositMatchState(txn = {}) {
     txn.matched_existing_qbo === true ||
     ["needs_confirmation", "ambiguous", "match_check_unavailable", "confirmed"].includes(String(status || "")) ||
     ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(String(blockReason || ""));
-  if (!active) return { active: false };
+  if (!active && !isProbableProcessorFee) return { active: false };
   const candidates = txn.incoming_deposit_candidates || meta.incoming_deposit_candidates || [];
   const primary = candidates[0] || null;
   const confirmed = txn.status === "matched_existing_qbo" || txn.matched_existing_qbo === true || status === "confirmed";
@@ -674,6 +678,10 @@ function incomingDepositMatchState(txn = {}) {
   const invoiceOnly = candidates.length > 0 && candidates.every((candidate) => candidate.match_type === "qbo_invoice_only_context" || candidate.qbo_entity_type === "Invoice");
   return {
     active: true,
+    isProcessorFee: isProbableProcessorFee,
+    processor: processorFee?.processor || processorActivity?.profile?.name || null,
+    processorMatchState: processorFee?.matchState || (isProbableProcessorFee ? "checking_for_qbo_match" : null),
+    canCreateNewFee: processorFee?.canCreateNewFee === true,
     confirmed,
     unavailable,
     ambiguous,
@@ -700,13 +708,15 @@ function IncomingDepositMatchPanel({
   onConfirm,
   onReject,
   onUndo,
+  onRecordNewFee,
 }) {
   const selectableCandidates = (state?.candidates || []).filter((candidate) => candidate?.candidate_role !== "supporting" && candidate?.qbo_entity_type !== "Invoice");
   const [selectedCandidateKey, setSelectedCandidateKey] = React.useState("");
   React.useEffect(() => setSelectedCandidateKey(""), [state?.matchId]);
   if (!state?.active) return null;
   const primary = state.primary || {};
-  const isProcessorFee = primary.match_type === "qbo_processing_fee_expense";
+  const isProcessorFee = state.isProcessorFee || primary.match_type === "qbo_processing_fee_expense";
+  const processorState = state.processorMatchState;
   const paymentCandidate = (state.candidates || []).find((candidate) => candidate.qbo_entity_type === "Payment") || null;
   const transitionSuccess = action.status === "success";
   const transitionMatching = action.status === "matching" || action.loading === true;
@@ -714,8 +724,14 @@ function IncomingDepositMatchPanel({
     ? "Matched to existing QuickBooks"
     : action.error
       ? "Match needs to be refreshed"
-    : state.unavailable
+      : processorState === "posted_duplicate_review_required"
+        ? "Duplicate review required"
+      : state.unavailable || processorState === "qbo_match_check_unavailable"
       ? "QuickBooks match check temporarily unavailable"
+      : processorState === "checking_for_qbo_match" || transitionMatching
+        ? "Checking QuickBooks for an existing processing fee…"
+      : processorState === "no_existing_qbo_match"
+        ? "No existing QuickBooks fee found"
       : state.invoiceOnly
         ? "Possible duplicate income - payment verification needed"
       : state.needsFreshCheck
@@ -727,8 +743,14 @@ function IncomingDepositMatchPanel({
     ? transitionSuccess ? "Match confirmed. No new QuickBooks transaction was created." : "Confirmed against existing QuickBooks activity. Bizzi did not create a new QuickBooks transaction."
     : action.error
       ? action.error
-    : state.unavailable
+    : processorState === "posted_duplicate_review_required"
+      ? "Bizzi already has a QuickBooks posting receipt for this fee. It cannot be rematched automatically; review it through the correction workflow."
+    : state.unavailable || processorState === "qbo_match_check_unavailable"
       ? `Bizzi couldn't safely check whether this ${isProcessorFee ? "fee" : "deposit"} is already recorded in QuickBooks. It has not been posted.`
+      : processorState === "checking_for_qbo_match" || transitionMatching
+        ? "The ordinary approval action is blocked until this check completes."
+      : processorState === "no_existing_qbo_match"
+        ? "A fresh, complete QuickBooks check found no matching fee. Recording this fee will create a new QuickBooks expense using the selected processing-fee account."
       : state.invoiceOnly
         ? "Bizzi found QuickBooks invoice activity that may already explain this deposit, but the payment or bank deposit chain still needs verification."
       : state.needsFreshCheck
@@ -787,6 +809,12 @@ function IncomingDepositMatchPanel({
           {state.confirmed ? <div><span className="text-slate-400">Matched by</span><br />you</div> : null}
         </div>
       ) : null}
+      {processorState === "no_existing_qbo_match" ? (
+        <div className="mt-3 text-[11px] text-slate-100">
+          <span className="text-slate-400">New fee account</span><br />
+          {txn.glAccountName || txn.suggestedAccountName || "Payment Processing Fees"}
+        </div>
+      ) : null}
       {state.reasons?.length ? (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {state.reasons.slice(0, 6).map((reason) => {
@@ -823,8 +851,12 @@ function IncomingDepositMatchPanel({
             <span className="rounded-md border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold text-slate-100">View match details</span>
             <button type="button" disabled={readOnly || action.loading || !state.matchId} onClick={() => onUndo?.(txn.id, state.matchId, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">Undo match</button>
           </>
-        ) : state.unavailable ? (
+        ) : state.unavailable || processorState === "qbo_match_check_unavailable" || processorState === "checking_for_qbo_match" ? (
           <button type="button" disabled={readOnly || transitionMatching} onClick={() => onInspect?.(txn.id, null, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{transitionMatching ? "Checking..." : "Try again"}</button>
+        ) : processorState === "no_existing_qbo_match" ? (
+          <button type="button" disabled={readOnly || transitionMatching} onClick={() => onRecordNewFee?.(txn.id, txn.glAccountId || txn.suggestedAccountId || null)} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">Record New Fee</button>
+        ) : processorState === "posted_duplicate_review_required" ? (
+          <span className="rounded-md border border-rose-300/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-semibold text-rose-100">Posting receipt protected</span>
         ) : (
           <>
             {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && canConfirmSelected ? (
@@ -1585,7 +1617,19 @@ export default function BookkeepingFeed({
                           : "border-emerald-300/35 bg-emerald-500/10 text-emerald-100/95 hover:border-emerald-300/65 hover:bg-emerald-500/16"
                       }`}
                     >
-                      {incomingMatchAction.loading === true ? "Checking..." : incomingMatch.unavailable ? "Retry" : "Review match"}
+                          {incomingMatchAction.loading === true
+                            ? "Checking..."
+                            : incomingMatch.unavailable || incomingMatch.processorMatchState === "qbo_match_check_unavailable"
+                              ? "Retry"
+                              : incomingMatch.processorMatchState === "checking_for_qbo_match"
+                                ? "Check QuickBooks"
+                                : incomingMatch.processorMatchState === "no_existing_qbo_match"
+                                  ? "Record New Fee"
+                                  : incomingMatch.processorMatchState === "posted_duplicate_review_required"
+                                    ? "Review duplicate"
+                                    : incomingMatch.isProcessorFee
+                                      ? "Possible QBO match"
+                                      : "Review match"}
                     </button>
                   )
                 ) : isCcPaymentWorkflow ? (
@@ -1693,6 +1737,7 @@ export default function BookkeepingFeed({
                    onConfirm={onConfirmIncomingDepositMatch}
                    onReject={onRejectIncomingDepositMatch}
                    onUndo={onUndoIncomingDepositMatch}
+                   onRecordNewFee={onApprove}
                  />
                  {customerAnswered ? (
                    <div className="mt-3 rounded-lg border border-cyan-300/18 bg-cyan-400/[0.06] px-3 py-2">

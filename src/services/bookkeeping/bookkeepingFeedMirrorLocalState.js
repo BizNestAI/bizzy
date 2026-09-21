@@ -140,6 +140,25 @@ export function removeBookkeepingRow(rows = [], transactionId = "") {
   return (Array.isArray(rows) ? rows : []).filter((row) => String(row.id) !== String(transactionId));
 }
 
+export function suppressUndoneRowsFromLifecyclePage(rows = [], totalCount = null, suppressedIds = new Set(), tabKey = "handled") {
+  const currentRows = Array.isArray(rows) ? rows : [];
+  if (tabKey !== "handled" || !suppressedIds?.size) {
+    return { rows: currentRows, totalCount };
+  }
+  const filteredRows = currentRows.filter((row) => !suppressedIds.has(String(row?.id || "")));
+  const removed = currentRows.length - filteredRows.length;
+  return {
+    rows: filteredRows,
+    totalCount: typeof totalCount === "number" ? Math.max(0, totalCount - removed) : totalCount,
+  };
+}
+
+export async function reloadCurrentBookkeepingView(reloadRef, options = {}) {
+  const reload = reloadRef?.current;
+  if (typeof reload !== "function") return undefined;
+  return reload(options);
+}
+
 export function upsertBookkeepingRow(rows = [], nextRow = {}, { prepend = false } = {}) {
   const currentRows = Array.isArray(rows) ? rows : [];
   const transactionId = String(nextRow.id || "");

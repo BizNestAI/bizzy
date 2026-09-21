@@ -965,14 +965,16 @@ async function persistCandidateResult({ db, businessId, bankTxn, mapping, freshn
 async function writeCategorizationBlockMeta({ db, businessId, bankTxn, result, match = null, reason }) {
   const { data: existing } = await db
     .from("transaction_categorizations")
-    .select("meta")
+    .select("status,meta")
     .eq("business_id", businessId)
     .eq("transaction_id", bankTxn.id)
     .maybeSingle();
   await db
     .from("transaction_categorizations")
     .update({
-      status: "needs_review",
+      status: ["approved", "auto_approved", "failed", "handled"].includes(String(existing?.status || "").toLowerCase())
+        ? existing.status
+        : "needs_review",
       post_after: null,
       post_error: reason,
       last_post_attempt_at: new Date().toISOString(),
@@ -1616,6 +1618,9 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
     .eq("transaction_id", bankTransactionId)
     .maybeSingle();
   const alreadyMatched = existingCat?.status === "matched_existing_qbo" || existingCat?.meta?.matched_existing_qbo === true || existingCat?.meta?.incoming_deposit_match_status === "confirmed";
+  const previousLifecycle = ["approved", "auto_approved", "failed", "handled"].includes(String(existingCat?.status || "").toLowerCase())
+    ? "handled"
+    : "needs_review";
   await db.from("transaction_categorizations").update({
     status: "matched_existing_qbo",
     post_after: null,
@@ -1683,7 +1688,9 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
         next_post_attempt_at: null,
       },
     },
-    count_delta: alreadyMatched ? { needs_review: 0, matched: 0, handled: 0, posted: 0, pending: 0 } : { needs_review: -1, matched: 1, handled: 0, posted: 0, pending: 0 },
+    count_delta: alreadyMatched
+      ? { needs_review: 0, matched: 0, handled: 0, posted: 0, pending: 0 }
+      : { needs_review: previousLifecycle === "needs_review" ? -1 : 0, matched: 1, handled: previousLifecycle === "handled" ? -1 : 0, posted: 0, pending: 0 },
   };
 }
 
@@ -1725,6 +1732,24 @@ export async function rejectIncomingDepositQboMatch({ db = defaultSupabase, busi
     },
   }).eq("business_id", businessId).eq("transaction_id", bankTransactionId);
   await insertHistory({ db, businessId, bankTransactionId, matchId, action: "rejected", previousState: match, newState: { ...match, status: "rejected" }, actor, actorRole, reason });
+  const bankTxn = await fetchBankTransaction({ db, businessId, bankTransactionId });
+  if (detectProcessorSettlementActivity(bankTxn || {})?.kind === "fee") {
+    const rediscovered = await discoverIncomingDepositQboMatch({
+      db,
+      businessId,
+      bankTransactionId,
+      actor,
+      actorRole: `${actorRole}_after_rejection`,
+      persist: true,
+    });
+    return {
+      ok: true,
+      status: rediscovered.status,
+      rejected_match_id: matchId,
+      posting_eligibility: rediscovered.posting_eligibility,
+      result: rediscovered,
+    };
+  }
   return { ok: true, status: "rejected", posting_eligibility: "blocked_rejected_candidate_review_required", match_id: matchId };
 }
 

@@ -13,6 +13,7 @@ import { fetchChartOfAccounts, validateBusinessQboCreditCardAccount } from "./qb
 import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummaryService.js";
 import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
 import { evaluateIncomingDepositPostingGuard } from "./incomingDepositMatchService.js";
+import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
 
 export class BookkeepingApprovalError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -410,7 +411,8 @@ export async function approveBookkeepingTransactions({
     const amount = Number(bankTxn?.amount || 0);
     const direction = String(bankTxn?.direction || "").toUpperCase();
     const isIncomingDeposit = amount > 0 && (direction === "INFLOW" || !direction);
-    if (!isIncomingDeposit || approval.meta?.taxonomy_type === "cc_payment") continue;
+    const isProcessorFee = detectProcessorSettlementActivity(bankTxn || {})?.kind === "fee";
+    if ((!isIncomingDeposit && !isProcessorFee) || approval.meta?.taxonomy_type === "cc_payment") continue;
     const guard = await evaluateIncomingDepositPostingGuard({
       db,
       businessId,

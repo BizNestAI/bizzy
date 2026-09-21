@@ -42,6 +42,10 @@ import {
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
 import { ClarificationModal } from "../../components/Bizzy/OperatorRequestsPanel.jsx";
+import {
+  reloadCurrentBookkeepingView,
+  suppressUndoneRowsFromLifecyclePage,
+} from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 const __motionUsageForLint = motion;
 
 const MOCK_ACCOUNTS = [
@@ -602,6 +606,7 @@ function BookkeepingCleanup() {
   const transactionReloadSeqRef = useRef(0);
   const transactionViewKeyRef = useRef("");
   const transactionRequestAbortRef = useRef(null);
+  const reloadTransactionsRef = useRef(null);
   const [approvalLedgerVersion, setApprovalLedgerVersion] = useState(0);
   const accountOverrides = useRef(new Map());
   const accountScrollRef = useRef(null);
@@ -721,6 +726,7 @@ function BookkeepingCleanup() {
   const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [undoingTransactionIds, setUndoingTransactionIds] = useState(() => new Set());
+  const undoSuppressedIdsRef = useRef(new Set());
   const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
   const [ccPaymentActionState, setCcPaymentActionState] = useState({});
   const incomingDepositActionInFlightRef = useRef(new Set());
@@ -1455,7 +1461,7 @@ function BookkeepingCleanup() {
         confirmedAt: Date.now(),
       });
       await reloadAccounts();
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: false });
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] approve failed", e?.message || e);
@@ -1510,6 +1516,7 @@ function BookkeepingCleanup() {
           .map((t) => String(t.id))
       : [undoKey];
     const optimisticTxnIds = new Set(pairedTxnIds.length ? pairedTxnIds : [undoKey]);
+    optimisticTxnIds.forEach((txnId) => undoSuppressedIdsRef.current.add(txnId));
     setUndoingTransactionIds((prev) => {
       const next = new Set(prev);
       optimisticTxnIds.forEach((txnId) => next.add(txnId));
@@ -1529,12 +1536,14 @@ function BookkeepingCleanup() {
           .filter(Boolean)
       );
       optimisticTxnIds.forEach((txnId) => affectedIds.add(txnId));
+      affectedIds.forEach((txnId) => undoSuppressedIdsRef.current.add(txnId));
       setTransactions((prev) => prev.filter((t) => !affectedIds.has(String(t.id)) || activeTab === "needs_review"));
       await reloadAccounts();
-      await reloadTransactions({ showBackgroundRefresh: true, refreshProcessingStatus: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: true, refreshProcessingStatus: false });
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] undo failed", e?.message || e);
+      optimisticTxnIds.forEach((txnId) => undoSuppressedIdsRef.current.delete(txnId));
       applyOptimisticCountTransition(needsReviewTxn, txn);
       setTransactions((prev) =>
         prev.map((t) => (t.id === id ? txn : t))
@@ -1580,7 +1589,7 @@ function BookkeepingCleanup() {
       await rejectCreditCardPayment(businessId, id);
       accountOverrides.current?.delete?.(id);
       await reloadAccounts();
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] cc payment reject failed", e?.message || e);
@@ -1621,7 +1630,7 @@ function BookkeepingCleanup() {
     try {
       await markCreditCardPayment(businessId, id);
       accountOverrides.current?.delete?.(id);
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
     } catch (e) {
@@ -1849,7 +1858,7 @@ function BookkeepingCleanup() {
     try {
       await confirmLoanPaymentSplit(businessId, id, split);
       accountOverrides.current?.delete?.(id);
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
     } catch (e) {
@@ -1883,7 +1892,7 @@ function BookkeepingCleanup() {
     try {
       await confirmSplitTransaction(businessId, id, split);
       accountOverrides.current?.delete?.(id);
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
     } catch (e) {
@@ -1915,7 +1924,7 @@ function BookkeepingCleanup() {
     }
     try {
       await treatLoanPaymentAsRegularTransaction(businessId, id);
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
     } catch (e) {
@@ -1972,7 +1981,7 @@ function BookkeepingCleanup() {
         }
         setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { status: "idle", loading: false, error: "" } }));
       }
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       if (patch?.status !== "matched_existing_qbo") {
         setCountsRefreshKey((value) => value + 1);
         await loadMappingStatus();
@@ -2106,7 +2115,7 @@ function BookkeepingCleanup() {
         });
       });
       await reloadAccounts();
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: false });
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] bulk approve failed", e?.message || e);
@@ -2138,7 +2147,7 @@ function BookkeepingCleanup() {
     setPostingTransactionIds((prev) => new Set(prev).add(txnId));
     try {
       await postTransactionToQuickBooks(businessId, txnId);
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
       setManualPostResult({
@@ -2151,7 +2160,7 @@ function BookkeepingCleanup() {
     } catch (err) {
       console.warn("[bookkeeping] manual post failed", err?.message || err);
       setManualPostResult(buildManualPostError(err));
-      await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
     } finally {
       setPostingTransactionIds((prev) => {
         const next = new Set(prev);
@@ -2225,7 +2234,7 @@ function BookkeepingCleanup() {
             final_qbo_account_id: accountId,
             final_qbo_account_name: accountName,
           });
-          await reloadTransactions({ showBackgroundRefresh: false, refreshProcessingStatus: false });
+          await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
         } else {
           throw new Error("not_in_grace_window");
         }
@@ -2351,8 +2360,11 @@ function BookkeepingCleanup() {
         totalCount: typeof totalValue === "number" ? Math.max(0, totalValue - removed) : totalValue,
       };
     };
+    const suppressCachedUndoTransitions = (rows = [], totalValue = null) =>
+      suppressUndoneRowsFromLifecyclePage(rows, totalValue, undoSuppressedIdsRef.current, activeTab);
     if (cachedPage && Array.isArray(cachedPage.rows)) {
-      const cached = suppressCachedMatchedTransitions(cachedPage.rows, typeof cachedPage.totalCount === "number" ? cachedPage.totalCount : cachedPage.rows.length);
+      const cachedMatched = suppressCachedMatchedTransitions(cachedPage.rows, typeof cachedPage.totalCount === "number" ? cachedPage.totalCount : cachedPage.rows.length);
+      const cached = suppressCachedUndoTransitions(cachedMatched.rows, cachedMatched.totalCount);
       const ledgerSuppressed = suppressLedgerRowsFromNeedsReview(cached.rows, typeof cached.totalCount === "number" ? cached.totalCount : cached.rows.length);
       setTransactions(ledgerSuppressed.rows);
       setTotalCount(typeof ledgerSuppressed.totalCount === "number" ? ledgerSuppressed.totalCount : ledgerSuppressed.rows.length);
@@ -2443,6 +2455,9 @@ function BookkeepingCleanup() {
       const suppressed = suppressMatchedTransitions(normalizedList, nextTotalValue);
       normalizedList = suppressed.rows;
       nextTotalValue = suppressed.totalCount;
+      const undoSuppressed = suppressUndoneRowsFromLifecyclePage(normalizedList, nextTotalValue, undoSuppressedIdsRef.current, activeTab);
+      normalizedList = undoSuppressed.rows;
+      nextTotalValue = undoSuppressed.totalCount;
       const approvalSuppressed = suppressLedgerRowsFromNeedsReview(normalizedList, nextTotalValue);
       normalizedList = approvalSuppressed.rows;
       nextTotalValue = approvalSuppressed.totalCount;
@@ -2451,8 +2466,14 @@ function BookkeepingCleanup() {
       if (incomplete) {
         const fallbackPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
         if (fallbackPage?.rows?.length) {
-          setTransactions(fallbackPage.rows);
-          setTotalCount(typeof fallbackPage.totalCount === "number" ? fallbackPage.totalCount : fallbackPage.rows.length);
+          const fallback = suppressUndoneRowsFromLifecyclePage(
+            fallbackPage.rows,
+            typeof fallbackPage.totalCount === "number" ? fallbackPage.totalCount : fallbackPage.rows.length,
+            undoSuppressedIdsRef.current,
+            activeTab
+          );
+          setTransactions(fallback.rows);
+          setTotalCount(typeof fallback.totalCount === "number" ? fallback.totalCount : fallback.rows.length);
         } else if (page > 1) {
           const lastPage = Math.max(1, Math.ceil(Number(nextTotalValue || 0) / rowsPerPage));
           const clampedPage = Math.min(page - 1, lastPage);
@@ -2495,6 +2516,15 @@ function BookkeepingCleanup() {
       if (!isLatestRequest()) return;
       const txns = extractTxns(res);
       let normalized = normalizeTxns(txns);
+      if (activeTab === "handled") {
+        const returnedIds = new Set(normalized.map((txn) => String(txn.id)));
+        undoSuppressedIdsRef.current.forEach((txnId) => {
+          if (!returnedIds.has(txnId)) undoSuppressedIdsRef.current.delete(txnId);
+        });
+      } else if (activeTab === "needs_review") {
+        const returnedIds = new Set(normalized.map((txn) => String(txn.id)));
+        returnedIds.forEach((txnId) => undoSuppressedIdsRef.current.delete(txnId));
+      }
       // Re-apply any local account overrides so UI stays in sync with user selections
       normalized = normalized.map((t) => {
         const override = accountOverrides.current?.get(t.id);
@@ -2536,8 +2566,14 @@ function BookkeepingCleanup() {
       });
       const fallbackPage = cacheKey ? lastSuccessfulTransactionPagesRef.current.get(cacheKey) : null;
       if (fallbackPage?.rows?.length) {
-        setTransactions(fallbackPage.rows);
-        setTotalCount(typeof fallbackPage.totalCount === "number" ? fallbackPage.totalCount : fallbackPage.rows.length);
+        const fallback = suppressUndoneRowsFromLifecyclePage(
+          fallbackPage.rows,
+          typeof fallbackPage.totalCount === "number" ? fallbackPage.totalCount : fallbackPage.rows.length,
+          undoSuppressedIdsRef.current,
+          activeTab
+        );
+        setTransactions(fallback.rows);
+        setTotalCount(typeof fallback.totalCount === "number" ? fallback.totalCount : fallback.rows.length);
       }
       if (fallbackPage?.rows?.length || cachedPage?.rows?.length) {
         window.dispatchEvent(new CustomEvent("bizzy:toast", {
@@ -2562,6 +2598,8 @@ function BookkeepingCleanup() {
       }
     }
   }, [activeTab, accountFilter, businessId, dateRange, page, rowsPerPage, usingDemo, loadMappingStatus, loadProcessingStatus, reconcileApprovalLedgerAfterRows, suppressLedgerRowsFromNeedsReview]);
+
+  reloadTransactionsRef.current = reloadTransactions;
 
   useEffect(() => {
     if (usingDemo) return;

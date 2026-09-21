@@ -9,6 +9,8 @@ import {
   patchOperatorResponseApprovalInDetail,
   patchBookkeepingFeedsAfterReclassificationState,
   patchSourceLedgerTransaction,
+  suppressUndoneRowsFromLifecyclePage,
+  reloadCurrentBookkeepingView,
 } from "../src/services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 
 const sourceLedger = {
@@ -53,6 +55,37 @@ test("approval removes a row from Needs Review, adds it to Handled, and updates 
   assert.equal(next.handled.rows[0].final_qbo_account_id, "42");
   assert.equal(next.handled.rows[0].final_qbo_account_name, "Meals");
   assert.equal(next.handled.rows[0].pipeline_status_key, "handled_not_posted");
+});
+
+test("rapid undo suppression prevents cached Handled rows from flashing back into the feed", () => {
+  const staleHandledPage = [
+    { id: "txn-undone-1", status: "approved" },
+    { id: "txn-kept", status: "approved" },
+    { id: "txn-undone-2", status: "failed" },
+  ];
+  const suppressedIds = new Set(["txn-undone-1", "txn-undone-2"]);
+
+  const handled = suppressUndoneRowsFromLifecyclePage(staleHandledPage, 12, suppressedIds, "handled");
+  assert.deepEqual(handled.rows.map((row) => row.id), ["txn-kept"]);
+  assert.equal(handled.totalCount, 10);
+
+  const needsReview = suppressUndoneRowsFromLifecyclePage(staleHandledPage, 12, suppressedIds, "needs_review");
+  assert.deepEqual(needsReview.rows, staleHandledPage, "the destination lifecycle must not hide undone rows");
+  assert.equal(needsReview.totalCount, 12);
+});
+
+test("mutation completion reloads the latest account and lifecycle view instead of its stale captured view", async () => {
+  const calls = [];
+  const reloadRef = {
+    current: async (options) => calls.push({ view: "checking-needs-review", options }),
+  };
+  const completeMutation = () => reloadCurrentBookkeepingView(reloadRef, { showBackgroundRefresh: false });
+  reloadRef.current = async (options) => calls.push({ view: "credit-card-handled", options });
+  await completeMutation();
+
+  assert.deepEqual(calls, [
+    { view: "credit-card-handled", options: { showBackgroundRefresh: false } },
+  ]);
 });
 
 test("approval increments Handled count without inserting hidden rows into a collapsed unloaded feed", () => {
