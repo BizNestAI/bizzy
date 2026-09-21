@@ -29,6 +29,7 @@ const {
   detectProcessorSettlementActivity,
   validateSettlementArithmetic,
 } = await import("../src/services/bookkeeping/processorSettlementProfiles.js");
+const { normalizeTransactionDescription } = await import("../src/services/bookkeeping/transactionDescription.js");
 
 const root = process.cwd();
 
@@ -75,10 +76,25 @@ test("processor profiles distinguish fee/payout evidence from platform subscript
   assert.equal(validateSettlementArithmetic({ grossMinor: 10000, feeMinor: 290, adjustmentMinor: 0, netMinor: 9709 }).valid, false);
 });
 
+test("processor descriptions use canonical Plaid fields and tolerate absent optional originals", () => {
+  assert.equal(
+    detectProcessorSettlementActivity({ name: "TRAN FEE INTUIT 73857673", raw: null, amount: -8.4 })?.kind,
+    "fee"
+  );
+  assert.equal(
+    detectProcessorSettlementActivity({ name: null, raw: { name: "TRAN FEE INTUIT 02065923" }, amount: -18.9 })?.kind,
+    "fee"
+  );
+  assert.match(
+    normalizeTransactionDescription({ name: "Canonical bank name", merchant_name: "Intuit", raw: { original_name: "Raw upstream name" } }),
+    /Canonical bank name Intuit Raw upstream name/
+  );
+});
+
 test("TRAN FEE INTUIT exact amounts match existing QBO processing-fee expenses inside the settlement window", async () => {
   for (const fixture of [
-    { amount: 8.4, bankDate: "2026-09-09", qboDate: "2026-09-07", id: "fee-840" },
-    { amount: 18.9, bankDate: "2026-09-18", qboDate: "2026-09-17", id: "fee-1890" },
+    { amount: 8.4, bankDate: "2026-09-07", qboDate: "2026-09-07", id: "fee-840" },
+    { amount: 18.9, bankDate: "2026-09-17", qboDate: "2026-09-17", id: "fee-1890" },
   ]) {
     const tables = baseProcessorFeeTables(fixture);
     const db = fakeDb(tables);
@@ -172,6 +188,8 @@ test("handled unposted processor fees recover into Matched while posted fees req
 
 test("rejecting a processor-fee candidate immediately searches alternatives and reaches authoritative no-match", async () => {
   const db = fakeDb(baseProcessorFeeTables({ amount: 8.4, bankDate: "2026-09-09", qboDate: "2026-09-07", id: "fee-reject" }));
+  db.tables.qbo_entity_sync_runs[0].started_at = new Date(Date.now() - 60_000).toISOString();
+  db.tables.qbo_entity_sync_runs[0].finished_at = new Date().toISOString();
   const discovered = await discoverIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
   const rejected = await rejectIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", matchId: discovered.match.id });
   assert.equal(rejected.status, "candidate");
@@ -755,6 +773,39 @@ test("missing match columns and PGRST204 fail closed without exposing raw infras
   assert.ok(result.reason_codes.includes("quickbooks_match_check_temporarily_unavailable"));
   assert.equal(result.reason_codes.includes("PGRST204"), false);
   assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_reason_codes.includes("PGRST204"), false);
+});
+
+test("bank transaction schema errors remain blocking unavailable and never become an empty QBO result", async () => {
+  const db = fakeDb(baseProcessorFeeTables({ amount: 8.4, bankDate: "2026-09-07", qboDate: "2026-09-07", id: "fee-840" }));
+  db.failSelectColumns.set("bank_transactions", new Set(["name"]));
+
+  const result = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-fee",
+    persist: true,
+    nowMs: Date.parse("2026-09-21T16:01:00Z"),
+    correlationId: "schema-contract-test",
+  });
+
+  assert.equal(result.status, "match_check_unavailable");
+  assert.equal(result.posting_eligibility, "blocked_match_check_unavailable");
+  assert.equal(result.reason_codes.includes("bank_transaction_schema_contract_unavailable"), true);
+  assert.equal(db.calls.some((call) => call.table === "qbo_expense_transactions"), false);
+});
+
+test("incoming matcher bank select list only references migrated bank transaction columns", () => {
+  const service = readFileSync(join(root, "src/services/bookkeeping/incomingDepositMatchService.js"), "utf8");
+  const schema = readFileSync(join(root, "supabase/live_schema_snapshot.sql"), "utf8");
+  const selectMatch = service.match(/\.from\("bank_transactions"\)\s*\.select\("([^"]+)"\)/);
+  const tableMatch = schema.match(/CREATE TABLE IF NOT EXISTS "public"\."bank_transactions" \(([\s\S]*?)\n\);/);
+  assert.ok(selectMatch, "bank transaction select list must remain statically checkable");
+  assert.ok(tableMatch, "authoritative bank transaction schema must be present");
+  const schemaColumns = new Set([...tableMatch[1].matchAll(/^\s+"([^"]+)"/gm)].map((match) => match[1]));
+  const queriedColumns = selectMatch[1].split(",").map((column) => column.trim());
+  assert.deepEqual(queriedColumns.filter((column) => !schemaColumns.has(column)), []);
+  assert.equal(queriedColumns.includes("original_description"), false);
+  assert.equal(queriedColumns.includes("raw"), true);
 });
 
 test("freshness probe does not require legacy qbo sync error_message column", async () => {

@@ -196,7 +196,7 @@ async function matchSchemaAvailable({ db }) {
 async function fetchBankTransaction({ db, businessId, bankTransactionId }) {
   return selectMaybe(db
     .from("bank_transactions")
-    .select("id,business_id,plaid_transaction_id,plaid_account_id,date,amount,signed_amount,direction,iso_currency_code,unofficial_currency_code,pending,is_archived,accounting_review_required,accounting_review_reason,name,merchant_name,original_description,counterparty_name,counterparties,updated_at")
+    .select("id,business_id,plaid_transaction_id,plaid_account_id,date,authorized_date,amount,signed_amount,direction,iso_currency_code,unofficial_currency_code,pending,is_archived,name,merchant_name,counterparty_name,counterparties,raw,updated_at")
     .eq("business_id", businessId)
     .eq("id", bankTransactionId)
     .maybeSingle());
@@ -1209,7 +1209,19 @@ export async function renormalizeIncomingDepositQboCacheEvidence({
 
 export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, businessId, bankTransactionId, actor = null, actorRole = null, persist = true, nowMs = Date.now(), correlationId = null } = {}) {
   if (!businessId || !bankTransactionId) throw new IncomingDepositMatchError("missing_match_input", 400);
-  const bankTxn = await fetchBankTransaction({ db, businessId, bankTransactionId });
+  let bankTxn;
+  try {
+    bankTxn = await fetchBankTransaction({ db, businessId, bankTransactionId });
+  } catch (err) {
+    if (!isMissingSchemaError(err)) throw err;
+    logDbContractError({ err, stage: "fetch_bank_transaction", table: "bank_transactions", operation: "select", businessId, bankTransactionId, correlationId });
+    return {
+      ok: true,
+      ...schemaUnavailableResult("bank_transaction_schema_contract_unavailable"),
+      posting_eligibility: "blocked_match_check_unavailable",
+      match: null,
+    };
+  }
   if (!bankTxn) throw new IncomingDepositMatchError("bank_transaction_not_found", 404);
   const processorActivity = detectProcessorSettlementActivity(bankTxn);
   const processorFee = processorActivity?.kind === "fee";

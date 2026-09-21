@@ -1,3 +1,5 @@
+import { normalizeTransactionDescription } from "./transactionDescription.js";
+
 const PROFILE_DEFINITIONS = [
   { key: "quickbooks_payments", name: "QuickBooks Payments", aliases: ["intuit", "quickbooks payments", "qb payments"], fee: [/\btran(?:saction)? fee intuit\b/i, /\bquickbooks payments? fee\b/i], payout: [/\bdeposit intuit\b/i, /\bquickbooks payments? deposit\b/i], windowDays: 4, separateFees: true },
   { key: "stripe", name: "Stripe", aliases: ["stripe"], fee: [/\bstripe\b.*\bfee\b/i], payout: [/\bstripe\b.*\b(?:payout|deposit)\b/i], windowDays: 4, nettedFees: true },
@@ -15,9 +17,7 @@ const PROFILE_DEFINITIONS = [
 export const PROCESSOR_SETTLEMENT_PROFILES = Object.freeze(PROFILE_DEFINITIONS);
 
 function evidenceText(transaction = {}) {
-  return [transaction.name, transaction.description, transaction.bank_memo, transaction.memo, transaction.merchant_name, transaction.original_description, transaction.counterparty_name]
-    .concat((transaction.counterparties || []).map((item) => item?.name || item?.legal_name))
-    .filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  return normalizeTransactionDescription(transaction);
 }
 
 function directionOf(transaction = {}) {
