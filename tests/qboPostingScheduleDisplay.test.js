@@ -77,7 +77,7 @@ test("QBO posting schedule exposes failures and protects non-handled rows", () =
     last_post_attempt_at: "2026-08-31T15:00:00.000Z",
   }, { nowMs });
   assert.equal(failed.key, "failed");
-  assert.equal(failed.label, "Failed");
+  assert.equal(failed.label, "Posting failed");
 
   assert.equal(formatQboPostingSchedule({ status: "needs_review", post_after: "2026-09-01T18:14:00.000Z" }, { nowMs }).key, "not_eligible");
   assert.equal(formatQboPostingSchedule({ status: "uncategorized", post_after: "2026-09-01T18:14:00.000Z" }, { nowMs }).key, "not_eligible");

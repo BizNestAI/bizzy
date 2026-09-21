@@ -33,6 +33,7 @@ import {
   markCreditCardPaymentPairPosted,
 } from "../services/bookkeeping/creditCardPaymentPairService.js";
 import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/incomingDepositMatchService.js";
+import { postingFailureStatus } from "../services/bookkeeping/bookkeepingLifecycleState.js";
 import {
   buildLoanPaymentPurchasePayload,
   fetchConfirmedLoanPaymentSplit,
@@ -682,7 +683,7 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
     meta.merchant_group_operation_failed_at = nowIso;
   }
   const update = {
-    status: outcome.review ? "needs_review" : item.status,
+    status: outcome.review ? postingFailureStatus(item.status) : item.status,
     post_error: outcome.reason,
     last_post_attempt_at: nowIso,
     meta,
@@ -960,7 +961,7 @@ async function markPossibleQboDuplicate({ item, requestId, confidence, candidate
   await supabase
     .from("transaction_categorizations")
     .update({
-      status: "needs_review",
+      status: postingFailureStatus(item.status),
       post_after: null,
       post_error: "possible_qbo_duplicate",
       last_post_attempt_at: nowIso,
@@ -1262,7 +1263,7 @@ async function markTransactionNonPostable(item, reason) {
   await supabase
     .from("transaction_categorizations")
     .update({
-      status: "needs_review",
+      status: postingFailureStatus(item.status),
       post_after: null,
       post_error: reason,
       pending_blocked_at: reason === "pending_transaction_not_postable" ? new Date().toISOString() : null,
@@ -1591,7 +1592,7 @@ async function markLoanPaymentSplitRequired(item, reason = "loan_payment_split_r
   await supabase
     .from("transaction_categorizations")
     .update({
-      status: "needs_review",
+      status: postingFailureStatus(item.status),
       post_after: null,
       post_error: reason,
       last_post_attempt_at: new Date().toISOString(),
@@ -1634,7 +1635,7 @@ async function markSplitTransactionRequired(item, reason = "split_transaction_re
   await supabase
     .from("transaction_categorizations")
     .update({
-      status: "needs_review",
+      status: postingFailureStatus(item.status),
       post_after: null,
       post_error: reason,
       last_post_attempt_at: new Date().toISOString(),
@@ -1701,7 +1702,7 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
     await supabase
       .from("transaction_categorizations")
       .update({
-        status: "needs_review",
+        status: postingFailureStatus(item.status),
         post_after: null,
         post_error: "taxonomy_requires_review",
         last_post_attempt_at: new Date().toISOString(),
@@ -1735,7 +1736,7 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
     await supabase
       .from("transaction_categorizations")
       .update({
-        status: "needs_review",
+        status: postingFailureStatus(item.status),
         post_after: null,
         post_error: "invalid_qbo_account_mapping_type",
         last_post_attempt_at: new Date().toISOString(),
@@ -1756,7 +1757,7 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
     await supabase
       .from("transaction_categorizations")
       .update({
-        status: "needs_review",
+        status: postingFailureStatus(item.status),
         post_after: null,
         post_error: "credit_card_inflow_requires_review",
         last_post_attempt_at: new Date().toISOString(),
@@ -2730,7 +2731,7 @@ async function runOnce(options = {}) {
           checkUpdates.push({
             business_id: item.business_id,
             transaction_id: item.transaction_id,
-            status: "needs_review",
+            status: postingFailureStatus(item.status),
             post_after: null,
             post_error: "blocked_check_requires_manual_approval",
             last_post_attempt_at: nowIso,

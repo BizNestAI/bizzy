@@ -1614,6 +1614,8 @@ export async function rejectIncomingDepositQboMatch({ db = defaultSupabase, busi
       incoming_deposit_reason_codes: Array.from(new Set([...(match.reason_codes || []), "human_rejected_candidate", "ordinary_income_posting_blocked"])),
       posting_in_progress: false,
       next_post_attempt_at: null,
+      review_reopen_authorized: true,
+      review_reopen_reason: "incoming_deposit_match_rejected_by_user",
     },
   }).eq("business_id", businessId).eq("transaction_id", bankTransactionId);
   await insertHistory({ db, businessId, bankTransactionId, matchId, action: "rejected", previousState: match, newState: { ...match, status: "rejected" }, actor, actorRole, reason });
@@ -1688,6 +1690,8 @@ export async function undoIncomingDepositQboMatch({
       matched_existing_qbo: false,
       qbo_write_performed: false,
       safe_to_auto_post: false,
+      review_reopen_authorized: true,
+      review_reopen_reason: "incoming_deposit_match_undone_by_user",
       post_block_reason: "incoming_deposit_needs_match",
       posting_in_progress: false,
       next_post_attempt_at: null,

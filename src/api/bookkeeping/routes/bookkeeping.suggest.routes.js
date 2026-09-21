@@ -28,6 +28,10 @@ import {
   hasCreditCardPaymentSignal,
 } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
+import {
+  persistUnresolvedCategorizationRows,
+  shouldSkipSuggestionRefresh,
+} from "../../../services/bookkeeping/bookkeepingLifecycleState.js";
 import { resolveIntentToCanonicalKey } from "../../../services/bookkeeping/canonicalCoaRegistry.js";
 import {
   isStrongUniversalVendorEvidence,
@@ -1440,6 +1444,14 @@ export async function runBookkeepingSuggestionPass({
       try {
       const checkHit = isCheck(row);
       const existingCat = existingMap[row.id];
+      // Suggestion refreshes are discovery-only for unresolved rows. Once a row
+      // has been handled, posting and review are independent lifecycles: weaker
+      // or newer suggestion evidence must never reopen review or clear the
+      // user's final account.
+      if (shouldSkipSuggestionRefresh(existingCat)) {
+        skipped += 1;
+        continue;
+      }
       const similarUserApproval = findSimilarUserApproval(userApprovalContext, row);
       const hasSimilarUserApproval = Boolean(similarUserApproval);
       const metaBase = existingCat?.meta || {};
@@ -2996,10 +3008,14 @@ export async function runBookkeepingSuggestionPass({
 
     if (!rows.length) {
       if (metaBackfills.length) {
-        const { error: backfillErr } = await supabase
-          .from("transaction_categorizations")
-          .upsert(metaBackfills, { onConflict: "business_id,transaction_id" });
-        if (backfillErr) {
+        try {
+          await persistUnresolvedCategorizationRows({
+            db: supabase,
+            businessId,
+            rows: metaBackfills,
+            knownExistingIds: Object.keys(existingMap),
+          });
+        } catch (backfillErr) {
           devLog("meta_backfill_skipped", {
             business_id: businessId,
             count: metaBackfills.length,
@@ -3024,10 +3040,14 @@ export async function runBookkeepingSuggestionPass({
     }
 
     if (metaBackfills.length) {
-      const { error: backfillErr } = await supabase
-        .from("transaction_categorizations")
-        .upsert(metaBackfills, { onConflict: "business_id,transaction_id" });
-      if (backfillErr) {
+      try {
+        await persistUnresolvedCategorizationRows({
+          db: supabase,
+          businessId,
+          rows: metaBackfills,
+          knownExistingIds: Object.keys(existingMap),
+        });
+      } catch (backfillErr) {
         devLog("meta_backfill_skipped", {
           business_id: businessId,
           count: metaBackfills.length,
@@ -3043,11 +3063,12 @@ export async function runBookkeepingSuggestionPass({
       updated_at: row.updated_at || nowIso,
     }));
 
-    const { data: upserted, error: upErr } = await supabase
-      .from("transaction_categorizations")
-      .upsert(normalizedRows, { onConflict: "business_id,transaction_id" })
-      .select("transaction_id,suggested_qbo_account_id,suggested_qbo_account_name,confidence,status,reason,meta");
-    if (upErr) throw upErr;
+    const upserted = await persistUnresolvedCategorizationRows({
+      db: supabase,
+      businessId,
+      rows: normalizedRows,
+      knownExistingIds: Object.keys(existingMap),
+    });
 
     await refreshOperatorRequestSummaryBestEffort({
       businessId,

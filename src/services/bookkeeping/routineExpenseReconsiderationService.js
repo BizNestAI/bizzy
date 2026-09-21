@@ -30,6 +30,7 @@ import {
   isStrongIntuitPaymentProcessingFeeDescriptor,
 } from "./paymentProcessingFeeIntent.js";
 import { hasStrongRewardCreditDescriptor } from "./rewardCreditPolicy.js";
+import { persistUnresolvedCategorizationRows } from "./bookkeepingLifecycleState.js";
 
 const MAX_RECONSIDERATION_LIMIT = 500;
 const PNL_ACCOUNT_TYPES = new Set(["income", "other income", "expense", "cost of goods sold", "costofgoodssold"]);
@@ -1742,10 +1743,12 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
   }
 
   if (updates.length) {
-    const { error: upsertErr } = await db
-      .from("transaction_categorizations")
-      .upsert(updates, { onConflict: "business_id,transaction_id" });
-    if (upsertErr) throw upsertErr;
+    await persistUnresolvedCategorizationRows({
+      db,
+      businessId,
+      rows: updates,
+      knownExistingIds: catRows.map((row) => row.transaction_id),
+    });
   }
 
   const last = catRows[catRows.length - 1]?.transaction_id || null;

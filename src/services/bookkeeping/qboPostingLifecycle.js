@@ -78,7 +78,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   if (!unsupportedUnpairedCcPayment && hasProvenPostingFailure(row)) {
     return {
       key: "failed",
-      label: "Failed",
+      label: "Posting failed",
       tone: "danger",
       detail: row.post_error || "QBO posting failed.",
     };
@@ -198,7 +198,7 @@ export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) 
   if (lifecycle.key === "failed") {
     return {
       key: "failed",
-      label: "Failed",
+      label: "Posting failed",
       tone: "danger",
       detail: lifecycle.detail || "QuickBooks posting failed.",
     };

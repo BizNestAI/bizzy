@@ -82,6 +82,18 @@ router.post("/undo", requireAuth, async (req, res) => {
     }
 
     const nowIso = new Date().toISOString();
+    const { data: existingCategorization, error: existingCategorizationErr } = await supabase
+      .from("transaction_categorizations")
+      .select("meta")
+      .eq("business_id", businessId)
+      .eq("transaction_id", txnId)
+      .maybeSingle();
+    if (existingCategorizationErr) throw existingCategorizationErr;
+    const undoMeta = {
+      ...(existingCategorization?.meta || {}),
+      review_reopen_authorized: true,
+      review_reopen_reason: "approval_undone_by_user",
+    };
     const { data: updatedRows, error: updateErr } = await supabase
       .from("transaction_categorizations")
       .update({
@@ -93,6 +105,7 @@ router.post("/undo", requireAuth, async (req, res) => {
         updated_at: nowIso,
         post_after: null,
         post_error: null,
+        meta: undoMeta,
         // QBO posting evidence is intentionally preserved. Undo does not void,
         // delete, reverse, or make a posted transaction eligible to post again.
       })
@@ -120,6 +133,7 @@ router.post("/undo", requireAuth, async (req, res) => {
             updated_at: nowIso,
             post_after: null,
             post_error: null,
+            meta: undoMeta,
           },
           { onConflict: "business_id,transaction_id" }
         )

@@ -1602,11 +1602,11 @@ export default function BookkeepingFeed({
                         if (readOnly || isPosting) return;
                         onManualPost && onManualPost(txn.id);
                       }}
-                      title={readOnly ? "Billing required to post transactions." : "Post this handled transaction to QuickBooks now."}
-                      aria-label="Post to QuickBooks"
+                      title={readOnly ? "Billing required to post transactions." : txn.status === "failed" ? "Retry posting this handled transaction to QuickBooks." : "Post this handled transaction to QuickBooks now."}
+                      aria-label={txn.status === "failed" ? "Retry QuickBooks posting" : "Post to QuickBooks"}
                     >
                       <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
-                      {isPosting ? "Posting..." : "Post"}
+                      {isPosting ? "Posting..." : txn.status === "failed" ? "Retry" : "Post"}
                     </button>
                   </div>
                 ) : (

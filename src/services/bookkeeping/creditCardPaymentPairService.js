@@ -1214,7 +1214,11 @@ export async function undoCreditCardPaymentPairForTransaction({ db = defaultSupa
     posted_at: null,
     reconciled_at: null,
     last_post_attempt_at: null,
-    meta: buildNeedsMatchCreditCardPaymentMeta(metaByTxnId.get(String(id)) || {}, { markedAt: nowIso }),
+    meta: {
+      ...buildNeedsMatchCreditCardPaymentMeta(metaByTxnId.get(String(id)) || {}, { markedAt: nowIso }),
+      review_reopen_authorized: true,
+      review_reopen_reason: "credit_card_payment_pair_undone_by_user",
+    },
     decided_by: "user",
     decided_at: nowIso,
     updated_at: nowIso,

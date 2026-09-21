@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -43,7 +44,7 @@ test("vendor-required failures are classified into retryable or review states wi
   assert.match(cron, /vendor_create_pending/);
   assert.match(cron, /vendor_mapping_invalid/);
   assert.match(cron, /function markVendorPostingBlocked/);
-  assert.match(cron, /status: outcome\.review \? "needs_review" : item\.status/);
+  assert.match(cron, /status: outcome\.review \? postingFailureStatus\(item\.status\) : item\.status/);
   assert.match(cron, /vendor_review_canonical_vendor_id/);
   assert.match(cron, /vendor_failure_stage/);
   assert.match(cron, /vendor_failure_provider_code/);
