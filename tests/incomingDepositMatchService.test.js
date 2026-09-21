@@ -145,6 +145,28 @@ test("same-amount QBO fee ambiguity requires and records an exact candidate ID",
   assert.equal(db.tables.bank_qbo_match_items.find((item) => item.qbo_entity_id === "fee-a").active_confirmed, false);
 });
 
+test("processor fee ranking prefers exact date, accepts three nearby days, and rejects day four", async () => {
+  const tables = baseProcessorFeeTables({ amount: 8.4, bankDate: "2026-09-07", qboDate: "2026-09-10", id: "nearby-three" });
+  tables.qbo_expense_transactions.push(
+    { ...tables.qbo_expense_transactions[0], id: "exact-row", qbo_entity_id: "exact", txn_date: "2026-09-07" },
+    { ...tables.qbo_expense_transactions[0], id: "outside-row", qbo_entity_id: "outside", txn_date: "2026-09-11" }
+  );
+  const result = await discoverIncomingDepositQboMatch({ db: fakeDb(tables), businessId: "b1", bankTransactionId: "txn-fee", persist: false, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  assert.equal(result.status, "ambiguous");
+  assert.equal(result.primary.qbo_entity_id, "exact");
+  assert.deepEqual(result.candidates.map((candidate) => candidate.qbo_entity_id), ["exact", "nearby-three"]);
+});
+
+test("Purchase fee candidates survive missing optional vendor, memo, and account-name metadata", async () => {
+  const tables = baseProcessorFeeTables({ amount: 18.9, bankDate: "2026-09-17", qboDate: "2026-09-17", id: "fee-no-optional" });
+  Object.assign(tables.qbo_expense_transactions[0], { entity_ref: null, account_names: [], descriptions: [], private_note: null });
+  const result = await discoverIncomingDepositQboMatch({ db: fakeDb(tables), businessId: "b1", bankTransactionId: "txn-fee", persist: false, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  assert.equal(result.status, "needs_confirmation");
+  assert.equal(result.primary.qbo_entity_type, "Purchase");
+  assert.ok(result.primary.reason_codes.includes("qbo_processing_fee_account_metadata_missing"));
+  assert.equal(result.diagnostics.final_candidate_count, 1);
+});
+
 test("processor fee lookup fails closed, while an authoritative empty result keeps normal fee posting", async () => {
   const emptyTables = baseProcessorFeeTables({ amount: 13.3, bankDate: "2026-08-20", qboDate: "2026-08-20", id: "fee-1330" });
   emptyTables.qbo_expense_transactions = [];
@@ -547,6 +569,16 @@ test("migration declares launch constraints, business-scoped FKs, and tenant RLS
   assert.match(sql, /ENABLE ROW LEVEL SECURITY/i);
   assert.match(sql, /tax_user_owns_business\(business_id\)/i);
   assert.match(sql, /request_idempotency_key/i);
+});
+
+test("atomic QBO claim migration uses realm identity and maps uniqueness conflicts", () => {
+  const sql = readFileSync(join(root, "supabase/migrations/20261012_atomic_qbo_match_claim.sql"), "utf8");
+  const service = readFileSync(join(root, "src/services/bookkeeping/incomingDepositMatchService.js"), "utf8");
+  assert.match(sql, /business_id, qbo_realm_id, qbo_entity_type, qbo_entity_id/i);
+  assert.match(sql, /create or replace function public\.claim_bank_qbo_match/i);
+  assert.match(sql, /qbo_entity_already_matched/i);
+  assert.match(service, /claim_bank_qbo_match/);
+  assert.match(service, /IncomingDepositMatchError\("qbo_entity_already_matched", 409\)/);
 });
 
 test("routes are mounted, authenticated, business-authorized, and rate-limited", () => {

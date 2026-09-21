@@ -14,6 +14,7 @@ const DEPOSIT_WINDOW_BEFORE_DAYS = Number(process.env.QBO_DEPOSIT_MATCH_WINDOW_B
 const DEPOSIT_WINDOW_AFTER_DAYS = Number(process.env.QBO_DEPOSIT_MATCH_WINDOW_AFTER_DAYS || 2);
 const DIRECT_WINDOW_BEFORE_DAYS = Number(process.env.QBO_DIRECT_PAYMENT_MATCH_WINDOW_BEFORE_DAYS || 7);
 const DIRECT_WINDOW_AFTER_DAYS = Number(process.env.QBO_DIRECT_PAYMENT_MATCH_WINDOW_AFTER_DAYS || 2);
+const PROCESSOR_FEE_WINDOW_DAYS = Number(process.env.QBO_PROCESSOR_FEE_MATCH_WINDOW_DAYS || 3);
 const QBO_CACHE_NORMALIZATION_VERSION = "incoming-deposit-qbo-match-v1";
 
 const ACTIVE_CANDIDATE_STATUSES = new Set(["needs_confirmation", "ambiguous"]);
@@ -229,7 +230,7 @@ async function fetchFreshness({ db, businessId, nowMs = Date.now(), freshnessMin
   try {
     const latest = await selectRows(db
       .from("qbo_entity_sync_runs")
-      .select("id,status,started_at,finished_at,created_at")
+      .select("id,realm_id,mode,status,entity_counts,started_at,finished_at,created_at")
       .eq("business_id", businessId)
       .order("started_at", { ascending: false })
       .limit(1));
@@ -244,7 +245,10 @@ async function fetchFreshness({ db, businessId, nowMs = Date.now(), freshnessMin
     if (nowMs - time > freshnessMinutes * 60000) {
       return { ok: false, reason: "qbo_match_cache_stale", source_freshness_at: at };
     }
-    return { ok: true, reason: "qbo_match_cache_fresh", source_freshness_at: at };
+    const mode = String(run.mode || "").toLowerCase();
+    const purchaseWasSearched = !["webhook", "cdc"].includes(mode) || Object.hasOwn(run.entity_counts || {}, "Purchase");
+    if (!purchaseWasSearched) return { ok: false, reason: "qbo_expense_cache_search_incomplete", source_freshness_at: at, realm_id: run.realm_id || null };
+    return { ok: true, reason: "qbo_match_cache_fresh", source_freshness_at: at, realm_id: run.realm_id || null };
   } catch (err) {
     if (isMissingSchemaError(err)) return { ok: false, reason: "qbo_match_cache_unavailable", source_freshness_at: null };
     throw err;
@@ -314,6 +318,10 @@ function candidateChainKey(candidate = {}) {
     candidate.qbo_entity_type || "",
     candidate.qbo_entity_id || "",
   ].join(":");
+}
+
+function qboTargetKey({ qbo_realm_id: realmId, qbo_entity_type: entityType, qbo_entity_id: entityId } = {}) {
+  return `${realmId || ""}:${entityType || ""}:${entityId || ""}`;
 }
 
 function annotateCandidateChains(candidates = []) {
@@ -522,11 +530,11 @@ async function fetchRejectedTargetKeys({ db, businessId, bankTransactionId }) {
     if (!ids.length) return new Set();
     const items = await selectRows(db
       .from("bank_qbo_match_items")
-      .select("qbo_entity_type,qbo_entity_id")
+      .select("qbo_realm_id,qbo_entity_type,qbo_entity_id")
       .eq("business_id", businessId)
       .in("match_id", ids)
       .eq("evidence_role", "primary"));
-    return new Set(items.map((item) => `${item.qbo_entity_type}:${item.qbo_entity_id}`));
+    return new Set(items.map(qboTargetKey));
   } catch (err) {
     if (isMissingSchemaError(err)) return new Set();
     throw err;
@@ -544,37 +552,47 @@ async function fetchAlreadyConfirmedTargetKeys({ db, businessId, bankTransaction
     if (!ids.length) return new Set();
     const items = await selectRows(db
       .from("bank_qbo_match_items")
-      .select("qbo_entity_type,qbo_entity_id")
+      .select("qbo_realm_id,qbo_entity_type,qbo_entity_id")
       .eq("business_id", businessId)
       .in("match_id", ids)
       .eq("active_confirmed", true));
-    return new Set(items.map((item) => `${item.qbo_entity_type}:${item.qbo_entity_id}`));
+    return new Set(items.map(qboTargetKey));
   } catch (err) {
     if (isMissingSchemaError(err)) return new Set();
     throw err;
   }
 }
 
-async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInfo, bankAmountMinor }) {
+async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInfo, bankAmountMinor, realmId = null }) {
   const rejected = await fetchRejectedTargetKeys({ db, businessId, bankTransactionId: bankTxn.id });
   const consumed = await fetchAlreadyConfirmedTargetKeys({ db, businessId, bankTransactionId: bankTxn.id });
   const within = (field, value, before, after, query) => query.gte(field, shiftDate(value, -before)).lte(field, shiftDate(value, after));
   const candidates = [];
   let evidenceSchemaIncomplete = false;
   const processorActivity = detectProcessorSettlementActivity(bankTxn);
+  const diagnostics = { entities_fetched_by_type: {}, amount_matched: 0, amount_rejected: 0, date_matched: 0, date_rejected: 0, account_matched: 0, account_rejected: 0, already_consumed: 0, stale_or_wrong_realm: 0, final_candidate_count: 0 };
 
   if (processorActivity?.kind === "fee") {
     try {
-      const windowDays = Number(processorActivity.profile?.windowDays || 5);
-      const expenses = await selectRows(within("txn_date", bankTxn.date, windowDays, windowDays, db
+      const windowDays = PROCESSOR_FEE_WINDOW_DAYS;
+      let expenseQuery = within("txn_date", bankTxn.date, windowDays, windowDays, db
         .from("qbo_expense_transactions")
         .select("id,realm_id,qbo_entity_type,qbo_entity_id,txn_date,amount_minor,currency,payment_type,payment_account_ref,entity_ref,account_refs,account_names,descriptions,private_note,doc_number,sync_token,source_snapshot_at,status,source_snapshot")
         .eq("business_id", businessId)
-        .eq("amount_minor", bankAmountMinor)
-        .eq("status", "active")));
+        .eq("status", "active"));
+      if (realmId) expenseQuery = expenseQuery.eq("realm_id", realmId);
+      const expenses = await selectRows(expenseQuery);
       expenses.forEach((row) => {
+        const type = row.qbo_entity_type || "Purchase";
+        diagnostics.entities_fetched_by_type[type] = (diagnostics.entities_fetched_by_type[type] || 0) + 1;
+        if (realmId && row.realm_id && String(row.realm_id) !== String(realmId)) { diagnostics.stale_or_wrong_realm += 1; return; }
+        diagnostics.date_matched += 1;
+        if (Number(row.amount_minor) !== Number(bankAmountMinor)) { diagnostics.amount_rejected += 1; return; }
+        diagnostics.amount_matched += 1;
         const accountNames = row.account_names || [];
-        if (!accountNames.some(isCompatibleProcessingFeeAccount)) return;
+        const compatibleExpenseAccount = accountNames.some(isCompatibleProcessingFeeAccount);
+        if (accountNames.length && !compatibleExpenseAccount) { diagnostics.account_rejected += 1; return; }
+        diagnostics.account_matched += 1;
         const paymentAccountMatches = String(refValue(row.payment_account_ref) || "") === String(mapping?.qbo_account_id || "");
         const candidate = candidateBase({ bankTxn, mapping, mappingInfo, row, entityType: row.qbo_entity_type || "Purchase", entityId: row.qbo_entity_id, txnDate: row.txn_date, amountMinor: row.amount_minor, currency: row.currency, syncToken: row.sync_token, sourceSnapshotAt: row.source_snapshot_at });
         candidate.match_type = "qbo_processing_fee_expense";
@@ -587,7 +605,7 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
         candidate.reason_codes = Array.from(new Set([
           ...candidate.reason_codes.filter((reason) => reason !== "compatible_positive_deposit_direction"),
           "compatible_processing_fee_outflow",
-          "qbo_processing_fee_account",
+          compatibleExpenseAccount ? "qbo_processing_fee_account" : "qbo_processing_fee_account_metadata_missing",
           `processor:${processorActivity.profile.key}`,
           paymentAccountMatches ? "qbo_expense_affects_mapped_bank_account" : "qbo_expense_bank_account_unverified",
         ]));
@@ -712,12 +730,19 @@ async function discoverCandidates({ db, businessId, bankTxn, mapping, mappingInf
     if (isMissingSchemaError(err)) evidenceSchemaIncomplete = true; else throw err;
   }
 
-  return {
-    candidates: candidates
+  const eligible = candidates
       .filter(candidateEligible)
-      .filter((candidate) => !rejected.has(`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`))
-      .filter((candidate) => !consumed.has(`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`)),
+      .filter((candidate) => !rejected.has(qboTargetKey(candidate)))
+      .filter((candidate) => {
+        const isConsumed = consumed.has(qboTargetKey(candidate));
+        if (isConsumed) diagnostics.already_consumed += 1;
+        return !isConsumed;
+      });
+  diagnostics.final_candidate_count = eligible.length;
+  return {
+    candidates: eligible,
     evidenceSchemaIncomplete,
+    diagnostics,
   };
 }
 
@@ -1282,8 +1307,10 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
     return { ok: true, ...result, posting_eligibility: "blocked_match_check_unavailable", match };
   }
   const bankAmountMinor = toMinorUnits(Math.abs(Number(bankTxn.amount || 0)), null);
-  const { candidates: rawCandidates, evidenceSchemaIncomplete } = await discoverCandidates({ db, businessId, bankTxn, mapping, mappingInfo, bankAmountMinor });
-  const candidates = annotateCandidateChains(rawCandidates);
+  const { candidates: rawCandidates, evidenceSchemaIncomplete, diagnostics } = await discoverCandidates({ db, businessId, bankTxn, mapping, mappingInfo, bankAmountMinor, realmId: freshness.realm_id });
+  const candidates = annotateCandidateChains([...rawCandidates].sort((left, right) =>
+    Math.abs(Number(left.date_distance_days ?? 9999)) - Math.abs(Number(right.date_distance_days ?? 9999))
+  ));
   if (evidenceSchemaIncomplete && !candidates.length) {
     const result = schemaUnavailableResult("qbo_match_evidence_columns_unavailable");
     let match = null;
@@ -1298,6 +1325,7 @@ export async function discoverIncomingDepositQboMatch({ db = defaultSupabase, bu
     return { ok: true, ...result, posting_eligibility: "blocked_match_check_unavailable", match };
   }
   let result = classifyCandidates(candidates);
+  result.diagnostics = diagnostics;
   if (evidenceSchemaIncomplete) {
     result.reason_codes = Array.from(new Set([...(result.reason_codes || []), "qbo_match_evidence_schema_partial"]));
   }
@@ -1607,21 +1635,37 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
         ...match.meta.candidates.filter((candidate) => !(String(candidate.qbo_entity_type) === String(item.qbo_entity_type) && String(candidate.qbo_entity_id) === String(item.qbo_entity_id))),
       ]
     : [];
-  await db.from("bank_qbo_matches").update({
+  const confirmedMeta = {
+    ...(match.meta || {}),
+    confirmed_idempotency_key: idempotencyKey || null,
+    confirmed_qbo_entity_id: item.qbo_entity_id,
+    confirmed_qbo_entity_type: item.qbo_entity_type,
+    candidates: confirmedCandidates,
+  };
+  const claim = typeof db.rpc === "function" ? await db.rpc("claim_bank_qbo_match", {
+    p_business_id: businessId,
+    p_bank_transaction_id: bankTransactionId,
+    p_match_id: matchId,
+    p_item_id: item.id,
+    p_confirmed_at: now,
+    p_actor_role: actorRole,
+    p_meta: confirmedMeta,
+  }) : null;
+  if (claim?.error && (String(claim.error.code) === "23505" || /qbo_entity_already_matched/i.test(claim.error.message || ""))) {
+    throw new IncomingDepositMatchError("qbo_entity_already_matched", 409);
+  }
+  if (claim?.error && !["42883", "PGRST202"].includes(String(claim.error.code || ""))) throw claim.error;
+  if (!claim?.data) {
+    await db.from("bank_qbo_matches").update({
     status: "confirmed",
     confirmed_at: now,
     updated_at: now,
     actor_role: actorRole,
-    meta: {
-      ...(match.meta || {}),
-      confirmed_idempotency_key: idempotencyKey || null,
-      confirmed_qbo_entity_id: item.qbo_entity_id,
-      confirmed_qbo_entity_type: item.qbo_entity_type,
-      candidates: confirmedCandidates,
-    },
-  }).eq("business_id", businessId).eq("id", matchId);
-  await db.from("bank_qbo_match_items").update({ active_confirmed: false }).eq("business_id", businessId).eq("match_id", matchId);
-  await db.from("bank_qbo_match_items").update({ active_confirmed: true }).eq("business_id", businessId).eq("match_id", matchId).eq("qbo_entity_type", item.qbo_entity_type).eq("qbo_entity_id", item.qbo_entity_id);
+    meta: confirmedMeta,
+    }).eq("business_id", businessId).eq("id", matchId);
+    await db.from("bank_qbo_match_items").update({ active_confirmed: false }).eq("business_id", businessId).eq("match_id", matchId);
+    await db.from("bank_qbo_match_items").update({ active_confirmed: true }).eq("business_id", businessId).eq("match_id", matchId).eq("qbo_entity_type", item.qbo_entity_type).eq("qbo_entity_id", item.qbo_entity_id);
+  }
 
   const { data: existingCat } = await db
     .from("transaction_categorizations")

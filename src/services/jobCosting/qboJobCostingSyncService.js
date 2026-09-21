@@ -488,10 +488,23 @@ async function importDepositEvidence({ db, businessId, realmId, deposit, now, di
   return { evidence_id: saved?.id || null, mutation, linked: status === "confirmed" ? 1 : 0, partial: status === "partial" ? 1 : 0 };
 }
 
+export function collectPurchaseAccountRefs(purchase = {}) {
+  const refs = [];
+  const add = (value) => {
+    const ref = normalizeQboRef(value);
+    if (ref?.value || ref?.name) refs.push(ref);
+  };
+  for (const line of Array.isArray(purchase.Line) ? purchase.Line : []) {
+    add(line?.AccountBasedExpenseLineDetail?.AccountRef);
+    add(line?.ItemBasedExpenseLineDetail?.AccountRef);
+    add(line?.ItemBasedExpenseLineDetail?.ItemRef);
+  }
+  return [...new Map(refs.map((ref) => [`${ref.value || ""}:${ref.name || ""}`, ref])).values()];
+}
+
 async function importExpenseTransaction({ db, businessId, realmId, purchase, now }) {
   const lines = Array.isArray(purchase.Line) ? purchase.Line : [];
-  const detailRows = lines.map((line) => line.AccountBasedExpenseLineDetail || line.ItemBasedExpenseLineDetail || {});
-  const accountRefs = detailRows.map((detail) => normalizeQboRef(detail.AccountRef)).filter(Boolean);
+  const accountRefs = collectPurchaseAccountRefs(purchase);
   const entityRef = normalizeQboRef(purchase.EntityRef || purchase.PayeeRef);
   const amount = Math.abs(toNumber(purchase.TotalAmt, 0));
   const payload = {
