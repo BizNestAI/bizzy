@@ -502,12 +502,12 @@ export function collectPurchaseAccountRefs(purchase = {}) {
   return [...new Map(refs.map((ref) => [`${ref.value || ""}:${ref.name || ""}`, ref])).values()];
 }
 
-async function importExpenseTransaction({ db, businessId, realmId, purchase, now }) {
+export function normalizeQboPurchaseExpenseRow({ businessId, realmId, purchase, now = new Date() }) {
   const lines = Array.isArray(purchase.Line) ? purchase.Line : [];
   const accountRefs = collectPurchaseAccountRefs(purchase);
   const entityRef = normalizeQboRef(purchase.EntityRef || purchase.PayeeRef);
   const amount = Math.abs(toNumber(purchase.TotalAmt, 0));
-  const payload = {
+  return {
     business_id: businessId,
     realm_id: realmId,
     qbo_env: qboEnvName,
@@ -531,6 +531,10 @@ async function importExpenseTransaction({ db, businessId, realmId, purchase, now
     source_snapshot: { purchase },
     updated_at: now.toISOString(),
   };
+}
+
+async function importExpenseTransaction({ db, businessId, realmId, purchase, now }) {
+  const payload = normalizeQboPurchaseExpenseRow({ businessId, realmId, purchase, now });
   const saved = await upsertAndFetch({
     db,
     table: "qbo_expense_transactions",

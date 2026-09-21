@@ -13,6 +13,7 @@ import {
   rejectIncomingDepositQboMatch,
   undoIncomingDepositQboMatch,
 } from "../../../services/bookkeeping/incomingDepositMatchService.js";
+import { ProcessorFeeRefreshError, refreshProcessorFeeQboEvidence } from "../../../services/bookkeeping/processorFeeQboRefreshService.js";
 
 const router = Router();
 const incomingDepositMatchWriteRateLimit = createRateLimiter({
@@ -63,6 +64,29 @@ router.get("/incoming-deposit-matches/:transactionId", requireAuth, async (req, 
     return res.json({ ok: true, result });
   } catch (err) {
     return sendError(req, res, err);
+  }
+});
+
+router.post("/incoming-deposit-matches/:transactionId/refresh", requireAuth, incomingDepositMatchWriteRateLimit, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  req.matchCorrelationId = requestCorrelationId(req);
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const refresh = await refreshProcessorFeeQboEvidence({ businessId, bankTransactionId: req.params.transactionId, db: supabase });
+    const result = await discoverIncomingDepositQboMatch({
+      db: supabase, businessId, bankTransactionId: req.params.transactionId,
+      actor: actorId(req), actorRole: "user_targeted_refresh", persist: true, correlationId: req.matchCorrelationId,
+    });
+    const status = result.status === "needs_confirmation" ? "match_found"
+      : result.status === "ambiguous" ? "multiple_matches"
+        : result.status === "candidate" ? "authoritative_no_match" : "cache_incomplete";
+    return res.json({ ok: true, status, refresh, result });
+  } catch (err) {
+    if (err instanceof ProcessorFeeRefreshError) {
+      return res.status(200).json({ ok: false, status: "refresh_failed", error: err.code, diagnostics: err.details || {}, correlation_id: req.matchCorrelationId });
+    }
+    return sendError(req, res, err, "qbo_processor_fee_refresh_failed");
   }
 });
 

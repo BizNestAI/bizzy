@@ -33,6 +33,7 @@ import {
   getClarificationRequests,
   postTransactionToQuickBooks,
   inspectIncomingDepositMatch,
+  refreshIncomingDepositMatch,
   confirmIncomingDepositMatch,
   rejectIncomingDepositMatch,
   undoIncomingDepositMatch,
@@ -2010,7 +2011,11 @@ function BookkeepingCleanup() {
   };
 
   const handleInspectIncomingDepositMatch = async (id) => {
-    await withIncomingDepositMatchAction(id, () => inspectIncomingDepositMatch(businessId, id, { persist: true }));
+    const txn = transactions.find((row) => String(row.id) === String(id));
+    const unavailable = txn?.incoming_deposit_match_status === "match_check_unavailable" || txn?.processor_fee?.matchState === "qbo_match_check_unavailable";
+    await withIncomingDepositMatchAction(id, () => unavailable
+      ? refreshIncomingDepositMatch(businessId, id)
+      : inspectIncomingDepositMatch(businessId, id, { persist: true }));
   };
 
   const handleConfirmIncomingDepositMatch = async (id, matchId, txn = {}, selection = {}) => {

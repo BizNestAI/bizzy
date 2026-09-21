@@ -113,6 +113,14 @@ export async function inspectIncomingDepositMatch(businessId, transactionId, { p
   });
 }
 
+export async function refreshIncomingDepositMatch(businessId, transactionId) {
+  return safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/refresh`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId }),
+  });
+}
+
 export async function confirmIncomingDepositMatch(businessId, transactionId, matchId, { expectedBankUpdatedAt = null, qboEntityId = null, qboEntityType = null } = {}) {
   const res = await safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/${encodeURIComponent(matchId)}/confirm`), {
     method: "POST",

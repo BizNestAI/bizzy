@@ -605,7 +605,7 @@ function humanizeReason(code = "") {
     human_confirmation_required_for_launch: "Human confirmation required",
     strong_qbo_bank_affecting_candidate: "Strong QBO candidate",
     multiple_or_unproven_qbo_candidates: "Multiple or unverified candidates",
-    ordinary_income_posting_blocked: "Income posting blocked",
+    ordinary_income_posting_blocked: "Posting blocked",
     qbo_match_cache_stale: "QBO cache is stale",
     qbo_match_cache_unavailable: "QBO cache unavailable",
     qbo_match_cache_never_synced: "QBO cache has not synced",
@@ -852,7 +852,7 @@ function IncomingDepositMatchPanel({
             <button type="button" disabled={readOnly || action.loading || !state.matchId} onClick={() => onUndo?.(txn.id, state.matchId, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">Undo match</button>
           </>
         ) : state.unavailable || processorState === "qbo_match_check_unavailable" || processorState === "checking_for_qbo_match" ? (
-          <button type="button" disabled={readOnly || transitionMatching} onClick={() => onInspect?.(txn.id, null, txn)} className="rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{transitionMatching ? "Checking..." : "Try again"}</button>
+          <button type="button" disabled={readOnly || transitionMatching} onClick={() => onInspect?.(txn.id, null, txn)} className="inline-flex items-center gap-1.5 rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{transitionMatching ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}{transitionMatching ? "Refreshing QuickBooks…" : "Try again"}</button>
         ) : processorState === "no_existing_qbo_match" ? (
           <button type="button" disabled={readOnly || transitionMatching} onClick={() => onRecordNewFee?.(txn.id, txn.glAccountId || txn.suggestedAccountId || null)} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">Record New Fee</button>
         ) : processorState === "posted_duplicate_review_required" ? (
