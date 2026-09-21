@@ -35,7 +35,6 @@ const CHAT_MAX_W = CHAT_CONTENT_MAX_W;
 
 // Grid
 const RIGHT_RAIL_W = 320;
-const HANDLE_W = 46;
 const GRID_GAP = 6;
 
 // This must match the wrapper class "bottom-12"
@@ -43,11 +42,16 @@ const WRAPPER_BOTTOM_OFFSET_PX = 50;
 // Small nudge to align the dashboard bar perfectly with content
 const DASH_BAR_ALIGN_NUDGE_PX = -12;
 
-// Layer stack (ordered low → high)
+// Application layer stack (ordered low → high). Portal roots that animate with
+// Framer Motion form their own stacking contexts, so order those roots here.
 const LAYERS = {
-  CANVAS: 9400,   // ChatCanvas root
-  BAR: 9500,      // Chat bar wrapper (curtain renders inside this wrapper)
-  HANDLE: 9600,   // Insights toggle handle always clickable
+  CONTENT: 1,
+  CANVAS: 9400,
+  CHAT_DOCK: 9500,
+  INSIGHTS_RAIL: 9600,
+  INSIGHTS_CONTROL: 9610,
+  MODAL: 10000,
+  TOAST: 11000,
 };
 
 const GLOBAL_INSIGHTS_MODULE = "contractor_cfo";
@@ -605,7 +609,7 @@ const DashboardContent = ({ children }) => {
                   type="button"
                   onClick={(e) => { e.stopPropagation(); toggleRail(); }}
                   className="hidden lg:inline-flex items-center justify-center h-8 w-8 rounded-full border border-white/16 bg-black/80 text-white hover:bg-black/90 transition shadow-[0_10px_30px_rgba(0,0,0,0.35)]"
-                  style={{ position: "fixed", top: 12, right: 12, zIndex: 20000, pointerEvents: "auto" }}
+                  style={{ position: "fixed", top: 12, right: 12, zIndex: LAYERS.INSIGHTS_CONTROL, pointerEvents: "auto" }}
                   title={railOpen ? "Close insights" : "Open insights"}
                   aria-label={railOpen ? "Close insights" : (showUnreadBadge ? `${unreadCount} unread insights` : "Open insights")}
                 >
@@ -638,7 +642,7 @@ const DashboardContent = ({ children }) => {
                 width: `${RIGHT_RAIL_W}px`,
                 overscrollBehavior: "contain",
                 "--chat-clearance": `${chatClearance}px`,
-                zIndex: LAYERS.HANDLE + 10,
+                zIndex: LAYERS.INSIGHTS_RAIL,
                 background: "transparent",
                 overflow: "visible",
                 opacity: railOpen ? 1 : 0,
@@ -695,15 +699,15 @@ const DashboardContent = ({ children }) => {
             return (
               <MotionDiv
                 ref={chatWrapperRef}
-                className="hidden md:block fixed bottom-0 right-0 pointer-events-none"
+                className="bizzy-dashboard-chat-dock hidden md:block fixed bottom-0 pointer-events-none"
                 data-bizzy-chatbar
                 data-bizzy-chatbar-shell
+                data-insights-open={railOpen && showRail ? "true" : "false"}
                 style={{
                   left: `${bandLeft}px`,
-                  transform: "none",
                   width: "auto",
                   maxWidth: "none",
-                  zIndex: LAYERS.BAR,
+                  zIndex: LAYERS.CHAT_DOCK,
                   overflow: "visible",
                   isolation: "isolate",
                   paddingBottom: "32px",

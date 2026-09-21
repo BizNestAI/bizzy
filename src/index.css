@@ -1245,6 +1245,17 @@ body.pdf-modal-open .bizzy-qprompts {
 }
 
 /* Shared Bizzi chat composer */
+.bizzy-dashboard-chat-dock{
+  right: 0;
+  transition: right 260ms cubic-bezier(.2,.85,.25,1);
+}
+
+@media (min-width: 1024px){
+  .bizzy-dashboard-chat-dock[data-insights-open="true"]{
+    right: var(--insights-w, 0px);
+  }
+}
+
 .bizzy-chat-composer-group{
   width: 100%;
 }
