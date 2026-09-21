@@ -14,7 +14,7 @@ import ChatCanvasBar from "./ChatCanvasBar";
 import UserMessageBubble from "./UserMessageBubble";
 
 const WARM_TEXT = "var(--text)";
-const SCROLL_BUTTON_BAR_GAP = 8;
+const SCROLL_BUTTON_BAR_GAP = 16;
 const FOLLOWUPS_ENABLED = false; // temporarily hide follow-up prompts from the canvas
 const FOLLOWUP_MIN_LENGTH = 240; // chars threshold for showing follow-ups
 const FOLLOWUP_USER_MAX = 600;
@@ -349,7 +349,14 @@ export default function ChatCanvas({
   const [contentGutter, setContentGutter] = useState(0);
   const canvasScrollRef = useRef(null);
   const [scrollShellStyle, setScrollShellStyle] = useState(null);
-  const [scrollButtonBottom, setScrollButtonBottom] = useState(CANVAS_BAR_HEIGHT + SCROLL_BUTTON_BAR_GAP);
+  const syncScrollButtonToBar = useCallback((barRect) => {
+    if (!barRect || typeof window === "undefined") return;
+    const portal = getScrollPortalRoot();
+    portal?.style.setProperty(
+      "--bizzy-scroll-button-bottom",
+      `${Math.max(48, Math.round(window.innerHeight - barRect.top + SCROLL_BUTTON_BAR_GAP))}px`
+    );
+  }, []);
 
   useEffect(() => {
     if (!isCanvasOpen) return;
@@ -357,9 +364,7 @@ export default function ChatCanvas({
       const bar = barMeasureRef.current;
       if (!bar) return;
       const barRect = bar.getBoundingClientRect();
-      setScrollButtonBottom(
-        Math.max(48, Math.round(window.innerHeight - barRect.top + SCROLL_BUTTON_BAR_GAP))
-      );
+      syncScrollButtonToBar(barRect);
       const quickRow = bar.querySelector?.(".bizzy-qprompts");
       const rect = (quickRow || bar).getBoundingClientRect();
       setScrollShellStyle({ left: rect.left, width: rect.width });
@@ -375,7 +380,7 @@ export default function ChatCanvas({
       window.removeEventListener("resize", updateShell);
       ro?.disconnect();
     };
-  }, [isCanvasOpen]);
+  }, [isCanvasOpen, syncScrollButtonToBar]);
   useLayoutEffect(() => {
     if (!isCanvasOpen) return;
     const pillEl = barMeasureRef.current?.querySelector?.("[data-bizzy-chatbar-pill]");
@@ -395,9 +400,7 @@ export default function ChatCanvas({
       setContentGutter(Math.max(padL, padR) || 0);
       const barRect = barMeasureRef.current?.getBoundingClientRect?.();
       if (barRect) {
-        setScrollButtonBottom(
-          Math.max(48, Math.round(window.innerHeight - barRect.top + SCROLL_BUTTON_BAR_GAP))
-        );
+        syncScrollButtonToBar(barRect);
         const quickRow = barMeasureRef.current?.querySelector?.(".bizzy-qprompts");
         const rect = (quickRow || barMeasureRef.current).getBoundingClientRect();
         setScrollShellStyle({ left: rect.left, width: rect.width });
@@ -407,7 +410,7 @@ export default function ChatCanvas({
     const ro = new ResizeObserver(measure);
     ro.observe(pillEl);
     return () => ro.disconnect();
-  }, [isCanvasOpen]);
+  }, [isCanvasOpen, syncScrollButtonToBar]);
 
   const columnStyle = {
     margin: "0 auto",
@@ -512,7 +515,6 @@ export default function ChatCanvas({
                 contentGutter={contentGutter}
                 scrollerRef={canvasScrollRef}
                 scrollShellStyle={scrollShellStyle}
-                scrollButtonBottom={scrollButtonBottom}
               />
             </div>
           </div>
@@ -563,7 +565,6 @@ function MessageStream({
   contentGutter = 0,
   scrollerRef: providedScrollerRef,
   scrollShellStyle,
-  scrollButtonBottom = CANVAS_BAR_HEIGHT + SCROLL_BUTTON_BAR_GAP,
 }) {
   const {
     messages = [],
@@ -1309,7 +1310,7 @@ function MessageStream({
             .followup-arrow { opacity: 0.65; transform: translateX(-2px); transition: opacity .12s ease, transform .12s ease; display: inline-flex; align-items: center; }
             .followup-pill:hover .followup-arrow { opacity: 1; transform: translateX(0px); }
             @keyframes followupFade { to { opacity: 1; transform: translateY(0); } }
-            .scrollbottom-shell { position:fixed; left:var(--nav-w, 0px); right:var(--bizzy-canvas-right-inset, 0px); display:flex; justify-content:center; pointer-events:none; opacity:0; transform: translateY(12px); transition: opacity .2s ease, transform .2s ease, right 560ms cubic-bezier(0.22,1,0.36,1), bottom 180ms cubic-bezier(0.22,1,0.36,1); z-index:20000; }
+            .scrollbottom-shell { position:fixed; left:var(--nav-w, 0px); right:var(--bizzy-canvas-right-inset, 0px); bottom:var(--bizzy-scroll-button-bottom, ${CANVAS_BAR_HEIGHT + SCROLL_BUTTON_BAR_GAP}px); display:flex; justify-content:center; pointer-events:none; opacity:0; transform: translateY(12px); transition: opacity .2s ease, transform .2s ease, right 560ms cubic-bezier(0.22,1,0.36,1); z-index:20000; }
             .scrollbottom-shell.visible { opacity:1; transform: translateY(0); }
             .scrollbottom-btn { pointer-events:auto; background:#0f1214; color:rgba(255,255,255,0.95); border:1px solid rgba(255,255,255,0.32); border-radius:999px; padding:6px; font-size:12px; box-shadow:0 16px 38px rgba(0,0,0,0.42); display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; }
             .scrollbottom-btn:hover { background:#15191c; border-color:rgba(255,255,255,0.4); transform: translateY(-1px); transition: all .15s ease; color: rgba(255,255,255,1); }
@@ -1461,10 +1462,7 @@ function MessageStream({
 
         {scrollPortal && isCanvasOpen
           ? createPortal(
-              <div
-                className={`scrollbottom-shell ${showScrollBtn && !isGenerating ? "visible" : ""}`}
-                style={{ bottom: `${scrollButtonBottom}px` }}
-              >
+              <div className={`scrollbottom-shell ${showScrollBtn && !isGenerating ? "visible" : ""}`}>
                 <button
                   onClick={handleScrollButtonClick}
                   className="scrollbottom-btn"
