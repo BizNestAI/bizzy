@@ -1,8 +1,8 @@
 // src/pages/Bizzy/ChatHome.jsx
 import React, { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate, useLocation } from "react-router-dom";
-import { AnimatePresence, motion } from "framer-motion";
+import { useLocation } from "react-router-dom";
+import { AnimatePresence, motion as Motion, useReducedMotion } from "framer-motion";
 import { useBizzyChatContext } from "../../context/BizzyChatContext";
 import BizzyChatBar from "../../components/Bizzy/BizzyChatBar";
 import ChatCanvas from "../../components/Bizzy/ChatCanvas";
@@ -16,17 +16,17 @@ import { getDemoMode, shouldUseDemoData, getDemoData } from "../../services/demo
 import { getOperatorRequestSummary, getOperatorRequests } from "../../services/bookkeeping/bookkeepingClient.js";
 
 const OPERATOR_REQUEST_PREFETCH_PAGE_SIZE = 25;
+const OPERATOR_PANEL_OPEN_TRANSITION = { duration: 0.18, ease: [0.22, 1, 0.36, 1] };
+const OPERATOR_PANEL_CLOSE_TRANSITION = { duration: 0.14, ease: [0.4, 0, 1, 1] };
 
 export default function ChatHome() {
   return <ChatHomeInner />;
 }
 
 function ChatHomeInner() {
-  const navigate = useNavigate();
   const { isCanvasOpen = false, closeCanvas } = useBizzyChatContext();
   const location = useLocation();
   const { quickPromptMode } = useOnboardingStatus();
-  const dashboardTarget = "/dashboard/accounting";
   const { businessId, currentBusiness } = useBusiness();
   const [needsReviewRequests, setNeedsReviewRequests] = useState([]);
   const [operatorOutstandingCount, setOperatorOutstandingCount] = useState(0);
@@ -36,6 +36,10 @@ function ChatHomeInner() {
   const [clarError, setClarError] = useState("");
   const [clarOpen, setClarOpen] = useState(false);
   const [showStatusCard, setShowStatusCard] = useState(false);
+  const [statusCardExiting, setStatusCardExiting] = useState(false);
+  const showStatusCardRef = useRef(false);
+  const operatorRequestsTriggerRef = useRef(null);
+  const reduceMotion = useReducedMotion();
   const operatorRequestPrefetchSeq = useRef(0);
   const dataMode = getDemoMode?.() || "";
   const isMockMode =
@@ -220,6 +224,18 @@ function ChatHomeInner() {
     setClarOpen(true);
   }, []);
 
+  const showOperatorRequests = useCallback(() => {
+    showStatusCardRef.current = true;
+    setStatusCardExiting(false);
+    setShowStatusCard(true);
+  }, []);
+
+  const hideOperatorRequests = useCallback(() => {
+    showStatusCardRef.current = false;
+    setStatusCardExiting(true);
+    setShowStatusCard(false);
+  }, []);
+
   const clarCount = isMockMode ? needsReviewRequests.length : operatorOutstandingCount;
   const hasPendingQuestions = clarCount > 0;
   const isChatHome = (location?.pathname || "").includes("/chat");
@@ -230,9 +246,20 @@ function ChatHomeInner() {
   // Keep hidden by default; hide automatically when nothing remains.
   useEffect(() => {
     if (clarCount === 0) {
+      showStatusCardRef.current = false;
+      setStatusCardExiting(false);
       setShowStatusCard(false);
     }
   }, [clarCount]);
+
+  useEffect(() => {
+    if (!showStatusCard) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") hideOperatorRequests();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [hideOperatorRequests, showStatusCard]);
 
   useEffect(() => {
     loadNeedsReviewRequests();
@@ -322,25 +349,29 @@ function ChatHomeInner() {
                       />
                     </div>
                   </div>
-                  <AnimatePresence>
+                  <AnimatePresence
+                    initial={false}
+                    onExitComplete={() => {
+                      if (showStatusCardRef.current) return;
+                      setStatusCardExiting(false);
+                      operatorRequestsTriggerRef.current?.focus?.({ preventScroll: true });
+                    }}
+                  >
                     {clarCount > 0 && showStatusCard ? (
-                      <motion.div
+                      <Motion.div
                         key="operator-status-card"
-                        initial={{ opacity: 0, y: 180 }}
+                        initial={{ opacity: 0, y: reduceMotion ? 0 : 16, scale: reduceMotion ? 1 : 0.995 }}
                         animate={{
                           opacity: 1,
                           y: 0,
-                          transition: {
-                            type: "spring",
-                            stiffness: 100,
-                            damping: 16,
-                            mass: 1.05,
-                          },
+                          scale: 1,
+                          transition: reduceMotion ? { duration: 0.01 } : OPERATOR_PANEL_OPEN_TRANSITION,
                         }}
                         exit={{
                           opacity: 0,
-                          y: 120,
-                          transition: { duration: 0.32, ease: [0.22, 0.1, 0.25, 1] },
+                          y: reduceMotion ? 0 : 10,
+                          scale: reduceMotion ? 1 : 0.997,
+                          transition: reduceMotion ? { duration: 0.01 } : OPERATOR_PANEL_CLOSE_TRANSITION,
                         }}
                         className="w-full mt-16 relative"
                       >
@@ -356,7 +387,7 @@ function ChatHomeInner() {
                         requests={isMockMode || !operatorRequestsPrefetchFailed ? needsReviewRequests : null}
                         rowsLoading={operatorRequestsPrefetching}
                         error={clarError}
-                        onHide={() => setShowStatusCard(false)}
+                        onHide={hideOperatorRequests}
                         showExpand
                       />
                         <div
@@ -366,11 +397,11 @@ function ChatHomeInner() {
                             background: "linear-gradient(180deg, rgba(15,17,20,0) 0%, rgba(15,17,20,0.55) 60%, rgba(15,17,20,0.8) 100%)",
                           }}
                         />
-                      </motion.div>
+                      </Motion.div>
                     ) : null}
                   </AnimatePresence>
                   {/* Keep layout height stable when the card is hidden so the halo/glow behind the chat bar doesn't shift */}
-                  {clarCount > 0 && !showStatusCard ? (
+                  {clarCount > 0 && !showStatusCard && !statusCardExiting ? (
                     <div
                       className="w-full mt-16 rounded-3xl"
                       aria-hidden
@@ -386,9 +417,10 @@ function ChatHomeInner() {
 
             {!showStatusCard && hasPendingQuestions && isChatHome && !isCanvasOpen && typeof document !== "undefined"
               ? createPortal(
-                  <motion.button
+                  <Motion.button
+                    ref={operatorRequestsTriggerRef}
                     type="button"
-                    onClick={() => setShowStatusCard(true)}
+                    onClick={showOperatorRequests}
                     aria-label="Show questions"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
@@ -403,7 +435,7 @@ function ChatHomeInner() {
                       ↑
                     </span>
                     {clarCount} remaining transaction{clarCount === 1 ? "" : "s"}
-                  </motion.button>,
+                  </Motion.button>,
                   document.body
                 )
               : null}
