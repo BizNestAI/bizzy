@@ -16,8 +16,8 @@ import { getDemoMode, shouldUseDemoData, getDemoData } from "../../services/demo
 import { getOperatorRequestSummary, getOperatorRequests } from "../../services/bookkeeping/bookkeepingClient.js";
 
 const OPERATOR_REQUEST_PREFETCH_PAGE_SIZE = 25;
-const OPERATOR_PANEL_OPEN_TRANSITION = { duration: 0.18, ease: [0.22, 1, 0.36, 1] };
-const OPERATOR_PANEL_CLOSE_TRANSITION = { duration: 0.14, ease: [0.4, 0, 1, 1] };
+const OPERATOR_PANEL_OPEN_TRANSITION = { duration: 0.23, ease: [0.22, 1, 0.36, 1] };
+const OPERATOR_PANEL_CLOSE_TRANSITION = { duration: 0.17, ease: [0.4, 0, 1, 1] };
 
 export default function ChatHome() {
   return <ChatHomeInner />;
@@ -358,19 +358,18 @@ function ChatHomeInner() {
                     }}
                   >
                     {clarCount > 0 && showStatusCard ? (
-                      <Motion.div
+                      <Motion.section
                         key="operator-status-card"
-                        initial={{ opacity: 0, y: reduceMotion ? 0 : 16, scale: reduceMotion ? 1 : 0.995 }}
+                        data-operator-requests-panel
+                        initial={{ opacity: 0, y: reduceMotion ? 0 : 36 }}
                         animate={{
                           opacity: 1,
                           y: 0,
-                          scale: 1,
                           transition: reduceMotion ? { duration: 0.01 } : OPERATOR_PANEL_OPEN_TRANSITION,
                         }}
                         exit={{
                           opacity: 0,
-                          y: reduceMotion ? 0 : 10,
-                          scale: reduceMotion ? 1 : 0.997,
+                          y: reduceMotion ? 0 : 24,
                           transition: reduceMotion ? { duration: 0.01 } : OPERATOR_PANEL_CLOSE_TRANSITION,
                         }}
                         className="w-full mt-16 relative"
@@ -397,7 +396,7 @@ function ChatHomeInner() {
                             background: "linear-gradient(180deg, rgba(15,17,20,0) 0%, rgba(15,17,20,0.55) 60%, rgba(15,17,20,0.8) 100%)",
                           }}
                         />
-                      </Motion.div>
+                      </Motion.section>
                     ) : null}
                   </AnimatePresence>
                   {/* Keep layout height stable when the card is hidden so the halo/glow behind the chat bar doesn't shift */}
