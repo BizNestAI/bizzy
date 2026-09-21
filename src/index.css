@@ -22,6 +22,12 @@
   --chat-composer-placeholder: rgba(255,255,255,0.43);
   --chat-composer-control-bg: rgba(255,255,255,0.045);
   --chat-composer-control-border: rgba(255,255,255,0.08);
+  --chat-user-bg: rgba(255,255,255,0.055);
+  --chat-user-bg-hover: rgba(255,255,255,0.07);
+  --chat-user-border: rgba(255,255,255,0.07);
+  --chat-user-border-hover: rgba(255,255,255,0.10);
+  --chat-user-radius: 18px;
+  --chat-user-text: var(--text-primary);
   --chatbar-bg: var(--chat-composer-bg);
   --chatbar-bg-2: var(--chat-composer-bg);
   --chatbar-border: var(--chat-composer-border);
@@ -121,6 +127,42 @@
 .bizzy-page-width--workspace .bizzy-page-width--workspace {
   max-width: none;
   padding-inline: 0;
+}
+
+/* Shared user-authored chat message */
+.bizzy-user-message{
+  box-sizing: border-box;
+  display: block;
+  width: fit-content;
+  max-width: 70%;
+  align-self: flex-end;
+  padding: 10px 17px;
+  border: 1px solid var(--chat-user-border);
+  border-radius: var(--chat-user-radius);
+  background: var(--chat-user-bg);
+  color: var(--chat-user-text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  box-shadow: none;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.bizzy-user-message:hover{
+  background: var(--chat-user-bg-hover);
+  border-color: var(--chat-user-border-hover);
+}
+
+@media (max-width: 768px){
+  .bizzy-user-message{
+    max-width: 88%;
+    padding: 10px 16px;
+  }
 }
 
 /* Optional theme switch hook */

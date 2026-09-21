@@ -11,8 +11,10 @@ import { CHAT_ALIGN_NUDGE_PX } from "../../config/chatLayout";
 import { CANVAS_BAR_HEIGHT } from "../../config/chatCanvasLayout";
 import { apiUrl, safeFetch } from "../../utils/safeFetch";
 import ChatCanvasBar from "./ChatCanvasBar";
+import UserMessageBubble from "./UserMessageBubble";
 
 const WARM_TEXT = "var(--text)";
+const SCROLL_BUTTON_BAR_GAP = 8;
 const FOLLOWUPS_ENABLED = false; // temporarily hide follow-up prompts from the canvas
 const FOLLOWUP_MIN_LENGTH = 240; // chars threshold for showing follow-ups
 const FOLLOWUP_USER_MAX = 600;
@@ -347,12 +349,17 @@ export default function ChatCanvas({
   const [contentGutter, setContentGutter] = useState(0);
   const canvasScrollRef = useRef(null);
   const [scrollShellStyle, setScrollShellStyle] = useState(null);
+  const [scrollButtonBottom, setScrollButtonBottom] = useState(CANVAS_BAR_HEIGHT + SCROLL_BUTTON_BAR_GAP);
 
   useEffect(() => {
     if (!isCanvasOpen) return;
     const updateShell = () => {
       const bar = barMeasureRef.current;
       if (!bar) return;
+      const barRect = bar.getBoundingClientRect();
+      setScrollButtonBottom(
+        Math.max(48, Math.round(window.innerHeight - barRect.top + SCROLL_BUTTON_BAR_GAP))
+      );
       const quickRow = bar.querySelector?.(".bizzy-qprompts");
       const rect = (quickRow || bar).getBoundingClientRect();
       setScrollShellStyle({ left: rect.left, width: rect.width });
@@ -388,6 +395,9 @@ export default function ChatCanvas({
       setContentGutter(Math.max(padL, padR) || 0);
       const barRect = barMeasureRef.current?.getBoundingClientRect?.();
       if (barRect) {
+        setScrollButtonBottom(
+          Math.max(48, Math.round(window.innerHeight - barRect.top + SCROLL_BUTTON_BAR_GAP))
+        );
         const quickRow = barMeasureRef.current?.querySelector?.(".bizzy-qprompts");
         const rect = (quickRow || barMeasureRef.current).getBoundingClientRect();
         setScrollShellStyle({ left: rect.left, width: rect.width });
@@ -502,6 +512,7 @@ export default function ChatCanvas({
                 contentGutter={contentGutter}
                 scrollerRef={canvasScrollRef}
                 scrollShellStyle={scrollShellStyle}
+                scrollButtonBottom={scrollButtonBottom}
               />
             </div>
           </div>
@@ -548,7 +559,12 @@ function TypingIndicator() {
 }
 
 /* ---------------- message stream ---------------- */
-function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, scrollShellStyle }) {
+function MessageStream({
+  contentGutter = 0,
+  scrollerRef: providedScrollerRef,
+  scrollShellStyle,
+  scrollButtonBottom = CANVAS_BAR_HEIGHT + SCROLL_BUTTON_BAR_GAP,
+}) {
   const {
     messages = [],
     isGenerating,
@@ -1252,11 +1268,6 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
             .chat-row  { margin: 18px 0; position: relative; z-index: 15000; }
             .row-wrap  { width: 100%; max-width: 100%; gap: 8px; display:flex; flex-direction:column; align-items:stretch; }
             .row-wrap--user { align-items: flex-end; padding-right: 6px; }
-            .bubble-user { background: linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.025));
-                           padding: 8px 12px; border-radius: 14px; font-size: 15px;
-                           color:${WARM_TEXT}; display:inline-flex; border:1px solid rgba(255,255,255,0.10);
-                           max-width:100%; align-self:flex-end; word-break: break-word; white-space: normal; text-align:left;
-                           box-shadow: 0 10px 20px rgba(0,0,0,0.20); }
             .bubble-assistant { color:${WARM_TEXT}; width:100%; margin-top:10px; padding: 4px 0; font-size: 15px; }
             .actions { opacity:0; transition:opacity .18s ease; display:flex; gap:8px; margin-top:-10px; width:100%; }
             .actions { transform: translateY(4px); transition: opacity .18s ease, transform .18s ease; }
@@ -1298,7 +1309,7 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
             .followup-arrow { opacity: 0.65; transform: translateX(-2px); transition: opacity .12s ease, transform .12s ease; display: inline-flex; align-items: center; }
             .followup-pill:hover .followup-arrow { opacity: 1; transform: translateX(0px); }
             @keyframes followupFade { to { opacity: 1; transform: translateY(0); } }
-            .scrollbottom-shell { position:fixed; left:var(--nav-w, 0px); right:var(--bizzy-canvas-right-inset, 0px); bottom:${CANVAS_BAR_HEIGHT + 18}px; display:flex; justify-content:center; pointer-events:none; opacity:0; transform: translateY(12px); transition: opacity .2s ease, transform .2s ease, right 560ms cubic-bezier(0.22,1,0.36,1); z-index:20000; }
+            .scrollbottom-shell { position:fixed; left:var(--nav-w, 0px); right:var(--bizzy-canvas-right-inset, 0px); display:flex; justify-content:center; pointer-events:none; opacity:0; transform: translateY(12px); transition: opacity .2s ease, transform .2s ease, right 560ms cubic-bezier(0.22,1,0.36,1), bottom 180ms cubic-bezier(0.22,1,0.36,1); z-index:20000; }
             .scrollbottom-shell.visible { opacity:1; transform: translateY(0); }
             .scrollbottom-btn { pointer-events:auto; background:#0f1214; color:rgba(255,255,255,0.95); border:1px solid rgba(255,255,255,0.32); border-radius:999px; padding:6px; font-size:12px; box-shadow:0 16px 38px rgba(0,0,0,0.42); display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; }
             .scrollbottom-btn:hover { background:#15191c; border-color:rgba(255,255,255,0.4); transform: translateY(-1px); transition: all .15s ease; color: rgba(255,255,255,1); }
@@ -1328,7 +1339,7 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
               <div className="chat-row" key={key}>
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <div className="row-wrap row-wrap--user">
-                    <div className="bubble-user">{m.text}</div>
+                    <UserMessageBubble>{m.text}</UserMessageBubble>
                   </div>
                 </div>
               </div>
@@ -1450,7 +1461,10 @@ function MessageStream({ contentGutter = 0, scrollerRef: providedScrollerRef, sc
 
         {scrollPortal && isCanvasOpen
           ? createPortal(
-              <div className={`scrollbottom-shell ${showScrollBtn && !isGenerating ? "visible" : ""}`}>
+              <div
+                className={`scrollbottom-shell ${showScrollBtn && !isGenerating ? "visible" : ""}`}
+                style={{ bottom: `${scrollButtonBottom}px` }}
+              >
                 <button
                   onClick={handleScrollButtonClick}
                   className="scrollbottom-btn"
