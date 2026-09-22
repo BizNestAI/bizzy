@@ -69,6 +69,54 @@ function sanitizeMessage(value = "") {
   return String(value || "Posting could not finish.").replace(/\s+/g, " ").slice(0, 500);
 }
 
+function postingFailureResult({ transactionId, error, childOperationId = null } = {}) {
+  const internalCode = String(error?.code || error?.message || "interactive_posting_failed");
+  const normalized = internalCode.toLowerCase();
+  let safeReasonCode = "qbo_posting_failed";
+  let safeMessage = "QuickBooks could not complete this posting. Nothing was posted. Try again.";
+  let action = "retry";
+  let retryable = true;
+  let ambiguous = false;
+
+  if (/possible.*duplicate|duplicate_preflight|existing_qbo|match.*review/.test(normalized)) {
+    safeReasonCode = "possible_existing_qbo_transaction";
+    safeMessage = "A possible existing QuickBooks transaction must be reviewed first.";
+    action = "review_match";
+    retryable = false;
+  } else if (/account|mapping|unsupported.*transaction|vendor/.test(normalized)) {
+    safeReasonCode = "qbo_account_or_transaction_invalid";
+    safeMessage = "The selected QuickBooks account cannot be used for this transaction. Choose a compatible account and try again.";
+    action = "choose_account";
+    retryable = false;
+  } else if (/timeout|unknown|ambiguous|no_receipt|missing_transaction_id|child_result_missing/.test(normalized)) {
+    safeReasonCode = "qbo_result_unconfirmed";
+    safeMessage = "Bizzi could not confirm whether QuickBooks accepted this transaction. Posting is paused to prevent a duplicate.";
+    action = "check_status";
+    retryable = false;
+    ambiguous = true;
+  } else if (/safety|protected|blocked|not_handled|row_changed/.test(normalized)) {
+    safeReasonCode = "posting_safety_blocked";
+    safeMessage = "This transaction did not pass the posting safety check. Review its details before trying again.";
+    action = "review_transaction";
+    retryable = false;
+  }
+
+  return {
+    transaction_id: transactionId || null,
+    parent_operation_id: null,
+    child_operation_id: childOperationId,
+    state: ambiguous ? "ambiguous" : retryable ? "retryable_failure" : "blocked",
+    posted: false,
+    retryable,
+    ambiguous,
+    safe_reason_code: safeReasonCode,
+    safe_message: safeMessage,
+    action,
+    internal_reason_code: internalCode,
+    qbo_txn_id: null,
+  };
+}
+
 function tableStore(db, table) {
   if (!db?.store) return null;
   db.store[table] ||= [];
@@ -219,6 +267,8 @@ export async function createInteractivePostingCommand({
     stage: INTERACTIVE_COMMAND_STATES.ACCEPTED,
     stage_started_at: requestedIso,
     event_timeline: [],
+    child_operations: {},
+    transaction_results: {},
     created_at: requestedIso,
     updated_at: requestedIso,
   };
@@ -451,6 +501,9 @@ export async function processInteractivePostingCommand({
   if (!claimed) return { ok: true, claimed: false, operation_id: operationId };
   let command = claimed;
   const transactionIds = uniqueSortedIds(command.transaction_ids);
+  let activeTransactionId = null;
+  const transactionResults = { ...(command.transaction_results || {}) };
+  const childOperations = { ...(command.child_operations || {}) };
   try {
     await appendInteractivePostingCommandEvent({ db, operationId, event: "notification_received" });
     command = await setCommandStage({ db, command, state: INTERACTIVE_COMMAND_STATES.PROCESSING, stage: "validation", event: "validation_completed" });
@@ -501,6 +554,7 @@ export async function processInteractivePostingCommand({
     });
     const postedIds = [];
     for (const row of readyRows) {
+      activeTransactionId = row.transaction_id;
       command = await setCommandStage({ db, command, state: INTERACTIVE_COMMAND_STATES.POSTING, stage: "posting" });
       await appendInteractivePostingCommandEvent({ db, operationId, event: "qbo_create_started", extra: { transaction_id: row.transaction_id } });
       const result = await poster({
@@ -508,6 +562,34 @@ export async function processInteractivePostingCommand({
         transactionId: row.transaction_id,
         confirmPostAnyway: false,
       });
+      const childOperationId = result?.child_operation_id || result?.qbo_request_id || null;
+      if (!childOperationId) {
+        const err = new Error("interactive_posting_child_result_missing");
+        err.code = "interactive_posting_child_result_missing";
+        throw err;
+      }
+      childOperations[row.transaction_id] = childOperationId;
+      transactionResults[row.transaction_id] = {
+        transaction_id: row.transaction_id,
+        parent_operation_id: operationId,
+        child_operation_id: childOperationId,
+        state: result?.ok === true && result?.qbo_txn_id ? "posted" : "failed",
+        posted: result?.ok === true && Boolean(result?.qbo_txn_id),
+        retryable: false,
+        ambiguous: false,
+        safe_reason_code: result?.ok === true && result?.qbo_txn_id ? null : "qbo_posting_failed",
+        safe_message: result?.ok === true && result?.qbo_txn_id ? "Posted to QuickBooks" : "QuickBooks could not complete this posting. Nothing was posted. Try again.",
+        action: result?.ok === true && result?.qbo_txn_id ? null : "retry",
+        internal_reason_code: result?.error || null,
+        qbo_txn_id: result?.qbo_txn_id || null,
+        qbo_txn_type: result?.qbo_txn_type || null,
+        posted_at: result?.posted_at || null,
+      };
+      command = await updateInteractiveCommand({
+        db,
+        operationId,
+        patch: { child_operations: childOperations, transaction_results: transactionResults },
+      }) || command;
       await appendInteractivePostingCommandEvent({
         db,
         operationId,
@@ -535,11 +617,23 @@ export async function processInteractivePostingCommand({
         qbo_receipt_ids: receiptIds,
         failure_code: null,
         failure_message: null,
+        child_operations: childOperations,
+        transaction_results: transactionResults,
       },
     });
     return { ok: true, operation_id: operationId, posted_transaction_ids: postedIds, qbo_receipt_ids: receiptIds, command };
   } catch (err) {
     const code = err?.code || err?.message || "interactive_posting_failed";
+    if (activeTransactionId) {
+      const failure = postingFailureResult({
+        transactionId: activeTransactionId,
+        error: err,
+        childOperationId: childOperations[activeTransactionId] || err?.child_operation_id || err?.qbo_request_id || null,
+      });
+      failure.parent_operation_id = operationId;
+      transactionResults[activeTransactionId] = failure;
+      childOperations[activeTransactionId] = failure.child_operation_id;
+    }
     await markMerchantBacklogApprovalOperationFailed({
       db,
       businessId: command.business_id,
@@ -553,7 +647,12 @@ export async function processInteractivePostingCommand({
       command,
       state: INTERACTIVE_COMMAND_STATES.FAILED,
       stage: INTERACTIVE_COMMAND_STATES.FAILED,
-      extra: { failure_code: code, failure_message: sanitizeMessage(err?.message || code) },
+      extra: {
+        failure_code: code,
+        failure_message: activeTransactionId ? transactionResults[activeTransactionId]?.safe_message : sanitizeMessage(err?.message || code),
+        child_operations: childOperations,
+        transaction_results: transactionResults,
+      },
     });
     return { ok: false, operation_id: operationId, error: code, message: sanitizeMessage(err?.message || code) };
   }
@@ -568,6 +667,7 @@ export async function getInteractivePostingCommandStatus({ db = null, businessId
   const postedTransactionIds = selectedIds.filter((id) => receiptTransactionIds.has(id));
   const terminal = TERMINAL_STATES.has(command.state);
   const active = !terminal;
+  const transactionResults = command.transaction_results || {};
   return {
     ok: true,
     operation_id: operationId,
@@ -586,9 +686,15 @@ export async function getInteractivePostingCommandStatus({ db = null, businessId
     failed_transaction_ids: command.state === INTERACTIVE_COMMAND_STATES.FAILED ? selectedIds.filter((id) => !receiptTransactionIds.has(id)) : [],
     failure_code: command.failure_code || null,
     failure_message: command.failure_message || null,
+    authoritative_operation_id: operationId,
+    parent_operation_id: operationId,
+    child_operation_ids: Object.values(command.child_operations || {}).filter(Boolean),
+    retryable: command.state === INTERACTIVE_COMMAND_STATES.RETRYABLE_FAILURE || Object.values(transactionResults).some((result) => result?.retryable === true),
+    ambiguous: Object.values(transactionResults).some((result) => result?.ambiguous === true),
     user_message: buildInteractiveCommandUserMessage({ command, selectedIds, postedTransactionIds }),
     event_timeline: command.event_timeline || [],
     rows: selectedIds.map((id) => ({
+      ...(transactionResults[id] || {}),
       transaction_id: id,
       state: receiptTransactionIds.has(id) ? "posted" : command.state,
       stage: receiptTransactionIds.has(id) ? "posted" : command.stage,
@@ -597,8 +703,11 @@ export async function getInteractivePostingCommandStatus({ db = null, businessId
       requested_at: command.requested_at || null,
       claimed_at: command.claimed_at || null,
       lease_expires_at: command.lease_expires_at || null,
-      failure_code: command.failure_code || null,
-      failure_message: command.failure_message || null,
+      parent_operation_id: operationId,
+      child_operation_id: transactionResults[id]?.child_operation_id || command.child_operations?.[id] || null,
+      failure_code: transactionResults[id]?.safe_reason_code || command.failure_code || null,
+      failure_message: transactionResults[id]?.safe_message || command.failure_message || null,
+      internal_reason_code: transactionResults[id]?.internal_reason_code || command.failure_code || null,
       qbo_txn_id: receipts.find((row) => String(row.transaction_id) === id)?.qbo_txn_id || null,
     })),
   };
@@ -608,8 +717,10 @@ function buildInteractiveCommandUserMessage({ command, selectedIds, postedTransa
   if (postedTransactionIds.length > 0 && postedTransactionIds.length === selectedIds.length) {
     return postedTransactionIds.length === 1 ? "1 transaction posted to QuickBooks." : `${postedTransactionIds.length} transactions posted to QuickBooks.`;
   }
-  if (command.state === INTERACTIVE_COMMAND_STATES.BLOCKED) return "Posting needs attention before it can continue.";
-  if (command.state === INTERACTIVE_COMMAND_STATES.FAILED) return "Posting could not finish. Review the transaction and retry when safe.";
-  if (command.state === INTERACTIVE_COMMAND_STATES.RETRYABLE_FAILURE) return "Posting will retry automatically.";
+  const result = Object.values(command.transaction_results || {}).find((item) => item?.safe_message);
+  if (result?.safe_message) return result.safe_message;
+  if (command.state === INTERACTIVE_COMMAND_STATES.BLOCKED) return "This transaction did not pass the posting safety check. Review its details before trying again.";
+  if (command.state === INTERACTIVE_COMMAND_STATES.FAILED) return "QuickBooks could not complete this posting. Nothing was posted. Try again.";
+  if (command.state === INTERACTIVE_COMMAND_STATES.RETRYABLE_FAILURE) return "QuickBooks could not complete the posting check. Nothing was posted. Try again.";
   return "Posting to QuickBooks.";
 }

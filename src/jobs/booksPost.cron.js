@@ -2525,7 +2525,15 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
     throw err;
   }
   if (item.status === "posted" || item.qbo_txn_id) {
-    return { ok: true, already_posted: true, transaction_id: transactionId, qbo_txn_id: item.qbo_txn_id || null };
+    const childOperationId = item?.meta?.qbo_request_id || (item.qbo_txn_id ? `qbo:${item.qbo_txn_id}` : null);
+    return {
+      ok: true,
+      already_posted: true,
+      transaction_id: transactionId,
+      qbo_txn_id: item.qbo_txn_id || null,
+      qbo_request_id: item?.meta?.qbo_request_id || null,
+      child_operation_id: childOperationId,
+    };
   }
   const duplicatePostAnyway =
     confirmPostAnyway === true && item.status === "needs_review" && item?.meta?.possible_qbo_duplicate === true;
@@ -2544,13 +2552,18 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
     await handleItem(item, { manual: true, confirmPostAnyway });
   } catch (err) {
     await markFailed(item, err?.message || "manual_post_failed");
+    const postingIntent = await fetchExistingQboPostingIntent(businessId, transactionId).catch(() => null);
+    if (postingIntent?.request_id) {
+      err.qbo_request_id = postingIntent.request_id;
+      err.child_operation_id = postingIntent.request_id;
+    }
     err.status = err.status || 400;
     throw err;
   }
 
   const { data: posted, error: postedErr } = await supabase
     .from("transaction_categorizations")
-    .select("transaction_id,status,qbo_txn_id,qbo_txn_type,posted_at,post_error")
+    .select("transaction_id,status,qbo_txn_id,qbo_txn_type,posted_at,post_error,meta")
     .eq("business_id", businessId)
     .eq("transaction_id", transactionId)
     .maybeSingle();
@@ -2567,6 +2580,8 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
     qbo_txn_id: posted.qbo_txn_id || null,
     qbo_txn_type: posted.qbo_txn_type || null,
     posted_at: posted.posted_at || null,
+    qbo_request_id: posted?.meta?.qbo_request_id || null,
+    child_operation_id: posted?.meta?.qbo_request_id || (posted.qbo_txn_id ? `qbo:${posted.qbo_txn_id}` : null),
   };
 }
 

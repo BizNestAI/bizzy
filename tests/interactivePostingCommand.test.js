@@ -25,6 +25,9 @@ test("interactive command migration is idempotent and installs table, claims, in
   assert.match(sql, /create or replace function public\.claim_bookkeeping_interactive_posting_command/);
   assert.match(sql, /create or replace function public\.claim_bookkeeping_interactive_posting_commands/);
   assert.match(sql, /grant execute[\s\S]*service_role/);
+  const resultSql = readFileSync(new URL("../supabase/migrations/20261016_interactive_posting_parent_child_results.sql", import.meta.url), "utf8");
+  assert.match(resultSql, /child_operations jsonb/);
+  assert.match(resultSql, /transaction_results jsonb/);
 });
 
 function makeDb() {
@@ -121,7 +124,7 @@ test("one worker owns approval, exact posting, receipt, and terminal state", asy
         qbo_txn_type: "Purchase",
         posted_at: new Date().toISOString(),
       });
-      return { ok: true, transaction_id: transactionId, qbo_txn_id: "1556", qbo_txn_type: "Purchase" };
+      return { ok: true, transaction_id: transactionId, qbo_txn_id: "1556", qbo_txn_type: "Purchase", child_operation_id: "qbo-request-1" };
     },
   });
 
@@ -133,6 +136,9 @@ test("one worker owns approval, exact posting, receipt, and terminal state", asy
   assert.equal(status.state, "posted");
   assert.deepEqual(status.posted_transaction_ids, [TXN_ID]);
   assert.equal(status.rows[0].qbo_txn_id, "1556");
+  assert.equal(status.parent_operation_id, command.operation_id);
+  assert.deepEqual(status.child_operation_ids, ["qbo-request-1"]);
+  assert.equal(status.rows[0].child_operation_id, "qbo-request-1");
 });
 
 test("duplicate worker notifications do not create duplicate postings", async () => {
@@ -162,7 +168,7 @@ test("duplicate worker notifications do not create duplicate postings", async ()
       qbo_txn_type: "Purchase",
       posted_at: new Date().toISOString(),
     });
-    return { ok: true, transaction_id: transactionId, qbo_txn_id: "1556" };
+    return { ok: true, transaction_id: transactionId, qbo_txn_id: "1556", child_operation_id: "qbo-request-dupe" };
   };
 
   await processInteractivePostingCommand({ db, operationId: command.operation_id, workerId: "worker-a", runApprovalOperation, postTransactionNow });
@@ -171,6 +177,58 @@ test("duplicate worker notifications do not create duplicate postings", async ()
   assert.equal(second.claimed, false);
   assert.equal(postCalls, 1);
   assert.equal(db.store.qbo_posted_transactions.length, 1);
+});
+
+test("QBO rejection is persisted on the parent with a safe per-transaction reason", async () => {
+  const db = makeDb();
+  const command = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "1150040001",
+    transactionIds: [TXN_ID],
+    idempotencyKey: "qbo-rejection",
+  });
+  const error = new Error("qbo_account_mapping_not_safe");
+  error.code = "qbo_account_mapping_not_safe";
+  error.child_operation_id = "qbo-request-rejected";
+  const result = await processInteractivePostingCommand({
+    db,
+    operationId: command.operation_id,
+    runApprovalOperation: async () => ({ blocked: [], scheduled: [{ transaction_id: TXN_ID }] }),
+    postTransactionNow: async () => { throw error; },
+  });
+  assert.equal(result.ok, false);
+  const status = await getInteractivePostingCommandStatus({ db, businessId: BUSINESS_ID, operationId: command.operation_id });
+  assert.equal(status.terminal, true);
+  assert.equal(status.rows[0].failure_code, "qbo_account_or_transaction_invalid");
+  assert.match(status.rows[0].failure_message, /selected QuickBooks account cannot be used/);
+  assert.equal(status.rows[0].internal_reason_code, "qbo_account_mapping_not_safe");
+  assert.equal(status.rows[0].child_operation_id, "qbo-request-rejected");
+  assert.equal(status.rows[0].action, "choose_account");
+  assert.equal(status.lease_expires_at, undefined);
+});
+
+test("parent cannot report success without a durable child operation result", async () => {
+  const db = makeDb();
+  const command = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "1150040001",
+    transactionIds: [TXN_ID],
+    idempotencyKey: "missing-child",
+  });
+  const result = await processInteractivePostingCommand({
+    db,
+    operationId: command.operation_id,
+    runApprovalOperation: async () => ({ blocked: [], scheduled: [{ transaction_id: TXN_ID }] }),
+    postTransactionNow: async () => ({ ok: true, transaction_id: TXN_ID, qbo_txn_id: "1556" }),
+  });
+  assert.equal(result.ok, false);
+  const status = await getInteractivePostingCommandStatus({ db, businessId: BUSINESS_ID, operationId: command.operation_id });
+  assert.equal(status.terminal, true);
+  assert.equal(status.posted_transaction_ids.length, 0);
+  assert.equal(status.rows[0].failure_code, "qbo_result_unconfirmed");
+  assert.equal(status.rows[0].ambiguous, true);
 });
 
 test("claim is guarded by lease ownership and becomes reclaimable after expiration", async () => {

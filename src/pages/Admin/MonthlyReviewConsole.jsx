@@ -185,7 +185,7 @@ function mapPostingReviewOperationToUiState(operation = {}, startedAt = Date.now
   const states = operation?.states || {};
   if (operation?.terminal) {
     if (extractReceiptConfirmedPostedIds(operation).length) return "success";
-    if (states.retry_scheduled) return "retryable_failure";
+    if (operation?.retryable || states.retry_scheduled) return "retryable_failure";
     return "terminal_failure";
   }
   if (operation?.stale || Date.now() - startedAt > POSTING_REVIEW_DELAYED_MS) return "delayed";
@@ -795,7 +795,7 @@ export default function MonthlyReviewConsole() {
                 });
                 return;
               }
-              const message = operation?.user_message || firstOperationFailureMessage(operation) || "Posting needs attention before it can continue.";
+              const message = firstOperationFailureMessage(operation) || operation?.user_message || "QuickBooks could not complete this posting. Nothing was posted. Try again.";
               setPostingReviewProgress((current) => ({ ...current, [group.group_id]: message }));
               setPostingReviewAction((current) => ({
                 ...current,
@@ -2577,7 +2577,7 @@ function PostingReviewMirrorSection({
                     </div>
                     {delayed ? (
                       <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300/18 bg-amber-300/[0.07] px-3 py-2 text-xs text-amber-100/90">
-                        <span>Posting is taking longer than expected.</span>
+                        <span>Posting is taking longer than expected. Bizzi is still waiting for an authoritative result; do not submit this transaction again yet.</span>
                         <button type="button" onClick={onRefresh} className="font-semibold text-amber-50 hover:text-white">
                           Check status
                         </button>
@@ -2653,6 +2653,9 @@ function PostingReviewMirrorSection({
                         <div>Confidence/safety: {group.evidence?.confidence || "n/a"}</div>
                         <div>Rule state: {group.evidence?.reusable_rule_status || "n/a"}</div>
                         <div>Blockers: {(group.warnings || []).join(", ") || "none"}</div>
+                        {postingReviewAction?.[group.group_id]?.operationId ? (
+                          <div className="sm:col-span-2">Operation: {postingReviewAction[group.group_id].operationId}</div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
