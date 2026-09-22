@@ -18,6 +18,7 @@ import {
 
 const BUSINESS_ID = "cffc2183-e77c-4148-a206-d5192e090925";
 const TXN_ID = "144742f9-77d7-4ca5-82b6-0f19930d079a";
+const BARCELONA_TXN_ID = "f5d02587-e0d9-4c8a-9997-cc6f54c3a94f";
 
 test("interactive command migration is idempotent and installs table, claims, indexes, and grants", () => {
   const sql = readFileSync(new URL("../supabase/migrations/20261011_interactive_posting_commands.sql", import.meta.url), "utf8");
@@ -103,6 +104,7 @@ test("one worker owns approval, exact posting, receipt, and terminal state", asy
     runApprovalOperation: async (args) => {
       approvalCalls += 1;
       assert.equal(args.graceHours, 0);
+      assert.equal(args.interactive, true);
       assert.deepEqual(args.transactionIds, [TXN_ID]);
       assert.equal(args.expectedRowVersions[TXN_ID], "v1");
       return {
@@ -260,6 +262,51 @@ test("a post-success local conflict converges parent and child without a second 
   assert.equal(status.state, "posted");
   assert.equal(status.rows[0].child_operation_id, "qbo-request-after-success");
   assert.equal(status.rows[0].qbo_txn_id, "qbo-after-success");
+});
+
+test("Barcelona-style QBO success followed by stale local finalization remains posted under Meals", async () => {
+  const db = makeDb();
+  const command = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "1150040001",
+    transactionIds: [BARCELONA_TXN_ID],
+    idempotencyKey: "73b294e7c4f4c1ccbb7f25896f428a6b3a8618589cce2c0753b78cc62be316f7",
+  });
+  let qboCreateCalls = 0;
+  const result = await processInteractivePostingCommand({
+    db,
+    operationId: command.operation_id,
+    runApprovalOperation: async ({ interactive }) => {
+      assert.equal(interactive, true);
+      return { blocked: [], scheduled: [{ transaction_id: BARCELONA_TXN_ID, status: "ready_to_post" }] };
+    },
+    postTransactionNow: async ({ businessId, transactionId }) => {
+      qboCreateCalls += 1;
+      db.store.qbo_posted_transactions.push({
+        id: "barcelona-receipt",
+        business_id: businessId,
+        transaction_id: transactionId,
+        status: "posted",
+        qbo_txn_id: "barcelona-qbo-expense",
+        qbo_txn_type: "Purchase",
+        request_id: "f86bea9d12d175af3944d36974f652a7a01b0da75b8defa9a80fd8f019664ace",
+        posted_at: "2026-08-11T18:19:59.000Z",
+      });
+      const stale = new Error("row_changed");
+      stale.code = "row_changed";
+      stale.child_operation_id = "f86bea9d12d175af3944d36974f652a7a01b0da75b8defa9a80fd8f019664ace";
+      throw stale;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "completed_with_warning");
+  assert.equal(qboCreateCalls, 1);
+  const status = await getInteractivePostingCommandStatus({ db, businessId: BUSINESS_ID, operationId: command.operation_id });
+  assert.equal(status.state, "posted");
+  assert.equal(status.rows[0].qbo_txn_id, "barcelona-qbo-expense");
+  assert.equal(db.store.qbo_accounts_cache[0].name, "Meals");
 });
 
 test("vendor-rule failure after a durable receipt completes with a warning", async () => {

@@ -1638,14 +1638,20 @@ export async function persistMerchantApprovalVendorRule({
   transactionIds = [],
   exclusionIds = [],
 } = {}) {
-  const { account, group, candidateIds, bankRows } = await resolveMerchantBacklogApproval({
-    db,
+  if (!db || !businessId || !selectedQboAccountId) throw new Error("businessId and selectedQboAccountId are required.");
+  const account = await fetchQboAccountForApproval(db, businessId, selectedQboAccountId);
+  const excluded = new Set(exclusionIds || []);
+  const candidateIds = Array.from(new Set((transactionIds || []).filter(Boolean))).filter((id) => !excluded.has(id));
+  const bankRows = await fetchBacklogBankRows(db, businessId, candidateIds);
+  const group = buildExplicitMerchantApprovalGroup({
     businessId,
-    selectedQboAccountId,
+    account,
+    rows: [],
+    bankRows,
+    transactionIds: candidateIds,
     groupSnapshotToken,
-    transactionIds,
-    exclusionIds,
   });
+  if (!group) throw new Error("merchant_group_changed");
   return learnRuleForMerchantApproval({
     businessId,
     actorId,
@@ -1761,6 +1767,7 @@ export async function runMerchantBacklogApprovalOperation({
   duplicatePreflight = defaultDuplicatePreflight,
   graceHours = DEFAULT_GRACE_HOURS,
   operationId = null,
+  interactive = false,
 } = {}) {
   const resolvedOperationId = operationId || buildMerchantApprovalOperationId({ businessId, idempotencyKey, groupSnapshotToken, transactionIds, selectedQboAccountId });
   const { account, group, excluded, candidateIds, rows, bankRows, policy, sourceMappings } = await resolveMerchantBacklogApproval({
@@ -1835,7 +1842,7 @@ export async function runMerchantBacklogApprovalOperation({
       await markMerchantBacklogApprovalRowsState({ db, businessId, operationId: resolvedOperationId, transactionIds: [item.transaction_id], state: "blocked", reasonCode: duplicate.reason || "duplicate_preflight_required" });
       continue;
     }
-    const postAfter = policy.enabled === true ? computePostAfterForAutoPost(true, graceHours) : null;
+    const postAfter = interactive ? null : (policy.enabled === true ? computePostAfterForAutoPost(true, graceHours) : null);
     const recorded = await recordMerchantApprovalDecision({
       db,
       businessId,

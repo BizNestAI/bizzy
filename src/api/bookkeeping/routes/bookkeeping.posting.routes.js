@@ -4,6 +4,7 @@ import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId, readBusinessId } from "./_bookkeepingRouteUtils.js";
 import { postSingleBookkeepingTransactionNow, runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
+import { signalInteractivePostingCommandWakeup } from "../../../jobs/interactivePostingCommands.worker.js";
 import {
   getAutoPostSettings,
   getCanonicalPostingBacklogSummary,
@@ -374,10 +375,24 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       worker: `${process.env.RAILWAY_SERVICE_NAME || process.env.HOSTNAME || "api"}:${process.pid || "worker"}`,
       deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,
     });
+    const wake = signalInteractivePostingCommandWakeup({
+      operationId: decision.operation_id,
+      correlationId,
+    });
+    stageTimings.worker_wakeup_ms = routeTiming(routeStartMs);
+    console.info("[merchant-approval-timeline]", {
+      stage: "approval_wake_requested",
+      operation_id: decision.operation_id,
+      business_id: businessId,
+      transaction_ids: common.transactionIds,
+      correlation_id: correlationId,
+      elapsed_ms: routeTiming(routeStartMs),
+      queued: wake.queued === true,
+    });
     return res.status(202).json({
       ...decision,
       correlation_id: correlationId,
-      worker_wakeup: "durable_command",
+      worker_wakeup: wake.queued ? "direct_exact_operation" : "periodic_recovery",
       stage_timings_ms: stageTimings,
       response_ms: routeTiming(routeStartMs),
       status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(businessId)}`,

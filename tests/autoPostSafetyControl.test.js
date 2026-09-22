@@ -940,13 +940,14 @@ test("validated vendor mapping can skip fresh QBO vendor search safely", () => {
   assert.match(cron, /const payeeResolution = await resolvePayee/);
 });
 
-test("Posting Review removes rows locally only after receipt-confirmed posted status", () => {
+test("Posting Review removes rows after durable acceptance and retains receipt-confirmed terminal suppression", () => {
   const adminPage = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
 
   assert.match(adminPage, /function removePostedPostingReviewTransactions/);
   assert.match(adminPage, /row\?\.posted && row\?\.qbo_txn_id/);
   assert.match(adminPage, /setPostingReview\(\(current\) => removePostedPostingReviewTransactions\(current, confirmedPostedIds\)\)/);
-  assert.doesNotMatch(adminPage, /removePostedPostingReviewTransactions\(current, includedIds\)/);
+  assert.match(adminPage, /removePostedPostingReviewTransactions\(current, includedIds\)/);
+  assert.match(adminPage, /acceptedPostingReviewIdsRef/);
 });
 
 test("posting review details expose every counted non-merchant bucket and approval decision saves before posting checks", async () => {
@@ -1592,6 +1593,22 @@ test("posting review polling is keyed by operation id and cleaned up", () => {
   assert.match(page, /postingReviewPollsRef\.current\.set\(operationId, poll\)/);
   assert.match(page, /postingReviewPollsRef\.current\.delete\(operationId\)/);
   assert.match(page, /poll\.controller\.abort\(\)/);
+  assert.match(page, /postingReviewPollsRef\.current\.get\(operationId\) !== poll/);
+  assert.match(page, /poll\.terminal = true/);
+});
+
+test("durable acceptance immediately removes the card while canonical polling continues", () => {
+  const page = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
+  const acceptanceRemoval = page.indexOf("setPostingReview((current) => removePostedPostingReviewTransactions(current, includedIds))");
+  const firstPoll = page.indexOf("const pollOnce = async () =>");
+  assert.ok(acceptanceRemoval > 0 && acceptanceRemoval < firstPoll);
+  assert.match(page, /acceptedPostingReviewIdsRef\.current\.add\(id\)/);
+  assert.match(page, /"Posting to QuickBooks…"/);
+  assert.match(page, /acceptedPostingReviewIdsRef\.current\.delete\(id\)/);
+  assert.match(page, /showPostingReviewNotice\(setPostingReviewNotice, postingReviewNoticeTimerRef, message\)/);
+  assert.match(page, /loadPostingReview\(\);/);
+  assert.match(page, /refreshQboPnlSnapshot\(\{ silent: true \}\)/);
+  assert.match(page, /business_id: selectedBusinessId, month/);
 });
 
 test("partial merchant success preserves unchecked rows and keeps success out of the action button", () => {
@@ -1607,11 +1624,17 @@ test("partial merchant success preserves unchecked rows and keeps success out of
 test("merchant approval queue has a short durable polling loop, immediate wakeup, and no synchronous QBO work in approval route", () => {
   const routeSource = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
   const workerSource = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
+  const interactiveWorkerSource = readFileSync(join(root, "src/jobs/interactivePostingCommands.worker.js"), "utf8");
   const serviceSource = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
   assert.doesNotMatch(routeSource, /setImmediate|runMerchantBacklogApprovalOperation|persistMerchantBacklogGroupApprovalDecision/);
   assert.match(workerSource, /BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS/);
   assert.match(routeSource, /createInteractivePostingCommand\(\{[\s\S]*?\.\.\.common[\s\S]*?merchantSnapshot:/);
-  assert.match(routeSource, /worker_wakeup:\s*"durable_command"/);
+  assert.match(routeSource, /signalInteractivePostingCommandWakeup\(\{/);
+  assert.match(routeSource, /worker_wakeup:\s*wake\.queued \? "direct_exact_operation" : "periodic_recovery"/);
+  assert.match(interactiveWorkerSource, /queueMicrotask\(\(\) => drainDirectWakeups/);
+  assert.match(interactiveWorkerSource, /processExactOperation\(operationId\)/);
+  assert.match(interactiveWorkerSource, /queue_wait_ms:\s*queueWaitMs/);
+  assert.match(interactiveWorkerSource, /periodic recovery remains active/);
   assert.match(workerSource, /merchantApprovalQueueWakeupQueued/);
   assert.match(workerSource, /pendingMerchantApprovalWakeups/);
   assert.match(workerSource, /merchantApprovalWakeupRunning/);
@@ -1640,6 +1663,7 @@ test("merchant approval queue has a short durable polling loop, immediate wakeup
   assert.match(serviceSource, /let candidateIds = explicitCandidateIds/);
   assert.match(serviceSource, /if \(!candidateIds\.length\)[\s\S]*?getMerchantBacklogGroups/);
   assert.match(serviceSource, /buildExplicitMerchantApprovalGroup\(\{[\s\S]*?transactionIds: candidateIds/);
+  assert.match(serviceSource, /const postAfter = interactive \? null/);
 });
 
 test("merchant approval dispatch waits for due exact rows and leaves recovery cron available", () => {

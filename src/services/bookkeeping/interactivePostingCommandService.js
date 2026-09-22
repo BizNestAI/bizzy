@@ -590,7 +590,13 @@ export async function processInteractivePostingCommand({
   const transactionResults = { ...(command.transaction_results || {}) };
   const childOperations = { ...(command.child_operations || {}) };
   try {
-    await appendInteractivePostingCommandEvent({ db, operationId, event: "notification_received" });
+    const acceptedAt = Date.parse(command.requested_at || command.created_at || "");
+    await appendInteractivePostingCommandEvent({
+      db,
+      operationId,
+      event: "worker_claimed",
+      extra: { queue_wait_ms: Number.isFinite(acceptedAt) ? Math.max(0, Date.now() - acceptedAt) : null },
+    });
     command = await setCommandStage({ db, command, state: INTERACTIVE_COMMAND_STATES.PROCESSING, stage: "validation", event: "validation_completed" });
     const decision = await runApprovalOperation({
       db,
@@ -608,6 +614,7 @@ export async function processInteractivePostingCommand({
       duplicatePreflight,
       graceHours: 0,
       operationId: command.operation_id,
+      interactive: true,
     });
     await appendInteractivePostingCommandEvent({ db, operationId, event: "decision_saved", extra: { blocked_count: decision.blocked_count || 0 } });
     await appendInteractivePostingCommandEvent({ db, operationId, event: "duplicate_preflight_completed" });

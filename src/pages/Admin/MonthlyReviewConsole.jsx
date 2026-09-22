@@ -258,6 +258,7 @@ export default function MonthlyReviewConsole() {
   const postingReviewSubmittingRef = useRef(new Set());
   const postingReviewNoticeTimerRef = useRef(null);
   const postedPostingReviewIdsRef = useRef(new Set());
+  const acceptedPostingReviewIdsRef = useRef(new Set());
   const [expandedPostingReviewGroup, setExpandedPostingReviewGroup] = useState(null);
   const [busyFeedActions, setBusyFeedActions] = useState({});
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
@@ -690,7 +691,10 @@ export default function MonthlyReviewConsole() {
       ]);
       const groups = Array.isArray(detailsResult?.groups) ? detailsResult.groups : [];
       const items = Array.isArray(detailsResult?.items) ? detailsResult.items : [];
-      const suppressedIds = Array.from(postedPostingReviewIdsRef.current || []);
+      const suppressedIds = Array.from(new Set([
+        ...Array.from(postedPostingReviewIdsRef.current || []),
+        ...Array.from(acceptedPostingReviewIdsRef.current || []),
+      ]));
       const filtered = suppressedIds.length
         ? removePostedPostingReviewTransactions({ summary, groups, items }, suppressedIds)
         : { summary, groups, items };
@@ -771,6 +775,13 @@ export default function MonthlyReviewConsole() {
         : null);
       if (statusUrl) {
         const operationId = decision?.operation_id || statusUrl.match(/operations\/([^?]+)/)?.[1] || null;
+        includedIds.forEach((id) => acceptedPostingReviewIdsRef.current.add(id));
+        setPostingReview((current) => removePostedPostingReviewTransactions(current, includedIds));
+        showPostingReviewNotice(
+          setPostingReviewNotice,
+          postingReviewNoticeTimerRef,
+          "Posting to QuickBooks…"
+        );
         setPostingReviewAction((current) => ({
           ...current,
           [group.group_id]: { ...(current[group.group_id] || {}), uiState: "posting", operationId, statusUrl },
@@ -779,20 +790,25 @@ export default function MonthlyReviewConsole() {
           postingReviewSubmittingRef.current.delete(group.group_id);
           return;
         }
-        const poll = { timer: null, controller: null };
+        const poll = { timer: null, controller: null, terminal: false, generation: Symbol(operationId || statusUrl) };
         if (operationId) postingReviewPollsRef.current.set(operationId, poll);
         const startedAt = Date.now();
         const pollOnce = async () => {
           poll.controller = new AbortController();
           try {
             const operation = await safeFetch(statusUrl, { cache: "no-store", signal: poll.controller.signal });
+            if (poll.terminal || (operationId && postingReviewPollsRef.current.get(operationId) !== poll)) return;
             const uiState = mapPostingReviewOperationToUiState(operation, startedAt);
             if (operation?.terminal) {
+              poll.terminal = true;
               if (operationId) postingReviewPollsRef.current.delete(operationId);
               const confirmedPostedIds = extractReceiptConfirmedPostedIds(operation);
               if (confirmedPostedIds.length) {
                 const vendorRuleWarning = Array.isArray(operation?.warnings) && operation.warnings.includes("vendor_rule_update_failed");
-                confirmedPostedIds.forEach((id) => postedPostingReviewIdsRef.current.add(id));
+                confirmedPostedIds.forEach((id) => {
+                  acceptedPostingReviewIdsRef.current.delete(id);
+                  postedPostingReviewIdsRef.current.add(id);
+                });
                 setPostingReview((current) => removePostedPostingReviewTransactions(current, confirmedPostedIds));
                 setPostingReviewProgress((current) => {
                   const next = { ...current };
@@ -830,12 +846,15 @@ export default function MonthlyReviewConsole() {
                 return;
               }
               const message = firstOperationFailureMessage(operation) || operation?.user_message || "QuickBooks could not complete this posting. Nothing was posted. Try again.";
+              includedIds.forEach((id) => acceptedPostingReviewIdsRef.current.delete(id));
               setPostingReviewProgress((current) => ({ ...current, [group.group_id]: message }));
               setPostingReviewAction((current) => ({
                 ...current,
                 [group.group_id]: { ...(current[group.group_id] || {}), uiState: uiState === "retryable_failure" ? "retryable_failure" : "terminal_failure" },
               }));
               postingReviewSubmittingRef.current.delete(group.group_id);
+              showPostingReviewNotice(setPostingReviewNotice, postingReviewNoticeTimerRef, message);
+              loadPostingReview();
               return;
             }
             setPostingReviewAction((current) => ({
@@ -846,6 +865,7 @@ export default function MonthlyReviewConsole() {
             poll.timer = setTimeout(pollOnce, delayMs);
           } catch (pollError) {
             if (pollError?.name === "AbortError") return;
+            if (poll.terminal || (operationId && postingReviewPollsRef.current.get(operationId) !== poll)) return;
             const delayed = Date.now() - startedAt > POSTING_REVIEW_DELAYED_MS;
             setPostingReviewAction((current) => ({
               ...current,
@@ -856,6 +876,7 @@ export default function MonthlyReviewConsole() {
         };
         poll.timer = setTimeout(pollOnce, 1000);
       } else {
+        includedIds.forEach((id) => acceptedPostingReviewIdsRef.current.delete(id));
         setPostingReviewAction((current) => {
           const next = { ...current };
           delete next[group.group_id];
@@ -866,6 +887,7 @@ export default function MonthlyReviewConsole() {
           ...current,
           [group.group_id]: "Posting status is unavailable. Refresh Posting Review to check status.",
         }));
+        loadPostingReview();
       }
     } catch (e) {
       console.warn("[monthly-review][posting-review-approval] failed", e?.body || e?.message || e);
@@ -1006,6 +1028,8 @@ export default function MonthlyReviewConsole() {
     setBookkeepingCountsError("");
     setPostingReview({ expanded: false, summary: null, groups: [], loading: false, error: "", loaded: false });
     setPostingReviewOptions({});
+    acceptedPostingReviewIdsRef.current.clear();
+    postedPostingReviewIdsRef.current.clear();
     setExpandedPostingReviewGroup(null);
     setError("");
     setAccountSearch("");

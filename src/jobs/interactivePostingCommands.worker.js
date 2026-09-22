@@ -23,6 +23,9 @@ let listenClient = null;
 let listenerStarted = false;
 let missingRpcLogged = false;
 let consecutiveMissingRpcFailures = 0;
+const directWakeups = new Map();
+let directWakeScheduled = false;
+let directWakeRunning = false;
 
 const workerHealth = {
   ok: true,
@@ -66,6 +69,60 @@ async function processExactOperation(operationId) {
     workerId: workerId(),
     postTransactionNow: postSingleBookkeepingTransactionNow,
   });
+}
+
+async function drainDirectWakeups() {
+  if (directWakeRunning) return;
+  directWakeRunning = true;
+  directWakeScheduled = false;
+  try {
+    while (directWakeups.size) {
+      const [operationId, wake] = directWakeups.entries().next().value;
+      directWakeups.delete(operationId);
+      const queueWaitMs = Math.max(0, Date.now() - wake.enqueuedAtMs);
+      console.info("[interactive-posting-command-worker] direct wake claimed", {
+        operation_id: operationId,
+        correlation_id: wake.correlationId || null,
+        queue_wait_ms: queueWaitMs,
+      });
+      await appendInteractivePostingCommandEvent({
+        db: supabase,
+        operationId,
+        event: "approval_claimed",
+        extra: { correlation_id: wake.correlationId || null, queue_wait_ms: queueWaitMs, wake_source: "http_acceptance" },
+      }).catch(() => null);
+      await processExactOperation(operationId).catch((err) => {
+        console.warn("[interactive-posting-command-worker] direct wake processing failed; periodic recovery remains active", {
+          operation_id: operationId,
+          correlation_id: wake.correlationId || null,
+          queue_wait_ms: queueWaitMs,
+          message: err?.message || String(err),
+        });
+      });
+    }
+  } finally {
+    directWakeRunning = false;
+    if (directWakeups.size) scheduleDirectWakeDrain();
+  }
+}
+
+function scheduleDirectWakeDrain() {
+  if (directWakeScheduled || directWakeRunning) return;
+  directWakeScheduled = true;
+  queueMicrotask(() => drainDirectWakeups().catch((err) => {
+    directWakeScheduled = false;
+    directWakeRunning = false;
+    console.warn("[interactive-posting-command-worker] direct wake drain failed; periodic recovery remains active", err?.message || err);
+  }));
+}
+
+export function signalInteractivePostingCommandWakeup({ operationId, correlationId = null } = {}) {
+  if (!operationId) return { queued: false, reason: "missing_operation_id" };
+  if (!directWakeups.has(operationId)) {
+    directWakeups.set(operationId, { correlationId, enqueuedAtMs: Date.now() });
+  }
+  scheduleDirectWakeDrain();
+  return { queued: true, operation_id: operationId, wake_source: "http_acceptance" };
 }
 
 export async function runInteractivePostingCommandWorkerOnce({ operationId = null, batchSize = BATCH_SIZE } = {}) {
@@ -248,4 +305,5 @@ export default {
   startInteractivePostingCommandWorker,
   stopInteractivePostingCommandWorker,
   runInteractivePostingCommandWorkerOnce,
+  signalInteractivePostingCommandWakeup,
 };
