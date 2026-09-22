@@ -176,6 +176,9 @@ function firstOperationFailureMessage(operation = {}) {
 }
 
 function humanizePostingReviewReason(value = "") {
+  if (String(value || "").trim() === "row_changed") {
+    return "This transaction changed while it was being reviewed. Refresh and try again.";
+  }
   const normalized = String(value || "").replace(/[_-]+/g, " ").trim();
   if (!normalized) return "";
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
@@ -788,10 +791,19 @@ export default function MonthlyReviewConsole() {
                 showPostingReviewNotice(
                   setPostingReviewNotice,
                   postingReviewNoticeTimerRef,
-                  confirmedPostedIds.length === 1 ? "1 transaction posted to QuickBooks." : `${confirmedPostedIds.length} transactions posted to QuickBooks.`
+                  "Posted—refreshing reports…"
                 );
-                Promise.all([loadPostingReview(), loadBookkeepingFeedCounts()]).catch((error) => {
-                  console.warn("[monthly-review][posting-review-refresh-after-post] failed", error?.body || error?.message || error);
+                Promise.allSettled([
+                  loadPostingReview(),
+                  loadBookkeepingFeedCounts(),
+                  refreshQboPnlSnapshot({ silent: true }),
+                ]).then((results) => {
+                  const refreshFailed = results.some((result) => result.status === "rejected" || result.value === null);
+                  showPostingReviewNotice(
+                    setPostingReviewNotice,
+                    postingReviewNoticeTimerRef,
+                    refreshFailed ? "Posted to QuickBooks. Reports will refresh shortly." : "Posted to QuickBooks."
+                  );
                 });
                 return;
               }
@@ -846,7 +858,7 @@ export default function MonthlyReviewConsole() {
         [group.group_id]: `${e?.body?.message || e?.message || "Bizzi could not save this posting decision."}${e?.body?.correlation_id ? ` Reference: ${e.body.correlation_id}` : ""}`,
       }));
     }
-  }, [loadBookkeepingFeedCounts, loadPostingReview, postingReviewAction, postingReviewOptions, selectedBusinessId]);
+  }, [loadBookkeepingFeedCounts, loadPostingReview, postingReviewAction, postingReviewOptions, refreshQboPnlSnapshot, selectedBusinessId]);
   const retryPostingReviewItem = useCallback(async (item) => {
     if (!selectedBusinessId || !item?.operation_id || !item?.transaction_id || postingReviewItemActions[item.transaction_id]) return;
     setPostingReviewItemActions((current) => ({ ...current, [item.transaction_id]: "Retry requested" }));

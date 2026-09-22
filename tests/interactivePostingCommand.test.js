@@ -179,6 +179,88 @@ test("duplicate worker notifications do not create duplicate postings", async ()
   assert.equal(db.store.qbo_posted_transactions.length, 1);
 });
 
+test("a durable QBO receipt overrides a later approval row-version conflict", async () => {
+  const db = makeDb();
+  const command = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "1150040001",
+    transactionIds: [TXN_ID],
+    expectedRowVersions: { [TXN_ID]: "stale-version" },
+    idempotencyKey: "receipt-over-row-conflict",
+  });
+  db.store.qbo_posted_transactions.push({
+    id: "receipt-existing",
+    business_id: BUSINESS_ID,
+    transaction_id: TXN_ID,
+    status: "posted",
+    qbo_txn_id: "qbo-existing",
+    qbo_txn_type: "Purchase",
+    posted_at: "2026-08-06T12:00:00.000Z",
+  });
+  let postCalls = 0;
+
+  const result = await processInteractivePostingCommand({
+    db,
+    operationId: command.operation_id,
+    runApprovalOperation: async () => ({
+      blocked: [{ transaction_id: TXN_ID, reason: "row_changed" }],
+      scheduled: [],
+    }),
+    postTransactionNow: async () => { postCalls += 1; },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "completed_with_warning");
+  assert.equal(postCalls, 0);
+  const status = await getInteractivePostingCommandStatus({ db, businessId: BUSINESS_ID, operationId: command.operation_id });
+  assert.equal(status.state, "posted");
+  assert.equal(status.rows[0].posted, true);
+  assert.equal(status.rows[0].qbo_txn_id, "qbo-existing");
+  assert.equal(status.rows[0].failure_code, null);
+});
+
+test("a post-success local conflict converges parent and child without a second QBO call", async () => {
+  const db = makeDb();
+  const command = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "1150040001",
+    transactionIds: [TXN_ID],
+    idempotencyKey: "post-success-local-conflict",
+  });
+  let postCalls = 0;
+  const result = await processInteractivePostingCommand({
+    db,
+    operationId: command.operation_id,
+    runApprovalOperation: async () => ({ blocked: [], scheduled: [{ transaction_id: TXN_ID }] }),
+    postTransactionNow: async ({ businessId, transactionId }) => {
+      postCalls += 1;
+      db.store.qbo_posted_transactions.push({
+        id: "receipt-after-provider-success",
+        business_id: businessId,
+        transaction_id: transactionId,
+        status: "posted",
+        qbo_txn_id: "qbo-after-success",
+        qbo_txn_type: "Purchase",
+        posted_at: "2026-08-06T12:00:00.000Z",
+      });
+      const error = new Error("row_changed");
+      error.code = "row_changed";
+      error.child_operation_id = "qbo-request-after-success";
+      throw error;
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "completed_with_warning");
+  assert.equal(postCalls, 1);
+  const status = await getInteractivePostingCommandStatus({ db, businessId: BUSINESS_ID, operationId: command.operation_id });
+  assert.equal(status.state, "posted");
+  assert.equal(status.rows[0].child_operation_id, "qbo-request-after-success");
+  assert.equal(status.rows[0].qbo_txn_id, "qbo-after-success");
+});
+
 test("QBO rejection is persisted on the parent with a safe per-transaction reason", async () => {
   const db = makeDb();
   const command = await createInteractivePostingCommand({

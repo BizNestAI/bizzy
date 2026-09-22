@@ -183,8 +183,37 @@ test("posted truth is recorded in durable receipt before local categorization be
 
   assert.match(cron, /const postedIso = await recordQboPostingSuccess/);
   assert.match(cron, /recordQboPostingSuccess[\s\S]*status: "posted"[\s\S]*qbo_txn_id: result\?\.id/);
-  assert.match(cron, /const postedIso = await recordQboPostingSuccess[\s\S]*from\("transaction_categorizations"\)[\s\S]*status: "posted"/);
+  assert.match(cron, /const postedIso = await recordQboPostingSuccess[\s\S]*finalizeCategorizationAfterQboSuccess/);
+  assert.match(cron, /finalizeCategorizationAfterQboSuccess[\s\S]*status: "posted"/);
   assert.match(cron, /if \(!result\?\.id\)[\s\S]*recordQboPostingUnknown/);
+});
+
+test("post-success reconciliation uses bounded CAS recovery and structured lifecycle stages", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const reconcile = cron.slice(
+    cron.indexOf("export async function finalizeCategorizationAfterQboSuccess"),
+    cron.indexOf("async function recordQboExistingLink")
+  );
+
+  assert.match(reconcile, /maxAttempts = 2/);
+  assert.match(reconcile, /\.eq\("updated_at", current\.updated_at\)/);
+  assert.match(reconcile, /conditional_update_returned_no_row/);
+  assert.match(reconcile, /if \(sameReceipt\(reread\)\)/);
+  assert.match(reconcile, /qbo_succeeded_local_finalize_pending/);
+  for (const stage of ["qbo_write_started", "qbo_write_succeeded", "qbo_receipt_persisted", "local_finalize_conflict", "operation_completed"]) {
+    assert.match(cron, new RegExp(`logPostSuccessStage\\("${stage}"`));
+  }
+});
+
+test("Monthly Review removes receipt-confirmed cards and refreshes feed plus selected-month QBO P&L", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+
+  assert.match(page, /extractReceiptConfirmedPostedIds/);
+  assert.match(page, /setPostingReview\(\(current\) => \(\{/);
+  assert.match(page, /Promise\.allSettled\(\[[\s\S]*loadPostingReview\(\)[\s\S]*loadBookkeepingFeedCounts\(\)[\s\S]*refreshQboPnlSnapshot\(\{ silent: true \}\)/);
+  assert.match(page, /Posted—refreshing reports…/);
+  assert.match(page, /Posted to QuickBooks\. Reports will refresh shortly\./);
+  assert.match(page, /This transaction changed while it was being reviewed\. Refresh and try again\./);
 });
 
 test("pending and pre-cutoff transactions are rejected before durable QBO claim", () => {

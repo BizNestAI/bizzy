@@ -106,7 +106,7 @@ test("successful QBO write remains required before Posted state", () => {
 
   assert.match(source, /const result = await timePostingStage\(timing, "qbo_create_ms", \(\) =>\s*postToQbo/);
   assert.match(source, /if \(!result\)/);
-  assert.match(source, /status:\s*"posted"[\s\S]*?qbo_txn_id:\s*qboId/);
+  assert.match(source, /status:\s*"posted"[\s\S]*?qbo_txn_id:\s*qboTxnId/);
 });
 
 test("manual row-level posting uses the shared QBO posting path while auto-post may be off", () => {
@@ -866,7 +866,7 @@ test("successful QBO receipt clears scheduling state and records vendor substage
   const cron = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
 
   assert.match(cron, /const postedIso = await recordQboPostingSuccess/);
-  assert.match(cron, /status:\s*"posted"[\s\S]*?qbo_txn_id:\s*qboId[\s\S]*?post_after:\s*null/);
+  assert.match(cron, /status:\s*"posted"[\s\S]*?qbo_txn_id:\s*qboTxnId[\s\S]*?post_after:\s*null/);
   assert.match(cron, /vendor_subtimings/);
   assert.match(cron, /active_mapping_lookup_ms/);
   assert.match(cron, /vendor_validation_mode:\s*"validated_bank_vendor_ref"/);
@@ -1518,7 +1518,7 @@ test("posting review UI presents merchant approval as one posting lifecycle and 
   assert.match(page, /Posting\.\.\./);
   assert.match(page, /extractReceiptConfirmedPostedIds\(operation\)/);
   assert.match(page, /removePostedPostingReviewTransactions\(current, confirmedPostedIds\)/);
-  assert.match(page, /1 transaction posted to QuickBooks\./);
+  assert.match(page, /Posted—refreshing reports…/);
   assert.match(page, /Posting is taking longer than expected\./);
   assert.match(page, /Check status/);
   assert.doesNotMatch(page, /lastOperationLabel = "Posted"/);
@@ -1543,7 +1543,7 @@ test("partial merchant success preserves unchecked rows and keeps success out of
   assert.match(page, /leftInReview = Math\.max\(0, Number\(group\.transaction_count \|\| 0\) - includedTransactions\.length\)/);
   assert.match(page, /showPostingReviewNotice\(/);
   assert.match(page, /postedPostingReviewIdsRef\.current\.add\(id\)/);
-  assert.match(page, /Promise\.all\(\[loadPostingReview\(\), loadBookkeepingFeedCounts\(\)\]\)\.catch/);
+  assert.match(page, /Promise\.allSettled\(\[[\s\S]*loadPostingReview\(\)[\s\S]*loadBookkeepingFeedCounts\(\)[\s\S]*refreshQboPnlSnapshot/);
   assert.doesNotMatch(page, />Posted<\/button>/);
 });
 

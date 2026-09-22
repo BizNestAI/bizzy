@@ -906,6 +906,102 @@ async function recordQboPostingSuccess({ businessId, transactionId, requestId, r
   return postedIso;
 }
 
+function logPostSuccessStage(stage, { businessId, transactionId, requestId, qboTxnId, qboTxnType, correlationId = null, warning = null } = {}) {
+  log.info("[books-post] post-success reconciliation", {
+    stage,
+    business_id: businessId || null,
+    transaction_id: transactionId || null,
+    operation_id: requestId || null,
+    correlation_id: correlationId || requestId || null,
+    qbo_txn_id: qboTxnId || null,
+    qbo_txn_type: qboTxnType || null,
+    warning,
+  });
+}
+
+export async function finalizeCategorizationAfterQboSuccess({
+  db = supabase,
+  item,
+  businessId,
+  transactionId,
+  requestId,
+  qboTxnId,
+  qboTxnType,
+  postedAt,
+  manual = false,
+  maxAttempts = 2,
+} = {}) {
+  const sameReceipt = (row) => Boolean(
+    row?.qbo_txn_id && String(row.qbo_txn_id) === String(qboTxnId) && row.status === "posted"
+  );
+  let current = item || null;
+  for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt += 1) {
+    if (sameReceipt(current)) return { ok: true, reconciled: attempt > 1, row: current };
+    const nextMeta = {
+      ...(current?.meta || item?.meta || {}),
+      posting_in_progress: false,
+      post_retry_count: null,
+      next_post_attempt_at: null,
+      manual_post: manual === true,
+      qbo_request_id: requestId,
+      ...(current?.meta?.merchant_group_operation_id || item?.meta?.merchant_group_operation_id
+        ? {
+            merchant_group_operation_state: "posted",
+            merchant_group_operation_stage: "posted",
+            merchant_group_operation_lease_expires_at: null,
+          }
+        : {}),
+    };
+    let query = db
+      .from("transaction_categorizations")
+      .update({
+        status: "posted",
+        qbo_txn_id: qboTxnId,
+        qbo_txn_type: qboTxnType || null,
+        posted_at: postedAt,
+        reconciled_at: postedAt,
+        post_error: null,
+        post_after: null,
+        last_post_attempt_at: postedAt,
+        meta: nextMeta,
+      })
+      .eq("business_id", businessId)
+      .eq("transaction_id", transactionId);
+    if (current?.updated_at) query = query.eq("updated_at", current.updated_at);
+    const { data, error } = await query
+      .select("transaction_id,status,qbo_txn_id,qbo_txn_type,posted_at,post_error,meta,updated_at")
+      .maybeSingle();
+    if (!error && sameReceipt(data)) return { ok: true, reconciled: attempt > 1, row: data };
+
+    logPostSuccessStage("local_finalize_conflict", {
+      businessId,
+      transactionId,
+      requestId,
+      qboTxnId,
+      qboTxnType,
+      warning: error?.code || error?.message || "conditional_update_returned_no_row",
+    });
+    const { data: reread, error: rereadError } = await db
+      .from("transaction_categorizations")
+      .select("transaction_id,status,qbo_txn_id,qbo_txn_type,posted_at,post_error,meta,updated_at")
+      .eq("business_id", businessId)
+      .eq("transaction_id", transactionId)
+      .maybeSingle();
+    if (rereadError) throw rereadError;
+    if (sameReceipt(reread)) {
+      logPostSuccessStage("local_finalize_reconciled", { businessId, transactionId, requestId, qboTxnId, qboTxnType });
+      return { ok: true, reconciled: true, row: reread };
+    }
+    current = reread;
+  }
+  const err = new Error("qbo_succeeded_local_finalize_pending");
+  err.code = "qbo_succeeded_local_finalize_pending";
+  err.qbo_write_succeeded = true;
+  err.qbo_request_id = requestId;
+  err.child_operation_id = requestId;
+  throw err;
+}
+
 async function recordQboExistingLink({ businessId, transactionId, requestId, result, payloadSummary, responseSummary }) {
   const postedIso = getNowIso();
   const { data, error } = await supabase
@@ -2284,6 +2380,7 @@ export async function handleItem(item, options = {}) {
     attemptedAt: nowIso,
   });
 
+  logPostSuccessStage("qbo_write_started", { businessId, transactionId: txnId, requestId, qboTxnType: intentQboTxnTypeForLog });
   const result = await timePostingStage(timing, "qbo_create_ms", () => postToQbo(item, bank, qbo, mapping, requestId)).catch(async (err) => {
     timing.context.failure_code = err?.message || "qbo_create_failed";
     await recordQboPostingUnknown({ businessId, transactionId: txnId, requestId, err });
@@ -2325,6 +2422,7 @@ export async function handleItem(item, options = {}) {
     throw missingIdErr;
   }
   const { id: qboId, type: qboType } = result;
+  logPostSuccessStage("qbo_write_succeeded", { businessId, transactionId: txnId, requestId, qboTxnId: qboId, qboTxnType: qboType });
 
   const responseSummary = {
     ...summarizeResponse(result),
@@ -2339,6 +2437,7 @@ export async function handleItem(item, options = {}) {
     payloadSummary,
     responseSummary,
   });
+  logPostSuccessStage("qbo_receipt_persisted", { businessId, transactionId: txnId, requestId, qboTxnId: qboId, qboTxnType: qboType });
   timing.timings.receipt_ms = (timing.timings.receipt_ms || 0) + (Date.now() - receiptStart);
   const finalTiming = summarizePostingTiming(timing);
   await insertPostAttempt({
@@ -2356,36 +2455,18 @@ export async function handleItem(item, options = {}) {
     },
     attemptedAt: postedIso,
   });
-  const { error } = await supabase
-    .from("transaction_categorizations")
-    .update({
-      status: "posted",
-      qbo_txn_id: qboId || null,
-      qbo_txn_type: qboType || null,
-      posted_at: postedIso,
-      reconciled_at: postedIso,
-      post_error: null,
-      post_after: null,
-      last_post_attempt_at: postedIso,
-      meta: {
-        ...(item.meta || {}),
-        posting_in_progress: false,
-        post_retry_count: null,
-        next_post_attempt_at: null,
-        manual_post: manual === true,
-        qbo_request_id: requestId,
-        ...(item?.meta?.merchant_group_operation_id
-          ? {
-              merchant_group_operation_state: "posted",
-              merchant_group_operation_stage: "posted",
-              merchant_group_operation_lease_expires_at: null,
-            }
-          : {}),
-      },
-    })
-    .eq("business_id", businessId)
-    .eq("transaction_id", txnId);
-  if (error) throw error;
+  await finalizeCategorizationAfterQboSuccess({
+    db: supabase,
+    item,
+    businessId,
+    transactionId: txnId,
+    requestId,
+    qboTxnId: qboId,
+    qboTxnType: qboType,
+    postedAt: postedIso,
+    manual,
+  });
+  logPostSuccessStage("operation_completed", { businessId, transactionId: txnId, requestId, qboTxnId: qboId, qboTxnType: qboType });
   if (item?.meta?.taxonomy_type === "loan_payment") {
     await markLoanPaymentSplitPosted({
       db: supabase,
@@ -2551,8 +2632,32 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
   try {
     await handleItem(item, { manual: true, confirmPostAnyway });
   } catch (err) {
-    await markFailed(item, err?.message || "manual_post_failed");
     const postingIntent = await fetchExistingQboPostingIntent(businessId, transactionId).catch(() => null);
+    if (postingIntent?.status === "posted" && postingIntent?.qbo_txn_id) {
+      const finalized = await finalizeCategorizationAfterQboSuccess({
+        db: supabase,
+        item,
+        businessId,
+        transactionId,
+        requestId: postingIntent.request_id,
+        qboTxnId: postingIntent.qbo_txn_id,
+        qboTxnType: postingIntent.qbo_txn_type,
+        postedAt: postingIntent.posted_at || getNowIso(),
+        manual: true,
+      });
+      return {
+        ok: true,
+        status: "completed_with_warning",
+        warning: "local_finalize_reconciled",
+        transaction_id: transactionId,
+        qbo_txn_id: postingIntent.qbo_txn_id,
+        qbo_txn_type: postingIntent.qbo_txn_type || null,
+        posted_at: postingIntent.posted_at || finalized?.row?.posted_at || null,
+        qbo_request_id: postingIntent.request_id || null,
+        child_operation_id: postingIntent.request_id || `qbo:${postingIntent.qbo_txn_id}`,
+      };
+    }
+    await markFailed(item, err?.message || "manual_post_failed");
     if (postingIntent?.request_id) {
       err.qbo_request_id = postingIntent.request_id;
       err.child_operation_id = postingIntent.request_id;
@@ -2934,7 +3039,16 @@ async function runOnce(options = {}) {
           transaction_id: item.transaction_id,
           error: sanitized,
         });
-        await markFailed(item, err?.message || "post_failed");
+        if (err?.qbo_write_succeeded !== true) {
+          await markFailed(item, err?.message || "post_failed");
+        } else {
+          logPostSuccessStage("local_finalize_pending", {
+            businessId: item.business_id,
+            transactionId: item.transaction_id,
+            requestId: err?.qbo_request_id || null,
+            warning: err?.code || err?.message || "qbo_succeeded_local_finalize_pending",
+          });
+        }
         if (isTransientPreloadError(err) || String(err?.message || "").toLowerCase().includes("fetch failed")) {
           consecutiveSystemicFailures += 1;
         } else {

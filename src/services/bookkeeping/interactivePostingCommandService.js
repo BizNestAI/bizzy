@@ -530,6 +530,50 @@ export async function processInteractivePostingCommand({
     ].filter((row) => row?.transaction_id && !blocked.some((blockedRow) => blockedRow.transaction_id === row.transaction_id));
 
     if (!readyRows.length) {
+      const existingReceipts = await fetchReceiptRows(db, command.business_id, transactionIds);
+      const receiptIds = existingReceipts.map((row) => row.id).filter(Boolean);
+      const receiptTransactionIds = new Set(existingReceipts.map((row) => String(row.transaction_id)));
+      if (transactionIds.length > 0 && transactionIds.every((id) => receiptTransactionIds.has(id))) {
+        const reconciledResults = { ...transactionResults };
+        const reconciledChildren = { ...childOperations };
+        for (const id of transactionIds) {
+          const receipt = existingReceipts.find((row) => String(row.transaction_id) === id);
+          const childId = reconciledChildren[id] || `qbo:${receipt.qbo_txn_id}`;
+          reconciledChildren[id] = childId;
+          reconciledResults[id] = {
+            transaction_id: id,
+            parent_operation_id: operationId,
+            child_operation_id: childId,
+            state: "posted",
+            posted: true,
+            retryable: false,
+            ambiguous: false,
+            safe_reason_code: null,
+            safe_message: "Posted to QuickBooks",
+            action: null,
+            internal_reason_code: blocked[0]?.reason || null,
+            qbo_txn_id: receipt.qbo_txn_id,
+            qbo_txn_type: receipt.qbo_txn_type || null,
+            posted_at: receipt.posted_at || null,
+          };
+        }
+        command = await setCommandStage({
+          db,
+          command,
+          state: INTERACTIVE_COMMAND_STATES.POSTED,
+          stage: "completed_with_warning",
+          event: "operation_completed",
+          extra: {
+            posted_transaction_ids: transactionIds,
+            qbo_receipt_ids: receiptIds,
+            child_operations: reconciledChildren,
+            transaction_results: reconciledResults,
+            failure_code: null,
+            failure_message: null,
+          },
+        });
+        return { ok: true, operation_id: operationId, status: "completed_with_warning", posted_transaction_ids: transactionIds, qbo_receipt_ids: receiptIds, command };
+      }
       const reason = blocked[0]?.reason || "interactive_posting_no_rows_ready";
       await markMerchantBacklogApprovalOperationFailed({
         db,
@@ -624,6 +668,48 @@ export async function processInteractivePostingCommand({
     return { ok: true, operation_id: operationId, posted_transaction_ids: postedIds, qbo_receipt_ids: receiptIds, command };
   } catch (err) {
     const code = err?.code || err?.message || "interactive_posting_failed";
+    const existingReceipts = await fetchReceiptRows(db, command.business_id, transactionIds).catch(() => []);
+    const receiptTransactionIds = new Set(existingReceipts.map((row) => String(row.transaction_id)));
+    if (transactionIds.length > 0 && transactionIds.every((id) => receiptTransactionIds.has(id))) {
+      const receiptIds = existingReceipts.map((row) => row.id).filter(Boolean);
+      for (const id of transactionIds) {
+        const receipt = existingReceipts.find((row) => String(row.transaction_id) === id);
+        const childId = childOperations[id] || err?.child_operation_id || err?.qbo_request_id || `qbo:${receipt.qbo_txn_id}`;
+        childOperations[id] = childId;
+        transactionResults[id] = {
+          transaction_id: id,
+          parent_operation_id: operationId,
+          child_operation_id: childId,
+          state: "posted",
+          posted: true,
+          retryable: false,
+          ambiguous: false,
+          safe_reason_code: null,
+          safe_message: "Posted to QuickBooks",
+          action: null,
+          internal_reason_code: code,
+          qbo_txn_id: receipt.qbo_txn_id,
+          qbo_txn_type: receipt.qbo_txn_type || null,
+          posted_at: receipt.posted_at || null,
+        };
+      }
+      command = await setCommandStage({
+        db,
+        command,
+        state: INTERACTIVE_COMMAND_STATES.POSTED,
+        stage: "completed_with_warning",
+        event: "operation_completed",
+        extra: {
+          posted_transaction_ids: transactionIds,
+          qbo_receipt_ids: receiptIds,
+          child_operations: childOperations,
+          transaction_results: transactionResults,
+          failure_code: null,
+          failure_message: null,
+        },
+      });
+      return { ok: true, operation_id: operationId, status: "completed_with_warning", warning: code, posted_transaction_ids: transactionIds, qbo_receipt_ids: receiptIds, command };
+    }
     if (activeTransactionId) {
       const failure = postingFailureResult({
         transactionId: activeTransactionId,
