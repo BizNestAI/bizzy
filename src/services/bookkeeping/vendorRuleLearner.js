@@ -343,10 +343,7 @@ export async function learnVendorRuleFromTransaction({
     row.default_qbo_account_id &&
     String(row.default_qbo_account_id) !== String(finalAccountId)
   );
-  if (incompatibleCategoryDefault) {
-    return { ok: false, error: "incompatible_existing_vendor_rule_requires_correction" };
-  }
-  const existing = duplicateCategoryDefaults[0] || compatibleRows.find((row) => row.rule_kind === "identity") || compatibleRows[0] || null;
+  const existing = duplicateCategoryDefaults[0] || incompatibleCategoryDefault || compatibleRows.find((row) => row.rule_kind === "identity") || compatibleRows[0] || null;
   const usage_count = (existing?.usage_count || 0) + 1;
   const counterparty_confidence = existing?.counterparty_confidence || (merchantEntityId ? "high" : "medium");
   const inferredConfidence = merchantEntityId || identity.match_specificity !== "broad_fuzzy_alias" ? "high" : "medium";
@@ -381,7 +378,11 @@ export async function learnVendorRuleFromTransaction({
       .select("id,match_type,match_value")
       .maybeSingle();
     if (updErr) return { ok: false, error: updErr?.message || "update_failed" };
-    return { ok: true, rule: updData || { id: existing.id, match_type, match_value } };
+    return {
+      ok: true,
+      action: existing.default_qbo_account_id && String(existing.default_qbo_account_id) === String(finalAccountId) ? "noop" : "updated",
+      rule: updData || { id: existing.id, match_type, match_value },
+    };
   }
 
   const insertPayload = {
@@ -395,9 +396,9 @@ export async function learnVendorRuleFromTransaction({
   };
   const { data: insData, error: insErr } = await db
     .from("vendor_rules")
-    .insert(insertPayload)
+    .upsert(insertPayload, { onConflict: "business_id,match_type,match_value" })
     .select("id,match_type,match_value")
     .maybeSingle();
-  if (insErr) return { ok: false, error: insErr?.message || "insert_failed" };
-  return { ok: true, rule: insData };
+  if (insErr) return { ok: false, error: insErr?.message || "upsert_failed" };
+  return { ok: true, action: "upserted", rule: insData };
 }

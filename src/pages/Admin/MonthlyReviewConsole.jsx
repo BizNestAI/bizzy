@@ -172,7 +172,23 @@ function firstOperationFailureMessage(operation = {}) {
   const row = Array.isArray(operation.rows)
     ? operation.rows.find((candidate) => candidate?.failure_message || candidate?.failure_code || candidate?.post_error)
     : null;
-  return row?.failure_message || row?.post_error || humanizePostingReviewReason(row?.failure_code || operation?.error);
+  return safePostingReviewFailureMessage(row?.failure_message || row?.post_error || row?.failure_code || operation?.error);
+}
+
+function safePostingReviewFailureMessage(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const normalized = raw.toLowerCase();
+  if (normalized === "row_changed" || normalized.includes("stale version")) {
+    return "This transaction changed while it was being reviewed. Refresh and try again.";
+  }
+  if (normalized.includes("duplicate key") || normalized.includes("unique constraint") || normalized.includes("vendor_rules_business_match_uq")) {
+    return "The vendor rule could not be updated. Review the transaction and try again.";
+  }
+  if (/postgres|sqlstate|relation .* does not exist|violates .* constraint/.test(normalized)) {
+    return "Bizzi could not finish a local update. Refresh and try again.";
+  }
+  return humanizePostingReviewReason(raw);
 }
 
 function humanizePostingReviewReason(value = "") {
@@ -775,6 +791,7 @@ export default function MonthlyReviewConsole() {
               if (operationId) postingReviewPollsRef.current.delete(operationId);
               const confirmedPostedIds = extractReceiptConfirmedPostedIds(operation);
               if (confirmedPostedIds.length) {
+                const vendorRuleWarning = Array.isArray(operation?.warnings) && operation.warnings.includes("vendor_rule_update_failed");
                 confirmedPostedIds.forEach((id) => postedPostingReviewIdsRef.current.add(id));
                 setPostingReview((current) => removePostedPostingReviewTransactions(current, confirmedPostedIds));
                 setPostingReviewProgress((current) => {
@@ -793,6 +810,7 @@ export default function MonthlyReviewConsole() {
                   postingReviewNoticeTimerRef,
                   "Posted—refreshing reports…"
                 );
+                console.info("[monthly-review]", { stage: "pnl_refresh_dispatched", business_id: selectedBusinessId, month });
                 Promise.allSettled([
                   loadPostingReview(),
                   loadBookkeepingFeedCounts(),
@@ -802,7 +820,11 @@ export default function MonthlyReviewConsole() {
                   showPostingReviewNotice(
                     setPostingReviewNotice,
                     postingReviewNoticeTimerRef,
-                    refreshFailed ? "Posted to QuickBooks. Reports will refresh shortly." : "Posted to QuickBooks."
+                    vendorRuleWarning
+                      ? "Posted to QuickBooks. The vendor rule could not be updated."
+                      : refreshFailed
+                        ? "Posted to QuickBooks. Reports will refresh shortly."
+                        : "Posted to QuickBooks."
                   );
                 });
                 return;
@@ -858,7 +880,7 @@ export default function MonthlyReviewConsole() {
         [group.group_id]: `${e?.body?.message || e?.message || "Bizzi could not save this posting decision."}${e?.body?.correlation_id ? ` Reference: ${e.body.correlation_id}` : ""}`,
       }));
     }
-  }, [loadBookkeepingFeedCounts, loadPostingReview, postingReviewAction, postingReviewOptions, refreshQboPnlSnapshot, selectedBusinessId]);
+  }, [loadBookkeepingFeedCounts, loadPostingReview, month, postingReviewAction, postingReviewOptions, refreshQboPnlSnapshot, selectedBusinessId]);
   const retryPostingReviewItem = useCallback(async (item) => {
     if (!selectedBusinessId || !item?.operation_id || !item?.transaction_id || postingReviewItemActions[item.transaction_id]) return;
     setPostingReviewItemActions((current) => ({ ...current, [item.transaction_id]: "Retry requested" }));

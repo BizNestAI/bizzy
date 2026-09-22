@@ -872,6 +872,63 @@ test("successful QBO receipt clears scheduling state and records vendor substage
   assert.match(cron, /vendor_validation_mode:\s*"validated_bank_vendor_ref"/);
 });
 
+test("Posting Review excludes rows with an authoritative successful QBO receipt", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: false }],
+    transaction_categorizations: [{
+      business_id: "biz-1",
+      transaction_id: "externally-posted-1",
+      status: "failed",
+      final_qbo_account_id: "1150040001",
+      final_qbo_account_name: "Meals",
+      qbo_txn_id: null,
+      post_error: "row_changed",
+      meta: {},
+    }],
+    qbo_posted_transactions: [{
+      id: "receipt-1",
+      business_id: "biz-1",
+      transaction_id: "externally-posted-1",
+      status: "posted",
+      qbo_txn_id: "qbo-1",
+    }],
+    bank_transactions: [{
+      id: "externally-posted-1",
+      business_id: "biz-1",
+      plaid_account_id: "plaid-1",
+      date: "2026-08-04",
+      pending: false,
+      is_archived: false,
+      amount: -79.52,
+      direction: "OUTFLOW",
+      name: "Test merchant",
+    }],
+  });
+
+  const details = await getPostingBacklogReviewDetails({ db, businessId: "biz-1" });
+  assert.equal(details.item_count, 0);
+  assert.equal(details.items.length, 0);
+});
+
+test("receipt-only reconciliation endpoint cannot dispatch another QBO create", () => {
+  const route = readFileSync(join(root, "src/api/bookkeeping/routes/bookkeeping.posting.routes.js"), "utf8");
+  const service = readFileSync(join(root, "src/services/bookkeeping/interactivePostingCommandService.js"), "utf8");
+  const reconcileRoute = route.slice(
+    route.indexOf('router.post("/posting/backlog/merchant-groups/operations/:operationId/reconcile-receipt"'),
+    route.indexOf('router.post("/posting/backlog/merchant-groups/operations/:operationId/retry-now"')
+  );
+  assert.match(reconcileRoute, /reconcileInteractivePostingCommandFromReceipts/);
+  assert.doesNotMatch(reconcileRoute, /postSingleBookkeepingTransactionNow|runBooksPostOnce|getQBOClient|createQbo/);
+  assert.match(service, /authoritative_qbo_receipt_required/);
+  assert.match(service, /finalizeCategorizationAfterQboSuccess/);
+});
+
+test("an operation does not conflict with its own acceptance metadata update", () => {
+  const service = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
+  assert.match(service, /ownedByCurrentOperation = item\.meta\?\.merchant_group_operation_id === resolvedOperationId/);
+  assert.match(service, /if \(!ownedByCurrentOperation && expectedVersion && currentVersion/);
+});
+
 test("validated vendor mapping can skip fresh QBO vendor search safely", () => {
   const cron = readFileSync(join(root, "src/jobs/booksPost.cron.js"), "utf8");
 
@@ -1819,6 +1876,26 @@ class Query {
     this.state[this.table].push(...inserted);
     this.rows = inserted;
     this.calls.push({ table: this.table, op: "insert" });
+    return this;
+  }
+  upsert(payload) {
+    const rows = Array.isArray(payload) ? payload : [payload];
+    if (!this.state[this.table]) this.state[this.table] = [];
+    this.rows = rows.map((row) => {
+      const existing = this.state[this.table].find((candidate) =>
+        candidate.business_id === row.business_id &&
+        candidate.match_type === row.match_type &&
+        candidate.match_value === row.match_value
+      );
+      if (existing) {
+        Object.assign(existing, row);
+        return existing;
+      }
+      const inserted = { id: row.id || `${this.table}-${this.state[this.table].length + 1}`, ...row };
+      this.state[this.table].push(inserted);
+      return inserted;
+    });
+    this.calls.push({ table: this.table, op: "upsert" });
     return this;
   }
   eq(field, value) {

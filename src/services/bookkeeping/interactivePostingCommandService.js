@@ -3,6 +3,7 @@ import crypto from "crypto";
 import {
   runMerchantBacklogApprovalOperation,
   markMerchantBacklogApprovalOperationFailed,
+  persistMerchantApprovalVendorRule,
 } from "./autoPostControl.js";
 
 export const INTERACTIVE_POSTING_COMMAND_TYPE = "interactive_transaction_post";
@@ -473,12 +474,95 @@ async function fetchReceiptRows(db, businessId, transactionIds) {
   }
   const { data, error } = await db
     .from("qbo_posted_transactions")
-    .select("id,transaction_id,status,qbo_txn_id,qbo_txn_type,posted_at")
+    .select("id,transaction_id,status,qbo_txn_id,qbo_txn_type,qbo_sync_token,request_id,posted_at")
     .eq("business_id", businessId)
     .in("transaction_id", transactionIds)
     .eq("status", "posted");
   if (error) throw error;
   return data || [];
+}
+
+export async function reconcileInteractivePostingCommandFromReceipts({ db = null, businessId, operationId, finalizeCategorization = null } = {}) {
+  db ||= await getDefaultSupabase();
+  const command = await fetchInteractivePostingCommand({ db, businessId, operationId });
+  const transactionIds = uniqueSortedIds(command.transaction_ids);
+  const receipts = await fetchReceiptRows(db, businessId, transactionIds);
+  const receiptsByTransaction = new Map(receipts.map((row) => [String(row.transaction_id), row]));
+  if (!transactionIds.length || transactionIds.some((id) => !receiptsByTransaction.get(id)?.qbo_txn_id)) {
+    const error = new Error("authoritative_qbo_receipt_required");
+    error.code = "authoritative_qbo_receipt_required";
+    error.status = 409;
+    throw error;
+  }
+  if (!finalizeCategorization) {
+    ({ finalizeCategorizationAfterQboSuccess: finalizeCategorization } = await import("../../jobs/booksPost.cron.js"));
+  }
+  const transactionResults = { ...(command.transaction_results || {}) };
+  const childOperations = { ...(command.child_operations || {}) };
+  for (const transactionId of transactionIds) {
+    const receipt = receiptsByTransaction.get(transactionId);
+    let item = null;
+    if (db.store) {
+      item = tableStore(db, "transaction_categorizations").find(
+        (row) => row.business_id === businessId && String(row.transaction_id) === transactionId
+      ) || null;
+    } else {
+      const { data, error: itemError } = await db
+        .from("transaction_categorizations")
+        .select("transaction_id,status,qbo_txn_id,qbo_txn_type,posted_at,post_error,meta,updated_at")
+        .eq("business_id", businessId)
+        .eq("transaction_id", transactionId)
+        .maybeSingle();
+      if (itemError) throw itemError;
+      item = data;
+    }
+    await finalizeCategorization({
+      db,
+      item,
+      businessId,
+      transactionId,
+      requestId: receipt.request_id || childOperations[transactionId] || `qbo:${receipt.qbo_txn_id}`,
+      qboTxnId: receipt.qbo_txn_id,
+      qboTxnType: receipt.qbo_txn_type,
+      postedAt: receipt.posted_at || nowIso(),
+      manual: true,
+    });
+    const childId = childOperations[transactionId] || receipt.request_id || `qbo:${receipt.qbo_txn_id}`;
+    childOperations[transactionId] = childId;
+    transactionResults[transactionId] = {
+      transaction_id: transactionId,
+      parent_operation_id: operationId,
+      child_operation_id: childId,
+      state: "posted",
+      posted: true,
+      retryable: false,
+      ambiguous: false,
+      safe_reason_code: null,
+      safe_message: "Posted to QuickBooks",
+      action: null,
+      internal_reason_code: "reconciled_from_authoritative_receipt",
+      qbo_txn_id: receipt.qbo_txn_id,
+      qbo_txn_type: receipt.qbo_txn_type || null,
+      posted_at: receipt.posted_at || null,
+    };
+  }
+  const reconciled = await setCommandStage({
+    db,
+    command,
+    state: INTERACTIVE_COMMAND_STATES.POSTED,
+    stage: "completed_with_warning",
+    event: "operation_completed",
+    extra: {
+      posted_transaction_ids: transactionIds,
+      qbo_receipt_ids: receipts.map((row) => row.id).filter(Boolean),
+      child_operations: childOperations,
+      transaction_results: transactionResults,
+      failure_code: null,
+      failure_message: null,
+      warnings: ["reconciled_from_authoritative_receipt"],
+    },
+  });
+  return { ok: true, status: "completed_with_warning", operation_id: operationId, posted_transaction_ids: transactionIds, command: reconciled };
 }
 
 export async function processInteractivePostingCommand({
@@ -489,6 +573,7 @@ export async function processInteractivePostingCommand({
   postTransactionNow,
   claimedCommand = null,
   runApprovalOperation = runMerchantBacklogApprovalOperation,
+  persistRememberedRule = null,
 } = {}) {
   db ||= await getDefaultSupabase();
   if (!duplicatePreflight && runApprovalOperation === runMerchantBacklogApprovalOperation) {
@@ -512,7 +597,9 @@ export async function processInteractivePostingCommand({
       businessId: command.business_id,
       actorId: command.actor_id,
       selectedQboAccountId: command.selected_qbo_account_id,
-      rememberForFuture: command.remember_for_future,
+      // Remembered rules are auxiliary and are persisted only after the
+      // authoritative QBO receipt has been recorded.
+      rememberForFuture: false,
       groupSnapshotToken: command.merchant_snapshot?.group_snapshot_token || null,
       transactionIds,
       exclusionIds: Array.isArray(command.merchant_snapshot?.exclusion_ids) ? command.merchant_snapshot.exclusion_ids : [],
@@ -650,12 +737,42 @@ export async function processInteractivePostingCommand({
     const receipts = await fetchReceiptRows(db, command.business_id, transactionIds);
     const receiptIds = receipts.map((row) => row.id).filter(Boolean);
     await appendInteractivePostingCommandEvent({ db, operationId, event: "receipt_persisted", extra: { receipt_count: receiptIds.length } });
+    let auxiliaryWarning = null;
+    if (command.remember_for_future === true) {
+      const ruleWriter = persistRememberedRule || (runApprovalOperation === runMerchantBacklogApprovalOperation ? persistMerchantApprovalVendorRule : null);
+      if (ruleWriter) {
+        try {
+          const ruleResult = await ruleWriter({
+            db,
+            businessId: command.business_id,
+            actorId: command.actor_id,
+            selectedQboAccountId: command.selected_qbo_account_id,
+            groupSnapshotToken: command.merchant_snapshot?.group_snapshot_token || null,
+            transactionIds,
+            exclusionIds: Array.isArray(command.merchant_snapshot?.exclusion_ids) ? command.merchant_snapshot.exclusion_ids : [],
+          });
+          if (ruleResult?.ok === false) {
+            auxiliaryWarning = "vendor_rule_update_failed";
+            await appendInteractivePostingCommandEvent({ db, operationId, event: "auxiliary_warning", extra: { warning: auxiliaryWarning } });
+          } else {
+            await appendInteractivePostingCommandEvent({
+              db,
+              operationId,
+              event: ruleResult?.action === "noop" ? "vendor_rule_noop" : "vendor_rule_upserted",
+            });
+          }
+        } catch {
+          auxiliaryWarning = "vendor_rule_update_failed";
+          await appendInteractivePostingCommandEvent({ db, operationId, event: "auxiliary_warning", extra: { warning: auxiliaryWarning } });
+        }
+      }
+    }
     command = await setCommandStage({
       db,
       command,
       state: INTERACTIVE_COMMAND_STATES.POSTED,
-      stage: INTERACTIVE_COMMAND_STATES.POSTED,
-      event: "operation_posted",
+      stage: auxiliaryWarning ? "completed_with_warning" : INTERACTIVE_COMMAND_STATES.POSTED,
+      event: "operation_completed",
       extra: {
         posted_transaction_ids: postedIds,
         qbo_receipt_ids: receiptIds,
@@ -663,9 +780,10 @@ export async function processInteractivePostingCommand({
         failure_message: null,
         child_operations: childOperations,
         transaction_results: transactionResults,
+        warnings: auxiliaryWarning ? [auxiliaryWarning] : [],
       },
     });
-    return { ok: true, operation_id: operationId, posted_transaction_ids: postedIds, qbo_receipt_ids: receiptIds, command };
+    return { ok: true, operation_id: operationId, status: auxiliaryWarning ? "completed_with_warning" : "completed", warning: auxiliaryWarning, posted_transaction_ids: postedIds, qbo_receipt_ids: receiptIds, command };
   } catch (err) {
     const code = err?.code || err?.message || "interactive_posting_failed";
     const existingReceipts = await fetchReceiptRows(db, command.business_id, transactionIds).catch(() => []);
@@ -751,7 +869,10 @@ export async function getInteractivePostingCommandStatus({ db = null, businessId
   const receipts = await fetchReceiptRows(db, businessId, selectedIds);
   const receiptTransactionIds = new Set(receipts.map((row) => String(row.transaction_id)));
   const postedTransactionIds = selectedIds.filter((id) => receiptTransactionIds.has(id));
-  const terminal = TERMINAL_STATES.has(command.state);
+  const externallySucceeded = selectedIds.length > 0 && postedTransactionIds.length === selectedIds.length;
+  const canonicalState = externallySucceeded ? INTERACTIVE_COMMAND_STATES.POSTED : command.state;
+  const canonicalStage = externallySucceeded && command.state !== INTERACTIVE_COMMAND_STATES.POSTED ? "completed_with_warning" : command.stage;
+  const terminal = TERMINAL_STATES.has(canonicalState);
   const active = !terminal;
   const transactionResults = command.transaction_results || {};
   return {
@@ -759,31 +880,32 @@ export async function getInteractivePostingCommandStatus({ db = null, businessId
     operation_id: operationId,
     row_count: selectedIds.length,
     command_type: command.command_type,
-    state: command.state,
-    stage: command.stage,
-    states: { [command.state]: selectedIds.length },
+    state: canonicalState,
+    stage: canonicalStage,
+    states: { [canonicalState]: selectedIds.length },
     terminal,
     active,
     stale: false,
     last_update_at: command.updated_at || null,
     selected_transaction_ids: selectedIds,
     posted_transaction_ids: postedTransactionIds,
-    blocked_transaction_ids: command.state === INTERACTIVE_COMMAND_STATES.BLOCKED ? selectedIds.filter((id) => !receiptTransactionIds.has(id)) : [],
-    failed_transaction_ids: command.state === INTERACTIVE_COMMAND_STATES.FAILED ? selectedIds.filter((id) => !receiptTransactionIds.has(id)) : [],
-    failure_code: command.failure_code || null,
-    failure_message: command.failure_message || null,
+    blocked_transaction_ids: canonicalState === INTERACTIVE_COMMAND_STATES.BLOCKED ? selectedIds.filter((id) => !receiptTransactionIds.has(id)) : [],
+    failed_transaction_ids: canonicalState === INTERACTIVE_COMMAND_STATES.FAILED ? selectedIds.filter((id) => !receiptTransactionIds.has(id)) : [],
+    failure_code: externallySucceeded ? null : command.failure_code || null,
+    failure_message: externallySucceeded ? null : command.failure_message || null,
     authoritative_operation_id: operationId,
     parent_operation_id: operationId,
     child_operation_ids: Object.values(command.child_operations || {}).filter(Boolean),
-    retryable: command.state === INTERACTIVE_COMMAND_STATES.RETRYABLE_FAILURE || Object.values(transactionResults).some((result) => result?.retryable === true),
-    ambiguous: Object.values(transactionResults).some((result) => result?.ambiguous === true),
+    retryable: !externallySucceeded && (canonicalState === INTERACTIVE_COMMAND_STATES.RETRYABLE_FAILURE || Object.values(transactionResults).some((result) => result?.retryable === true)),
+    ambiguous: !externallySucceeded && Object.values(transactionResults).some((result) => result?.ambiguous === true),
     user_message: buildInteractiveCommandUserMessage({ command, selectedIds, postedTransactionIds }),
     event_timeline: command.event_timeline || [],
+    warnings: Array.isArray(command.warnings) ? command.warnings : [],
     rows: selectedIds.map((id) => ({
       ...(transactionResults[id] || {}),
       transaction_id: id,
-      state: receiptTransactionIds.has(id) ? "posted" : command.state,
-      stage: receiptTransactionIds.has(id) ? "posted" : command.stage,
+      state: receiptTransactionIds.has(id) ? "posted" : canonicalState,
+      stage: receiptTransactionIds.has(id) ? "posted" : canonicalStage,
       posted: receiptTransactionIds.has(id),
       updated_at: command.updated_at || null,
       requested_at: command.requested_at || null,
@@ -791,8 +913,8 @@ export async function getInteractivePostingCommandStatus({ db = null, businessId
       lease_expires_at: command.lease_expires_at || null,
       parent_operation_id: operationId,
       child_operation_id: transactionResults[id]?.child_operation_id || command.child_operations?.[id] || null,
-      failure_code: transactionResults[id]?.safe_reason_code || command.failure_code || null,
-      failure_message: transactionResults[id]?.safe_message || command.failure_message || null,
+      failure_code: receiptTransactionIds.has(id) ? null : transactionResults[id]?.safe_reason_code || command.failure_code || null,
+      failure_message: receiptTransactionIds.has(id) ? null : transactionResults[id]?.safe_message || command.failure_message || null,
       internal_reason_code: transactionResults[id]?.internal_reason_code || command.failure_code || null,
       qbo_txn_id: receipts.find((row) => String(row.transaction_id) === id)?.qbo_txn_id || null,
     })),

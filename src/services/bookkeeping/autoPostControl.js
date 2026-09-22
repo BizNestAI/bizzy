@@ -669,7 +669,27 @@ async function fetchBacklogCategorizationRows(db, businessId, { transactionIds =
   if (ids.length) query = query.in("transaction_id", ids);
   const { data, error } = await query;
   if (error) throw wrapAutoPostDbError("auto_post_backlog_preview_categorizations_failed", error);
-  return data || [];
+  const rows = data || [];
+  if (!rows.length) return rows;
+  const candidateIds = rows.map((row) => row.transaction_id).filter(Boolean);
+  let postedReceipts = [];
+  if (db.store?.qbo_posted_transactions) {
+    postedReceipts = db.store.qbo_posted_transactions.filter(
+      (row) => row.business_id === businessId && row.status === "posted" && row.qbo_txn_id && candidateIds.includes(row.transaction_id)
+    );
+  } else {
+    const { data: receiptRows, error: receiptError } = await db
+      .from("qbo_posted_transactions")
+      .select("transaction_id")
+      .eq("business_id", businessId)
+      .in("transaction_id", candidateIds)
+      .eq("status", "posted")
+      .not("qbo_txn_id", "is", null);
+    if (receiptError) throw wrapAutoPostDbError("auto_post_backlog_receipts_failed", receiptError);
+    postedReceipts = receiptRows || [];
+  }
+  const externallyPostedIds = new Set(postedReceipts.map((row) => row.transaction_id));
+  return rows.filter((row) => !externallyPostedIds.has(row.transaction_id));
 }
 
 async function fetchBacklogBankRows(db, businessId, transactionIds = []) {
@@ -1600,13 +1620,42 @@ async function learnRuleForMerchantApproval({
       db,
     });
     if (ruleResult?.ok === false) {
-      const err = new Error(ruleResult.error || "merchant_rule_save_failed");
-      err.status = 409;
-      err.code = "merchant_rule_save_failed";
-      throw err;
+      return {
+        ...ruleResult,
+        warning: "vendor_rule_update_failed",
+      };
     }
   }
   return ruleResult;
+}
+
+export async function persistMerchantApprovalVendorRule({
+  db,
+  businessId,
+  actorId = null,
+  selectedQboAccountId,
+  groupSnapshotToken = null,
+  transactionIds = [],
+  exclusionIds = [],
+} = {}) {
+  const { account, group, candidateIds, bankRows } = await resolveMerchantBacklogApproval({
+    db,
+    businessId,
+    selectedQboAccountId,
+    groupSnapshotToken,
+    transactionIds,
+    exclusionIds,
+  });
+  return learnRuleForMerchantApproval({
+    businessId,
+    actorId,
+    rememberForFuture: true,
+    account,
+    group,
+    candidateIds,
+    bankRows,
+    db,
+  });
 }
 
 export async function persistMerchantBacklogGroupApprovalDecision({
@@ -1646,7 +1695,8 @@ export async function persistMerchantBacklogGroupApprovalDecision({
     const bankTxn = bankRows.map.get(item.transaction_id);
     const expectedVersion = expectedRowVersions?.[item.transaction_id];
     const currentVersion = item.meta?.row_version || item.meta?.version || item.updated_at || null;
-    if (expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
+    const ownedByCurrentOperation = item.meta?.merchant_group_operation_id === operationId;
+    if (!ownedByCurrentOperation && expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
       blocked.push({ transaction_id: item.transaction_id, reason: "row_changed" });
       continue;
     }
@@ -1744,7 +1794,8 @@ export async function runMerchantBacklogApprovalOperation({
     const bankTxn = bankRows.map.get(item.transaction_id);
     const expectedVersion = expectedRowVersions?.[item.transaction_id];
     const currentVersion = item.meta?.row_version || item.meta?.version || item.updated_at || null;
-    if (expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
+    const ownedByCurrentOperation = item.meta?.merchant_group_operation_id === resolvedOperationId;
+    if (!ownedByCurrentOperation && expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
       blocked.push({ transaction_id: item.transaction_id, reason: "row_changed" });
       await markMerchantBacklogApprovalRowsState({ db, businessId, operationId: resolvedOperationId, transactionIds: [item.transaction_id], state: "blocked", reasonCode: "row_changed" });
       continue;

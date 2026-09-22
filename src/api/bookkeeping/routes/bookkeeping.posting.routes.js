@@ -19,6 +19,7 @@ import {
   assertInteractivePostingCommandSchema,
   createInteractivePostingCommand,
   getInteractivePostingCommandStatus,
+  reconcileInteractivePostingCommandFromReceipts,
 } from "../../../services/bookkeeping/interactivePostingCommandService.js";
 import { assertTaxBusinessAccess } from "../../tax/taxRouteUtils.js";
 import { getQBOClient } from "../../../utils/qboClient.js";
@@ -552,6 +553,28 @@ function buildMerchantApprovalOperationUserMessage({
   }
   return rows.length ? "Checking posting status." : "Posting status is unavailable.";
 }
+
+router.post("/posting/backlog/merchant-groups/operations/:operationId/reconcile-receipt", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  setNoStoreHeaders(res);
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const operationId = String(req.params?.operationId || "").trim();
+    if (!operationId) return res.status(400).json({ ok: false, error: "missing_operation_id", message: "Missing operation id." });
+    const result = await reconcileInteractivePostingCommandFromReceipts({ db: supabase, businessId, operationId });
+    return res.json({ ...result, message: "The existing QuickBooks receipt was reconciled. No new QuickBooks transaction was created." });
+  } catch (error) {
+    const status = error?.status || 500;
+    return res.status(status).json({
+      ok: false,
+      error: error?.code || "posting_receipt_reconciliation_failed",
+      message: status === 409
+        ? "A verified QuickBooks posting receipt is required before this operation can be reconciled."
+        : "Bizzi could not reconcile this posting receipt.",
+    });
+  }
+});
 
 router.post("/posting/backlog/merchant-groups/operations/:operationId/retry-now", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
   const routeStartMs = nowMs();

@@ -2455,6 +2455,7 @@ export async function handleItem(item, options = {}) {
     },
     attemptedAt: postedIso,
   });
+  logPostSuccessStage("local_finalize_started", { businessId, transactionId: txnId, requestId, qboTxnId: qboId, qboTxnType: qboType });
   await finalizeCategorizationAfterQboSuccess({
     db: supabase,
     item,

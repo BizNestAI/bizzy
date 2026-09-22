@@ -9,6 +9,7 @@ import {
   createInteractivePostingCommand,
   getInteractivePostingCommandStatus,
   processInteractivePostingCommand,
+  reconcileInteractivePostingCommandFromReceipts,
 } from "../src/services/bookkeeping/interactivePostingCommandService.js";
 import {
   isMissingInteractivePostingCommandRpcError,
@@ -259,6 +260,101 @@ test("a post-success local conflict converges parent and child without a second 
   assert.equal(status.state, "posted");
   assert.equal(status.rows[0].child_operation_id, "qbo-request-after-success");
   assert.equal(status.rows[0].qbo_txn_id, "qbo-after-success");
+});
+
+test("vendor-rule failure after a durable receipt completes with a warning", async () => {
+  const db = makeDb();
+  const command = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "1150040001",
+    transactionIds: [TXN_ID],
+    rememberForFuture: true,
+    idempotencyKey: "rule-warning-after-receipt",
+  });
+  let postCalls = 0;
+  const result = await processInteractivePostingCommand({
+    db,
+    operationId: command.operation_id,
+    runApprovalOperation: async ({ rememberForFuture }) => {
+      assert.equal(rememberForFuture, false);
+      return { blocked: [], scheduled: [{ transaction_id: TXN_ID }] };
+    },
+    postTransactionNow: async ({ businessId, transactionId }) => {
+      postCalls += 1;
+      db.store.qbo_posted_transactions.push({
+        id: "receipt-rule-warning",
+        business_id: businessId,
+        transaction_id: transactionId,
+        status: "posted",
+        qbo_txn_id: "qbo-rule-warning",
+        qbo_txn_type: "Purchase",
+        posted_at: "2026-08-04T12:00:00.000Z",
+      });
+      return { ok: true, qbo_txn_id: "qbo-rule-warning", qbo_txn_type: "Purchase", child_operation_id: "child-rule-warning" };
+    },
+    persistRememberedRule: async () => ({ ok: false, error: "simulated_unique_conflict" }),
+  });
+
+  assert.equal(postCalls, 1);
+  assert.equal(result.ok, true);
+  assert.equal(result.status, "completed_with_warning");
+  assert.equal(result.warning, "vendor_rule_update_failed");
+  const status = await getInteractivePostingCommandStatus({ db, businessId: BUSINESS_ID, operationId: command.operation_id });
+  assert.equal(status.state, "posted");
+  assert.equal(status.rows[0].posted, true);
+  assert.deepEqual(db.store.qbo_posted_transactions.map((row) => row.qbo_txn_id), ["qbo-rule-warning"]);
+});
+
+test("failed-after-success operation reconciles from its receipt without a QBO create", async () => {
+  const db = makeDb();
+  const command = await createInteractivePostingCommand({
+    db,
+    businessId: BUSINESS_ID,
+    selectedQboAccountId: "1150040001",
+    transactionIds: [TXN_ID],
+    idempotencyKey: "reconcile-old-success",
+  });
+  const stored = db.store.bookkeeping_interactive_posting_commands.find((row) => row.operation_id === command.operation_id);
+  stored.state = "failed";
+  stored.stage = "failed";
+  stored.failure_code = "merchant_rule_save_failed";
+  db.store.qbo_posted_transactions.push({
+    id: "receipt-old-success",
+    business_id: BUSINESS_ID,
+    transaction_id: TXN_ID,
+    status: "posted",
+    qbo_txn_id: "qbo-old-success",
+    qbo_txn_type: "Purchase",
+    request_id: "request-old-success",
+    posted_at: "2026-08-04T12:00:00.000Z",
+  });
+  db.store.transaction_categorizations = [{
+    business_id: BUSINESS_ID,
+    transaction_id: TXN_ID,
+    status: "failed",
+    qbo_txn_id: null,
+    meta: {},
+  }];
+  let localFinalizeCalls = 0;
+  const result = await reconcileInteractivePostingCommandFromReceipts({
+    db,
+    businessId: BUSINESS_ID,
+    operationId: command.operation_id,
+    finalizeCategorization: async ({ qboTxnId }) => {
+      localFinalizeCalls += 1;
+      assert.equal(qboTxnId, "qbo-old-success");
+      return { ok: true };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(localFinalizeCalls, 1);
+  assert.equal(db.store.qbo_posted_transactions.length, 1);
+  const status = await getInteractivePostingCommandStatus({ db, businessId: BUSINESS_ID, operationId: command.operation_id });
+  assert.equal(status.state, "posted");
+  assert.equal(status.rows[0].qbo_txn_id, "qbo-old-success");
+  assert.equal(status.failure_code, null);
 });
 
 test("QBO rejection is persisted on the parent with a safe per-transaction reason", async () => {

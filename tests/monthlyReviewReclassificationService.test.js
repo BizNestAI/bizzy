@@ -351,6 +351,51 @@ test("vendor rule learner deterministically promotes exact identity rows and rep
   assert.equal(db.tables.vendor_rules[0].usage_count, 5);
 });
 
+test("remembered vendor rules atomically update category and concurrent saves converge", async () => {
+  const { learnVendorRuleFromTransaction } = await import("../src/services/bookkeeping/vendorRuleLearner.js");
+  const db = makeDb({
+    vendor_rules: [{
+      id: "stable-canopy-rule",
+      business_id: "biz-1",
+      match_type: "merchant_entity_id",
+      match_value: "merchant-canopy",
+      counterparty_name: "Canopy",
+      rule_kind: "category_default",
+      default_qbo_account_id: "old-account",
+      default_qbo_account_name: "Old category",
+      direction_hint: "OUTFLOW",
+      usage_count: 1,
+    }],
+  });
+  const bank = bankTxn({ merchant_name: "Canopy", merchant_entity_id: "merchant-canopy", direction: "OUTFLOW", amount: -79.52 });
+  const changed = await learnVendorRuleFromTransaction({
+    businessId: "biz-1",
+    bankTxn: bank,
+    finalAccountId: "meals-account",
+    finalAccountName: "Meals",
+    options: { learnedFrom: "merchant_group_review" },
+    db,
+  });
+  assert.equal(changed.ok, true);
+  assert.equal(changed.action, "updated");
+  assert.equal(db.tables.vendor_rules[0].id, "stable-canopy-rule");
+  assert.equal(db.tables.vendor_rules[0].default_qbo_account_id, "meals-account");
+
+  const concurrentDb = makeDb();
+  const save = () => learnVendorRuleFromTransaction({
+    businessId: "biz-1",
+    bankTxn: bank,
+    finalAccountId: "meals-account",
+    finalAccountName: "Meals",
+    options: { learnedFrom: "merchant_group_review" },
+    db: concurrentDb,
+  });
+  const results = await Promise.all([save(), save()]);
+  assert.equal(results.every((result) => result.ok), true);
+  assert.equal(concurrentDb.tables.vendor_rules.length, 1);
+  assert.equal(concurrentDb.tables.vendor_rules[0].default_qbo_account_id, "meals-account");
+});
+
 test("Monthly Review handled unposted reclassification updates categorization without QBO create or auto-post changes", async () => {
   const db = makeDb({
     bank_transactions: [bankTxn()],
