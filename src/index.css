@@ -1622,3 +1622,16 @@ body.pdf-modal-open .bizzy-qprompts {
   0% { opacity: 0; transform: translateY(6px); }
   100% { opacity: 1; transform: translateY(0); }
 }
+@keyframes bizzi-toast-in {
+  from { opacity: 0; transform: translate(12px, -4px); }
+  to { opacity: 1; transform: translate(0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-bizzi-toast-viewport="true"] *,
+  [data-bizzi-toast-viewport="true"] *::before,
+  [data-bizzi-toast-viewport="true"] *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -34,7 +34,20 @@ function requestCorrelationId(req) {
 function sendError(req, res, err, fallback = "incoming_deposit_match_failed") {
   const correlationId = req.matchCorrelationId || requestCorrelationId(req);
   if (err instanceof IncomingDepositMatchError) {
-    return res.status(err.status || 400).json({ ok: false, error: err.code, correlation_id: correlationId });
+    const refreshed = err.code === "qbo_match_details_changed" ? err.details?.refreshed_candidate : null;
+    return res.status(err.status || 400).json({
+      ok: false,
+      error: err.code,
+      correlation_id: correlationId,
+      ...(refreshed ? { details: { refreshed_candidate: {
+        qbo_entity_type: refreshed.qbo_entity_type,
+        qbo_entity_id: refreshed.qbo_entity_id,
+        txn_date: refreshed.txn_date,
+        amount_minor: refreshed.amount_minor,
+        currency: refreshed.currency,
+        status: refreshed.status,
+      } } } : {}),
+    });
   }
   console.error("[bookkeeping][incoming-deposit-match] failed", {
     correlation_id: correlationId,

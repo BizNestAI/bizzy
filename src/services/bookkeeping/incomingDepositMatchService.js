@@ -85,6 +85,60 @@ function normalizeCurrency(value) {
   return text || null;
 }
 
+function canonicalValues(values = []) {
+  return Array.from(new Set((Array.isArray(values) ? values : [values])
+    .map((value) => refValue(value) || (typeof value === "string" ? value : null))
+    .filter(Boolean)
+    .map(String))).sort();
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+export function canonicalQboCandidateSnapshot(candidate = {}) {
+  const raw = candidate.raw || candidate;
+  const rawStatus = String(candidate.status || raw.status || "active").toLowerCase();
+  const rawAmountMinor = candidate.amount_minor ?? candidate.amount_allocated_minor ?? raw.amount_minor;
+  return {
+    business_id: candidate.business_id || null,
+    qbo_realm_id: candidate.qbo_realm_id || raw.realm_id || null,
+    qbo_entity_type: candidate.qbo_entity_type || raw.qbo_entity_type || null,
+    qbo_entity_id: String(candidate.qbo_entity_id || raw.qbo_entity_id || ""),
+    sync_token: candidate.sync_token ?? raw.sync_token ?? null,
+    txn_date: dateOnly(candidate.txn_date || raw.txn_date || raw.qbo_txn_date || raw.payment_date || raw.document_date),
+    amount_minor: Number.isFinite(Number(rawAmountMinor)) ? Number(rawAmountMinor) : null,
+    currency: normalizeCurrency(candidate.currency || raw.currency),
+    payment_account_ref: refValue(candidate.payment_account_ref || raw.payment_account_ref || raw.deposit_account_ref || raw.deposit_ref),
+    expense_account_refs: canonicalValues(candidate.expense_account_refs || candidate.account_refs || raw.expense_account_refs || raw.account_refs || raw.line_entity_refs || []),
+    status: INVALID_QBO_STATUSES.has(rawStatus) ? rawStatus : "active",
+  };
+}
+
+export function qboCandidateSnapshotFingerprint(snapshot = {}) {
+  return crypto.createHash("sha256").update(stableStringify(canonicalQboCandidateSnapshot(snapshot))).digest("hex");
+}
+
+function meaningfulCandidateSnapshot(snapshot = {}) {
+  const canonical = canonicalQboCandidateSnapshot(snapshot);
+  const { sync_token: _syncToken, ...meaningful } = canonical;
+  return meaningful;
+}
+
+function meaningfulSnapshotsEqual(expectedSnapshot = {}, actualSnapshot = {}) {
+  const expected = meaningfulCandidateSnapshot(expectedSnapshot);
+  const actual = meaningfulCandidateSnapshot(actualSnapshot);
+  return Object.keys(expected).every((key) => {
+    const expectedValue = expected[key];
+    if (expectedValue === null || expectedValue === undefined || (Array.isArray(expectedValue) && expectedValue.length === 0) || (typeof expectedValue === "number" && !Number.isFinite(expectedValue))) return true;
+    return stableStringify(expectedValue) === stableStringify(actual[key]);
+  });
+}
+
 function rawSnapshotEntity(row = {}, key) {
   const snapshot = row.source_snapshot || {};
   return snapshot?.[key] && typeof snapshot[key] === "object" ? snapshot[key] : snapshot;
@@ -388,6 +442,8 @@ function canonicalCandidateItems({ matchId, businessId, candidates = [] }) {
       processor_key: candidate.processor_key || null,
       processor_name: candidate.processor_name || null,
       reason_codes: candidate.reason_codes,
+      candidate_snapshot: canonicalQboCandidateSnapshot({ ...candidate, business_id: businessId }),
+      candidate_snapshot_fingerprint: qboCandidateSnapshotFingerprint({ ...candidate, business_id: businessId }),
     },
   }));
   const existingKeys = new Set(items.map((item) => `${item.qbo_entity_type}:${item.qbo_entity_id}`));
@@ -1508,7 +1564,7 @@ async function fetchCurrentQboVersion({ db, businessId, item }) {
   if (item.qbo_entity_type === "Deposit") {
     return selectMaybe(db
       .from("job_revenue_evidence")
-      .select("realm_id,qbo_txn_id,sync_token,source_snapshot_at,status")
+      .select("realm_id,qbo_txn_id,qbo_txn_type,qbo_txn_date,amount_minor,currency,deposit_account_ref,line_entity_refs,sync_token,source_snapshot_at,status")
       .eq("business_id", businessId)
       .eq("qbo_txn_type", "Deposit")
       .eq("qbo_txn_id", item.qbo_entity_id)
@@ -1517,7 +1573,7 @@ async function fetchCurrentQboVersion({ db, businessId, item }) {
   if (item.qbo_entity_type === "Payment") {
     return selectMaybe(db
       .from("job_payment_records")
-      .select("realm_id,external_payment_id,sync_token,source_snapshot_at,status")
+      .select("realm_id,external_payment_id,payment_date,amount_minor,currency,deposit_ref,sync_token,source_snapshot_at,status")
       .eq("business_id", businessId)
       .eq("external_payment_id", item.qbo_entity_id)
       .maybeSingle());
@@ -1525,7 +1581,7 @@ async function fetchCurrentQboVersion({ db, businessId, item }) {
   if (item.qbo_entity_type === "SalesReceipt") {
     return selectMaybe(db
       .from("job_revenue_documents")
-      .select("realm_id,external_document_id,sync_token,source_snapshot_at,status")
+      .select("realm_id,external_document_id,document_date,amount_minor,currency,deposit_account_ref,sync_token,source_snapshot_at,status")
       .eq("business_id", businessId)
       .eq("source_document_type", "sales_receipt")
       .eq("external_document_id", item.qbo_entity_id)
@@ -1534,7 +1590,7 @@ async function fetchCurrentQboVersion({ db, businessId, item }) {
   if (["Purchase", "Expense", "Check", "CreditCardCharge", "Bill"].includes(item.qbo_entity_type)) {
     return selectMaybe(db
       .from("qbo_expense_transactions")
-      .select("realm_id,qbo_entity_id,sync_token,source_snapshot_at,status")
+      .select("realm_id,qbo_entity_type,qbo_entity_id,txn_date,amount_minor,currency,payment_account_ref,account_refs,sync_token,source_snapshot_at,status")
       .eq("business_id", businessId)
       .eq("qbo_entity_type", item.qbo_entity_type)
       .eq("qbo_entity_id", item.qbo_entity_id)
@@ -1543,22 +1599,111 @@ async function fetchCurrentQboVersion({ db, businessId, item }) {
   return null;
 }
 
+function snapshotFromMatchItem(item = {}) {
+  if (item.meta?.candidate_snapshot) return canonicalQboCandidateSnapshot(item.meta.candidate_snapshot);
+  return canonicalQboCandidateSnapshot({
+    business_id: item.business_id,
+    qbo_realm_id: item.qbo_realm_id,
+    qbo_entity_type: item.qbo_entity_type,
+    qbo_entity_id: item.qbo_entity_id,
+    sync_token: item.qbo_sync_token,
+    txn_date: item.meta?.txn_date,
+    amount_minor: item.amount_allocated_minor,
+    currency: item.meta?.currency || null,
+    payment_account_ref: item.meta?.payment_account_ref || null,
+    account_refs: item.meta?.account_refs || [],
+    status: item.meta?.status || "active",
+  });
+}
+
+function snapshotFromCurrentQbo(item = {}, current = {}) {
+  return canonicalQboCandidateSnapshot({
+    business_id: item.business_id,
+    qbo_realm_id: current.realm_id,
+    qbo_entity_type: item.qbo_entity_type,
+    qbo_entity_id: current.qbo_entity_id || current.qbo_txn_id || current.external_payment_id || current.external_document_id,
+    sync_token: current.sync_token,
+    txn_date: current.txn_date || current.qbo_txn_date || current.payment_date || current.document_date,
+    amount_minor: current.amount_minor,
+    currency: current.currency,
+    payment_account_ref: current.payment_account_ref || current.deposit_account_ref || current.deposit_ref,
+    account_refs: current.account_refs || current.line_entity_refs || [],
+    status: current.status,
+  });
+}
+
+async function assertQboEntityNotConsumed({ db, businessId, matchId, item }) {
+  const consumed = await selectRows(db
+    .from("bank_qbo_match_items")
+    .select("id,match_id")
+    .eq("business_id", businessId)
+    .eq("qbo_realm_id", item.qbo_realm_id)
+    .eq("qbo_entity_type", item.qbo_entity_type)
+    .eq("qbo_entity_id", item.qbo_entity_id)
+    .eq("active_confirmed", true));
+  if (consumed.some((row) => String(row.match_id) !== String(matchId))) {
+    throw new IncomingDepositMatchError("qbo_entity_already_matched", 409);
+  }
+}
+
 async function assertCandidateCurrent({ db, businessId, matchId, candidateItem = null }) {
   const item = candidateItem || await fetchPrimaryMatchItem({ db, businessId, matchId });
   if (!item) throw new IncomingDepositMatchError("primary_match_item_missing", 409);
   const current = await fetchCurrentQboVersion({ db, businessId, item });
   if (!current) throw new IncomingDepositMatchError("qbo_match_candidate_missing", 409);
   if (INVALID_QBO_STATUSES.has(String(current.status || "").toLowerCase())) throw new IncomingDepositMatchError("qbo_match_candidate_invalid_status", 409);
+  await assertQboEntityNotConsumed({ db, businessId, matchId, item });
   if (item.qbo_realm_id && current.realm_id && String(item.qbo_realm_id) !== String(current.realm_id)) {
     throw new IncomingDepositMatchError("qbo_match_candidate_realm_changed", 409);
   }
-  if (item.qbo_sync_token && current.sync_token && String(item.qbo_sync_token) !== String(current.sync_token)) {
-    throw new IncomingDepositMatchError("qbo_match_candidate_stale", 409);
+  const expected = snapshotFromMatchItem(item);
+  const actual = snapshotFromCurrentQbo(item, current);
+  if (!meaningfulSnapshotsEqual(expected, actual)) {
+    const refreshedMeta = {
+      ...(item.meta || {}),
+      candidate_snapshot: actual,
+      candidate_snapshot_fingerprint: qboCandidateSnapshotFingerprint(actual),
+      candidate_details_changed_at: new Date().toISOString(),
+    };
+    const refreshUpdate = await db.from("bank_qbo_match_items").update({
+      qbo_sync_token: current.sync_token || null,
+      source_snapshot_at: current.source_snapshot_at || null,
+      amount_allocated_minor: current.amount_minor ?? item.amount_allocated_minor,
+      meta: refreshedMeta,
+    }).eq("business_id", businessId).eq("id", item.id);
+    if (refreshUpdate?.error) throw refreshUpdate.error;
+    console.warn("[incoming-deposit-match][candidate-changed]", {
+      business_id: businessId,
+      bank_qbo_match_id: matchId,
+      qbo_entity_type: item.qbo_entity_type,
+      expected_fingerprint: qboCandidateSnapshotFingerprint(expected),
+      actual_fingerprint: qboCandidateSnapshotFingerprint(actual),
+      changed_fields: Object.keys(expected).filter((key) => stableStringify(expected[key]) !== stableStringify(actual[key])),
+    });
+    throw new IncomingDepositMatchError("qbo_match_details_changed", 409, {
+      reason: "meaningful_qbo_candidate_fields_changed",
+      refreshed_candidate: actual,
+    });
   }
-  if (item.source_snapshot_at && current.source_snapshot_at && String(item.source_snapshot_at) !== String(current.source_snapshot_at)) {
-    throw new IncomingDepositMatchError("qbo_match_candidate_snapshot_stale", 409);
+  const snapshotChanged = qboCandidateSnapshotFingerprint(expected) !== qboCandidateSnapshotFingerprint(actual);
+  if (snapshotChanged || String(item.source_snapshot_at || "") !== String(current.source_snapshot_at || "")) {
+    const refreshedMeta = {
+      ...(item.meta || {}),
+      candidate_snapshot: actual,
+      candidate_snapshot_fingerprint: qboCandidateSnapshotFingerprint(actual),
+      candidate_snapshot_refreshed_once: true,
+    };
+    const update = await db.from("bank_qbo_match_items").update({
+      qbo_sync_token: current.sync_token || null,
+      source_snapshot_at: current.source_snapshot_at || null,
+      meta: refreshedMeta,
+    }).eq("business_id", businessId).eq("id", item.id);
+    if (update?.error) throw update.error;
+    item.qbo_sync_token = current.sync_token || null;
+    item.source_snapshot_at = current.source_snapshot_at || null;
+    item.meta = refreshedMeta;
   }
-  return { item, current };
+  return { item, current, snapshot_refreshed: snapshotChanged };
 }
 
 export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, businessId, bankTransactionId, matchId, actor = null, actorRole = "user", idempotencyKey = null, expectedBankUpdatedAt = null, selectedQboEntityId = null, selectedQboEntityType = null } = {}) {

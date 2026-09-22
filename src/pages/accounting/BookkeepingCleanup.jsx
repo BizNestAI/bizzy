@@ -1947,6 +1947,9 @@ function BookkeepingCleanup() {
       const countDelta = result?.count_delta || result?.result?.count_delta || null;
       const resultStatus = result?.status || result?.result?.status || null;
       if (patch?.status === "matched_existing_qbo") {
+        const matchedTransaction = transactions.find((transaction) => String(transaction.id) === key) || {};
+        const matchedAmount = Math.abs(Number(matchedTransaction.signed_amount ?? matchedTransaction.signedAmount ?? matchedTransaction.amount ?? 0));
+        const formattedMatchedAmount = matchedAmount.toLocaleString(undefined, { style: "currency", currency: matchedTransaction.currency || "USD" });
         if (countDelta) {
           setTabCounts((prev) => ({
             ...prev,
@@ -1960,8 +1963,20 @@ function BookkeepingCleanup() {
         window.dispatchEvent(new CustomEvent("bizzy:toast", {
           detail: {
             severity: "success",
-            title: "Matched to existing QuickBooks",
-            body: "View in Matched",
+            title: "Match confirmed",
+            description: `${formattedMatchedAmount} fee linked to an existing QuickBooks expense`,
+            transactionId: id,
+            accountId: matchedTransaction.plaid_account_id || matchedTransaction.plaidAccountId || matchedTransaction.accountId || matchedTransaction.account_id || accountFilter || null,
+            operationId: `incoming-qbo-match:${id}:${patch.reconciled_at || patch.updated_at || "confirmed"}`,
+            dedupeKey: `incoming-qbo-match:${id}:${patch.reconciled_at || patch.updated_at || "confirmed"}`,
+            action: {
+              label: "View matched",
+              // Replaces the legacy non-interactive “View in Matched” toast copy.
+              onClick: () => {
+                setPage(1);
+                setActiveTab("matched");
+              },
+            },
           },
         }));
         setIncomingDepositMatchActionState((prev) => ({
@@ -2002,9 +2017,13 @@ function BookkeepingCleanup() {
         primary_match_item_missing: "Bizzi found the QuickBooks transaction, but the match details need to be refreshed before you can confirm it.",
         invoice_only_match_not_confirmable: "This deposit needs payment or bank-deposit evidence before it can be matched.",
         match_check_unavailable: "QuickBooks match checking is temporarily unavailable. Try again shortly.",
+        qbo_match_details_changed: "QuickBooks returned updated transaction details. Review them before confirming.",
+        qbo_entity_already_matched: "This QuickBooks transaction has already been matched to another bank transaction.",
+        qbo_match_candidate_missing: "The previous QuickBooks match is no longer available.",
+        qbo_match_candidate_invalid_status: "The previous QuickBooks match was voided or is no longer available.",
       };
       const message = customerSafeErrors[code] || e?.body?.message || e?.message || "Could not update this QuickBooks match.";
-      setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { status: "error", loading: false, error: message, reason: code } }));
+      setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { status: "error", loading: false, error: message, reason: code, refreshedCandidate: e?.body?.details?.refreshed_candidate || null } }));
     } finally {
       incomingDepositActionInFlightRef.current.delete(key);
     }

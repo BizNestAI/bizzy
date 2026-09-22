@@ -724,12 +724,19 @@ export function IncomingDepositMatchPanel({
   React.useEffect(() => setSelectedCandidateKey(""), [state?.matchId]);
   if (!state?.active) return null;
   const primary = state.primary || {};
+  const displayPrimary = action.refreshedCandidate ? { ...primary, ...action.refreshedCandidate } : primary;
   const isProcessorFee = state.isProcessorFee || primary.match_type === "qbo_processing_fee_expense";
   const processorState = state.processorMatchState;
   const transitionSuccess = action.status === "success";
   const transitionMatching = action.status === "matching" || action.loading === true;
   const heading = state.confirmed || transitionSuccess
     ? "Matched to existing QuickBooks"
+    : action.reason === "qbo_match_details_changed"
+      ? "Match details changed"
+    : action.reason === "qbo_entity_already_matched"
+      ? "Already matched"
+    : ["qbo_match_candidate_missing", "qbo_match_candidate_invalid_status"].includes(action.reason)
+      ? "Match no longer available"
     : action.error
       ? "Match needs to be refreshed"
       : processorState === "posted_duplicate_review_required"
@@ -771,6 +778,7 @@ export function IncomingDepositMatchPanel({
   const candidateCount = state.independentCandidateCount ?? independentCandidateCount(state.candidates || []);
   const selectedCandidate = selectableCandidates.find((candidate) => `${candidate.qbo_entity_type}:${candidate.qbo_entity_id}` === selectedCandidateKey) || null;
   const canConfirmSelected = state.confirmable || (state.ambiguous && Boolean(selectedCandidate));
+  const matchNoLongerConfirmable = ["qbo_entity_already_matched", "qbo_match_candidate_missing", "qbo_match_candidate_invalid_status"].includes(action.reason);
   const primaryActionLabel = isProcessorFee ? "Confirm match" : primary.qbo_entity_type === "Deposit" ? "Match existing QuickBooks deposit" : "Match existing payment";
   const refreshable = ["primary_match_item_missing", "fresh_match_check_required", "stale_match_refresh_required"].includes(String(state.confirmabilityReason || action.reason || ""));
   const bankEvidence = primary.bank_account_match === "verified_same_account" ? "Verified bank account" : "Bank account could not be fully verified";
@@ -801,13 +809,13 @@ export function IncomingDepositMatchPanel({
         </div>
         {transitionSuccess ? <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tierTone}`}>MATCHED</span> : state.tier ? <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${tierTone}`}>{state.tier.replace("_", " ").toUpperCase()}</span> : null}
       </div>
-      {primary.qbo_entity_type ? (
+      {displayPrimary.qbo_entity_type ? (
         <div className="mt-3 grid gap-2 text-[11px] text-slate-100 sm:grid-cols-3">
           <div><span className="text-slate-400">Bank amount</span><br />{formatMinorMoney(Math.round(Math.abs(Number(txn.amount || 0)) * 100), primary.currency || "USD") || "Not available"}</div>
           <div><span className="text-slate-400">Bank date</span><br />{formatNumericCalendarDate(txn.date, { fallback: "Not available" })}</div>
           <div><span className="text-slate-400">Bank description</span><br />{txn.description || txn.payee || txn.vendor || "Not available"}</div>
-          <div><span className="text-slate-400">QBO {primary.qbo_entity_type}</span><br />{formatMinorMoney(primary.amount_minor, primary.currency || "USD") || "Not available"}</div>
-          {primary.txn_date ? <div><span className="text-slate-400">QBO date</span><br />{formatNumericCalendarDate(primary.txn_date)}</div> : null}
+          <div><span className="text-slate-400">QBO {displayPrimary.qbo_entity_type}</span><br />{formatMinorMoney(displayPrimary.amount_minor, displayPrimary.currency || "USD") || "Not available"}</div>
+          {displayPrimary.txn_date ? <div><span className="text-slate-400">QBO date</span><br />{formatNumericCalendarDate(displayPrimary.txn_date)}</div> : null}
           {primary.account_names?.length ? <div><span className="text-slate-400">QBO account</span><br />{primary.account_names.join(", ")}</div> : null}
           {primary.description ? <div><span className="text-slate-400">QBO description</span><br />{primary.description}</div> : null}
           {invoiceText ? <div><span className="text-slate-400">Invoice</span><br />{invoiceText}</div> : null}
@@ -869,10 +877,10 @@ export function IncomingDepositMatchPanel({
           <span className="rounded-md border border-rose-300/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-semibold text-rose-100">Posting receipt protected</span>
         ) : (
           <>
-            {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && canConfirmSelected ? (
+            {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && canConfirmSelected && !matchNoLongerConfirmable ? (
               <button type="button" disabled={readOnly || transitionMatching} onClick={() => onConfirm?.(txn.id, state.matchId, txn, { qboEntityId: selectedCandidate?.qbo_entity_id || null, qboEntityType: selectedCandidate?.qbo_entity_type || null })} className="inline-flex min-w-[190px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
                 {transitionMatching ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
-                {transitionMatching ? "Matching to QuickBooks…" : primaryActionLabel}
+                {transitionMatching ? "Confirming…" : action.reason === "qbo_match_details_changed" ? "Confirm updated match" : primaryActionLabel}
               </button>
             ) : state.matchId && primary.qbo_entity_type && !state.invoiceOnly ? (
               <button type="button" disabled={readOnly || transitionMatching} onClick={() => onInspect?.(txn.id, null, txn)} className="inline-flex min-w-[116px] items-center justify-center gap-1.5 rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">

@@ -9,10 +9,12 @@ process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 
 const {
   confirmIncomingDepositQboMatch,
+  canonicalQboCandidateSnapshot,
   discoverExistingIncomingDepositMatches,
   discoverIncomingDepositQboMatch,
   evaluateIncomingDepositPostingGuard,
   renormalizeIncomingDepositQboCacheEvidence,
+  qboCandidateSnapshotFingerprint,
   rejectIncomingDepositQboMatch,
   undoIncomingDepositQboMatch,
 } = await import("../src/services/bookkeeping/incomingDepositMatchService.js");
@@ -300,7 +302,7 @@ test("inferred account mappings cannot produce Tier 1 and remain blocked with vi
   assert.equal(result.candidates[0].qbo_entity_id, "dep-300");
 });
 
-test("confirmation is local-only, idempotent, and rejects stale QBO candidate versions", async () => {
+test("confirmation is local-only, idempotent, and refreshes unchanged QBO candidate versions", async () => {
   const db = fakeDb(baseMatchTables());
   const discovered = await discoverIncomingDepositQboMatch({
     db,
@@ -358,9 +360,68 @@ test("confirmation is local-only, idempotent, and rejects stale QBO candidate ve
     nowMs: Date.parse("2026-09-11T16:01:00Z"),
   });
   staleDb.tables.job_revenue_evidence[0].sync_token = "1";
+  staleDb.tables.job_revenue_evidence[0].source_snapshot_at = "2026-09-11T17:00:00Z";
+  const refreshedConfirmation = await confirmIncomingDepositQboMatch({ db: staleDb, businessId: "b1", bankTransactionId: "txn-300", matchId: staleDiscovered.match.id });
+  assert.equal(refreshedConfirmation.status, "confirmed");
+  assert.equal(staleDb.tables.bank_qbo_match_items[0].qbo_sync_token, "1");
+});
+
+test("processor fee cache timestamps and property order do not invalidate meaningful candidate identity", async () => {
+  const db = fakeDb(baseProcessorFeeTables({ amount: 5.60, bankDate: "2026-08-20", qboDate: "2026-08-19", id: "purchase-560" }));
+  const discovered = await discoverIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  db.tables.qbo_expense_transactions[0].source_snapshot_at = "2026-09-21T20:54:00Z";
+  const confirmed = await confirmIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", matchId: discovered.match.id });
+  assert.equal(confirmed.status, "confirmed");
+  assert.equal(confirmed.transaction_patch.meta.qbo_write_performed, false);
+
+  const left = canonicalQboCandidateSnapshot({ qbo_entity_type: "Purchase", qbo_entity_id: "1", account_refs: [{ value: "b" }, { value: "a" }], amount_minor: 560 });
+  const right = canonicalQboCandidateSnapshot({ amount_minor: 560, account_refs: [{ value: "a" }, { value: "b" }], qbo_entity_id: "1", qbo_entity_type: "Purchase" });
+  assert.equal(qboCandidateSnapshotFingerprint(left), qboCandidateSnapshotFingerprint(right));
+});
+
+test("meaningful processor fee amount changes require renewed confirmation", async () => {
+  const db = fakeDb(baseProcessorFeeTables({ amount: 5.60, bankDate: "2026-08-20", qboDate: "2026-08-19", id: "purchase-changed" }));
+  const discovered = await discoverIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  db.tables.qbo_expense_transactions[0].amount_minor = 600;
   await assert.rejects(
-    () => confirmIncomingDepositQboMatch({ db: staleDb, businessId: "b1", bankTransactionId: "txn-300", matchId: staleDiscovered.match.id }),
-    /qbo_match_candidate_stale/
+    () => confirmIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", matchId: discovered.match.id }),
+    /qbo_match_details_changed/
+  );
+  assert.equal(db.tables.bank_qbo_matches[0].status, "needs_confirmation");
+});
+
+test("processor fee date or account changes require review and voided candidates cannot confirm", async () => {
+  const mutations = [
+    (row) => { row.txn_date = "2026-08-18"; },
+    (row) => { row.account_refs = [{ value: "different-expense", name: "Other Expense" }]; },
+  ];
+  for (const [index, mutate] of mutations.entries()) {
+    const db = fakeDb(baseProcessorFeeTables({ amount: 5.60, bankDate: "2026-08-20", qboDate: "2026-08-19", id: `purchase-change-${index}` }));
+    const discovered = await discoverIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+    mutate(db.tables.qbo_expense_transactions[0]);
+    await assert.rejects(
+      () => confirmIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", matchId: discovered.match.id }),
+      /qbo_match_details_changed/
+    );
+  }
+
+  const voidedDb = fakeDb(baseProcessorFeeTables({ amount: 5.60, bankDate: "2026-08-20", qboDate: "2026-08-19", id: "purchase-voided" }));
+  const voidedDiscovery = await discoverIncomingDepositQboMatch({ db: voidedDb, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  voidedDb.tables.qbo_expense_transactions[0].status = "voided";
+  await assert.rejects(
+    () => confirmIncomingDepositQboMatch({ db: voidedDb, businessId: "b1", bankTransactionId: "txn-fee", matchId: voidedDiscovery.match.id }),
+    /qbo_match_candidate_invalid_status/
+  );
+});
+
+test("a QBO entity already consumed by another match returns the dedicated conflict", async () => {
+  const db = fakeDb(baseProcessorFeeTables({ amount: 5.60, bankDate: "2026-08-20", qboDate: "2026-08-19", id: "purchase-consumed" }));
+  const discovered = await discoverIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", persist: true, nowMs: Date.parse("2026-09-21T16:01:00Z") });
+  const primary = db.tables.bank_qbo_match_items.find((item) => item.match_id === discovered.match.id && item.evidence_role === "primary");
+  db.tables.bank_qbo_match_items.push({ ...primary, id: "other-active-item", match_id: "other-match", active_confirmed: true });
+  await assert.rejects(
+    () => confirmIncomingDepositQboMatch({ db, businessId: "b1", bankTransactionId: "txn-fee", matchId: discovered.match.id }),
+    /qbo_entity_already_matched/
   );
 });
 
@@ -612,7 +673,7 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(feed, /Match existing QuickBooks deposit/);
   assert.match(feed, /Match confirmed/);
   assert.match(feed, /View in Matched/);
-  assert.match(feed, /Matching to QuickBooks…/);
+  assert.match(feed, /Confirming…/);
   assert.match(feed, /Matching this bank deposit to the existing QuickBooks deposit/);
   assert.match(feed, /aria-busy/);
   assert.match(feed, /state\.confirmable/);
