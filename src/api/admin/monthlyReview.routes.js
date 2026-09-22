@@ -781,6 +781,8 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/cre
     await assertRunTransactionInSelectedMonth({ business_id: businessId, review_month: month }, transactionId);
     const targetQboAccountId = req.body?.target_qbo_account_id || req.body?.targetQboAccountId || null;
     const targetTransactionId = req.body?.target_transaction_id || req.body?.targetTransactionId || null;
+    const expectedCandidateVersion = req.body?.expected_candidate_version || req.body?.expectedCandidateVersion || null;
+    const idempotencyKey = req.body?.idempotency_key || req.get("Idempotency-Key") || null;
     if (!targetQboAccountId) return res.status(400).json({ ok: false, error: "missing_target_qbo_account_id" });
 
     const result = await confirmCreditCardPaymentMatchForTransaction({
@@ -788,6 +790,9 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/cre
       transactionId,
       targetQboAccountId,
       targetTransactionId,
+      expectedCandidateVersion,
+      idempotencyKey,
+      correlationId: req.get("x-correlation-id") || req.get("x-request-id") || crypto.randomUUID(),
       actor: req.internalStaff?.user_id || "admin",
       matchMethod: "admin_monthly_review",
     });
@@ -809,11 +814,28 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/cre
       qbo_transaction_writes: false,
     });
   } catch (e) {
-    console.error("[monthly-review] credit-card payment match failed", e?.message || e);
+    const correlationId = String(req.get?.("x-correlation-id") || req.get?.("x-request-id") || crypto.randomUUID());
+    console.error("[monthly-review] credit-card payment match failed", {
+      correlation_id: correlationId,
+      business_id: req.params.businessId,
+      transaction_ids: e?.transactionIds || [req.params.transactionId, req.body?.target_transaction_id || req.body?.targetTransactionId].filter(Boolean),
+      attempted_transition: e?.attemptedTransition || null,
+      postgres_code: e?.pgCode || null,
+      constraint: e?.constraint || null,
+      error_code: e?.code || null,
+    });
     if (String(e?.message || "").includes("cc_payment_pair_")) {
-      return res.status(e?.status || 409).json({ ok: false, error: String(e.message), message: String(e.message) });
+      return res.status(e?.status || 409).json({ ok: false, error: e?.code || String(e.message), message: String(e.message), correlation_id: correlationId });
     }
-    sendMonthlyReviewError(res, "monthly_review_cc_payment_match_failed", "Could not match credit-card payment.", e);
+    if (e?.code === "cc_payment_match_schema_update_required") {
+      return res.status(503).json({ ok: false, error: e.code, message: e.message, correlation_id: correlationId });
+    }
+    return res.status(e?.status || 500).json({
+      ok: false,
+      error: "monthly_review_cc_payment_match_failed",
+      message: "Could not match credit-card payment.",
+      correlation_id: correlationId,
+    });
   }
 });
 

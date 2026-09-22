@@ -1,4 +1,5 @@
 import { Router } from "express";
+import crypto from "crypto";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
@@ -243,7 +244,7 @@ router.post("/credit-card-payments/:transactionId/discover-match", requireAuth, 
     return res.json(result);
   } catch (err) {
     const code = String(err?.message || "cc_payment_discover_match_failed");
-    if (code.startsWith("cc_payment_") || code === "missing_cc_payment_match_target" || code === "pending_transaction_not_matchable") {
+    if (err?.code === "cc_payment_match_schema_update_required" || code.startsWith("cc_payment_") || code === "missing_cc_payment_match_target" || code === "pending_transaction_not_matchable") {
       return res.status(err?.status || 400).json({ ok: false, error: code, message: code });
     }
     console.error("[bookkeeping][cc-payment-discover-match] failed", err?.message || err);
@@ -256,28 +257,43 @@ router.post("/credit-card-payments/:transactionId/discover-match", requireAuth, 
 });
 
 router.post("/credit-card-payments/:transactionId/confirm-match", requireAuth, async (req, res) => {
+  const routeStartedAt = Date.now();
+  const correlationId = String(req.get?.("x-correlation-id") || req.get?.("x-request-id") || crypto.randomUUID());
   const businessId = ensureBusinessId(req, res);
+  const authAndBusinessResolutionMs = Date.now() - routeStartedAt;
+  res.once("finish", () => {
+    console.info("[bookkeeping][cc-payment-confirm-match] response-finished", {
+      correlation_id: correlationId,
+      server_response_serialization_and_flush_ms: Math.max(0, Date.now() - Number(res.locals?.ccMatchSerializationStartedAt || Date.now())),
+      total_server_request_ms: Date.now() - routeStartedAt,
+    });
+  });
   const transactionId = req.params?.transactionId;
   const targetQboAccountId = req.body?.target_qbo_account_id || req.body?.targetQboAccountId || null;
   const targetTransactionId = req.body?.target_transaction_id || req.body?.targetTransactionId || null;
+  const expectedCandidateVersion = req.body?.expected_candidate_version || req.body?.expectedCandidateVersion || null;
+  const idempotencyKey = req.body?.idempotency_key || req.get?.("Idempotency-Key") || null;
   if (!businessId) return;
   if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
   if (!targetQboAccountId) return res.status(400).json({ ok: false, error: "missing_target_qbo_account_id" });
 
   try {
-    const startedAt = Date.now();
     const result = await confirmCreditCardPaymentMatchForTransaction({
       businessId,
       transactionId,
       targetQboAccountId,
       targetTransactionId,
+      expectedCandidateVersion,
+      idempotencyKey,
+      correlationId,
       actor: req.user?.id || "user",
       matchMethod: "customer_books_review",
     });
     result.timings_ms = {
       ...(result.timings_ms || {}),
-      response_serialization_ms: 0,
-      total_route_ms: Date.now() - startedAt,
+      authentication_and_business_resolution_ms: authAndBusinessResolutionMs,
+      response_preparation_ms: Math.max(0, Date.now() - routeStartedAt - Number(result.timings_ms?.database_rpc_round_trip_and_commit_ms || 0)),
+      total_route_pre_serialization_ms: Date.now() - routeStartedAt,
     };
     if (result?.matched !== true) {
       const status = result?.code === "cc_payment_pair_ambiguous" ? 409 : 200;
@@ -289,21 +305,42 @@ router.post("/credit-card-payments/:transactionId/confirm-match", requireAuth, a
         candidates: result?.candidates || [],
       });
     }
-    await refreshOperatorRequestSummaryBestEffort({
+    void refreshOperatorRequestSummaryBestEffort({
       businessId,
       reason: "cc_payment_match_confirmed",
     });
+    res.set("x-correlation-id", correlationId);
+    console.info("[bookkeeping][cc-payment-confirm-match] completed", {
+      correlation_id: correlationId,
+      transaction_ids: [transactionId, targetTransactionId].filter(Boolean),
+      timings_ms: result.timings_ms,
+    });
+    res.locals.ccMatchSerializationStartedAt = Date.now();
     return res.json(result);
   } catch (err) {
     const code = String(err?.message || "cc_payment_confirm_match_failed");
-    if (code.startsWith("cc_payment_") || code === "missing_cc_payment_match_target" || code === "pending_transaction_not_matchable") {
-      return res.status(err?.status || 400).json({ ok: false, error: code, message: code });
+    console.error("[bookkeeping][cc-payment-confirm-match] failed", {
+      correlation_id: correlationId,
+      business_id: businessId,
+      transaction_ids: err?.transactionIds || [transactionId, targetTransactionId].filter(Boolean),
+      attempted_transition: err?.attemptedTransition || null,
+      postgres_code: err?.pgCode || null,
+      constraint: err?.constraint || null,
+      error_code: err?.code || null,
+    });
+    if (err?.code === "cc_payment_match_schema_update_required" || code.startsWith("cc_payment_") || code === "missing_cc_payment_match_target" || code === "pending_transaction_not_matchable") {
+      return res.status(err?.status || 400).json({
+        ok: false,
+        error: err?.code || code,
+        message: err?.code === "cc_payment_match_schema_update_required" ? err.message : code,
+        correlation_id: correlationId,
+      });
     }
-    console.error("[bookkeeping][cc-payment-confirm-match] failed", err?.message || err);
     return res.status(500).json({
       ok: false,
       error: "cc_payment_confirm_match_failed",
-      message: err?.message || "failed",
+      message: "This credit-card payment match could not be saved. Please try again.",
+      correlation_id: correlationId,
     });
   }
 });

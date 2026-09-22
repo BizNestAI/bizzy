@@ -72,7 +72,7 @@ begin
   if v_checking_cat.transaction_id is null or v_card_cat.transaction_id is null then
     raise exception 'cc_payment_pair_categorization_missing';
   end if;
-  if v_checking_cat.status not in ('needs_review', 'matched') or v_card_cat.status not in ('needs_review', 'matched') then
+  if v_checking_cat.status not in ('needs_review', 'handled', 'matched') or v_card_cat.status not in ('needs_review', 'handled', 'matched') then
     raise exception 'cc_payment_pair_transaction_ineligible';
   end if;
   if v_checking_cat.qbo_txn_id is not null or v_card_cat.qbo_txn_id is not null
@@ -87,7 +87,7 @@ begin
   end if;
 
   if v_pair.status in ('confirmed', 'posting', 'failed', 'posted')
-     and v_checking_cat.status = 'matched' and v_card_cat.status = 'matched' then
+     and v_checking_cat.status = 'handled' and v_card_cat.status = 'handled' then
     return jsonb_build_object('ok', true, 'idempotent', true, 'pair', to_jsonb(v_pair),
       'transaction_ids', jsonb_build_array(v_pair.checking_transaction_id, v_pair.credit_card_transaction_id));
   end if;
@@ -103,7 +103,7 @@ begin
     (business_id, transaction_id, status, post_after, post_error, qbo_txn_id, qbo_txn_type, posted_at,
      final_qbo_account_id, final_qbo_account_name, meta, decided_by, decided_at, updated_at)
   values
-    (p_business_id, v_pair.checking_transaction_id, 'matched', null, null, null, null, null, null, null,
+    (p_business_id, v_pair.checking_transaction_id, 'handled', null, null, null, null, null, null, null,
      coalesce(v_checking_cat.meta, '{}'::jsonb) || jsonb_build_object(
        'taxonomy_type','cc_payment','cc_payment_pair_id',v_pair.id,'cc_payment_pair_role','checking',
        'cc_payment_pair_txn_id',v_pair.credit_card_transaction_id,'cc_payment_pair_status','confirmed',
@@ -116,7 +116,7 @@ begin
        'cc_payment_pair_confirmed_by',p_actor,'cc_payment_pair_confirmation_source',p_match_method,
        'match_type','credit_card_payment_pair','safe_to_auto_handle',false,'safe_to_auto_post',false),
      p_actor, v_now, v_now),
-    (p_business_id, v_pair.credit_card_transaction_id, 'matched', null, null, null, null, null, null, null,
+    (p_business_id, v_pair.credit_card_transaction_id, 'handled', null, null, null, null, null, null, null,
      coalesce(v_card_cat.meta, '{}'::jsonb) || jsonb_build_object(
        'taxonomy_type','cc_payment','cc_payment_pair_id',v_pair.id,'cc_payment_pair_role','credit_card',
        'cc_payment_pair_txn_id',v_pair.checking_transaction_id,'cc_payment_pair_status','confirmed',

@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
+  assertInteractivePostingCommandSchema,
   claimInteractivePostingCommand,
   claimInteractivePostingCommands,
   createInteractivePostingCommand,
@@ -15,6 +17,15 @@ import {
 
 const BUSINESS_ID = "cffc2183-e77c-4148-a206-d5192e090925";
 const TXN_ID = "144742f9-77d7-4ca5-82b6-0f19930d079a";
+
+test("interactive command migration is idempotent and installs table, claims, indexes, and grants", () => {
+  const sql = readFileSync(new URL("../supabase/migrations/20261011_interactive_posting_commands.sql", import.meta.url), "utf8");
+  assert.match(sql, /create table if not exists public\.bookkeeping_interactive_posting_commands/);
+  assert.match(sql, /bookkeeping_interactive_posting_commands_idempotency_idx/);
+  assert.match(sql, /create or replace function public\.claim_bookkeeping_interactive_posting_command/);
+  assert.match(sql, /create or replace function public\.claim_bookkeeping_interactive_posting_commands/);
+  assert.match(sql, /grant execute[\s\S]*service_role/);
+});
 
 function makeDb() {
   return {
@@ -58,6 +69,14 @@ test("interactive posting command is durable and idempotent before worker proces
   assert.equal(db.store.bookkeeping_interactive_posting_commands.length, 1);
   assert.equal(db.store.bookkeeping_interactive_posting_commands[0].state, "accepted");
   assert.deepEqual(db.store.bookkeeping_interactive_posting_commands[0].transaction_ids, [TXN_ID]);
+});
+
+test("approval fails closed before intent persistence when command migration is missing", async () => {
+  const db = { store: { qbo_accounts_cache: [] } };
+  await assert.rejects(
+    assertInteractivePostingCommandSchema({ db }),
+    (err) => err?.code === "interactive_posting_schema_required" && err?.status === 503
+  );
 });
 
 test("one worker owns approval, exact posting, receipt, and terminal state", async () => {

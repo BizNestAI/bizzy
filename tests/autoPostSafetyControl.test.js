@@ -49,7 +49,7 @@ test("off permits handled state but does not create a posting grace timestamp", 
   assert.match(clarification, /customer_context_only/);
   assert.match(clarification, /accounting_status:\s*"needs_review"/);
   assert.doesNotMatch(clarification, /status = baseMeta\.safe_to_auto_post === true \? "auto_approved" : "approved"/);
-  assert.match(approvals, /status:\s*"approved"/);
+  assert.match(approvals, /status:\s*isConfirmedCcPaymentPair \? "handled" : item\?\.status/);
   assert.match(suggest, /status:\s*"auto_approved"/);
 });
 

@@ -98,7 +98,9 @@ function isConfirmedPairStatus(status = "") {
 function categorizationStatusForPair(pair = {}) {
   const status = String(pair?.status || "").toLowerCase();
   if (status === "posted") return "posted";
-  if (isConfirmedPairStatus(status)) return "matched";
+  // The durable pair is the authority for Matched-feed membership. Keep the
+  // legacy categorization lifecycle on its schema-compatible terminal value.
+  if (isConfirmedPairStatus(status)) return "handled";
   return "needs_review";
 }
 
@@ -225,6 +227,7 @@ function compactCcPaymentCandidateForClient({
     is_archived: candidate.is_archived === true,
     archived_at: candidate.archived_at || null,
     archived_reason: candidate.archived_reason || null,
+    row_version: candidate.updated_at || null,
     canonical_lineage_key: canonicalPlaidLineageKey(candidate),
     review_status: cat?.status || null,
     match_pair_id: activePair?.id || cat?.meta?.cc_payment_pair_id || null,
@@ -714,7 +717,7 @@ export async function createSafeCreditCardPaymentPairForRow({
 
   let candidateQuery = db
     .from("bank_transactions")
-    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required")
+    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required,updated_at")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .neq("plaid_account_id", row.plaid_account_id)
@@ -758,6 +761,7 @@ export async function createSafeCreditCardPaymentPairForRow({
         cat?.final_qbo_account_id ||
         status === "approved" ||
         status === "auto_approved" ||
+        status === "handled" ||
         status === "matched" ||
         status === "matched_existing_qbo" ||
         status === "posted"
@@ -932,7 +936,7 @@ export async function discoverCreditCardPaymentMatchForTransaction({
   const sourceStartedAt = Date.now();
   const { data: row, error } = await db
     .from("bank_transactions")
-    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required")
+    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required,updated_at")
     .eq("business_id", businessId)
     .eq("id", transactionId)
     .eq("is_archived", false)
@@ -1004,6 +1008,9 @@ export async function confirmCreditCardPaymentMatchForTransaction({
   transactionId,
   targetQboAccountId,
   targetTransactionId = null,
+  expectedCandidateVersion = null,
+  idempotencyKey = null,
+  correlationId = null,
   actor = "user",
   matchMethod = "books_review",
   validateQboAccountType = validateBusinessQboPaymentAccountType,
@@ -1013,9 +1020,46 @@ export async function confirmCreditCardPaymentMatchForTransaction({
     err.status = 400;
     throw err;
   }
+  if (targetTransactionId && typeof db.rpc === "function") {
+    const rpcStartedAt = Date.now();
+    const stableIdempotencyKey = idempotencyKey || stablePairIdempotencyKey({
+      businessId,
+      checkingTransactionId: transactionId,
+      creditCardTransactionId: targetTransactionId,
+      amount: expectedCandidateVersion || "selected",
+    });
+    const { data, error } = await db.rpc("confirm_selected_credit_card_payment_pair_atomic", {
+      p_business_id: businessId,
+      p_initiating_transaction_id: transactionId,
+      p_opposite_transaction_id: targetTransactionId,
+      p_target_qbo_account_id: targetQboAccountId,
+      p_expected_opposite_updated_at: expectedCandidateVersion || null,
+      p_idempotency_key: stableIdempotencyKey,
+      p_actor: actor || "user",
+      p_match_method: matchMethod || "books_review",
+      p_correlation_id: correlationId || null,
+    });
+    if (error) {
+      const err = new Error(error.message || "cc_payment_pair_confirmation_failed");
+      err.code = error.code || "cc_payment_pair_confirmation_failed";
+      err.pgCode = error.code || null;
+      err.status = String(error.message || "").includes("stale") || String(error.message || "").includes("already_") ? 409 : 500;
+      err.transactionIds = [transactionId, targetTransactionId];
+      throw err;
+    }
+    return {
+      ...(data || {}),
+      ok: true,
+      matched: true,
+      timings_ms: {
+        ...(data?.timings_ms || {}),
+        database_rpc_round_trip_and_commit_ms: Date.now() - rpcStartedAt,
+      },
+    };
+  }
   const { data: row, error } = await db
     .from("bank_transactions")
-    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required")
+    .select("id,business_id,plaid_account_id,plaid_transaction_id,pending_transaction_id,amount,signed_amount,direction,date,authorized_date,name,merchant_name,counterparty_name,is_archived,archived_at,archived_reason,pending,accounting_review_required,updated_at")
     .eq("business_id", businessId)
     .eq("id", transactionId)
     .eq("is_archived", false)
@@ -1140,9 +1184,23 @@ export async function confirmCreditCardPaymentPairForTransaction({ db = defaultS
       p_match_method: matchMethod || "books_review",
     });
     if (error) {
-      const err = new Error(error.message || "cc_payment_pair_confirmation_failed");
-      err.code = error.code || null;
-      err.status = String(error.message || "").includes("already_") || String(error.message || "").includes("mismatch") ? 409 : 500;
+      const rawMessage = String(error.message || "");
+      const constraint = error.constraint || rawMessage.match(/constraint\s+["']?([^"'\s]+)["']?/i)?.[1] || null;
+      const schemaMismatch = error.code === "23514" && constraint === "transaction_categorizations_status_check";
+      const err = new Error(schemaMismatch
+        ? "This match could not be saved because the matching database update has not been applied."
+        : rawMessage || "cc_payment_pair_confirmation_failed");
+      err.code = schemaMismatch ? "cc_payment_match_schema_update_required" : error.code || null;
+      err.pgCode = error.code || null;
+      err.constraint = constraint;
+      err.attemptedTransition = {
+        pair_status: "confirmed",
+        categorization_status: "handled",
+      };
+      err.transactionIds = [pair.checking_transaction_id, pair.credit_card_transaction_id].filter(Boolean);
+      err.status = schemaMismatch
+        ? 503
+        : rawMessage.includes("already_") || rawMessage.includes("mismatch") ? 409 : 500;
       throw err;
     }
     return data?.pair || data;

@@ -362,12 +362,20 @@ export async function markCreditCardPayment(businessId, txnId) {
   return res;
 }
 
-export async function confirmCreditCardPaymentMatch(businessId, txnId, targetQboAccountId, targetTransactionId = null) {
+export async function confirmCreditCardPaymentMatch(businessId, txnId, targetQboAccountId, targetTransactionId = null, options = {}) {
   const payload = { business_id: businessId, target_qbo_account_id: targetQboAccountId };
   if (targetTransactionId) payload.target_transaction_id = targetTransactionId;
+  if (options.expectedCandidateVersion) payload.expected_candidate_version = options.expectedCandidateVersion;
+  if (options.idempotencyKey) payload.idempotency_key = options.idempotencyKey;
+  const correlationId = options.correlationId || globalThis.crypto?.randomUUID?.() || `cc-match-${Date.now()}`;
+  const requestDispatchedAt = performance.now();
   const res = await safeFetch(apiUrl(`/api/bookkeeping/credit-card-payments/${encodeURIComponent(txnId)}/confirm-match`), {
     method: "POST",
-    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    headers: withBizHeaders(businessId, {
+      "Content-Type": "application/json",
+      "Idempotency-Key": options.idempotencyKey || correlationId,
+      "x-correlation-id": correlationId,
+    }),
     body: JSON.stringify(payload),
   });
   if (res && res.ok === false) {
@@ -376,7 +384,14 @@ export async function confirmCreditCardPaymentMatch(businessId, txnId, targetQbo
     err.body = res;
     throw err;
   }
-  return res;
+  return {
+    ...res,
+    correlation_id: res?.correlation_id || correlationId,
+    timings_ms: {
+      ...(res?.timings_ms || {}),
+      client_request_to_response_ms: performance.now() - requestDispatchedAt,
+    },
+  };
 }
 
 export async function discoverCreditCardPaymentMatch(businessId, txnId, targetQboAccountId, options = {}) {

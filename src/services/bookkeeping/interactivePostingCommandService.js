@@ -250,6 +250,34 @@ export async function createInteractivePostingCommand({
   return { ok: true, reused: false, command: data, operation_id: operationId };
 }
 
+export async function assertInteractivePostingCommandSchema({ db = null } = {}) {
+  db ||= await getDefaultSupabase();
+  if (db?.store) {
+    if (!Array.isArray(db.store.bookkeeping_interactive_posting_commands)) {
+      const err = new Error("Required interactive posting command storage is unavailable.");
+      err.code = "interactive_posting_schema_required";
+      err.status = 503;
+      throw err;
+    }
+    return { ok: true };
+  }
+  const { error } = await db
+    .from("bookkeeping_interactive_posting_commands")
+    .select("operation_id")
+    .limit(1);
+  if (!error) return { ok: true };
+  const err = new Error("Required interactive posting command storage is unavailable.");
+  err.code = "interactive_posting_schema_required";
+  err.status = 503;
+  err.dbCode = error.code || null;
+  err.dbMessage = error.message || null;
+  err.dbDetails = error.details || null;
+  err.dbHint = error.hint || null;
+  err.table = "bookkeeping_interactive_posting_commands";
+  err.cause = error;
+  throw err;
+}
+
 export async function fetchInteractivePostingCommand({ db = null, operationId, businessId = null, maybe = false } = {}) {
   db ||= await getDefaultSupabase();
   if (!operationId) return null;

@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -9,6 +10,12 @@ async function confirmCreditCardPaymentMatchForTransaction(args) {
   servicePromise ||= import("../src/services/bookkeeping/creditCardPaymentPairService.js");
   const service = await servicePromise;
   return service.confirmCreditCardPaymentMatchForTransaction(args);
+}
+
+async function confirmCreditCardPaymentPairForTransaction(args) {
+  servicePromise ||= import("../src/services/bookkeeping/creditCardPaymentPairService.js");
+  const service = await servicePromise;
+  return service.confirmCreditCardPaymentPairForTransaction(args);
 }
 
 async function undoCreditCardPaymentPairForTransaction(args) {
@@ -199,8 +206,8 @@ test("confirms an Aug 5 checking payment to an Aug 4 credit-card payment", async
   assert.equal(result.pair.status, "confirmed");
   const checkingCat = data.transaction_categorizations.find((row) => row.transaction_id === "checking-aug5");
   const cardCat = data.transaction_categorizations.find((row) => row.transaction_id === "card-aug4");
-  assert.equal(checkingCat.status, "matched");
-  assert.equal(cardCat.status, "matched");
+  assert.equal(checkingCat.status, "handled");
+  assert.equal(cardCat.status, "handled");
   assert.equal(checkingCat.meta.cc_payment_pair_role, "checking");
   assert.equal(cardCat.meta.cc_payment_pair_role, "credit_card");
   assert.equal(checkingCat.final_qbo_account_id, null);
@@ -226,6 +233,83 @@ test("confirms the same pair when started from the credit-card side", async () =
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.pair.checking_transaction_id, "checking-aug5");
   assert.equal(result.pair.credit_card_transaction_id, "card-aug4");
+});
+
+test("selected confirmation uses one atomic RPC without rerunning broad discovery", async () => {
+  const calls = [];
+  const db = {
+    from() {
+      throw new Error("selected fast path must not issue table queries");
+    },
+    async rpc(name, args) {
+      calls.push({ name, args });
+      return {
+        data: {
+          ok: true,
+          matched: true,
+          pair: { id: "pair-fast", status: "confirmed" },
+          lifecycle_rows: [{ transaction_id: "checking-fast", status: "handled" }, { transaction_id: "card-fast", status: "handled" }],
+          timings_ms: { database_transaction_precommit_ms: 12 },
+        },
+        error: null,
+      };
+    },
+  };
+
+  const result = await confirmCreditCardPaymentMatchForTransaction({
+    db,
+    businessId: "biz-1",
+    transactionId: "checking-fast",
+    targetTransactionId: "card-fast",
+    targetQboAccountId: "qbo-blue",
+    expectedCandidateVersion: "2026-09-22T12:00:00.000Z",
+    idempotencyKey: "fast-idempotency",
+    correlationId: "fast-correlation",
+  });
+
+  assert.equal(result.matched, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, "confirm_selected_credit_card_payment_pair_atomic");
+  assert.equal(calls[0].args.p_opposite_transaction_id, "card-fast");
+  assert.equal(calls[0].args.p_expected_opposite_updated_at, "2026-09-22T12:00:00.000Z");
+  assert.equal(calls[0].args.p_idempotency_key, "fast-idempotency");
+  assert.equal(calls[0].args.p_correlation_id, "fast-correlation");
+  assert.ok(result.timings_ms.database_rpc_round_trip_and_commit_ms >= 0);
+});
+
+test("maps a production status constraint failure to a safe schema-compatibility error", async () => {
+  const { db, data, businessId } = makeDb({
+    credit_card_payment_pairs: [{
+      id: "pair-constraint",
+      business_id: "biz-1",
+      checking_transaction_id: "checking-aug5",
+      credit_card_transaction_id: "card-aug4",
+      status: "needs_review",
+    }],
+  });
+  db.rpc = async () => ({
+    data: null,
+    error: {
+      code: "23514",
+      message: 'new row for relation "transaction_categorizations" violates check constraint "transaction_categorizations_status_check"',
+    },
+  });
+
+  await assert.rejects(
+    confirmCreditCardPaymentPairForTransaction({ db, businessId, transactionId: "checking-aug5" }),
+    (error) => {
+      assert.equal(error.code, "cc_payment_match_schema_update_required");
+      assert.equal(error.status, 503);
+      assert.equal(error.pgCode, "23514");
+      assert.equal(error.constraint, "transaction_categorizations_status_check");
+      assert.deepEqual(error.transactionIds, ["checking-aug5", "card-aug4"]);
+      assert.deepEqual(error.attemptedTransition, { pair_status: "confirmed", categorization_status: "handled" });
+      assert.doesNotMatch(error.message, /relation|constraint/i);
+      return true;
+    }
+  );
+  assert.equal(data.credit_card_payment_pairs[0].status, "needs_review");
+  assert.equal(data.transaction_categorizations.every((row) => row.status === "needs_review"), true);
 });
 
 test("matches across the full five-day window but not outside it", async () => {
@@ -380,8 +464,8 @@ test("confirms the Sep 7 checking AMEX payment to the Sep 5 card-side payment", 
   assert.equal(data.credit_card_payment_pairs.length, 1);
   const checkingCat = data.transaction_categorizations.find((row) => row.transaction_id === "checking-sep7-amex-40");
   const cardCat = data.transaction_categorizations.find((row) => row.transaction_id === "amex-sep5-mobile-payment-40");
-  assert.equal(checkingCat.status, "matched");
-  assert.equal(cardCat.status, "matched");
+  assert.equal(checkingCat.status, "handled");
+  assert.equal(cardCat.status, "handled");
   assert.equal(checkingCat.meta.safe_to_auto_post, false);
   assert.equal(cardCat.meta.safe_to_auto_post, false);
   assert.equal(checkingCat.meta.match_type, "credit_card_payment_pair");
@@ -655,8 +739,8 @@ test("selecting a specific candidate confirms both sides atomically", async () =
 
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.pair.credit_card_transaction_id, "card-specific-b");
-  assert.equal(data.transaction_categorizations.find((row) => row.transaction_id === "checking-specific-40").status, "matched");
-  assert.equal(data.transaction_categorizations.find((row) => row.transaction_id === "card-specific-b").status, "matched");
+  assert.equal(data.transaction_categorizations.find((row) => row.transaction_id === "checking-specific-40").status, "handled");
+  assert.equal(data.transaction_categorizations.find((row) => row.transaction_id === "card-specific-b").status, "handled");
   assert.equal(data.transaction_categorizations.find((row) => row.transaction_id === "card-specific-a").status, "needs_review");
 });
 

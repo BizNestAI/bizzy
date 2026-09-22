@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+/* global process */
 import test from "node:test";
 
 const root = process.cwd();
@@ -25,12 +26,12 @@ test("confirm uses the discovered target transaction and prevents duplicate muta
 
   assert.match(feed, /ccAction\.targetTransactionId \|\| ccAction\.candidate\?\.transaction_id/);
   assert.match(page, /ccConfirmInFlightRef\.current\.has\(key\)/);
-  assert.match(page, /confirmCreditCardPaymentMatch\(businessId, id, targetQboAccountId, targetTransactionId\)/);
+  assert.match(page, /confirmCreditCardPaymentMatch\(businessId, id, targetQboAccountId, targetTransactionId, \{/);
   const confirmHandler = page.slice(
     page.indexOf("const handleConfirmCreditCardPaymentMatch"),
     page.indexOf("const handleConfirmLoanPaymentSplit")
   );
-  assert.doesNotMatch(confirmHandler, /reloadTransactions|loadMappingStatus/);
+  assert.doesNotMatch(confirmHandler, /await\s+(?:reloadTransactions|loadMappingStatus)\s*\(/);
 });
 
 test("match card exposes localized async states without global processing banners", () => {
@@ -69,18 +70,53 @@ test("read-only discovery route avoids broad refresh and posting side effects", 
   assert.match(service, /categorization_update_ms/);
 });
 
-test("confirmed credit-card payment pairs stay in matched lifecycle, not handled auto-post", () => {
+test("confirmed credit-card payment pairs use handled legacy state while pair authority drives Matched", () => {
   const approval = read("src/services/bookkeeping/bookkeepingApprovalService.js");
   const pairService = read("src/services/bookkeeping/creditCardPaymentPairService.js");
   const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
 
   assert.match(pairService, /match_type: isConfirmedPairStatus\(pair\.status\) \? "credit_card_payment_pair"/);
   assert.match(pairService, /safe_to_auto_post: false/);
-  assert.match(approval, /isConfirmedCcPaymentPair \? "matched"/);
+  assert.match(approval, /isConfirmedCcPaymentPair \? "handled"/);
   assert.match(approval, /linkCategorizationToCreditCardPair/);
   assert.doesNotMatch(approval, /cc_payment_pair_status: "confirmed"[\s\S]{0,800}safe_to_auto_post: true/);
   assert.match(page, /match_type: "credit_card_payment_pair"/);
   assert.match(page, /safe_to_auto_post: false/);
+});
+
+test("confirmation transitions optimistically and background reconciliation does not block success", () => {
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  const handler = page.slice(
+    page.indexOf("const handleConfirmCreditCardPaymentMatch"),
+    page.indexOf("const handleConfirmLoanPaymentSplit")
+  );
+
+  assert.match(handler, /applyOptimisticCountTransition\(initiatingTxn, optimisticTxn\)/);
+  assert.match(handler, /setTransactions[\s\S]*confirmCreditCardPaymentMatch/);
+  assert.match(handler, /setTransactions\(previousTransactions\)/);
+  assert.match(handler, /setTabCounts\(previousTabCounts\)/);
+  assert.match(handler, /updateCachedCreditCardPaymentFeeds/);
+  assert.match(handler, /rollbackCachedFeeds\(\)/);
+  assert.match(handler, /queueMicrotask/);
+  assert.doesNotMatch(handler, /await reloadCurrentBookkeepingView/);
+  assert.match(client, /Idempotency-Key/);
+  assert.match(client, /x-correlation-id/);
+  assert.match(client, /expected_candidate_version/);
+});
+
+test("only the two affected account caches are transitioned between review and matched", () => {
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  const helper = page.slice(
+    page.indexOf("function updateCachedCreditCardPaymentFeeds"),
+    page.indexOf("function isInconsistentEmptyTransactionPage")
+  );
+
+  assert.match(helper, /accounts\.has\(cachedAccount\)/);
+  assert.match(helper, /\["needs_review", "matched"\]/);
+  assert.match(helper, /cachedPage === 1/);
+  assert.match(helper, /snapshots/);
+  assert.doesNotMatch(helper, /sessionStorage\.clear/);
 });
 
 test("matched feed paginates existing-QBO matches and credit-card pair legs together", () => {

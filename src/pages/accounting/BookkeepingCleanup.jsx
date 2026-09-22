@@ -234,6 +234,51 @@ function writeTransactionPageCache(cacheKey, payload) {
   }
 }
 
+function updateCachedCreditCardPaymentFeeds({ businessId, transactionIds, plaidAccountIds, buildMatchedRow, fallbackRows = [] }) {
+  if (!businessId || typeof window === "undefined" || !window.sessionStorage) return () => {};
+  const ids = new Set((transactionIds || []).filter(Boolean).map(String));
+  const accounts = new Set((plaidAccountIds || []).filter(Boolean).map(String));
+  const prefix = `${BOOKS_TXN_CACHE_PREFIX}${encodeURIComponent(String(businessId))}:`;
+  const snapshots = new Map();
+  const rowsById = new Map((fallbackRows || []).filter(Boolean).map((row) => [String(row.id || row.transaction_id), row]));
+  const keys = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
+    .filter((key) => key?.startsWith(prefix));
+
+  for (const key of keys) {
+    const cached = readTransactionPageCache(key);
+    cached?.rows?.forEach((row) => {
+      if (ids.has(String(row.id))) rowsById.set(String(row.id), row);
+    });
+  }
+  for (const key of keys) {
+    const encodedParts = key.slice(BOOKS_TXN_CACHE_PREFIX.length).split(":");
+    const [, encodedAccount, encodedTab, , encodedPage] = encodedParts;
+    const cachedAccount = decodeURIComponent(encodedAccount || "");
+    const cachedTab = decodeURIComponent(encodedTab || "");
+    const cachedPage = Number(decodeURIComponent(encodedPage || "1"));
+    if (!accounts.has(cachedAccount) || !["needs_review", "matched"].includes(cachedTab)) continue;
+    const raw = window.sessionStorage.getItem(key);
+    const cached = readTransactionPageCache(key);
+    if (!raw || !cached?.rows) continue;
+    snapshots.set(key, raw);
+    const relevantRows = Array.from(rowsById.values()).filter((row) => {
+      const rowAccount = row.accountId || row.plaid_account_id || row.account_id;
+      return rowAccount && String(rowAccount) === cachedAccount;
+    });
+    const removed = cached.rows.filter((row) => ids.has(String(row.id))).length;
+    let rows = cached.rows.filter((row) => !ids.has(String(row.id)));
+    let totalCount = Math.max(0, Number(cached.totalCount ?? cached.rows.length) - removed);
+    if (cachedTab === "matched" && cachedPage === 1) {
+      const matchedRows = relevantRows.map(buildMatchedRow);
+      rows = [...matchedRows, ...rows].filter((row, index, list) =>
+        list.findIndex((candidate) => String(candidate.id) === String(row.id)) === index);
+      totalCount += matchedRows.filter((row) => !cached.rows.some((existing) => String(existing.id) === String(row.id))).length;
+    }
+    writeTransactionPageCache(key, { ...cached, rows, totalCount });
+  }
+  return () => snapshots.forEach((value, key) => window.sessionStorage.setItem(key, value));
+}
+
 function isInconsistentEmptyTransactionPage(payload = {}) {
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   const total =
@@ -1783,11 +1828,33 @@ function BookkeepingCleanup() {
   }, []);
 
   const handleConfirmCreditCardPaymentMatch = async (id, targetQboAccountId, targetTransactionIdArg = null) => {
+    const clickStartedAt = performance.now();
     if (!canRunAI || !businessId || !id || !targetQboAccountId) return;
     const key = String(id);
     if (ccConfirmInFlightRef.current.has(key)) return;
     const ccAction = ccPaymentActionState[key] || {};
     const targetTransactionId = targetTransactionIdArg || ccAction.targetTransactionId || ccAction.candidate?.transaction_id || null;
+    const initiatingTxn = transactions.find((txn) => String(txn.id) === key) || null;
+    const previousTransactions = transactions;
+    const previousTabCounts = tabCounts;
+    const correlationId = globalThis.crypto?.randomUUID?.() || `cc-match-${Date.now()}`;
+    const idempotencyKey = `cc-match:${businessId}:${key}:${targetTransactionId || "selected"}:${ccAction.candidate?.row_version || "current"}`;
+    const provisionalPair = {
+      id: `pending:${correlationId}`,
+      status: "confirmed",
+      checking_transaction_id: initiatingTxn?.direction === "outflow" ? id : targetTransactionId,
+      credit_card_transaction_id: initiatingTxn?.direction === "outflow" ? targetTransactionId : id,
+      checking_plaid_account_id: initiatingTxn?.direction === "outflow" ? initiatingTxn?.accountId : ccAction.candidate?.plaid_account_id,
+      credit_card_plaid_account_id: initiatingTxn?.direction === "outflow" ? ccAction.candidate?.plaid_account_id : initiatingTxn?.accountId,
+      amount: Math.abs(Number(initiatingTxn?.signed_amount ?? initiatingTxn?.amount ?? 0)),
+    };
+    const rollbackCachedFeeds = updateCachedCreditCardPaymentFeeds({
+      businessId,
+      transactionIds: [id, targetTransactionId],
+      plaidAccountIds: [provisionalPair.checking_plaid_account_id, provisionalPair.credit_card_plaid_account_id],
+      fallbackRows: [initiatingTxn, ccAction.candidate],
+      buildMatchedRow: (row) => buildMatchedCreditCardPaymentTxn(row, provisionalPair),
+    });
     ccConfirmInFlightRef.current.add(key);
     setCcPaymentActionState((prev) => ({
       ...prev,
@@ -1798,11 +1865,46 @@ function BookkeepingCleanup() {
         error: "",
       },
     }));
+    // Perceived completion is immediate; authoritative state is reconciled from
+    // the single atomic response below. Rollback restores this exact snapshot.
+    if (initiatingTxn) {
+      const optimisticTxn = {
+        ...initiatingTxn,
+        status: "matched",
+        match_type: "credit_card_payment_pair",
+        cc_payment_pair_status: "confirmed",
+        meta: {
+          ...(initiatingTxn.meta || {}),
+          taxonomy_type: "cc_payment",
+          cc_payment_pair_status: "confirmed",
+          match_type: "credit_card_payment_pair",
+          safe_to_auto_post: false,
+        },
+      };
+      applyOptimisticCountTransition(initiatingTxn, optimisticTxn);
+      setTransactions((prev) => activeTab === "matched"
+        ? prev.map((txn) => String(txn.id) === key ? optimisticTxn : txn)
+        : prev.filter((txn) => String(txn.id) !== key));
+    }
+    const optimisticVisibleUpdateMs = performance.now() - clickStartedAt;
     try {
-      const result = await confirmCreditCardPaymentMatch(businessId, id, targetQboAccountId, targetTransactionId);
+      const requestDispatchMs = performance.now() - clickStartedAt;
+      const result = await confirmCreditCardPaymentMatch(businessId, id, targetQboAccountId, targetTransactionId, {
+        expectedCandidateVersion: ccAction.candidate?.row_version || null,
+        idempotencyKey,
+        correlationId,
+      });
+      const responseReceivedAt = performance.now();
       const pair = result?.pair || null;
       const affectedIds = new Set([id, pair?.checking_transaction_id, pair?.credit_card_transaction_id].filter(Boolean).map(String));
       if (pair?.id) {
+        updateCachedCreditCardPaymentFeeds({
+          businessId,
+          transactionIds: Array.from(affectedIds),
+          plaidAccountIds: [pair.checking_plaid_account_id, pair.credit_card_plaid_account_id],
+          fallbackRows: [initiatingTxn, ccAction.candidate],
+          buildMatchedRow: (row) => buildMatchedCreditCardPaymentTxn(row, pair),
+        });
         transactions.forEach((txn) => {
           if (!affectedIds.has(String(txn.id))) return;
           applyOptimisticCountTransition(txn, buildMatchedCreditCardPaymentTxn(txn, pair));
@@ -1814,18 +1916,51 @@ function BookkeepingCleanup() {
         });
       }
       accountOverrides.current?.delete?.(id);
-      setCountsRefreshKey((value) => value + 1);
       setCcPaymentActionState((prev) => {
         const next = { ...prev };
         affectedIds.forEach((txnId) => delete next[txnId]);
         return next;
       });
-      await reloadCurrentBookkeepingView(reloadTransactionsRef, {
-        showBackgroundRefresh: false,
-        refreshProcessingStatus: false,
-        refreshCounts: true,
+      const visibleFeedUpdateMs = performance.now() - responseReceivedAt;
+      window.dispatchEvent(new CustomEvent("bizzy:credit-card-payment-match-confirmed", {
+        detail: {
+          businessId,
+          correlationId: result?.correlation_id || correlationId,
+          pair,
+          transactionIds: Array.from(affectedIds),
+          plaidAccountIds: [pair?.checking_plaid_account_id, pair?.credit_card_plaid_account_id].filter(Boolean),
+          timings_ms: {
+            ...(result?.timings_ms || {}),
+            click_to_request_dispatch_ms: requestDispatchMs,
+            optimistic_visible_update_ms: optimisticVisibleUpdateMs,
+            client_response_to_visible_feed_ms: visibleFeedUpdateMs,
+          },
+        },
+      }));
+      // Reconciliation is deliberately non-blocking and scoped to the current
+      // view; count refresh runs independently after visible success.
+      queueMicrotask(() => {
+        const backgroundStartedAt = performance.now();
+        void reloadCurrentBookkeepingView(reloadTransactionsRef, {
+          showBackgroundRefresh: false,
+          refreshProcessingStatus: false,
+          refreshCounts: false,
+        }).finally(() => console.info("[bookkeeping][cc-payment-match] background-revalidation", {
+          correlation_id: result?.correlation_id || correlationId,
+          affected_plaid_account_ids: [pair?.checking_plaid_account_id, pair?.credit_card_plaid_account_id].filter(Boolean),
+          background_account_feed_revalidation_ms: performance.now() - backgroundStartedAt,
+        }));
+        const countRefreshStartedAt = performance.now();
+        setCountsRefreshKey((value) => value + 1);
+        console.info("[bookkeeping][cc-payment-match] count-refresh-dispatched", {
+          correlation_id: result?.correlation_id || correlationId,
+          count_refresh_dispatch_ms: performance.now() - countRefreshStartedAt,
+        });
       });
     } catch (e) {
+      rollbackCachedFeeds();
+      setTransactions(previousTransactions);
+      setTabCounts(previousTabCounts);
       const message = e?.body?.message || e?.message || "No matching opposite-side payment was found yet.";
       setCcPaymentActionState((prev) => ({
         ...prev,

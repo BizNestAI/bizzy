@@ -80,6 +80,8 @@ test("credit-card-payment pairs are durable, tenant scoped, and one leg cannot b
 
 test("confirmation and undo atomically transition, validate, and audit both payment legs", () => {
   const migration = read("supabase/migrations/20260922_atomic_credit_card_payment_pair_lifecycle.sql");
+  const compatibilityMigration = read("supabase/migrations/20260922143000_credit_card_payment_pair_handled_lifecycle.sql");
+  const fastMigration = read("supabase/migrations/20260922150000_confirm_selected_credit_card_payment_pair_fast.sql");
   const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
   const audit = read("scripts/manual/auditCreditCardPaymentPairLifecycle.sql");
   const repair = read("scripts/manual/repairCreditCardPaymentPairLifecycle.sql");
@@ -95,13 +97,27 @@ test("confirmation and undo atomically transition, validate, and audit both paym
   assert.match(migration, /cc_payment_pair_amount_mismatch/);
   assert.match(migration, /cc_payment_pair_date_window_exceeded/);
   assert.match(migration, /cc_payment_pair_leg_already_consumed/);
+  assert.doesNotMatch(migration, /transaction_id, status[\s\S]{0,160}'matched'/);
+  assert.match(migration, /transaction_id, 'handled'/);
+  assert.match(compatibilityMigration, /pg_get_functiondef/);
+  assert.match(compatibilityMigration, /transaction_id, 'handled'/);
+  assert.doesNotMatch(compatibilityMigration, /drop constraint/i);
+  assert.match(fastMigration, /confirm_selected_credit_card_payment_pair_atomic/);
+  assert.match(fastMigration, /order by id for update/);
+  assert.match(fastMigration, /cc_payment_pair_amount_mismatch/);
+  assert.match(fastMigration, /cc_payment_pair_sign_mismatch/);
+  assert.match(fastMigration, /cc_payment_pair_date_window_exceeded/);
+  assert.match(fastMigration, /credit_card_payment_pair_events/);
+  assert.match(fastMigration, /safe_to_auto_post',false/);
   assert.match(migration, /values[\s\S]*'checking'[\s\S]*'credit_card'/);
   assert.match(migration, /status = excluded\.status/);
   assert.match(migration, /credit_card_payment_pair_events/);
   assert.match(migration, /safe_to_auto_post',false/);
   assert.match(service, /db\.rpc\("confirm_credit_card_payment_pair_atomic"/);
   assert.match(service, /db\.rpc\("undo_credit_card_payment_pair_atomic"/);
-  assert.match(audit, /one_leg_matched/);
+  assert.match(audit, /one_leg_handled/);
+  assert.match(audit, /pg_get_constraintdef/);
+  assert.match(audit, /supabase_migrations\.schema_migrations/);
   assert.match(audit, /reciprocal_reference_mismatch/);
   assert.match(audit, /multiple_active_pairs/);
   assert.match(repair, /rollback;/);
@@ -168,7 +184,7 @@ test("one confirmation resolves the pair and validates the payment target by sou
   assert.match(approvals, /confirmedCcPairs/);
   assert.match(service, /pair\.checking_transaction_id/);
   assert.match(service, /pair\.credit_card_transaction_id/);
-  assert.match(approvals, /status: isConfirmedCcPaymentPair \? "matched"/);
+  assert.match(approvals, /status: isConfirmedCcPaymentPair \? "handled"/);
   assert.match(approvals, /safe_to_auto_post = false/);
   assert.match(approvals, /linkCategorizationToCreditCardPair/);
 });

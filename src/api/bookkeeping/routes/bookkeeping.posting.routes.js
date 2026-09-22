@@ -3,7 +3,7 @@ import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId, readBusinessId } from "./_bookkeepingRouteUtils.js";
-import { postSingleBookkeepingTransactionNow, runBooksPostOnce, signalMerchantApprovalQueueWakeup } from "../../../jobs/booksPost.cron.js";
+import { postSingleBookkeepingTransactionNow, runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
 import {
   getAutoPostSettings,
   getCanonicalPostingBacklogSummary,
@@ -16,6 +16,7 @@ import {
   setAutoPostEnabled,
 } from "../../../services/bookkeeping/autoPostControl.js";
 import {
+  assertInteractivePostingCommandSchema,
   createInteractivePostingCommand,
   getInteractivePostingCommandStatus,
 } from "../../../services/bookkeeping/interactivePostingCommandService.js";
@@ -334,6 +335,12 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       idempotencyKey: req.get("Idempotency-Key") || normalized.idempotencyKey,
     };
     stageStartMs = nowMs();
+    // Fail closed before persisting operator intent. The legacy queue watches
+    // categorization metadata, so accepting first and discovering schema drift
+    // later can return an error while still posting asynchronously.
+    await assertInteractivePostingCommandSchema({ db: supabase });
+    stageTimings.command_schema_preflight_ms = routeTiming(stageStartMs);
+    stageStartMs = nowMs();
     const accepted = await persistMerchantBacklogGroupApprovalOperation(common);
     diagnostics.resolved_row_count = Number(accepted.accepted_count || 0) + Number(accepted.blocked_count || 0);
     diagnostics.eligible_posting_count = Number(accepted.accepted_count || 0);
@@ -346,32 +353,14 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       throw resolutionError;
     }
     let decision;
-    let workerWakeup = "durable_command";
-    try {
-      decision = await createInteractivePostingCommand({
-        ...common,
-        merchantSnapshot: {
-          group_id: normalized.groupId,
-          group_snapshot_token: common.groupSnapshotToken,
-          exclusion_ids: common.exclusionIds,
-        },
-      });
-    } catch (commandError) {
-      if (!isMissingInteractiveCommandSchema(commandError)) throw commandError;
-      workerWakeup = "legacy_transaction_queue";
-      decision = { ok: true, reused: false, operation_id: accepted.operation_id, command: null };
-      signalMerchantApprovalQueueWakeup({
-        businessId,
-        operationId: accepted.operation_id,
-        transactionIds: normalized.transactionIds,
-        requestedAt: new Date().toISOString(),
-      });
-      console.warn("[bookkeeping][merchant-group-approve] durable command schema unavailable; using transaction queue", {
-        ...diagnostics,
-        operation_id: accepted.operation_id,
-        schema_error_code: commandError?.code || null,
-      });
-    }
+    decision = await createInteractivePostingCommand({
+      ...common,
+      merchantSnapshot: {
+        group_id: normalized.groupId,
+        group_snapshot_token: common.groupSnapshotToken,
+        exclusion_ids: common.exclusionIds,
+      },
+    });
     stageTimings.accept_operation_ms = routeTiming(stageStartMs);
     console.info("[merchant-approval-timeline]", {
       stage: "command_committed",
@@ -387,7 +376,7 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
     return res.status(202).json({
       ...decision,
       correlation_id: correlationId,
-      worker_wakeup: workerWakeup,
+      worker_wakeup: "durable_command",
       stage_timings_ms: stageTimings,
       response_ms: routeTiming(routeStartMs),
       status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(businessId)}`,
@@ -400,6 +389,15 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       error_code: err?.code || "merchant_group_approval_failed",
       error_name: err?.name || "Error",
       error_message: err?.message || String(err),
+      database_code: err?.dbCode || err?.cause?.code || null,
+      database_message: err?.dbMessage || err?.cause?.message || null,
+      database_detail: err?.dbDetails || err?.cause?.details || null,
+      database_hint: err?.dbHint || err?.cause?.hint || null,
+      constraint: err?.constraint || err?.cause?.constraint || null,
+      table: err?.table || err?.cause?.table || null,
+      column: err?.column || err?.cause?.column || null,
+      operation_id: err?.operationId || null,
+      transaction_ids: normalized.transactionIds,
       stack: err?.stack || null,
       response_ms: routeTiming(routeStartMs),
       stage_timings_ms: stageTimings,
@@ -407,7 +405,13 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
     return res.status(err?.status || 500).json({
       ok: false,
       error: err?.code || "merchant_group_approval_failed",
-      message: err?.status && err.status < 500 ? `Posting could not continue: ${err.message}.` : "Could not save this posting decision.",
+      message: err?.code === "interactive_posting_schema_required"
+        ? "A required database update has not been applied."
+        : err?.status === 409
+          ? "This transaction’s posting state changed. Refresh and try again."
+          : err?.status && err.status < 500
+            ? `Posting could not continue: ${err.message}.`
+            : "Could not save this posting decision.",
       correlation_id: correlationId,
       response_ms: routeTiming(routeStartMs),
     });

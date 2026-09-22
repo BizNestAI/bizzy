@@ -376,7 +376,7 @@ export async function approveBookkeepingTransactions({
 
       return {
         transaction_id: txnId,
-        status: isConfirmedCcPaymentPair ? "matched" : item?.status,
+        status: isConfirmedCcPaymentPair ? "handled" : item?.status,
         final_qbo_account_id: effectiveFinalId,
         final_qbo_account_name: effectiveFinalName,
         final_canonical_account_key: explicitCanonicalKey || suggestedCanonicalMap[txnId] || mergedMeta?.canonical_account_key || null,
@@ -401,7 +401,7 @@ export async function approveBookkeepingTransactions({
   if (approvals.some((a) => !a.transaction_id)) throw new BookkeepingApprovalError("missing_transaction_id", 400, { approvals });
   if (missingCheckFinals.length) throw new BookkeepingApprovalError("missing_final_account_for_check", 400, { transactions: missingCheckFinals });
   const missingAccounts = approvals
-    .filter((a) => !(a.status === "matched" && a.meta?.taxonomy_type === "cc_payment"))
+    .filter((a) => !(a.status === "handled" && a.meta?.match_type === "credit_card_payment_pair"))
     .filter((a) => !a.final_qbo_account_id && !a.is_check)
     .map((a) => a.transaction_id);
   if (missingAccounts.length) throw new BookkeepingApprovalError("missing_account_id", 400, { transactions: missingAccounts });
