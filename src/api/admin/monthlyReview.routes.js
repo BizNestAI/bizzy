@@ -788,6 +788,8 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/cre
       transactionId,
       targetQboAccountId,
       targetTransactionId,
+      actor: req.internalStaff?.user_id || "admin",
+      matchMethod: "admin_monthly_review",
     });
     if (result?.matched !== true) {
       const status = result?.code === "cc_payment_pair_ambiguous" ? 409 : 200;
@@ -808,6 +810,9 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/cre
     });
   } catch (e) {
     console.error("[monthly-review] credit-card payment match failed", e?.message || e);
+    if (String(e?.message || "").includes("cc_payment_pair_")) {
+      return res.status(e?.status || 409).json({ ok: false, error: String(e.message), message: String(e.message) });
+    }
     sendMonthlyReviewError(res, "monthly_review_cc_payment_match_failed", "Could not match credit-card payment.", e);
   }
 });

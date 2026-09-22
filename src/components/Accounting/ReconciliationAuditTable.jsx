@@ -230,6 +230,36 @@ function EmptyState({ title, copy }) {
   );
 }
 
+function SortableHeader({ label, sortKey, sort, onSortChange, align = "left" }) {
+  const active = sort?.key === sortKey;
+  const direction = active ? sort.direction : null;
+  const nextDirection = active ? (direction === "asc" ? "desc" : "asc") : sortKey === "date" ? "desc" : "asc";
+  return (
+    <th
+      className={`px-3 py-2.5 ${align === "right" ? "text-right" : "text-left"}`}
+      aria-sort={active ? (direction === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <button
+        type="button"
+        onClick={() => onSortChange?.({ key: sortKey, direction: nextDirection })}
+        className={`group inline-flex items-center gap-1.5 rounded-sm outline-none transition hover:text-slate-100 focus-visible:ring-2 focus-visible:ring-emerald-400/60 ${
+          align === "right" ? "ml-auto" : ""
+        } ${active ? "text-slate-100" : "text-slate-400"}`}
+        aria-label={`Sort by ${label}${active ? `, currently ${direction === "asc" ? "ascending" : "descending"}` : ""}`}
+      >
+        <span>{label}</span>
+        <span className="inline-flex h-4 w-3 items-center justify-center" aria-hidden="true">
+          {active ? (
+            direction === "asc" ? <ChevronUp className="h-3.5 w-3.5 text-emerald-300" /> : <ChevronDown className="h-3.5 w-3.5 text-emerald-300" />
+          ) : (
+            <span className="text-[10px] leading-none text-slate-600 transition group-hover:text-slate-400">↕</span>
+          )}
+        </span>
+      </button>
+    </th>
+  );
+}
+
 export default function ReconciliationAuditTable({
   accounts = [],
   accountMap,
@@ -244,6 +274,7 @@ export default function ReconciliationAuditTable({
   total = 0,
   page = 1,
   pageSize = 50,
+  sort = { key: "date", direction: "desc" },
   latestRunId,
   selectedRunSummary,
   isHistoricalSnapshot = false,
@@ -254,6 +285,7 @@ export default function ReconciliationAuditTable({
   onReturnToLatest,
   onPrevPage,
   onNextPage,
+  onSortChange,
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const noConnectedIntegrations = !accounts.length && !rows.length && Number(total || 0) === 0;
@@ -420,12 +452,12 @@ export default function ReconciliationAuditTable({
           <table className={`${embeddedInHorizontalScroller ? "min-w-[980px]" : "min-w-[940px]"} w-full text-sm text-slate-100`}>
             <thead className="sticky top-0 z-10 bg-[#171a19] text-[11px] uppercase tracking-[0.18em] text-slate-400 shadow-[0_1px_0_rgba(255,255,255,0.06)]">
               <tr className="border-b border-white/6">
-                <th className="px-3 py-2.5 text-left">Date</th>
-                <th className="px-3 py-2.5 text-left">Transaction</th>
-                <th className="px-3 py-2.5 text-left">Bank Account</th>
-                <th className="px-3 py-2.5 text-right">Amount</th>
-                <th className="px-3 py-2.5 text-left">Category</th>
-                <th className="px-3 py-2.5 text-left">Pipeline Status</th>
+                <SortableHeader label="Date" sortKey="date" sort={sort} onSortChange={onSortChange} />
+                <SortableHeader label="Transaction" sortKey="transaction" sort={sort} onSortChange={onSortChange} />
+                <SortableHeader label="Bank Account" sortKey="bank_account" sort={sort} onSortChange={onSortChange} />
+                <SortableHeader label="Amount" sortKey="amount" sort={sort} onSortChange={onSortChange} align="right" />
+                <SortableHeader label="Category" sortKey="category" sort={sort} onSortChange={onSortChange} />
+                <SortableHeader label="Pipeline Status" sortKey="pipeline_status" sort={sort} onSortChange={onSortChange} />
               </tr>
             </thead>
             <tbody className="divide-y divide-white/6">

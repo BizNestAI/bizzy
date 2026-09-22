@@ -1424,11 +1424,16 @@ export async function evaluateIncomingDepositPostingGuard(args = {}) {
   return { ok: true, allowed: false, reason: result.posting_eligibility || result.status, result };
 }
 
-function isUnresolvedCustomerReceiptCandidate(bankTxn = {}, cat = {}) {
-  if (!isIncomingDeposit(bankTxn)) return false;
+function isUnresolvedDiscoveryCandidate(bankTxn = {}, cat = {}) {
+  const processorFee = detectProcessorSettlementActivity(bankTxn)?.kind === "fee";
+  if (!isIncomingDeposit(bankTxn) && !processorFee) return false;
   if (bankTxn.pending === true || bankTxn.is_archived === true) return false;
   const status = String(cat.status || "needs_review").toLowerCase();
-  if (!["needs_review", "uncategorized", ""].includes(status)) return false;
+  const eligibleStatuses = processorFee
+    ? ["needs_review", "uncategorized", "approved", "auto_approved", "failed", "handled", ""]
+    : ["needs_review", "uncategorized", ""];
+  if (!eligibleStatuses.includes(status)) return false;
+  if (cat.qbo_txn_id || cat.posted_at) return false;
   const meta = cat.meta || {};
   if (meta.matched_existing_qbo === true || meta.incoming_deposit_match_status === "rejected") return false;
   if (meta.incoming_deposit_match_status && !REDISCOVERABLE_MATCH_STATUSES.has(String(meta.incoming_deposit_match_status))) return false;
@@ -1477,28 +1482,29 @@ function matchResultSummary(result = {}) {
 
 async function fetchCandidateRowsForDiscovery({ db, businessId, transactionId = null, limit = 25 }) {
   const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+  const scanLimit = transactionId ? 1 : Math.min(safeLimit * 10, 500);
   let query = db
     .from("bank_transactions")
     .select("id,business_id,plaid_transaction_id,plaid_account_id,date,amount,signed_amount,direction,pending,is_archived,name,merchant_name,counterparty_name")
     .eq("business_id", businessId)
     .eq("is_archived", false)
     .eq("pending", false)
-    .gt("amount", 0)
     .order("date", { ascending: false })
-    .limit(safeLimit);
+    .limit(scanLimit);
   if (transactionId) query = query.eq("id", transactionId).limit(1);
   const bankRows = await selectRows(query);
   const ids = bankRows.map((row) => row.id).filter(Boolean);
   if (!ids.length) return [];
   const cats = await selectRows(db
     .from("transaction_categorizations")
-    .select("transaction_id,status,post_error,meta")
+    .select("transaction_id,status,post_error,meta,qbo_txn_id,posted_at")
     .eq("business_id", businessId)
     .in("transaction_id", ids));
   const catByTxn = new Map(cats.map((row) => [String(row.transaction_id), row]));
   return bankRows
     .map((bankTxn) => ({ bankTxn, cat: catByTxn.get(String(bankTxn.id)) || { status: "needs_review", meta: {} } }))
-    .filter(({ bankTxn, cat }) => isUnresolvedCustomerReceiptCandidate(bankTxn, cat));
+    .filter(({ bankTxn, cat }) => isUnresolvedDiscoveryCandidate(bankTxn, cat))
+    .slice(0, safeLimit);
 }
 
 export async function discoverExistingIncomingDepositMatches({
@@ -1943,6 +1949,37 @@ export async function rejectIncomingDepositQboMatch({ db = defaultSupabase, busi
       actorRole: `${actorRole}_after_rejection`,
       persist: true,
     });
+    if (rediscovered.status === "candidate" && rediscovered.confidence_tier === "tier_4" && !(rediscovered.candidates || []).length) {
+      const { data: refreshedCat } = await db
+        .from("transaction_categorizations")
+        .select("meta")
+        .eq("business_id", businessId)
+        .eq("transaction_id", bankTransactionId)
+        .maybeSingle();
+      await db.from("transaction_categorizations").update({
+        post_error: "processor_fee_record_new_required",
+        meta: {
+          ...(refreshedCat?.meta || {}),
+          safe_to_auto_post: false,
+          post_block_reason: "processor_fee_record_new_required",
+          processor_fee_new_fee_authorized: true,
+          incoming_deposit_match_status: "candidate",
+          incoming_deposit_confidence_tier: "tier_4",
+          incoming_deposit_candidates: [],
+          processor_fee: {
+            isProbable: true,
+            processor: detectProcessorSettlementActivity(bankTxn)?.profile?.name || null,
+            matchState: "no_existing_qbo_match",
+            evidenceStatus: "fresh_complete",
+            candidates: [],
+            selectedCandidateId: null,
+            canCreateNewFee: true,
+            blockingReason: "human_rejected_candidate",
+            lastCheckedAt: rediscovered.source_freshness_at || now,
+          },
+        },
+      }).eq("business_id", businessId).eq("transaction_id", bankTransactionId);
+    }
     return {
       ok: true,
       status: rediscovered.status,

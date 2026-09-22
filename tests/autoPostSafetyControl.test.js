@@ -984,6 +984,54 @@ test("merchant group route operation acceptance persists operator intent without
   assert.equal(db.calls.some((call) => call.table === "vendor_rules"), false);
 });
 
+test("merchant group approval accepts a previously failed handled row for a posting retry", async () => {
+  const db = makeSupabase({
+    business_profiles: [{ id: "biz-1", auto_post_to_quickbooks: true, bookkeeping_start_date: "2026-05-01" }],
+    qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],
+    transaction_categorizations: [{
+      business_id: "biz-1",
+      transaction_id: "coffee-1",
+      status: "failed",
+      review_status: "handled",
+      posting_status: "posting_failed",
+      final_qbo_account_id: "1150040001",
+      final_qbo_account_name: "Meals",
+      qbo_txn_id: null,
+      post_after: null,
+      post_error: "previous_qbo_failure",
+      meta: { auto_approve_reason: "universal_hint" },
+      updated_at: "v1",
+    }],
+    bank_transactions: [{
+      business_id: "biz-1",
+      id: "coffee-1",
+      plaid_account_id: "pa-1",
+      date: "2026-09-19",
+      amount: -5.46,
+      direction: "OUTFLOW",
+      name: "not just coffee",
+      merchant_name: "not just coffee",
+      is_archived: false,
+      pending: false,
+    }],
+  });
+
+  const accepted = await persistMerchantBacklogGroupApprovalOperation({
+    db,
+    businessId: "biz-1",
+    actorId: "operator-1",
+    selectedQboAccountId: "1150040001",
+    transactionIds: ["coffee-1"],
+    idempotencyKey: "retry-coffee-1",
+  });
+
+  assert.equal(accepted.accepted_count, 1);
+  assert.equal(accepted.blocked_count, 0);
+  assert.equal(db.cat("biz-1", "coffee-1").status, "failed");
+  assert.equal(db.cat("biz-1", "coffee-1").review_status, "handled");
+  assert.equal(db.cat("biz-1", "coffee-1").meta.merchant_group_operation_state, "accepted");
+});
+
 test("same unresolved merchant approval decision reuses the same operation across refreshed snapshots", async () => {
   const db = makeSupabase({
     qbo_accounts_cache: [{ business_id: "biz-1", qbo_account_id: "1150040001", name: "Meals", account_type: "Expense", active: true }],

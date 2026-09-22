@@ -20,6 +20,7 @@ const {
 } = await import("../src/services/bookkeeping/incomingDepositMatchService.js");
 const {
   fetchBookkeepingTransactions,
+  incomingDepositOverlayFromResult,
   matchesTransactionStatusFilter,
   normalizeBookkeepingRpcRow,
 } = await import("../src/services/bookkeeping/bookkeepingTransactionFeedService.js");
@@ -208,6 +209,53 @@ test("handled unposted processor fees recover into Matched while posted fees req
   });
   assert.equal(posted.processor_fee.matchState, "posted_duplicate_review_required");
   assert.equal(posted.processor_fee.canCreateNewFee, false);
+});
+
+test("June handled processor fee projects its discovered Purchase as confirmable, never as a new fee", async () => {
+  const tables = baseProcessorFeeTables({ amount: 14, bankDate: "2026-06-11", qboDate: "2026-06-10", id: "qbo-june-fee" });
+  tables.transaction_categorizations[0].status = "auto_approved";
+  tables.transaction_categorizations[0].meta = {
+    processor_fee: { isProbable: true, matchState: "no_existing_qbo_match", canCreateNewFee: true },
+  };
+  const db = fakeDb(tables);
+  const discovered = await discoverIncomingDepositQboMatch({
+    db,
+    businessId: "b1",
+    bankTransactionId: "txn-fee",
+    persist: true,
+    nowMs: Date.parse("2026-09-21T16:01:00Z"),
+  });
+  const overlay = incomingDepositOverlayFromResult(discovered, {
+    id: "txn-fee",
+    status: "auto_approved",
+    date: "2026-06-11",
+    amount: -14,
+    direction: "OUTFLOW",
+    description: "TRAN FEE INTUIT 18434453 OPTIMIST BOOKKEEPING ACH CORP DEBIT",
+    meta: tables.transaction_categorizations[0].meta,
+  });
+  assert.equal(overlay.incoming_deposit_match_status, "needs_confirmation");
+  assert.equal(overlay.incoming_deposit_candidates[0].qbo_entity_type, "Purchase");
+  assert.equal(overlay.incoming_deposit_candidates[0].txn_date, "2026-06-10");
+  assert.equal(overlay.processor_fee.matchState, "qbo_match_found");
+  assert.equal(overlay.processor_fee.canCreateNewFee, false);
+  assert.equal(overlay.meta.post_block_reason, "possible_existing_qbo_match");
+});
+
+test("bounded recovery includes historical handled processor-fee outflows without posting receipts", async () => {
+  const tables = baseProcessorFeeTables({ amount: 14, bankDate: "2026-06-11", qboDate: "2026-06-10", id: "qbo-june-fee" });
+  tables.transaction_categorizations[0].status = "auto_approved";
+  const result = await discoverExistingIncomingDepositMatches({
+    db: fakeDb(tables),
+    businessId: "b1",
+    dryRun: true,
+    limit: 25,
+    nowMs: Date.parse("2026-09-21T16:01:00Z"),
+  });
+  assert.equal(result.scanned, 1);
+  assert.equal(result.results[0].transaction_id, "txn-fee");
+  assert.equal(result.results[0].status, "needs_confirmation");
+  assert.equal(result.results[0].candidates[0].qbo_entity_id, "qbo-june-fee");
 });
 
 test("rejecting a processor-fee candidate immediately searches alternatives and reaches authoritative no-match", async () => {

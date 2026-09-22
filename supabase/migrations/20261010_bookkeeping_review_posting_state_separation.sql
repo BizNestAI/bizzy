@@ -11,17 +11,17 @@ alter table if exists public.transaction_categorizations
 update public.transaction_categorizations
 set
   review_status = case
-    when status in ('approved', 'auto_approved', 'handled', 'failed', 'posted', 'matched_existing_qbo', 'ignored') then 'handled'
+    when status in ('approved', 'auto_approved', 'handled', 'failed', 'posted', 'matched', 'matched_existing_qbo', 'ignored') then 'handled'
     else 'needs_review'
   end,
   reviewed_at = case
-    when status in ('approved', 'auto_approved', 'handled', 'failed', 'posted', 'matched_existing_qbo', 'ignored')
+    when status in ('approved', 'auto_approved', 'handled', 'failed', 'posted', 'matched', 'matched_existing_qbo', 'ignored')
       then coalesce(decided_at, posted_at, updated_at, created_at)
     else reviewed_at
   end,
   posting_status = case
     when status = 'posted' or qbo_txn_id is not null then 'posted'
-    when status = 'matched_existing_qbo' then 'not_scheduled'
+    when status in ('matched', 'matched_existing_qbo') then 'not_scheduled'
     when status = 'failed' or post_error is not null then 'posting_failed'
     when coalesce((meta ->> 'posting_in_progress')::boolean, false) then 'posting'
     when post_after is not null then 'scheduled'
@@ -91,7 +91,7 @@ begin
     new.final_canonical_account_key := old.final_canonical_account_key;
     new.decided_by := old.decided_by;
     new.decided_at := old.decided_at;
-  elsif new.status in ('approved', 'auto_approved', 'handled', 'failed', 'posted', 'matched_existing_qbo', 'ignored') then
+  elsif new.status in ('approved', 'auto_approved', 'handled', 'failed', 'posted', 'matched', 'matched_existing_qbo', 'ignored') then
     new.review_status := 'handled';
     new.reviewed_at := coalesce(old.reviewed_at, new.decided_at, new.posted_at, now());
   else
@@ -104,7 +104,7 @@ begin
 
   new.posting_status := case
     when new.status = 'posted' or new.qbo_txn_id is not null then 'posted'
-    when new.status = 'matched_existing_qbo' then 'not_scheduled'
+    when new.status in ('matched', 'matched_existing_qbo') then 'not_scheduled'
     when new.status = 'failed' or new.post_error is not null then 'posting_failed'
     when coalesce((new.meta ->> 'posting_in_progress')::boolean, false) then 'posting'
     when new.post_after is not null then 'scheduled'

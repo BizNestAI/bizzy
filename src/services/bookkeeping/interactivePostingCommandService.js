@@ -132,13 +132,13 @@ export async function appendInteractivePostingCommandEvent({
 
 async function fetchQboAccount(db, businessId, selectedQboAccountId) {
   if (!selectedQboAccountId) return null;
-  if (db.store?.qbo_accounts) {
-    return db.store.qbo_accounts.find(
+  if (db.store?.qbo_accounts_cache) {
+    return db.store.qbo_accounts_cache.find(
       (row) => row.business_id === businessId && String(row.qbo_account_id) === String(selectedQboAccountId)
     ) || null;
   }
   const { data, error } = await db
-    .from("qbo_accounts")
+    .from("qbo_accounts_cache")
     .select("qbo_account_id,name,account_type,active")
     .eq("business_id", businessId)
     .eq("qbo_account_id", String(selectedQboAccountId))

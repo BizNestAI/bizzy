@@ -361,7 +361,7 @@ function issuerMatchesCheckingToCard(checkingRow = {}, cardRow = {}, cardAcct = 
   return haystack.includes(checkingIssuer);
 }
 
-function buildPairRecord({ businessId, checkingRow, cardRow = null, checkingAcct, cardAcct = null, checkingMapping, cardMapping, confidence, evidence, status = "needs_review" }) {
+function buildPairRecord({ businessId, checkingRow, cardRow = null, cardAcct = null, checkingMapping, cardMapping, confidence, evidence, status = "needs_review" }) {
   const amountMinorUnits = Math.abs(
     signedAmountMinorUnits(checkingRow) ??
       signedAmountMinorUnits(cardRow) ??
@@ -1004,6 +1004,8 @@ export async function confirmCreditCardPaymentMatchForTransaction({
   transactionId,
   targetQboAccountId,
   targetTransactionId = null,
+  actor = "user",
+  matchMethod = "books_review",
   validateQboAccountType = validateBusinessQboPaymentAccountType,
 } = {}) {
   if (!businessId || !transactionId || !targetQboAccountId) {
@@ -1036,11 +1038,10 @@ export async function confirmCreditCardPaymentMatchForTransaction({
     validateQboAccountType,
   });
   if (result.status === "paired" && result.pair?.id) {
-    const pairStatus = String(result.pair.status || "").toLowerCase();
-    const confirmedPair = pairStatus === "confirmed" || pairStatus === "posting" || pairStatus === "failed" || pairStatus === "posted"
-      ? result.pair
-      : await confirmCreditCardPaymentPairForTransaction({ db, businessId, transactionId });
-    await linkCategorizationToCreditCardPair({ db, businessId, pair: confirmedPair });
+    // Always pass through the atomic authority. Besides normal confirmation this
+    // idempotently heals legacy pairs whose pair row was confirmed before only
+    // one categorization write succeeded.
+    const confirmedPair = await confirmCreditCardPaymentPairForTransaction({ db, businessId, transactionId, actor, matchMethod });
     return { ok: true, matched: true, pair: confirmedPair, reason: result.reason, timings_ms: result.timings_ms || null };
   }
   const code = result.reason || "cc_payment_no_matching_counterpart";
@@ -1128,9 +1129,26 @@ export async function createManualCreditCardPaymentPair({ db = defaultSupabase, 
   return pair;
 }
 
-export async function confirmCreditCardPaymentPairForTransaction({ db = defaultSupabase, businessId, transactionId }) {
+export async function confirmCreditCardPaymentPairForTransaction({ db = defaultSupabase, businessId, transactionId, actor = "user", matchMethod = "books_review" }) {
   const pair = await findExistingCreditCardPaymentPairForTransaction({ db, businessId, transactionId });
   if (!pair) throw new Error("cc_payment_pair_not_found");
+  if (typeof db.rpc === "function") {
+    const { data, error } = await db.rpc("confirm_credit_card_payment_pair_atomic", {
+      p_business_id: businessId,
+      p_pair_id: pair.id,
+      p_actor: actor || "user",
+      p_match_method: matchMethod || "books_review",
+    });
+    if (error) {
+      const err = new Error(error.message || "cc_payment_pair_confirmation_failed");
+      err.code = error.code || null;
+      err.status = String(error.message || "").includes("already_") || String(error.message || "").includes("mismatch") ? 409 : 500;
+      throw err;
+    }
+    return data?.pair || data;
+  }
+  // Unit-test adapters predating RPC support use this compatibility path. Real
+  // Supabase clients always execute the transactional database function above.
   const nowIso = new Date().toISOString();
   const { data: updated, error } = await db
     .from("credit_card_payment_pairs")
@@ -1163,6 +1181,21 @@ export async function undoCreditCardPaymentPairForTransaction({ db = defaultSupa
   }
   if (pair.status === "voided") {
     return { ok: true, undone: true, idempotent: true, pair_id: pair.id, transaction_ids: [] };
+  }
+
+  if (typeof db.rpc === "function") {
+    const { data, error } = await db.rpc("undo_credit_card_payment_pair_atomic", {
+      p_business_id: businessId,
+      p_pair_id: pair.id,
+      p_actor: "user",
+    });
+    if (error) {
+      const err = new Error(error.message || "cc_payment_pair_undo_failed");
+      err.code = error.code || null;
+      err.status = 409;
+      throw err;
+    }
+    return data;
   }
 
   const nowIso = new Date().toISOString();

@@ -1820,6 +1820,11 @@ function BookkeepingCleanup() {
         affectedIds.forEach((txnId) => delete next[txnId]);
         return next;
       });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, {
+        showBackgroundRefresh: false,
+        refreshProcessingStatus: false,
+        refreshCounts: true,
+      });
     } catch (e) {
       const message = e?.body?.message || e?.message || "No matching opposite-side payment was found yet.";
       setCcPaymentActionState((prev) => ({

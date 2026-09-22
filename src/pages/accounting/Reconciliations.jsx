@@ -10,6 +10,7 @@ import {
   getReconciliationsStatus,
   getReconciliationsTransactions,
 } from "../../services/bookkeeping/bookkeepingClient.js";
+import { sortMonthlyReconciliationRows } from "../../services/bookkeeping/reconciliationAuditSort.js";
 
 function firstNonEmpty(...values) {
   return values.find((value) => value !== undefined && value !== null && value !== "") ?? null;
@@ -245,7 +246,7 @@ export default function Reconciliations() {
   const businessId = currentBusiness?.id || localStorage.getItem("currentBusinessId");
 
   const [accounts, setAccounts] = useState([]);
-  const [statusData, setStatusData] = useState({
+  const [, setStatusData] = useState({
     accounts: [],
     overall_status: "unknown",
     latest_run: null,
@@ -265,6 +266,7 @@ export default function Reconciliations() {
   const [totalTxns, setTotalTxns] = useState(0);
   const [page, setPage] = useState(1);
   const [pageSize] = useState(200);
+  const [auditSort, setAuditSort] = useState({ key: "date", direction: "desc" });
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [filters, setFilters] = useState({
@@ -396,6 +398,8 @@ export default function Reconciliations() {
         search: searchTerm || undefined,
         limit: pageSize,
         offset: (effectivePage - 1) * pageSize,
+        sort_by: auditSort.key,
+        sort_direction: auditSort.direction,
       };
       const res = await getReconciliationsTransactions(businessId, params);
       if (res?.ok === false) throw new Error(res?.error || "reconciliation_txns_failed");
@@ -413,7 +417,7 @@ export default function Reconciliations() {
     } finally {
       setLoadingTxns(false);
     }
-  }, [businessId, filters.account, filters.status, page, pageSize, searchTerm, selectedRunId, usingDemoData]);
+  }, [auditSort.direction, auditSort.key, businessId, filters.account, filters.status, page, pageSize, searchTerm, selectedRunId, usingDemoData]);
 
   useEffect(() => {
     if (usingDemoData) return;
@@ -506,9 +510,14 @@ export default function Reconciliations() {
     [demoRowsForSelectedRun, filters, searchTerm]
   );
 
+  const sortedDemoRows = useMemo(
+    () => sortMonthlyReconciliationRows(filteredDemoRows, auditSort.key, auditSort.direction),
+    [auditSort.direction, auditSort.key, filteredDemoRows]
+  );
+
   const pagedDemoRows = useMemo(
-    () => filteredDemoRows.slice((page - 1) * pageSize, page * pageSize),
-    [filteredDemoRows, page, pageSize]
+    () => sortedDemoRows.slice((page - 1) * pageSize, page * pageSize),
+    [page, pageSize, sortedDemoRows]
   );
 
   const displayRunHistory = useMemo(() => {
@@ -541,6 +550,11 @@ export default function Reconciliations() {
       total={displayTotal}
       page={page}
       pageSize={pageSize}
+      sort={auditSort}
+      onSortChange={(nextSort) => {
+        setAuditSort(nextSort);
+        setPage(1);
+      }}
       latestRunId={displayLatestRunId}
       selectedRunId={selectedRunId}
       selectedRunSummary={displaySelectedRunSummary}

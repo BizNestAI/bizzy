@@ -78,6 +78,39 @@ test("credit-card-payment pairs are durable, tenant scoped, and one leg cannot b
   assert.match(migration, /credit_card_payment_pair_card_business_mismatch/);
 });
 
+test("confirmation and undo atomically transition, validate, and audit both payment legs", () => {
+  const migration = read("supabase/migrations/20260922_atomic_credit_card_payment_pair_lifecycle.sql");
+  const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
+  const audit = read("scripts/manual/auditCreditCardPaymentPairLifecycle.sql");
+  const repair = read("scripts/manual/repairCreditCardPaymentPairLifecycle.sql");
+  const customerPage = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  const adminPage = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const customerRoute = read("src/api/bookkeeping/routes/bookkeeping.approvals.routes.js");
+  const adminRoute = read("src/api/admin/monthlyReview.routes.js");
+
+  assert.match(migration, /confirm_credit_card_payment_pair_atomic/);
+  assert.match(migration, /undo_credit_card_payment_pair_atomic/);
+  assert.match(migration, /for update/);
+  assert.match(migration, /cc_payment_pair_sign_mismatch/);
+  assert.match(migration, /cc_payment_pair_amount_mismatch/);
+  assert.match(migration, /cc_payment_pair_date_window_exceeded/);
+  assert.match(migration, /cc_payment_pair_leg_already_consumed/);
+  assert.match(migration, /values[\s\S]*'checking'[\s\S]*'credit_card'/);
+  assert.match(migration, /status = excluded\.status/);
+  assert.match(migration, /credit_card_payment_pair_events/);
+  assert.match(migration, /safe_to_auto_post',false/);
+  assert.match(service, /db\.rpc\("confirm_credit_card_payment_pair_atomic"/);
+  assert.match(service, /db\.rpc\("undo_credit_card_payment_pair_atomic"/);
+  assert.match(audit, /one_leg_matched/);
+  assert.match(audit, /reciprocal_reference_mismatch/);
+  assert.match(audit, /multiple_active_pairs/);
+  assert.match(repair, /rollback;/);
+  assert.match(customerRoute, /confirmCreditCardPaymentMatchForTransaction/);
+  assert.match(adminRoute, /confirmCreditCardPaymentMatchForTransaction/);
+  assert.match(customerPage, /affectedIds[\s\S]*reloadCurrentBookkeepingView/);
+  assert.match(adminPage, /handleMirrorConfirmCreditCardPaymentMatch[\s\S]*loadBookkeepingFeedCounts/);
+});
+
 test("safe matcher requires more than amount and fails ambiguous matches closed", () => {
   const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
 

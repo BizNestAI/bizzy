@@ -19,7 +19,7 @@ const TXN_ID = "144742f9-77d7-4ca5-82b6-0f19930d079a";
 function makeDb() {
   return {
     store: {
-      qbo_accounts: [
+      qbo_accounts_cache: [
         {
           business_id: BUSINESS_ID,
           qbo_account_id: "1150040001",

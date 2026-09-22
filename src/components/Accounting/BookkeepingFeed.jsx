@@ -670,6 +670,7 @@ export function incomingDepositMatchState(txn = {}) {
   if (!active && !isProbableProcessorFee) return { active: false };
   const candidates = txn.incoming_deposit_candidates || meta.incoming_deposit_candidates || [];
   const primary = candidates[0] || null;
+  const hasQboCandidate = Boolean(primary?.qbo_entity_type && primary?.qbo_entity_id);
   const confirmed = txn.status === "matched_existing_qbo" || txn.matched_existing_qbo === true || status === "confirmed";
   const unavailable = status === "match_check_unavailable" || blockReason === "match_check_unavailable";
   const explicitIndependentCount = Number(txn.incoming_deposit_independent_candidate_count ?? meta.incoming_deposit_independent_candidate_count);
@@ -687,10 +688,10 @@ export function incomingDepositMatchState(txn = {}) {
         ? "qbo_match_check_unavailable"
         : status === "ambiguous"
           ? "multiple_qbo_matches"
-          : status === "needs_confirmation" && primary
+          : hasQboCandidate
             ? "qbo_match_found"
             : processorFee?.matchState || (isProbableProcessorFee ? "checking_for_qbo_match" : null),
-    canCreateNewFee: processorFee?.canCreateNewFee === true,
+    canCreateNewFee: !hasQboCandidate && processorFee?.canCreateNewFee === true && meta.processor_fee_new_fee_authorized === true,
     confirmed,
     unavailable,
     ambiguous,
@@ -745,8 +746,10 @@ export function IncomingDepositMatchPanel({
       ? "QuickBooks match check temporarily unavailable"
       : processorState === "checking_for_qbo_match" || transitionMatching
         ? "Checking QuickBooks for an existing processing fee…"
-      : processorState === "no_existing_qbo_match"
+      : processorState === "no_existing_qbo_match" && state.canCreateNewFee
         ? "No existing QuickBooks fee found"
+      : processorState === "no_existing_qbo_match"
+        ? "QuickBooks fee check complete"
       : state.invoiceOnly
         ? "Possible duplicate income - payment verification needed"
       : state.needsFreshCheck
@@ -764,8 +767,10 @@ export function IncomingDepositMatchPanel({
       ? `Bizzi couldn't safely check whether this ${isProcessorFee ? "fee" : "deposit"} is already recorded in QuickBooks. It has not been posted.`
       : processorState === "checking_for_qbo_match" || transitionMatching
         ? "The ordinary approval action is blocked until this check completes."
-      : processorState === "no_existing_qbo_match"
+      : processorState === "no_existing_qbo_match" && state.canCreateNewFee
         ? "A fresh, complete QuickBooks check found no matching fee. Recording this fee will create a new QuickBooks expense using the selected processing-fee account."
+      : processorState === "no_existing_qbo_match"
+        ? "A fresh, complete QuickBooks check found no existing fee. This transaction can continue through the ordinary guarded approval workflow."
       : state.invoiceOnly
         ? "Bizzi found QuickBooks invoice activity that may already explain this deposit, but the payment or bank deposit chain still needs verification."
       : state.needsFreshCheck
@@ -823,7 +828,7 @@ export function IncomingDepositMatchPanel({
           {state.confirmed ? <div><span className="text-slate-400">Matched by</span><br />you</div> : null}
         </div>
       ) : null}
-      {processorState === "no_existing_qbo_match" ? (
+      {processorState === "no_existing_qbo_match" && state.canCreateNewFee ? (
         <div className="mt-3 text-[11px] text-slate-100">
           <span className="text-slate-400">New fee account</span><br />
           {txn.glAccountName || txn.suggestedAccountName || "Payment Processing Fees"}
@@ -871,7 +876,7 @@ export function IncomingDepositMatchPanel({
           </>
         ) : state.unavailable || processorState === "qbo_match_check_unavailable" || processorState === "checking_for_qbo_match" ? (
           <button type="button" disabled={readOnly || transitionMatching} onClick={() => onInspect?.(txn.id, null, txn)} className="inline-flex items-center gap-1.5 rounded-md border border-amber-200/35 px-2.5 py-1 text-[10px] font-semibold text-amber-100 disabled:opacity-45">{transitionMatching ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}{transitionMatching ? "Refreshing QuickBooks…" : "Try again"}</button>
-        ) : processorState === "no_existing_qbo_match" ? (
+        ) : processorState === "no_existing_qbo_match" && state.canCreateNewFee ? (
           <button type="button" disabled={readOnly || transitionMatching} onClick={() => onRecordNewFee?.(txn.id, txn.glAccountId || txn.suggestedAccountId || null)} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">Record New Fee</button>
         ) : processorState === "posted_duplicate_review_required" ? (
           <span className="rounded-md border border-rose-300/30 bg-rose-500/10 px-2.5 py-1 text-[10px] font-semibold text-rose-100">Posting receipt protected</span>
@@ -1635,7 +1640,7 @@ export default function BookkeepingFeed({
                               ? "Retry"
                               : incomingMatch.processorMatchState === "checking_for_qbo_match"
                                 ? "Check QuickBooks"
-                                : incomingMatch.processorMatchState === "no_existing_qbo_match"
+                                : incomingMatch.processorMatchState === "no_existing_qbo_match" && incomingMatch.canCreateNewFee
                                   ? "Record New Fee"
                                   : incomingMatch.processorMatchState === "posted_duplicate_review_required"
                                     ? "Review duplicate"

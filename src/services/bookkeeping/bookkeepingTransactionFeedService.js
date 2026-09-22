@@ -500,7 +500,7 @@ function shouldDiscoverIncomingDepositForFeed(row = {}) {
     (processorFee && ["approved", "auto_approved", "failed", "handled"].includes(status) && !row.qbo_txn_id && !row.posted_at);
 }
 
-function incomingDepositOverlayFromResult(result = {}, row = {}) {
+export function incomingDepositOverlayFromResult(result = {}, row = {}) {
   const candidates = (result.candidates || []).map((candidate) => ({
     qbo_entity_type: candidate.qbo_entity_type,
     qbo_entity_id: candidate.qbo_entity_id,
@@ -547,7 +547,10 @@ function incomingDepositOverlayFromResult(result = {}, row = {}) {
     evidenceStatus: status === "candidate" && result.confidence_tier === "tier_4" ? "fresh_complete" : status,
     candidates,
     selectedCandidateId: null,
-    canCreateNewFee: processorMatchState === "no_existing_qbo_match",
+    // A zero-result search permits the ordinary guarded approval path.  Creating a
+    // replacement fee is a separate, explicit user decision after rejecting a
+    // candidate; never infer that permission from an empty search alone.
+    canCreateNewFee: processorMatchState === "no_existing_qbo_match" && row.meta?.processor_fee_new_fee_authorized === true,
     blockingReason: result.confirmability_reason || null,
     lastCheckedAt: result.source_freshness_at || null,
   } : null;

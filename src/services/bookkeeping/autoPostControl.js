@@ -332,7 +332,7 @@ async function getHandledCategorizationTransactionIds(db, businessId) {
     .from("transaction_categorizations")
     .select("transaction_id")
     .eq("business_id", businessId)
-    .in("status", ["approved", "auto_approved"])
+    .in("status", ["approved", "auto_approved", "failed"])
     .is("qbo_txn_id", null);
   if (error) throw wrapAutoPostDbError("auto_post_backlog_categorizations_fetch_failed", error);
   return (data || []).map((row) => row.transaction_id).filter(Boolean);
@@ -375,7 +375,7 @@ async function clearBacklogPostAfter(db, businessId, transactionIds = [], nowIso
       .eq("business_id", businessId)
       .in("transaction_id", ids)
       .is("qbo_txn_id", null)
-      .in("status", ["approved", "auto_approved"]);
+      .in("status", ["approved", "auto_approved", "failed"]);
     if (error) throw wrapAutoPostDbError("auto_post_backlog_clear_failed", error);
   }
 }
@@ -1365,7 +1365,7 @@ async function recordMerchantApprovalDecision({
     .eq("business_id", businessId)
     .eq("transaction_id", item.transaction_id)
     .is("qbo_txn_id", null)
-    .in("status", ["approved", "auto_approved"])
+    .in("status", ["approved", "auto_approved", "failed"])
     .select("transaction_id,final_qbo_account_id,final_qbo_account_name,post_after,meta")
     .maybeSingle();
   if (error) return { ok: false, transaction_id: item.transaction_id, reason: error.message || "update_failed" };
@@ -1429,7 +1429,7 @@ async function recordMerchantApprovalOperationAccepted({
     .eq("business_id", businessId)
     .eq("transaction_id", item.transaction_id)
     .is("qbo_txn_id", null)
-    .in("status", ["approved", "auto_approved"]);
+    .in("status", ["approved", "auto_approved", "failed"]);
   if (error) return { ok: false, transaction_id: item.transaction_id, reason: error.message || "operation_accept_failed" };
   return { ok: true, transaction_id: item.transaction_id, status: "accepted" };
 }
@@ -1837,7 +1837,7 @@ async function fetchPendingMerchantApprovalOperationRows({
       .select("business_id,transaction_id,status,final_qbo_account_id,final_qbo_account_name,qbo_txn_id,post_after,post_error,meta,updated_at")
       .contains("meta", { merchant_group_operation_state: state })
       .is("qbo_txn_id", null)
-      .in("status", ["approved", "auto_approved"])
+      .in("status", ["approved", "auto_approved", "failed"])
       .order("updated_at", { ascending: true })
       .order("transaction_id", { ascending: true })
       .limit(limit);
@@ -1915,7 +1915,7 @@ async function claimMerchantBacklogApprovalOperation({
     .eq("business_id", businessId)
     .in("transaction_id", ids)
     .is("qbo_txn_id", null)
-    .in("status", ["approved", "auto_approved"])
+    .in("status", ["approved", "auto_approved", "failed"])
     .order("updated_at", { ascending: true })
     .order("transaction_id", { ascending: true });
   if (error) throw wrapAutoPostDbError("merchant_group_claim_fetch_failed", error);
@@ -1944,7 +1944,7 @@ async function claimMerchantBacklogApprovalOperation({
       .eq("business_id", businessId)
       .eq("transaction_id", row.transaction_id)
       .is("qbo_txn_id", null)
-      .in("status", ["approved", "auto_approved"])
+      .in("status", ["approved", "auto_approved", "failed"])
       .contains("meta", {
         merchant_group_operation_id: operation.operation_id,
         merchant_group_operation_state: state,
@@ -2198,7 +2198,7 @@ export async function postReadyBacklogTransactions({
       .eq("business_id", businessId)
       .eq("transaction_id", item.transaction_id)
       .is("qbo_txn_id", null)
-      .in("status", ["approved", "auto_approved"]);
+      .in("status", ["approved", "auto_approved", "failed"]);
     if (error) blocked.push({ transaction_id: item.transaction_id, reason: error.message || "schedule_failed" });
     else scheduled.push({ transaction_id: item.transaction_id, post_after: postAfter });
   }
@@ -2428,7 +2428,7 @@ async function scheduleBacklogRows({ db, businessId, evaluations = [], postAfter
         .eq("business_id", businessId)
         .eq("transaction_id", row.transaction_id)
         .is("qbo_txn_id", null)
-        .in("status", ["approved", "auto_approved"]);
+        .in("status", ["approved", "auto_approved", "failed"]);
       if (error) {
         failed.push({ transaction_id: row.transaction_id, reason: error.message || "schedule_failed" });
       } else {

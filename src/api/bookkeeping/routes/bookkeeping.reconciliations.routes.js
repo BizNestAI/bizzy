@@ -506,6 +506,8 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
     const dateFrom = parsed.date_from;
     const dateTo = parsed.date_to;
     const search = (req.query?.search || "").trim();
+    const sortBy = req.query?.sort_by || "date";
+    const sortDirection = req.query?.sort_direction || "desc";
 
     if (globalThis?.process?.env?.NODE_ENV !== "production") {
       console.info("[reconciliations][transactions] resolved_range", {
@@ -532,6 +534,8 @@ router.get("/reconciliations/transactions", requireAuth, async (req, res) => {
       search,
       limit,
       offset,
+      sort_by: sortBy,
+      sort_direction: sortDirection,
     });
     const run_summary = pipelineRunSummary({ run: runSummaryRow, pipeline });
 

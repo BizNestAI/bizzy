@@ -34,6 +34,13 @@ test("feed contract preserves every processor-fee match state instead of droppin
   assert.match(feedService, /processor_fee: processorFee/);
 });
 
+test("candidate evidence overrides stale new-fee metadata in every feed", () => {
+  assert.match(feed, /hasQboCandidate/);
+  assert.match(feed, /hasQboCandidate[\s\S]*"qbo_match_found"/);
+  assert.match(feed, /!hasQboCandidate && processorFee\?\.canCreateNewFee/);
+  assert.match(feedService, /processor_fee_new_fee_authorized === true/);
+});
+
 test("manual approval invokes the authoritative match guard for processor-fee outflows", () => {
   assert.match(approvalService, /detectProcessorSettlementActivity\(bankTxn \|\| \{\}\)\?\.kind === "fee"/);
   assert.match(approvalService, /\(!isIncomingDeposit && !isProcessorFee\)/);

@@ -271,6 +271,8 @@ router.post("/credit-card-payments/:transactionId/confirm-match", requireAuth, a
       transactionId,
       targetQboAccountId,
       targetTransactionId,
+      actor: req.user?.id || "user",
+      matchMethod: "customer_books_review",
     });
     result.timings_ms = {
       ...(result.timings_ms || {}),

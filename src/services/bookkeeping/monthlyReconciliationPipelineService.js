@@ -1,4 +1,5 @@
 import { supabase } from "../supabaseAdmin.js";
+import { sortMonthlyReconciliationRows } from "./reconciliationAuditSort.js";
 import { removeSupersededPendingPlaidRows as removeSharedSupersededPendingPlaidRows } from "./pendingPlaidSupersession.js";
 import { deriveQboPostingLifecycle } from "./qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "./postingTraceDisplay.js";
@@ -275,7 +276,11 @@ export async function loadMonthlyReconciliationPipeline(businessId, opts = {}) {
       reconciliationItem: reconciliationItemByTxn.get(String(row.id)) || null,
     }));
   const totals = finalizePipelineTotals(summarizePipelineStatuses(rows));
-  const filteredRows = applyPipelineFilters(rows, opts);
+  const filteredRows = sortMonthlyReconciliationRows(
+    applyPipelineFilters(rows, opts),
+    opts.sort_by,
+    opts.sort_direction
+  );
   const offset = Math.max(0, Number(opts.offset || 0));
   const limit = Number(opts.limit || 0);
   const pagedRows = limit > 0 ? filteredRows.slice(offset, offset + limit) : filteredRows;

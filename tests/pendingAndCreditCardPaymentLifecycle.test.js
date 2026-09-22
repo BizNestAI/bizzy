@@ -197,6 +197,7 @@ test("confirm-match creates/reuses a Plaid pair only and does not call QBO posti
 
   assert.match(pairService, /validateBusinessQboPaymentAccountType/);
   assert.match(body, /targetQboAccountId/);
-  assert.match(body, /linkCategorizationToCreditCardPair/);
+  assert.match(body, /confirmCreditCardPaymentPairForTransaction/);
+  assert.match(pairService, /confirm_credit_card_payment_pair_atomic/);
   assert.doesNotMatch(body, /createQboTransfer|postSingleBookkeepingTransactionNow|claimCreditCardPaymentPairPosting|getQBOClient/);
 });
