@@ -2,8 +2,8 @@
 import { Router } from "express";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
-import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
-import { postSingleBookkeepingTransactionNow, runBooksPostOnce } from "../../../jobs/booksPost.cron.js";
+import { ensureBusinessId, readBusinessId } from "./_bookkeepingRouteUtils.js";
+import { postSingleBookkeepingTransactionNow, runBooksPostOnce, signalMerchantApprovalQueueWakeup } from "../../../jobs/booksPost.cron.js";
 import {
   getAutoPostSettings,
   getCanonicalPostingBacklogSummary,
@@ -12,6 +12,7 @@ import {
   previewAutoPostBacklog,
   releaseAutoPostBacklogScope,
   requestMerchantGroupPostingRetryNow,
+  persistMerchantBacklogGroupApprovalOperation,
   setAutoPostEnabled,
 } from "../../../services/bookkeeping/autoPostControl.js";
 import {
@@ -24,6 +25,8 @@ import { getLatestQuickBooksTokenRow } from "../../../services/quickbooksTokenSe
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../../services/tax/taxChangeEvents.js";
 import { runLiveDuplicatePreflight } from "../../../services/bookkeeping/qboDuplicatePreflightService.js";
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../../_shared/internalStaffAuth.js";
+import { normalizeMerchantGroupApprovalRequest, UUID_PATTERN } from "../../../contracts/merchantGroupApprovalContract.js";
+import crypto from "node:crypto";
 
 const router = Router();
 const POSTING_GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
@@ -34,6 +37,13 @@ function nowMs() {
 
 function routeTiming(startMs) {
   return Math.max(0, nowMs() - startMs);
+}
+
+function isMissingInteractiveCommandSchema(error) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || error || "");
+  return ["42P01", "PGRST200", "PGRST204", "PGRST205"].includes(code) ||
+    (/bookkeeping_interactive_posting_commands/i.test(message) && /(does not exist|schema cache|could not find)/i.test(message));
 }
 
 function setNoStoreHeaders(res) {
@@ -237,14 +247,71 @@ router.get("/posting/backlog/merchant-groups", requireAuth, requireInternalRole(
 router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInternalRole(MONTHLY_REVIEW_STAFF_ROLES), async (req, res) => {
   const routeStartMs = nowMs();
   const stageTimings = {};
-  const businessId = ensureBusinessId(req, res);
-  if (!businessId) return;
+  const correlationId = crypto.randomUUID();
+  const normalized = normalizeMerchantGroupApprovalRequest(req.body || {});
+  const businessId = readBusinessId(req);
+  if (!businessId) {
+    console.warn("[bookkeeping][merchant-group-approve] rejected", {
+      correlation_id: correlationId,
+      route: "merchant_group_approve",
+      failure_stage: "business_resolution",
+      error_code: "missing_business_id",
+      supplied_transaction_count: normalized.suppliedTransactionCount,
+      normalized_transaction_count: normalized.transactionIds.length,
+      qbo_posting_invoked: false,
+    });
+    return res.status(400).json({
+      ok: false,
+      error: "missing_business_id",
+      message: "A business context is required.",
+      correlation_id: correlationId,
+    });
+  }
+  const diagnostics = {
+    correlation_id: correlationId,
+    route: "merchant_group_approve",
+    business_id: businessId,
+    supplied_group_id: normalized.groupId,
+    supplied_transaction_count: normalized.suppliedTransactionCount,
+    normalized_transaction_count: normalized.transactionIds.length,
+    resolved_row_count: 0,
+    eligible_posting_count: 0,
+    rejected_count: Math.max(0, normalized.suppliedTransactionCount - normalized.transactionIds.length),
+    rejection_reasons: [],
+    qbo_posting_invoked: false,
+  };
+  if (!UUID_PATTERN.test(String(businessId))) {
+    diagnostics.rejection_reasons.push("invalid_business_id");
+    console.warn("[bookkeeping][merchant-group-approve] rejected", diagnostics);
+    return res.status(400).json({ ok: false, error: "invalid_business_id", message: "The selected business is invalid.", correlation_id: correlationId });
+  }
+  if (normalized.suppliedTransactionCount === 0 || normalized.transactionIds.length === 0) {
+    diagnostics.rejection_reasons.push(normalized.suppliedTransactionCount === 0 ? "transaction_ids_missing" : "transaction_ids_invalid");
+    console.warn("[bookkeeping][merchant-group-approve] rejected", diagnostics);
+    return res.status(422).json({
+      ok: false,
+      error: diagnostics.rejection_reasons[0],
+      message: "No valid transactions were supplied for posting. Refresh Posting Review and try again.",
+      correlation_id: correlationId,
+    });
+  }
+  if (normalized.transactionIds.length !== normalized.suppliedTransactionCount) {
+    diagnostics.rejection_reasons.push("some_transaction_ids_invalid");
+    console.warn("[bookkeeping][merchant-group-approve] rejected", diagnostics);
+    return res.status(422).json({ ok: false, error: "invalid_transaction_ids", message: "One or more selected transactions are invalid.", correlation_id: correlationId });
+  }
+  if (!normalized.selectedQboAccountId) {
+    diagnostics.rejection_reasons.push("selected_account_missing");
+    console.warn("[bookkeeping][merchant-group-approve] rejected", diagnostics);
+    return res.status(422).json({ ok: false, error: "selected_account_missing", message: "Select a QuickBooks category before posting.", correlation_id: correlationId });
+  }
   console.info("[merchant-approval-timeline]", {
     stage: "approval_accept_started",
     operation_id: null,
     business_id: businessId,
-    transaction_ids: Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids : [],
-    transaction_count: Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids.length : 0,
+    transaction_ids: normalized.transactionIds,
+    transaction_count: normalized.transactionIds.length,
+    correlation_id: correlationId,
     elapsed_ms: 0,
     worker: `${process.env.RAILWAY_SERVICE_NAME || process.env.HOSTNAME || "api"}:${process.pid || "worker"}`,
     deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,
@@ -258,22 +325,53 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       db: supabase,
       businessId,
       actorId: req.user?.id || req.user?.sub || null,
-      selectedQboAccountId: req.body?.selected_qbo_account_id || req.body?.qbo_account_id || null,
-      rememberForFuture: req.body?.remember_for_future !== false,
-      groupSnapshotToken: req.body?.group_snapshot_token || req.body?.snapshot_token || null,
-      transactionIds: Array.isArray(req.body?.transaction_ids) ? req.body.transaction_ids : [],
-      exclusionIds: Array.isArray(req.body?.exclusion_ids) ? req.body.exclusion_ids : [],
-      expectedRowVersions: req.body?.expected_row_versions || {},
-      idempotencyKey: req.get("Idempotency-Key") || req.body?.idempotency_key || null,
+      selectedQboAccountId: normalized.selectedQboAccountId,
+      rememberForFuture: normalized.rememberForFuture,
+      groupSnapshotToken: normalized.groupSnapshotToken,
+      transactionIds: normalized.transactionIds,
+      exclusionIds: normalized.exclusionIds,
+      expectedRowVersions: normalized.expectedRowVersions,
+      idempotencyKey: req.get("Idempotency-Key") || normalized.idempotencyKey,
     };
     stageStartMs = nowMs();
-    const decision = await createInteractivePostingCommand({
-      ...common,
-      merchantSnapshot: {
-        group_snapshot_token: common.groupSnapshotToken,
-        exclusion_ids: common.exclusionIds,
-      },
-    });
+    const accepted = await persistMerchantBacklogGroupApprovalOperation(common);
+    diagnostics.resolved_row_count = Number(accepted.accepted_count || 0) + Number(accepted.blocked_count || 0);
+    diagnostics.eligible_posting_count = Number(accepted.accepted_count || 0);
+    diagnostics.rejected_count += Number(accepted.blocked_count || 0);
+    diagnostics.rejection_reasons.push(...(accepted.blocked || []).map((row) => row.reason).filter(Boolean));
+    if (accepted.accepted_count !== normalized.transactionIds.length) {
+      const resolutionError = new Error(accepted.blocked?.[0]?.reason || "selected_transactions_not_eligible");
+      resolutionError.status = 409;
+      resolutionError.code = accepted.blocked?.[0]?.reason || "selected_transactions_not_eligible";
+      throw resolutionError;
+    }
+    let decision;
+    let workerWakeup = "durable_command";
+    try {
+      decision = await createInteractivePostingCommand({
+        ...common,
+        merchantSnapshot: {
+          group_id: normalized.groupId,
+          group_snapshot_token: common.groupSnapshotToken,
+          exclusion_ids: common.exclusionIds,
+        },
+      });
+    } catch (commandError) {
+      if (!isMissingInteractiveCommandSchema(commandError)) throw commandError;
+      workerWakeup = "legacy_transaction_queue";
+      decision = { ok: true, reused: false, operation_id: accepted.operation_id, command: null };
+      signalMerchantApprovalQueueWakeup({
+        businessId,
+        operationId: accepted.operation_id,
+        transactionIds: normalized.transactionIds,
+        requestedAt: new Date().toISOString(),
+      });
+      console.warn("[bookkeeping][merchant-group-approve] durable command schema unavailable; using transaction queue", {
+        ...diagnostics,
+        operation_id: accepted.operation_id,
+        schema_error_code: commandError?.code || null,
+      });
+    }
     stageTimings.accept_operation_ms = routeTiming(stageStartMs);
     console.info("[merchant-approval-timeline]", {
       stage: "command_committed",
@@ -282,27 +380,35 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       transaction_ids: common.transactionIds,
       transaction_count: common.transactionIds.length,
       elapsed_ms: routeTiming(routeStartMs),
+      correlation_id: correlationId,
       worker: `${process.env.RAILWAY_SERVICE_NAME || process.env.HOSTNAME || "api"}:${process.pid || "worker"}`,
       deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,
     });
     return res.status(202).json({
       ...decision,
-      worker_wakeup: "durable_command",
+      correlation_id: correlationId,
+      worker_wakeup: workerWakeup,
       stage_timings_ms: stageTimings,
       response_ms: routeTiming(routeStartMs),
       status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(businessId)}`,
     });
   } catch (err) {
     console.error("[bookkeeping][merchant-group-approve] failed", {
+      ...diagnostics,
       business_id: businessId,
-      error: err?.code || err?.message || String(err),
+      failure_stage: diagnostics.resolved_row_count ? "command_persistence" : "transaction_resolution",
+      error_code: err?.code || "merchant_group_approval_failed",
+      error_name: err?.name || "Error",
+      error_message: err?.message || String(err),
+      stack: err?.stack || null,
       response_ms: routeTiming(routeStartMs),
       stage_timings_ms: stageTimings,
     });
     return res.status(err?.status || 500).json({
       ok: false,
       error: err?.code || "merchant_group_approval_failed",
-      message: "Could not save this posting decision.",
+      message: err?.status && err.status < 500 ? `Posting could not continue: ${err.message}.` : "Could not save this posting decision.",
+      correlation_id: correlationId,
       response_ms: routeTiming(routeStartMs),
     });
   }
@@ -318,7 +424,7 @@ router.get("/posting/backlog/merchant-groups/operations/:operationId", requireAu
     const operationId = String(req.params?.operationId || "").trim();
     if (!operationId) return res.status(400).json({ ok: false, error: "missing_operation_id", message: "Missing operation id." });
     const durableStatus = await getInteractivePostingCommandStatus({ db: supabase, businessId, operationId }).catch((err) => {
-      if (err?.status === 404 || err?.message === "interactive_posting_command_not_found") return null;
+      if (err?.status === 404 || err?.message === "interactive_posting_command_not_found" || isMissingInteractiveCommandSchema(err)) return null;
       throw err;
     });
     if (durableStatus) return res.json(durableStatus);

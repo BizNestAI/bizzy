@@ -24,6 +24,7 @@ import {
   patchSourceLedgerTransaction,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
+import { buildMerchantGroupApprovalRequest } from "../../contracts/merchantGroupApprovalContract.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -728,18 +729,23 @@ export default function MonthlyReviewConsole() {
     }));
     setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "" }));
     try {
+      const requestBody = buildMerchantGroupApprovalRequest({
+        businessId: selectedBusinessId,
+        group,
+        transactionIds: includedIds,
+        exclusionIds: excludedIds,
+        selectedQboAccountId: approval.qboAccountId || options.qboAccountId || group.proposed_qbo_account_id,
+        rememberForFuture: approval.rememberForFuture ?? (options.rememberForFuture === true),
+        idempotencyKey: `monthly-review-posting-group-${group.snapshot_token}`,
+      });
+      if (requestBody.transaction_ids.length !== includedIds.length || requestBody.transaction_ids.length === 0) {
+        const contractError = new Error("This posting group is missing its transaction identity. Refresh Posting Review and try again.");
+        contractError.code = "invalid_transaction_ids";
+        throw contractError;
+      }
       const decision = await safeFetch("/api/bookkeeping/posting/backlog/merchant-groups/approve", {
         method: "POST",
-        body: {
-          business_id: selectedBusinessId,
-          group_snapshot_token: group.snapshot_token,
-          selected_qbo_account_id: approval.qboAccountId || options.qboAccountId || group.proposed_qbo_account_id,
-          remember_for_future: approval.rememberForFuture ?? (options.rememberForFuture === true),
-          transaction_ids: includedIds,
-          exclusion_ids: excludedIds,
-          expected_row_versions: group.row_versions || {},
-          idempotency_key: `monthly-review-posting-group-${group.snapshot_token}`,
-        },
+        body: requestBody,
       });
       const statusUrl = decision?.status_url || (decision?.operation_id
         ? `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(selectedBusinessId)}`
@@ -837,7 +843,7 @@ export default function MonthlyReviewConsole() {
       postingReviewSubmittingRef.current.delete(group.group_id);
       setPostingReviewProgress((current) => ({
         ...current,
-        [group.group_id]: e?.body?.message || e?.message || "Bizzi could not save this posting decision.",
+        [group.group_id]: `${e?.body?.message || e?.message || "Bizzi could not save this posting decision."}${e?.body?.correlation_id ? ` Reference: ${e.body.correlation_id}` : ""}`,
       }));
     }
   }, [loadBookkeepingFeedCounts, loadPostingReview, postingReviewAction, postingReviewOptions, selectedBusinessId]);
