@@ -156,13 +156,14 @@ test("manual posting cannot bypass bookkeeping start date, mapping, idempotency,
   assert.match(cron, /if \(!posted\?\.qbo_txn_id \|\| posted\.status !== "posted"\)/);
 });
 
-test("failed manual QBO writes stay visible in handled feed for retry", () => {
+test("failed manual QBO writes remain retryable without entering the handled feed", () => {
   const transactionsService = readFileSync(join(root, "src/services/bookkeeping/bookkeepingTransactionFeedService.js"), "utf8");
   const feed = readFileSync(join(root, "src/components/Accounting/BookkeepingFeed.jsx"), "utf8");
 
-  assert.match(transactionsService, /\["approved", "auto_approved", "failed"\]\.includes\(status\)/);
+  assert.match(transactionsService, /hasProvenPostingFailure/);
+  assert.match(transactionsService, /\["approved", "auto_approved", "handled"\]\.includes\(status\)/);
   assert.match(feed, /\["approved", "auto_approved", "failed"\]\.includes\(txn\.status\)/);
-  assert.match(feed, /Posting\.\.\./);
+  assert.match(feed, /txn\.status === "failed" \? "Retry" : "Post"/);
 });
 
 test("manual posting affects only the selected transaction row and prevents repeated clicks", () => {

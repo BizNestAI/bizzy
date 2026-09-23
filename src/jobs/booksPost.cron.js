@@ -35,6 +35,7 @@ import {
 import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/incomingDepositMatchService.js";
 import { postingFailureStatus } from "../services/bookkeeping/bookkeepingLifecycleState.js";
 import { detectProcessorSettlementActivity } from "../services/bookkeeping/processorSettlementProfiles.js";
+import { decideManualPostingGate, hasAuthorizedMonthlyReviewApproval } from "../services/bookkeeping/manualPostingAuthority.js";
 import {
   buildLoanPaymentPurchasePayload,
   fetchConfirmedLoanPaymentSplit,
@@ -815,6 +816,16 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
       ? "qbo_client_acquisition"
       : "canonical_vendor_db";
     const outcome = classifyVendorEnsureOutcome(null, err, fallbackStage);
+    const manualDecision = decideManualPostingGate({ item, reason: outcome.reason, gate: "vendor_payee" });
+    if (manualDecision.allowed && manualDecision.bypassed) {
+      log.info("[books-post] manual approval bypassed soft vendor review gate", {
+        business_id: item.business_id,
+        transaction_id: item.transaction_id,
+        operation_id: item?.meta?.manual_approval?.operation_id || null,
+        reason: outcome.reason,
+      });
+      return { ok: true, requirement, softReviewBypass: manualDecision };
+    }
     await markVendorPostingBlocked({ item, requestId, requirement, outcome });
     return { ok: false, requirement, outcome };
   }
@@ -833,6 +844,16 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
     return { ok: true, requirement, vendorEnsure };
   }
   const outcome = classifyVendorEnsureOutcome(vendorEnsure);
+  const manualDecision = decideManualPostingGate({ item, reason: outcome.reason, gate: "vendor_payee" });
+  if (manualDecision.allowed && manualDecision.bypassed) {
+    log.info("[books-post] manual approval bypassed soft vendor review gate", {
+      business_id: item.business_id,
+      transaction_id: item.transaction_id,
+      operation_id: item?.meta?.manual_approval?.operation_id || null,
+      reason: outcome.reason,
+    });
+    return { ok: true, requirement, vendorEnsure, softReviewBypass: manualDecision };
+  }
   await markVendorPostingBlocked({ item, requestId, requirement, outcome, vendorResult: vendorEnsure });
   return { ok: false, requirement, outcome, vendorEnsure };
 }
@@ -944,6 +965,7 @@ export async function finalizeCategorizationAfterQboSuccess({
       next_post_attempt_at: null,
       manual_post: manual === true,
       qbo_request_id: requestId,
+      ...(hasAuthorizedMonthlyReviewApproval(current || item) ? { manual_approval_state: "qbo_posted" } : {}),
       ...(current?.meta?.merchant_group_operation_id || item?.meta?.merchant_group_operation_id
         ? {
             merchant_group_operation_state: "posted",
@@ -2115,12 +2137,24 @@ export async function handleItem(item, options = {}) {
   await supabase
     .from("transaction_categorizations")
     .update({
-      meta: { ...(item.meta || {}), post_idempotency_key: idempotencyKey, posting_in_progress: true, manual_post: manual === true },
+      meta: {
+        ...(item.meta || {}),
+        post_idempotency_key: idempotencyKey,
+        posting_in_progress: true,
+        manual_post: manual === true,
+        ...(hasAuthorizedMonthlyReviewApproval(item) ? { manual_approval_state: "qbo_posting" } : {}),
+      },
       last_post_attempt_at: nowIso,
     })
     .eq("business_id", businessId)
     .eq("transaction_id", txnId);
-  item.meta = { ...(item.meta || {}), post_idempotency_key: idempotencyKey, posting_in_progress: true, manual_post: manual === true };
+  item.meta = {
+    ...(item.meta || {}),
+    post_idempotency_key: idempotencyKey,
+    posting_in_progress: true,
+    manual_post: manual === true,
+    ...(hasAuthorizedMonthlyReviewApproval(item) ? { manual_approval_state: "qbo_posting" } : {}),
+  };
 
   const qboTxnType = resolveQboTxnType(item, bank, mapping);
   if (!qboTxnType) {
@@ -2521,11 +2555,19 @@ async function markFailed(item, message) {
     await markTransactionNonPostable(item, "cc_payment_pair_requires_confirmation");
     return;
   }
+  const shouldStop =
+    nextRetries >= MAX_RETRIES ||
+    message === "cc_payment_post_not_supported" ||
+    message === "cc_payment_mapping_not_safe" ||
+    message === "cc_charge_post_not_supported";
   const meta = {
     ...(item.meta || {}),
     post_retry_count: nextRetries,
     posting_in_progress: false,
     next_post_attempt_at: nextAttemptIso,
+    ...(hasAuthorizedMonthlyReviewApproval(item)
+      ? { manual_approval_state: shouldStop ? "needs_attention" : "posting_failed" }
+      : {}),
   };
   if (message === "cc_payment_post_not_supported") {
     meta.post_block_reason = "cc_payment_post_not_supported";
@@ -2536,11 +2578,6 @@ async function markFailed(item, message) {
   if (message === "cc_charge_post_not_supported") {
     meta.post_block_reason = "cc_charge_post_not_supported";
   }
-  const shouldStop =
-    nextRetries >= MAX_RETRIES ||
-    message === "cc_payment_post_not_supported" ||
-    message === "cc_payment_mapping_not_safe" ||
-    message === "cc_charge_post_not_supported";
   if (shouldStop) {
     meta.next_post_attempt_at = null;
   }

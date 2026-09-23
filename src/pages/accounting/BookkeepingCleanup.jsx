@@ -493,7 +493,7 @@ function getTxnAccountKey(txn = {}) {
 
 function matchesBooksTab(txn = {}, tabKey = "needs_review") {
   const status = txn.status || "needs_review";
-  const handledStatuses = ["approved", "auto_approved", "failed"];
+  const handledStatuses = ["approved", "auto_approved", "handled"];
   const matchedExistingQbo =
     status === "matched_existing_qbo" ||
     txn.matched_existing_qbo === true ||
@@ -2392,7 +2392,7 @@ function BookkeepingCleanup() {
       }
     }
     try {
-      if (txn && ["approved", "auto_approved", "failed"].includes(txn.status)) {
+      if (txn && ["approved", "auto_approved", "handled"].includes(txn.status)) {
         if (txn.canEdit) {
           await updateHandledTransaction(businessId, txnId, {
             final_qbo_account_id: accountId,

@@ -25,7 +25,7 @@ test("shared feed service preserves Books Review status semantics", async () => 
   assert.equal(matchesTransactionStatusFilter("needs_review", { status: "auto_approved", meta: { is_check: true } }), true);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "approved" }), true);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "auto_approved" }), true);
-  assert.equal(matchesTransactionStatusFilter("handled", { status: "failed" }), true);
+  assert.equal(matchesTransactionStatusFilter("handled", { status: "failed", post_error: "qbo_rejected", last_post_attempt_at: "2026-09-22T00:00:00Z" }), false);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "posted", qbo_txn_id: "1" }), false);
   assert.equal(matchesTransactionStatusFilter("posted", { status: "approved", qbo_txn_id: "qbo-1" }), true);
   assert.equal(matchesTransactionStatusFilter("matched", { status: "matched_existing_qbo" }), true);

@@ -252,7 +252,7 @@ test("pair-level concurrency, duplicate preflight, and posted propagation are ex
   assert.match(service, /\.in\("transaction_id", ids\)/);
 });
 
-test("failed posts remain visible generically in Books Review handled state", () => {
+test("failed posts remain actionable outside Books Review handled state", () => {
   const cron = read("src/jobs/booksPost.cron.js");
   const txFeedService = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
   const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
@@ -260,8 +260,9 @@ test("failed posts remain visible generically in Books Review handled state", ()
 
   assert.match(cron, /status: shouldStop \? "failed" : item\.status/);
   assert.match(cron, /posting_in_progress: false/);
-  assert.match(txFeedService, /\["approved", "auto_approved", "failed"\]\.includes\(status\)/);
-  assert.match(page, /const handledStatuses = \["approved", "auto_approved", "failed"\]/);
+  assert.match(txFeedService, /hasProvenPostingFailure/);
+  assert.match(txFeedService, /\["approved", "auto_approved", "handled"\]\.includes\(status\)/);
+  assert.match(page, /const handledStatuses = \["approved", "auto_approved", "handled"\]/);
   assert.match(feed, /\["approved", "auto_approved", "failed"\]\.includes\(txn\.status\)/);
 });
 

@@ -4,6 +4,11 @@ import { getVendorRuleForTransaction } from "./vendorRuleMatcher.js";
 import { canAutoHandle } from "./autoHandlingPolicy.js";
 import { learnVendorRuleFromTransaction } from "./vendorRuleLearner.js";
 import { normalizeMerchantIdentity } from "./merchantNormalization.js";
+import {
+  buildMonthlyReviewManualApproval,
+  hasAuthorizedMonthlyReviewApproval,
+  originalManualReviewReason,
+} from "./manualPostingAuthority.js";
 
 function isMissingAutoPostColumn(error) {
   const message = String(error?.message || error || "").toLowerCase();
@@ -661,7 +666,7 @@ function assertMatchingPreviewFingerprint(preview, expectedFingerprint) {
 async function fetchBacklogCategorizationRows(db, businessId, { transactionIds = [] } = {}) {
   let query = db
     .from("transaction_categorizations")
-    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,last_post_attempt_at,meta,qbo_txn_id,updated_at")
+    .select("transaction_id,business_id,status,reason,confidence,final_qbo_account_id,final_qbo_account_name,post_after,post_error,last_post_attempt_at,meta,qbo_txn_id,updated_at")
     .eq("business_id", businessId)
     .in("status", ["approved", "auto_approved", "failed"])
     .is("qbo_txn_id", null);
@@ -1346,6 +1351,17 @@ async function recordMerchantApprovalDecision({
   operationState = null,
 } = {}) {
   const decidedAt = new Date().toISOString();
+  const manualApproval = item.meta?.manual_approval || buildMonthlyReviewManualApproval({
+    item,
+    businessId,
+    transactionId: item.transaction_id,
+    actorId,
+    selectedQboAccountId: account.qbo_account_id,
+    selectedQboAccountName: account.name || item.final_qbo_account_name || null,
+    operationId,
+    idempotencyKey,
+    approvedAt: decidedAt,
+  });
   const meta = {
     ...(item.meta || {}),
     merchant_group_approved_at: decidedAt,
@@ -1363,7 +1379,10 @@ async function recordMerchantApprovalDecision({
     vendor_rule_source_type: "business_merchant_rule",
     vendor_rule_match_specificity: group?.identity?.specificity || item.meta?.vendor_rule_match_specificity || null,
     categorization_source: "business_merchant_rule",
-    categorization_authority: "user_confirmed",
+    categorization_authority: "admin_confirmed",
+    manual_approval: manualApproval,
+    manual_approval_state: "admin_approved_pending_post",
+    merchant_group_original_review_reason: manualApproval.original_review_reason,
     merchant_group_approved_transaction_scope: "explicit_selected_transactions",
     duplicate_preflight: duplicate || null,
     per_row_safety_result: safety || null,
@@ -1417,9 +1436,20 @@ async function recordMerchantApprovalOperationAccepted({
   const acceptedAt = new Date().toISOString();
   const existingState = item.meta?.merchant_group_operation_state || null;
   const sameOperation = item.meta?.merchant_group_operation_id === operationId;
-  if (sameOperation && ["accepted", "decision_saved", "checking_duplicates", "scheduled", "ready_to_post"].includes(existingState)) {
+  if (sameOperation && hasAuthorizedMonthlyReviewApproval(item) && ["accepted", "decision_saved", "checking_duplicates", "scheduled", "ready_to_post"].includes(existingState)) {
     return { ok: true, transaction_id: item.transaction_id, status: existingState || "accepted", idempotent: true };
   }
+  const manualApproval = buildMonthlyReviewManualApproval({
+    item,
+    businessId,
+    transactionId: item.transaction_id,
+    actorId,
+    selectedQboAccountId: account.qbo_account_id,
+    selectedQboAccountName: account.name || item.final_qbo_account_name || null,
+    operationId,
+    idempotencyKey,
+    approvedAt: acceptedAt,
+  });
   const meta = {
     ...(item.meta || {}),
     merchant_group_requested_at: acceptedAt,
@@ -1438,6 +1468,10 @@ async function recordMerchantApprovalOperationAccepted({
     },
     selected_qbo_account_id: String(account.qbo_account_id),
     selected_qbo_account_name: account.name || item.final_qbo_account_name || null,
+    categorization_authority: "admin_confirmed",
+    manual_approval: manualApproval,
+    manual_approval_state: "admin_approved_pending_post",
+    merchant_group_original_review_reason: originalManualReviewReason(item),
     safe_to_auto_post: false,
   };
   const { error } = await db
@@ -1824,8 +1858,20 @@ export async function runMerchantBacklogApprovalOperation({
         categorization_authority: item.meta?.categorization_authority || "user_confirmed",
       },
     };
-    const evaluation = await evaluateBacklogRowForRelease({ db, businessId, item: canonicalItem, bankTxn, policy: buildPreviewPolicy(policy, { effectiveDate: bankTxn.date }), sourceMappings });
-    const customerBucket = customerBucketForEvaluation({ item: canonicalItem, bankTxn, evaluation, sourceMappings });
+    const manualAuthority = interactive && hasAuthorizedMonthlyReviewApproval(canonicalItem);
+    const manualHardGate = manualAuthority
+      ? protectedCustomerBucket(canonicalItem, bankTxn)
+      : null;
+    const evaluation = manualAuthority
+      ? { category: "manual_approval_authorized", reason: originalManualReviewReason(canonicalItem) || "admin_manual_approval" }
+      : await evaluateBacklogRowForRelease({ db, businessId, item: canonicalItem, bankTxn, policy: buildPreviewPolicy(policy, { effectiveDate: bankTxn.date }), sourceMappings });
+    const customerBucket = manualAuthority
+      ? (bankTxn.plaid_account_id && !sourceMappings.has(bankTxn.plaid_account_id)
+          ? { bucket: "missing_mapping", reason: "missing_source_mapping" }
+          : manualHardGate && manualHardGate.reason !== "possible_qbo_duplicate"
+            ? manualHardGate
+            : { bucket: "ready_to_release", reason: "admin_manual_approval" })
+      : customerBucketForEvaluation({ item: canonicalItem, bankTxn, evaluation, sourceMappings });
     if (!["ready_to_release", "merchant_approval_needed"].includes(customerBucket.bucket)) {
       blocked.push({ transaction_id: item.transaction_id, reason: customerBucket.reason });
       await markMerchantBacklogApprovalRowsState({ db, businessId, operationId: resolvedOperationId, transactionIds: [item.transaction_id], state: "blocked", reasonCode: customerBucket.reason });

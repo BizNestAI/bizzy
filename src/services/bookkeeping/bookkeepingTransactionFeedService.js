@@ -9,6 +9,7 @@ import { classifyAutoPostOperationalScope, getAutoPostPolicy } from "./autoPostC
 import { discoverIncomingDepositQboMatch } from "./incomingDepositMatchService.js";
 import { isCashBackRewardCredit, rewardCreditIntent } from "./rewardCreditPolicy.js";
 import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
+import { hasProvenPostingFailure } from "./reconciliationPipelineStatus.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -86,7 +87,7 @@ export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   }
 
   if (handledView) {
-    return ["approved", "auto_approved", "failed"].includes(status);
+    return ["approved", "auto_approved", "handled"].includes(status) && !hasProvenPostingFailure(cat);
   }
 
   if (!status || status === "needs_review" || status === "uncategorized") return true;
@@ -931,7 +932,7 @@ export async function fetchBookkeepingTransactions({
   }
   let rows = pageRows.map((row) => normalizeBookkeepingRpcRow(row));
   if (statusKey === "handled" || statusKey === "approved") {
-    rows = rows.filter((row) => !deriveCreditCardPaymentStatus(row)?.matched);
+    rows = rows.filter((row) => !deriveCreditCardPaymentStatus(row)?.matched && !hasProvenPostingFailure(row));
     const ccMatchedCount = await countMatchedCreditCardPairLegs({
       db,
       businessId,

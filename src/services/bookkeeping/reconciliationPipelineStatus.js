@@ -1,5 +1,5 @@
 const FAILURE_STATUSES = new Set(["failed", "failed_post", "post_failed", "blocked"]);
-const APPROVED_STATUSES = new Set(["approved", "auto_approved", "handled", "failed"]);
+const APPROVED_STATUSES = new Set(["approved", "auto_approved", "handled"]);
 const NEEDS_REVIEW_STATUSES = new Set(["", "needs_review", "uncategorized"]);
 const CC_PAYMENT_META_TYPE = "cc_payment";
 
@@ -110,7 +110,7 @@ export function isBooksReviewNeedsReview(row = {}) {
 
 export function isBooksReviewHandled(row = {}) {
   const status = normalizeStatus(row.status || row.categorization_status);
-  return APPROVED_STATUSES.has(status);
+  return APPROVED_STATUSES.has(status) && !hasProvenPostingFailure(row);
 }
 
 export function deriveReconciliationEvidence(reconciliationItem = null) {
@@ -157,7 +157,6 @@ function withDetail(base, detail = null, extra = {}) {
 
 export function derivePipelineStatus({ bank = {}, cat = {}, reconciliationItem = null, nowTs = Date.now() } = {}) {
   const row = { ...(cat || {}) };
-  const status = normalizeStatus(row.status);
   const pending = bank.pending === true || row.meta?.pending === true;
   const reconciliation = deriveReconciliationEvidence(reconciliationItem);
   const isCcPayment = row.meta?.taxonomy_type === CC_PAYMENT_META_TYPE;
