@@ -51,6 +51,28 @@ function isSpecificIdentity(value = "") {
 
 export function buildAuthorizedMerchantRuleIdentity(bankTxn = {}) {
   const merchantEntityId = bankTxn.merchant_entity_id || bankTxn.merchant_id || null;
+  const merchantIdentity = normalizeMerchantIdentity(bankTxn.merchant_name || bankTxn.counterparty_name || "");
+  const descriptorIdentity = normalizeMerchantIdentity(bankTxn.name || "");
+  const requiresFamilyScope = /(^| )(tesla|apple)( |$)/.test(merchantIdentity.normalized || descriptorIdentity.normalized || "");
+  // Provider merchant ids can span materially different purchase families (for
+  // example Tesla Supercharger and Tesla Motors payments).  A manual category
+  // decision is scoped to the observed descriptor family unless the descriptor
+  // contains no information beyond the merchant itself.
+  if (
+    merchantEntityId && requiresFamilyScope &&
+    isSpecificIdentity(descriptorIdentity.normalized) &&
+    descriptorIdentity.normalized !== merchantIdentity.normalized &&
+    !merchantIdentity.normalized?.startsWith(descriptorIdentity.normalized)
+  ) {
+    return {
+      match_type: "memo_prefix",
+      match_value: descriptorIdentity.normalized,
+      match_specificity: "exact_descriptor_fingerprint",
+      normalized_merchant: merchantIdentity.normalized || null,
+      normalized_descriptor: descriptorIdentity.normalized,
+      normalization_version: descriptorIdentity.normalization_version,
+    };
+  }
   if (merchantEntityId) {
     return {
       match_type: "merchant_entity_id",
@@ -62,7 +84,6 @@ export function buildAuthorizedMerchantRuleIdentity(bankTxn = {}) {
     };
   }
 
-  const merchantIdentity = normalizeMerchantIdentity(bankTxn.merchant_name || bankTxn.counterparty_name || "");
   if (isSpecificIdentity(merchantIdentity.normalized)) {
     return {
       match_type: "memo_prefix",
@@ -74,15 +95,15 @@ export function buildAuthorizedMerchantRuleIdentity(bankTxn = {}) {
     };
   }
 
-  const descriptorIdentity = normalizeMerchantIdentity([bankTxn.name, bankTxn.merchant_name, bankTxn.counterparty_name].filter(Boolean).join(" "));
-  if (isSpecificIdentity(descriptorIdentity.normalized)) {
+  const fallbackDescriptorIdentity = normalizeMerchantIdentity([bankTxn.name, bankTxn.merchant_name, bankTxn.counterparty_name].filter(Boolean).join(" "));
+  if (isSpecificIdentity(fallbackDescriptorIdentity.normalized)) {
     return {
       match_type: "memo_prefix",
-      match_value: descriptorIdentity.normalized,
+      match_value: fallbackDescriptorIdentity.normalized,
       match_specificity: "exact_descriptor_fingerprint",
       normalized_merchant: merchantIdentity.normalized || null,
-      normalized_descriptor: descriptorIdentity.normalized,
-      normalization_version: descriptorIdentity.normalization_version,
+      normalized_descriptor: fallbackDescriptorIdentity.normalized,
+      normalization_version: fallbackDescriptorIdentity.normalization_version,
     };
   }
 
@@ -93,7 +114,7 @@ export function buildAuthorizedMerchantRuleIdentity(bankTxn = {}) {
       match_value: memo,
       match_specificity: "memo_fingerprint",
       normalized_merchant: merchantIdentity.normalized || null,
-      normalized_descriptor: descriptorIdentity.normalized || null,
+      normalized_descriptor: fallbackDescriptorIdentity.normalized || null,
       normalization_version: NORMALIZATION_VERSION,
     };
   }
@@ -373,8 +394,7 @@ export async function learnVendorRuleFromTransaction({
     }
     const { error: updErr, data: updData } = await db
       .from("vendor_rules")
-      .update(payload)
-      .eq("id", existing.id)
+      .upsert({ ...payload, id: existing.id, business_id: businessId, match_type, match_value }, { onConflict: "business_id,match_type,match_value" })
       .select("id,match_type,match_value")
       .maybeSingle();
     if (updErr) return { ok: false, error: updErr?.message || "update_failed" };

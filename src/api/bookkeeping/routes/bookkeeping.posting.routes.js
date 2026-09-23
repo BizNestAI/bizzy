@@ -14,6 +14,7 @@ import {
   releaseAutoPostBacklogScope,
   requestMerchantGroupPostingRetryNow,
   persistMerchantBacklogGroupApprovalOperation,
+  persistMerchantApprovalVendorRule,
   setAutoPostEnabled,
 } from "../../../services/bookkeeping/autoPostControl.js";
 import {
@@ -343,6 +344,30 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
     // later can return an error while still posting asynchronously.
     await assertInteractivePostingCommandSchema({ db: supabase });
     stageTimings.command_schema_preflight_ms = routeTiming(stageStartMs);
+    let reusableRule = { ok: true, skipped: true, reason: "remember_for_future_false" };
+    if (normalized.rememberForFuture === true) {
+      stageStartMs = nowMs();
+      try {
+        reusableRule = await persistMerchantApprovalVendorRule({
+          db: supabase,
+          businessId,
+          actorId: common.actorId,
+          selectedQboAccountId: common.selectedQboAccountId,
+          groupSnapshotToken: common.groupSnapshotToken,
+          transactionIds: common.transactionIds,
+          exclusionIds: common.exclusionIds,
+        });
+      } catch (ruleError) {
+        reusableRule = { ok: false, error: "vendor_rule_update_failed" };
+        console.warn("[bookkeeping][merchant-group-rule] save failed", {
+          correlation_id: correlationId,
+          business_id: businessId,
+          transaction_ids: common.transactionIds,
+          error_code: ruleError?.code || "vendor_rule_update_failed",
+        });
+      }
+      stageTimings.vendor_rule_ms = routeTiming(stageStartMs);
+    }
     stageStartMs = nowMs();
     const accepted = await persistMerchantBacklogGroupApprovalOperation(common);
     diagnostics.resolved_row_count = Number(accepted.accepted_count || 0) + Number(accepted.blocked_count || 0);
@@ -362,6 +387,7 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
         group_id: normalized.groupId,
         group_snapshot_token: common.groupSnapshotToken,
         exclusion_ids: common.exclusionIds,
+        reusable_rule: reusableRule,
       },
     });
     stageTimings.accept_operation_ms = routeTiming(stageStartMs);
@@ -397,6 +423,8 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       stage_timings_ms: stageTimings,
       response_ms: routeTiming(routeStartMs),
       status_url: `/api/bookkeeping/posting/backlog/merchant-groups/operations/${encodeURIComponent(decision.operation_id)}?business_id=${encodeURIComponent(businessId)}`,
+      reusable_rule: reusableRule,
+      warnings: reusableRule?.ok === false ? ["vendor_rule_update_failed"] : [],
     });
   } catch (err) {
     console.error("[bookkeeping][merchant-group-approve] failed", {

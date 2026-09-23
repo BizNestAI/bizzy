@@ -748,7 +748,8 @@ export async function processInteractivePostingCommand({
     const receiptIds = receipts.map((row) => row.id).filter(Boolean);
     await appendInteractivePostingCommandEvent({ db, operationId, event: "receipt_persisted", extra: { receipt_count: receiptIds.length } });
     let auxiliaryWarning = null;
-    if (command.remember_for_future === true) {
+    const ruleAlreadySaved = command.merchant_snapshot?.reusable_rule?.ok === true && Boolean(command.merchant_snapshot?.reusable_rule?.rule?.id);
+    if (command.remember_for_future === true && !ruleAlreadySaved) {
       const ruleWriter = persistRememberedRule || (runApprovalOperation === runMerchantBacklogApprovalOperation ? persistMerchantApprovalVendorRule : null);
       if (ruleWriter) {
         try {

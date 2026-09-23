@@ -782,7 +782,7 @@ export default function MonthlyReviewConsole() {
         showPostingReviewNotice(
           setPostingReviewNotice,
           postingReviewNoticeTimerRef,
-          "Posting to QuickBooks…"
+          decision?.reusable_rule?.rule?.id ? "Rule saved · Posting to QuickBooks…" : "Posting to QuickBooks…"
         );
         setPostingReviewAction((current) => ({
           ...current,
@@ -2633,10 +2633,16 @@ function PostingReviewMirrorSection({
                       </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-3 text-xs text-white/60">
-                      <label className="flex items-center gap-2">
-                        <input type="checkbox" checked={options.rememberForFuture !== false} disabled={controlsDisabled} onChange={(event) => onOptionChange(stateKey, { rememberForFuture: event.target.checked })} />
-                        {`Remember ${selectedAccount?.name || group.proposed_qbo_account_name || "this category"} for future matching ${group.display_merchant} transactions`}
-                      </label>
+                      {group.evidence?.reusable_rule_status === "active" ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-300/20 bg-emerald-300/[0.08] px-2.5 py-1 font-medium text-emerald-100">
+                          Rule saved
+                        </span>
+                      ) : (
+                        <label className="flex items-center gap-2">
+                          <input type="checkbox" checked={options.rememberForFuture !== false} disabled={controlsDisabled} onChange={(event) => onOptionChange(stateKey, { rememberForFuture: event.target.checked })} />
+                          {`Remember ${selectedAccount?.name || group.proposed_qbo_account_name || "this category"} for future matching ${group.display_merchant} transactions`}
+                        </label>
+                      )}
                       {group.transaction_count > 1 && excludedIds.size ? (
                         <span className="text-white/45">{leftInReview} left in review</span>
                       ) : null}

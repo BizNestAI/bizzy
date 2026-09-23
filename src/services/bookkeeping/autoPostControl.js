@@ -1245,6 +1245,15 @@ export async function getMerchantBacklogGroups({
           confidence: identity.confidence,
           reusable_rule_status: vendorRule?.id ? "active" : "not_created",
           vendor_rule_id: vendorRule?.id || null,
+          vendor_rule: vendorRule?.id ? {
+            id: vendorRule.id,
+            match_scope: vendorRule.match_scope,
+            qbo_account_id: vendorRule.default_qbo_account_id,
+            active: vendorRule.active !== false,
+            source: vendorRule.source_type || vendorRule.source || null,
+            created_at: vendorRule.created_at || null,
+            updated_at: vendorRule.updated_at || null,
+          } : null,
           match_specificity: identity.specificity,
         },
         warnings: [],
@@ -1685,7 +1694,18 @@ async function learnRuleForMerchantApproval({
   db,
 } = {}) {
   let ruleResult = { ok: true, skipped: true, reason: "remember_for_future_false" };
-  const firstBankTxn = bankRows.map.get(candidateIds[0]);
+  const candidates = candidateIds.map((id) => bankRows.map.get(id)).filter(Boolean);
+  const descriptorCounts = new Map();
+  for (const transaction of candidates) {
+    const descriptor = normalizeMerchantIdentity(transaction.name || transaction.merchant_name || transaction.counterparty_name || "").normalized;
+    if (!descriptor) continue;
+    descriptorCounts.set(descriptor, (descriptorCounts.get(descriptor) || 0) + 1);
+  }
+  const dominantDescriptor = [...descriptorCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length || a[0].localeCompare(b[0]))[0]?.[0] || null;
+  const firstBankTxn = candidates.find((transaction) =>
+    normalizeMerchantIdentity(transaction.name || transaction.merchant_name || transaction.counterparty_name || "").normalized === dominantDescriptor
+  ) || candidates[0];
   if (rememberForFuture === true && firstBankTxn) {
     ruleResult = await learnVendorRuleFromTransaction({
       businessId,

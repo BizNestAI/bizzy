@@ -396,6 +396,64 @@ test("remembered vendor rules atomically update category and concurrent saves co
   assert.equal(concurrentDb.tables.vendor_rules[0].default_qbo_account_id, "meals-account");
 });
 
+test("Tesla remembered rules are scoped to the Supercharger description family", async () => {
+  const { learnVendorRuleFromTransaction } = await import("../src/services/bookkeeping/vendorRuleLearner.js");
+  const { getVendorRuleForTransaction } = await import("../src/services/bookkeeping/vendorRuleMatcher.js");
+  const db = makeDb();
+  const supercharger = bankTxn({
+    id: "tesla-charge-1",
+    name: "TESLA SUPERCHARGER US",
+    merchant_name: "Tesla",
+    merchant_entity_id: "tesla-entity",
+    direction: "OUTFLOW",
+    amount: -10.75,
+  });
+  const saved = await learnVendorRuleFromTransaction({
+    businessId: "biz-1",
+    bankTxn: supercharger,
+    finalAccountId: "gas-account",
+    finalAccountName: "Gas",
+    options: { learnedFrom: "merchant_group_review" },
+    db,
+  });
+  assert.equal(saved.ok, true);
+  assert.equal(db.tables.vendor_rules[0].match_type, "memo_prefix");
+  assert.equal(db.tables.vendor_rules[0].match_value, "tesla supercharger us");
+
+  const futureCharge = await getVendorRuleForTransaction({
+    businessId: "biz-1",
+    bankTransaction: { ...supercharger, id: "tesla-charge-2", amount: -14.22 },
+    db,
+  });
+  assert.equal(futureCharge?.default_qbo_account_id, "gas-account");
+  assert.equal(futureCharge?.match_scope, "description_family");
+
+  const vehiclePayment = await getVendorRuleForTransaction({
+    businessId: "biz-1",
+    bankTransaction: {
+      ...supercharger,
+      id: "tesla-moto-1",
+      name: "TESLA MOTO TESLA MOTORS INTERNET PAYMENT",
+      plaid_account_id: "checking",
+      amount: -600,
+    },
+    db,
+  });
+  assert.equal(vehiclePayment, null);
+});
+
+test("Posting Review saves remembered rules before approval and renders active rules as saved", () => {
+  const routeSource = read("src/api/bookkeeping/routes/bookkeeping.posting.routes.js");
+  const ruleSaveAt = routeSource.indexOf("persistMerchantApprovalVendorRule({");
+  const approvalAt = routeSource.indexOf("persistMerchantBacklogGroupApprovalOperation(common)");
+  assert.ok(ruleSaveAt > 0 && approvalAt > ruleSaveAt);
+  assert.match(routeSource, /reusable_rule: reusableRule/);
+
+  const uiSource = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  assert.match(uiSource, /reusable_rule_status === "active"/);
+  assert.match(uiSource, /Rule saved · Posting to QuickBooks/);
+});
+
 test("Monthly Review handled unposted reclassification updates categorization without QBO create or auto-post changes", async () => {
   const db = makeDb({
     bank_transactions: [bankTxn()],
