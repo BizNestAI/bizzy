@@ -136,6 +136,14 @@ export async function approveBookkeepingTransactions({
     suggestedCanonicalMap[row.transaction_id] = row.suggested_canonical_account_key || row.meta?.canonical_account_key || null;
   });
 
+  for (const item of items || []) {
+    const txnId = txnIdFromItem(item);
+    const requested = item?.resolution || null;
+    const selected = existingMetaMap[txnId]?.user_selected_resolution || null;
+    if (requested && requested !== "categorize_new") throw new BookkeepingApprovalError("resolution_payload_mismatch", 409, { transactions: [txnId] });
+    if (selected && selected !== "categorize_new") throw new BookkeepingApprovalError("resolution_changed", 409, { transactions: [txnId], effective_resolution: selected });
+  }
+
   if (requireNeedsReview) {
     const invalidStatusIds = txnIds.filter((txnId) => {
       const status = statusMap[txnId] || "needs_review";

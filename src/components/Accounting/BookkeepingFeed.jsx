@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom";
-import { CheckCircle2, CreditCard, GitBranch, Landmark, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
+import { CheckCircle2, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import {
@@ -12,6 +12,7 @@ import {
 import { formatQboPostingSchedule } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { detectProcessorSettlementActivity } from "../../services/bookkeeping/processorSettlementProfiles.js";
 import { formatNumericCalendarDate } from "../../utils/dateUtils.js";
+import { effectiveTransactionResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
@@ -57,9 +58,6 @@ export function CoaDropdown({
   creationContext,
   status,
   disabled,
-  onUseCreditCardPayment,
-  onUseSplitTransaction,
-  onUseLoanPayment,
 }) {
   const [open, setOpen] = React.useState(false);
   const [renderMenu, setRenderMenu] = React.useState(false);
@@ -218,45 +216,6 @@ export function CoaDropdown({
                   >
                     <Plus className="h-3.5 w-3.5" />
                     Add new account
-                  </button>
-                ) : null}
-                {onUseCreditCardPayment ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 border-b border-cyan-300/20 bg-[rgba(10,22,28,0.98)] px-3.5 py-2 text-left text-[12px] font-semibold text-cyan-100 hover:bg-cyan-400/10"
-                    onClick={() => {
-                      setOpen(false);
-                      onUseCreditCardPayment();
-                    }}
-                  >
-                    <CreditCard className="h-3.5 w-3.5" />
-                    Match as credit card payment
-                  </button>
-                ) : null}
-                {onUseSplitTransaction ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 border-b border-emerald-300/20 bg-[rgba(10,24,19,0.98)] px-3.5 py-2 text-left text-[12px] font-semibold text-emerald-100 hover:bg-emerald-400/10"
-                    onClick={() => {
-                      setOpen(false);
-                      onUseSplitTransaction();
-                    }}
-                  >
-                    <GitBranch className="h-3.5 w-3.5" />
-                    Split transaction
-                  </button>
-                ) : null}
-                {onUseLoanPayment ? (
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 border-b border-amber-300/20 bg-[rgba(24,19,10,0.98)] px-3.5 py-2 text-left text-[12px] font-semibold text-amber-100 hover:bg-amber-400/10"
-                    onClick={() => {
-                      setOpen(false);
-                      onUseLoanPayment();
-                    }}
-                  >
-                    <Landmark className="h-3.5 w-3.5" />
-                    Split as loan payment
                   </button>
                 ) : null}
                 <div className="px-3.5 py-2 border-b border-[var(--accent-line)]/60 bg-white/5">
@@ -625,27 +584,6 @@ function humanizeReason(code = "") {
   return labels[code] || String(code || "").replace(/_/g, " ");
 }
 
-function isEligibleForManualLoanSplit(txn = {}) {
-  if (!txn || txn.pending === true) return false;
-  const status = String(txn.status || "").toLowerCase();
-  if (status === "posted" || txn.qbo_txn_id || txn.qboTxnId || txn.posted_at) return false;
-  const signedAmount = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0);
-  const direction = String(txn.direction || "").toUpperCase();
-  const isOutflow = direction === "OUTFLOW" || (direction !== "INFLOW" && Number.isFinite(signedAmount) && signedAmount < 0);
-  if (!isOutflow) return false;
-  const workflow = String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase();
-  if (!workflow || workflow === "ordinary_expense" || workflow === "expense" || workflow === "loan_payment") return true;
-  return false;
-}
-
-function isEligibleForManualSplit(txn = {}) {
-  if (!txn || txn.pending === true) return false;
-  const status = String(txn.status || "").toLowerCase();
-  if (status === "posted" || txn.qbo_txn_id || txn.qboTxnId || txn.posted_at) return false;
-  const signedAmount = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0);
-  return Number.isFinite(signedAmount) && signedAmount !== 0;
-}
-
 function isTruthy(value) {
   return value === true || String(value || "").toLowerCase() === "true";
 }
@@ -719,14 +657,29 @@ export function IncomingDepositMatchPanel({
   onReject,
   onUndo,
   onRecordNewFee,
+  onRecordNewIncome,
+  accounts = [],
+  resolutionOverride = null,
 }) {
   const selectableCandidates = (state?.candidates || []).filter((candidate) => candidate?.candidate_role !== "supporting" && candidate?.qbo_entity_type !== "Invoice");
-  const [selectedCandidateKey, setSelectedCandidateKey] = React.useState("");
-  React.useEffect(() => setSelectedCandidateKey(""), [state?.matchId]);
+  const [selectedCandidateKeys, setSelectedCandidateKeys] = React.useState(() => new Set());
+  const savedResolution = txn.meta?.incoming_deposit_resolution || {};
+  const universalResolution = resolutionOverride || txn.meta?.user_selected_resolution;
+  const [resolution, setResolution] = React.useState(universalResolution === "categorize_new" ? "create_new_income" : (savedResolution.resolution || "match_existing"));
+  const [incomeAccountId, setIncomeAccountId] = React.useState(savedResolution.selected_qbo_income_account_id || txn.glAccountId || txn.suggestedAccountId || "");
+  const [duplicateOverrideConfirmed, setDuplicateOverrideConfirmed] = React.useState(savedResolution.duplicate_check_override === true);
+  React.useEffect(() => setSelectedCandidateKeys(new Set()), [state?.matchId]);
+  React.useEffect(() => {
+    setResolution((resolutionOverride || txn.meta?.user_selected_resolution) === "categorize_new" ? "create_new_income" : (savedResolution.resolution || "match_existing"));
+    setIncomeAccountId(savedResolution.selected_qbo_income_account_id || txn.glAccountId || txn.suggestedAccountId || "");
+    setDuplicateOverrideConfirmed(savedResolution.duplicate_check_override === true);
+  }, [txn.id, resolutionOverride]); // immutable transaction identity owns resolution state
   if (!state?.active) return null;
   const primary = state.primary || {};
   const displayPrimary = action.refreshedCandidate ? { ...primary, ...action.refreshedCandidate } : primary;
   const isProcessorFee = state.isProcessorFee || primary.match_type === "qbo_processing_fee_expense";
+  const incomeAccounts = accounts.filter((account) => ["income", "otherincome"].includes(String(account.type || account.account_type || "").replace(/[\s_-]+/g, "").toLowerCase()));
+  const creatingNewIncome = !isProcessorFee && resolution === "create_new_income";
   const processorState = state.processorMatchState;
   const transitionSuccess = action.status === "success";
   const transitionMatching = action.status === "matching" || action.loading === true;
@@ -781,8 +734,11 @@ export function IncomingDepositMatchPanel({
           ? "Bizzi found an existing QuickBooks processing-fee expense that may explain this bank charge."
           : "Bizzi found an existing QuickBooks deposit or payment that may already explain this bank deposit.";
   const candidateCount = state.independentCandidateCount ?? independentCandidateCount(state.candidates || []);
-  const selectedCandidate = selectableCandidates.find((candidate) => `${candidate.qbo_entity_type}:${candidate.qbo_entity_id}` === selectedCandidateKey) || null;
-  const canConfirmSelected = state.confirmable || (state.ambiguous && Boolean(selectedCandidate));
+  const selectedCandidates = selectableCandidates.filter((candidate) => selectedCandidateKeys.has(`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`));
+  const selectedTotalMinor = selectedCandidates.reduce((sum, candidate) => sum + Math.abs(Number(candidate.amount_minor || 0)), 0);
+  const bankAmountMinor = Math.round(Math.abs(Number(txn.amount || 0)) * 100);
+  const selectionDifferenceMinor = bankAmountMinor - selectedTotalMinor;
+  const canConfirmSelected = state.confirmable || (state.ambiguous && selectedCandidates.length > 0 && selectionDifferenceMinor === 0);
   const matchNoLongerConfirmable = ["qbo_entity_already_matched", "qbo_match_candidate_missing", "qbo_match_candidate_invalid_status"].includes(action.reason);
   const primaryActionLabel = isProcessorFee ? "Confirm match" : primary.qbo_entity_type === "Deposit" ? "Match existing QuickBooks deposit" : "Match existing payment";
   const refreshable = ["primary_match_item_missing", "fresh_match_check_required", "stale_match_refresh_required"].includes(String(state.confirmabilityReason || action.reason || ""));
@@ -828,6 +784,29 @@ export function IncomingDepositMatchPanel({
           {state.confirmed ? <div><span className="text-slate-400">Matched by</span><br />you</div> : null}
         </div>
       ) : null}
+      {!isProcessorFee && !state.confirmed && !transitionSuccess && !universalResolution ? (
+        <div className="mt-3 rounded-lg border border-white/10 bg-black/10 p-3">
+          <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Resolution</div>
+          <div className="mt-2 flex flex-wrap gap-2" role="radiogroup" aria-label="Income resolution">
+            <button type="button" role="radio" aria-checked={resolution === "match_existing"} onClick={() => { setResolution("match_existing"); setSelectedCandidateKeys(new Set()); }} className={`rounded-md border px-2.5 py-1 text-[10px] font-semibold ${resolution === "match_existing" ? "border-emerald-300/40 bg-emerald-500/12 text-emerald-100" : "border-white/15 text-slate-200"}`}>Match existing QuickBooks transaction</button>
+            <button type="button" role="radio" aria-checked={creatingNewIncome} onClick={() => { setResolution("create_new_income"); setSelectedCandidateKeys(new Set()); }} className={`rounded-md border px-2.5 py-1 text-[10px] font-semibold ${creatingNewIncome ? "border-emerald-300/40 bg-emerald-500/12 text-emerald-100" : "border-white/15 text-slate-200"}`}>Record as new income</button>
+          </div>
+          {creatingNewIncome ? (
+            <div className="mt-3 space-y-3">
+              <p className="text-[11px] leading-5 text-slate-200">Bizzi will create a new QuickBooks deposit using the connected bank account and the income account below. It will not create an invoice or invoice payment.</p>
+              <label className="block text-[10px] font-semibold uppercase tracking-wide text-slate-300">Income account</label>
+              <CoaDropdown value={incomeAccountId} suggestedId={txn.glAccountId || txn.suggestedAccountId} suggestedName={txn.glAccountName || txn.suggestedAccountName} accounts={incomeAccounts} onChange={setIncomeAccountId} status={txn.status} disabled={readOnly || transitionMatching} />
+              {state.unavailable ? (
+                <label className="flex items-start gap-2 text-[11px] text-amber-50/85">
+                  <input type="checkbox" checked={duplicateOverrideConfirmed} onChange={(event) => setDuplicateOverrideConfirmed(event.target.checked)} className="mt-0.5" />
+                  <span>I confirmed this income is not already recorded in QuickBooks.</span>
+                </label>
+              ) : null}
+              <button type="button" disabled={readOnly || transitionMatching || !incomeAccountId || (state.unavailable && !duplicateOverrideConfirmed)} onClick={() => onRecordNewIncome?.(txn.id, { selectedQboAccountId: incomeAccountId, duplicateOverrideConfirmed })} className="rounded-md border border-emerald-300/40 bg-emerald-500/12 px-3 py-1.5 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">{transitionMatching ? "Posting…" : "Post as new income"}</button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {processorState === "no_existing_qbo_match" && state.canCreateNewFee ? (
         <div className="mt-3 text-[11px] text-slate-100">
           <span className="text-slate-400">New fee account</span><br />
@@ -847,23 +826,16 @@ export function IncomingDepositMatchPanel({
         </details>
       ) : null}
       {state.ambiguous && selectableCandidates.length > 1 ? (
-        <label className="mt-3 block text-[10px] font-semibold uppercase tracking-wide text-amber-100">
-          Choose the exact QuickBooks transaction
-          <select
-            value={selectedCandidateKey}
-            onChange={(event) => setSelectedCandidateKey(event.target.value)}
-            className="mt-1 block w-full rounded-md border border-white/15 bg-[#101312] px-2.5 py-2 text-[11px] font-normal normal-case tracking-normal text-slate-100 focus:border-emerald-300/60 focus:outline-none"
-          >
-            <option value="">Select a candidate…</option>
-            {selectableCandidates.map((candidate) => (
-              <option key={`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`} value={`${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`}>
-                {candidate.qbo_entity_type} · {candidate.txn_date || "date unavailable"} · {formatMinorMoney(candidate.amount_minor, candidate.currency || "USD") || "amount unavailable"} · {candidate.description || candidate.qbo_entity_id}
-              </option>
-            ))}
-          </select>
-        </label>
+        <fieldset className="mt-3 rounded-md border border-white/10 bg-black/10 p-2.5">
+          <legend className="px-1 text-[10px] font-semibold uppercase tracking-wide text-amber-100">Select one or more QuickBooks transactions</legend>
+          <div className="space-y-1.5">{selectableCandidates.map((candidate) => {
+            const key = `${candidate.qbo_entity_type}:${candidate.qbo_entity_id}`;
+            return <label key={key} className="flex items-start gap-2 rounded-md border border-white/10 px-2 py-1.5 text-[10px] text-slate-100"><input type="checkbox" checked={selectedCandidateKeys.has(key)} onChange={() => setSelectedCandidateKeys((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })} /><span>{candidate.qbo_entity_type} · {candidate.txn_date || "date unavailable"} · {formatMinorMoney(candidate.amount_minor, candidate.currency || "USD") || "amount unavailable"} · {candidate.description || candidate.qbo_entity_id}</span></label>;
+          })}</div>
+          <div className="mt-2 grid grid-cols-3 gap-2 text-[10px] text-slate-200"><div><span className="text-slate-400">Bank amount</span><br />{formatMinorMoney(bankAmountMinor)}</div><div><span className="text-slate-400">Selected total</span><br />{formatMinorMoney(selectedTotalMinor)}</div><div><span className="text-slate-400">Difference</span><br />{formatMinorMoney(selectionDifferenceMinor)}</div></div>
+        </fieldset>
       ) : null}
-      <div className="mt-3 flex flex-wrap gap-2">
+      {!creatingNewIncome ? <div className="mt-3 flex flex-wrap gap-2">
         {transitionSuccess ? (
           <>
             <span className="rounded-md border border-emerald-300/35 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-100">Matched to existing QuickBooks</span>
@@ -883,7 +855,7 @@ export function IncomingDepositMatchPanel({
         ) : (
           <>
             {state.matchId && primary.qbo_entity_type && !state.invoiceOnly && canConfirmSelected && !matchNoLongerConfirmable ? (
-              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onConfirm?.(txn.id, state.matchId, txn, { qboEntityId: selectedCandidate?.qbo_entity_id || null, qboEntityType: selectedCandidate?.qbo_entity_type || null })} className="inline-flex min-w-[190px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
+              <button type="button" disabled={readOnly || transitionMatching} onClick={() => onConfirm?.(txn.id, state.matchId, txn, { qboEntities: selectedCandidates.map((candidate) => ({ qboEntityId: candidate.qbo_entity_id, qboEntityType: candidate.qbo_entity_type })) })} className="inline-flex min-w-[190px] items-center justify-center gap-1.5 rounded-md border border-emerald-300/40 bg-emerald-500/12 px-2.5 py-1 text-[10px] font-semibold text-emerald-100 disabled:opacity-45">
                 {transitionMatching ? <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : null}
                 {transitionMatching ? "Confirming…" : action.reason === "qbo_match_details_changed" ? "Confirm updated match" : primaryActionLabel}
               </button>
@@ -899,7 +871,7 @@ export function IncomingDepositMatchPanel({
             {candidateCount > 1 && !state.ambiguous ? <span className="rounded-md border border-white/10 px-2.5 py-1 text-[10px] font-semibold text-slate-300">Review other matches</span> : null}
           </>
         )}
-      </div>
+      </div> : null}
     </div>
   );
 }
@@ -912,6 +884,30 @@ function ConfidenceBadge({ level }) {
   };
   const label = level === "high" ? "High" : level === "medium" ? "Medium" : "Low";
   return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${styles[level] || styles.low}`}>{label}</span>;
+}
+
+const RESOLUTION_OPTIONS = [
+  ["categorize_new", "Categorize as new"],
+  ["match_existing_qbo", "Match existing QuickBooks transaction"],
+  ["match_credit_card_payment", "Match as credit card payment"],
+  ["split_transaction", "Split transaction"],
+];
+
+export function TransactionResolutionSelector({ transactionId, value, suggested, disabled = false, busy = false, error = "", onChange }) {
+  const controlId = `resolution-${transactionId}`;
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/15 p-3" onClick={(event) => event.stopPropagation()}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-300" htmlFor={controlId}>Resolution</label>
+        {suggested && suggested !== value ? <span className="text-[9px] text-slate-400">Bizzi suggested: {RESOLUTION_OPTIONS.find(([id]) => id === suggested)?.[1]}</span> : null}
+      </div>
+      <select id={controlId} value={value} disabled={disabled || busy} onChange={(event) => onChange?.(event.target.value)} className="mt-2 block w-full rounded-md border border-white/15 bg-[#101312] px-2.5 py-2 text-[11px] font-medium text-slate-100 outline-none focus:border-emerald-300/60 focus:ring-2 focus:ring-emerald-500/20 disabled:opacity-50">
+        {RESOLUTION_OPTIONS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+      </select>
+      {busy ? <div className="mt-2 text-[10px] text-slate-400">Changing workflow…</div> : null}
+      {error ? <div role="alert" className="mt-2 rounded-md border border-rose-300/25 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-100">{error}</div> : null}
+    </div>
+  );
 }
 
 export default function BookkeepingFeed({
@@ -933,6 +929,8 @@ export default function BookkeepingFeed({
   onConfirmIncomingDepositMatch,
   onRejectIncomingDepositMatch,
   onUndoIncomingDepositMatch,
+  onRecordIncomingDepositAsNewIncome,
+  onResolutionChange,
   incomingDepositMatchActionState = {},
   ccPaymentActionState = {},
   ccPaymentAccounts = [],
@@ -1065,6 +1063,8 @@ export default function BookkeepingFeed({
     "checked:after:opacity-100";
   const [accountSelections, setAccountSelections] = React.useState(() => new Map());
   const [splitDrafts, setSplitDrafts] = React.useState(() => new Map());
+  const [resolutionSelections, setResolutionSelections] = React.useState(() => new Map());
+  const [resolutionActionState, setResolutionActionState] = React.useState(() => new Map());
   const [sort, setSort] = React.useState({ column: null, direction: null }); // direction: 'asc' | 'desc' | null
   const [expandedRowId, setExpandedRowId] = React.useState(null);
 
@@ -1101,22 +1101,40 @@ export default function BookkeepingFeed({
     if (onAccountChange) onAccountChange(txnId, accountId);
   };
 
-  const startSplitTransaction = (txn) => {
-    if (readOnly || !isEligibleForManualSplit(txn)) return;
-    setSplitDrafts((prev) => {
-      const next = new Map(prev);
-      next.set(txn.id, buildInitialSplitTransactionDraft("general", txn, accounts));
+  React.useEffect(() => {
+    setResolutionSelections((previous) => {
+      const next = new Map(previous);
+      transactions.forEach((txn) => {
+        const persisted = effectiveTransactionResolution(txn);
+        if (!next.has(txn.id) || txn.meta?.user_selected_resolution) next.set(txn.id, persisted);
+      });
       return next;
     });
-  };
+  }, [transactions]);
 
-  const startLoanSplit = (txn) => {
-    if (readOnly || !isEligibleForManualLoanSplit(txn)) return;
-    setSplitDrafts((prev) => {
-      const next = new Map(prev);
-      next.set(txn.id, buildInitialLoanSplitDraft(txn, accounts));
-      return next;
-    });
+  const changeResolution = async (txn, resolution) => {
+    if (readOnly || txn.status === "posted") return;
+    const previous = resolutionSelections.get(txn.id) || effectiveTransactionResolution(txn);
+    setResolutionSelections((state) => new Map(state).set(txn.id, resolution));
+    setResolutionActionState((state) => new Map(state).set(txn.id, { busy: true, error: "" }));
+    try {
+      await onResolutionChange?.(txn.id, resolution, suggestedTransactionResolution(txn));
+      if (resolution === "match_existing_qbo") {
+        setExpandedRowId(txn.id);
+        await onInspectIncomingDepositMatch?.(txn.id, null, txn);
+      } else if (resolution === "match_credit_card_payment") {
+        await onMarkCcPayment?.(txn.id);
+      } else if (resolution === "split_transaction") {
+        const legacyLoan = ["loan_payment", "loan_movement"].includes(String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase()) || txn.meta?.loan_payment_split_id;
+        setSplitDrafts((state) => new Map(state).set(txn.id, legacyLoan ? { ...buildInitialLoanSplitDraft(txn, accounts), mode: "general", legacyLoanSplit: true } : buildInitialSplitTransactionDraft("general", txn, accounts)));
+      } else if (resolution === "categorize_new" && (txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment")) {
+        await onRejectCcPayment?.(txn.id);
+      }
+      setResolutionActionState((state) => new Map(state).set(txn.id, { busy: false, error: "" }));
+    } catch (error) {
+      setResolutionSelections((state) => new Map(state).set(txn.id, previous));
+      setResolutionActionState((state) => new Map(state).set(txn.id, { busy: false, error: error?.body?.message || error?.message || "Could not change this workflow." }));
+    }
   };
 
   const clearLoanSplit = (txnId) => {
@@ -1292,6 +1310,9 @@ export default function BookkeepingFeed({
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
             const incomingMatch = incomingDepositMatchState(txn);
+            const effectiveResolution = resolutionSelections.get(txn.id) || effectiveTransactionResolution(txn);
+            const systemSuggestedResolution = suggestedTransactionResolution(txn);
+            const resolutionAction = resolutionActionState.get(txn.id) || {};
             const incomingMatchAction = incomingDepositMatchActionState?.[txn.id] || {};
             const fullMemo = getTransactionMemo(txn) || "No bank memo available.";
             const operatorRequest = txn.operator_request || null;
@@ -1372,7 +1393,7 @@ export default function BookkeepingFeed({
             const loanSplitDraft = splitDrafts.get(txn.id) || null;
             const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
             const canUndoCcPaymentPair = allowCreditCardPaymentUndo && isCcPaymentWorkflow && hasCcPair && !isPosted && !txn.qbo_txn_id && !txn.qboTxnId && !txn.posted_at;
-            const rowSelectable = !isPosted && !isPending && !isCcPaymentWorkflow && !incomingMatch.active && !isLoanSplitWorkflow && !readOnly;
+            const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly;
 
             return (
               <React.Fragment key={txn.id}>
@@ -1471,7 +1492,7 @@ export default function BookkeepingFeed({
                       <span className="truncate text-[9px] font-medium text-amber-100/65">{txn.suggestedAccountName || txn.glAccountName} · Suggested</span>
                     ) : null}
                   </span>
-                ) : incomingMatch.active ? (
+                ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (
                   <span className={`inline-flex w-fit max-w-full flex-col rounded-md border px-2 py-1 text-[10px] font-semibold ${
                     incomingMatch.confirmed
                       ? "border-emerald-300/30 bg-emerald-500/10 text-emerald-100"
@@ -1484,7 +1505,7 @@ export default function BookkeepingFeed({
                       {incomingMatch.primary?.qbo_entity_type || "QuickBooks"} {incomingMatch.primary?.txn_date || ""}
                     </span>
                   </span>
-                ) : ccWorkflowStatus ? (
+                ) : ccWorkflowStatus && effectiveResolution === "match_credit_card_payment" ? (
                   <CreditCardPaymentMatchControl
                     value={selectedCcTargetValue}
                     accounts={ccPaymentDestinationAccounts}
@@ -1514,20 +1535,20 @@ export default function BookkeepingFeed({
                     {ccMatchedLabel ? <span className="truncate text-[9px] font-medium text-emerald-100/65">{ccMatchedLabel}</span> : null}
                   </span>
                 ) : null}
-                {isCcPaymentSuspected && !ccWorkflowStatus ? (
+                {isCcPaymentSuspected && !ccWorkflowStatus && effectiveResolution === "match_credit_card_payment" ? (
                   <span className="inline-flex w-fit max-w-full rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
                     Possible credit card payment
                   </span>
                 ) : null}
-                {loanSplitDraft ? (
+                {effectiveResolution === "split_transaction" && loanSplitDraft ? (
                   <span className="inline-flex w-fit max-w-full rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
                     Loan Payment · Needs Split
                   </span>
-                ) : isLoanSplitWorkflow ? (
+                ) : effectiveResolution === "split_transaction" && isLoanSplitWorkflow ? (
                   <span className="inline-flex w-fit max-w-full rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
                     Loan Payment · Needs Split
                   </span>
-                ) : !isPending && !isCcPaymentWorkflow && !incomingMatch.active && accounts.length > 0 ? (
+                ) : !isPending && effectiveResolution === "categorize_new" && accounts.length > 0 ? (
                   <CoaDropdown
                     value={selectedAccountValue}
                     suggestedId={txn.suggestedAccountId}
@@ -1535,21 +1556,6 @@ export default function BookkeepingFeed({
                     accounts={accounts}
                     onCreateAccount={onCreateAccount}
                     onCreatedAccountSelect={(account) => onCreatedAccountSelect?.(txn, account)}
-                    onUseCreditCardPayment={
-                      !readOnly && !isPosted
-                        ? () => onMarkCcPayment?.(txn.id)
-                        : null
-                    }
-                    onUseSplitTransaction={
-                      !readOnly && isEligibleForManualSplit(txn)
-                        ? () => startSplitTransaction(txn)
-                        : null
-                    }
-                    onUseLoanPayment={
-                      !readOnly && isEligibleForManualLoanSplit(txn)
-                        ? () => startLoanSplit(txn)
-                        : null
-                    }
                     accountTypes={accountTypes}
                     creationContext={{
                       amount: txn.signed_amount ?? txn.signedAmount ?? txn.amount,
@@ -1565,7 +1571,7 @@ export default function BookkeepingFeed({
                     }
                     onChange={(id) => handleAccountSelect(txn.id, id)}
                   />
-                ) : !isPending && !isCcPaymentWorkflow && !incomingMatch.active ? (
+                ) : !isPending && effectiveResolution === "categorize_new" ? (
                   <span className="text-slate-400 text-[11px] truncate">{readOnlyGlLabel}</span>
                 ) : null}
                 {txn.status === "auto_approved" && !isCcPaymentWorkflow ? (
@@ -1602,7 +1608,7 @@ export default function BookkeepingFeed({
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
-                ) : incomingMatch.active ? (
+                ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (
                   incomingMatch.confirmed && allowIncomingDepositUndo && incomingMatch.matchId ? (
                     <button
                       type="button"
@@ -1649,7 +1655,7 @@ export default function BookkeepingFeed({
                                       : "Review match"}
                     </button>
                   )
-                ) : isCcPaymentWorkflow ? (
+                ) : effectiveResolution === "match_credit_card_payment" ? (
                   canUndoCcPaymentPair ? (
                     <button
                       className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
@@ -1667,7 +1673,7 @@ export default function BookkeepingFeed({
                   ) : (
                     <span className="text-[10px] text-slate-400">Needs match</span>
                   )
-                ) : isLoanSplitWorkflow ? (
+                ) : effectiveResolution === "split_transaction" ? (
                   <span className="text-[10px] text-slate-400">{loanSplitDraft ? "Needs split" : "Loan split"}</span>
                 ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
                   <div className="flex items-center justify-center gap-1.5">
@@ -1745,7 +1751,18 @@ export default function BookkeepingFeed({
                  <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
                    {fullMemo}
                  </div>
-                 <IncomingDepositMatchPanel
+                 {!isPosted && !isPending ? <div className="mt-3">
+                   <TransactionResolutionSelector
+                     transactionId={txn.id}
+                     value={effectiveResolution}
+                     suggested={systemSuggestedResolution}
+                     disabled={readOnly}
+                     busy={resolutionAction.busy === true}
+                     error={resolutionAction.error || ""}
+                     onChange={(resolution) => changeResolution(txn, resolution)}
+                   />
+                 </div> : null}
+                 {incomingMatch.active && ["match_existing_qbo", "categorize_new"].includes(effectiveResolution) ? <IncomingDepositMatchPanel
                    txn={txn}
                    state={incomingMatch}
                    action={incomingMatchAction}
@@ -1755,7 +1772,10 @@ export default function BookkeepingFeed({
                    onReject={onRejectIncomingDepositMatch}
                    onUndo={onUndoIncomingDepositMatch}
                    onRecordNewFee={onApprove}
-                 />
+                   onRecordNewIncome={onRecordIncomingDepositAsNewIncome}
+                   accounts={accounts}
+                   resolutionOverride={effectiveResolution}
+                 /> : null}
                  {customerAnswered ? (
                    <div className="mt-3 rounded-lg border border-cyan-300/18 bg-cyan-400/[0.06] px-3 py-2">
                      <div className="text-[10px] font-semibold uppercase tracking-wide text-cyan-100/80">

@@ -1,10 +1,11 @@
 import React from "react";
-import { CoaDropdown, CreditCardPaymentMatchControl, IncomingDepositMatchPanel, incomingDepositMatchState } from "./BookkeepingFeed.jsx";
+import { CoaDropdown, CreditCardPaymentMatchControl, IncomingDepositMatchPanel, TransactionResolutionSelector, incomingDepositMatchState } from "./BookkeepingFeed.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
+import { effectiveTransactionResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import {
   deriveCreditCardPaymentOrientation,
   deriveCreditCardPaymentStatus,
@@ -40,6 +41,7 @@ export default function BookkeepingTransactionMirrorTable({
   onConfirmIncomingDepositMatch,
   onCreateAccount,
   onCreatedAccountSelect,
+  onResolutionChange,
   accountTypes,
   emptyMessage = "No transactions in this feed.",
 }) {
@@ -89,6 +91,7 @@ export default function BookkeepingTransactionMirrorTable({
             onConfirmIncomingDepositMatch={onConfirmIncomingDepositMatch}
             onCreateAccount={onCreateAccount}
             onCreatedAccountSelect={onCreatedAccountSelect}
+            onResolutionChange={onResolutionChange}
             accountTypes={accountTypes}
           />
         ))}
@@ -122,6 +125,7 @@ function BookkeepingTransactionMirrorRow({
   onConfirmIncomingDepositMatch,
   onCreateAccount,
   onCreatedAccountSelect,
+  onResolutionChange,
   accountTypes,
 }) {
   const rowCcPairRole = row.cc_payment_pair_role || row.meta?.cc_payment_pair_role || null;
@@ -136,9 +140,13 @@ function BookkeepingTransactionMirrorRow({
   const [selectedAccountId, setSelectedAccountId] = React.useState(initialAccountId);
   const [selectedCcCandidateId, setSelectedCcCandidateId] = React.useState("");
   const [loanSplitDraft, setLoanSplitDraft] = React.useState(null);
+  const [resolution, setResolution] = React.useState(() => effectiveTransactionResolution(row));
+  const [resolutionError, setResolutionError] = React.useState("");
+  const [resolutionBusy, setResolutionBusy] = React.useState(false);
 
   React.useEffect(() => {
     setSelectedAccountId(initialAccountId);
+    setResolution(effectiveTransactionResolution(row));
   }, [initialAccountId, row.id]);
 
   const qboStatus = deriveMirrorQboPostingStatus(row);
@@ -177,27 +185,25 @@ function BookkeepingTransactionMirrorRow({
   });
   const ccAction = ccPaymentActionState?.[row.id] || {};
   const incomingAction = incomingDepositMatchActionState?.[row.id] || {};
-  const canUseLoanSplit =
-    !isPosted &&
-    !isPending &&
-    !isQueued &&
-    !isActionBusy("approve") &&
-    !isActionBusy("reclassify") &&
-    isEligibleForMirrorLoanSplit(row);
-  const canUseSplit =
-    !isPosted &&
-    !isPending &&
-    !isQueued &&
-    !isActionBusy("approve") &&
-    !isActionBusy("reclassify") &&
-    isEligibleForMirrorSplit(row);
-  const startSplitTransaction = () => {
-    if (!canUseSplit) return;
-    setLoanSplitDraft(buildInitialSplitTransactionDraft("general", row, accounts));
-  };
-  const startLoanSplit = () => {
-    if (!canUseLoanSplit) return;
-    setLoanSplitDraft(buildInitialLoanSplitDraft(row, accounts));
+  const changeResolution = async (nextResolution) => {
+    const previous = resolution;
+    setResolution(nextResolution);
+    setResolutionBusy(true);
+    setResolutionError("");
+    try {
+      await onResolutionChange?.(row, nextResolution, suggestedTransactionResolution(row));
+      if (nextResolution === "match_existing_qbo") await onInspectIncomingDepositMatch?.(row.id, null, row);
+      else if (nextResolution === "match_credit_card_payment") await onMarkCcPayment?.(row);
+      else if (nextResolution === "split_transaction") {
+        const legacyLoan = ["loan_payment", "loan_movement"].includes(String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase()) || row.meta?.loan_payment_split_id;
+        setLoanSplitDraft(legacyLoan ? { ...buildInitialLoanSplitDraft(row, accounts), mode: "general", legacyLoanSplit: true } : buildInitialSplitTransactionDraft("general", row, accounts));
+      } else if (nextResolution === "categorize_new" && ccWorkflowStatus) await onRejectCcPayment?.(row);
+    } catch (error) {
+      setResolution(previous);
+      setResolutionError(error?.body?.message || error?.message || "Could not change this workflow.");
+    } finally {
+      setResolutionBusy(false);
+    }
   };
 
   return (
@@ -233,15 +239,16 @@ function BookkeepingTransactionMirrorRow({
       </div>
 
       <div className="min-w-0">
-        {loanSplitDraft ? (
+        {!isPosted && !isPending ? <div className="mb-2"><TransactionResolutionSelector transactionId={row.id} value={resolution} suggested={suggestedTransactionResolution(row)} busy={resolutionBusy} error={resolutionError} onChange={changeResolution} /></div> : null}
+        {resolution === "split_transaction" && loanSplitDraft ? (
           <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">
             Loan Payment · Needs Split
           </div>
-        ) : isLoanSplitWorkflow ? (
+        ) : resolution === "split_transaction" && isLoanSplitWorkflow ? (
           <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">
             Loan Payment · Needs Split
           </div>
-        ) : ccWorkflowStatus ? (
+        ) : resolution === "match_credit_card_payment" && ccWorkflowStatus ? (
           <CreditCardPaymentMatchControl
             value={selectedAccountId}
             accounts={ccAccounts}
@@ -256,7 +263,9 @@ function BookkeepingTransactionMirrorRow({
             onConfirm={() => onConfirmCcPaymentMatch?.(row, selectedAccountId, selectedCcCandidateId || null)}
             onUseCoa={!isPosted ? () => onRejectCcPayment?.(row) : null}
           />
-        ) : isPending || genericActionsBlocked ? (
+        ) : resolution === "match_existing_qbo" && incomingMatch.active ? (
+          <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">QuickBooks match review</div>
+        ) : isPending || (genericActionsBlocked && resolution !== "categorize_new") ? (
           <>
             <div className="truncate text-white/75">{glAccountLabel}</div>
             {isPending ? (
@@ -276,9 +285,6 @@ function BookkeepingTransactionMirrorRow({
               onCreatedAccountSelect?.(account);
               setSelectedAccountId(String(account.id));
             }}
-            onUseCreditCardPayment={!isPosted && !isPending ? () => onMarkCcPayment?.(row) : null}
-            onUseSplitTransaction={canUseSplit ? startSplitTransaction : null}
-            onUseLoanPayment={canUseLoanSplit ? startLoanSplit : null}
             accountTypes={accountTypes}
             creationContext={{
               amount: row.signed_amount ?? row.signedAmount ?? row.amount,
@@ -304,7 +310,7 @@ function BookkeepingTransactionMirrorRow({
           </div>
         ) : null}
         <div className="flex flex-wrap gap-1.5">
-          {ccWorkflowStatus ? (
+          {resolution === "match_credit_card_payment" && ccWorkflowStatus ? (
             <>
               <span className="text-[11px] text-white/45">{ccWorkflowStatus.matched ? "Matched" : "Needs match"}</span>
               {Array.isArray(ccAction.candidates) && ccAction.candidates.length > 1 ? (
@@ -326,7 +332,7 @@ function BookkeepingTransactionMirrorRow({
               ) : null}
             </>
           ) : null}
-          {isNeedsReviewFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus && !isLoanSplitWorkflow ? (
+          {isNeedsReviewFeed && resolution === "categorize_new" && !genericActionsBlocked && !isPending ? (
             <>
               <div className="basis-full text-[11px] text-white/42">
                 {learnReusableRule
@@ -351,7 +357,7 @@ function BookkeepingTransactionMirrorRow({
               </button>
             </>
           ) : null}
-          {isHandledFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus && !isLoanSplitWorkflow ? (
+          {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && !isPending ? (
             <>
               {selectedChanged ? (
                 <>
@@ -382,10 +388,10 @@ function BookkeepingTransactionMirrorRow({
           ) : null}
         </div>
         <div className="mt-1 flex flex-wrap gap-1.5">
-          {isLoanSplitWorkflow ? (
-            <span className="text-[11px] text-amber-100/80">Loan split review</span>
+          {resolution === "split_transaction" ? (
+            <span className="text-[11px] text-amber-100/80">Split review</span>
           ) : null}
-          {isHandledFeed && !genericActionsBlocked && !isPending && !ccWorkflowStatus && !isLoanSplitWorkflow && !isPosted && !isFailed && !isQueued ? (
+          {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && !isPending && !isPosted && !isFailed && !isQueued ? (
             <button
               type="button"
               onClick={() => onPost?.(row)}
@@ -395,7 +401,7 @@ function BookkeepingTransactionMirrorRow({
               {isActionBusy("post") ? "Posting..." : "Post to QBO"}
             </button>
           ) : null}
-          {isHandledFeed && !genericActionsBlocked && !ccWorkflowStatus && isFailed ? (
+          {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && isFailed ? (
             <button
               type="button"
               onClick={() => onRetry?.(row)}
@@ -413,12 +419,13 @@ function BookkeepingTransactionMirrorRow({
         ) : null}
       </div>
     </div>
-    {incomingMatch.active ? (
+    {resolution === "match_existing_qbo" && incomingMatch.active ? (
       <div className="border-t border-white/10 bg-black/20 px-4 pb-4">
         <IncomingDepositMatchPanel
           txn={row}
           state={incomingMatch}
           action={incomingAction}
+          resolutionOverride={resolution}
           onInspect={onInspectIncomingDepositMatch}
           onConfirm={onConfirmIncomingDepositMatch}
         />
@@ -464,27 +471,6 @@ function buildTransactionFlags(row) {
 function selectedAccountName(accountId, accounts = []) {
   const found = (accounts || []).find((account) => String(account.id || "") === String(accountId || ""));
   return found?.name || found?.fullyQualifiedName || "";
-}
-
-function isEligibleForMirrorLoanSplit(row = {}) {
-  if (!row || row.pending === true) return false;
-  const status = String(row.status || "").toLowerCase();
-  if (status === "posted" || row.qbo_txn_id || row.qboTxnId || row.posted_at) return false;
-  const signedAmount = Number(row.signed_amount ?? row.signedAmount ?? row.amount ?? 0);
-  const direction = String(row.direction || "").toUpperCase();
-  const isOutflow = direction === "OUTFLOW" || (direction !== "INFLOW" && Number.isFinite(signedAmount) && signedAmount < 0);
-  if (!isOutflow) return false;
-  const workflow = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
-  if (!workflow || workflow === "ordinary_expense" || workflow === "expense" || workflow === "loan_payment") return true;
-  return false;
-}
-
-function isEligibleForMirrorSplit(row = {}) {
-  if (!row || row.pending === true) return false;
-  const status = String(row.status || "").toLowerCase();
-  if (status === "posted" || row.qbo_txn_id || row.qboTxnId || row.posted_at) return false;
-  const signedAmount = Number(row.signed_amount ?? row.signedAmount ?? row.amount ?? 0);
-  return Number.isFinite(signedAmount) && signedAmount !== 0;
 }
 
 export function deriveMirrorQboPostingStatus(row = {}) {

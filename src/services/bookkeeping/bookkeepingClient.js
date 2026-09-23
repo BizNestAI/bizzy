@@ -44,6 +44,14 @@ export async function getTransactions(businessId, params = {}, options = {}) {
   return res || { rows: [] };
 }
 
+export async function saveTransactionResolution(businessId, transactionId, resolution) {
+  return safeFetch(apiUrl(`/api/bookkeeping/transactions/${encodeURIComponent(transactionId)}/resolution`), {
+    method: "PUT",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId, resolution }),
+  });
+}
+
 export async function getOperatorRequests(businessId, params = {}) {
   const search = new URLSearchParams();
   Object.entries(params || {}).forEach(([k, v]) => {
@@ -113,6 +121,27 @@ export async function inspectIncomingDepositMatch(businessId, transactionId, { p
   });
 }
 
+export async function recordIncomingDepositAsNewIncome(businessId, transactionId, {
+  selectedQboAccountId,
+  duplicateOverrideConfirmed = false,
+  idempotencyKey = null,
+} = {}) {
+  return safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/record-new-income`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, {
+      "Content-Type": "application/json",
+      ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+    }),
+    body: JSON.stringify({
+      business_id: businessId,
+      resolution: "create_new_income",
+      selected_qbo_account_id: selectedQboAccountId,
+      duplicate_override_confirmed: duplicateOverrideConfirmed,
+      idempotency_key: idempotencyKey,
+    }),
+  });
+}
+
 export async function refreshIncomingDepositMatch(businessId, transactionId) {
   return safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/refresh`), {
     method: "POST",
@@ -121,14 +150,14 @@ export async function refreshIncomingDepositMatch(businessId, transactionId) {
   });
 }
 
-export async function confirmIncomingDepositMatch(businessId, transactionId, matchId, { expectedBankUpdatedAt = null, qboEntityId = null, qboEntityType = null } = {}) {
+export async function confirmIncomingDepositMatch(businessId, transactionId, matchId, { expectedBankUpdatedAt = null, qboEntityId = null, qboEntityType = null, qboEntities = [] } = {}) {
   const res = await safeFetch(apiUrl(`/api/bookkeeping/incoming-deposit-matches/${encodeURIComponent(transactionId)}/${encodeURIComponent(matchId)}/confirm`), {
     method: "POST",
     headers: withBizHeaders(businessId, {
       "Content-Type": "application/json",
       "Idempotency-Key": `incoming-deposit-confirm-${transactionId}-${matchId}-${qboEntityId || "primary"}`,
     }),
-    body: JSON.stringify({ business_id: businessId, expected_bank_updated_at: expectedBankUpdatedAt, qbo_entity_id: qboEntityId, qbo_entity_type: qboEntityType }),
+    body: JSON.stringify({ business_id: businessId, resolution: "match_existing_qbo", expected_bank_updated_at: expectedBankUpdatedAt, qbo_entity_id: qboEntityId, qbo_entity_type: qboEntityType, qbo_entities: qboEntities }),
   });
   if (res && res.ok === false) throw new Error(res.message || res.error || "incoming_deposit_match_confirm_failed");
   return res;
@@ -350,7 +379,7 @@ export async function rejectCreditCardPayment(businessId, txnId) {
 }
 
 export async function markCreditCardPayment(businessId, txnId) {
-  const payload = { business_id: businessId, txnId };
+  const payload = { business_id: businessId, txnId, resolution: "match_credit_card_payment" };
   const res = await safeFetch(apiUrl("/api/bookkeeping/credit-card-payments/mark"), {
     method: "POST",
     headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
@@ -428,7 +457,7 @@ export async function confirmLoanPaymentSplit(businessId, txnId, split = {}) {
 }
 
 export async function confirmSplitTransaction(businessId, txnId, split = {}) {
-  const payload = { business_id: businessId, split };
+  const payload = { business_id: businessId, resolution: "split_transaction", split };
   const res = await safeFetch(apiUrl(`/api/bookkeeping/transactions/${encodeURIComponent(txnId)}/confirm-split`), {
     method: "POST",
     headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),

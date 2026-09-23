@@ -1911,6 +1911,7 @@ export async function handleItem(item, options = {}) {
   const txnId = item.transaction_id;
   const manual = options?.manual === true;
   const confirmPostAnyway = options?.confirmPostAnyway === true;
+  const createNewIncomeOverride = options?.createNewIncomeOverride === true && item?.meta?.incoming_deposit_resolution?.resolution === "create_new_income";
   const duplicatePostAnyway = confirmPostAnyway && item?.meta?.possible_qbo_duplicate === true;
   const timing = createPostingTiming();
   let intentQboTxnTypeForLog = null;
@@ -2169,7 +2170,7 @@ export async function handleItem(item, options = {}) {
     return;
   }
 
-  if (qboTxnType === "Deposit" || detectProcessorSettlementActivity(bank)?.kind === "fee") {
+  if ((qboTxnType === "Deposit" || detectProcessorSettlementActivity(bank)?.kind === "fee") && !createNewIncomeOverride) {
     const depositGuard = await timePostingStage(timing, "incoming_deposit_match_guard_ms", () =>
       evaluateIncomingDepositPostingGuard({ businessId, bankTransactionId: txnId, actorRole: manual ? "manual_post" : "auto_post" })
     );
@@ -2627,7 +2628,7 @@ async function markFailed(item, message) {
     .eq("transaction_id", item.transaction_id);
 }
 
-export async function postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway = false }) {
+export async function postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway = false, createNewIncomeOverride = false }) {
   if (!businessId) throw new Error("missing_business_id");
   if (!transactionId) throw new Error("missing_transaction_id");
 
@@ -2668,7 +2669,11 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
   }
 
   try {
-    await handleItem(item, { manual: true, confirmPostAnyway });
+    if (createNewIncomeOverride) {
+      await handleItem(item, { manual: true, confirmPostAnyway, createNewIncomeOverride: true });
+    } else {
+      await handleItem(item, { manual: true, confirmPostAnyway });
+    }
   } catch (err) {
     const postingIntent = await fetchExistingQboPostingIntent(businessId, transactionId).catch(() => null);
     if (postingIntent?.status === "posted" && postingIntent?.qbo_txn_id) {

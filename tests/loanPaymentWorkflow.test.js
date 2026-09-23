@@ -421,7 +421,7 @@ test("posting worker has loan split guard before QBO writes and still blocks pen
   assert.match(worker, /markSplitTransactionPosted/);
 });
 
-test("Books Review account dropdown exposes a manual loan split workflow safely", () => {
+test("Books Review exposes loan rows through the universal general splitter safely", () => {
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
   const mirror = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   const modal = read("src/components/Accounting/SplitTransactionModal.jsx");
@@ -433,17 +433,15 @@ test("Books Review account dropdown exposes a manual loan split workflow safely"
   const migration = read("supabase/migrations/20261014_transaction_split_workflow.sql");
 
   assert.match(feed, /Split transaction/);
-  assert.match(feed, /Split as loan payment/);
-  assert.match(feed, /onUseCreditCardPayment[\s\S]*Match as credit card payment[\s\S]*onUseSplitTransaction[\s\S]*Split transaction[\s\S]*onUseLoanPayment[\s\S]*Split as loan payment/);
-  assert.match(feed, /function isEligibleForManualLoanSplit/);
-  assert.match(feed, /function isEligibleForManualSplit/);
-  assert.match(feed, /txn\.pending === true/);
-  assert.match(feed, /status === "posted" \|\| txn\.qbo_txn_id/);
-  assert.match(feed, /signedAmount < 0/);
-  assert.match(feed, /workflow === "loan_payment"/);
+  assert.doesNotMatch(feed, /Split as loan payment/);
+  assert.match(feed, /categorize_new/);
+  assert.match(feed, /match_existing_qbo/);
+  assert.match(feed, /match_credit_card_payment/);
+  assert.match(feed, /split_transaction/);
   assert.match(feed, /SplitTransactionModal/);
   assert.match(feed, /buildInitialSplitTransactionDraft\("general", txn, accounts\)/);
   assert.match(feed, /buildInitialLoanSplitDraft\(txn, accounts\)/);
+  assert.match(feed, /mode: "general", legacyLoanSplit: true/);
   assert.match(feed, /onConfirmLoanPaymentSplit/);
   assert.match(feed, /onConfirmSplitTransaction/);
   assert.match(feed, /onTreatLoanPaymentAsRegular/);
@@ -451,20 +449,17 @@ test("Books Review account dropdown exposes a manual loan split workflow safely"
   assert.doesNotMatch(feed, /min-w-\[420px\] max-w-\[680px\]/);
 
   assert.match(mirror, /BookkeepingTransactionMirrorRow/);
-  assert.match(mirror, /onUseCreditCardPayment[\s\S]*onUseSplitTransaction[\s\S]*onUseLoanPayment/);
-  assert.match(mirror, /onUseLoanPayment=\{canUseLoanSplit \? startLoanSplit : null\}/);
+  assert.doesNotMatch(mirror, /Split as loan payment/);
+  assert.match(mirror, /TransactionResolutionSelector/);
   assert.match(mirror, /SplitTransactionModal/);
   assert.match(mirror, /buildInitialSplitTransactionDraft\("general", row, accounts\)/);
   assert.match(mirror, /buildInitialLoanSplitDraft\(row, accounts\)/);
   assert.doesNotMatch(mirror, /LoanPaymentSplitEditor/);
   assert.doesNotMatch(mirror, /Split loan payment[\s\S]*Principal[\s\S]*Interest/);
   assert.doesNotMatch(mirror, /function findDefaultInterestAccountId/);
-  assert.match(mirror, /isEligibleForMirrorLoanSplit/);
-  assert.match(mirror, /row\.pending === true/);
-  assert.match(mirror, /status === "posted" \|\| row\.qbo_txn_id/);
-  assert.match(mirror, /isOutflow/);
-  assert.match(mirror, /!isActionBusy\("approve"\)/);
-  assert.match(mirror, /Loan split review/);
+  assert.match(mirror, /mode: "general", legacyLoanSplit: true/);
+  assert.match(mirror, /resolution === "split_transaction"/);
+  assert.match(mirror, /Split review/);
   assert.match(monthlyReview, /handleMirrorConfirmLoanPaymentSplit/);
   assert.match(monthlyReview, /handleMirrorConfirmSplitTransaction/);
   assert.match(monthlyReview, /handleMirrorTreatLoanPaymentAsRegular/);

@@ -25,8 +25,27 @@ import {
   BookkeepingApprovalError,
 } from "../../../services/bookkeeping/bookkeepingApprovalService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
+import { persistTransactionResolution } from "../../../services/bookkeeping/transactionResolutionService.js";
 
 const router = Router();
+
+router.put("/transactions/:transactionId/resolution", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await persistTransactionResolution({
+      db: supabase,
+      businessId,
+      transactionId: req.params.transactionId,
+      resolution: req.body?.resolution,
+      actor: req.user?.id || req.auth?.userId || null,
+      source: "books_review",
+    });
+    return res.json(result);
+  } catch (err) {
+    return res.status(err?.status || 500).json({ ok: false, error: err?.code || "transaction_resolution_save_failed", message: err?.status ? err.message : "Could not save this workflow selection." });
+  }
+});
 
 router.post("/approve", requireAuth, async (req, res) => {
   const raw = req.body || {};
@@ -202,6 +221,7 @@ router.post("/credit-card-payments/mark", requireAuth, async (req, res) => {
   const txnId = raw.txnId || raw.transaction_id || raw.transactionId || raw.id || null;
   if (!businessId) return;
   if (!txnId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+  if (raw.resolution !== "match_credit_card_payment") return res.status(400).json({ ok: false, error: "resolution_payload_mismatch" });
 
   try {
     const result = await markTransactionAsCreditCardPayment({
@@ -437,6 +457,7 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
   const split = req.body?.split || req.body || {};
   if (!businessId) return;
   if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+  if (req.body?.resolution !== "split_transaction") return res.status(400).json({ ok: false, error: "resolution_payload_mismatch" });
 
   try {
     const { data: transaction, error: txnErr } = await supabase

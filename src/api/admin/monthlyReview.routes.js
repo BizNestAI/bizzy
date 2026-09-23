@@ -63,6 +63,7 @@ import {
   discoverIncomingDepositQboMatch,
 } from "../../services/bookkeeping/incomingDepositMatchService.js";
 import { refreshProcessorFeeQboEvidence } from "../../services/bookkeeping/processorFeeQboRefreshService.js";
+import { persistTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import {
   BookkeepingReclassificationError,
   reclassifyBookkeepingTransaction,
@@ -773,6 +774,7 @@ router.get("/businesses/:businessId/bookkeeping/posting-review/details", async (
 
 router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/credit-card-payment/confirm-match", async (req, res) => {
   try {
+    if (req.body?.resolution !== "match_credit_card_payment") return res.status(400).json({ ok: false, error: "resolution_payload_mismatch" });
     const businessId = req.params.businessId;
     const transactionId = req.params.transactionId;
     if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
@@ -864,6 +866,7 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/inc
 
 router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/incoming-deposit-match/:matchId/confirm", async (req, res) => {
   try {
+    if (req.body?.resolution !== "match_existing_qbo") return res.status(400).json({ ok: false, error: "resolution_payload_mismatch" });
     const { businessId, transactionId, matchId } = req.params;
     if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
     if (!UUID_RE.test(String(transactionId))) return res.status(400).json({ ok: false, error: "invalid_transaction_id" });
@@ -881,6 +884,7 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/inc
       expectedBankUpdatedAt: req.body?.expected_bank_updated_at || null,
       selectedQboEntityId: req.body?.qbo_entity_id || null,
       selectedQboEntityType: req.body?.qbo_entity_type || null,
+      selectedQboEntities: req.body?.qbo_entities || null,
     });
     return res.json({ ...result, business_id: businessId, month, qbo_provider_writes: false, qbo_transaction_writes: false });
   } catch (e) {
@@ -889,8 +893,32 @@ router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/inc
   }
 });
 
+router.put("/businesses/:businessId/bookkeeping/transactions/:transactionId/resolution", async (req, res) => {
+  try {
+    const { businessId, transactionId } = req.params;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    if (!UUID_RE.test(String(transactionId))) return res.status(400).json({ ok: false, error: "invalid_transaction_id" });
+    const month = normalizeMonth(req.body?.month || req.query?.month);
+    await assertRunTransactionInSelectedMonth({ business_id: businessId, review_month: month }, transactionId);
+    const result = await persistTransactionResolution({
+      db: supabase,
+      businessId,
+      transactionId,
+      resolution: req.body?.resolution,
+      systemSuggestedResolution: req.body?.system_suggested_resolution,
+      actor: req.user?.id || req.user?.sub || null,
+      actorRole: "admin_monthly_review",
+    });
+    return res.json({ ok: true, ...result, business_id: businessId, month });
+  } catch (e) {
+    console.error("[monthly-review] transaction resolution update failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_resolution_update_failed", "Could not save this workflow selection.", e);
+  }
+});
+
 router.post("/businesses/:businessId/bookkeeping/transactions/:transactionId/credit-card-payment/mark", async (req, res) => {
   try {
+    if (req.body?.resolution !== "match_credit_card_payment") return res.status(400).json({ ok: false, error: "resolution_payload_mismatch" });
     const businessId = req.params.businessId;
     const transactionId = req.params.transactionId;
     if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });

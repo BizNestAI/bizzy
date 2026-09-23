@@ -10,9 +10,11 @@ import {
   discoverExistingIncomingDepositMatches,
   discoverIncomingDepositQboMatch,
   IncomingDepositMatchError,
+  recordIncomingDepositAsNewIncome,
   rejectIncomingDepositQboMatch,
   undoIncomingDepositQboMatch,
 } from "../../../services/bookkeeping/incomingDepositMatchService.js";
+import { postSingleBookkeepingTransactionNow } from "../../../jobs/booksPost.cron.js";
 import { ProcessorFeeRefreshError, refreshProcessorFeeQboEvidence } from "../../../services/bookkeeping/processorFeeQboRefreshService.js";
 
 const router = Router();
@@ -124,11 +126,34 @@ router.post("/incoming-deposit-matches/discovery", requireAuth, incomingDepositM
   }
 });
 
+router.post("/incoming-deposit-matches/:transactionId/record-new-income", requireAuth, incomingDepositMatchWriteRateLimit, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  req.matchCorrelationId = requestCorrelationId(req);
+  try {
+    await assertTaxBusinessAccess({ req, businessId, supabase });
+    const result = await recordIncomingDepositAsNewIncome({
+      db: supabase,
+      businessId,
+      bankTransactionId: req.params.transactionId,
+      selectedQboAccountId: req.body?.selected_qbo_account_id || req.body?.selectedQboAccountId,
+      duplicateOverrideConfirmed: req.body?.duplicate_override_confirmed === true,
+      actor: actorId(req),
+      idempotencyKey: req.body?.idempotency_key || req.get("Idempotency-Key") || null,
+      postTransaction: postSingleBookkeepingTransactionNow,
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendError(req, res, err, "create_new_income_failed");
+  }
+});
+
 router.post("/incoming-deposit-matches/:transactionId/:matchId/confirm", requireAuth, incomingDepositMatchWriteRateLimit, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   req.matchCorrelationId = requestCorrelationId(req);
   try {
+    if (req.body?.resolution !== "match_existing_qbo") return res.status(400).json({ ok: false, error: "resolution_payload_mismatch" });
     await assertTaxBusinessAccess({ req, businessId, supabase });
     const result = await confirmIncomingDepositQboMatch({
       db: supabase,
@@ -141,6 +166,7 @@ router.post("/incoming-deposit-matches/:transactionId/:matchId/confirm", require
       expectedBankUpdatedAt: req.body?.expected_bank_updated_at || req.body?.expectedBankUpdatedAt || null,
       selectedQboEntityId: req.body?.qbo_entity_id || req.body?.qboEntityId || null,
       selectedQboEntityType: req.body?.qbo_entity_type || req.body?.qboEntityType || null,
+      selectedQboEntities: Array.isArray(req.body?.qbo_entities) ? req.body.qbo_entities : [],
     });
     return res.json(result);
   } catch (err) {

@@ -1424,6 +1424,108 @@ export async function evaluateIncomingDepositPostingGuard(args = {}) {
   return { ok: true, allowed: false, reason: result.posting_eligibility || result.status, result };
 }
 
+export async function recordIncomingDepositAsNewIncome({
+  db,
+  businessId,
+  bankTransactionId,
+  selectedQboAccountId,
+  actor = null,
+  duplicateOverrideConfirmed = false,
+  idempotencyKey = null,
+  postTransaction,
+  discover = discoverIncomingDepositQboMatch,
+} = {}) {
+  if (!db || !businessId || !bankTransactionId || !selectedQboAccountId) {
+    throw new IncomingDepositMatchError("create_new_income_missing_input", 400);
+  }
+  const { data: existingReceipt, error: receiptError } = await db
+    .from("qbo_posted_transactions")
+    .select("qbo_txn_id,qbo_txn_type,status")
+    .eq("business_id", businessId)
+    .eq("transaction_id", bankTransactionId)
+    .eq("status", "posted")
+    .limit(1)
+    .maybeSingle();
+  if (receiptError && !isMissingSchemaError(receiptError)) throw receiptError;
+  if (existingReceipt?.qbo_txn_id) {
+    return { ok: true, already_posted: true, resolution: "create_new_income", qbo_txn_id: existingReceipt.qbo_txn_id };
+  }
+
+  const { data: bankTxn, error: bankError } = await db
+    .from("bank_transactions")
+    .select("id,plaid_account_id,amount,date,name,merchant_name,counterparty_name,direction")
+    .eq("business_id", businessId)
+    .eq("id", bankTransactionId)
+    .maybeSingle();
+  if (bankError) throw bankError;
+  if (!bankTxn || Number(bankTxn.amount || 0) <= 0 || String(bankTxn.direction || "INFLOW").toUpperCase() === "OUTFLOW") {
+    throw new IncomingDepositMatchError("create_new_income_requires_inflow", 400);
+  }
+
+  const { data: account, error: accountError } = await db
+    .from("qbo_accounts_cache")
+    .select("qbo_account_id,name,account_type,active")
+    .eq("business_id", businessId)
+    .eq("qbo_account_id", String(selectedQboAccountId))
+    .maybeSingle();
+  if (accountError) throw accountError;
+  const accountType = String(account?.account_type || "").replace(/[\s_-]+/g, "").toLowerCase();
+  if (!account || account.active === false || !["income", "otherincome"].includes(accountType)) {
+    throw new IncomingDepositMatchError("invalid_income_account", 400);
+  }
+
+  const discovery = await discover({
+    db, businessId, bankTransactionId, actor, actorRole: "create_new_income_preflight", persist: true,
+  });
+  const unavailable = discovery.status === "match_check_unavailable" || discovery.posting_eligibility === "blocked_match_check_unavailable";
+  if (unavailable && duplicateOverrideConfirmed !== true) {
+    throw new IncomingDepositMatchError("duplicate_override_confirmation_required", 409);
+  }
+  if (!unavailable && !["ordinary_workflow", "ordinary_income_posting_allowed"].includes(discovery.posting_eligibility)) {
+    throw new IncomingDepositMatchError("confirmed_qbo_duplicate_requires_match", 409);
+  }
+
+  const { data: current, error: currentError } = await db
+    .from("transaction_categorizations")
+    .select("meta")
+    .eq("business_id", businessId)
+    .eq("transaction_id", bankTransactionId)
+    .maybeSingle();
+  if (currentError) throw currentError;
+  const resolutionAudit = {
+    resolution: "create_new_income",
+    selected_qbo_income_account_id: String(selectedQboAccountId),
+    bank_payment_account_id: bankTxn.plaid_account_id || null,
+    amount: Number(bankTxn.amount),
+    transaction_date: bankTxn.date || null,
+    memo: bankTxn.name || bankTxn.merchant_name || bankTxn.counterparty_name || null,
+    duplicate_check_result: unavailable ? "unavailable" : "no_match",
+    duplicate_check_override: unavailable && duplicateOverrideConfirmed === true,
+    approved_by: actor,
+    approval_source: "books_review_match_check",
+    idempotency_key: idempotencyKey || null,
+    approved_at: new Date().toISOString(),
+  };
+  const { error: saveError } = await db
+    .from("transaction_categorizations")
+    .update({
+      status: "approved",
+      final_qbo_account_id: String(selectedQboAccountId),
+      final_qbo_account_name: account.name || null,
+      post_error: null,
+      meta: { ...(current?.meta || {}), incoming_deposit_resolution: resolutionAudit },
+    })
+    .eq("business_id", businessId)
+    .eq("transaction_id", bankTransactionId);
+  if (saveError) throw saveError;
+  const posted = await postTransaction({
+    businessId,
+    transactionId: bankTransactionId,
+    createNewIncomeOverride: true,
+  });
+  return { ...posted, resolution: "create_new_income", selected_qbo_account_id: String(selectedQboAccountId) };
+}
+
 function isUnresolvedDiscoveryCandidate(bankTxn = {}, cat = {}) {
   const processorFee = detectProcessorSettlementActivity(bankTxn)?.kind === "fee";
   if (!isIncomingDeposit(bankTxn) && !processorFee) return false;
@@ -1712,7 +1814,7 @@ async function assertCandidateCurrent({ db, businessId, matchId, candidateItem =
   return { item, current, snapshot_refreshed: snapshotChanged };
 }
 
-export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, businessId, bankTransactionId, matchId, actor = null, actorRole = "user", idempotencyKey = null, expectedBankUpdatedAt = null, selectedQboEntityId = null, selectedQboEntityType = null } = {}) {
+export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, businessId, bankTransactionId, matchId, actor = null, actorRole = "user", idempotencyKey = null, expectedBankUpdatedAt = null, selectedQboEntityId = null, selectedQboEntityType = null, selectedQboEntities = [] } = {}) {
   if (!businessId || !bankTransactionId || !matchId) throw new IncomingDepositMatchError("missing_confirm_input", 400);
   const bankTxn = await fetchBankTransaction({ db, businessId, bankTransactionId });
   if (!bankTxn) throw new IncomingDepositMatchError("bank_transaction_not_found", 404);
@@ -1749,22 +1851,38 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
   if (primaryItem.qbo_entity_type === "Invoice" || match.match_type === "qbo_invoice_only_context") {
     throw new IncomingDepositMatchError("invoice_only_match_not_confirmable", 409);
   }
-  let selectedItem = primaryItem;
-  if (selectedQboEntityId) {
+  let selectedItems = [primaryItem];
+  if (Array.isArray(selectedQboEntities) && selectedQboEntities.length) {
     const matchItems = await fetchMatchItems({ db, businessId, matchId });
-    selectedItem = matchItems.find((candidate) => (
+    selectedItems = selectedQboEntities.map((selected) => matchItems.find((candidate) => (
+      candidate.evidence_role !== "linked_context" &&
+      String(candidate.qbo_entity_id) === String(selected.qboEntityId || selected.qbo_entity_id) &&
+      String(candidate.qbo_entity_type) === String(selected.qboEntityType || selected.qbo_entity_type)
+    ))).filter(Boolean);
+    if (selectedItems.length !== selectedQboEntities.length) throw new IncomingDepositMatchError("selected_match_candidate_invalid", 409);
+  } else if (selectedQboEntityId) {
+    const matchItems = await fetchMatchItems({ db, businessId, matchId });
+    const selectedItem = matchItems.find((candidate) => (
       candidate.evidence_role !== "linked_context" &&
       String(candidate.qbo_entity_id) === String(selectedQboEntityId) &&
       (!selectedQboEntityType || String(candidate.qbo_entity_type) === String(selectedQboEntityType))
     )) || null;
     if (!selectedItem) throw new IncomingDepositMatchError("selected_match_candidate_invalid", 409);
+    selectedItems = [selectedItem];
   } else if (match.status === "ambiguous") {
     throw new IncomingDepositMatchError("exact_match_candidate_required", 409);
   }
-  if (selectedItem.qbo_entity_type === "Invoice") {
+  if (selectedItems.some((selectedItem) => selectedItem.qbo_entity_type === "Invoice")) {
     throw new IncomingDepositMatchError("invoice_only_match_not_confirmable", 409);
   }
-  const { item } = await assertCandidateCurrent({ db, businessId, matchId, candidateItem: selectedItem });
+  const bankAmountMinor = Math.round(Math.abs(Number(bankTxn.amount || 0)) * 100);
+  const selectedAmountMinor = selectedItems.reduce((sum, selectedItem) => sum + Math.abs(Number(selectedItem.amount_allocated_minor || 0)), 0);
+  if (selectedItems.length > 1 && selectedAmountMinor !== bankAmountMinor) {
+    throw new IncomingDepositMatchError("selected_match_total_mismatch", 409, { bank_amount_minor: bankAmountMinor, selected_amount_minor: selectedAmountMinor });
+  }
+  const currentSelections = [];
+  for (const selectedItem of selectedItems) currentSelections.push(await assertCandidateCurrent({ db, businessId, matchId, candidateItem: selectedItem }));
+  const item = currentSelections[0].item;
   if (item.qbo_entity_type === "Invoice" || match.match_type === "qbo_invoice_only_context") {
     throw new IncomingDepositMatchError("invoice_only_match_not_confirmable", 409);
   }
@@ -1791,9 +1909,10 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
     confirmed_idempotency_key: idempotencyKey || null,
     confirmed_qbo_entity_id: item.qbo_entity_id,
     confirmed_qbo_entity_type: item.qbo_entity_type,
+    confirmed_qbo_entities: selectedItems.map((selectedItem) => ({ qbo_entity_id: selectedItem.qbo_entity_id, qbo_entity_type: selectedItem.qbo_entity_type, amount_minor: selectedItem.amount_allocated_minor })),
     candidates: confirmedCandidates,
   };
-  const claim = typeof db.rpc === "function" ? await db.rpc("claim_bank_qbo_match", {
+  const claim = selectedItems.length === 1 && typeof db.rpc === "function" ? await db.rpc("claim_bank_qbo_match", {
     p_business_id: businessId,
     p_bank_transaction_id: bankTransactionId,
     p_match_id: matchId,
@@ -1807,6 +1926,11 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
   }
   if (claim?.error && !["42883", "PGRST202"].includes(String(claim.error.code || ""))) throw claim.error;
   if (!claim?.data) {
+    await db.from("bank_qbo_match_items").update({ active_confirmed: false }).eq("business_id", businessId).eq("match_id", matchId);
+    const selectedIds = selectedItems.map((selectedItem) => selectedItem.id).filter(Boolean);
+    const activate = selectedIds.length ? await db.from("bank_qbo_match_items").update({ active_confirmed: true }).eq("business_id", businessId).eq("match_id", matchId).in("id", selectedIds) : null;
+    if (activate?.error && String(activate.error.code) === "23505") throw new IncomingDepositMatchError("qbo_entity_already_matched", 409);
+    if (activate?.error) throw activate.error;
     await db.from("bank_qbo_matches").update({
     status: "confirmed",
     confirmed_at: now,
@@ -1814,8 +1938,6 @@ export async function confirmIncomingDepositQboMatch({ db = defaultSupabase, bus
     actor_role: actorRole,
     meta: confirmedMeta,
     }).eq("business_id", businessId).eq("id", matchId);
-    await db.from("bank_qbo_match_items").update({ active_confirmed: false }).eq("business_id", businessId).eq("match_id", matchId);
-    await db.from("bank_qbo_match_items").update({ active_confirmed: true }).eq("business_id", businessId).eq("match_id", matchId).eq("qbo_entity_type", item.qbo_entity_type).eq("qbo_entity_id", item.qbo_entity_id);
   }
 
   const { data: existingCat } = await db

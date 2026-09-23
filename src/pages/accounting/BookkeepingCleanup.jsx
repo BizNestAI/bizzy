@@ -37,6 +37,8 @@ import {
   confirmIncomingDepositMatch,
   rejectIncomingDepositMatch,
   undoIncomingDepositMatch,
+  recordIncomingDepositAsNewIncome,
+  saveTransactionResolution,
   getAutoPostStatus,
   updateAutoPostStatus,
 } from "../../services/bookkeeping/bookkeepingClient.js";
@@ -1496,7 +1498,7 @@ function BookkeepingCleanup() {
     );
     try {
       const approvalResult = await approveTransactions(businessId, [
-        { txnId: id, newAccountId: glAccountId, newAccountName: glAccountName, newAccountType: glAccount?.type || null },
+        { txnId: id, resolution: "categorize_new", newAccountId: glAccountId, newAccountName: glAccountName, newAccountType: glAccount?.type || null },
       ]);
       const serverRow = Array.isArray(approvalResult?.rows)
         ? approvalResult.rows.find((row) => String(row.transaction_id || row.id || "") === String(id))
@@ -2161,6 +2163,11 @@ function BookkeepingCleanup() {
         qbo_entity_already_matched: "This QuickBooks transaction has already been matched to another bank transaction.",
         qbo_match_candidate_missing: "The previous QuickBooks match is no longer available.",
         qbo_match_candidate_invalid_status: "The previous QuickBooks match was voided or is no longer available.",
+        duplicate_override_confirmation_required: "Confirm that this income is not already recorded in QuickBooks before posting it as new income.",
+        confirmed_qbo_duplicate_requires_match: "QuickBooks already contains a matching transaction. Match it instead of recording new income.",
+        invalid_income_account: "Choose an active QuickBooks income account before posting this deposit.",
+        create_new_income_requires_inflow: "Only incoming deposits can be recorded as new income from this review.",
+        create_new_income_failed: "QuickBooks could not record this deposit as new income. Your selection has been preserved so you can try again.",
       };
       const message = customerSafeErrors[code] || e?.body?.message || e?.message || "Could not update this QuickBooks match.";
       setIncomingDepositMatchActionState((prev) => ({ ...prev, [id]: { status: "error", loading: false, error: message, reason: code, refreshedCandidate: e?.body?.details?.refreshed_candidate || null } }));
@@ -2183,12 +2190,43 @@ function BookkeepingCleanup() {
         expectedBankUpdatedAt: txn.updated_at || txn.updatedAt || null,
         qboEntityId: selection.qboEntityId || null,
         qboEntityType: selection.qboEntityType || null,
+        qboEntities: selection.qboEntities || [],
       })
     );
   };
 
   const handleRejectIncomingDepositMatch = async (id, matchId) => {
     await withIncomingDepositMatchAction(id, () => rejectIncomingDepositMatch(businessId, id, matchId));
+  };
+
+  const handleRecordIncomingDepositAsNewIncome = async (id, options = {}) => {
+    const idempotencyKey = `create-new-income:${businessId}:${id}`;
+    await withIncomingDepositMatchAction(id, () => recordIncomingDepositAsNewIncome(businessId, id, {
+      selectedQboAccountId: options.selectedQboAccountId,
+      duplicateOverrideConfirmed: options.duplicateOverrideConfirmed === true,
+      idempotencyKey,
+    }));
+    setCountsRefreshKey((value) => value + 1);
+    window.dispatchEvent(new CustomEvent("bizzy:books-data-changed", { detail: { businessId, transactionId: id, resolution: "create_new_income" } }));
+  };
+
+  const handleResolutionChange = async (id, resolution, systemSuggestedResolution) => {
+    if (!canRunAI || !businessId || !id) return;
+    const selectedAt = new Date().toISOString();
+    const applySelection = (savedMeta = null) => setTransactions((rows) => rows.map((row) => row.id === id ? {
+      ...row,
+      meta: {
+        ...(row.meta || {}),
+        ...(savedMeta || {}),
+        system_suggested_resolution: row.meta?.system_suggested_resolution || systemSuggestedResolution,
+        user_selected_resolution: resolution,
+        resolution_selected_at: selectedAt,
+      },
+    } : row));
+    if (usingDemo) { applySelection(); return; }
+    const result = await saveTransactionResolution(businessId, id, resolution);
+    const savedMeta = result?.row?.meta;
+    applySelection(savedMeta);
   };
 
   const confirmUndoIncomingDepositMatch = async () => {
@@ -2265,6 +2303,7 @@ function BookkeepingCleanup() {
         businessId,
         selectedTxnIds.map((txnId) => ({
           txnId,
+          resolution: "categorize_new",
           newAccountId: bulkAccountId,
           newAccountName: accountName,
           newAccountType: account?.type || null,
@@ -3225,6 +3264,8 @@ function BookkeepingCleanup() {
               onConfirmIncomingDepositMatch={handleConfirmIncomingDepositMatch}
               onRejectIncomingDepositMatch={handleRejectIncomingDepositMatch}
               onUndoIncomingDepositMatch={handleUndoIncomingDepositMatch}
+              onRecordIncomingDepositAsNewIncome={handleRecordIncomingDepositAsNewIncome}
+              onResolutionChange={handleResolutionChange}
               incomingDepositMatchActionState={incomingDepositMatchActionState}
               ccPaymentActionState={{
                 ...Object.fromEntries(
