@@ -5,6 +5,14 @@ export function normalizeTransactionUuids(values = []) {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter((value) => UUID_PATTERN.test(value))));
 }
 
+export function postingReviewGroupStateKey(group = {}) {
+  const transactionIds = Array.from(new Set([
+    ...(Array.isArray(group.transaction_ids) ? group.transaction_ids : []),
+    ...(Array.isArray(group.transactions) ? group.transactions.map((txn) => txn?.transaction_id) : []),
+  ].filter(Boolean))).sort();
+  return transactionIds.length ? `transactions:${transactionIds.join("|")}` : `group:${group.group_id || "missing"}`;
+}
+
 export function buildMerchantGroupApprovalRequest({
   businessId,
   group = {},
@@ -43,4 +51,3 @@ export function normalizeMerchantGroupApprovalRequest(body = {}) {
     idempotencyKey: body.idempotency_key || null,
   };
 }
-

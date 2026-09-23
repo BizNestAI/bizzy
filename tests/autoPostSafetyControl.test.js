@@ -17,14 +17,38 @@ import {
   processPendingMerchantBacklogApprovalOperations,
   persistMerchantBacklogGroupApprovalOperation,
   persistMerchantBacklogGroupApprovalDecision,
+  postingApprovalRevision,
   previewAutoPostBacklog,
   reEvaluateAutoPostBacklog,
   releaseAutoPostBacklogScope,
   requestMerchantGroupPostingRetryNow,
   setAutoPostEnabled,
 } from "../src/services/bookkeeping/autoPostControl.js";
+import { postingReviewGroupStateKey } from "../src/contracts/merchantGroupApprovalContract.js";
 
 const root = process.cwd();
+
+test("Posting Review card state is transaction-stable and independent for same-category merchants", () => {
+  const figma = { group_id: "derived-figma-old", proposed_qbo_account_name: "Software", transaction_ids: ["f5d02587-e0d9-4c8a-9997-cc6f54c3a94f"] };
+  const figmaRefetched = { ...figma, group_id: "derived-figma-new", transactions: [{ transaction_id: figma.transaction_ids[0] }] };
+  const spotify = { group_id: "derived-spotify", proposed_qbo_account_name: "Software", transaction_ids: ["9d3e121f-bf3d-4dc5-85ca-dca609d4911e"] };
+  assert.equal(postingReviewGroupStateKey(figma), postingReviewGroupStateKey(figmaRefetched));
+  assert.notEqual(postingReviewGroupStateKey(figma), postingReviewGroupStateKey(spotify));
+  const errors = { [postingReviewGroupStateKey(figma)]: "Figma conflict" };
+  assert.equal(errors[postingReviewGroupStateKey(figmaRefetched)], "Figma conflict");
+  assert.equal(errors[postingReviewGroupStateKey(spotify)], undefined);
+  assert.equal([spotify, figmaRefetched].find((group) => errors[postingReviewGroupStateKey(group)])?.group_id, "derived-figma-new");
+});
+
+test("posting approval revision ignores background metadata but detects material posting changes", () => {
+  const item = { transaction_id: "txn-1", final_qbo_account_id: "software", meta: { polling: 1 }, updated_at: "old" };
+  const bankTxn = { id: "txn-1", plaid_transaction_id: "plaid-1", amount: -20, date: "2026-08-23", plaid_account_id: "card-8193" };
+  const expected = postingApprovalRevision({ item, bankTxn });
+  assert.equal(postingApprovalRevision({ item: { ...item, meta: { polling: 2, vendor_rule_learned: true }, updated_at: "new" }, bankTxn }), expected);
+  assert.notEqual(postingApprovalRevision({ item: { ...item, final_qbo_account_id: "meals" }, bankTxn }), expected);
+  assert.notEqual(postingApprovalRevision({ item, bankTxn: { ...bankTxn, amount: -21 } }), expected);
+  assert.notEqual(postingApprovalRevision({ item, bankTxn: { ...bankTxn, plaid_account_id: "other-card" } }), expected);
+});
 
 test("new business auto-post defaults safely off in schema and helper", async () => {
   const migration = readFileSync(join(root, "supabase/migrations/20260824_add_auto_post_to_quickbooks.sql"), "utf8");
@@ -927,7 +951,7 @@ test("receipt-only reconciliation endpoint cannot dispatch another QBO create", 
 test("an operation does not conflict with its own acceptance metadata update", () => {
   const service = readFileSync(join(root, "src/services/bookkeeping/autoPostControl.js"), "utf8");
   assert.match(service, /ownedByCurrentOperation = item\.meta\?\.merchant_group_operation_id === resolvedOperationId/);
-  assert.match(service, /if \(!ownedByCurrentOperation && expectedVersion && currentVersion/);
+  assert.match(service, /if \(!ownedByCurrentOperation && approvalRevisionConflict/);
 });
 
 test("validated vendor mapping can skip fresh QBO vendor search safely", () => {
@@ -1038,7 +1062,7 @@ test("merchant group route operation acceptance persists operator intent without
   assert.equal(db.cat("biz-1", "chex-1").meta.safe_to_auto_post, false);
   assert.equal(db.cat("biz-1", "chex-1").meta.merchant_group_operation_state, "accepted");
   assert.equal(db.cat("biz-1", "chex-1").meta.merchant_group_requested_decision.selected_qbo_account_id, "1150040001");
-  assert.equal(db.calls.some((call) => call.table === "bank_transactions"), false);
+  assert.equal(db.calls.some((call) => call.table === "bank_transactions"), true);
   assert.equal(db.calls.some((call) => call.table === "plaid_qbo_account_mappings"), false);
   assert.equal(db.calls.some((call) => call.table === "vendor_rules"), false);
 });
@@ -1573,7 +1597,7 @@ test("posting review UI presents merchant approval as one posting lifecycle and 
   const page = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
   assert.match(page, /uiState:\s*"submitting"/);
   assert.match(page, /uiState:\s*"posting"/);
-  assert.match(page, /postingReviewSubmittingRef\.current\.has\(group\.group_id\)/);
+  assert.match(page, /postingReviewSubmittingRef\.current\.has\(stateKey\)/);
   assert.match(page, /Posting\.\.\./);
   assert.match(page, /extractReceiptConfirmedPostedIds\(operation\)/);
   assert.match(page, /removePostedPostingReviewTransactions\(current, confirmedPostedIds\)/);

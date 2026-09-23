@@ -857,6 +857,37 @@ function groupSnapshotHash(group = {}) {
     .digest("hex");
 }
 
+export function postingApprovalRevision({ item = {}, bankTxn = {} } = {}) {
+  return createHash("sha256")
+    .update(JSON.stringify({
+      transaction_id: item.transaction_id || bankTxn.id || null,
+      plaid_transaction_id: bankTxn.plaid_transaction_id || null,
+      amount: Number.isFinite(Number(bankTxn.amount)) ? Number(bankTxn.amount) : null,
+      date: bankTxn.date || null,
+      payment_account_id: bankTxn.plaid_account_id || null,
+      selected_gl_account_id: item.final_qbo_account_id ? String(item.final_qbo_account_id) : null,
+    }))
+    .digest("hex");
+}
+
+function approvalRevisionConflict({ item, bankTxn, expectedRevision, operationId, businessId, correlationId, workerStage }) {
+  if (!expectedRevision) return false;
+  const currentRevision = postingApprovalRevision({ item, bankTxn });
+  if (String(expectedRevision) === currentRevision) return false;
+  console.warn("[merchant-approval-concurrency]", {
+    operation_id: operationId || null,
+    business_id: businessId,
+    transaction_id: item?.transaction_id || bankTxn?.id || null,
+    expected_posting_revision: String(expectedRevision),
+    current_posting_revision: currentRevision,
+    current_posting_state: item?.meta?.merchant_group_operation_state || item?.status || null,
+    qbo_receipt_present: Boolean(item?.qbo_txn_id || item?.meta?.qbo_posting_receipt_id || item?.meta?.qbo_txn_id),
+    worker_stage: workerStage,
+    correlation_id: correlationId || null,
+  });
+  return true;
+}
+
 async function evaluateBacklogRowForRelease({ db, businessId, item, bankTxn = {}, policy = {}, sourceMappings = new Map() }) {
   if (String(item?.status || "").toLowerCase() === "failed") {
     return { category: "failed_posting_requires_retry_review", reason: item?.post_error || "failed_posting_requires_retry_review" };
@@ -1235,7 +1266,7 @@ export async function getMerchantBacklogGroups({
     if (mapping) group.source_accounts[mapping.qbo_account_id] = mapping.qbo_account_name || mapping.qbo_account_id;
     group.transactions.push({
       transaction_id: item.transaction_id,
-      row_version: item.meta?.row_version || item.meta?.version || item.updated_at || null,
+      posting_revision: postingApprovalRevision({ item, bankTxn }),
       date: bankTxn.date || null,
       amount: bankTxn.amount ?? null,
       description: bankTxn.name || "",
@@ -1246,7 +1277,7 @@ export async function getMerchantBacklogGroups({
       exclusion_reason: null,
     });
     group.transaction_ids.push(item.transaction_id);
-    group.row_versions[item.transaction_id] = item.meta?.row_version || item.meta?.version || item.updated_at || null;
+    group.row_versions[item.transaction_id] = postingApprovalRevision({ item, bankTxn });
   }
   const out = Array.from(groups.values())
     .map((group) => ({
@@ -1315,7 +1346,10 @@ function buildExplicitMerchantApprovalGroup({ businessId, account, rows = [], ba
     row_versions: {},
   };
   for (const row of rows || []) {
-    group.row_versions[row.transaction_id] = row.meta?.row_version || row.meta?.version || row.updated_at || null;
+    group.row_versions[row.transaction_id] = postingApprovalRevision({
+      item: row,
+      bankTxn: bankRows?.map?.get(row.transaction_id) || {},
+    });
   }
   return group;
 }
@@ -1554,6 +1588,7 @@ export async function persistMerchantBacklogGroupApprovalOperation({
   exclusionIds = [],
   expectedRowVersions = {},
   idempotencyKey = null,
+  correlationId = null,
 } = {}) {
   if (!db || !businessId || !selectedQboAccountId) {
     const err = new Error("businessId and selectedQboAccountId are required.");
@@ -1572,7 +1607,16 @@ export async function persistMerchantBacklogGroupApprovalOperation({
     throw err;
   }
   const rows = await fetchBacklogCategorizationRows(db, businessId, { transactionIds: candidateIds });
+  const bankRows = await fetchBacklogBankRows(db, businessId, candidateIds);
   const rowsById = new Map(rows.map((row) => [row.transaction_id, row]));
+  const { data: receiptRows, error: receiptError } = await db
+    .from("qbo_posted_transactions")
+    .select("transaction_id,qbo_txn_id,status")
+    .eq("business_id", businessId)
+    .in("transaction_id", candidateIds)
+    .eq("status", "posted");
+  if (receiptError) throw wrapAutoPostDbError("merchant_group_receipt_authority_fetch_failed", receiptError);
+  const postedByReceipt = new Set((receiptRows || []).filter((row) => row.qbo_txn_id).map((row) => row.transaction_id));
   const group = {
     business_id: businessId,
     group_id: groupSnapshotToken || operationId,
@@ -1584,12 +1628,16 @@ export async function persistMerchantBacklogGroupApprovalOperation({
   for (const transactionId of candidateIds) {
     const item = rowsById.get(transactionId);
     if (!item) {
+      if (postedByReceipt.has(transactionId)) {
+        accepted.push({ ok: true, transaction_id: transactionId, status: "already_posted", idempotent: true });
+        continue;
+      }
       blocked.push({ transaction_id: transactionId, reason: "missing_categorization" });
       continue;
     }
+    const bankTxn = bankRows.map.get(item.transaction_id);
     const expectedVersion = expectedRowVersions?.[item.transaction_id];
-    const currentVersion = item.meta?.row_version || item.meta?.version || item.updated_at || null;
-    if (expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
+    if (approvalRevisionConflict({ item, bankTxn, expectedRevision: expectedVersion, operationId, businessId, correlationId, workerStage: "approval_accept" })) {
       blocked.push({ transaction_id: item.transaction_id, reason: "row_changed" });
       continue;
     }
@@ -1709,6 +1757,7 @@ export async function persistMerchantBacklogGroupApprovalDecision({
   exclusionIds = [],
   expectedRowVersions = {},
   idempotencyKey = null,
+  correlationId = null,
 } = {}) {
   const operationId = buildMerchantApprovalOperationId({ businessId, idempotencyKey, groupSnapshotToken, transactionIds, selectedQboAccountId });
   const { account, group, excluded, candidateIds, rows, bankRows, policy, sourceMappings } = await resolveMerchantBacklogApproval({
@@ -1734,9 +1783,8 @@ export async function persistMerchantBacklogGroupApprovalDecision({
   for (const item of rows) {
     const bankTxn = bankRows.map.get(item.transaction_id);
     const expectedVersion = expectedRowVersions?.[item.transaction_id];
-    const currentVersion = item.meta?.row_version || item.meta?.version || item.updated_at || null;
     const ownedByCurrentOperation = item.meta?.merchant_group_operation_id === operationId;
-    if (!ownedByCurrentOperation && expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
+    if (!ownedByCurrentOperation && approvalRevisionConflict({ item, bankTxn, expectedRevision: expectedVersion, operationId, businessId, correlationId, workerStage: "decision_save" })) {
       blocked.push({ transaction_id: item.transaction_id, reason: "row_changed" });
       continue;
     }
@@ -1802,6 +1850,7 @@ export async function runMerchantBacklogApprovalOperation({
   graceHours = DEFAULT_GRACE_HOURS,
   operationId = null,
   interactive = false,
+  correlationId = null,
 } = {}) {
   const resolvedOperationId = operationId || buildMerchantApprovalOperationId({ businessId, idempotencyKey, groupSnapshotToken, transactionIds, selectedQboAccountId });
   const { account, group, excluded, candidateIds, rows, bankRows, policy, sourceMappings } = await resolveMerchantBacklogApproval({
@@ -1834,9 +1883,8 @@ export async function runMerchantBacklogApprovalOperation({
   for (const item of rows) {
     const bankTxn = bankRows.map.get(item.transaction_id);
     const expectedVersion = expectedRowVersions?.[item.transaction_id];
-    const currentVersion = item.meta?.row_version || item.meta?.version || item.updated_at || null;
     const ownedByCurrentOperation = item.meta?.merchant_group_operation_id === resolvedOperationId;
-    if (!ownedByCurrentOperation && expectedVersion && currentVersion && String(expectedVersion) !== String(currentVersion)) {
+    if (!ownedByCurrentOperation && approvalRevisionConflict({ item, bankTxn, expectedRevision: expectedVersion, operationId: resolvedOperationId, businessId, correlationId, workerStage: "worker_validation" })) {
       blocked.push({ transaction_id: item.transaction_id, reason: "row_changed" });
       await markMerchantBacklogApprovalRowsState({ db, businessId, operationId: resolvedOperationId, transactionIds: [item.transaction_id], state: "blocked", reasonCode: "row_changed" });
       continue;

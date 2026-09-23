@@ -24,7 +24,7 @@ import {
   patchSourceLedgerTransaction,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
-import { buildMerchantGroupApprovalRequest } from "../../contracts/merchantGroupApprovalContract.js";
+import { buildMerchantGroupApprovalRequest, postingReviewGroupStateKey } from "../../contracts/merchantGroupApprovalContract.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -710,8 +710,9 @@ export default function MonthlyReviewConsole() {
       setPostingReviewOptions((current) => {
         const next = { ...(current || {}) };
         filtered.groups.forEach((group) => {
-          if (!next[group.group_id]) {
-            next[group.group_id] = {
+          const stateKey = postingReviewGroupStateKey(group);
+          if (!next[stateKey]) {
+            next[stateKey] = {
               qboAccountId: group.proposed_qbo_account_id,
               rememberForFuture: shouldDefaultMerchantMemoryOn(group),
               excludedIds: new Set(),
@@ -736,10 +737,11 @@ export default function MonthlyReviewConsole() {
   }, [loadPostingReview, postingReview.expanded, postingReview.loaded, postingReview.loading]);
 
   const approvePostingReviewGroup = useCallback(async (group, approval = {}) => {
-    const existingUiState = postingReviewAction?.[group?.group_id]?.uiState;
-    if (!selectedBusinessId || !group || postingReviewSubmittingRef.current.has(group.group_id) || ["submitting", "posting", "delayed"].includes(existingUiState)) return;
-    postingReviewSubmittingRef.current.add(group.group_id);
-    const options = postingReviewOptions[group.group_id] || {};
+    const stateKey = postingReviewGroupStateKey(group);
+    const existingUiState = postingReviewAction?.[stateKey]?.uiState;
+    if (!selectedBusinessId || !group || postingReviewSubmittingRef.current.has(stateKey) || ["submitting", "posting", "delayed"].includes(existingUiState)) return;
+    postingReviewSubmittingRef.current.add(stateKey);
+    const options = postingReviewOptions[stateKey] || {};
     const includedIds = Array.isArray(approval.transactionIds) && approval.transactionIds.length
       ? approval.transactionIds
       : group.transaction_ids;
@@ -748,9 +750,9 @@ export default function MonthlyReviewConsole() {
       : Array.from(options.excludedIds || []);
     setPostingReviewAction((current) => ({
       ...current,
-      [group.group_id]: { uiState: "submitting", selectedTransactionIds: includedIds, operationId: null },
+      [stateKey]: { uiState: "submitting", selectedTransactionIds: includedIds, operationId: null },
     }));
-    setPostingReviewProgress((current) => ({ ...current, [group.group_id]: "" }));
+    setPostingReviewProgress((current) => ({ ...current, [stateKey]: "" }));
     try {
       const requestBody = buildMerchantGroupApprovalRequest({
         businessId: selectedBusinessId,
@@ -784,10 +786,10 @@ export default function MonthlyReviewConsole() {
         );
         setPostingReviewAction((current) => ({
           ...current,
-          [group.group_id]: { ...(current[group.group_id] || {}), uiState: "posting", operationId, statusUrl },
+          [stateKey]: { ...(current[stateKey] || {}), uiState: "posting", operationId, statusUrl },
         }));
         if (operationId && postingReviewPollsRef.current.has(operationId)) {
-          postingReviewSubmittingRef.current.delete(group.group_id);
+          postingReviewSubmittingRef.current.delete(stateKey);
           return;
         }
         const poll = { timer: null, controller: null, terminal: false, generation: Symbol(operationId || statusUrl) };
@@ -812,15 +814,15 @@ export default function MonthlyReviewConsole() {
                 setPostingReview((current) => removePostedPostingReviewTransactions(current, confirmedPostedIds));
                 setPostingReviewProgress((current) => {
                   const next = { ...current };
-                  delete next[group.group_id];
+                  delete next[stateKey];
                   return next;
                 });
                 setPostingReviewAction((current) => {
                   const next = { ...current };
-                  delete next[group.group_id];
+                  delete next[stateKey];
                   return next;
                 });
-                postingReviewSubmittingRef.current.delete(group.group_id);
+                postingReviewSubmittingRef.current.delete(stateKey);
                 showPostingReviewNotice(
                   setPostingReviewNotice,
                   postingReviewNoticeTimerRef,
@@ -847,19 +849,19 @@ export default function MonthlyReviewConsole() {
               }
               const message = firstOperationFailureMessage(operation) || operation?.user_message || "QuickBooks could not complete this posting. Nothing was posted. Try again.";
               includedIds.forEach((id) => acceptedPostingReviewIdsRef.current.delete(id));
-              setPostingReviewProgress((current) => ({ ...current, [group.group_id]: message }));
+              setPostingReviewProgress((current) => ({ ...current, [stateKey]: message }));
               setPostingReviewAction((current) => ({
                 ...current,
-                [group.group_id]: { ...(current[group.group_id] || {}), uiState: uiState === "retryable_failure" ? "retryable_failure" : "terminal_failure" },
+                [stateKey]: { ...(current[stateKey] || {}), uiState: uiState === "retryable_failure" ? "retryable_failure" : "terminal_failure" },
               }));
-              postingReviewSubmittingRef.current.delete(group.group_id);
+              postingReviewSubmittingRef.current.delete(stateKey);
               showPostingReviewNotice(setPostingReviewNotice, postingReviewNoticeTimerRef, message);
               loadPostingReview();
               return;
             }
             setPostingReviewAction((current) => ({
               ...current,
-              [group.group_id]: { ...(current[group.group_id] || {}), uiState },
+              [stateKey]: { ...(current[stateKey] || {}), uiState },
             }));
             const delayMs = uiState === "delayed" ? 4000 : 1000;
             poll.timer = setTimeout(pollOnce, delayMs);
@@ -869,7 +871,7 @@ export default function MonthlyReviewConsole() {
             const delayed = Date.now() - startedAt > POSTING_REVIEW_DELAYED_MS;
             setPostingReviewAction((current) => ({
               ...current,
-              [group.group_id]: { ...(current[group.group_id] || {}), uiState: delayed ? "delayed" : "posting" },
+              [stateKey]: { ...(current[stateKey] || {}), uiState: delayed ? "delayed" : "posting" },
             }));
             poll.timer = setTimeout(pollOnce, delayed ? 5000 : 1500);
           }
@@ -879,28 +881,33 @@ export default function MonthlyReviewConsole() {
         includedIds.forEach((id) => acceptedPostingReviewIdsRef.current.delete(id));
         setPostingReviewAction((current) => {
           const next = { ...current };
-          delete next[group.group_id];
+          delete next[stateKey];
           return next;
         });
-        postingReviewSubmittingRef.current.delete(group.group_id);
+        postingReviewSubmittingRef.current.delete(stateKey);
         setPostingReviewProgress((current) => ({
           ...current,
-          [group.group_id]: "Posting status is unavailable. Refresh Posting Review to check status.",
+          [stateKey]: "Posting status is unavailable. Refresh Posting Review to check status.",
         }));
         loadPostingReview();
       }
     } catch (e) {
       console.warn("[monthly-review][posting-review-approval] failed", e?.body || e?.message || e);
+      const failureCode = e?.body?.error || e?.code || "";
+      const failureMessage = safePostingReviewFailureMessage(failureCode || e?.body?.message || e?.message) || "Bizzi could not save this posting decision.";
       setPostingReviewAction((current) => {
         const next = { ...current };
-        delete next[group.group_id];
+        delete next[stateKey];
         return next;
       });
-      postingReviewSubmittingRef.current.delete(group.group_id);
+      postingReviewSubmittingRef.current.delete(stateKey);
       setPostingReviewProgress((current) => ({
         ...current,
-        [group.group_id]: `${e?.body?.message || e?.message || "Bizzi could not save this posting decision."}${e?.body?.correlation_id ? ` Reference: ${e.body.correlation_id}` : ""}`,
+        [stateKey]: `${failureMessage}${e?.body?.correlation_id ? ` Reference: ${e.body.correlation_id}` : ""}`,
       }));
+      if (failureCode === "row_changed") {
+        void loadPostingReview();
+      }
     }
   }, [loadBookkeepingFeedCounts, loadPostingReview, month, postingReviewAction, postingReviewOptions, refreshQboPnlSnapshot, selectedBusinessId]);
   const retryPostingReviewItem = useCallback(async (item) => {
@@ -2487,7 +2494,7 @@ function PostingReviewMirrorSection({
       return !merchantRepresentedIds.has(item.transaction_id);
     })
     .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || Math.abs(Number(b.amount || 0)) - Math.abs(Number(a.amount || 0)));
-  const confirmOptions = confirmGroup ? buildPostingReviewApproval(confirmGroup, postingReviewOptions?.[confirmGroup.group_id]) : null;
+  const confirmOptions = confirmGroup ? buildPostingReviewApproval(confirmGroup, postingReviewOptions?.[postingReviewGroupStateKey(confirmGroup)]) : null;
   const confirmationAccount = confirmOptions
     ? accounts.find((acct) => String(acct.id || acct.Id) === String(confirmOptions.qboAccountId))
     : null;
@@ -2561,24 +2568,25 @@ function PostingReviewMirrorSection({
               {visibleGroups.length ? (
                 <div className="space-y-3">
               {visibleGroups.map((group) => {
-                const options = postingReviewOptions?.[group.group_id] || {};
+                const stateKey = postingReviewGroupStateKey(group);
+                const options = postingReviewOptions?.[stateKey] || {};
                 const selectedAccountId = options.qboAccountId || group.proposed_qbo_account_id || "";
                 const selectedAccount = accounts.find((acct) => String(acct.id || acct.Id) === String(selectedAccountId));
                 const excludedIds = options.excludedIds instanceof Set ? options.excludedIds : new Set();
                 const includedTransactions = (group.transactions || []).filter((txn) => !excludedIds.has(txn.transaction_id));
                 const leftInReview = Math.max(0, Number(group.transaction_count || 0) - includedTransactions.length);
                 const primaryLabel = buildPostingReviewPrimaryLabel(selectedFilter, includedTransactions.length);
-                const actionState = postingReviewAction?.[group.group_id]?.uiState || "idle";
-                const progressLabel = postingReviewProgress?.[group.group_id] || "";
+                const actionState = postingReviewAction?.[stateKey]?.uiState || "idle";
+                const progressLabel = postingReviewProgress?.[stateKey] || "";
                 const progressActive = ["submitting", "posting"].includes(actionState);
                 const delayed = actionState === "delayed";
                 const failed = ["retryable_failure", "terminal_failure"].includes(actionState);
                 const controlsDisabled = progressActive || delayed;
-                const isExpanded = expandedPostingReviewGroup === group.group_id;
-                const techExpanded = technicalGroup === group.group_id;
+                const isExpanded = expandedPostingReviewGroup === stateKey;
+                const techExpanded = technicalGroup === stateKey;
                 const warning = shouldWarnVariableMerchantGroup(group);
                 return (
-                  <div key={group.group_id} className="rounded-xl border border-white/10 bg-black/20 p-3">
+                  <div key={stateKey} className="rounded-xl border border-white/10 bg-black/20 p-3">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
                         <h4 className="truncate text-base font-semibold text-white">{group.display_merchant}</h4>
@@ -2598,7 +2606,7 @@ function PostingReviewMirrorSection({
                         <select
                           aria-label={`Pending category for ${group.display_merchant}`}
                           value={selectedAccountId}
-                          onChange={(event) => onOptionChange(group.group_id, { qboAccountId: event.target.value })}
+                          onChange={(event) => onOptionChange(stateKey, { qboAccountId: event.target.value })}
                           disabled={controlsDisabled}
                           className="min-h-9 rounded-lg border border-white/10 bg-[#0f1115] px-2 text-xs text-white"
                         >
@@ -2626,7 +2634,7 @@ function PostingReviewMirrorSection({
                     </div>
                     <div className="mt-3 flex flex-wrap gap-3 text-xs text-white/60">
                       <label className="flex items-center gap-2">
-                        <input type="checkbox" checked={options.rememberForFuture !== false} disabled={controlsDisabled} onChange={(event) => onOptionChange(group.group_id, { rememberForFuture: event.target.checked })} />
+                        <input type="checkbox" checked={options.rememberForFuture !== false} disabled={controlsDisabled} onChange={(event) => onOptionChange(stateKey, { rememberForFuture: event.target.checked })} />
                         {`Remember ${selectedAccount?.name || group.proposed_qbo_account_name || "this category"} for future matching ${group.display_merchant} transactions`}
                       </label>
                       {group.transaction_count > 1 && excludedIds.size ? (
@@ -2648,7 +2656,7 @@ function PostingReviewMirrorSection({
                     ) : null}
                     <button
                       type="button"
-                      onClick={() => onToggleGroup(isExpanded ? null : group.group_id)}
+                      onClick={() => onToggleGroup(isExpanded ? null : stateKey)}
                       className="mt-3 text-xs font-semibold text-emerald-200 hover:text-emerald-100"
                     >
                       {isExpanded ? "Hide transactions" : group.transaction_count === 1 ? "Review transaction" : `Review ${group.transaction_count} transactions`}
@@ -2660,7 +2668,7 @@ function PostingReviewMirrorSection({
                             <span>Checked rows are included. Rows left in review will not be category-authorized by this action.</span>
                             <button
                               type="button"
-                              onClick={() => onOptionChange(group.group_id, { excludedIds: new Set([...(options.excludedIds || []), ...includedTransactions.map((txn) => txn.transaction_id)]) })}
+                              onClick={() => onOptionChange(stateKey, { excludedIds: new Set([...(options.excludedIds || []), ...includedTransactions.map((txn) => txn.transaction_id)]) })}
                               className="font-semibold text-white/70 hover:text-white"
                             >
                               Leave selected in review
@@ -2680,7 +2688,7 @@ function PostingReviewMirrorSection({
                                   const next = new Set(excludedIds);
                                   if (event.target.checked) next.delete(txn.transaction_id);
                                   else next.add(txn.transaction_id);
-                                  onOptionChange(group.group_id, { excludedIds: next });
+                                  onOptionChange(stateKey, { excludedIds: next });
                                 }}
                               />
                             ) : <span />}
@@ -2696,7 +2704,7 @@ function PostingReviewMirrorSection({
                     ) : null}
                     <button
                       type="button"
-                      onClick={() => setTechnicalGroup(techExpanded ? null : group.group_id)}
+                      onClick={() => setTechnicalGroup(techExpanded ? null : stateKey)}
                       className="mt-3 text-xs font-semibold text-white/45 hover:text-white/75"
                     >
                       {techExpanded ? "Hide technical details" : "Technical details"}
@@ -2711,8 +2719,8 @@ function PostingReviewMirrorSection({
                         <div>Confidence/safety: {group.evidence?.confidence || "n/a"}</div>
                         <div>Rule state: {group.evidence?.reusable_rule_status || "n/a"}</div>
                         <div>Blockers: {(group.warnings || []).join(", ") || "none"}</div>
-                        {postingReviewAction?.[group.group_id]?.operationId ? (
-                          <div className="sm:col-span-2">Operation: {postingReviewAction[group.group_id].operationId}</div>
+                        {postingReviewAction?.[stateKey]?.operationId ? (
+                          <div className="sm:col-span-2">Operation: {postingReviewAction[stateKey].operationId}</div>
                         ) : null}
                       </div>
                     ) : null}
@@ -2754,7 +2762,7 @@ function PostingReviewMirrorSection({
               <button
                 type="button"
                 onClick={async () => {
-                  const approval = buildPostingReviewApproval(confirmGroup, postingReviewOptions?.[confirmGroup.group_id]);
+                  const approval = buildPostingReviewApproval(confirmGroup, postingReviewOptions?.[postingReviewGroupStateKey(confirmGroup)]);
                   setConfirmGroup(null);
                   await onApproveGroup(confirmGroup, approval);
                 }}

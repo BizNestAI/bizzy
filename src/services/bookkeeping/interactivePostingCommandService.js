@@ -209,6 +209,7 @@ export async function createInteractivePostingCommand({
   transactionIds = [],
   expectedRowVersions = {},
   idempotencyKey = null,
+  correlationId = null,
   requestedAt = new Date(),
 } = {}) {
   db ||= await getDefaultSupabase();
@@ -249,6 +250,7 @@ export async function createInteractivePostingCommand({
   const snapshot = {
     ...(merchantSnapshot || {}),
     group_snapshot_token: groupSnapshotToken || merchantSnapshot?.group_snapshot_token || null,
+    correlation_id: correlationId || merchantSnapshot?.correlation_id || null,
   };
   const command = {
     operation_id: operationId,
@@ -615,6 +617,7 @@ export async function processInteractivePostingCommand({
       graceHours: 0,
       operationId: command.operation_id,
       interactive: true,
+      correlationId: command.merchant_snapshot?.correlation_id || null,
     });
     await appendInteractivePostingCommandEvent({ db, operationId, event: "decision_saved", extra: { blocked_count: decision.blocked_count || 0 } });
     await appendInteractivePostingCommandEvent({ db, operationId, event: "duplicate_preflight_completed" });

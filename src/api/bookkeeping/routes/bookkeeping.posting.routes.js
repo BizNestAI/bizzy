@@ -335,6 +335,7 @@ router.post("/posting/backlog/merchant-groups/approve", requireAuth, requireInte
       exclusionIds: normalized.exclusionIds,
       expectedRowVersions: normalized.expectedRowVersions,
       idempotencyKey: req.get("Idempotency-Key") || normalized.idempotencyKey,
+      correlationId,
     };
     stageStartMs = nowMs();
     // Fail closed before persisting operator intent. The legacy queue watches
