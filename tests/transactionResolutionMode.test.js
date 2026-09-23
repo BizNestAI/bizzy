@@ -97,8 +97,8 @@ test("resolution selection renders immediately before persistence and workflow l
 
   assert.ok(change.indexOf("setResolutionSelections") < change.indexOf("onResolutionChange?."));
   assert.ok(change.indexOf("setExpandedRowId") < change.indexOf("onInspectIncomingDepositMatch?."));
-  assert.match(change, /const persistence = Promise\.resolve/);
-  assert.match(change, /workflow = Promise\.resolve/);
+  assert.match(change, /await Promise\.resolve\(onResolutionChange\?\./);
+  assert.ok(change.indexOf("onResolutionChange?.") < change.indexOf("onRejectCcPayment?."));
   assert.doesNotMatch(change, /setResolutionSelections\(\(state\).*previous/);
   assert.match(feed, /Checking QuickBooks for an existing transaction/);
   assert.match(feed, /Preparing credit-card payment matching/);

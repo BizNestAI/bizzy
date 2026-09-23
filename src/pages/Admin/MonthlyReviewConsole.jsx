@@ -236,6 +236,7 @@ export default function MonthlyReviewConsole() {
   const [paymentAccountMappings, setPaymentAccountMappings] = useState([]);
   const [loadingPaymentAccounts, setLoadingPaymentAccounts] = useState(false);
   const [paymentAccountsError, setPaymentAccountsError] = useState("");
+  const paymentAccountsLoaded = !loadingPaymentAccounts && !paymentAccountsError;
   const [qboPnlSnapshot, setQboPnlSnapshot] = useState(null);
   const [loadingQboPnl, setLoadingQboPnl] = useState(false);
   const [qboPnlError, setQboPnlError] = useState("");
@@ -2270,7 +2271,7 @@ export default function MonthlyReviewConsole() {
                   postingReviewItemActions={postingReviewItemActions}
                   onTogglePostingReviewGroup={setExpandedPostingReviewGroup}
                   accounts={mirrorFeedAccounts}
-                  paymentAccountsLoaded={!loadingPaymentAccounts}
+                  paymentAccountsLoaded={paymentAccountsLoaded}
                   loadingPaymentAccounts={loadingPaymentAccounts}
                   paymentAccountsError={paymentAccountsError}
                   busyAction={busyFeedAction}
@@ -2546,9 +2547,6 @@ function PostingReviewMirrorSection({
   postingReviewItemActions,
   expandedPostingReviewGroup,
   accounts,
-  paymentAccountsLoaded,
-  loadingPaymentAccounts,
-  paymentAccountsError,
   onToggle,
   onRefresh,
   onOptionChange,
@@ -2965,6 +2963,9 @@ function BookkeepingFeedMirrorSection({
   onToggle,
   onLoadMore,
   accounts,
+  paymentAccountsLoaded,
+  loadingPaymentAccounts,
+  paymentAccountsError,
   busyAction,
   busyActions,
   rowErrors,

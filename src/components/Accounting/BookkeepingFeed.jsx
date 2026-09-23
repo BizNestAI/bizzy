@@ -1163,23 +1163,24 @@ export default function BookkeepingFeed({
     if (readOnly || txn.status === "posted") return;
     setResolutionSelections((state) => new Map(state).set(txn.id, resolution));
     setResolutionActionState((state) => new Map(state).set(txn.id, { busy: true, error: "" }));
+    if (resolution === "categorize_new") {
+      const normalAccountId = txn.final_qbo_account_id || txn.glAccountId || txn.suggestedAccountId || txn.suggested_qbo_account_id || "";
+      setAccountSelections((state) => new Map(state).set(txn.id, normalAccountId));
+    }
     if (resolution === "match_existing_qbo") setExpandedRowId(txn.id);
     if (resolution === "split_transaction") {
       const legacyLoan = ["loan_payment", "loan_movement"].includes(String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase()) || txn.meta?.loan_payment_split_id;
       setSplitDrafts((state) => new Map(state).set(txn.id, legacyLoan ? { ...buildInitialLoanSplitDraft(txn, accounts), mode: "general", legacyLoanSplit: true } : buildInitialSplitTransactionDraft("general", txn, accounts)));
     }
     try {
-      const persistence = Promise.resolve(onResolutionChange?.(txn.id, resolution, suggestedTransactionResolution(txn)));
-      let workflow = Promise.resolve();
+      await Promise.resolve(onResolutionChange?.(txn.id, resolution, suggestedTransactionResolution(txn)));
       if (resolution === "match_existing_qbo") {
-        workflow = Promise.resolve(onInspectIncomingDepositMatch?.(txn.id, null, txn));
+        await Promise.resolve(onInspectIncomingDepositMatch?.(txn.id, null, txn));
       } else if (resolution === "match_credit_card_payment") {
-        workflow = Promise.resolve(onMarkCcPayment?.(txn.id));
+        await Promise.resolve(onMarkCcPayment?.(txn.id));
       } else if (resolution === "categorize_new" && (txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment")) {
-        workflow = Promise.resolve(onRejectCcPayment?.(txn.id));
+        await Promise.resolve(onRejectCcPayment?.(txn.id));
       }
-      workflow.catch(() => {});
-      await persistence;
       setResolutionActionState((state) => new Map(state).set(txn.id, { busy: false, error: "" }));
     } catch (error) {
       setResolutionActionState((state) => new Map(state).set(txn.id, { busy: false, error: error?.body?.message || error?.message || "Could not save this workflow choice." }));
@@ -1575,7 +1576,7 @@ export default function BookkeepingFeed({
                     disabled={readOnly}
                     onChange={(id) => handleAccountSelect(txn.id, id)}
                     onConfirm={() => onConfirmCcPaymentMatch?.(txn.id, selectedCcTargetValue, ccAction.targetTransactionId || ccAction.candidate?.transaction_id || null)}
-                    onUseCoa={canRejectCcPayment ? () => onRejectCcPayment?.(txn.id) : null}
+                    onUseCoa={canRejectCcPayment ? () => changeResolution(txn, "categorize_new") : null}
                     onRetryAccounts={onRetryCcPaymentAccounts}
                   />
                 ) : ccTransferLabel ? (

@@ -199,18 +199,21 @@ function BookkeepingTransactionMirrorRow({
     setResolution(nextResolution);
     setResolutionBusy(true);
     setResolutionError("");
+    if (nextResolution === "categorize_new") {
+      setSelectedCcCandidateId("");
+      setSelectedAccountId(
+        row.final_qbo_account_id || row.glAccountId || row.suggestedAccountId || row.suggested_qbo_account_id || ""
+      );
+    }
     if (nextResolution === "split_transaction") {
       const legacyLoan = ["loan_payment", "loan_movement"].includes(String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase()) || row.meta?.loan_payment_split_id;
       setLoanSplitDraft(legacyLoan ? { ...buildInitialLoanSplitDraft(row, accounts), mode: "general", legacyLoanSplit: true } : buildInitialSplitTransactionDraft("general", row, accounts));
     }
     try {
-      const persistence = Promise.resolve(onResolutionChange?.(row, nextResolution, suggestedTransactionResolution(row)));
-      let workflow = Promise.resolve();
-      if (nextResolution === "match_existing_qbo") workflow = Promise.resolve(onInspectIncomingDepositMatch?.(row.id, null, row));
-      else if (nextResolution === "match_credit_card_payment") workflow = Promise.resolve(onMarkCcPayment?.(row));
-      else if (nextResolution === "categorize_new" && ccWorkflowStatus) workflow = Promise.resolve(onRejectCcPayment?.(row));
-      workflow.catch(() => {});
-      await persistence;
+      await Promise.resolve(onResolutionChange?.(row, nextResolution, suggestedTransactionResolution(row)));
+      if (nextResolution === "match_existing_qbo") await Promise.resolve(onInspectIncomingDepositMatch?.(row.id, null, row));
+      else if (nextResolution === "match_credit_card_payment") await Promise.resolve(onMarkCcPayment?.(row));
+      else if (nextResolution === "categorize_new" && ccWorkflowStatus) await Promise.resolve(onRejectCcPayment?.(row));
     } catch (error) {
       setResolutionError(error?.body?.message || error?.message || "Could not save this workflow choice.");
     } finally {
@@ -276,7 +279,7 @@ function BookkeepingTransactionMirrorRow({
             loading={ccAction.loading || isActionBusy("ccmatch")}
             onChange={(id) => setSelectedAccountId(id)}
             onConfirm={() => onConfirmCcPaymentMatch?.(row, selectedAccountId, selectedCcCandidateId || null)}
-            onUseCoa={!isPosted ? () => onRejectCcPayment?.(row) : null}
+            onUseCoa={!isPosted ? () => changeResolution("categorize_new") : null}
           />
         ) : resolution === "match_existing_qbo" && incomingMatch.active ? (
           <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">QuickBooks match review</div>

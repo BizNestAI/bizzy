@@ -1561,6 +1561,15 @@ function BookkeepingCleanup() {
 
   const handleRejectCreditCardPayment = async (id) => {
     if (!canRunAI) return;
+    const discoveryKey = String(id || "");
+    ccDiscoveryAbortRef.current.get(discoveryKey)?.abort?.();
+    ccDiscoveryAbortRef.current.delete(discoveryKey);
+    ccDiscoverySeqRef.current.set(discoveryKey, (ccDiscoverySeqRef.current.get(discoveryKey) || 0) + 1);
+    setCcPaymentActionState((prev) => {
+      const next = { ...prev };
+      delete next[discoveryKey];
+      return next;
+    });
     if (usingDemo) {
       setTransactions((prev) =>
         prev.map((t) =>
@@ -1595,7 +1604,11 @@ function BookkeepingCleanup() {
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] cc payment reject failed", e?.message || e);
-      window.alert(e?.message || "Could not mark this as not a credit card payment.");
+      setCcPaymentActionState((prev) => ({
+        ...prev,
+        [id]: { loading: false, error: e?.message || "Could not switch this row back to regular account review." },
+      }));
+      throw e;
     }
   };
 
