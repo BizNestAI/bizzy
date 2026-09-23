@@ -47,6 +47,19 @@ export function deriveCreditCardPaymentStatus(row = {}) {
   };
 }
 
+export function deriveResolutionAwareCreditCardPaymentStatus(row = {}, resolution = "") {
+  const persistedStatus = deriveCreditCardPaymentStatus(row);
+  if (persistedStatus || resolution !== "match_credit_card_payment") return persistedStatus;
+  return {
+    key: "cc_payment_needs_match",
+    label: "Credit Card Payment · Needs Match",
+    matched: false,
+    postable: false,
+    tone: "warning",
+    optimistic: true,
+  };
+}
+
 export function isQboCreditCardAccount(account = {}) {
   return normalizeQboAccountType(account.type || account.accountType || account.account_type) === "creditcard";
 }
@@ -157,6 +170,7 @@ export function deriveCreditCardPaymentOrientation(row = {}) {
 export default {
   deriveCreditCardPaymentOrientation,
   deriveCreditCardPaymentStatus,
+  deriveResolutionAwareCreditCardPaymentStatus,
   isCreditCardPaymentWorkflow,
   isQboBankAccount,
   isQboCreditCardAccount,

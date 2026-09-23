@@ -384,7 +384,7 @@ export async function approveBookkeepingTransactions({
 
       return {
         transaction_id: txnId,
-        status: isConfirmedCcPaymentPair ? "handled" : item?.status,
+        status: isConfirmedCcPaymentPair ? "matched" : item?.status,
         final_qbo_account_id: effectiveFinalId,
         final_qbo_account_name: effectiveFinalName,
         final_canonical_account_key: explicitCanonicalKey || suggestedCanonicalMap[txnId] || mergedMeta?.canonical_account_key || null,

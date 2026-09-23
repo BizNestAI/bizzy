@@ -98,9 +98,10 @@ function isConfirmedPairStatus(status = "") {
 function categorizationStatusForPair(pair = {}) {
   const status = String(pair?.status || "").toLowerCase();
   if (status === "posted") return "posted";
-  // The durable pair is the authority for Matched-feed membership. Keep the
-  // legacy categorization lifecycle on its schema-compatible terminal value.
-  if (isConfirmedPairStatus(status)) return "handled";
+  // A confirmed payment pair is a reconciliation result, not an approval to
+  // create anything in QuickBooks. Keep that distinction in the canonical row
+  // as well as in the durable pair so every feed sees the same lifecycle.
+  if (isConfirmedPairStatus(status)) return "matched";
   return "needs_review";
 }
 
@@ -1195,7 +1196,7 @@ export async function confirmCreditCardPaymentPairForTransaction({ db = defaultS
       err.constraint = constraint;
       err.attemptedTransition = {
         pair_status: "confirmed",
-        categorization_status: "handled",
+        categorization_status: "matched",
       };
       err.transactionIds = [pair.checking_transaction_id, pair.credit_card_transaction_id].filter(Boolean);
       err.status = schemaMismatch

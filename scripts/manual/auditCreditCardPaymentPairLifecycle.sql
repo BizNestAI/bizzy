@@ -58,7 +58,9 @@ with active_pairs as (
 select ps.business_id, ps.id as pair_id, ps.checking_transaction_id, ps.credit_card_transaction_id,
   ps.status as pair_status, ps.checking_status, ps.card_status,
   case
-    when (ps.checking_review_status='handled') <> (ps.card_review_status='handled') then 'one_leg_handled'
+    when (ps.checking_review_status='matched') <> (ps.card_review_status='matched') then 'one_leg_matched'
+    when ps.status in ('confirmed','posting','failed','posted')
+      and (ps.checking_status <> 'matched' or ps.card_status <> 'matched') then 'confirmed_pair_not_canonical_matched'
     when ps.credit_card_transaction_id is null or ps.checking_status is null or ps.card_status is null then 'missing_leg'
     when ps.checking_meta->>'cc_payment_pair_txn_id' is distinct from ps.credit_card_transaction_id::text
       or ps.card_meta->>'cc_payment_pair_txn_id' is distinct from ps.checking_transaction_id::text then 'reciprocal_reference_mismatch'
@@ -73,7 +75,9 @@ select ps.business_id, ps.id as pair_id, ps.checking_transaction_id, ps.credit_c
       and m.transaction_id in (ps.checking_transaction_id,ps.credit_card_transaction_id)) then 'multiple_active_pairs'
   end as anomaly
 from pair_state ps
-where (ps.checking_review_status='handled') <> (ps.card_review_status='handled')
+where (ps.checking_review_status='matched') <> (ps.card_review_status='matched')
+   or (ps.status in ('confirmed','posting','failed','posted')
+      and (ps.checking_status <> 'matched' or ps.card_status <> 'matched'))
    or ps.credit_card_transaction_id is null or ps.checking_status is null or ps.card_status is null
    or ps.checking_meta->>'cc_payment_pair_txn_id' is distinct from ps.credit_card_transaction_id::text
    or ps.card_meta->>'cc_payment_pair_txn_id' is distinct from ps.checking_transaction_id::text

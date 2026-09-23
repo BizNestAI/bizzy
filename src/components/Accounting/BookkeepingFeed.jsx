@@ -6,7 +6,7 @@ import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import {
   deriveCreditCardPaymentOrientation,
-  deriveCreditCardPaymentStatus,
+  deriveResolutionAwareCreditCardPaymentStatus,
   isQboBankAccount,
   isQboCreditCardAccount,
 } from "../../services/bookkeeping/creditCardPaymentStatus.js";
@@ -1373,7 +1373,7 @@ export default function BookkeepingFeed({
             const hasCcPair = Boolean(txn.cc_payment_pair_id || txn.meta?.cc_payment_pair_id);
             const isCcPaymentSuspected = !ccRejected && !hasCcPair && (txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment");
             const isCcPayment = !ccRejected && hasCcPair;
-            const ccWorkflowStatus = deriveCreditCardPaymentStatus(txn);
+            const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(txn, effectiveResolution);
             const isCcPaymentWorkflow = Boolean(ccWorkflowStatus);
             const ccOrientation = deriveCreditCardPaymentOrientation(txn);
             const ccPairRole = txn.cc_payment_pair_role || txn.meta?.cc_payment_pair_role || null;
@@ -1437,7 +1437,7 @@ export default function BookkeepingFeed({
               !readOnly &&
               !isPosted &&
               txn.status !== "posted" &&
-              (isCcPaymentSuspected || (isCcPayment && !["confirmed", "posted"].includes(String(txn.cc_payment_pair_status || txn.meta?.cc_payment_pair_status || "").toLowerCase())));
+              (effectiveResolution === "match_credit_card_payment" || isCcPaymentSuspected || (isCcPayment && !["confirmed", "posted"].includes(String(txn.cc_payment_pair_status || txn.meta?.cc_payment_pair_status || "").toLowerCase())));
             const ccAction = ccPaymentActionState?.[txn.id] || {};
             const ccConfirmBusy = ccAction.loading === true || ccAction.matching === true;
             const loanSplitDraft = splitDrafts.get(txn.id) || null;
@@ -1730,7 +1730,7 @@ export default function BookkeepingFeed({
                   )
                 ) : effectiveResolution === "split_transaction" ? (
                   <span className="text-[10px] text-slate-400">{loanSplitDraft ? "Needs split" : "Loan split"}</span>
-                ) : ["approved", "auto_approved", "failed"].includes(txn.status) ? (
+                ) : ["approved", "auto_approved", "handled", "failed"].includes(txn.status) ? (
                   <div className="flex items-center justify-center gap-1.5">
                     <button
                       className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"

@@ -9,7 +9,7 @@ import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import { effectiveTransactionResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import {
   deriveCreditCardPaymentOrientation,
-  deriveCreditCardPaymentStatus,
+  deriveResolutionAwareCreditCardPaymentStatus,
   isQboBankAccount,
   isQboCreditCardAccount,
 } from "../../services/bookkeeping/creditCardPaymentStatus.js";
@@ -171,7 +171,7 @@ function BookkeepingTransactionMirrorRow({
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const protectedReason = getProtectedWorkflowReason(row);
   const incomingMatch = incomingDepositMatchState(row);
-  const ccWorkflowStatus = deriveCreditCardPaymentStatus(row);
+  const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(row, resolution);
   const ccOrientation = deriveCreditCardPaymentOrientation(row);
   const isPending = row.pending === true;
   const genericActionsBlocked = Boolean(protectedReason) && !ccWorkflowStatus;

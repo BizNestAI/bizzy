@@ -68,6 +68,12 @@ test("Not a credit card payment uses the shared optimistic resolution transition
   assert.doesNotMatch(mirrorChange, /onPost|onApprove|postTransaction/);
 });
 
+test("switching back keeps the credit-card matcher rendered during persistence and taxonomy refresh", () => {
+  assert.match(customerFeed, /deriveResolutionAwareCreditCardPaymentStatus\(txn, effectiveResolution\)/);
+  assert.match(mirrorTable, /deriveResolutionAwareCreditCardPaymentStatus\(row, resolution\)/);
+  assert.match(customerFeed, /effectiveResolution === "match_credit_card_payment" \|\| isCcPaymentSuspected/);
+});
+
 test("resolution state and credit-card cleanup are transaction scoped and stale discovery is cancelled", () => {
   assert.match(customerFeed, /new Map\(state\)\.set\(txn\.id, resolution\)/);
   assert.match(customerFeed, /new Map\(state\)\.set\(txn\.id, \{ busy: true, error: "" \}\)/);

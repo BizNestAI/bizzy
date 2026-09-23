@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { classifyTaxonomy } from "../src/services/bookkeeping/taxonomyClassifier.js";
 import {
   deriveCreditCardPaymentOrientation,
+  deriveResolutionAwareCreditCardPaymentStatus,
   isQboBankAccount,
   isQboCreditCardAccount,
 } from "../src/services/bookkeeping/creditCardPaymentStatus.js";
@@ -47,6 +48,25 @@ test("credit-card payment orientation is bidirectional and account-type aware", 
   assert.equal(isQboBankAccount({ type: "CreditCard" }), false);
 });
 
+test("an optimistic credit-card resolution keeps the matcher mounted through stale refetches", () => {
+  const rejectedRow = {
+    cc_payment_rejected: true,
+    meta: { taxonomy_override: "not_cc_payment" },
+  };
+  assert.equal(deriveResolutionAwareCreditCardPaymentStatus(rejectedRow, "categorize_new"), null);
+  assert.deepEqual(
+    deriveResolutionAwareCreditCardPaymentStatus(rejectedRow, "match_credit_card_payment"),
+    {
+      key: "cc_payment_needs_match",
+      label: "Credit Card Payment · Needs Match",
+      matched: false,
+      postable: false,
+      tone: "warning",
+      optimistic: true,
+    }
+  );
+});
+
 test("taxonomy-only credit-card payment outflow still offers mapped credit-card destinations", () => {
   const orientation = deriveCreditCardPaymentOrientation({
     taxonomy_type: "cc_payment",
@@ -82,6 +102,7 @@ test("confirmation and undo atomically transition, validate, and audit both paym
   const migration = read("supabase/migrations/20260922_atomic_credit_card_payment_pair_lifecycle.sql");
   const compatibilityMigration = read("supabase/migrations/20260922143000_credit_card_payment_pair_handled_lifecycle.sql");
   const fastMigration = read("supabase/migrations/20260922150000_confirm_selected_credit_card_payment_pair_fast.sql");
+  const canonicalMigration = read("supabase/migrations/20261013_credit_card_payment_matched_lifecycle.sql");
   const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
   const audit = read("scripts/manual/auditCreditCardPaymentPairLifecycle.sql");
   const repair = read("scripts/manual/repairCreditCardPaymentPairLifecycle.sql");
@@ -109,13 +130,19 @@ test("confirmation and undo atomically transition, validate, and audit both paym
   assert.match(fastMigration, /cc_payment_pair_date_window_exceeded/);
   assert.match(fastMigration, /credit_card_payment_pair_events/);
   assert.match(fastMigration, /safe_to_auto_post',false/);
+  assert.match(canonicalMigration, /status='matched', review_status='matched'/);
+  assert.match(canonicalMigration, /review_status='matched'/);
+  assert.match(canonicalMigration, /status='matched'/);
+  assert.match(canonicalMigration, /when new\.status in \('matched', 'matched_existing_qbo'\) then 'not_scheduled'/);
+  assert.match(canonicalMigration, /never schedules or creates QBO activity/);
   assert.match(migration, /values[\s\S]*'checking'[\s\S]*'credit_card'/);
   assert.match(migration, /status = excluded\.status/);
   assert.match(migration, /credit_card_payment_pair_events/);
   assert.match(migration, /safe_to_auto_post',false/);
   assert.match(service, /db\.rpc\("confirm_credit_card_payment_pair_atomic"/);
   assert.match(service, /db\.rpc\("undo_credit_card_payment_pair_atomic"/);
-  assert.match(audit, /one_leg_handled/);
+  assert.match(audit, /one_leg_matched/);
+  assert.match(audit, /confirmed_pair_not_canonical_matched/);
   assert.match(audit, /pg_get_constraintdef/);
   assert.match(audit, /supabase_migrations\.schema_migrations/);
   assert.match(audit, /reciprocal_reference_mismatch/);
@@ -184,7 +211,7 @@ test("one confirmation resolves the pair and validates the payment target by sou
   assert.match(approvals, /confirmedCcPairs/);
   assert.match(service, /pair\.checking_transaction_id/);
   assert.match(service, /pair\.credit_card_transaction_id/);
-  assert.match(approvals, /status: isConfirmedCcPaymentPair \? "handled"/);
+  assert.match(approvals, /status: isConfirmedCcPaymentPair \? "matched"/);
   assert.match(approvals, /safe_to_auto_post = false/);
   assert.match(approvals, /linkCategorizationToCreditCardPair/);
 });
@@ -263,7 +290,7 @@ test("failed posts remain actionable outside Books Review handled state", () => 
   assert.match(txFeedService, /hasProvenPostingFailure/);
   assert.match(txFeedService, /\["approved", "auto_approved", "handled"\]\.includes\(status\)/);
   assert.match(page, /const handledStatuses = \["approved", "auto_approved", "handled"\]/);
-  assert.match(feed, /\["approved", "auto_approved", "failed"\]\.includes\(txn\.status\)/);
+  assert.match(feed, /\["approved", "auto_approved", "handled", "failed"\]\.includes\(txn\.status\)/);
 });
 
 test("credit-card-payment UI exposes transfer target state instead of only a generic GL category", () => {
