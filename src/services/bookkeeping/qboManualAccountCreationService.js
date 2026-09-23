@@ -5,6 +5,7 @@ import {
   isValidManualQboAccountSubType,
   normalizeManualQboAccountType,
 } from "./qboAccountTypes.js";
+import { invalidateChartOfAccountsCache, normalizeChartOfAccount } from "./qboAccounts.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -33,13 +34,14 @@ function sanitizeAccountName(name = "") {
 
 function shapeQboAccount(account = {}, fallback = {}) {
   const id = account.Id || account.id || null;
-  return {
+  const shaped = {
     id: id ? String(id) : null,
     name: account.Name || account.name || fallback.name || null,
     type: account.AccountType || account.type || fallback.accountType || null,
     subType: account.AccountSubType || account.subType || fallback.accountSubType || null,
     active: account.Active !== false && account.active !== false,
   };
+  return normalizeChartOfAccount({ ...account, ...shaped }) || shaped;
 }
 
 function unwrapCreateResponse(data, fallback) {
@@ -212,6 +214,7 @@ export async function createManualQboAccountForBusiness({
     if (!account.id) {
       throw new QboManualAccountCreationError("qbo_create_missing_id", "QuickBooks could not create this account. Please try again.", 502);
     }
+    invalidateChartOfAccountsCache(businessId);
     return { ok: true, account, created: true };
   } catch (err) {
     if (err instanceof QboManualAccountCreationError) throw err;

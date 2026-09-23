@@ -23,7 +23,7 @@ function isGeneralPostingAccountOption(account = {}) {
 }
 
 function accountName(account = {}) {
-  return account.name || account.fullyQualifiedName || account.FullyQualifiedName || "Account";
+  return account.fullyQualifiedName || account.FullyQualifiedName || account.name || "Account";
 }
 
 function accountTypeLabel(account = {}) {
@@ -185,7 +185,11 @@ function AccountSelect({ label, value, accounts = [], placeholder, disabled, onC
   const filtered = React.useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return accounts;
-    return accounts.filter((account) => `${accountName(account)} ${accountTypeLabel(account)}`.toLowerCase().includes(term));
+    return accounts.filter((account) =>
+      `${accountName(account)} ${account.shortName || ""} ${account.parentRef?.name || ""} ${accountTypeLabel(account)}`
+        .toLowerCase()
+        .includes(term)
+    );
   }, [accounts, search]);
 
   React.useEffect(() => {

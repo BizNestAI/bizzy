@@ -124,8 +124,13 @@ router.get("/qbo/coa", requireAuth, async (req, res) => {
     return sendAdminViewReadOnlyUnavailable(res, { error: "admin_view_provider_refresh_blocked", status: 403 });
   }
   try {
-    const coa = await fetchChartOfAccounts(businessId);
-    return res.json({ ok: true, accounts: coa || [] });
+    const forceRefresh = req.query?.refresh === "1" || req.query?.refresh === "true";
+    const coa = await fetchChartOfAccounts(businessId, { forceRefresh });
+    return res.json({
+      ok: true,
+      accounts: coa || [],
+      meta: { source: "quickbooks_chart_of_accounts", includes_subaccounts: true, refreshed: forceRefresh },
+    });
   } catch (err) {
     console.error("[bookkeeping][coa] failed", err?.message || err);
     return res.status(500).json({ ok: false, error: "coa_fetch_failed", message: err?.message || "failed" });

@@ -6,6 +6,7 @@ import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import OpenAI from "openai";
 import { getBookkeepingHealth, upsertBookkeepingHealth } from "./bookkeepingHealth.js";
 import { isAdminViewRequest, sendAdminViewReadOnlyUnavailable } from "../_shared/tenantAuth.js";
+import { fetchChartOfAccounts } from "../../services/bookkeeping/qboAccounts.js";
 
 const router = express.Router();
 // DEPRECATED: Legacy QBO-only bookkeeping APIs. Plaid-first flows live under /api/bookkeeping.
@@ -20,28 +21,6 @@ function readCtx(req) {
     businessId:
       req.business?.id || req.auth?.businessId || req.user?.business_id || b.businessId || b.business_id || q.businessId || q.business_id || h["x-business-id"] || null,
   };
-}
-
-async function fetchChartOfAccounts(businessId) {
-  const qbo = await getQBOClient(businessId);
-  if (!qbo) return [];
-  try {
-    const res = await qbo.findAccounts({ Active: true });
-    const accounts = Array.isArray(res?.QueryResponse?.Account)
-      ? res.QueryResponse.Account
-      : [];
-    return accounts
-      .filter((a) => !a.SubAccount && a.AccountType && !/header/i.test(a.Classification || ""))
-      .map((a) => ({
-        id: a.Id,
-        name: a.Name,
-        type: a.AccountType,
-        subType: a.AccountSubType || null,
-      }));
-  } catch (e) {
-    console.warn("[bookkeeping] fetch COA failed", e?.message || e);
-    return [];
-  }
 }
 
 async function fetchUncategorizedTransactions({ businessId, sinceDate, limit = 500, qbo }) {

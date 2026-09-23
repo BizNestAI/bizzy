@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom";
-import { CheckCircle2, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
+import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
+import { Check, CheckCircle2, ChevronDown, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import {
@@ -58,6 +59,8 @@ export function CoaDropdown({
   creationContext,
   status,
   disabled,
+  resolution,
+  onResolutionChange,
 }) {
   const [open, setOpen] = React.useState(false);
   const [renderMenu, setRenderMenu] = React.useState(false);
@@ -87,6 +90,10 @@ export function CoaDropdown({
       ? accounts.filter(
           (a) =>
             a.name?.toLowerCase().includes(term) ||
+            a.shortName?.toLowerCase().includes(term) ||
+            a.fullyQualifiedName?.toLowerCase().includes(term) ||
+            a.parentRef?.name?.toLowerCase().includes(term) ||
+            a.searchText?.includes(term) ||
             a.type?.toLowerCase().includes(term)
         )
       : accounts;
@@ -205,6 +212,26 @@ export function CoaDropdown({
                 className="overflow-y-auto overscroll-contain scrollbar-thin scrollbar-thumb-[rgba(255,255,255,0.12)] scrollbar-track-transparent"
                 style={{ maxHeight: "inherit", scrollbarColor: "rgba(255,255,255,0.12) transparent" }}
               >
+                {onResolutionChange ? (
+                  <div className="border-b border-emerald-400/20 bg-emerald-950/15 py-1">
+                    {RESOLUTION_OPTIONS.filter(([id]) => id !== "categorize_new").map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        className={`flex w-full items-center justify-between gap-3 px-3.5 py-2 text-left text-[12px] font-medium transition focus:outline-none focus-visible:bg-emerald-400/12 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-300/60 ${
+                          resolution === id ? "bg-emerald-400/10 text-emerald-200" : "text-slate-100 hover:bg-emerald-400/[0.07]"
+                        }`}
+                        onClick={() => {
+                          setOpen(false);
+                          onResolutionChange(id);
+                        }}
+                      >
+                        <span>{id === "match_existing_qbo" ? "Match existing QuickBooks transaction" : label}</span>
+                        {resolution === id ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-300" aria-hidden="true" /> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 {onCreateAccount ? (
                   <button
                     type="button"
@@ -254,11 +281,12 @@ export function CoaDropdown({
                           }`}
                           onClick={() => {
                             onChange(acct.id);
+                            onResolutionChange?.("categorize_new");
                             setOpen(false);
                           }}
                         >
                           <span className="truncate flex flex-col leading-tight">
-                            <span className="truncate">{acct.name}</span>
+                            <span className="truncate">{acct.fullyQualifiedName || acct.name}</span>
                             {acct.type ? (
                               <span className="text-[10px] text-white/50 capitalize">{acct.type}</span>
                             ) : null}
@@ -466,7 +494,10 @@ export function CreditCardPaymentMatchControl({
                         setOpen(false);
                       }}
                     >
-                      <span className="min-w-0 truncate">{acct.name}</span>
+                      <span className="min-w-0">
+                        <span className="block truncate">{acct.name}</span>
+                        <span className="block text-[10px] text-white/40">{isQboCreditCardAccount(acct) ? "Credit card" : isQboBankAccount(acct) ? "Bank account" : "Payment account"}</span>
+                      </span>
                       {active ? <span className="text-emerald-300">✓</span> : null}
                     </button>
                   );
@@ -489,7 +520,9 @@ export function CreditCardPaymentMatchControl({
                     ) : null}
                   </div>
                 ) : accountsLoaded ? (
-                  <div className="px-3 py-2 text-[12px] text-white/48">No mapped credit-card accounts</div>
+                  <div className="px-3 py-2 text-[12px] text-white/48">
+                    No eligible mapped payment accounts. Finish account mapping in Connected Accounts.
+                  </div>
                 ) : (
                   <div className="px-3 py-2 text-[12px] text-white/48">Loading credit-card accounts…</div>
                 )}
@@ -894,18 +927,32 @@ const RESOLUTION_OPTIONS = [
 ];
 
 export function TransactionResolutionSelector({ transactionId, value, suggested, disabled = false, busy = false, error = "", onChange }) {
-  const controlId = `resolution-${transactionId}`;
+  const labelId = `resolution-label-${transactionId}`;
+  const selected = RESOLUTION_OPTIONS.find(([id]) => id === value) || RESOLUTION_OPTIONS[0];
   return (
     <div className="rounded-lg border border-white/10 bg-black/15 p-3" onClick={(event) => event.stopPropagation()}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <label className="text-[10px] font-semibold uppercase tracking-wide text-slate-300" htmlFor={controlId}>Resolution</label>
+        <span id={labelId} className="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Resolution</span>
         {suggested && suggested !== value ? <span className="text-[9px] text-slate-400">Bizzi suggested: {RESOLUTION_OPTIONS.find(([id]) => id === suggested)?.[1]}</span> : null}
       </div>
-      <select id={controlId} value={value} disabled={disabled || busy} onChange={(event) => onChange?.(event.target.value)} className="mt-2 block w-full rounded-md border border-white/15 bg-[#101312] px-2.5 py-2 text-[11px] font-medium text-slate-100 outline-none focus:border-emerald-300/60 focus:ring-2 focus:ring-emerald-500/20 disabled:opacity-50">
-        {RESOLUTION_OPTIONS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-      </select>
-      {busy ? <div className="mt-2 text-[10px] text-slate-400">Changing workflow…</div> : null}
-      {error ? <div role="alert" className="mt-2 rounded-md border border-rose-300/25 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-100">{error}</div> : null}
+      <Listbox value={value} onChange={(next) => onChange?.(next)} disabled={disabled}>
+        <div className="relative mt-2">
+          <ListboxButton aria-labelledby={labelId} className="flex w-full items-center justify-between gap-3 rounded-lg border border-emerald-400/25 bg-[#101312] px-3 py-2 text-left text-[11px] font-medium text-slate-100 shadow-[0_8px_20px_rgba(0,0,0,0.32),inset_0_1px_0_rgba(255,255,255,0.035)] outline-none transition hover:border-emerald-300/40 focus-visible:border-emerald-300/65 focus-visible:ring-2 focus-visible:ring-emerald-400/30 disabled:cursor-not-allowed disabled:opacity-50">
+            <span className="truncate">{selected[1]}</span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+          </ListboxButton>
+          <ListboxOptions anchor={{ to: "bottom", gap: 6, padding: 12 }} portal transition className="z-[10030] w-[var(--button-width)] overflow-hidden rounded-xl border border-emerald-400/25 bg-[rgba(13,16,18,0.985)] p-1.5 text-white shadow-[0_22px_52px_rgba(0,0,0,0.72)] backdrop-blur-md outline-none transition duration-150 ease-out data-[closed]:translate-y-[-5px] data-[closed]:opacity-0">
+            {RESOLUTION_OPTIONS.map(([id, label]) => (
+              <ListboxOption key={id} value={id} className="group flex cursor-default select-none items-center justify-between gap-3 rounded-lg px-3 py-2 text-[11px] font-medium text-slate-100 outline-none data-[focus]:bg-emerald-400/10 data-[focus]:text-emerald-100 data-[selected]:text-emerald-200">
+                <span>{label}</span>
+                <Check className="invisible h-3.5 w-3.5 shrink-0 text-emerald-300 group-data-[selected]:visible" aria-hidden="true" />
+              </ListboxOption>
+            ))}
+          </ListboxOptions>
+        </div>
+      </Listbox>
+      {busy ? <div role="status" className="mt-2 flex items-center gap-1.5 text-[10px] text-slate-400"><Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />Saving choice…</div> : null}
+      {error ? <div role="alert" className="mt-2 flex items-center justify-between gap-2 rounded-md border border-rose-300/25 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-100"><span>{error}</span><button type="button" onClick={() => onChange?.(value)} className="shrink-0 rounded border border-rose-200/25 px-2 py-1 font-semibold hover:bg-rose-200/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/60">Retry</button></div> : null}
     </div>
   );
 }
@@ -1106,7 +1153,7 @@ export default function BookkeepingFeed({
       const next = new Map(previous);
       transactions.forEach((txn) => {
         const persisted = effectiveTransactionResolution(txn);
-        if (!next.has(txn.id) || txn.meta?.user_selected_resolution) next.set(txn.id, persisted);
+        if (!next.has(txn.id)) next.set(txn.id, persisted);
       });
       return next;
     });
@@ -1114,26 +1161,28 @@ export default function BookkeepingFeed({
 
   const changeResolution = async (txn, resolution) => {
     if (readOnly || txn.status === "posted") return;
-    const previous = resolutionSelections.get(txn.id) || effectiveTransactionResolution(txn);
     setResolutionSelections((state) => new Map(state).set(txn.id, resolution));
     setResolutionActionState((state) => new Map(state).set(txn.id, { busy: true, error: "" }));
+    if (resolution === "match_existing_qbo") setExpandedRowId(txn.id);
+    if (resolution === "split_transaction") {
+      const legacyLoan = ["loan_payment", "loan_movement"].includes(String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase()) || txn.meta?.loan_payment_split_id;
+      setSplitDrafts((state) => new Map(state).set(txn.id, legacyLoan ? { ...buildInitialLoanSplitDraft(txn, accounts), mode: "general", legacyLoanSplit: true } : buildInitialSplitTransactionDraft("general", txn, accounts)));
+    }
     try {
-      await onResolutionChange?.(txn.id, resolution, suggestedTransactionResolution(txn));
+      const persistence = Promise.resolve(onResolutionChange?.(txn.id, resolution, suggestedTransactionResolution(txn)));
+      let workflow = Promise.resolve();
       if (resolution === "match_existing_qbo") {
-        setExpandedRowId(txn.id);
-        await onInspectIncomingDepositMatch?.(txn.id, null, txn);
+        workflow = Promise.resolve(onInspectIncomingDepositMatch?.(txn.id, null, txn));
       } else if (resolution === "match_credit_card_payment") {
-        await onMarkCcPayment?.(txn.id);
-      } else if (resolution === "split_transaction") {
-        const legacyLoan = ["loan_payment", "loan_movement"].includes(String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase()) || txn.meta?.loan_payment_split_id;
-        setSplitDrafts((state) => new Map(state).set(txn.id, legacyLoan ? { ...buildInitialLoanSplitDraft(txn, accounts), mode: "general", legacyLoanSplit: true } : buildInitialSplitTransactionDraft("general", txn, accounts)));
+        workflow = Promise.resolve(onMarkCcPayment?.(txn.id));
       } else if (resolution === "categorize_new" && (txn.taxonomy_type === "cc_payment" || txn.meta?.taxonomy_type === "cc_payment")) {
-        await onRejectCcPayment?.(txn.id);
+        workflow = Promise.resolve(onRejectCcPayment?.(txn.id));
       }
+      workflow.catch(() => {});
+      await persistence;
       setResolutionActionState((state) => new Map(state).set(txn.id, { busy: false, error: "" }));
     } catch (error) {
-      setResolutionSelections((state) => new Map(state).set(txn.id, previous));
-      setResolutionActionState((state) => new Map(state).set(txn.id, { busy: false, error: error?.body?.message || error?.message || "Could not change this workflow." }));
+      setResolutionActionState((state) => new Map(state).set(txn.id, { busy: false, error: error?.body?.message || error?.message || "Could not save this workflow choice." }));
     }
   };
 
@@ -1569,7 +1618,12 @@ export default function BookkeepingFeed({
                       (["approved", "auto_approved"].includes(txn.status) && !txn.canEdit) ||
                       readOnly
                     }
-                    onChange={(id) => handleAccountSelect(txn.id, id)}
+                    resolution={effectiveResolution}
+                    onResolutionChange={(nextResolution) => changeResolution(txn, nextResolution)}
+                    onChange={(id) => {
+                      handleAccountSelect(txn.id, id);
+                      if (id && effectiveResolution !== "categorize_new") changeResolution(txn, "categorize_new");
+                    }}
                   />
                 ) : !isPending && effectiveResolution === "categorize_new" ? (
                   <span className="text-slate-400 text-[11px] truncate">{readOnlyGlLabel}</span>
@@ -1762,6 +1816,17 @@ export default function BookkeepingFeed({
                      onChange={(resolution) => changeResolution(txn, resolution)}
                    />
                  </div> : null}
+                 {effectiveResolution === "match_existing_qbo" && !incomingMatch.active ? (
+                   <div className="mt-3 rounded-xl border border-emerald-300/20 bg-emerald-500/[0.055] px-4 py-4" role="status">
+                     <div className="flex items-center gap-2 text-[12px] font-semibold text-emerald-100"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Checking QuickBooks for an existing transaction…</div>
+                     <div className="mt-1 text-[10px] text-slate-400">You can continue reviewing other transactions while candidates load.</div>
+                   </div>
+                 ) : null}
+                 {effectiveResolution === "match_credit_card_payment" && !ccWorkflowStatus ? (
+                   <div className="mt-3 rounded-xl border border-cyan-300/20 bg-cyan-500/[0.055] px-4 py-4" role="status">
+                     <div className="flex items-center gap-2 text-[12px] font-semibold text-cyan-100"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Preparing credit-card payment matching…</div>
+                   </div>
+                 ) : null}
                  {incomingMatch.active && ["match_existing_qbo", "categorize_new"].includes(effectiveResolution) ? <IncomingDepositMatchPanel
                    txn={txn}
                    state={incomingMatch}

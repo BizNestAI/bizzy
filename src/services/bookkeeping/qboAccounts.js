@@ -9,8 +9,72 @@ export function normalizeQboPaymentAccountType(val = "") {
   return null;
 }
 
+const chartOfAccountsCache = new Map();
+const DEFAULT_COA_CACHE_TTL_MS = 60_000;
+
+function accountDepth(account = {}) {
+  const fqName = account.FullyQualifiedName || account.fullyQualifiedName || account.fully_qualified_name || "";
+  if (fqName) return Math.max(0, String(fqName).split(":").length - 1);
+  return account.SubAccount || account.subAccount || account.sub_account ? 1 : 0;
+}
+
+export function normalizeChartOfAccount(account = {}, { syncedAt = null } = {}) {
+  const id = account.Id || account.id || account.qbo_account_id || null;
+  if (!id) return null;
+  const shortName = account.Name || account.shortName || account.short_name || account.name || null;
+  const fullyQualifiedName =
+    account.FullyQualifiedName || account.fullyQualifiedName || account.fully_qualified_name || shortName;
+  const parent = account.ParentRef || account.parentRef || account.parent_ref || null;
+  const parentId = parent?.value || parent?.id || account.parent_id || null;
+  const parentName = parent?.name || account.parent_name || null;
+  const type = account.AccountType || account.type || account.account_type || null;
+  const subType = account.AccountSubType || account.subType || account.account_sub_type || null;
+  const active = account.Active !== false && account.active !== false;
+  const subAccount = Boolean(account.SubAccount || account.subAccount || account.sub_account || parentId);
+  const classification = account.Classification || account.classification || null;
+  const postable = Boolean(type && !/header/i.test(String(classification || "")));
+  return {
+    id: String(id),
+    businessId: account.businessId || account.business_id || null,
+    name: fullyQualifiedName || shortName || "Unnamed account",
+    shortName: shortName || fullyQualifiedName || "Unnamed account",
+    fullyQualifiedName: fullyQualifiedName || shortName || "Unnamed account",
+    type,
+    subType,
+    active,
+    subAccount,
+    parentRef: parentId || parentName ? { id: parentId ? String(parentId) : null, name: parentName || null } : null,
+    depth: accountDepth(account),
+    classification,
+    postable,
+    searchText: [shortName, fullyQualifiedName, parentName, type, subType].filter(Boolean).join(" ").toLowerCase(),
+    lastSyncedAt: syncedAt || account.lastSyncedAt || account.last_synced_at || null,
+  };
+}
+
+export function isChartAccountEligible(account = {}, workflow = "categorize") {
+  if (account.active === false || account.postable === false || !account.id) return false;
+  const normalizedType = String(account.type || "").replace(/[\s_-]+/g, "").toLowerCase();
+  if (workflow === "credit_card_payment") return normalizedType === "bank" || normalizedType === "creditcard";
+  if (workflow === "expense") return ["expense", "otherexpense", "costofgoodssold", "costofgoodsold"].includes(normalizedType);
+  if (workflow === "income") return ["income", "otherincome"].includes(normalizedType);
+  return true;
+}
+
+export function invalidateChartOfAccountsCache(businessId) {
+  if (businessId) chartOfAccountsCache.delete(String(businessId));
+  else chartOfAccountsCache.clear();
+}
+
 export async function fetchChartOfAccounts(businessId, opts = {}) {
-  const includeSubaccounts = opts?.includeSubaccounts === true;
+  // Subaccounts are part of the canonical Chart of Accounts. The legacy opt-out is
+  // retained only for non-selector callers that explicitly request it.
+  const includeSubaccounts = opts?.includeSubaccounts !== false;
+  const cacheKey = String(businessId || "");
+  const now = Date.now();
+  const ttlMs = Number.isFinite(opts?.cacheTtlMs) ? opts.cacheTtlMs : DEFAULT_COA_CACHE_TTL_MS;
+  const cached = chartOfAccountsCache.get(cacheKey);
+  if (!opts?.forceRefresh && cached && now - cached.loadedAt < ttlMs) return cached.accounts;
   let qbo = null;
   try {
     qbo = await getQBOClient(businessId);
@@ -32,14 +96,13 @@ export async function fetchChartOfAccounts(businessId, opts = {}) {
       });
     });
     const accounts = Array.isArray(res?.QueryResponse?.Account) ? res.QueryResponse.Account : [];
-    return accounts
-      .filter((a) => (includeSubaccounts || !a.SubAccount) && a.AccountType && !/header/i.test(a.Classification || ""))
-      .map((a) => ({
-        id: a.Id,
-        name: a.Name,
-        type: a.AccountType,
-        subType: a.AccountSubType || null,
-      }));
+    const syncedAt = new Date().toISOString();
+    const normalized = accounts
+      .map((account) => normalizeChartOfAccount({ ...account, businessId }, { syncedAt }))
+      .filter((account) => account && account.active && account.postable && (includeSubaccounts || !account.subAccount))
+      .sort((left, right) => String(left.fullyQualifiedName).localeCompare(String(right.fullyQualifiedName)));
+    if (includeSubaccounts) chartOfAccountsCache.set(cacheKey, { accounts: normalized, loadedAt: now });
+    return normalized;
   } catch (e) {
     console.warn("[bookkeeping] fetch COA failed", e?.message || e);
     return [];
@@ -56,10 +119,7 @@ function normalizeName(name = "") {
 
 export async function fetchPaymentAccounts(businessId) {
   const accounts = await fetchChartOfAccounts(businessId);
-  return (accounts || []).filter((acct) => {
-    const t = normalizeQboPaymentAccountType(acct?.type);
-    return t === "Bank" || t === "CreditCard";
-  });
+  return (accounts || []).filter((account) => isChartAccountEligible(account, "credit_card_payment"));
 }
 
 function shapeQboAccount(account = {}) {
@@ -337,6 +397,9 @@ export async function fetchQboAccountBalance(businessId, qboAccountId) {
 
 export default {
   fetchChartOfAccounts,
+  normalizeChartOfAccount,
+  isChartAccountEligible,
+  invalidateChartOfAccountsCache,
   fetchPaymentAccounts,
   fetchQboAccountByIdForBusiness,
   findStrongPaymentAccountMatch,

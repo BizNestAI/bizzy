@@ -25,6 +25,7 @@ import {
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
 import { buildMerchantGroupApprovalRequest, postingReviewGroupStateKey } from "../../contracts/merchantGroupApprovalContract.js";
+import { buildPaymentAccountDestinationOptions } from "../../services/bookkeeping/creditCardPaymentAccountOptions.js";
 
 const SELECT_CLASS = "rounded-xl border border-white/12 bg-[#101216] px-3 py-2 text-sm text-white outline-none [color-scheme:dark]";
 const INPUT_CLASS = "rounded-xl border border-white/10 bg-[#0f1115] px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 [color-scheme:dark]";
@@ -94,6 +95,8 @@ function buildInitialBookkeepingFeeds() {
       totalCount: null,
       page: 0,
       pageSize: BOOKKEEPING_FEED_PAGE_SIZE,
+      nextCursor: null,
+      hasMore: false,
       loading: false,
       error: "",
       loaded: false,
@@ -230,6 +233,9 @@ export default function MonthlyReviewConsole() {
   const [detail, setDetail] = useState(null);
   const [sourceLedger, setSourceLedger] = useState(null);
   const [connectedAccounts, setConnectedAccounts] = useState(null);
+  const [paymentAccountMappings, setPaymentAccountMappings] = useState([]);
+  const [loadingPaymentAccounts, setLoadingPaymentAccounts] = useState(false);
+  const [paymentAccountsError, setPaymentAccountsError] = useState("");
   const [qboPnlSnapshot, setQboPnlSnapshot] = useState(null);
   const [loadingQboPnl, setLoadingQboPnl] = useState(false);
   const [qboPnlError, setQboPnlError] = useState("");
@@ -313,19 +319,29 @@ export default function MonthlyReviewConsole() {
   const totalCount = detail?.sections?.length || 0;
   const canRequestApproval = Boolean(detail?.run?.id && !detail?.stamp && !finalizing);
   const selectedReviewStatus = getMonthlyCloseStatus(detail, selectedBusiness);
-  const mirrorFeedAccounts = useMemo(
-    () => (sourceLedger?.chart_accounts || []).map(normalizeAccountForBooksDropdown),
-    [sourceLedger?.chart_accounts]
-  );
+  const mirrorFeedAccounts = useMemo(() => {
+    const chartAccounts = (sourceLedger?.chart_accounts || []).map(normalizeAccountForBooksDropdown);
+    const paymentAccounts = buildPaymentAccountDestinationOptions(paymentAccountMappings, selectedBusinessId);
+    const byId = new Map(chartAccounts.map((account) => [String(account.id), account]));
+    paymentAccounts.forEach((account) => byId.set(String(account.id), account));
+    return [...byId.values()];
+  }, [paymentAccountMappings, selectedBusinessId, sourceLedger?.chart_accounts]);
 
   const injectSourceLedgerAccount = useCallback((account) => {
     if (!account?.id) return;
     const nextAccount = {
       id: String(account.id),
-      name: account.name || "Unnamed account",
+      name: account.fullyQualifiedName || account.name || "Unnamed account",
+      shortName: account.shortName || account.name || "Unnamed account",
+      fullyQualifiedName: account.fullyQualifiedName || account.name || "Unnamed account",
       type: account.type || account.accountType || account.account_type || null,
       subType: account.subType || account.accountSubType || account.account_subtype || null,
       active: account.active !== false,
+      subAccount: account.subAccount === true,
+      parentRef: account.parentRef || null,
+      depth: Number(account.depth || 0),
+      postable: account.postable !== false,
+      searchText: account.searchText || "",
     };
     setSourceLedger((current) => {
       const existing = current || {};
@@ -609,6 +625,25 @@ export default function MonthlyReviewConsole() {
     }
   }, [selectedBusinessId]);
 
+  const loadPaymentAccounts = useCallback(async () => {
+    if (!selectedBusinessId) {
+      setPaymentAccountMappings([]);
+      setPaymentAccountsError("");
+      return;
+    }
+    setLoadingPaymentAccounts(true);
+    setPaymentAccountsError("");
+    try {
+      const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/payment-accounts`);
+      setPaymentAccountMappings(Array.isArray(data?.accounts) ? data.accounts : []);
+    } catch (e) {
+      setPaymentAccountMappings([]);
+      setPaymentAccountsError(e?.body?.message || e?.message || "Couldn’t load mapped payment accounts");
+    } finally {
+      setLoadingPaymentAccounts(false);
+    }
+  }, [selectedBusinessId]);
+
   const loadBookkeepingFeedCounts = useCallback(async () => {
     if (!selectedBusinessId) {
       setBookkeepingFeeds(buildInitialBookkeepingFeeds());
@@ -651,21 +686,46 @@ export default function MonthlyReviewConsole() {
     }));
     try {
       const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/transactions?month=${encodeURIComponent(month)}&status=${encodeURIComponent(status)}&page=${encodeURIComponent(nextPage)}&page_size=${BOOKKEEPING_FEED_PAGE_SIZE}`);
-      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      const rows = Array.isArray(data?.items) ? data.items : Array.isArray(data?.rows) ? data.rows : [];
       const totalCount = Number(data?.totalCount ?? data?.total_count ?? rows.length);
-      setBookkeepingFeeds((current) => ({
-        ...current,
-        [status]: {
-          ...current[status],
-          rows: reset ? rows : [...(current[status]?.rows || []), ...rows],
-          totalCount,
-          page: Number(data?.meta?.page || nextPage),
-          pageSize: Number(data?.meta?.page_size || BOOKKEEPING_FEED_PAGE_SIZE),
-          loading: false,
-          error: "",
-          loaded: true,
-        },
-      }));
+      setBookkeepingFeeds((current) => {
+        const previousRows = reset ? [] : (current[status]?.rows || []);
+        const byId = new Map(previousRows.map((row) => [String(row.id), row]));
+        rows.forEach((row) => {
+          if (row?.id) byId.set(String(row.id), row);
+        });
+        const mergedRows = [...byId.values()];
+        const addedUniqueRows = mergedRows.length - previousRows.length;
+        const serverHasMore = Boolean(data?.has_more ?? data?.meta?.has_more);
+        const paginationStalled = !reset && rows.length > 0 && addedUniqueRows === 0 && serverHasMore;
+        if (paginationStalled && import.meta.env.DEV) {
+          console.warn("[monthly-review][bookkeeping-pagination] page added no unique transactions", {
+            business_id: selectedBusinessId,
+            month,
+            status,
+            requested_page: nextPage,
+            next_cursor: data?.next_cursor ?? data?.meta?.next_cursor ?? null,
+            received_count: rows.length,
+            loaded_unique_count: previousRows.length,
+            total_count: totalCount,
+          });
+        }
+        return {
+          ...current,
+          [status]: {
+            ...current[status],
+            rows: mergedRows,
+            totalCount,
+            page: Number(data?.meta?.page || nextPage),
+            pageSize: Number(data?.meta?.page_size || BOOKKEEPING_FEED_PAGE_SIZE),
+            nextCursor: paginationStalled ? null : (data?.next_cursor ?? data?.meta?.next_cursor ?? null),
+            hasMore: paginationStalled ? false : serverHasMore,
+            loading: false,
+            error: paginationStalled ? "The next page repeated rows already loaded. Refresh the feed to continue safely." : "",
+            loaded: true,
+          },
+        };
+      });
     } catch (e) {
       setBookkeepingFeeds((current) => ({
         ...current,
@@ -992,6 +1052,10 @@ export default function MonthlyReviewConsole() {
   }, [loadConnectedAccounts]);
 
   useEffect(() => {
+    loadPaymentAccounts();
+  }, [loadPaymentAccounts]);
+
+  useEffect(() => {
     setBookkeepingFeeds(buildInitialBookkeepingFeeds());
     setBookkeepingReconsideration({ loading: false, message: "", error: "" });
     setPostingReview({ expanded: false, summary: null, groups: [], loading: false, error: "", loaded: false });
@@ -1031,6 +1095,8 @@ export default function MonthlyReviewConsole() {
     setQboPnlAccountDetails({});
     setConnectedAccounts(null);
     setConnectedAccountsError("");
+    setPaymentAccountMappings([]);
+    setPaymentAccountsError("");
     setBookkeepingFeeds(buildInitialBookkeepingFeeds());
     setBookkeepingCountsError("");
     setPostingReview({ expanded: false, summary: null, groups: [], loading: false, error: "", loaded: false });
@@ -2204,6 +2270,9 @@ export default function MonthlyReviewConsole() {
                   postingReviewItemActions={postingReviewItemActions}
                   onTogglePostingReviewGroup={setExpandedPostingReviewGroup}
                   accounts={mirrorFeedAccounts}
+                  paymentAccountsLoaded={!loadingPaymentAccounts}
+                  loadingPaymentAccounts={loadingPaymentAccounts}
+                  paymentAccountsError={paymentAccountsError}
                   busyAction={busyFeedAction}
                   busyActions={busyFeedActions}
                   rowErrors={bookkeepingFeedActionErrors}
@@ -2334,6 +2403,9 @@ function BookkeepingFeedMirrorPanels({
   onRetryPostingReviewItem,
   onTogglePostingReviewGroup,
   accounts,
+  paymentAccountsLoaded,
+  loadingPaymentAccounts,
+  paymentAccountsError,
   busyAction,
   busyActions,
   rowErrors,
@@ -2418,6 +2490,9 @@ function BookkeepingFeedMirrorPanels({
             onToggle={() => onToggle(status)}
             onLoadMore={() => onLoadMore(status)}
             accounts={accounts}
+            paymentAccountsLoaded={paymentAccountsLoaded}
+            loadingPaymentAccounts={loadingPaymentAccounts}
+            paymentAccountsError={paymentAccountsError}
             busyAction={busyAction}
             busyActions={busyActions}
             rowErrors={rowErrors}
@@ -2471,6 +2546,9 @@ function PostingReviewMirrorSection({
   postingReviewItemActions,
   expandedPostingReviewGroup,
   accounts,
+  paymentAccountsLoaded,
+  loadingPaymentAccounts,
+  paymentAccountsError,
   onToggle,
   onRefresh,
   onOptionChange,
@@ -2913,7 +2991,7 @@ function BookkeepingFeedMirrorSection({
 }) {
   const rows = Array.isArray(feed?.rows) ? feed.rows : [];
   const totalCount = feed?.totalCount ?? 0;
-  const hasMore = rows.length < Number(totalCount || 0);
+  const hasMore = feed?.hasMore === true;
   const expanded = Boolean(feed?.expanded);
   return (
     <div className="rounded-xl border border-white/10 bg-black/15">
@@ -2951,6 +3029,9 @@ function BookkeepingFeedMirrorSection({
               rows={rows}
               status={status}
               accounts={accounts}
+              paymentAccountsLoaded={paymentAccountsLoaded}
+              loadingPaymentAccounts={loadingPaymentAccounts}
+              paymentAccountsError={paymentAccountsError}
               busyAction={busyAction}
               busyActions={busyActions}
               rowErrors={rowErrors}

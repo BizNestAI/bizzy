@@ -284,12 +284,13 @@ test("credit-card-payment selector uses mapped card destinations and preserves l
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
   const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
   const mappingsRoute = read("src/api/bookkeeping/routes/bookkeeping.accountMappings.routes.js");
+  const resolver = read("src/services/bookkeeping/creditCardPaymentAccountOptions.js");
 
   assert.match(page, /getAccountMappings/);
   assert.match(page, /buildCreditCardPaymentDestinationOptions/);
-  assert.match(page, /plaidType === "credit"/);
-  assert.match(page, /qboType === "creditcard"/);
-  assert.match(page, /row\?\.mapped === true/);
+  assert.match(resolver, /plaidType === "credit"/);
+  assert.match(resolver, /qboType === expectedQboType/);
+  assert.match(resolver, /row\?\.mapped === true/);
   assert.match(page, /ccPaymentAccountsLoaded/);
   assert.match(page, /setCcPaymentAccountsError\("Couldn’t load credit-card accounts"\)/);
   assert.match(page, /ccPaymentAccounts=\{ccPaymentAccounts\}/);
@@ -297,7 +298,8 @@ test("credit-card-payment selector uses mapped card destinations and preserves l
   assert.match(feed, /ccPaymentDestinationAccounts/);
   assert.match(feed, /Loading credit-card accounts…/);
   assert.match(feed, /Couldn’t load credit-card accounts/);
-  assert.match(feed, /No mapped credit-card accounts/);
+  assert.match(feed, /No eligible mapped payment accounts/);
+  assert.match(feed, /Finish account mapping in Connected Accounts/);
   assert.match(feed, /disabled=\{!currentAccount \|\| discovering \|\| busy\}/);
   assert.match(feed, /disabled=\{disabled \|\| matching\}/);
   assert.match(feed, /Not a credit card payment/);
@@ -309,6 +311,21 @@ test("credit-card-payment selector uses mapped card destinations and preserves l
   assert.match(mappingsRoute, /mapping_id/);
   assert.match(mappingsRoute, /mapping_status/);
   assert.match(mappingsRoute, /qbo_account_subtype/);
+});
+
+test("shared payment-account resolver returns only active, mapped, type-safe accounts", async () => {
+  const { buildPaymentAccountDestinationOptions } = await import("../src/services/bookkeeping/creditCardPaymentAccountOptions.js");
+  const options = buildPaymentAccountDestinationOptions([
+    { plaidAccountId: "card-1", plaidAccountName: "Blue Cash", plaidMask: "1008", plaidType: "credit", qboAccountId: "qbo-card", qboAccountName: "Blue Cash", qboAccountType: "Credit Card", mapped: true, isActive: true, isEligible: true },
+    { plaidAccountId: "bank-1", plaidAccountName: "Checking", plaidMask: "8626", plaidType: "depository", qboAccountId: "qbo-bank", qboAccountName: "Checking", qboAccountType: "Bank", mapped: true, isActive: true, isEligible: true },
+    { plaidAccountId: "wrong", plaidType: "credit", qboAccountId: "wrong-type", qboAccountType: "Bank", mapped: true, isActive: true, isEligible: false },
+    { plaidAccountId: "inactive", plaidType: "credit", qboAccountId: "inactive-card", qboAccountType: "CreditCard", mapped: true, isActive: false, isEligible: true },
+  ], "biz-1");
+
+  assert.deepEqual(options.map((account) => [account.id, account.type, account.name]), [
+    ["qbo-card", "CreditCard", "Blue Cash • 1008"],
+    ["qbo-bank", "Bank", "Checking • 8626"],
+  ]);
 });
 
 test("taxonomy-only cc-payment stays suspected and does not lock the account picker", () => {
@@ -386,7 +403,8 @@ test("credit-card payment selector uses dark custom menu and can switch back to 
   assert.doesNotMatch(feed, /Use regular COA dropdown/);
   assert.doesNotMatch(feed, /Use COA/);
   assert.match(feed, /Match as credit card payment/);
-  assert.match(feed, /onUseCreditCardPayment/);
+  assert.match(feed, /TransactionResolutionSelector/);
+  assert.match(feed, /match_credit_card_payment/);
   assert.match(feed, /canUndoCcPaymentPair = allowCreditCardPaymentUndo && isCcPaymentWorkflow && hasCcPair/);
   assert.match(feed, /Undo credit-card payment match/);
   assert.match(mirror, /CreditCardPaymentMatchControl/);

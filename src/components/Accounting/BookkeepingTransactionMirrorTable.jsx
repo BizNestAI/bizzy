@@ -1,4 +1,5 @@
 import React from "react";
+import { Loader2 } from "lucide-react";
 import { CoaDropdown, CreditCardPaymentMatchControl, IncomingDepositMatchPanel, TransactionResolutionSelector, incomingDepositMatchState } from "./BookkeepingFeed.jsx";
 import SplitTransactionModal, { buildInitialSplitTransactionDraft, buildInitialLoanSplitDraft } from "./SplitTransactionModal.jsx";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
@@ -20,6 +21,9 @@ export default function BookkeepingTransactionMirrorTable({
   rows = [],
   status = "",
   accounts = [],
+  paymentAccountsLoaded = true,
+  loadingPaymentAccounts = false,
+  paymentAccountsError = "",
   busyAction = "",
   busyActions = {},
   rowErrors = {},
@@ -70,6 +74,9 @@ export default function BookkeepingTransactionMirrorTable({
             row={row}
             feedStatus={status}
             accounts={accounts}
+            paymentAccountsLoaded={paymentAccountsLoaded}
+            loadingPaymentAccounts={loadingPaymentAccounts}
+            paymentAccountsError={paymentAccountsError}
             busyAction={busyAction}
             busyActions={busyActions}
             rowError={rowErrors?.[row.id] || ""}
@@ -104,6 +111,9 @@ function BookkeepingTransactionMirrorRow({
   row,
   feedStatus,
   accounts,
+  paymentAccountsLoaded,
+  loadingPaymentAccounts,
+  paymentAccountsError,
   busyAction,
   busyActions,
   rowError,
@@ -186,21 +196,23 @@ function BookkeepingTransactionMirrorRow({
   const ccAction = ccPaymentActionState?.[row.id] || {};
   const incomingAction = incomingDepositMatchActionState?.[row.id] || {};
   const changeResolution = async (nextResolution) => {
-    const previous = resolution;
     setResolution(nextResolution);
     setResolutionBusy(true);
     setResolutionError("");
+    if (nextResolution === "split_transaction") {
+      const legacyLoan = ["loan_payment", "loan_movement"].includes(String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase()) || row.meta?.loan_payment_split_id;
+      setLoanSplitDraft(legacyLoan ? { ...buildInitialLoanSplitDraft(row, accounts), mode: "general", legacyLoanSplit: true } : buildInitialSplitTransactionDraft("general", row, accounts));
+    }
     try {
-      await onResolutionChange?.(row, nextResolution, suggestedTransactionResolution(row));
-      if (nextResolution === "match_existing_qbo") await onInspectIncomingDepositMatch?.(row.id, null, row);
-      else if (nextResolution === "match_credit_card_payment") await onMarkCcPayment?.(row);
-      else if (nextResolution === "split_transaction") {
-        const legacyLoan = ["loan_payment", "loan_movement"].includes(String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase()) || row.meta?.loan_payment_split_id;
-        setLoanSplitDraft(legacyLoan ? { ...buildInitialLoanSplitDraft(row, accounts), mode: "general", legacyLoanSplit: true } : buildInitialSplitTransactionDraft("general", row, accounts));
-      } else if (nextResolution === "categorize_new" && ccWorkflowStatus) await onRejectCcPayment?.(row);
+      const persistence = Promise.resolve(onResolutionChange?.(row, nextResolution, suggestedTransactionResolution(row)));
+      let workflow = Promise.resolve();
+      if (nextResolution === "match_existing_qbo") workflow = Promise.resolve(onInspectIncomingDepositMatch?.(row.id, null, row));
+      else if (nextResolution === "match_credit_card_payment") workflow = Promise.resolve(onMarkCcPayment?.(row));
+      else if (nextResolution === "categorize_new" && ccWorkflowStatus) workflow = Promise.resolve(onRejectCcPayment?.(row));
+      workflow.catch(() => {});
+      await persistence;
     } catch (error) {
-      setResolution(previous);
-      setResolutionError(error?.body?.message || error?.message || "Could not change this workflow.");
+      setResolutionError(error?.body?.message || error?.message || "Could not save this workflow choice.");
     } finally {
       setResolutionBusy(false);
     }
@@ -252,6 +264,9 @@ function BookkeepingTransactionMirrorRow({
           <CreditCardPaymentMatchControl
             value={selectedAccountId}
             accounts={ccAccounts}
+            accountsLoaded={paymentAccountsLoaded}
+            loadingAccounts={loadingPaymentAccounts}
+            accountsError={paymentAccountsError}
             statusLabel={ccWorkflowStatus.label}
             targetLabel={ccOrientation.label}
             placeholder={ccOrientation.placeholder}
@@ -293,7 +308,12 @@ function BookkeepingTransactionMirrorRow({
             }}
             status={row.status}
             disabled={!hasAccounts || isActionBusy("approve") || isActionBusy("reclassify")}
-            onChange={(accountId) => setSelectedAccountId(accountId)}
+            resolution={resolution}
+            onResolutionChange={changeResolution}
+            onChange={(accountId) => {
+              setSelectedAccountId(accountId);
+              if (accountId && resolution !== "categorize_new") changeResolution("categorize_new");
+            }}
           />
         )}
       </div>
@@ -419,6 +439,11 @@ function BookkeepingTransactionMirrorRow({
         ) : null}
       </div>
     </div>
+    {resolution === "match_existing_qbo" && !incomingMatch.active ? (
+      <div className="border-t border-white/10 bg-black/20 px-4 py-4" role="status">
+        <div className="flex items-center gap-2 text-xs font-semibold text-emerald-100"><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />Checking QuickBooks for an existing transaction…</div>
+      </div>
+    ) : null}
     {resolution === "match_existing_qbo" && incomingMatch.active ? (
       <div className="border-t border-white/10 bg-black/20 px-4 pb-4">
         <IncomingDepositMatchPanel

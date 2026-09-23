@@ -42,6 +42,7 @@ import {
   getAutoPostStatus,
   updateAutoPostStatus,
 } from "../../services/bookkeeping/bookkeepingClient.js";
+import { buildCreditCardPaymentDestinationOptions } from "../../services/bookkeeping/creditCardPaymentAccountOptions.js";
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
 import { ClarificationModal } from "../../components/Bizzy/OperatorRequestsPanel.jsx";
@@ -557,60 +558,6 @@ function isNeedsReviewTransaction(txn = {}) {
 
 function transitionDelay(ms = 450) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function normalizePaymentAccountType(value = "") {
-  return String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
-}
-
-function formatMappedCreditCardLabel(row = {}) {
-  const name = row.qboAccountName || row.qbo_account_name || row.plaidAccountName || row.plaid_name || "Credit card";
-  const maskValue = row.plaidMask || row.mask || "";
-  const mask = maskValue ? String(maskValue).slice(-4) : "";
-  return mask ? `${name} • ${mask}` : name;
-}
-
-function buildCreditCardPaymentDestinationOptions(rows = [], businessId = null) {
-  const seen = new Set();
-  return (Array.isArray(rows) ? rows : [])
-    .filter((row) => {
-      const plaidType = normalizePaymentAccountType(row.plaidType || row.plaid_type);
-      const qboType = normalizePaymentAccountType(row.qboAccountType || row.qbo_account_type);
-      return (
-        (row?.mapped === true || row?.mappingStatus === "mapped" || row?.mapping_status === "mapped") &&
-        row?.isActive !== false &&
-        row?.is_active !== false &&
-        plaidType === "credit" &&
-        qboType === "creditcard" &&
-        (row.qboAccountId || row.qbo_account_id)
-      );
-    })
-    .map((row) => {
-      const id = String(row.qboAccountId || row.qbo_account_id);
-      const plaidAccountId = row.plaidAccountId || row.plaid_account_id || null;
-      const key = `${plaidAccountId || "plaid"}:${id}`;
-      if (seen.has(key)) return null;
-      seen.add(key);
-      return {
-        id,
-        name: formatMappedCreditCardLabel(row),
-        type: "CreditCard",
-        accountType: "CreditCard",
-        account_type: "CreditCard",
-        subType: row.qboAccountSubtype || row.qbo_account_subtype || row.plaidSubtype || row.plaid_subtype || "CreditCard",
-        mappingId: row.mappingId || row.mapping_id || key,
-        plaidAccountId,
-        qboAccountId: id,
-        qboAccountName: row.qboAccountName || row.qbo_account_name || null,
-        institutionName: row.institutionName || row.institution_name || null,
-        mask: row.plaidMask || row.mask || null,
-        mappingStatus: row.mappingStatus || row.mapping_status || "mapped",
-        active: row.isActive !== false && row.is_active !== false,
-        eligible: row.isEligible !== false,
-        businessId,
-      };
-    })
-    .filter(Boolean);
 }
 
 function BookkeepingCleanup() {
@@ -1218,10 +1165,17 @@ function BookkeepingCleanup() {
     if (!account?.id) return;
     const nextAccount = {
       id: String(account.id),
-      name: account.name || "Unnamed account",
+      name: account.fullyQualifiedName || account.name || "Unnamed account",
+      shortName: account.shortName || account.name || "Unnamed account",
+      fullyQualifiedName: account.fullyQualifiedName || account.name || "Unnamed account",
       type: account.type || account.accountType || account.account_type || "other",
       subType: account.subType || account.accountSubType || account.account_subtype || null,
       active: account.active !== false,
+      subAccount: account.subAccount === true,
+      parentRef: account.parentRef || null,
+      depth: Number(account.depth || 0),
+      postable: account.postable !== false,
+      searchText: account.searchText || "",
     };
     setChartAccounts((current) => {
       const next = [...(current || []).filter((item) => String(item.id) !== String(nextAccount.id)), nextAccount];

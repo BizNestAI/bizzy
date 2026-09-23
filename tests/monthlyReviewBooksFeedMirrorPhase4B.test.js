@@ -264,8 +264,33 @@ test("Monthly Review renders collapsible Needs Review and Handled mirrors with b
   assert.match(monthlyReviewUi, /aria-expanded=\{expanded\}/);
   assert.match(monthlyReviewUi, /\/bookkeeping\/transactions\/counts\?month=/);
   assert.match(monthlyReviewUi, /\/bookkeeping\/transactions\?month=.*status=.*page=.*page_size=\$\{BOOKKEEPING_FEED_PAGE_SIZE\}/s);
-  assert.match(monthlyReviewUi, /rows:\s*reset \? rows : \[\.\.\.\(current\[status\]\?\.rows \|\| \[\]\), \.\.\.rows\]/);
+  assert.match(monthlyReviewUi, /const byId = new Map\(previousRows\.map\(\(row\) => \[String\(row\.id\), row\]\)\)/);
+  assert.match(monthlyReviewUi, /hasMore:\s*paginationStalled \? false : serverHasMore/);
   assert.match(monthlyReviewUi, /setBookkeepingFeeds\(buildInitialBookkeepingFeeds\(\)\)/);
+});
+
+test("Handled count and pages use the same post-filter population", async () => {
+  const { fetchBookkeepingTransactions, countBookkeepingTransactions } = await servicePromise;
+  const rawRows = [
+    { id: "handled-1", date: "2026-09-21", amount: -10, cat_status: "approved", total_count: 4 },
+    { id: "matched-pair", date: "2026-09-20", amount: -20, cat_status: "approved", total_count: 4, cat_meta: { taxonomy_type: "cc_payment", cc_payment_pair_id: "pair-1", cc_payment_pair_status: "confirmed" } },
+    { id: "failed-post", date: "2026-09-19", amount: -30, cat_status: "failed", total_count: 4, post_error: "qbo rejected", last_post_attempt_at: "2026-09-20T00:00:00Z" },
+    { id: "handled-2", date: "2026-09-18", amount: -40, cat_status: "auto_approved", total_count: 4 },
+  ];
+  const db = {
+    rpc: async (name, params) => {
+      assert.equal(name, "get_bookkeeping_transactions_bounded");
+      assert.equal(params.p_status_filter, "handled");
+      return { data: rawRows.slice(params.p_offset, params.p_offset + params.p_limit), error: null };
+    },
+  };
+
+  const count = await countBookkeepingTransactions({ db, businessId: "biz-1", statusFilter: "handled", rangeParam: "all" });
+  const page = await fetchBookkeepingTransactions({ db, businessId: "biz-1", statusFilter: "handled", rangeParam: "all", page: 1, pageSize: 25 });
+
+  assert.equal(count, 2);
+  assert.equal(page.totalCount, 2);
+  assert.deepEqual(page.rows.map((row) => row.id), ["handled-1", "handled-2"]);
 });
 
 test("mirror row presenter preserves customer-answer, QBO, and special-workflow state without mutations", () => {

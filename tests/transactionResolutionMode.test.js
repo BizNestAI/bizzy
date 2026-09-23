@@ -62,3 +62,44 @@ test("Books Review exposes four universal modes, multi-match totals, and no sepa
   assert.match(client, /resolution: "match_existing_qbo"/);
   assert.match(client, /resolution: "split_transaction"/);
 });
+
+test("resolution and COA menus share an accessible dark non-native command surface", () => {
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  const selectorStart = feed.indexOf("export function TransactionResolutionSelector");
+  const selectorEnd = feed.indexOf("export default function BookkeepingFeed", selectorStart);
+  const selector = feed.slice(selectorStart, selectorEnd);
+  const coaStart = feed.indexOf("export function CoaDropdown");
+  const coaEnd = feed.indexOf("function ConfidenceBadge", coaStart);
+  const coa = feed.slice(coaStart, coaEnd);
+
+  assert.match(selector, /ListboxButton/);
+  assert.match(selector, /ListboxOptions[\s\S]*portal/);
+  assert.match(selector, /ListboxOption/);
+  assert.match(selector, /bg-\[rgba\(13,16,18,0\.985\)\]/);
+  assert.doesNotMatch(selector, /<select/);
+  assert.match(selector, /role="alert"[\s\S]*Retry/);
+
+  assert.match(coa, /RESOLUTION_OPTIONS\.filter\(\(\[id\]\) => id !== "categorize_new"\)/);
+  assert.match(feed, /\["match_existing_qbo", "Match existing QuickBooks transaction"\]/);
+  assert.match(feed, /\["match_credit_card_payment", "Match as credit card payment"\]/);
+  assert.match(feed, /\["split_transaction", "Split transaction"\]/);
+  assert.doesNotMatch(coa, /Split as loan payment|Loan Split/);
+  assert.match(coa, /Add new account/);
+  assert.match(coa, /Search accounts/);
+  assert.match(coa, /onResolutionChange\?\.\("categorize_new"\)/);
+});
+
+test("resolution selection renders immediately before persistence and workflow loading", () => {
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  const start = feed.indexOf("const changeResolution = async");
+  const end = feed.indexOf("const clearLoanSplit", start);
+  const change = feed.slice(start, end);
+
+  assert.ok(change.indexOf("setResolutionSelections") < change.indexOf("onResolutionChange?."));
+  assert.ok(change.indexOf("setExpandedRowId") < change.indexOf("onInspectIncomingDepositMatch?."));
+  assert.match(change, /const persistence = Promise\.resolve/);
+  assert.match(change, /workflow = Promise\.resolve/);
+  assert.doesNotMatch(change, /setResolutionSelections\(\(state\).*previous/);
+  assert.match(feed, /Checking QuickBooks for an existing transaction/);
+  assert.match(feed, /Preparing credit-card payment matching/);
+});

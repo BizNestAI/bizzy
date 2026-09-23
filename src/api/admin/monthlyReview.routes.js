@@ -78,6 +78,7 @@ import {
 import { refreshMonthlyQboFinancialSnapshot } from "../../services/accounting/healthMonthlySnapshotService.js";
 import { ensureForecastV1Run } from "../../services/accounting/forecastV1Service.js";
 import { getConnectedFinancialAccountsForBusiness } from "../../services/plaid/plaidIntegrationService.js";
+import { fetchAdminViewPersistedAccountMappings } from "../bookkeeping/routes/bookkeeping.accountMappings.routes.js";
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../_shared/internalStaffAuth.js";
 import {
   buildAccountingCloseFinalizationGuard,
@@ -326,6 +327,28 @@ router.get("/businesses/:businessId/connected-accounts", async (req, res) => {
       error: "monthly_review_connected_accounts_failed",
       message: e?.message || "Could not load connected financial accounts.",
     });
+  }
+});
+
+router.get("/businesses/:businessId/bookkeeping/payment-accounts", async (req, res) => {
+  try {
+    const businessId = req.params.businessId;
+    if (!UUID_RE.test(String(businessId))) return res.status(400).json({ ok: false, error: "invalid_business_id" });
+    await assertMonthlyReviewBusinessExists(businessId);
+    const result = await fetchAdminViewPersistedAccountMappings({ businessId });
+    return res.json({
+      ...result,
+      business_id: businessId,
+      source_contract: {
+        service: "persisted_account_mappings",
+        same_business_only: true,
+        active_accounts_only: true,
+        provider_calls: false,
+      },
+    });
+  } catch (e) {
+    console.error("[monthly-review] payment accounts failed", e?.message || e);
+    sendMonthlyReviewError(res, "monthly_review_payment_accounts_failed", "Could not load mapped payment accounts.", e);
   }
 });
 
@@ -621,13 +644,18 @@ router.get("/businesses/:businessId/bookkeeping/transactions", async (req, res) 
       month,
       status: statusFilter,
       rows,
+      items: rows,
       totalCount,
       total_count: totalCount,
+      next_cursor: page * pageSize < totalCount ? String(page + 1) : null,
+      has_more: page * pageSize < totalCount,
       meta: {
         page,
         page_size: pageSize,
         total_count: totalCount,
         page_count: Math.max(1, Math.ceil(totalCount / pageSize)),
+        next_cursor: page * pageSize < totalCount ? String(page + 1) : null,
+        has_more: page * pageSize < totalCount,
         range_start: rangeStart,
         range_end: rangeEnd,
       },
@@ -2986,8 +3014,17 @@ async function buildMonthlySourceLedger(businessId, month) {
     chart_accounts: chartAccounts.map((account) => ({
       id: account.id,
       name: account.name,
+      shortName: account.shortName || account.name,
+      fullyQualifiedName: account.fullyQualifiedName || account.name,
       type: account.accountType || account.account_type || account.type || null,
+      subType: account.subType || account.account_sub_type || null,
       active: account.active !== false,
+      subAccount: account.subAccount === true,
+      parentRef: account.parentRef || null,
+      depth: Number(account.depth || 0),
+      postable: account.postable !== false,
+      searchText: account.searchText || "",
+      lastSyncedAt: account.lastSyncedAt || null,
     })),
     account_groups: accountGroups,
     reconciliation_trace: reconciliationTrace,
