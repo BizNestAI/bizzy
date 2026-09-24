@@ -27,6 +27,8 @@ import {
   confirmLoanPaymentSplit,
   treatLoanPaymentAsRegularTransaction,
   updateHandledTransaction,
+  excludeTransaction,
+  restoreExcludedTransaction,
   getBookkeepingProcessingStatus,
   getMappingStatus,
   getAccountMappings,
@@ -181,6 +183,7 @@ const TABS = [
   { key: "posted", label: "Posted", icon: UploadCloud },
   { key: "matched", label: "Matched", icon: Link2 },
   { key: "pending", label: "Pending", icon: CircleAlert },
+  { key: "excluded", label: "Excluded", icon: CircleAlert },
 ];
 
 const DATE_RANGE_OPTIONS = [
@@ -506,6 +509,8 @@ function matchesBooksTab(txn = {}, tabKey = "needs_review") {
     txn.meta?.incoming_deposit_match_status === "confirmed";
   if (tabKey === "all") return true;
   if (tabKey === "pending") return txn.pending === true;
+  if (tabKey === "excluded") return status === "excluded" || Boolean(txn.excluded_at || txn.meta?.excluded_at);
+  if (status === "excluded" || txn.excluded_at || txn.meta?.excluded_at) return false;
   if (tabKey === "matched") return txn.pending !== true && (matchedExistingQbo || status === "matched");
   if (matchedExistingQbo) return false;
   if (txn.pending === true && tabKey !== "posted") return false;
@@ -593,7 +598,7 @@ function BookkeepingCleanup() {
   const [categorizationStatus, setCategorizationStatus] = useState(null);
   const [processingStatus, setProcessingStatus] = useState(null);
   const [completedProcessingMessage, setCompletedProcessingMessage] = useState(null);
-  const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null, matched: null, pending: null });
+  const [tabCounts, setTabCounts] = useState({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
   const lastSuccessfulTransactionPagesRef = useRef(new Map());
   const lastProcessingRunRef = useRef(null);
@@ -1054,7 +1059,7 @@ function BookkeepingCleanup() {
   const loadTabCounts = useCallback(async () => {
     if (usingDemo) return;
     if (!businessId || !accountFilter) {
-      setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null });
+      setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
       return;
     }
     try {
@@ -1065,7 +1070,7 @@ function BookkeepingCleanup() {
       setTabCounts(overlayPendingApprovalCounts(counts));
     } catch (e) {
       console.warn("[bookkeeping] transaction counts fetch failed", e?.message || e);
-      setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null });
+      setTabCounts({ needs_review: null, handled: null, posted: null, matched: null, pending: null, excluded: null });
     }
   }, [accountFilter, businessId, dateRange, usingDemo, overlayPendingApprovalCounts]);
 
@@ -1301,7 +1306,7 @@ function BookkeepingCleanup() {
         if (matchesBooksTab(txn, "matched")) acc.matched += 1;
         return acc;
       },
-      { needs_review: 0, handled: 0, posted: 0, matched: 0, pending: 0 }
+      { needs_review: 0, handled: 0, posted: 0, matched: 0, pending: 0, excluded: 0 }
     );
   }, [accountFilter, dateRange, tabCounts, transactions, usingDemo]);
 
@@ -1359,6 +1364,7 @@ function BookkeepingCleanup() {
   );
   const isHandledTab = activeTab === "handled";
   const isMatchedTab = activeTab === "matched";
+  const isExcludedTab = activeTab === "excluded";
   const hasVisibleRows = feedRows.length > 0;
   const serverProcessingCount = Number(processingStatus?.active_count || 0);
   const hasRelevantProcessing = serverProcessingCount > 0;
@@ -1581,6 +1587,41 @@ function BookkeepingCleanup() {
         optimisticTxnIds.forEach((txnId) => next.delete(txnId));
         return next;
       });
+    }
+  };
+
+  const handleExclude = async (id) => {
+    if (!businessId || !canRunAI) return;
+    const txn = transactions.find((row) => String(row.id) === String(id));
+    if (!txn) return;
+    const confirmed = window.confirm("Exclude this transaction?\n\nThis transaction will not be categorized, matched, or posted to QuickBooks. You can restore it later from the Excluded feed.");
+    if (!confirmed) return;
+    try {
+      await excludeTransaction(businessId, id);
+      setTransactions((rows) => rows.filter((row) => String(row.id) !== String(id)));
+      setTabCounts((counts) => counts ? {
+        ...counts,
+        [activeTab]: Math.max(0, Number(counts[activeTab] || 0) - 1),
+        excluded: Number(counts.excluded || 0) + 1,
+      } : counts);
+      window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: { severity: "success", title: "Transaction excluded", body: "You can restore it from Excluded." } }));
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: true, refreshProcessingStatus: false });
+      await loadTabCounts();
+    } catch (err) {
+      window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: { severity: "error", title: "Could not exclude transaction", body: err?.body?.error === "posting_in_progress" ? "Posting is currently in progress. Wait for it to finish before excluding this transaction." : "Refresh and try again." } }));
+    }
+  };
+
+  const handleRestoreExcluded = async (id) => {
+    if (!businessId || !canRunAI) return;
+    if (!window.confirm("Restore this transaction to the bookkeeping workflow?")) return;
+    try {
+      await restoreExcludedTransaction(businessId, id);
+      setTransactions((rows) => rows.filter((row) => String(row.id) !== String(id)));
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: true, refreshProcessingStatus: false });
+      await loadTabCounts();
+    } catch {
+      window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: { severity: "error", title: "Could not restore transaction", body: "Refresh and try again." } }));
     }
   };
 
@@ -2696,7 +2737,7 @@ function BookkeepingCleanup() {
         console.log("[Books] fetching txns", { accountFilter, activeTab, dateRange, page, rowsPerPage });
       }
       const res = await fetchTransactions(businessId, {
-        status: activeTab === "handled" || activeTab === "posted" || activeTab === "matched" || activeTab === "pending" ? activeTab : "needs_review",
+        status: ["handled", "posted", "matched", "pending", "excluded"].includes(activeTab) ? activeTab : "needs_review",
         account_id: accountFilter,
         range: dateRange,
         page,
@@ -2995,13 +3036,6 @@ function BookkeepingCleanup() {
             <>
               <button
                 type="button"
-                onClick={() => navigate("/dashboard/accounting/reconciliations")}
-                className="min-w-0 rounded-full border border-white/10 px-3 py-1.5 text-center text-slate-200 transition hover:border-[var(--accent-line)] hover:bg-[var(--panel)] sm:px-3.5"
-              >
-                Reconciled
-              </button>
-              <button
-                type="button"
                 disabled={rulesButtonDisabled}
                 onClick={
                   rulesButtonDisabled
@@ -3245,6 +3279,8 @@ function BookkeepingCleanup() {
               toggleRow={toggleRow}
               onApprove={handleApprove}
               onUndo={handleUndo}
+              onExclude={handleExclude}
+              onRestoreExcluded={handleRestoreExcluded}
               onManualPost={handleManualPostTransaction}
               onRejectCcPayment={handleRejectCreditCardPayment}
               onMarkCcPayment={handleMarkCreditCardPayment}
@@ -3289,6 +3325,8 @@ function BookkeepingCleanup() {
               showQboSchedule={isHandledTab}
               allowCreditCardPaymentUndo={isHandledTab || isMatchedTab}
               allowIncomingDepositUndo={isMatchedTab}
+              allowExclude={["needs_review", "handled", "pending"].includes(activeTab)}
+              showRestoreExcluded={isExcludedTab}
             />
           )}
         </motion.div>

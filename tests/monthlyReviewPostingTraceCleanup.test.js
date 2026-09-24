@@ -125,14 +125,14 @@ test("unified pipeline statuses are mutually exclusive and prevent false failed 
     "handled_not_posted",
     "scheduled_for_qbo",
     "posted_matched",
-    "posting_failed",
+    "handled_not_posted",
   ]);
 
   const totals = finalizePipelineTotals(summarizePipelineStatuses(rows));
   assert.equal(totals.plaid_transactions_count, 6);
   assert.equal(totals.needs_review_count, 1);
-  assert.equal(totals.handled_not_posted_count, 3);
+  assert.equal(totals.handled_not_posted_count, 4);
   assert.equal(totals.posted_matched_count, 1);
-  assert.equal(totals.exceptions_count, 1);
+  assert.equal(totals.exceptions_count, 0);
   assert.equal(totals.explained_count, totals.plaid_transactions_count);
 });

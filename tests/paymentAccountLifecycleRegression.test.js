@@ -39,7 +39,7 @@ test("inactive, unmapped, contradictory, duplicate, and source accounts are excl
   assert.deepEqual(options.map((row) => row.qboAccountId), ["10", "17", "19", "20"]);
 });
 
-test("lifecycle classifier assigns the orphaned payment row to exactly one failed bucket", () => {
+test("lifecycle classifier keeps an unpaired payment in Needs Review with a failed posting outcome", () => {
   const incident = {
     id: "c54988c5-ea58-491c-a899-72a07c1d6c22",
     status: "auto_approved", review_status: "handled", posting_status: "posting_failed",
@@ -47,7 +47,8 @@ test("lifecycle classifier assigns the orphaned payment row to exactly one faile
     meta: { taxonomy_type: "cc_payment", cc_payment_pair_status: "voided" },
   };
   const diagnosis = diagnoseBookkeepingLifecycle(incident);
-  assert.equal(diagnosis.bucket, "failed");
+  assert.equal(diagnosis.bucket, "needs_review");
+  assert.equal(diagnosis.postingOutcome.key, "failed");
   assert.equal(diagnosis.posted, false);
   assert.equal(diagnosis.matchedPair, false);
   assert.equal(diagnosis.orphaned, false);

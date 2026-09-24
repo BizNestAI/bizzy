@@ -136,6 +136,11 @@ export async function approveBookkeepingTransactions({
     suggestedCanonicalMap[row.transaction_id] = row.suggested_canonical_account_key || row.meta?.canonical_account_key || null;
   });
 
+  const excludedIds = txnIds.filter((txnId) => statusMap[txnId] === "excluded" || existingMetaMap[txnId]?.excluded_at);
+  if (excludedIds.length) {
+    throw new BookkeepingApprovalError("transaction_excluded", 409, { transactions: excludedIds });
+  }
+
   for (const item of items || []) {
     const txnId = txnIdFromItem(item);
     const requested = item?.resolution || null;

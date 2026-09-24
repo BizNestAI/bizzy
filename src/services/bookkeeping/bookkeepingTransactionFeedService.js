@@ -9,8 +9,7 @@ import { classifyAutoPostOperationalScope, getAutoPostPolicy } from "./autoPostC
 import { discoverIncomingDepositQboMatch } from "./incomingDepositMatchService.js";
 import { isCashBackRewardCredit, rewardCreditIntent } from "./rewardCreditPolicy.js";
 import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
-import { hasProvenPostingFailure } from "./reconciliationPipelineStatus.js";
-import { classifyBookkeepingLifecycle } from "./bookkeepingLifecycleClassifier.js";
+import { classifyBookkeepingLifecycle, derivePostingOutcome } from "./bookkeepingLifecycleClassifier.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -64,7 +63,7 @@ export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   const isCheckTxn = cat?.meta?.is_check === true;
   const lifecycle = classifyBookkeepingLifecycle(cat);
   if (statusKey === "approved") return lifecycle.bucket === "handled";
-  if (statusKey === "reconciled") return lifecycle.bucket === "matched" || lifecycle.bucket === "reconciled";
+  if (statusKey === "reconciled") return lifecycle.bucket === "matched" || lifecycle.bucket === "posted";
   if (statusKey === "needs_review" && cat?.status === "auto_approved" && isCheckTxn) return true;
   return lifecycle.bucket === statusKey;
 }
@@ -228,6 +227,10 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     post_after: cat.post_after || null,
     post_error: cat.post_error || null,
     last_post_attempt_at: cat.last_post_attempt_at || null,
+    excluded_at: cat.excluded_at || meta.excluded_at || null,
+    excluded_by: cat.excluded_by || meta.excluded_by || null,
+    exclusion_reason: cat.exclusion_reason || meta.exclusion_reason || null,
+    pre_exclusion_lifecycle: cat.pre_exclusion_lifecycle || meta.pre_exclusion_lifecycle || null,
     meta: meta || null,
     taxonomy_type: meta.taxonomy_type || null,
     cc_payment_pair_id: meta.cc_payment_pair_id || null,
@@ -316,6 +319,10 @@ export function normalizeBookkeepingRpcRow(row = {}) {
       reconciled_at: row.reconciled_at,
       post_error: row.post_error,
       last_post_attempt_at: row.last_post_attempt_at,
+      excluded_at: row.excluded_at,
+      excluded_by: row.excluded_by,
+      exclusion_reason: row.exclusion_reason,
+      pre_exclusion_lifecycle: row.pre_exclusion_lifecycle,
       meta: row.cat_meta,
     },
     row.account_name || row.account_official_name || null,
@@ -374,6 +381,24 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   if (row.qbo_txn_id) return null;
   if (!isHandledForPosting(row)) return null;
   const meta = row.meta || {};
+  const postingOutcome = derivePostingOutcome(row);
+  if (["failed", "blocked", "processing", "queued"].includes(postingOutcome.key)) {
+    return {
+      key: postingOutcome.key,
+      label: postingOutcome.label,
+      tone: postingOutcome.key === "failed" ? "danger" : postingOutcome.key === "blocked" ? "warning" : "info",
+      detail: postingOutcome.key === "failed"
+        ? "QuickBooks did not accept the last posting attempt."
+        : postingOutcome.key === "blocked"
+          ? "A safety or evidence check requires review before posting."
+          : postingOutcome.label,
+      technical: {
+        reason: postingOutcome.reason,
+        last_attempt_at: postingOutcome.lastAttemptAt,
+        operation_id: postingOutcome.lastOperationId,
+      },
+    };
+  }
   if (row.pending === true) {
     return {
       key: "pending",
@@ -872,7 +897,7 @@ async function fetchCanonicalHandledTransactions({
     // Payment workflows have their own two terminal locations: unresolved in
     // Needs Review and confirmed in Matched. Never leak either form into the
     // ordinary Handled queue, even when a legacy row retained `approved`.
-    .filter((row) => !isCreditCardPaymentWorkflow(row) && !hasProvenPostingFailure(row))
+    .filter((row) => !isCreditCardPaymentWorkflow(row))
     .sort((a, b) => {
       const dateOrder = String(b.date || "").localeCompare(String(a.date || ""));
       if (dateOrder) return dateOrder;

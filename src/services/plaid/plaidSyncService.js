@@ -470,7 +470,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       if (matchedIds.length) {
         const { data: catRows, error: catFetchErr } = await supabase
           .from("transaction_categorizations")
-          .select("transaction_id,status,qbo_txn_id,posted_at,reconciled_at")
+          .select("transaction_id,status,qbo_txn_id,posted_at,reconciled_at,excluded_at,meta")
           .eq("business_id", businessId)
           .in("transaction_id", matchedIds);
         if (catFetchErr) throw catFetchErr;
@@ -478,10 +478,20 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       }
 
       const safeRowsForIdUpsert = [];
+      const excludedFinalizedReopens = [];
       for (const row of rowsForIdUpsert) {
         const existing = existingRows.find((candidate) => candidate.id === row.id);
         const cat = catByTxnId.get(row.id);
         const posted = cat?.status === "posted" || Boolean(cat?.qbo_txn_id || cat?.posted_at || cat?.reconciled_at);
+        const excluded = cat?.status === "excluded" || Boolean(cat?.excluded_at || cat?.meta?.excluded_at);
+        if (excluded && existing?.pending === true && row.pending !== true && hasMaterialTransactionChange(existing, row)) {
+          excludedFinalizedReopens.push({
+            transactionId: row.id,
+            accountId: row.plaid_account_id,
+            prior: existing,
+            finalized: row,
+          });
+        }
         if (posted && hasMaterialTransactionChange(existing, row)) {
           protectedRemovedIds.add(existing?.plaid_transaction_id);
           if (existing?.pending_transaction_id) protectedRemovedIds.add(existing.pending_transaction_id);
@@ -510,6 +520,51 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
         await upsertRowsInChunks("bank_transactions", safeRowsForIdUpsert, "id");
         await upsertRowsInChunks("bank_transactions", rowsForPlaidUpsert, "business_id,plaid_transaction_id");
         await upsertRowsInChunks("bank_transactions", postedReviewUpdates, "id");
+        for (const reopened of excludedFinalizedReopens) {
+          const { data: currentCat, error: currentCatErr } = await supabase
+            .from("transaction_categorizations")
+            .select("meta,exclusion_snapshot")
+            .eq("business_id", businessId)
+            .eq("transaction_id", reopened.transactionId)
+            .maybeSingle();
+          if (currentCatErr) throw currentCatErr;
+          const { error: reopenErr } = await supabase
+            .from("transaction_categorizations")
+            .update({
+              status: "needs_review",
+              review_status: "needs_review",
+              posting_status: "not_scheduled",
+              excluded_at: null,
+              excluded_by: null,
+              exclusion_reason: null,
+              exclusion_source: null,
+              pre_exclusion_lifecycle: null,
+              post_after: null,
+              meta: {
+                ...(currentCat?.meta || {}),
+                excluded_at: undefined,
+                pending_exclusion_snapshot: currentCat?.exclusion_snapshot || null,
+                finalized_replacement_reopened_at: now,
+                finalized_replacement_reason: "material_pending_to_posted_change",
+              },
+              updated_at: now,
+            })
+            .eq("business_id", businessId)
+            .eq("transaction_id", reopened.transactionId);
+          if (reopenErr) throw reopenErr;
+          const { error: eventErr } = await supabase.from("bookkeeping_exclusion_events").insert({
+            business_id: businessId,
+            transaction_id: reopened.transactionId,
+            connected_account_id: reopened.accountId,
+            event_type: "finalized_replacement_reopened",
+            actor: "plaid_sync",
+            prior_lifecycle: "excluded",
+            resulting_lifecycle: "needs_review",
+            reason: "material_pending_to_posted_change",
+            details: { prior_amount: reopened.prior?.amount, finalized_amount: reopened.finalized?.amount },
+          });
+          if (eventErr) throw eventErr;
+        }
         if (postedReviewUpdates.length) {
           const reviewIds = postedReviewUpdates.map((row) => row.id).filter(Boolean);
           const { error: reviewCatErr } = await supabase
@@ -560,7 +615,7 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
       if (archiveTxnIds.length) {
         const { data: removedCats, error: removedCatFetchErr } = await supabase
           .from("transaction_categorizations")
-          .select("transaction_id,status,qbo_txn_id,posted_at,reconciled_at")
+          .select("transaction_id,status,qbo_txn_id,posted_at,reconciled_at,excluded_at,meta")
           .eq("business_id", businessId)
           .in("transaction_id", archiveTxnIds);
         if (removedCatFetchErr) throw removedCatFetchErr;
@@ -570,8 +625,49 @@ async function runSyncForItem(plaid, businessId, item, options = {}) {
             .map((cat) => cat.transaction_id)
             .filter(Boolean)
         );
-        const unpostedArchiveTxnIds = archiveTxnIds.filter((id) => !postedRemovedIds.has(id));
+        const excludedRemovedIds = new Set(
+          (removedCats || [])
+            .filter((cat) => cat?.status === "excluded" || cat?.excluded_at || cat?.meta?.excluded_at)
+            .map((cat) => cat.transaction_id)
+            .filter(Boolean)
+        );
+        const unpostedArchiveTxnIds = archiveTxnIds.filter((id) => !postedRemovedIds.has(id) && !excludedRemovedIds.has(id));
         const postedRemovedTxnIds = archiveTxnIds.filter((id) => postedRemovedIds.has(id));
+
+        for (const excludedId of excludedRemovedIds) {
+          const excludedBank = existingRows.find((row) => String(row.id) === String(excludedId));
+          const replacement = [...safeRowsForIdUpsert, ...rowsForPlaidUpsert].find((row) =>
+            excludedBank?.plaid_transaction_id && String(row.pending_transaction_id || "") === String(excludedBank.plaid_transaction_id)
+          );
+          if (!replacement) continue;
+          const { data: excludedCat } = await supabase
+            .from("transaction_categorizations")
+            .select("meta")
+            .eq("business_id", businessId)
+            .eq("transaction_id", excludedId)
+            .maybeSingle();
+          await supabase.from("transaction_categorizations").update({
+            meta: {
+              ...(excludedCat?.meta || {}),
+              pending_authorization_replaced: true,
+              finalized_replacement_transaction_id: replacement.id || null,
+              finalized_replacement_plaid_transaction_id: replacement.plaid_transaction_id || null,
+              pending_replacement_linked_at: now,
+            },
+            updated_at: now,
+          }).eq("business_id", businessId).eq("transaction_id", excludedId);
+          await supabase.from("bookkeeping_exclusion_events").insert({
+            business_id: businessId,
+            transaction_id: excludedId,
+            connected_account_id: excludedBank?.plaid_account_id || null,
+            event_type: "pending_transaction_replaced",
+            actor: "plaid_sync",
+            prior_lifecycle: "excluded",
+            resulting_lifecycle: "excluded",
+            reason: "finalized_transaction_imported_independently",
+            details: { replacement_transaction_id: replacement.id || null, replacement_plaid_transaction_id: replacement.plaid_transaction_id || null },
+          });
+        }
 
         const archivePayload = unpostedArchiveTxnIds.map((id) => ({
           id,

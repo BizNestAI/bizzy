@@ -85,11 +85,11 @@ test("posting worker consumes durable authority and only bypasses classified sof
   assert.match(worker, /post_error: null/);
 });
 
-test("unresolved posting failures are actionable exceptions, not Handled rows", () => {
+test("regular posting failures remain Handled while retaining their posting exception", () => {
   const failed = {
     status: "failed",
     post_error: "qbo_api_rejected",
     last_post_attempt_at: "2026-09-22T18:00:00.000Z",
   };
-  assert.equal(isBooksReviewHandled(failed), false);
+  assert.equal(isBooksReviewHandled(failed), true);
 });

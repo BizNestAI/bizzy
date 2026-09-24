@@ -53,7 +53,18 @@ test("posting failed requires durable QBO mutation-attempt evidence", () => {
         latest_post_attempt: { attempted_at: "2026-08-24T17:00:00Z", status: "failed" },
       },
     }).key,
-    "posting_failed"
+    "handled_not_posted"
+  );
+  assert.equal(
+    derivePipelineStatus({
+      bank: {},
+      cat: {
+        status: "failed",
+        post_error: "QBO rejected payload",
+        latest_post_attempt: { attempted_at: "2026-08-24T17:00:00Z", status: "failed" },
+      },
+    }).posting_outcome,
+    "failed"
   );
   assert.equal(
     derivePipelineStatus({

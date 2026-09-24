@@ -17,6 +17,7 @@ import postingRoutes from "./routes/bookkeeping.posting.routes.js";
 import canonicalCoaRoutes from "./routes/bookkeeping.canonicalCoa.routes.js";
 import processingRoutes from "./routes/bookkeeping.processing.routes.js";
 import incomingDepositMatchesRoutes from "./routes/bookkeeping.incomingDepositMatches.routes.js";
+import exclusionsRoutes from "./routes/bookkeeping.exclusions.routes.js";
 
 const router = Router();
 
@@ -38,5 +39,6 @@ router.use(postingRoutes);
 router.use(canonicalCoaRoutes);
 router.use(processingRoutes);
 router.use(incomingDepositMatchesRoutes);
+router.use(exclusionsRoutes);
 
 export default router;

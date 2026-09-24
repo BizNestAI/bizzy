@@ -34,6 +34,7 @@ import {
 } from "../services/bookkeeping/creditCardPaymentPairService.js";
 import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/incomingDepositMatchService.js";
 import { postingFailureStatus } from "../services/bookkeeping/bookkeepingLifecycleState.js";
+import { assertTransactionNotExcluded } from "../services/bookkeeping/transactionExclusionService.js";
 import { detectProcessorSettlementActivity } from "../services/bookkeeping/processorSettlementProfiles.js";
 import { decideManualPostingGate, hasAuthorizedMonthlyReviewApproval } from "../services/bookkeeping/manualPostingAuthority.js";
 import {
@@ -1601,6 +1602,7 @@ async function handleCreditCardPaymentPairItem({ item, bank, mapping, timing, ma
 }
 
 async function postBankOutflowPurchase(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
+  await assertTransactionNotExcluded({ db: supabase, businessId: item.business_id, transactionId: item.transaction_id });
   const amount = Math.abs(Number(bankTxn.amount || 0));
   const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note, lineDescription } = buildQboPostText(bankTxn, "Bank transaction", requestId);
@@ -1667,8 +1669,10 @@ async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, catego
     ],
   });
 
-  const attempt = (payload) =>
-    createQboDeposit(qbo, payload);
+  const attempt = async (payload) => {
+    await assertTransactionNotExcluded({ db: supabase, businessId: item.business_id, transactionId: item.transaction_id });
+    return createQboDeposit(qbo, payload);
+  };
 
   try {
     return await attempt(buildPayload("A"));
@@ -1685,6 +1689,7 @@ async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, catego
 }
 
 async function postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
+  await assertTransactionNotExcluded({ db: supabase, businessId: item.business_id, transactionId: item.transaction_id });
   const amount = Math.abs(Number(bankTxn.amount || 0));
   const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note, lineDescription } = buildQboPostText(bankTxn, "CC charge", requestId);
@@ -1931,6 +1936,8 @@ export async function handleItem(item, options = {}) {
   const duplicatePostAnyway = confirmPostAnyway && item?.meta?.possible_qbo_duplicate === true;
   const timing = createPostingTiming();
   let intentQboTxnTypeForLog = null;
+
+  await assertTransactionNotExcluded({ db: supabase, businessId, transactionId: txnId });
 
   if (item.status === "posted" || item.qbo_txn_id) {
     return;

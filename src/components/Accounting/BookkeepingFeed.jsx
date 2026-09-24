@@ -965,6 +965,8 @@ export default function BookkeepingFeed({
   toggleRow,
   onApprove,
   onUndo,
+  onExclude,
+  onRestoreExcluded,
   onManualPost,
   onRejectCcPayment,
   onMarkCcPayment,
@@ -1002,6 +1004,8 @@ export default function BookkeepingFeed({
   showQboSchedule = false,
   allowCreditCardPaymentUndo = false,
   allowIncomingDepositUndo = false,
+  allowExclude = false,
+  showRestoreExcluded = false,
 }) {
   // Column widths (px) — draggable like QuickBooks
   const initialColWidths = React.useMemo(
@@ -1528,7 +1532,28 @@ export default function BookkeepingFeed({
                 ) : null}
               </div>
               <div className="relative z-[20] flex min-w-0 flex-col items-stretch gap-1 overflow-hidden text-slate-200 text-[11px] leading-tight whitespace-nowrap">
-                {isPosted ? (
+                {showRestoreExcluded ? (
+                  <button
+                    type="button"
+                    onClick={() => onRestoreExcluded?.(txn.id)}
+                    disabled={readOnly}
+                    className="inline-flex h-7 items-center justify-center rounded-full border border-emerald-300/35 bg-emerald-500/10 px-3 text-[10px] font-semibold text-emerald-100 disabled:opacity-45"
+                  >
+                    Restore
+                  </button>
+                ) : allowExclude && !isPosted && !isPosting && !incomingMatch.confirmed && !hasCcPair ? (
+                  <button
+                    type="button"
+                    onClick={() => onExclude?.(txn.id)}
+                    disabled={readOnly}
+                    className="inline-flex h-7 items-center justify-center rounded-full border border-rose-300/30 bg-rose-500/8 px-3 text-[10px] font-semibold text-rose-100 disabled:opacity-45"
+                    title="Exclude this transaction from categorization, matching, and QuickBooks posting"
+                  >
+                    Exclude
+                  </button>
+                ) : allowExclude && isPosting ? (
+                  <span className="text-[9px] text-amber-200" title="Posting is currently in progress. Wait for it to finish before excluding this transaction.">Posting</span>
+                ) : isPosted ? (
                   <span className="inline-flex w-fit items-center rounded-full px-2 py-[2px] text-[10px] font-semibold bg-emerald-500/10 text-emerald-200 border border-emerald-500/40">
                     Posted to QuickBooks
                   </span>
@@ -1801,10 +1826,50 @@ export default function BookkeepingFeed({
                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
                    Full bank memo
                  </div>
-                 <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
-                   {fullMemo}
-                 </div>
-                 {!isPosted && !isPending ? <div className="mt-3">
+                     <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
+                       {fullMemo}
+                     </div>
+                     {showRestoreExcluded ? (
+                       <div className="mt-3 rounded-lg border border-slate-500/25 bg-white/[0.025] px-3 py-2 text-[10px] text-slate-300">
+                         <div>Previous feed/status: {txn.pre_exclusion_lifecycle || txn.meta?.pre_exclusion_lifecycle || "Needs Review"}</div>
+                         <div>Excluded: {txn.excluded_at || txn.meta?.excluded_at ? new Date(txn.excluded_at || txn.meta?.excluded_at).toLocaleString() : "—"}</div>
+                         <div>Excluded by: {txn.excluded_by || txn.meta?.excluded_by || "Authorized user"}</div>
+                         {(txn.exclusion_reason || txn.meta?.exclusion_reason) ? <div>Reason: {txn.exclusion_reason || txn.meta?.exclusion_reason}</div> : null}
+                         <details className="mt-2">
+                           <summary className="cursor-pointer">Technical details</summary>
+                           <div className="mt-1 break-all font-mono text-slate-400">
+                             <div>Provider transaction: {txn.plaidTransactionId || "—"}</div>
+                             <div>Pending at exclusion: {String(txn.meta?.exclusion_snapshot?.pending ?? txn.pending)}</div>
+                             <div>Selected category: {txn.glAccountName || txn.suggestedAccountName || "—"}</div>
+                             <div>Prior posting status: {txn.meta?.exclusion_snapshot?.prior_posting_status || "—"}</div>
+                             <div>Correlation: {txn.meta?.exclusion_correlation_id || "—"}</div>
+                           </div>
+                         </details>
+                       </div>
+                     ) : null}
+                     {showQboSchedule && qboSchedule && ["failed", "blocked"].includes(qboSchedule.key) ? (
+                       <div className="mt-3 rounded-lg border border-amber-300/20 bg-amber-400/[0.055] px-3 py-2 text-[11px] text-slate-200">
+                         <div className="font-semibold text-amber-100">{qboSchedule.label}</div>
+                         <div className="mt-1 text-slate-300">{qboSchedule.detail}</div>
+                         {qboSchedule.technical?.last_attempt_at ? (
+                           <div className="mt-1 text-slate-400">Last attempt: {new Date(qboSchedule.technical.last_attempt_at).toLocaleString()}</div>
+                         ) : null}
+                         <details className="mt-2">
+                           <summary className="cursor-pointer text-slate-300">Technical details</summary>
+                           <div className="mt-1 break-all font-mono text-[10px] text-slate-400">
+                             {qboSchedule.technical?.reason ? <div>Reason: {qboSchedule.technical.reason}</div> : null}
+                             {qboSchedule.technical?.operation_id ? <div>Operation: {qboSchedule.technical.operation_id}</div> : null}
+                           </div>
+                         </details>
+                         <a
+                           href="/dashboard/admin/monthly-review#posting-review"
+                           className="mt-2 inline-flex text-[10px] font-semibold text-emerald-300 hover:text-emerald-200"
+                         >
+                           Open Monthly Review Posting Review
+                         </a>
+                       </div>
+                     ) : null}
+                     {!isPosted && !isPending ? <div className="mt-3">
                    <TransactionResolutionSelector
                      transactionId={txn.id}
                      value={effectiveResolution}

@@ -510,6 +510,22 @@ export async function updateHandledTransaction(businessId, transactionId, payloa
   return res;
 }
 
+export async function excludeTransaction(businessId, transactionId, reason = null) {
+  return safeFetch(apiUrl(`/api/bookkeeping/transactions/${encodeURIComponent(transactionId)}/exclude`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId, reason }),
+  });
+}
+
+export async function restoreExcludedTransaction(businessId, transactionId) {
+  return safeFetch(apiUrl(`/api/bookkeeping/transactions/${encodeURIComponent(transactionId)}/restore`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({ business_id: businessId }),
+  });
+}
+
 export async function suggestTransactions(businessId, payload = {}) {
   const body = {
     business_id: businessId,

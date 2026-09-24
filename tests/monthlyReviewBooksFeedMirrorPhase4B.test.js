@@ -25,7 +25,7 @@ test("shared feed service preserves Books Review status semantics", async () => 
   assert.equal(matchesTransactionStatusFilter("needs_review", { status: "auto_approved", meta: { is_check: true } }), true);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "approved" }), true);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "auto_approved" }), true);
-  assert.equal(matchesTransactionStatusFilter("handled", { status: "failed", post_error: "qbo_rejected", last_post_attempt_at: "2026-09-22T00:00:00Z" }), false);
+  assert.equal(matchesTransactionStatusFilter("handled", { status: "failed", post_error: "qbo_rejected", last_post_attempt_at: "2026-09-22T00:00:00Z" }), true);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "posted", qbo_txn_id: "1" }), false);
   assert.equal(matchesTransactionStatusFilter("posted", { status: "approved", qbo_txn_id: "qbo-1" }), true);
   assert.equal(matchesTransactionStatusFilter("matched", { status: "matched_existing_qbo" }), true);
@@ -288,9 +288,9 @@ test("Handled count and pages use the same post-filter population", async () => 
   const count = await countBookkeepingTransactions({ db, businessId: "biz-1", statusFilter: "handled", rangeParam: "all" });
   const page = await fetchBookkeepingTransactions({ db, businessId: "biz-1", statusFilter: "handled", rangeParam: "all", page: 1, pageSize: 25 });
 
-  assert.equal(count, 2);
-  assert.equal(page.totalCount, 2);
-  assert.deepEqual(page.rows.map((row) => row.id), ["handled-1", "handled-2"]);
+  assert.equal(count, 3);
+  assert.equal(page.totalCount, 3);
+  assert.deepEqual(page.rows.map((row) => row.id), ["handled-1", "failed-post", "handled-2"]);
 });
 
 test("mirror row presenter preserves customer-answer, QBO, and special-workflow state without mutations", () => {

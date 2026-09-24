@@ -111,7 +111,9 @@ export function isBooksReviewNeedsReview(row = {}) {
 
 export function isBooksReviewHandled(row = {}) {
   const status = normalizeStatus(row.status || row.categorization_status);
-  return APPROVED_STATUSES.has(status) && !isCreditCardPaymentWorkflow(row) && !hasProvenPostingFailure(row);
+  const reviewStatus = normalizeStatus(row.review_status);
+  return (APPROVED_STATUSES.has(status) || FAILURE_STATUSES.has(status) || reviewStatus === "handled") &&
+    !isCreditCardPaymentWorkflow(row) && !row.qbo_txn_id && !row.posted_at;
 }
 
 export function deriveReconciliationEvidence(reconciliationItem = null) {
@@ -186,10 +188,14 @@ export function derivePipelineStatus({ bank = {}, cat = {}, reconciliationItem =
     });
   }
 
-  if (hasProvenPostingFailure(row)) {
-    return withDetail(PIPELINE_STATUS.posting_failed, row.post_error || "QBO posting failed.", {
-      source: "posting_attempt",
+  if (hasProvenPostingFailure(row) && isBooksReviewHandled(row)) {
+    return withDetail(PIPELINE_STATUS.handled_not_posted, "Categorized in Bizzi; the QuickBooks posting attempt failed.", {
+      source: "books_review",
       is_pending: pending,
+      posting_outcome: "failed",
+      secondary_statuses: [withDetail(PIPELINE_STATUS.posting_failed, row.post_error || "QBO posting failed.", {
+        source: "posting_attempt",
+      })],
     });
   }
 
