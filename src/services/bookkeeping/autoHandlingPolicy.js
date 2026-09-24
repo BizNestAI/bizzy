@@ -86,6 +86,17 @@ export function isRoutineExpenseFullyResolved(transaction = {}, categorizationEv
   const accountId = evidence.accountId || evidence.suggested_qbo_account_id || null;
   const accountName = evidence.accountName || evidence.suggested_qbo_account_name || null;
 
+  // An explicit user undo is authoritative until the payment is rematched.
+  // Background classification/vendor-rule passes must not silently move the
+  // row back to Handled and schedule a transfer without a confirmed pair.
+  if (
+    taxonomyType === "cc_payment" &&
+    meta.review_reopen_authorized === true &&
+    !meta.cc_payment_pair_id
+  ) {
+    return block("cc_payment_pair_requires_confirmation", { confidence, source, evidence });
+  }
+
   const blocked = (reason) => block(reason, { confidence, source, evidence });
 
   if (transaction?.pending === true) return blocked("pending_transaction_not_postable");
@@ -184,6 +195,14 @@ export function canAutoHandle(transaction = {}, categorizationEvidence = {}, bus
   const taxonomyType = String(evidence.taxonomyType || meta.taxonomy_type || "").toLowerCase();
   const accountId = evidence.accountId || evidence.suggested_qbo_account_id || null;
   const accountName = evidence.accountName || evidence.suggested_qbo_account_name || null;
+
+  if (
+    taxonomyType === "cc_payment" &&
+    meta.review_reopen_authorized === true &&
+    !meta.cc_payment_pair_id
+  ) {
+    return block("cc_payment_pair_requires_confirmation", { confidence, source, evidence });
+  }
 
   if (transaction?.pending === true) {
     return block("pending_transaction_not_postable", { confidence, source, evidence });

@@ -10,6 +10,7 @@ import { discoverIncomingDepositQboMatch } from "./incomingDepositMatchService.j
 import { isCashBackRewardCredit, rewardCreditIntent } from "./rewardCreditPolicy.js";
 import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
 import { hasProvenPostingFailure } from "./reconciliationPipelineStatus.js";
+import { classifyBookkeepingLifecycle } from "./bookkeepingLifecycleClassifier.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -59,40 +60,13 @@ function resolveRangeStart({ rangeParam = "this_month", rangeStart } = {}) {
 }
 
 export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
-  const status = cat?.status || "needs_review";
   const statusKey = String(statusFilter || "needs_review").toLowerCase();
   const isCheckTxn = cat?.meta?.is_check === true;
-  const pending = cat?.pending === true || cat?.bank_pending === true || cat?.meta?.pending === true;
-  const matchedExistingQbo =
-    status === "matched_existing_qbo" ||
-    cat?.meta?.matched_existing_qbo === true ||
-    cat?.meta?.incoming_deposit_match_status === "confirmed";
-  const matchedCreditCardPayment =
-    cat?.meta?.taxonomy_type === "cc_payment" &&
-    cat?.meta?.cc_payment_pair_id &&
-    isConfirmedCreditCardPaymentPairStatus(cat?.meta?.cc_payment_pair_status);
-  const handledView = statusKey === "approved" || statusKey === "handled";
-  const postedView = statusKey === "posted";
-  const pendingView = statusKey === "pending";
-  const matchedView = statusKey === "matched" || statusKey === "reconciled";
-
-  if (pendingView) return pending;
-  if (matchedView) return !pending && (matchedExistingQbo || matchedCreditCardPayment);
-  if (matchedExistingQbo || matchedCreditCardPayment) return false;
-  if (pending && !postedView) return false;
-
-  if (postedView) {
-    const hasQbo = Boolean(cat?.qbo_txn_id);
-    return status === "posted" || hasQbo;
-  }
-
-  if (handledView) {
-    return ["approved", "auto_approved", "handled"].includes(status) && !hasProvenPostingFailure(cat);
-  }
-
-  if (!status || status === "needs_review" || status === "uncategorized") return true;
-  if (status === "auto_approved" && isCheckTxn) return true;
-  return false;
+  const lifecycle = classifyBookkeepingLifecycle(cat);
+  if (statusKey === "approved") return lifecycle.bucket === "handled";
+  if (statusKey === "reconciled") return lifecycle.bucket === "matched" || lifecycle.bucket === "reconciled";
+  if (statusKey === "needs_review" && cat?.status === "auto_approved" && isCheckTxn) return true;
+  return lifecycle.bucket === statusKey;
 }
 
 function rpcStatusFilter(statusFilter = "needs_review") {
@@ -606,7 +580,7 @@ function dateInRange(dateValue, startValue, endValue) {
 
 function isMatchedCreditCardPair(pair = {}) {
   const status = String(pair.status || "").toLowerCase();
-  return ["confirmed", "posting", "failed"].includes(status) && !pair.qbo_txn_id;
+  return ["matched", "confirmed", "posting", "failed"].includes(status) && !pair.qbo_txn_id;
 }
 
 function ccPairLegDescriptors(pair = {}) {
@@ -643,7 +617,7 @@ async function fetchMatchedCreditCardPairLegs({
       .from("credit_card_payment_pairs")
       .select("*")
       .eq("business_id", businessId)
-      .in("status", ["confirmed", "posting", "failed"])
+      .in("status", ["matched", "confirmed", "posting", "failed"])
       .is("qbo_txn_id", null);
     if (typeof query.order === "function") query = query.order("updated_at", { ascending: false });
     const result = await query;

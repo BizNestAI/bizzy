@@ -394,10 +394,14 @@ test("undoing a confirmed credit-card payment pair from either side restores bot
   const cardCat = data.transaction_categorizations.find((row) => row.transaction_id === "card-aug4");
   for (const cat of [checkingCat, cardCat]) {
     assert.equal(cat.status, "needs_review");
-    assert.equal(cat.post_error, "cc_payment_pair_requires_confirmation");
+    assert.equal(cat.review_status, "needs_review");
+    assert.equal(cat.posting_status, "not_scheduled");
+    assert.equal(cat.post_error, null);
     assert.equal(cat.meta.taxonomy_type, "cc_payment");
     assert.equal(cat.meta.cc_payment_pair_id, undefined);
     assert.equal(cat.meta.safe_to_auto_post, false);
+    assert.equal(cat.meta.safe_to_auto_handle, false);
+    assert.equal(cat.meta.auto_handle_decision, undefined);
   }
 });
 

@@ -128,6 +128,11 @@ function buildNeedsMatchCreditCardPaymentMeta(meta = {}, { markedAt = new Date()
     "cc_payment_pair_counterpart_account_name",
     "cc_payment_mapping_confidence",
     "cc_payment_mapping_notes",
+    "auto_approve_reason",
+    "auto_handled_reason",
+    "auto_handle_decision",
+    "posting_in_progress",
+    "next_post_attempt_at",
   ].forEach((key) => {
     delete next[key];
   });
@@ -142,7 +147,6 @@ function buildNeedsMatchCreditCardPaymentMeta(meta = {}, { markedAt = new Date()
   next.post_block_reason = "cc_payment_pair_requires_confirmation";
   next.safe_to_auto_handle = false;
   next.safe_to_auto_post = false;
-  next.auto_approve_reason = null;
   delete next.cc_payment_rejected_at;
   delete next.cc_payment_rejected_pair_id;
   return next;
@@ -1293,6 +1297,8 @@ export async function undoCreditCardPaymentPairForTransaction({ db = defaultSupa
     business_id: businessId,
     transaction_id: id,
     status: "needs_review",
+    review_status: "needs_review",
+    posting_status: "not_scheduled",
     suggested_qbo_account_id: null,
     suggested_qbo_account_name: null,
     suggested_canonical_account_key: null,
@@ -1300,7 +1306,7 @@ export async function undoCreditCardPaymentPairForTransaction({ db = defaultSupa
     final_qbo_account_name: null,
     final_canonical_account_key: null,
     post_after: null,
-    post_error: "cc_payment_pair_requires_confirmation",
+    post_error: null,
     qbo_txn_id: null,
     qbo_txn_type: null,
     posted_at: null,

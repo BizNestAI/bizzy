@@ -42,7 +42,7 @@ import {
   getAutoPostStatus,
   updateAutoPostStatus,
 } from "../../services/bookkeeping/bookkeepingClient.js";
-import { buildCreditCardPaymentDestinationOptions } from "../../services/bookkeeping/creditCardPaymentAccountOptions.js";
+import { buildPaymentAccountDestinationOptions } from "../../services/bookkeeping/creditCardPaymentAccountOptions.js";
 import useOnboardingStatus from "../../hooks/useOnboardingStatus.js";
 import useBillingStatus from "../../hooks/useBillingStatus.js";
 import { ClarificationModal } from "../../components/Bizzy/OperatorRequestsPanel.jsx";
@@ -715,6 +715,7 @@ function BookkeepingCleanup() {
   const [ccPaymentAccountsLoaded, setCcPaymentAccountsLoaded] = useState(false);
   const [loadingCcPaymentAccounts, setLoadingCcPaymentAccounts] = useState(false);
   const [ccPaymentAccountsError, setCcPaymentAccountsError] = useState("");
+  const ccPaymentAccountsRequestRef = useRef(0);
   const [autoPostStatus, setAutoPostStatus] = useState({ auto_post_to_quickbooks: false, handled_backlog_count: 0 });
   const [loadingAutoPost, setLoadingAutoPost] = useState(false);
   const [savingAutoPost, setSavingAutoPost] = useState(false);
@@ -865,6 +866,8 @@ function BookkeepingCleanup() {
   }, [businessId, usingDemo]);
 
   const loadCreditCardPaymentAccounts = useCallback(async () => {
+    const requestId = ccPaymentAccountsRequestRef.current + 1;
+    ccPaymentAccountsRequestRef.current = requestId;
     if (!businessId || usingDemo) {
       setCcPaymentAccounts([]);
       setCcPaymentAccountsLoaded(usingDemo);
@@ -875,14 +878,17 @@ function BookkeepingCleanup() {
     setCcPaymentAccountsError("");
     try {
       const res = await getAccountMappings(businessId);
-      const options = buildCreditCardPaymentDestinationOptions(res?.accounts || [], businessId);
+      if (ccPaymentAccountsRequestRef.current !== requestId) return;
+      const options = buildPaymentAccountDestinationOptions(res?.accounts || [], businessId);
       setCcPaymentAccounts(options);
       setCcPaymentAccountsLoaded(true);
     } catch (e) {
+      if (ccPaymentAccountsRequestRef.current !== requestId) return;
       console.warn("[bookkeeping] credit card payment accounts load failed", e?.message || e);
       setCcPaymentAccountsError("Couldn’t load credit-card accounts");
+      setCcPaymentAccountsLoaded(false);
     } finally {
-      setLoadingCcPaymentAccounts(false);
+      if (ccPaymentAccountsRequestRef.current === requestId) setLoadingCcPaymentAccounts(false);
     }
   }, [businessId, usingDemo]);
 

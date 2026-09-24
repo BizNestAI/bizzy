@@ -236,7 +236,8 @@ export default function MonthlyReviewConsole() {
   const [paymentAccountMappings, setPaymentAccountMappings] = useState([]);
   const [loadingPaymentAccounts, setLoadingPaymentAccounts] = useState(false);
   const [paymentAccountsError, setPaymentAccountsError] = useState("");
-  const paymentAccountsLoaded = !loadingPaymentAccounts && !paymentAccountsError;
+  const [paymentAccountsLoaded, setPaymentAccountsLoaded] = useState(false);
+  const paymentAccountsRequestRef = useRef(0);
   const [qboPnlSnapshot, setQboPnlSnapshot] = useState(null);
   const [loadingQboPnl, setLoadingQboPnl] = useState(false);
   const [qboPnlError, setQboPnlError] = useState("");
@@ -627,21 +628,27 @@ export default function MonthlyReviewConsole() {
   }, [selectedBusinessId]);
 
   const loadPaymentAccounts = useCallback(async () => {
+    const requestId = paymentAccountsRequestRef.current + 1;
+    paymentAccountsRequestRef.current = requestId;
     if (!selectedBusinessId) {
       setPaymentAccountMappings([]);
       setPaymentAccountsError("");
+      setPaymentAccountsLoaded(false);
       return;
     }
     setLoadingPaymentAccounts(true);
     setPaymentAccountsError("");
     try {
       const data = await safeFetch(`/api/admin/monthly-review/businesses/${encodeURIComponent(selectedBusinessId)}/bookkeeping/payment-accounts`);
+      if (paymentAccountsRequestRef.current !== requestId) return;
       setPaymentAccountMappings(Array.isArray(data?.accounts) ? data.accounts : []);
+      setPaymentAccountsLoaded(true);
     } catch (e) {
-      setPaymentAccountMappings([]);
+      if (paymentAccountsRequestRef.current !== requestId) return;
       setPaymentAccountsError(e?.body?.message || e?.message || "Couldn’t load mapped payment accounts");
+      setPaymentAccountsLoaded(false);
     } finally {
-      setLoadingPaymentAccounts(false);
+      if (paymentAccountsRequestRef.current === requestId) setLoadingPaymentAccounts(false);
     }
   }, [selectedBusinessId]);
 
@@ -1098,6 +1105,7 @@ export default function MonthlyReviewConsole() {
     setConnectedAccountsError("");
     setPaymentAccountMappings([]);
     setPaymentAccountsError("");
+    setPaymentAccountsLoaded(false);
     setBookkeepingFeeds(buildInitialBookkeepingFeeds());
     setBookkeepingCountsError("");
     setPostingReview({ expanded: false, summary: null, groups: [], loading: false, error: "", loaded: false });

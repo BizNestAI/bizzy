@@ -9,7 +9,7 @@ export function isCreditCardPaymentWorkflow(row = {}) {
 }
 
 export function isConfirmedCreditCardPaymentPairStatus(value = "") {
-  return ["confirmed", "posting", "failed", "posted"].includes(String(value || "").toLowerCase());
+  return ["matched", "confirmed", "posting", "failed", "posted"].includes(String(value || "").toLowerCase());
 }
 
 export function deriveCreditCardPaymentStatus(row = {}) {

@@ -1379,22 +1379,38 @@ async function markTransactionNonPostable(item, reason) {
     postAfter: item?.post_after || null,
     responseSummary: { reason },
   });
+  const requiresPaymentRematch = reason === "cc_payment_pair_requires_confirmation" || reason === "cc_payment_pair_ambiguous";
+  const nextMeta = {
+    ...(item.meta || {}),
+    post_block_reason: reason,
+    posting_in_progress: false,
+    next_post_attempt_at: null,
+    ...(requiresPaymentRematch
+      ? {
+          review_reopen_authorized: true,
+          review_reopen_reason: "credit_card_payment_pair_requires_confirmation",
+          safe_to_auto_handle: false,
+          safe_to_auto_post: false,
+        }
+      : {}),
+  };
+  if (requiresPaymentRematch) {
+    delete nextMeta.auto_approve_reason;
+    delete nextMeta.auto_handled_reason;
+    delete nextMeta.auto_handle_decision;
+  }
   await supabase
     .from("transaction_categorizations")
     .update({
-      status: postingFailureStatus(item.status),
+      status: requiresPaymentRematch ? "needs_review" : postingFailureStatus(item.status),
+      ...(requiresPaymentRematch ? { review_status: "needs_review", posting_status: "not_scheduled" } : {}),
       post_after: null,
-      post_error: reason,
+      post_error: requiresPaymentRematch ? null : reason,
       pending_blocked_at: reason === "pending_transaction_not_postable" ? new Date().toISOString() : null,
       accounting_review_required: reason === "plaid_accounting_review_required",
       accounting_review_reason: reason === "plaid_accounting_review_required" ? "plaid_transaction_changed_or_removed_after_qbo_post" : null,
       last_post_attempt_at: new Date().toISOString(),
-      meta: {
-        ...(item.meta || {}),
-        post_block_reason: reason,
-        posting_in_progress: false,
-        next_post_attempt_at: null,
-      },
+      meta: nextMeta,
     })
     .eq("business_id", item.business_id)
     .eq("transaction_id", item.transaction_id);

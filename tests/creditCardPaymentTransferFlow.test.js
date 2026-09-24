@@ -288,7 +288,7 @@ test("failed posts remain actionable outside Books Review handled state", () => 
   assert.match(cron, /status: shouldStop \? "failed" : item\.status/);
   assert.match(cron, /posting_in_progress: false/);
   assert.match(txFeedService, /hasProvenPostingFailure/);
-  assert.match(txFeedService, /\["approved", "auto_approved", "handled"\]\.includes\(status\)/);
+  assert.match(txFeedService, /classifyBookkeepingLifecycle/);
   assert.match(page, /const handledStatuses = \["approved", "auto_approved", "handled"\]/);
   assert.match(feed, /\["approved", "auto_approved", "handled", "failed"\]\.includes\(txn\.status\)/);
 });
@@ -300,7 +300,7 @@ test("credit-card-payment UI exposes transfer target state instead of only a gen
 
   assert.match(txFeedService, /cc_payment_transfer_target_qbo_account_name/);
   assert.match(feed, /Credit Card Payment/);
-  assert.match(feed, /ccSelectableAccounts/);
+  assert.match(feed, /canonicalPaymentAccounts/);
   assert.match(feed, /deriveCreditCardPaymentOrientation/);
   assert.match(feed, /isQboBankAccount/);
   assert.match(feed, /isQboCreditCardAccount/);
@@ -314,10 +314,10 @@ test("credit-card-payment selector uses mapped card destinations and preserves l
   const resolver = read("src/services/bookkeeping/creditCardPaymentAccountOptions.js");
 
   assert.match(page, /getAccountMappings/);
-  assert.match(page, /buildCreditCardPaymentDestinationOptions/);
-  assert.match(resolver, /plaidType === "credit"/);
-  assert.match(resolver, /qboType === expectedQboType/);
-  assert.match(resolver, /row\?\.mapped === true/);
+  assert.match(page, /buildPaymentAccountDestinationOptions/);
+  assert.match(resolver, /normalizePaymentAccountCapability/);
+  assert.match(resolver, /plaidClass === qboClass/);
+  assert.match(resolver, /row\.mapped === true/);
   assert.match(page, /ccPaymentAccountsLoaded/);
   assert.match(page, /setCcPaymentAccountsError\("Couldn’t load credit-card accounts"\)/);
   assert.match(page, /ccPaymentAccounts=\{ccPaymentAccounts\}/);

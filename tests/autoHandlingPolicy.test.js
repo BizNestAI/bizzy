@@ -40,6 +40,23 @@ test("high-confidence safe categorization can auto-handle while auto-post is off
   assert.equal(computePostAfterForAutoPost(false, 24, Date.parse("2026-08-01T00:00:00Z")), null);
 });
 
+test("an explicitly reopened unmatched credit-card payment cannot be auto-handled again", () => {
+  const decision = decide({
+    evidence: {
+      taxonomyType: "cc_payment",
+      verifiedCcPayment: true,
+      meta: {
+        taxonomy_type: "cc_payment",
+        review_reopen_authorized: true,
+        review_reopen_reason: "credit_card_payment_pair_undone_by_user",
+        safe_to_auto_handle: true,
+      },
+    },
+  });
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.reason, "cc_payment_pair_requires_confirmation");
+});
+
 test("high-confidence safe categorization can auto-handle while auto-post is on and then gets a grace timestamp", () => {
   const decision = decide();
   assert.equal(decision.eligible, true);

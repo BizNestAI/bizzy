@@ -1411,18 +1411,16 @@ export default function BookkeepingFeed({
             const ccMatchedLabel = isCcPayment && ccMatchedParts.length
               ? `Matched to ${ccMatchedParts.join(" · ")}`
               : null;
-            const ccSelectableAccounts = accounts.filter((account) => {
-              if (ccOrientation.counterpartAccountType === "Bank") {
-                return isQboBankAccount(account) && String(account.id) !== String(txn.source_qbo_account_id || "");
-              }
-              if (ccOrientation.counterpartAccountType === "CreditCard") {
-                return isQboCreditCardAccount(account) && String(account.id) !== String(txn.source_qbo_account_id || "");
-              }
+            const canonicalPaymentAccounts = ccPaymentAccounts.filter((account) => {
+              if (ccOrientation.counterpartAccountType === "Bank") return isQboBankAccount(account);
+              if (ccOrientation.counterpartAccountType === "CreditCard") return isQboCreditCardAccount(account);
               return false;
             });
-            const ccPaymentDestinationAccounts = ccOrientation.counterpartAccountType === "CreditCard"
-              ? ccPaymentAccounts.filter((account) => String(account.id) !== String(txn.source_qbo_account_id || ""))
-              : ccSelectableAccounts;
+            const ccPaymentDestinationAccounts = canonicalPaymentAccounts
+              .filter((account) => (
+                String(account.id) !== String(txn.source_qbo_account_id || "") &&
+                String(account.connectedAccountId || account.plaidAccountId || "") !== String(txn.plaid_account_id || txn.account_id || "")
+              ));
             const selectedAccountValue = accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? (readOnly ? "" : txn.accountId) ?? "";
             const selectedCcTargetValue = accountSelections.get(txn.id) ?? ccTargetId ?? "";
             const qboSchedule = showQboSchedule ? formatQboPostingSchedule(txn) : null;
@@ -1559,9 +1557,9 @@ export default function BookkeepingFeed({
                   <CreditCardPaymentMatchControl
                     value={selectedCcTargetValue}
                     accounts={ccPaymentDestinationAccounts}
-                    accountsLoaded={ccOrientation.counterpartAccountType === "CreditCard" ? ccPaymentAccountsLoaded : true}
-                    loadingAccounts={ccOrientation.counterpartAccountType === "CreditCard" ? loadingCcPaymentAccounts : false}
-                    accountsError={ccOrientation.counterpartAccountType === "CreditCard" ? ccPaymentAccountsError : ""}
+                    accountsLoaded={ccPaymentAccountsLoaded}
+                    loadingAccounts={loadingCcPaymentAccounts}
+                    accountsError={ccPaymentAccountsError}
                     statusLabel={ccWorkflowStatus.label}
                     targetLabel={ccOrientation.label}
                     placeholder={ccOrientation.placeholder}

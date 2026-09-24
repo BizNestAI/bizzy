@@ -17,7 +17,9 @@ function functionSlice(source, signature, nextSignature) {
 }
 
 test("Monthly Review defines and threads canonical payment-account query state", () => {
-  assert.match(monthlyReview, /const paymentAccountsLoaded = !loadingPaymentAccounts && !paymentAccountsError;/);
+  assert.match(monthlyReview, /const \[paymentAccountsLoaded, setPaymentAccountsLoaded\] = useState\(false\);/);
+  assert.match(monthlyReview, /paymentAccountsRequestRef/);
+  assert.match(monthlyReview, /setPaymentAccountsLoaded\(true\)/);
 
   const panels = functionSlice(
     monthlyReview,
