@@ -27,6 +27,7 @@ import {
   createSafeCreditCardPaymentPairForRow,
   hasCreditCardPaymentSignal,
 } from "../../../services/bookkeeping/creditCardPaymentPairService.js";
+import { isConfirmedCreditCardPaymentPairStatus } from "../../../services/bookkeeping/creditCardPaymentStatus.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
 import {
   persistUnresolvedCategorizationRows,
@@ -1676,7 +1677,14 @@ export async function runBookkeepingSuggestionPass({
           metaBackfilled += 1;
         }
         if (taxHit?.type === "cc_payment") {
-          const matched = Boolean(ccPaymentPair?.targetQboAccountId && ccPaymentPair?.pairConfidence === "high");
+          // A high-confidence candidate still requires explicit confirmation.
+          // Treating confidence as approval moved unresolved payment legs into
+          // Handled during background refreshes.
+          const matched = Boolean(
+            ccPaymentPair?.targetQboAccountId &&
+            ccPaymentPair?.pairConfidence === "high" &&
+            isConfirmedCreditCardPaymentPairStatus(ccPaymentPair?.pairStatus)
+          );
           const ccMeta = withCategorizationPolicyVersion({
             ...mergedMeta,
             taxonomy_type: "cc_payment",

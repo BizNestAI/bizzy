@@ -24,19 +24,23 @@ if (txError || catError || pairError) throw txError || catError || pairError;
 if (!transaction) throw new Error("transaction_not_found");
 const activePair = (pairs || []).find((pair) => pair.status !== "voided") || null;
 const merged = { ...transaction, ...(categorization || {}) };
-console.log(JSON.stringify({ transaction, categorization, pairs, activePair, lifecycle: classifyBookkeepingLifecycle(merged), dryRunRepair: activePair ? "none: active pair exists" : "reopen exact transaction in Needs Review and clear stale posting schedule/error only" }, null, 2));
+const activePairNeedsReview = activePair?.status === "needs_review";
+console.log(JSON.stringify({ transaction, categorization, pairs, activePair, lifecycle: classifyBookkeepingLifecycle(merged), dryRunRepair: !activePair || activePairNeedsReview ? "reopen exact transaction in Needs Review; preserve an active unconfirmed pair" : "none: active pair is not safely repairable" }, null, 2));
 
 if (args.has("--apply")) {
-  if (activePair) throw new Error("repair_refused_active_pair_exists");
+  if (activePair && !activePairNeedsReview) throw new Error("repair_refused_active_pair_not_needs_review");
   const repairedMeta = { ...(categorization?.meta || {}) };
-  [
-    "auto_approve_reason", "auto_handled_reason", "auto_handle_decision", "posting_in_progress", "next_post_attempt_at",
-    "cc_payment_pair_id", "cc_payment_pair_role", "cc_payment_pair_txn_id", "cc_payment_pair_status",
-    "cc_payment_pair_confidence", "cc_payment_pair_ambiguous", "cc_payment_pair_candidates",
-    "cc_payment_bank_qbo_account_id", "cc_payment_bank_qbo_account_name",
-    "cc_payment_cc_qbo_account_id", "cc_payment_cc_qbo_account_name",
-    "cc_payment_transfer_target_qbo_account_id", "cc_payment_transfer_target_qbo_account_name",
-  ].forEach((key) => delete repairedMeta[key]);
+  ["auto_approve_reason", "auto_handled_reason", "auto_handle_decision", "posting_in_progress", "next_post_attempt_at"]
+    .forEach((key) => delete repairedMeta[key]);
+  if (!activePair) {
+    [
+      "cc_payment_pair_id", "cc_payment_pair_role", "cc_payment_pair_txn_id", "cc_payment_pair_status",
+      "cc_payment_pair_confidence", "cc_payment_pair_ambiguous", "cc_payment_pair_candidates",
+      "cc_payment_bank_qbo_account_id", "cc_payment_bank_qbo_account_name",
+      "cc_payment_cc_qbo_account_id", "cc_payment_cc_qbo_account_name",
+      "cc_payment_transfer_target_qbo_account_id", "cc_payment_transfer_target_qbo_account_name",
+    ].forEach((key) => delete repairedMeta[key]);
+  }
   Object.assign(repairedMeta, {
     taxonomy_type: "cc_payment",
     taxonomy_subtype: "credit_card_payment",
@@ -44,9 +48,10 @@ if (args.has("--apply")) {
     safe_to_auto_handle: false,
     safe_to_auto_post: false,
     cc_payment_mapping_confidence: "manual_review",
-    cc_payment_mapping_notes: "voided_pair_requires_rematch",
+    cc_payment_pair_status: activePair?.status || repairedMeta.cc_payment_pair_status || null,
+    cc_payment_mapping_notes: activePairNeedsReview ? "active_pair_requires_confirmation" : "voided_pair_requires_rematch",
     review_reopen_authorized: true,
-    review_reopen_reason: "exact_cc_payment_orphan_repair",
+    review_reopen_reason: "exact_cc_payment_false_auto_approval_repair",
   });
   const { error } = await db.from("transaction_categorizations").update({
     status: "needs_review",

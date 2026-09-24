@@ -72,6 +72,8 @@ test("orphan repair utility is exact-ID scoped and read-only unless explicitly a
   const script = fs.readFileSync(new URL("../scripts/manual/inspectCreditCardPaymentLifecycle.js", import.meta.url), "utf8");
   assert.match(script, /c54988c5-ea58-491c-a899-72a07c1d6c22/);
   assert.match(script, /if \(args\.has\("--apply"\)\)/);
-  assert.match(script, /repair_refused_active_pair_exists/);
+  assert.match(script, /repair_refused_active_pair_not_needs_review/);
+  assert.match(script, /activePairNeedsReview/);
+  assert.match(script, /active_pair_requires_confirmation/);
   assert.match(script, /repair_refused_not_exact_discover_incident/);
 });

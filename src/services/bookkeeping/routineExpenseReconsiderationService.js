@@ -16,6 +16,7 @@ import {
   createSafeCreditCardPaymentPairForRow,
   hasCreditCardPaymentSignal,
 } from "./creditCardPaymentPairService.js";
+import { isConfirmedCreditCardPaymentPairStatus } from "./creditCardPaymentStatus.js";
 import {
   isStrongUniversalVendorEvidence,
   isSpecificUniversalVendorEvidence,
@@ -885,7 +886,14 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
           ? pair.checking_qbo_account_name
           : pair.credit_card_qbo_account_name
         : null;
-      const matched = Boolean(pair?.id && pair.match_confidence === "high");
+      // Confidence makes a pair a useful suggestion; it is not approval.
+      // Only the explicit pair-confirmation transition may remove either leg
+      // from Needs Review.
+      const matched = Boolean(
+        pair?.id &&
+        pair.match_confidence === "high" &&
+        isConfirmedCreditCardPaymentPairStatus(pair.status)
+      );
       const nextMeta = withCategorizationPolicyVersion({
         ...meta,
         taxonomy_type: "cc_payment",

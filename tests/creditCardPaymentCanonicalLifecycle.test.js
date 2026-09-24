@@ -13,6 +13,8 @@ const migration = readFileSync(new URL("../supabase/migrations/20261013_credit_c
 const neverHandledMigration = readFileSync(new URL("../supabase/migrations/20261018_credit_card_payments_never_handled.sql", import.meta.url), "utf8");
 const unconfirmedPairPrecedenceMigration = readFileSync(new URL("../supabase/migrations/20261019_unconfirmed_credit_card_payments_stay_in_review.sql", import.meta.url), "utf8");
 const feedUi = readFileSync(new URL("../src/components/Accounting/BookkeepingFeed.jsx", import.meta.url), "utf8");
+const reconsiderationService = readFileSync(new URL("../src/services/bookkeeping/routineExpenseReconsiderationService.js", import.meta.url), "utf8");
+const suggestionRoute = readFileSync(new URL("../src/api/bookkeeping/routes/bookkeeping.suggest.routes.js", import.meta.url), "utf8");
 
 const confirmedLeg = {
   status: "matched",
@@ -83,6 +85,16 @@ test("bounded feed predicate gives pair confirmation precedence over stale match
   assert.match(unconfirmedPairPrecedenceMigration, /is_credit_card_payment and is_confirmed_credit_card_payment/);
   assert.match(unconfirmedPairPrecedenceMigration, /not is_credit_card_payment[\s\S]*current_status in \('matched', 'matched_existing_qbo'\)/);
   assert.match(unconfirmedPairPrecedenceMigration, /unconfirmed credit-card pairs remain Needs Review/i);
+});
+
+test("background classification cannot treat a high-confidence candidate as a confirmed payment", () => {
+  for (const source of [reconsiderationService, suggestionRoute]) {
+    assert.match(source, /isConfirmedCreditCardPaymentPairStatus/);
+    assert.match(source, /pairConfidence|match_confidence/);
+    assert.match(source, /pairStatus|pair\.status/);
+  }
+  assert.match(reconsiderationService, /status: matched \? "auto_approved" : "needs_review"/);
+  assert.match(suggestionRoute, /status: matched \? "auto_approved" : "needs_review"/);
 });
 
 test("database transition is atomic, idempotent, non-posting, and feed-canonical", () => {
