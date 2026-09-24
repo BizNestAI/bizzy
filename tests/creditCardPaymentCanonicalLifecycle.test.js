@@ -11,6 +11,7 @@ const { matchesTransactionStatusFilter } = await import("../src/services/bookkee
 
 const migration = readFileSync(new URL("../supabase/migrations/20261013_credit_card_payment_matched_lifecycle.sql", import.meta.url), "utf8");
 const neverHandledMigration = readFileSync(new URL("../supabase/migrations/20261018_credit_card_payments_never_handled.sql", import.meta.url), "utf8");
+const unconfirmedPairPrecedenceMigration = readFileSync(new URL("../supabase/migrations/20261019_unconfirmed_credit_card_payments_stay_in_review.sql", import.meta.url), "utf8");
 const feedUi = readFileSync(new URL("../src/components/Accounting/BookkeepingFeed.jsx", import.meta.url), "utf8");
 
 const confirmedLeg = {
@@ -54,10 +55,34 @@ test("an unresolved payment with stale approved status is Needs Review and never
   assert.equal(matchesTransactionStatusFilter("matched", legacyHybrid), false);
 });
 
+test("an unresolved payment with stale matched status returns to Needs Review", () => {
+  const partiallyMatchedLegacyLeg = {
+    status: "matched",
+    qbo_txn_id: null,
+    meta: {
+      taxonomy_type: "cc_payment",
+      taxonomy_override: "cc_payment",
+      user_selected_resolution: "match_credit_card_payment",
+      cc_payment_rejected: false,
+      cc_payment_pair_id: "candidate-pair",
+      cc_payment_pair_status: "candidate",
+    },
+  };
+  assert.equal(matchesTransactionStatusFilter("needs_review", partiallyMatchedLegacyLeg), true);
+  assert.equal(matchesTransactionStatusFilter("matched", partiallyMatchedLegacyLeg), false);
+  assert.equal(matchesTransactionStatusFilter("handled", partiallyMatchedLegacyLeg), false);
+});
+
 test("bounded feed predicate keeps all active card payments out of Handled", () => {
   assert.match(neverHandledMigration, /and not is_credit_card_payment/);
   assert.match(neverHandledMigration, /is_credit_card_payment[\s\S]*not is_confirmed_credit_card_payment/);
   assert.match(neverHandledMigration, /unresolved credit-card payments are Needs Review/i);
+});
+
+test("bounded feed predicate gives pair confirmation precedence over stale matched status", () => {
+  assert.match(unconfirmedPairPrecedenceMigration, /is_credit_card_payment and is_confirmed_credit_card_payment/);
+  assert.match(unconfirmedPairPrecedenceMigration, /not is_credit_card_payment[\s\S]*current_status in \('matched', 'matched_existing_qbo'\)/);
+  assert.match(unconfirmedPairPrecedenceMigration, /unconfirmed credit-card pairs remain Needs Review/i);
 });
 
 test("database transition is atomic, idempotent, non-posting, and feed-canonical", () => {
