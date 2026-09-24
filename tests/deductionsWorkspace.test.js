@@ -493,8 +493,10 @@ test("deductions hook stages cold loading and keeps cached data visible during r
   assert.match(hook, /fetchAllPostedTransactions/);
   assert.match(hook, /getTaxClassifications/);
   assert.match(hook, /getCachedTaxDeductionsOverview\(\{ businessId, year, asOfDate, allowStale: true \}\)/);
-  assert.match(dashboard, /const initialDeductionsLoading = deductions\.loading && !workspaceRows\.length/);
+  assert.match(dashboard, /const initialDeductionsLoading = deductions\.loading && !hasUsableDeductionsData/);
   assert.match(dashboard, /disabled=\{deductions\.refreshing \|\| !hasUsableDeductionsData\}/);
+  assert.match(hook, /setError\(selectWorkspaceError\(\{ overviewResult, allTransactionsResult, coverageResult \}\)\)/);
+  assert.doesNotMatch(hook, /setError\(Object\.values\(errors\)\[0\]/);
 });
 
 test("terminal classification polling refreshes all Deductions resources without using stale cache", () => {

@@ -191,6 +191,21 @@ test("duplicate review tasks are not created", async () => {
   assert.equal(summary.needsReviewCount, 1);
 });
 
+test("review summary pages large queues instead of requesting one unbounded response", async () => {
+  const reviewRows = Array.from({ length: 423 }, (_, index) => classification({
+    id: `class-${index + 1}`,
+    transaction_id: `txn-${index + 1}`,
+    metadata: index % 2 === 0 ? { warnings: ["missing_qbo_account"] } : {},
+  }));
+  const supabase = makeSupabase(baseStore({ transaction_tax_classifications: reviewRows }));
+
+  const summary = await getTaxReviewQueueSummary({ supabase, businessId: BUSINESS_ID, taxYear: 2026 });
+
+  assert.equal(summary.needsReviewCount, 423);
+  assert.equal(summary.byReason.missing_qbo_account, 212);
+  assert.equal(summary.byReason.low_confidence, 423);
+});
+
 test("stale expectedUpdatedAt returns conflict and business isolation is enforced", async () => {
   const supabase = makeSupabase(baseStore());
   await assert.rejects(

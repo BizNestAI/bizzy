@@ -59,12 +59,34 @@ export async function listTaxClassificationReviewQueue({ supabase, businessId, t
 }
 
 export async function getTaxReviewQueueSummary({ supabase, businessId, taxYear } = {}) {
-  const listed = await listTaxClassifications({ supabase, businessId, taxYear, status: TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW, limit: 10000, offset: 0 });
+  const rows = await listAllReviewClassifications({ supabase, businessId, taxYear });
   const byReason = {};
-  for (const row of listed.rows) {
+  for (const row of rows) {
     for (const reason of deriveReviewReasons(row)) byReason[reason] = (byReason[reason] || 0) + 1;
   }
-  return { needsReviewCount: listed.rows.length, byReason };
+  return { needsReviewCount: rows.length, byReason };
+}
+
+async function listAllReviewClassifications({ supabase, businessId, taxYear } = {}) {
+  // Keep each PostgREST response bounded. Asking for an effectively unbounded
+  // range made this optional summary endpoint the lone 500 on otherwise healthy
+  // Tax workspaces with a large review queue.
+  const pageSize = 200;
+  const rows = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await listTaxClassifications({
+      supabase,
+      businessId,
+      taxYear,
+      status: TAX_CLASSIFICATION_STATUSES.NEEDS_REVIEW,
+      limit: pageSize,
+      offset,
+    });
+    const pageRows = Array.isArray(page?.rows) ? page.rows : [];
+    rows.push(...pageRows);
+    if (pageRows.length < pageSize) break;
+  }
+  return rows;
 }
 
 export async function createOrUpdateReviewTaskForClassification({ supabase, businessId, taxYear, classification, reasonCode } = {}) {

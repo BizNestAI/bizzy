@@ -130,7 +130,11 @@ export function useTaxDeductions({
           classificationReviewSummary: reviewSummaryResult,
         });
         setResourceErrors(errors);
-        setError(Object.values(errors)[0] || null);
+        // The review summary enriches the Needs attention view, but it is not
+        // authoritative for the overview, coverage, or deductions matrix. A
+        // failure there must not claim that the entire Tax request failed while
+        // the primary resources are visibly usable.
+        setError(selectWorkspaceError({ overviewResult, allTransactionsResult, coverageResult }));
         if (refresh && !Object.keys(errors).length) {
           setLastRefreshedAt(new Date().toISOString());
           setRefreshError(null);
@@ -452,6 +456,14 @@ function collectResourceErrors(results = {}) {
       .filter(([, result]) => result?.status === "rejected" && result.reason?.code !== "request_aborted")
       .map(([keyName, result]) => [keyName, result.reason])
   );
+}
+
+export function selectWorkspaceError({ overviewResult, allTransactionsResult, coverageResult } = {}) {
+  const primaryResults = [overviewResult, allTransactionsResult, coverageResult].filter(Boolean);
+  const allPrimaryResourcesFailed = primaryResults.length > 0
+    && primaryResults.every((result) => result.status === "rejected");
+  if (!allPrimaryResourcesFailed) return null;
+  return primaryResults.find((result) => result.reason?.code !== "request_aborted")?.reason || null;
 }
 
 function stableObject(value) {
