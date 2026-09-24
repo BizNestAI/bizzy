@@ -536,7 +536,7 @@ function TaxDashboardDeductions({ businessId, year, readOnly = false, onNotice =
   const attentionRows = useMemo(() => filterAttentionWorkspaceRows(workspaceRows, attentionTab), [workspaceRows, attentionTab]);
   const attentionGroups = useMemo(() => buildAttentionReviewGroups(attentionRows), [attentionRows]);
   const hasUsableDeductionsData = Boolean(deductions.overview || workspaceRows.length || deductions.classificationCoverage);
-  const initialDeductionsLoading = deductions.loading && !workspaceRows.length;
+  const initialDeductionsLoading = deductions.loading && !hasUsableDeductionsData;
   const previewStatusMessage = classificationWorkspaceMessage(classificationSummary);
   const matrix = useMemo(
     () => {
@@ -1327,6 +1327,7 @@ function DeductionsLoadingState() {
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug"];
   return (
     <div className="mt-5 space-y-4" role="status" aria-busy="true" aria-live="polite">
+      <span className="sr-only">Loading deduction totals and classification activity.</span>
       <div className="relative overflow-hidden rounded-2xl border border-emerald-300/10 bg-emerald-300/[0.035] p-3">
         <SkeletonSheen />
         <div className="relative flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -4164,7 +4165,7 @@ function DashboardSkeleton({ slow = false }) {
               <p className="mt-1 text-sm leading-6 text-white/56">
                 {slow
                   ? "This is taking longer than expected. You can stay here or return shortly."
-                  : "Fetching your profile, transactions, and deductions."}
+                  : "Fetching your profile, transactions, deductions, and estimate."}
               </p>
             </div>
           </div>

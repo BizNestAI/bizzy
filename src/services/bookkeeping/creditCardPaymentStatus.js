@@ -68,7 +68,7 @@ export function isQboBankAccount(account = {}) {
   return normalizeQboAccountType(account.type || account.accountType || account.account_type) === "bank";
 }
 
-export function deriveCreditCardPaymentOrientation(row = {}) {
+export function deriveCreditCardPaymentOrientation(row = {}, resolution = "") {
   const meta = row.meta || {};
   const explicitRole = String(row.cc_payment_pair_role || meta.cc_payment_pair_role || "").toLowerCase();
   if (explicitRole === "checking" || explicitRole === "bank") {
@@ -110,6 +110,7 @@ export function deriveCreditCardPaymentOrientation(row = {}) {
     sourceSubtype === "savings" ||
     sourceSubtype === "moneymarket";
   const isCardRail = sourceType === "creditcard" || sourceType === "credit" || sourceSubtype.includes("credit");
+  const explicitlySelectedPaymentWorkflow = resolution === "match_credit_card_payment";
 
   if (isBankRail && isOutflow) {
     return {
@@ -143,7 +144,7 @@ export function deriveCreditCardPaymentOrientation(row = {}) {
       placeholder: "Paid from...",
     };
   }
-  if (isCreditCardPaymentWorkflow(row) && isOutflow) {
+  if ((explicitlySelectedPaymentWorkflow || isCreditCardPaymentWorkflow(row)) && isOutflow) {
     return {
       side: "bank",
       counterpartAccountType: "CreditCard",
@@ -151,7 +152,7 @@ export function deriveCreditCardPaymentOrientation(row = {}) {
       placeholder: "Match payment to...",
     };
   }
-  if (isCreditCardPaymentWorkflow(row) && isInflow) {
+  if ((explicitlySelectedPaymentWorkflow || isCreditCardPaymentWorkflow(row)) && isInflow) {
     return {
       side: "credit_card",
       counterpartAccountType: "Bank",

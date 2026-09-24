@@ -1375,7 +1375,7 @@ export default function BookkeepingFeed({
             const isCcPayment = !ccRejected && hasCcPair;
             const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(txn, effectiveResolution);
             const isCcPaymentWorkflow = Boolean(ccWorkflowStatus);
-            const ccOrientation = deriveCreditCardPaymentOrientation(txn);
+            const ccOrientation = deriveCreditCardPaymentOrientation(txn, effectiveResolution);
             const ccPairRole = txn.cc_payment_pair_role || txn.meta?.cc_payment_pair_role || null;
             const ccTargetId =
               txn.cc_payment_transfer_target_qbo_account_id ||

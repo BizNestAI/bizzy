@@ -50,7 +50,11 @@ export function useTaxDeductions({
   const [classificationJobStatus, setClassificationJobStatus] = useState(null);
   const [classificationRows, setClassificationRows] = useState(null);
   const [classificationReviewSummary, setClassificationReviewSummary] = useState(null);
-  const [loading, setLoading] = useState(false);
+  // Enter the initial live-request state during render. Waiting for the effect to
+  // flip this flag allows one paint of the empty DTOs, which looks like real
+  // zero-value tax data before the requests have even started.
+  const startsWithLiveRequest = enabled && Boolean(businessId) && !shouldUseDemoData() && !initialCachedOverview;
+  const [loading, setLoading] = useState(startsWithLiveRequest);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState(null);
   const [refreshError, setRefreshError] = useState(null);

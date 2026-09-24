@@ -59,6 +59,14 @@ export async function persistTransactionResolution({ db, businessId, transaction
     resolution_selected_at: now,
     resolution_selection_source: source,
   };
+  if (normalized === "match_credit_card_payment") {
+    nextMeta.taxonomy_type = "cc_payment";
+    nextMeta.taxonomy_subtype = "credit_card_payment";
+    nextMeta.taxonomy_override = "cc_payment";
+    nextMeta.cc_payment_rejected = false;
+    delete nextMeta.cc_payment_rejected_at;
+    delete nextMeta.cc_payment_rejected_pair_id;
+  }
   const payload = {
     business_id: businessId,
     transaction_id: transactionId,

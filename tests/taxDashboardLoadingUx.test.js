@@ -28,8 +28,8 @@ test("Tax dashboard shows the active loading shell before unresolved data can re
   assert.ok(initialBranchIndex > -1, "TaxDashboard should branch on initialLoading");
   assert.ok(failedBranchIndex > initialBranchIndex, "request failure should be handled after pending loading");
   assert.ok(trendIndex > failedBranchIndex, "dashboard content should render after loading and initial failure branches");
-  assert.match(dashboardSource, /const initialLoading = tax\.loading && !hasPreviousData;/);
-  assert.match(dashboardSource, /const initialRequestFailed = Boolean\(tax\.error && !hasPreviousData && !tax\.loading\);/);
+  assert.match(dashboardSource, /const initialLoading = taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData;/);
+  assert.match(dashboardSource, /const initialRequestFailed = taxLiabilityEstimateEnabled && Boolean\(tax\.error && !hasPreviousData && !tax\.loading\);/);
 });
 
 test("Tax loading shell uses active accessible loading copy instead of static blank rectangles", () => {
@@ -56,15 +56,33 @@ test("Tax loading shell preserves dashboard geometry for low-jump replacement", 
 
 test("Tax dashboard keeps cached content visible during background refresh", () => {
   assert.match(dashboardSource, /const hasPreviousData = !!tax\.data;/);
-  assert.match(dashboardSource, /const initialLoading = tax\.loading && !hasPreviousData;/);
+  assert.match(dashboardSource, /const initialLoading = taxLiabilityEstimateEnabled && tax\.loading && !hasPreviousData;/);
   assert.match(dashboardSource, /loading=\{tax\.refreshing\}/);
   assert.match(dashboardSource, /tax\.error && hasPreviousData/);
-  assert.match(dashboardSource, /Keeping the last calculation on screen\./);
+  assert.match(dashboardSource, /Keeping the last Tax view on screen\./);
+});
+
+test("Deductions enter a loading state before their first live request can paint false zeros", () => {
+  assert.match(deductionsHookSource, /const startsWithLiveRequest = enabled && Boolean\(businessId\) && !shouldUseDemoData\(\) && !initialCachedOverview;/);
+  assert.match(deductionsHookSource, /const \[loading, setLoading\] = useState\(startsWithLiveRequest\);/);
+  assert.match(dashboardSource, /const hasUsableDeductionsData = Boolean\(deductions\.overview \|\| workspaceRows\.length \|\| deductions\.classificationCoverage\);/);
+  assert.match(dashboardSource, /const initialDeductionsLoading = deductions\.loading && !hasUsableDeductionsData;/);
+});
+
+test("Deductions first-load treatment is accessible, animated, and contains no false metrics", () => {
+  const skeleton = sourceBetween(dashboardSource, "function DeductionsLoadingState", "function LoadingEllipsis");
+  assert.match(skeleton, /role="status"/);
+  assert.match(skeleton, /aria-live="polite"/);
+  assert.match(skeleton, /aria-busy="true"/);
+  assert.match(skeleton, /Loading deduction totals and classification activity\./);
+  assert.match(skeleton, /SkeletonSheen/);
+  assert.match(skeleton, /SkeletonLine/);
+  assert.doesNotMatch(skeleton, /\$0|No classification run yet|No QBO-confirmed/i);
 });
 
 test("Tax dashboard distinguishes slow, failed, processing, and unavailable states", () => {
   assert.match(dashboardSource, /This is taking longer than expected\. You can stay here or return shortly\./);
-  assert.match(dashboardSource, /We couldn’t load your tax overview\./);
+  assert.match(dashboardSource, /We couldn’t load your tax workspace\./);
   assert.match(dashboardSource, /Try again/);
   assert.match(dashboardSource, /calculation_required/);
   assert.match(dashboardSource, /model\.status\.calculationStatus === "failed"/);

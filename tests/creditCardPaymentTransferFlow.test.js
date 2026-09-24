@@ -82,6 +82,26 @@ test("taxonomy-only credit-card payment outflow still offers mapped credit-card 
   });
 });
 
+test("explicitly reselecting credit-card payment overrides stale rejection metadata for orientation", () => {
+  const orientation = deriveCreditCardPaymentOrientation({
+    direction: "OUTFLOW",
+    signed_amount: -40,
+    cc_payment_rejected: true,
+    meta: {
+      taxonomy_type: "cc_payment",
+      taxonomy_override: "not_cc_payment",
+      cc_payment_rejected: true,
+    },
+  }, "match_credit_card_payment");
+
+  assert.deepEqual(orientation, {
+    side: "bank",
+    counterpartAccountType: "CreditCard",
+    label: "Paid to",
+    placeholder: "Match payment to...",
+  });
+});
+
 test("credit-card-payment pairs are durable, tenant scoped, and one leg cannot belong to multiple active pairs", () => {
   const migration = read("supabase/migrations/20260903_credit_card_payment_pairs.sql");
 

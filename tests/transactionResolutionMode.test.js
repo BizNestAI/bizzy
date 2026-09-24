@@ -48,6 +48,41 @@ test("completed transactions cannot be switched into another posting workflow", 
   );
 });
 
+test("reselecting credit-card payment clears a prior rejection atomically", async () => {
+  const db = resolutionDb({
+    status: "needs_review",
+    meta: {
+      taxonomy_type: "cc_payment",
+      taxonomy_override: "not_cc_payment",
+      cc_payment_rejected: true,
+      cc_payment_rejected_at: "2026-09-23T12:00:00.000Z",
+      cc_payment_rejected_pair_id: "old-pair",
+    },
+  });
+
+  await persistTransactionResolution({
+    db,
+    businessId: "biz-1",
+    transactionId: "checking-payment-1",
+    resolution: "match_credit_card_payment",
+  });
+
+  assert.equal(db.stored.meta.taxonomy_override, "cc_payment");
+  assert.equal(db.stored.meta.cc_payment_rejected, false);
+  assert.equal(db.stored.meta.cc_payment_rejected_at, undefined);
+  assert.equal(db.stored.meta.cc_payment_rejected_pair_id, undefined);
+});
+
+test("Plaid account enrichment only selects columns present in the deployed schema", () => {
+  const service = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
+  const start = service.indexOf("async function fetchPlaidAccountDisplayMap");
+  const end = service.indexOf("function isHandledForPosting", start);
+  const enrichment = service.slice(start, end);
+
+  assert.match(enrichment, /select\("plaid_account_id,name,official_name,mask,type,subtype"\)/);
+  assert.doesNotMatch(enrichment, /institution_name,institution/);
+});
+
 test("Books Review exposes four universal modes, multi-match totals, and no separate loan-split option", () => {
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
   const client = read("src/services/bookkeeping/bookkeepingClient.js");

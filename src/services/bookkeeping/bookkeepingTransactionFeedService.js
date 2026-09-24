@@ -330,7 +330,7 @@ async function fetchPlaidAccountDisplayMap({ db = supabase, businessId, plaidAcc
   const [{ data, error }, { data: mappings, error: mappingError }] = await Promise.all([
     db
       .from("plaid_accounts")
-      .select("plaid_account_id,name,official_name,mask,type,subtype,institution_name,institution")
+      .select("plaid_account_id,name,official_name,mask,type,subtype")
       .eq("business_id", businessId)
       .in("plaid_account_id", ids),
     db
