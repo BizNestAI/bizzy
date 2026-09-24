@@ -1735,7 +1735,9 @@ export async function runBookkeepingSuggestionPass({
               reason: matched ? "Credit card payment matched." : "Credit card payment needs matching before posting.",
               status: matched ? "auto_approved" : "needs_review",
               post_after: null,
-              post_error: matched ? null : ccPaymentPairResult?.reason || "cc_payment_pair_requires_confirmation",
+              // Candidate discovery happens before posting; an unconfirmed pair
+              // must remain clean Needs Review rather than look post-failed.
+              post_error: null,
               meta: ccMeta,
               updated_at: nowIso,
               decided_by: matched ? "bizzi" : "taxonomy",

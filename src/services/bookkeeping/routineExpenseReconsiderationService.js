@@ -942,7 +942,9 @@ export async function reconsiderNeedsReviewTransactions(businessId, options = {}
         confidence: matched ? "high" : "medium",
         status: matched ? "auto_approved" : "needs_review",
         post_after: null,
-        post_error: matched ? null : ccPaymentPairResult?.reason || "cc_payment_pair_requires_confirmation",
+        // An unconfirmed candidate is expected review state, not a posting
+        // failure. Keeping post_error null prevents false Failed/Handled UI.
+        post_error: null,
         decided_by: matched ? "bizzi" : "taxonomy",
         decided_at: matched ? nowIso : cat.decided_at || nowIso,
         meta: nextMeta,

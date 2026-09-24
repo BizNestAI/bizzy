@@ -95,6 +95,9 @@ test("background classification cannot treat a high-confidence candidate as a co
   }
   assert.match(reconsiderationService, /status: matched \? "auto_approved" : "needs_review"/);
   assert.match(suggestionRoute, /status: matched \? "auto_approved" : "needs_review"/);
+  for (const source of [reconsiderationService, suggestionRoute]) {
+    assert.match(source, /post_error: null/);
+  }
 });
 
 test("database transition is atomic, idempotent, non-posting, and feed-canonical", () => {

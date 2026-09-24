@@ -25,10 +25,54 @@ if (!transaction) throw new Error("transaction_not_found");
 const activePair = (pairs || []).find((pair) => pair.status !== "voided") || null;
 const merged = { ...transaction, ...(categorization || {}) };
 const activePairNeedsReview = activePair?.status === "needs_review";
-console.log(JSON.stringify({ transaction, categorization, pairs, activePair, lifecycle: classifyBookkeepingLifecycle(merged), dryRunRepair: !activePair || activePairNeedsReview ? "reopen exact transaction in Needs Review; preserve an active unconfirmed pair" : "none: active pair is not safely repairable" }, null, 2));
+const { data: feedRows, error: feedError } = await db.rpc("get_bookkeeping_transactions_bounded", {
+  p_business_id: businessId,
+  p_status_filter: "needs_review",
+  p_account_id: transaction.plaid_account_id,
+  p_range_start: null,
+  p_range_end: null,
+  p_limit: 200,
+  p_offset: 0,
+});
+if (feedError) throw feedError;
+console.log(JSON.stringify({
+  transaction,
+  categorization,
+  pairs,
+  activePair,
+  lifecycle: classifyBookkeepingLifecycle(merged),
+  boundedNeedsReview: {
+    accountId: transaction.plaid_account_id,
+    total: Array.isArray(feedRows) && feedRows.length ? Number(feedRows[0].total_count || feedRows.length) : 0,
+    containsExactTransaction: Boolean((feedRows || []).some((row) => String(row.id || row.transaction_id) === transactionId)),
+    rows: (feedRows || []).map((row) => ({
+      id: row.id || row.transaction_id,
+      date: row.date,
+      amount: row.signed_amount ?? row.amount,
+      description: row.description || row.name,
+      status: row.status,
+      posting_status: row.posting_status,
+      post_error: row.post_error,
+    })),
+  },
+  dryRunRepair: !activePair || activePairNeedsReview ? "reopen exact transaction in Needs Review; preserve an active unconfirmed pair" : "none: active pair is not safely repairable",
+}, null, 2));
 
 if (args.has("--apply")) {
   if (activePair && !activePairNeedsReview) throw new Error("repair_refused_active_pair_not_needs_review");
+  // The currently deployed reconsideration worker historically treated `high`
+  // candidate confidence as confirmation. Downgrade only this still-unconfirmed
+  // pair to manual confidence so that worker cannot immediately handle the row
+  // again before the confirmation-status fix is deployed.
+  if (activePairNeedsReview) {
+    const { error: pairUpdateError } = await db
+      .from("credit_card_payment_pairs")
+      .update({ match_confidence: "manual", updated_at: new Date().toISOString() })
+      .eq("business_id", businessId)
+      .eq("id", activePair.id)
+      .eq("status", "needs_review");
+    if (pairUpdateError) throw pairUpdateError;
+  }
   const repairedMeta = { ...(categorization?.meta || {}) };
   ["auto_approve_reason", "auto_handled_reason", "auto_handle_decision", "posting_in_progress", "next_post_attempt_at"]
     .forEach((key) => delete repairedMeta[key]);
@@ -49,6 +93,7 @@ if (args.has("--apply")) {
     safe_to_auto_post: false,
     cc_payment_mapping_confidence: "manual_review",
     cc_payment_pair_status: activePair?.status || repairedMeta.cc_payment_pair_status || null,
+    cc_payment_pair_confidence: activePairNeedsReview ? "manual" : repairedMeta.cc_payment_pair_confidence || null,
     cc_payment_mapping_notes: activePairNeedsReview ? "active_pair_requires_confirmation" : "voided_pair_requires_rematch",
     review_reopen_authorized: true,
     review_reopen_reason: "exact_cc_payment_false_auto_approval_repair",

@@ -75,5 +75,7 @@ test("orphan repair utility is exact-ID scoped and read-only unless explicitly a
   assert.match(script, /repair_refused_active_pair_not_needs_review/);
   assert.match(script, /activePairNeedsReview/);
   assert.match(script, /active_pair_requires_confirmation/);
+  assert.match(script, /match_confidence: "manual"/);
+  assert.match(script, /\.eq\("id", activePair\.id\)/);
   assert.match(script, /repair_refused_not_exact_discover_incident/);
 });

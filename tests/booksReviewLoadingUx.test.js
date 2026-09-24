@@ -197,9 +197,12 @@ test("Books Review protects optimistic approvals from stale and out-of-order tra
   assert.match(source, /removeApprovalLedgerEntry\(id\);[\s\S]*?applyOptimisticCountTransition\(approvedTxn, txn\)/);
   assert.match(source, /function isNeedsReviewTransaction\(txn = \{\}\)/);
   assert.match(source, /suppressLedgerRowsFromNeedsReview/);
+  assert.match(source, /APPROVAL_LEDGER_CONFIRMATION_GRACE_MS = 5_000/);
+  assert.match(source, /if \(!isApprovalLedgerEntryActive\(entry, now\)\) return true/);
   assert.match(source, /staleApprovalIds\.add\(String\(txn\.id\)\)/);
   assert.match(source, /reconcileApprovalLedgerAfterRows\(normalizedList, approvalSuppressed\.staleApprovalIds\)/);
   assert.match(source, /if \(staleApprovalIds\.has\(id\)\) continue/);
+  assert.doesNotMatch(source, /if \(row && isNeedsReviewTransaction\(row\)\) continue/);
   assert.match(source, /const requestSeq = transactionReloadSeqRef\.current \+ 1/);
   assert.match(source, /transactionReloadSeqRef\.current === requestSeq/);
   assert.match(source, /transactionViewKeyRef\.current === requestViewKey/);

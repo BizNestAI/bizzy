@@ -204,6 +204,7 @@ const PANEL_BG = "#151717";
 const PANEL_BORDER = "rgba(255,255,255,0.06)";
 const BOOKS_TXN_CACHE_PREFIX = "bizzi:books-review:transactions:";
 const BOOKS_TXN_CACHE_TTL_MS = 5 * 60 * 1000;
+const APPROVAL_LEDGER_CONFIRMATION_GRACE_MS = 5_000;
 
 function buildTransactionCacheKey({ businessId, accountFilter, activeTab, dateRange, page, rowsPerPage }) {
   if (!businessId || !accountFilter) return null;
@@ -782,9 +783,24 @@ function BookkeepingCleanup() {
     [approvalLedgerVersion]
   );
 
+  // A confirmed optimistic mutation is only allowed to mask an older read for a
+  // short propagation window. After that, the canonical feed wins: if the
+  // backend returns the transaction to Needs Review, it must be visible and
+  // actionable instead of being hidden forever by browser-local state.
+  const isApprovalLedgerEntryActive = useCallback((entry = {}, now = Date.now()) => {
+    if (entry.status === "pending") return true;
+    if (entry.status !== "confirmed") return false;
+    const confirmedAt = Number(entry.confirmedAt || 0);
+    return confirmedAt > 0 && now - confirmedAt < APPROVAL_LEDGER_CONFIRMATION_GRACE_MS;
+  }, []);
+
   const pendingApprovalIds = useMemo(
-    () => new Set(approvalLedgerEntries.map((entry) => String(entry.transactionId))),
-    [approvalLedgerEntries]
+    () => new Set(
+      approvalLedgerEntries
+        .filter((entry) => isApprovalLedgerEntryActive(entry))
+        .map((entry) => String(entry.transactionId))
+    ),
+    [approvalLedgerEntries, isApprovalLedgerEntryActive]
   );
 
   const approvalEntryMatchesCurrentScope = useCallback((entry = {}) => {
@@ -803,28 +819,31 @@ function BookkeepingCleanup() {
     }
     const staleApprovalIds = new Set();
     let removed = 0;
+    const now = Date.now();
     const nextRows = (rows || []).filter((txn) => {
       const entry = ledger.get(String(txn?.id || ""));
       if (!entry) return true;
       if (!isNeedsReviewTransaction(txn)) return true;
+      if (!isApprovalLedgerEntryActive(entry, now)) return true;
       staleApprovalIds.add(String(txn.id));
       removed += 1;
       return false;
     });
     const totalCount = typeof totalValue === "number" ? Math.max(0, totalValue - removed) : totalValue;
     return { rows: nextRows, totalCount, staleApprovalIds };
-  }, []);
+  }, [isApprovalLedgerEntryActive]);
 
   const reconcileApprovalLedgerAfterRows = useCallback((rows = [], staleApprovalIds = new Set()) => {
     const ledger = approvalMutationLedgerRef.current;
     if (!ledger.size) return;
-    const byId = new Map((rows || []).map((txn) => [String(txn.id), txn]));
     let changed = false;
     for (const [id, entry] of ledger.entries()) {
       if (entry.status !== "confirmed") continue;
       if (staleApprovalIds.has(id)) continue;
       const row = byId.get(id);
-      if (row && isNeedsReviewTransaction(row)) continue;
+      // A confirmed entry outside the bounded grace window must never override
+      // an authoritative Needs Review row. Removing it also prevents the same
+      // stale ledger entry from suppressing the row on later refetches.
       ledger.delete(id);
       changed = true;
     }
