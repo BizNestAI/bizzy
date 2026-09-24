@@ -1,4 +1,4 @@
-import { isConfirmedCreditCardPaymentPairStatus } from "./creditCardPaymentStatus.js";
+import { deriveCreditCardPaymentStatus, isConfirmedCreditCardPaymentPairStatus } from "./creditCardPaymentStatus.js";
 import { hasProvenPostingFailure } from "./reconciliationPipelineStatus.js";
 
 export const PRIMARY_BOOKKEEPING_BUCKETS = Object.freeze([
@@ -14,6 +14,7 @@ export function classifyBookkeepingLifecycle(row = {}) {
     isConfirmedCreditCardPaymentPairStatus(meta.cc_payment_pair_status || row.cc_payment_pair_status);
   const posted = status === "posted" || Boolean(row.qbo_txn_id || row.qbo_entity_id || row.posted_at);
   const failed = hasProvenPostingFailure(row);
+  const creditCardPayment = deriveCreditCardPaymentStatus(row);
 
   let bucket;
   if (pending) bucket = "pending";
@@ -21,6 +22,9 @@ export function classifyBookkeepingLifecycle(row = {}) {
   else if (matchedExisting || matchedPair || status === "matched") bucket = "matched";
   else if (failed) bucket = "failed";
   else if (row.reconciled_at) bucket = "reconciled";
+  // An unresolved card payment is not an ordinary categorized transaction.
+  // Payment matching must complete before it can leave Needs Review.
+  else if (creditCardPayment && !creditCardPayment.matched) bucket = "needs_review";
   else if (["approved", "auto_approved", "handled", "ignored"].includes(status)) bucket = "handled";
   else bucket = "needs_review";
 
@@ -31,6 +35,7 @@ export function classifyBookkeepingLifecycle(row = {}) {
     pending,
     posted,
     failed,
+    creditCardPayment,
     orphaned: !PRIMARY_BOOKKEEPING_BUCKETS.includes(bucket),
   };
 }

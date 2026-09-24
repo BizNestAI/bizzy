@@ -631,7 +631,10 @@ export async function markTransactionAsCreditCardPayment({ db = defaultSupabase,
   if (existing?.qbo_txn_id || existing?.posted_at || existing?.status === "posted") {
     throw new Error("cc_payment_posted_transaction_not_switchable");
   }
-  if (existing?.final_qbo_account_id && ["approved", "auto_approved"].includes(String(existing.status || "").toLowerCase())) {
+  const operatorSelectedPayment =
+    existing?.meta?.user_selected_resolution === "match_credit_card_payment" ||
+    existing?.meta?.taxonomy_override === "cc_payment";
+  if (existing?.final_qbo_account_id && ["approved", "auto_approved"].includes(String(existing.status || "").toLowerCase()) && !operatorSelectedPayment) {
     throw new Error("cc_payment_final_transaction_not_switchable");
   }
 
@@ -649,6 +652,8 @@ export async function markTransactionAsCreditCardPayment({ db = defaultSupabase,
     post_block_reason: "cc_payment_pair_requires_confirmation",
     safe_to_auto_handle: false,
     safe_to_auto_post: false,
+    review_reopen_authorized: true,
+    review_reopen_reason: "user_selected_credit_card_payment_match",
   };
   delete meta.cc_payment_rejected_at;
   delete meta.cc_payment_rejected_pair_id;

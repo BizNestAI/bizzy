@@ -73,6 +73,33 @@ test("reselecting credit-card payment clears a prior rejection atomically", asyn
   assert.equal(db.stored.meta.cc_payment_rejected_pair_id, undefined);
 });
 
+test("switching an approved categorization to card-payment matching reopens review and clears posting state", async () => {
+  const db = resolutionDb({
+    status: "approved",
+    final_qbo_account_id: "expense-account",
+    final_qbo_account_name: "Software",
+    post_after: "2026-09-25T12:00:00.000Z",
+    meta: { taxonomy_override: "not_cc_payment", cc_payment_rejected: true },
+  });
+
+  await persistTransactionResolution({
+    db,
+    businessId: "biz-1",
+    transactionId: "checking-payment-approved",
+    resolution: "match_credit_card_payment",
+    actor: "user-1",
+  });
+
+  assert.equal(db.stored.status, "needs_review");
+  assert.equal(db.stored.final_qbo_account_id, null);
+  assert.equal(db.stored.final_qbo_account_name, null);
+  assert.equal(db.stored.post_after, null);
+  assert.equal(db.stored.post_error, "cc_payment_pair_requires_confirmation");
+  assert.equal(db.stored.meta.review_reopen_authorized, true);
+  assert.equal(db.stored.meta.review_reopen_reason, "user_selected_credit_card_payment_match");
+  assert.equal(db.stored.meta.safe_to_auto_handle, false);
+});
+
 test("Plaid account enrichment only selects columns present in the deployed schema", () => {
   const service = read("src/services/bookkeeping/bookkeepingTransactionFeedService.js");
   const start = service.indexOf("async function fetchPlaidAccountDisplayMap");

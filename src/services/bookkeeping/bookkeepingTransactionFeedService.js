@@ -869,7 +869,10 @@ async function fetchCanonicalHandledTransactions({
   } while (offset < rawTotal);
 
   return rows
-    .filter((row) => !deriveCreditCardPaymentStatus(row)?.matched && !hasProvenPostingFailure(row))
+    // Payment workflows have their own two terminal locations: unresolved in
+    // Needs Review and confirmed in Matched. Never leak either form into the
+    // ordinary Handled queue, even when a legacy row retained `approved`.
+    .filter((row) => !isCreditCardPaymentWorkflow(row) && !hasProvenPostingFailure(row))
     .sort((a, b) => {
       const dateOrder = String(b.date || "").localeCompare(String(a.date || ""));
       if (dateOrder) return dateOrder;

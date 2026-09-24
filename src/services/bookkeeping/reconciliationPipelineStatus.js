@@ -1,8 +1,8 @@
+import { deriveCreditCardPaymentStatus, isCreditCardPaymentWorkflow } from "./creditCardPaymentStatus.js";
+
 const FAILURE_STATUSES = new Set(["failed", "failed_post", "post_failed", "blocked"]);
 const APPROVED_STATUSES = new Set(["approved", "auto_approved", "handled"]);
 const NEEDS_REVIEW_STATUSES = new Set(["", "needs_review", "uncategorized"]);
-const CC_PAYMENT_META_TYPE = "cc_payment";
-
 export const PIPELINE_STATUS = {
   pending_bank_transaction: {
     key: "pending_bank_transaction",
@@ -105,12 +105,13 @@ export function isBooksReviewNeedsReview(row = {}) {
   const status = normalizeStatus(row.status || row.categorization_status);
   const meta = row.meta || row.details || {};
   if (row.pending === true || meta.pending === true) return false;
-  return NEEDS_REVIEW_STATUSES.has(status) || (status === "auto_approved" && meta.is_check === true);
+  const creditCardPayment = deriveCreditCardPaymentStatus(row);
+  return (creditCardPayment && !creditCardPayment.matched) || NEEDS_REVIEW_STATUSES.has(status) || (status === "auto_approved" && meta.is_check === true);
 }
 
 export function isBooksReviewHandled(row = {}) {
   const status = normalizeStatus(row.status || row.categorization_status);
-  return APPROVED_STATUSES.has(status) && !hasProvenPostingFailure(row);
+  return APPROVED_STATUSES.has(status) && !isCreditCardPaymentWorkflow(row) && !hasProvenPostingFailure(row);
 }
 
 export function deriveReconciliationEvidence(reconciliationItem = null) {
@@ -159,7 +160,7 @@ export function derivePipelineStatus({ bank = {}, cat = {}, reconciliationItem =
   const row = { ...(cat || {}) };
   const pending = bank.pending === true || row.meta?.pending === true;
   const reconciliation = deriveReconciliationEvidence(reconciliationItem);
-  const isCcPayment = row.meta?.taxonomy_type === CC_PAYMENT_META_TYPE;
+  const isCcPayment = isCreditCardPaymentWorkflow(row);
   const ccPairStatus = normalizeStatus(row.meta?.cc_payment_pair_status);
   const ccPairId = row.meta?.cc_payment_pair_id || null;
 
@@ -192,6 +193,19 @@ export function derivePipelineStatus({ bank = {}, cat = {}, reconciliationItem =
     });
   }
 
+  if (isCcPayment && !row.qbo_txn_id) {
+    if (ccPairId && ["confirmed", "matched", "posted", "auto_approved"].includes(ccPairStatus || "confirmed")) {
+      return withDetail(PIPELINE_STATUS.credit_card_payment_matched, "Matched as an internal balance-sheet movement.", {
+        source: "credit_card_payment_pairs",
+        is_pending: false,
+      });
+    }
+    return withDetail(PIPELINE_STATUS.credit_card_payment_needs_match, "Needs an opposite-side payment match.", {
+      source: "credit_card_payment_pairs",
+      is_pending: false,
+    });
+  }
+
   const postAfterTs = toTime(row.post_after);
   const nextAttemptTs = toTime(row.meta?.next_post_attempt_at);
   const scheduled = postAfterTs && postAfterTs > nowTs;
@@ -208,19 +222,6 @@ export function derivePipelineStatus({ bank = {}, cat = {}, reconciliationItem =
     return withDetail(PIPELINE_STATUS.handled_not_posted, "Categorized in Bizzi; not posted to QuickBooks.", {
       source: "books_review",
       is_pending: pending,
-    });
-  }
-
-  if (isCcPayment && !row.qbo_txn_id) {
-    if (ccPairId && ["confirmed", "matched", "posted", "auto_approved"].includes(ccPairStatus || "confirmed")) {
-      return withDetail(PIPELINE_STATUS.credit_card_payment_matched, "Matched as an internal balance-sheet movement.", {
-        source: "credit_card_payment_pairs",
-        is_pending: false,
-      });
-    }
-    return withDetail(PIPELINE_STATUS.credit_card_payment_needs_match, "Needs an opposite-side payment match.", {
-      source: "credit_card_payment_pairs",
-      is_pending: false,
     });
   }
 

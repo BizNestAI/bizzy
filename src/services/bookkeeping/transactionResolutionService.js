@@ -40,7 +40,7 @@ export async function persistTransactionResolution({ db, businessId, transaction
     throw error;
   }
   const { data: current, error: fetchError } = await db.from("transaction_categorizations")
-    .select("status,posted_at,qbo_txn_id,meta")
+    .select("status,posted_at,qbo_txn_id,final_qbo_account_id,meta")
     .eq("business_id", businessId).eq("transaction_id", transactionId).maybeSingle();
   if (fetchError) throw fetchError;
   if (current?.status === "posted" || current?.posted_at || current?.qbo_txn_id || current?.meta?.matched_existing_qbo === true) {
@@ -64,16 +64,38 @@ export async function persistTransactionResolution({ db, businessId, transaction
     nextMeta.taxonomy_subtype = "credit_card_payment";
     nextMeta.taxonomy_override = "cc_payment";
     nextMeta.cc_payment_rejected = false;
+    nextMeta.cc_payment_marked_by_user = true;
+    nextMeta.cc_payment_marked_at = now;
+    nextMeta.post_block_reason = "cc_payment_pair_requires_confirmation";
+    nextMeta.safe_to_auto_handle = false;
+    nextMeta.safe_to_auto_post = false;
+    // This is an explicit operator-controlled lifecycle change. These audit
+    // fields allow the review-state trigger to distinguish it from an
+    // accidental approved -> needs_review regression.
+    nextMeta.review_reopen_authorized = true;
+    nextMeta.review_reopen_reason = "user_selected_credit_card_payment_match";
     delete nextMeta.cc_payment_rejected_at;
     delete nextMeta.cc_payment_rejected_pair_id;
   }
   const payload = {
     business_id: businessId,
     transaction_id: transactionId,
-    status: current?.status || "needs_review",
+    status: normalized === "match_credit_card_payment" ? "needs_review" : current?.status || "needs_review",
     meta: nextMeta,
     updated_at: now,
   };
+  if (normalized === "match_credit_card_payment") {
+    Object.assign(payload, {
+      suggested_qbo_account_id: null,
+      suggested_qbo_account_name: null,
+      suggested_canonical_account_key: null,
+      final_qbo_account_id: null,
+      final_qbo_account_name: null,
+      final_canonical_account_key: null,
+      post_after: null,
+      post_error: "cc_payment_pair_requires_confirmation",
+    });
+  }
   const { data, error } = await db.from("transaction_categorizations").upsert(payload, { onConflict: "business_id,transaction_id" }).select("transaction_id,status,meta").maybeSingle();
   if (error) throw error;
   return { ok: true, transaction_id: transactionId, system_suggested_resolution: nextMeta.system_suggested_resolution, user_selected_resolution: normalized, effective_resolution: normalized, row: data || payload };
