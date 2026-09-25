@@ -31,6 +31,11 @@ export function effectiveTransactionResolution(transaction = {}) {
   return normalizeTransactionResolution(transaction.meta?.user_selected_resolution) || suggestedTransactionResolution(transaction);
 }
 
+export function recoverOrphanedSplitResolution(resolution, hasActiveSplitDraft = false) {
+  const normalized = normalizeTransactionResolution(resolution) || "categorize_new";
+  return normalized === "split_transaction" && !hasActiveSplitDraft ? "categorize_new" : normalized;
+}
+
 export async function persistTransactionResolution({ db, businessId, transactionId, resolution, actor = null, source = "books_review" } = {}) {
   const normalized = normalizeTransactionResolution(resolution);
   if (!db || !businessId || !transactionId || !normalized) {

@@ -14,7 +14,7 @@ import {
 import { formatQboPostingSchedule } from "../../services/bookkeeping/qboPostingLifecycle.js";
 import { detectProcessorSettlementActivity } from "../../services/bookkeeping/processorSettlementProfiles.js";
 import { formatNumericCalendarDate } from "../../utils/dateUtils.js";
-import { effectiveTransactionResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
+import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 
 const ENABLE_QBO_ADD_STUB = false;
 const ROW_HOVER_BG = "#1A1D1C";
@@ -1366,7 +1366,9 @@ export default function BookkeepingFeed({
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
             const incomingMatch = incomingDepositMatchState(txn);
-            const effectiveResolution = resolutionSelections.get(txn.id) || effectiveTransactionResolution(txn);
+            const selectedResolution = resolutionSelections.get(txn.id) || effectiveTransactionResolution(txn);
+            const loanSplitDraft = splitDrafts.get(txn.id) || null;
+            const effectiveResolution = recoverOrphanedSplitResolution(selectedResolution, Boolean(loanSplitDraft));
             const systemSuggestedResolution = suggestedTransactionResolution(txn);
             const resolutionAction = resolutionActionState.get(txn.id) || {};
             const incomingMatchAction = incomingDepositMatchActionState?.[txn.id] || {};
@@ -1444,7 +1446,6 @@ export default function BookkeepingFeed({
               (effectiveResolution === "match_credit_card_payment" || isCcPaymentSuspected || (isCcPayment && !["confirmed", "posted"].includes(String(txn.cc_payment_pair_status || txn.meta?.cc_payment_pair_status || "").toLowerCase())));
             const ccAction = ccPaymentActionState?.[txn.id] || {};
             const ccConfirmBusy = ccAction.loading === true || ccAction.matching === true;
-            const loanSplitDraft = splitDrafts.get(txn.id) || null;
             const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
             const canUndoCcPaymentPair = allowCreditCardPaymentUndo && isCcPaymentWorkflow && hasCcPair && !isPosted && !txn.qbo_txn_id && !txn.qboTxnId && !txn.posted_at;
             const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly;
@@ -1636,7 +1637,7 @@ export default function BookkeepingFeed({
                     onResolutionChange={(nextResolution) => changeResolution(txn, nextResolution)}
                     onChange={(id) => {
                       handleAccountSelect(txn.id, id);
-                      if (id && effectiveResolution !== "categorize_new") changeResolution(txn, "categorize_new");
+                      if (id && selectedResolution !== "categorize_new") changeResolution(txn, "categorize_new");
                     }}
                   />
                 ) : !isPending && effectiveResolution === "categorize_new" ? (

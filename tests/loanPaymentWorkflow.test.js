@@ -458,7 +458,7 @@ test("Books Review exposes loan rows through the universal general splitter safe
   assert.doesNotMatch(mirror, /Split loan payment[\s\S]*Principal[\s\S]*Interest/);
   assert.doesNotMatch(mirror, /function findDefaultInterestAccountId/);
   assert.match(mirror, /mode: "general", legacyLoanSplit: true/);
-  assert.match(mirror, /resolution === "split_transaction"/);
+  assert.match(mirror, /displayResolution === "split_transaction"/);
   assert.match(mirror, /Split review/);
   assert.match(monthlyReview, /handleMirrorConfirmLoanPaymentSplit/);
   assert.match(monthlyReview, /handleMirrorConfirmSplitTransaction/);

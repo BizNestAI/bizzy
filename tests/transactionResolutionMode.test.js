@@ -6,6 +6,7 @@ const {
   effectiveTransactionResolution,
   normalizeTransactionResolution,
   persistTransactionResolution,
+  recoverOrphanedSplitResolution,
   suggestedTransactionResolution,
 } = await import("../src/services/bookkeeping/transactionResolutionService.js");
 
@@ -29,6 +30,18 @@ test("classifier defaults remain intact and legacy loan resolution maps to gener
   assert.equal(suggestedTransactionResolution({ meta: { taxonomy_type: "cc_payment" } }), "match_credit_card_payment");
   assert.equal(suggestedTransactionResolution({ meta: { taxonomy_type: "loan_payment", loan_payment_split_id: "legacy-1" } }), "split_transaction");
   assert.equal(normalizeTransactionResolution("loan_split"), "split_transaction");
+});
+
+test("a persisted split choice without an active draft recovers to categorization", () => {
+  assert.equal(recoverOrphanedSplitResolution("split_transaction", false), "categorize_new");
+  assert.equal(recoverOrphanedSplitResolution("split_transaction", true), "split_transaction");
+  assert.equal(recoverOrphanedSplitResolution("match_existing_qbo", false), "match_existing_qbo");
+});
+
+test("Books Review keeps the COA available for an orphaned split and persists the next account choice", () => {
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  assert.match(feed, /recoverOrphanedSplitResolution\(selectedResolution, Boolean\(loanSplitDraft\)\)/);
+  assert.match(feed, /if \(id && selectedResolution !== "categorize_new"\) changeResolution\(txn, "categorize_new"\)/);
 });
 
 test("immutable transaction override wins over a classifier rerun and persists audit identity", async () => {

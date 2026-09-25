@@ -6,7 +6,7 @@ import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPosting
 import { formatPlaidAccountDisplayLabel } from "../../services/bookkeeping/postingTraceDisplay.js";
 import { getProtectedWorkflowReason as getSharedProtectedWorkflowReason } from "../../services/bookkeeping/protectedWorkflow.js";
 import { formatShortCalendarDate } from "../../utils/dateUtils.js";
-import { effectiveTransactionResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
+import { effectiveTransactionResolution, recoverOrphanedSplitResolution, suggestedTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import {
   deriveCreditCardPaymentOrientation,
   deriveResolutionAwareCreditCardPaymentStatus,
@@ -153,6 +153,7 @@ function BookkeepingTransactionMirrorRow({
   const [resolution, setResolution] = React.useState(() => effectiveTransactionResolution(row));
   const [resolutionError, setResolutionError] = React.useState("");
   const [resolutionBusy, setResolutionBusy] = React.useState(false);
+  const displayResolution = recoverOrphanedSplitResolution(resolution, Boolean(loanSplitDraft));
 
   React.useEffect(() => {
     setSelectedAccountId(initialAccountId);
@@ -171,11 +172,10 @@ function BookkeepingTransactionMirrorRow({
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const protectedReason = getProtectedWorkflowReason(row);
   const incomingMatch = incomingDepositMatchState(row);
-  const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(row, resolution);
+  const ccWorkflowStatus = deriveResolutionAwareCreditCardPaymentStatus(row, displayResolution);
   const ccOrientation = deriveCreditCardPaymentOrientation(row);
   const isPending = row.pending === true;
   const genericActionsBlocked = Boolean(protectedReason) && !ccWorkflowStatus;
-  const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
   const bankAccountLabel = formatBankAccountLabel(row);
   const bankAccountMeta = formatBankAccountMeta(row);
   const glAccountLabel = ccWorkflowStatus
@@ -254,16 +254,12 @@ function BookkeepingTransactionMirrorRow({
       </div>
 
       <div className="min-w-0">
-        {!isPosted && !isPending ? <div className="mb-2"><TransactionResolutionSelector transactionId={row.id} value={resolution} suggested={suggestedTransactionResolution(row)} busy={resolutionBusy} error={resolutionError} onChange={changeResolution} /></div> : null}
-        {resolution === "split_transaction" && loanSplitDraft ? (
+        {!isPosted && !isPending ? <div className="mb-2"><TransactionResolutionSelector transactionId={row.id} value={displayResolution} suggested={suggestedTransactionResolution(row)} busy={resolutionBusy} error={resolutionError} onChange={changeResolution} /></div> : null}
+        {displayResolution === "split_transaction" && loanSplitDraft ? (
           <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">
             Loan Payment · Needs Split
           </div>
-        ) : resolution === "split_transaction" && isLoanSplitWorkflow ? (
-          <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">
-            Loan Payment · Needs Split
-          </div>
-        ) : resolution === "match_credit_card_payment" && ccWorkflowStatus ? (
+        ) : displayResolution === "match_credit_card_payment" && ccWorkflowStatus ? (
           <CreditCardPaymentMatchControl
             value={selectedAccountId}
             accounts={ccAccounts}
@@ -281,9 +277,9 @@ function BookkeepingTransactionMirrorRow({
             onConfirm={() => onConfirmCcPaymentMatch?.(row, selectedAccountId, selectedCcCandidateId || null)}
             onUseCoa={!isPosted ? () => changeResolution("categorize_new") : null}
           />
-        ) : resolution === "match_existing_qbo" && incomingMatch.active ? (
+        ) : displayResolution === "match_existing_qbo" && incomingMatch.active ? (
           <div className="rounded-lg border border-amber-300/25 bg-amber-300/[0.08] px-2 py-1 text-xs font-semibold text-amber-100">QuickBooks match review</div>
-        ) : isPending || (genericActionsBlocked && resolution !== "categorize_new") ? (
+        ) : isPending || (genericActionsBlocked && displayResolution !== "categorize_new") ? (
           <>
             <div className="truncate text-white/75">{glAccountLabel}</div>
             {isPending ? (
@@ -311,7 +307,7 @@ function BookkeepingTransactionMirrorRow({
             }}
             status={row.status}
             disabled={!hasAccounts || isActionBusy("approve") || isActionBusy("reclassify")}
-            resolution={resolution}
+            resolution={displayResolution}
             onResolutionChange={changeResolution}
             onChange={(accountId) => {
               setSelectedAccountId(accountId);
@@ -411,7 +407,7 @@ function BookkeepingTransactionMirrorRow({
           ) : null}
         </div>
         <div className="mt-1 flex flex-wrap gap-1.5">
-          {resolution === "split_transaction" ? (
+          {displayResolution === "split_transaction" ? (
             <span className="text-[11px] text-amber-100/80">Split review</span>
           ) : null}
           {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && !isPending && !isPosted && !isFailed && !isQueued ? (
