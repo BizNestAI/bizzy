@@ -40,7 +40,9 @@ test("a persisted split choice without an active draft recovers to categorizatio
 
 test("Books Review keeps the COA available for an orphaned split and persists the next account choice", () => {
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
-  assert.match(feed, /recoverOrphanedSplitResolution\(selectedResolution, Boolean\(loanSplitDraft\)\)/);
+  assert.match(feed, /recoverOrphanedSplitResolution\(selectedResolution, Boolean\(loanSplitDraft \|\| hasSavedSplit\)\)/);
+  assert.match(feed, /Transaction Split/);
+  assert.match(feed, /savedSplitLines/);
   assert.match(feed, /if \(id && selectedResolution !== "categorize_new"\) changeResolution\(txn, "categorize_new"\)/);
 });
 

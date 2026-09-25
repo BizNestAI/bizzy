@@ -1,4 +1,5 @@
 import { resolveBankTransactionCurrency } from "./bankTransactionCurrency.js";
+import crypto from "node:crypto";
 
 export class SplitTransactionWorkflowError extends Error {
   constructor(error, details = {}) {
@@ -96,6 +97,7 @@ export async function confirmSplitTransaction({
     total_amount_minor: validation.expected_amount_minor,
     currency: resolveBankTransactionCurrency(transaction, split.currency),
     lines: validation.lines.map((line) => ({
+      id: crypto.randomUUID(),
       description: line.description,
       amount_minor: line.amount_minor,
       qbo_account_id: line.qbo_account_id,
@@ -127,6 +129,15 @@ export async function confirmSplitTransaction({
   }
   if (error) throw error;
   return { split: data, created: true };
+}
+
+export function hasConfirmedSplitTransactionMeta(item = {}) {
+  const meta = item?.meta || {};
+  return Boolean(
+    meta.taxonomy_type === "split_transaction" &&
+    meta.split_transaction_status === "confirmed" &&
+    meta.split_transaction_id
+  );
 }
 
 export async function fetchConfirmedSplitTransaction({ db, businessId, transactionId }) {

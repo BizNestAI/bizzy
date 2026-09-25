@@ -395,16 +395,21 @@ function formatPostingAmount(txn = {}) {
 }
 
 function getManualPostSummary(txn = {}) {
+  const splitLines = Array.isArray(txn.split_lines)
+    ? txn.split_lines
+    : Array.isArray(txn.split_transaction?.lines)
+      ? txn.split_transaction.lines
+      : [];
+  const isSplit = txn.meta?.taxonomy_type === "split_transaction" && splitLines.length >= 2;
   return {
     date: txn.date || "Unknown",
     description: txn.description || txn.vendor || txn.payee || "Unknown",
     amount: formatPostingAmount(txn),
-    account:
-      txn.glAccountName ||
-      txn.final_qbo_account_name ||
-      txn.suggestedAccountName ||
-      txn.currentAccount ||
-      "Unselected",
+    account: isSplit
+      ? "Transaction Split"
+      : txn.glAccountName || txn.final_qbo_account_name || txn.suggestedAccountName || txn.currentAccount || "Unselected",
+    isSplit,
+    splitLines,
   };
 }
 
@@ -420,6 +425,15 @@ function buildManualPostError(err) {
       "QuickBooks rejected the transaction."
   );
   const normalized = rawMessage.toLowerCase();
+  if (normalized.includes("split_transaction") || normalized.includes("missing_final_qbo_account")) {
+    return {
+      type: "error",
+      title: "QuickBooks could not post this split transaction",
+      message: "Your split was preserved and nothing was marked Posted.",
+      detail: "Please try again. If the issue continues, Bizzi support can use the posting operation details to investigate.",
+      primaryLabel: "Close",
+    };
+  }
   if (normalized.includes("missing_qbo_account_mapping")) {
     return {
       type: "mapping",
@@ -3539,9 +3553,24 @@ function BookkeepingCleanup() {
                         <span className={manualPostSummary.amount.startsWith("-") ? "text-rose-300" : "text-emerald-300"}>
                           {manualPostSummary.amount}
                         </span>
-                        <span className="text-slate-500">Account</span>
+                        <span className="text-slate-500">Resolution</span>
                         <span className="min-w-0 truncate text-slate-200">{manualPostSummary.account}</span>
                       </div>
+                      {manualPostSummary.isSplit ? (
+                        <div className="mt-3 border-t border-white/8 pt-3">
+                          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                            {manualPostSummary.splitLines.length} split lines
+                          </div>
+                          <div className="space-y-1.5">
+                            {manualPostSummary.splitLines.map((line, index) => (
+                              <div key={line.id || `${line.qbo_account_id}-${index}`} className="flex items-center justify-between gap-4 text-xs">
+                                <span className="min-w-0 truncate text-slate-300">{line.qbo_account_name || line.description || `Line ${index + 1}`}</span>
+                                <span className="shrink-0 tabular-nums text-slate-100">${(Number(line.amount_minor || 0) / 100).toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
                     <div className="mt-5 flex items-center justify-end gap-2">

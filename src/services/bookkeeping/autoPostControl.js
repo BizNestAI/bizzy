@@ -224,7 +224,12 @@ export function classifyAutoPostBacklogCandidate({ item = {}, bankTxn = {}, poli
   if (item?.meta?.posting_in_progress === true || item?.meta?.post_intent_id) {
     return "ambiguous_prior_attempt";
   }
-  if (!item?.final_qbo_account_id && !item?.meta?.cc_payment_cc_qbo_account_id) {
+  const confirmedSplit = Boolean(
+    item?.meta?.taxonomy_type === "split_transaction" &&
+    item?.meta?.split_transaction_status === "confirmed" &&
+    item?.meta?.split_transaction_id
+  );
+  if (!item?.final_qbo_account_id && !item?.meta?.cc_payment_cc_qbo_account_id && !confirmedSplit) {
     return "missing_mapping";
   }
   if (item?.meta?.safe_to_auto_post !== true && item?.meta?.auto_approve_reason !== "manual_user") {

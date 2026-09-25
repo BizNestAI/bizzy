@@ -66,7 +66,7 @@ test("off permits handled state but does not create a posting grace timestamp", 
   const clarification = readFileSync(join(root, "src/services/bookkeeping/clarificationService.js"), "utf8");
 
   assert.match(approvals, /getAutoPostToQuickBooks/);
-  assert.match(approvals, /computePostAfterForAutoPost\(autoPostEnabled, 24\)/);
+  assert.match(approvals, /resolveBookkeepingPostAfter/);
   assert.match(suggest, /autoPostEnabled/);
   assert.match(suggest, /computePostAfterForAutoPost\(autoPostEnabled, GRACE_HOURS\)/);
   assert.doesNotMatch(clarification, /computePostAfterForAutoPost\(autoPostEnabled, GRACE_HOURS\)/);

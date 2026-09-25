@@ -35,7 +35,7 @@ test("Auto-post policy remains explicit and approval grace uses the configured 2
   const autoPostService = read("src/services/bookkeeping/autoPostControl.js");
 
   assert.match(approvalService, /const autoPostEnabled = await getAutoPostToQuickBooks\(db,\s*businessId\)/);
-  assert.match(approvalService, /computePostAfterForAutoPost\(autoPostEnabled,\s*24\)/);
+  assert.match(approvalService, /resolveBookkeepingPostAfter/);
   assert.match(autoPostRoute, /getAutoPostSettings\(\{ db: supabase, businessId, graceHours: POSTING_GRACE_HOURS \}\)/);
   assert.match(autoPostRoute, /setAutoPostEnabled\(\{[\s\S]*graceHours: POSTING_GRACE_HOURS/);
   assert.match(autoPostService, /posting_grace_hours:\s*normalizedGraceHours/);

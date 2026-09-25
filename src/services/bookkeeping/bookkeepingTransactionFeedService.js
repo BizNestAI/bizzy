@@ -374,6 +374,35 @@ async function fetchPlaidAccountDisplayMap({ db = supabase, businessId, plaidAcc
   ]));
 }
 
+export async function attachCanonicalSplitsForFeed({ db = supabase, businessId, rows = [] } = {}) {
+  const transactionIds = Array.from(new Set(
+    rows
+      .filter((row) => row?.meta?.taxonomy_type === "split_transaction" || row?.meta?.split_transaction_id)
+      .map((row) => String(row.id || row.transactionId || "").trim())
+      .filter(Boolean)
+  ));
+  if (!businessId || !transactionIds.length || typeof db?.from !== "function") return rows;
+  const { data, error } = await db
+    .from("transaction_splits")
+    .select("id,business_id,transaction_id,status,split_type,total_amount_minor,currency,lines,confirmed_at,posted_at,posted_qbo_txn_id,meta")
+    .eq("business_id", businessId)
+    .in("transaction_id", transactionIds)
+    .in("status", ["confirmed", "posted"]);
+  if (error) throw error;
+  const byTransactionId = new Map();
+  for (const split of data || []) {
+    const key = String(split.transaction_id || "");
+    const previous = byTransactionId.get(key);
+    if (!previous || Date.parse(split.confirmed_at || 0) > Date.parse(previous.confirmed_at || 0)) {
+      byTransactionId.set(key, split);
+    }
+  }
+  return rows.map((row) => {
+    const split = byTransactionId.get(String(row.id || row.transactionId || ""));
+    return split ? { ...row, split_transaction: split, split_lines: Array.isArray(split.lines) ? split.lines : [] } : row;
+  });
+}
+
 function isHandledForPosting(row = {}) {
   return ["approved", "auto_approved", "failed", "handled"].includes(String(row.status || "").toLowerCase());
 }
@@ -782,6 +811,7 @@ export async function fetchBookkeepingTransactions({
     const display = accountDisplayMap.get(String(row.plaid_account_id || row.plaidAccountId || ""));
     return display ? { ...row, ...display } : row;
   });
+  const splitEnrichedRows = await attachCanonicalSplitsForFeed({ db, businessId, rows: accountEnrichedRows });
   let policy = null;
   try {
     policy = await getAutoPostPolicy(db, businessId);
@@ -792,7 +822,7 @@ export async function fetchBookkeepingTransactions({
   const discoveryRows = await attachIncomingDepositDiscoveryForFeed({
     db,
     businessId,
-    rows: accountEnrichedRows,
+    rows: splitEnrichedRows,
     nowMs,
   });
   const enrichedRows = discoveryRows.map((row) => {

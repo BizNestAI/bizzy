@@ -1369,7 +1369,13 @@ export default function BookkeepingFeed({
             const incomingMatch = incomingDepositMatchState(txn);
             const selectedResolution = resolutionSelections.get(txn.id) || effectiveTransactionResolution(txn);
             const loanSplitDraft = splitDrafts.get(txn.id) || null;
-            const effectiveResolution = recoverOrphanedSplitResolution(selectedResolution, Boolean(loanSplitDraft));
+            const savedSplitLines = Array.isArray(txn.split_lines)
+              ? txn.split_lines
+              : Array.isArray(txn.split_transaction?.lines)
+                ? txn.split_transaction.lines
+                : [];
+            const hasSavedSplit = txn.meta?.taxonomy_type === "split_transaction" && savedSplitLines.length >= 2;
+            const effectiveResolution = recoverOrphanedSplitResolution(selectedResolution, Boolean(loanSplitDraft || hasSavedSplit));
             const systemSuggestedResolution = suggestedTransactionResolution(txn);
             const resolutionAction = resolutionActionState.get(txn.id) || {};
             const incomingMatchAction = incomingDepositMatchActionState?.[txn.id] || {};
@@ -1605,7 +1611,12 @@ export default function BookkeepingFeed({
                     Possible credit card payment
                   </span>
                 ) : null}
-                {effectiveResolution === "split_transaction" && loanSplitDraft ? (
+                {effectiveResolution === "split_transaction" && hasSavedSplit ? (
+                  <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-emerald-300/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100">
+                    <span>Transaction Split</span>
+                    <span className="text-[9px] font-medium text-emerald-100/65">{savedSplitLines.length} lines · ${(savedSplitLines.reduce((sum, line) => sum + Number(line.amount_minor || 0), 0) / 100).toFixed(2)}</span>
+                  </span>
+                ) : effectiveResolution === "split_transaction" && loanSplitDraft ? (
                   <span className="inline-flex w-fit max-w-full rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
                     Loan Payment · Needs Split
                   </span>
@@ -1773,7 +1784,7 @@ export default function BookkeepingFeed({
                     <span className="text-[10px] text-slate-400">Needs match</span>
                   )
                 ) : effectiveResolution === "split_transaction" ? (
-                  <span className="text-[10px] text-slate-400">{loanSplitDraft ? "Needs split" : "Loan split"}</span>
+                  <span className="text-[10px] text-slate-400">{hasSavedSplit ? "Transaction split" : loanSplitDraft ? "Needs split" : "Split"}</span>
                 ) : (
                  <button
                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/14 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/24 hover:border-emerald-300/90 active:scale-[0.99] disabled:opacity-45 disabled:cursor-not-allowed shadow-[0_2px_6px_rgba(0,0,0,0.2)] transition-transform"
@@ -1821,6 +1832,23 @@ export default function BookkeepingFeed({
                      <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
                        {fullMemo}
                      </div>
+                     {hasSavedSplit ? (
+                       <div className="mt-3 rounded-lg border border-emerald-300/18 bg-emerald-500/[0.045] px-3 py-2.5">
+                         <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-200">Transaction Split</div>
+                         <div className="mt-2 space-y-1.5">
+                           {savedSplitLines.map((line, index) => (
+                             <div key={line.id || `${line.qbo_account_id}-${index}`} className="flex items-center justify-between gap-4 text-[11px]">
+                               <span className="min-w-0 truncate text-slate-200">{line.qbo_account_name || line.description || `Line ${index + 1}`}</span>
+                               <span className="shrink-0 tabular-nums text-slate-100">${(Number(line.amount_minor || 0) / 100).toFixed(2)}</span>
+                             </div>
+                           ))}
+                           <div className="flex items-center justify-between gap-4 border-t border-white/8 pt-1.5 text-[11px] font-semibold text-white">
+                             <span>Total</span>
+                             <span className="tabular-nums">${(savedSplitLines.reduce((sum, line) => sum + Number(line.amount_minor || 0), 0) / 100).toFixed(2)}</span>
+                           </div>
+                         </div>
+                       </div>
+                     ) : null}
                      {allowExclude && getBookkeepingExclusionEligibility(txn).eligible ? (
                        <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-rose-300/15 bg-rose-500/[0.035] px-3 py-2.5">
                          <div className="min-w-0">

@@ -81,7 +81,7 @@ test("Monthly Review Operator Response approval is server-authoritative and shar
   assert.match(approveRoute, /pipeline_status:\s*pipelineStatus/);
   assert.match(approveRoute, /qbo_lifecycle_status:\s*qboLifecycleStatus/);
   assert.match(approvalService, /getAutoPostToQuickBooks/);
-  assert.match(approvalService, /computePostAfterForAutoPost\(autoPostEnabled, 24\)/);
+  assert.match(approvalService, /resolveBookkeepingPostAfter/);
 });
 
 test("Monthly Review Operator Response approval enforces selected business month and unresolved Needs Review scope", () => {

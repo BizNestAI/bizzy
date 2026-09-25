@@ -24,6 +24,7 @@ import { fetchChartOfAccounts } from "../../../services/bookkeeping/qboAccounts.
 import {
   approveBookkeepingTransactions,
   BookkeepingApprovalError,
+  resolveBookkeepingPostAfter,
 } from "../../../services/bookkeeping/bookkeepingApprovalService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
 import { persistTransactionResolution } from "../../../services/bookkeeping/transactionResolutionService.js";
@@ -509,6 +510,12 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
     });
     writesOccurred = result?.created === true;
     const nowIso = new Date().toISOString();
+    const { postAfter } = await resolveBookkeepingPostAfter({
+      db: supabase,
+      businessId,
+      graceHours: 24,
+      nowMs: Date.parse(nowIso),
+    });
     const nextMeta = {
       ...(existingCat?.meta || {}),
       taxonomy_type: "split_transaction",
@@ -517,7 +524,10 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
       protected_workflow: "split_transaction",
       safe_to_auto_post: true,
       auto_approve_reason: "manual_user",
+      posting_generation: crypto.randomUUID(),
+      posting_in_progress: false,
     };
+    delete nextMeta.posting_cancelled_at;
     const { data: categorization, error: upsertErr } = await supabase
       .from("transaction_categorizations")
       .upsert(
@@ -530,7 +540,7 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
           decided_by: "user",
           decided_at: nowIso,
           updated_at: nowIso,
-          post_after: nowIso,
+          post_after: postAfter,
           post_error: null,
           meta: nextMeta,
         },

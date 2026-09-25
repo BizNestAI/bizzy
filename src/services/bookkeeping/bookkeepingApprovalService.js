@@ -26,6 +26,14 @@ export class BookkeepingApprovalError extends Error {
   }
 }
 
+export async function resolveBookkeepingPostAfter({ db = defaultSupabase, businessId, graceHours = 24, nowMs = Date.now() } = {}) {
+  const autoPostEnabled = await getAutoPostToQuickBooks(db, businessId);
+  return {
+    autoPostEnabled,
+    postAfter: computePostAfterForAutoPost(autoPostEnabled, graceHours, nowMs),
+  };
+}
+
 function txnIdFromItem(item = {}) {
   return item?.txnId || item?.transaction_id || item?.transactionId || item?.id || null;
 }
@@ -112,8 +120,7 @@ export async function approveBookkeepingTransactions({
   if (!Array.isArray(items) || !items.length) throw new BookkeepingApprovalError("missing_items", 400);
 
   const nowIso = new Date().toISOString();
-  const autoPostEnabled = await getAutoPostToQuickBooks(db, businessId);
-  const postAfter = computePostAfterForAutoPost(autoPostEnabled, 24);
+  const { autoPostEnabled, postAfter } = await resolveBookkeepingPostAfter({ db, businessId, graceHours: 24, nowMs: Date.parse(nowIso) });
   const txnIds = items.map(txnIdFromItem).filter(Boolean);
   if (!txnIds.length) throw new BookkeepingApprovalError("missing_items", 400);
 

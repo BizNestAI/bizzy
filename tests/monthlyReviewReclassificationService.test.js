@@ -995,7 +995,7 @@ test("Monthly Review reclassification preserves auto-post and canonical COA auth
   assert.match(service, /approveTransactions\(\{/);
   assert.match(service, /requireNeedsReview: true/);
   assert.doesNotMatch(service, /computePostAfterForAutoPost/);
-  assert.match(approval, /computePostAfterForAutoPost\(autoPostEnabled, 24\)/);
+  assert.match(approval, /resolveBookkeepingPostAfter/);
   assert.doesNotMatch(service, /auto_post_to_quickbooks/);
   assert.doesNotMatch(service, /createPreferredQboAccountForCanonical|createQboAccountFromCanonical|createAccount/);
 });

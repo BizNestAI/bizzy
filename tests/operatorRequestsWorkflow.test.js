@@ -282,7 +282,7 @@ test("Books Review and Monthly Review share authoritative human approval service
   assert.match(monthlyRoute, /approveBookkeepingTransactions/);
   assert.match(monthlyRoute, /allowCcPaymentRejection:\s*false/);
   assert.match(approvalService, /getAutoPostToQuickBooks/);
-  assert.match(approvalService, /computePostAfterForAutoPost\(autoPostEnabled, 24\)/);
+  assert.match(approvalService, /resolveBookkeepingPostAfter/);
   assert.match(approvalService, /transfer_posting_not_supported/);
   assert.match(approvalService, /owner_move_posting_not_supported/);
   assert.match(approvalService, /refund_posting_not_supported/);

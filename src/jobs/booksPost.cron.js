@@ -46,6 +46,7 @@ import {
 import {
   buildSplitTransactionQboPayload,
   fetchConfirmedSplitTransaction,
+  hasConfirmedSplitTransactionMeta,
   markSplitTransactionPosted,
   splitTransactionRowToExecutableSplit,
 } from "../services/bookkeeping/splitTransactionWorkflow.js";
@@ -566,6 +567,10 @@ function resolveQboTxnType(item, bankTxn, mapping) {
     item?.meta?.cc_payment_cc_qbo_account_id ||
     item?.meta?.cc_payment_mapping_confidence;
   if (looksCcMeta) return "Transfer";
+  if (item?.meta?.taxonomy_type === "split_transaction" || item?.meta?.split_transaction_status === "confirmed") {
+    if ((isBank || isCreditCard) && isOutflowLike(bankTxn)) return "Purchase";
+    return null;
+  }
   if (item?.meta?.taxonomy_type && item.meta.taxonomy_type !== "cc_payment") return null;
   if (!item?.final_qbo_account_id) return null;
   if (!isBank && !isCreditCard) return null;
@@ -2726,7 +2731,16 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
     err.status = 400;
     throw err;
   }
-  if (!item.final_qbo_account_id && !item?.meta?.cc_payment_cc_qbo_account_id) {
+  let confirmedSplit = null;
+  if (hasConfirmedSplitTransactionMeta(item)) {
+    confirmedSplit = await fetchConfirmedSplitTransaction({
+      db: supabase,
+      businessId,
+      transactionId,
+    });
+    if (String(confirmedSplit?.id || "") !== String(item?.meta?.split_transaction_id || "")) confirmedSplit = null;
+  }
+  if (!item.final_qbo_account_id && !item?.meta?.cc_payment_cc_qbo_account_id && !confirmedSplit) {
     const err = new Error("missing_final_qbo_account");
     err.status = 400;
     throw err;
