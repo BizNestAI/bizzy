@@ -137,6 +137,12 @@ function normalizeDraftLines(draft = {}) {
 }
 
 function useFocusTrap(open, panelRef, onClose) {
+  const onCloseRef = React.useRef(onClose);
+
+  React.useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   React.useEffect(() => {
     if (!open) return undefined;
     const previous = document.activeElement;
@@ -151,7 +157,7 @@ function useFocusTrap(open, panelRef, onClose) {
     const onKeyDown = (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        onClose?.();
+        onCloseRef.current?.();
         return;
       }
       if (event.key !== "Tab") return;
@@ -173,7 +179,7 @@ function useFocusTrap(open, panelRef, onClose) {
       document.body.style.overflow = previousOverflow;
       if (previous && typeof previous.focus === "function") window.setTimeout(() => previous.focus(), 0);
     };
-  }, [open, onClose, panelRef]);
+  }, [open, panelRef]);
 }
 
 function AccountSelect({ label, value, accounts = [], placeholder, disabled, onChange }) {

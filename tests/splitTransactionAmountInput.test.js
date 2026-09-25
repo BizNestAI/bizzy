@@ -40,6 +40,13 @@ test("amount input keeps a local text draft, selects existing content, and uses 
   assert.match(source, /onBlur=\{handleBlur\}/);
 });
 
+test("typing an amount does not restart the modal focus trap after every character", () => {
+  assert.match(source, /const onCloseRef = React\.useRef\(onClose\)/);
+  assert.match(source, /onCloseRef\.current\?\.\(\)/);
+  assert.match(source, /\}, \[open, panelRef\]\);/);
+  assert.doesNotMatch(source, /\}, \[open, onClose, panelRef\]\);/);
+});
+
 test("canceling an edited split uses the dark in-app discard dialog", () => {
   assert.doesNotMatch(source, /window\.confirm\("Discard this split\?"\)/);
   assert.match(source, /role="alertdialog"/);
