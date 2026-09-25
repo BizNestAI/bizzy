@@ -20,7 +20,6 @@ as $$
   select case
     when lower(coalesce(p_status, '')) = 'excluded' or p_meta ->> 'excluded_at' is not null then 'excluded'
     when coalesce(p_pending, false) then 'pending'
-    when p_qbo_txn_id is not null or p_posted_at is not null or lower(coalesce(p_status, '')) = 'posted' then 'posted'
     when (
       lower(coalesce(p_status, '')) = 'matched_existing_qbo'
       or coalesce((p_meta ->> 'matched_existing_qbo')::boolean, false)
@@ -30,6 +29,7 @@ as $$
         and p_meta ->> 'cc_payment_pair_status' in ('confirmed', 'matched', 'posted', 'auto_approved')
       )
     ) then 'matched'
+    when p_qbo_txn_id is not null or p_posted_at is not null or lower(coalesce(p_status, '')) = 'posted' then 'posted'
     when (
       p_meta ->> 'taxonomy_type' = 'cc_payment'
       or p_meta ->> 'cc_payment_pair_id' is not null

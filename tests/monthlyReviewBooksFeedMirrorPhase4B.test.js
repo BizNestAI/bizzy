@@ -279,9 +279,13 @@ test("Handled count and pages use the same post-filter population", async () => 
   ];
   const db = {
     rpc: async (name, params) => {
+      if (name === "count_bookkeeping_transactions_bounded") return { data: 3, error: null };
       assert.equal(name, "get_bookkeeping_transactions_bounded");
       assert.equal(params.p_status_filter, "handled");
-      return { data: rawRows.slice(params.p_offset, params.p_offset + params.p_limit), error: null };
+      const canonicalRows = rawRows
+        .filter((row) => row.id !== "matched-pair")
+        .map((row) => ({ ...row, total_count: 3 }));
+      return { data: canonicalRows.slice(params.p_offset, params.p_offset + params.p_limit), error: null };
     },
   };
 
@@ -291,6 +295,60 @@ test("Handled count and pages use the same post-filter population", async () => 
   assert.equal(count, 3);
   assert.equal(page.totalCount, 3);
   assert.deepEqual(page.rows.map((row) => row.id), ["handled-1", "failed-post", "handled-2"]);
+});
+
+test("Handled server pagination retrieves all 21 rows without client-style post filtering", async () => {
+  const { fetchBookkeepingTransactions, countBookkeepingTransactions } = await servicePromise;
+  const rows = Array.from({ length: 21 }, (_, index) => ({
+    id: `handled-${String(index + 1).padStart(2, "0")}`,
+    date: "2026-09-21",
+    amount: -(index + 1),
+    cat_status: index % 4 === 0 ? "failed" : "approved",
+    post_error: index % 4 === 0 ? "qbo_rejected" : null,
+    total_count: 21,
+  }));
+  const db = {
+    rpc: async (name, params) => name === "count_bookkeeping_transactions_bounded"
+      ? { data: rows.length, error: null }
+      : { data: rows.slice(params.p_offset, params.p_offset + params.p_limit), error: null },
+  };
+
+  assert.equal(await countBookkeepingTransactions({ db, businessId: "biz-1", statusFilter: "handled", rangeParam: "all" }), 21);
+  const page = await fetchBookkeepingTransactions({ db, businessId: "biz-1", statusFilter: "handled", rangeParam: "all", page: 1, pageSize: 25 });
+  assert.equal(page.totalCount, 21);
+  assert.equal(page.rows.length, 21);
+  assert.equal(new Set(page.rows.map((row) => row.id)).size, 21);
+});
+
+test("Handled server pagination returns 25, 25, and 2 for 52 authoritative rows", async () => {
+  const { fetchBookkeepingTransactions } = await servicePromise;
+  const rows = Array.from({ length: 52 }, (_, index) => ({
+    id: `handled-${String(index + 1).padStart(2, "0")}`,
+    date: `2026-08-${String(28 - (index % 28)).padStart(2, "0")}`,
+    amount: -(index + 1),
+    cat_status: index % 5 === 0 ? "failed" : "auto_approved",
+    total_count: 52,
+  }));
+  const offsets = [];
+  const db = { rpc: async (name, params) => {
+    assert.equal(name, "get_bookkeeping_transactions_bounded");
+    offsets.push(params.p_offset);
+    return { data: rows.slice(params.p_offset, params.p_offset + params.p_limit), error: null };
+  } };
+
+  const pages = await Promise.all([1, 2, 3].map((page) => fetchBookkeepingTransactions({
+    db, businessId: "biz-1", statusFilter: "handled", rangeParam: "all", page, pageSize: 25,
+  })));
+  assert.deepEqual(pages.map((result) => result.rows.length), [25, 25, 2]);
+  assert.deepEqual(pages.map((result) => result.totalCount), [52, 52, 52]);
+  assert.deepEqual(offsets.sort((a, b) => a - b), [0, 25, 50]);
+  assert.equal(new Set(pages.flatMap((result) => result.rows.map((row) => row.id))).size, 52);
+});
+
+test("live Books Review renders the authoritative server page without lifecycle filtering", () => {
+  const source = readFileSync(join(root, "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+  assert.match(source, /if \(!usingDemo\) return transactions;/);
+  assert.match(source, /A completed request is authoritative/);
 });
 
 test("mirror row presenter preserves customer-answer, QBO, and special-workflow state without mutations", () => {

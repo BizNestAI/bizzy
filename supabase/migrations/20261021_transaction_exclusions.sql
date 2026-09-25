@@ -171,14 +171,15 @@ $$;
 -- Extend the canonical predicate without changing its public signature.
 create or replace function public.bookkeeping_transaction_matches_status(p_status_filter text,p_status text,p_meta jsonb,p_qbo_txn_id text)
 returns boolean language sql stable set search_path=public as $$
-  select case
-    when lower(coalesce(p_status_filter,'needs_review'))='excluded' then p_status='excluded' or p_meta->>'excluded_at' is not null
-    when p_status='excluded' or p_meta->>'excluded_at' is not null then false
-    when lower(coalesce(p_status_filter,'needs_review'))='posted' then p_status='posted' or p_qbo_txn_id is not null
-    when lower(coalesce(p_status_filter,'needs_review')) in ('matched','reconciled') then p_status in ('matched','matched_existing_qbo') or p_meta->>'incoming_deposit_match_status'='confirmed'
-    when lower(coalesce(p_status_filter,'needs_review')) in ('approved','handled') then p_status in ('approved','auto_approved','failed','handled')
-    when lower(coalesce(p_status_filter,'needs_review'))='pending' then false
-    else coalesce(p_status,'needs_review') in ('needs_review','uncategorized') or (p_status='auto_approved' and lower(coalesce(p_meta->>'is_check','false'))='true')
+  select case lower(coalesce(p_status_filter, 'needs_review'))
+    when 'approved' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null)='handled'
+    when 'handled' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null)='handled'
+    when 'reconciled' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null) in ('matched','posted')
+    when 'matched' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null)='matched'
+    when 'posted' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null)='posted'
+    when 'excluded' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null)='excluded'
+    when 'pending' then false
+    else public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null)='needs_review'
   end;
 $$;
 

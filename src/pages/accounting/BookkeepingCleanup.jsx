@@ -500,7 +500,7 @@ function getTxnAccountKey(txn = {}) {
 
 function matchesBooksTab(txn = {}, tabKey = "needs_review") {
   const status = txn.status || "needs_review";
-  const handledStatuses = ["approved", "auto_approved", "handled"];
+  const handledStatuses = ["approved", "auto_approved", "handled", "failed", "failed_post", "post_failed"];
   const matchedExistingQbo =
     status === "matched_existing_qbo" ||
     txn.matched_existing_qbo === true ||
@@ -838,14 +838,13 @@ function BookkeepingCleanup() {
     return { rows: nextRows, totalCount, staleApprovalIds };
   }, [isApprovalLedgerEntryActive]);
 
-  const reconcileApprovalLedgerAfterRows = useCallback((rows = [], staleApprovalIds = new Set()) => {
+  const reconcileApprovalLedgerAfterRows = useCallback((staleApprovalIds = new Set()) => {
     const ledger = approvalMutationLedgerRef.current;
     if (!ledger.size) return;
     let changed = false;
     for (const [id, entry] of ledger.entries()) {
       if (entry.status !== "confirmed") continue;
       if (staleApprovalIds.has(id)) continue;
-      const row = byId.get(id);
       // A confirmed entry outside the bounded grace window must never override
       // an authoritative Needs Review row. Removing it also prevents the same
       // stale ledger entry from suppressing the row on later refetches.
@@ -1274,13 +1273,16 @@ function BookkeepingCleanup() {
   }
 
   const filteredTransactions = useMemo(() => {
+    // Live pages have already been classified, filtered, and paginated by the
+    // bounded server RPC. Reapplying lifecycle membership here can only make a
+    // page shorter than its authoritative total (and was the Handled regression
+    // when failed rows were omitted by this client's narrower status list).
+    if (!usingDemo) return transactions;
+
     const now = new Date();
     const accountFilterNormalized = accountFilter === "all" ? null : accountFilter;
 
     const base = transactions.filter((txn) => {
-      if (!usingDemo && pendingApprovalIds.has(String(txn?.id || "")) && isNeedsReviewTransaction(txn)) {
-        return false;
-      }
       const matchesTab = matchesBooksTab(txn, activeTab);
       const txnAcct = getTxnAccountKey(txn);
       const matchesAccount = !accountFilterNormalized || txnAcct === accountFilterNormalized;
@@ -1289,7 +1291,7 @@ function BookkeepingCleanup() {
     });
 
     return base;
-  }, [accountFilter, activeTab, dateRange, pendingApprovalIds, transactions, usingDemo]);
+  }, [accountFilter, activeTab, dateRange, transactions, usingDemo]);
 
   const displayedTabCounts = useMemo(() => {
     if (!usingDemo) return tabCounts;
@@ -2662,16 +2664,6 @@ function BookkeepingCleanup() {
           direction,
         };
       });
-    const suppressMatchedTransitions = (list = [], totalValue = null) => {
-      const suppressIds = incomingDepositMatchedSuppressRef.current;
-      if (activeTab === "matched" || !suppressIds?.size) {
-        return { rows: list, totalCount: totalValue };
-      }
-      const rows = list.filter((txn) => !suppressIds.has(String(txn.id)));
-      const removed = list.length - rows.length;
-      const totalCount = typeof totalValue === "number" ? Math.max(0, totalValue - removed) : totalValue;
-      return { rows, totalCount };
-    };
     const extractTxns = (res) =>
       Array.isArray(res)
         ? res
@@ -2688,15 +2680,9 @@ function BookkeepingCleanup() {
       (typeof res?.meta?.total_count === "number" ? res.meta.total_count : null) ??
       normalizedList.length;
     const commitTransactionPage = (normalizedList, nextTotalValue, { cache = true } = {}) => {
-      const suppressed = suppressMatchedTransitions(normalizedList, nextTotalValue);
-      normalizedList = suppressed.rows;
-      nextTotalValue = suppressed.totalCount;
-      const undoSuppressed = suppressUndoneRowsFromLifecyclePage(normalizedList, nextTotalValue, undoSuppressedIdsRef.current, activeTab);
-      normalizedList = undoSuppressed.rows;
-      nextTotalValue = undoSuppressed.totalCount;
-      const approvalSuppressed = suppressLedgerRowsFromNeedsReview(normalizedList, nextTotalValue);
-      normalizedList = approvalSuppressed.rows;
-      nextTotalValue = approvalSuppressed.totalCount;
+      // A completed request is authoritative. Local transition ledgers may make
+      // an old cached page less jarring, but they must never discard rows from
+      // a fresh server page or alter the total returned with that page.
       const incomplete = isInconsistentEmptyTransactionPage({ rows: normalizedList, totalCount: nextTotalValue });
       setTotalCount(nextTotalValue);
       if (incomplete) {
@@ -2728,7 +2714,7 @@ function BookkeepingCleanup() {
       if (cache) {
         writeTransactionPageCache(cacheKey, { rows: normalizedList, totalCount: nextTotalValue });
       }
-      reconcileApprovalLedgerAfterRows(normalizedList, approvalSuppressed.staleApprovalIds);
+      reconcileApprovalLedgerAfterRows(new Set());
       return true;
     };
 

@@ -830,17 +830,6 @@ export async function countBookkeepingTransactions({
   db = supabase,
 } = {}) {
   const statusKey = String(statusFilter || "needs_review").toLowerCase();
-  if (statusKey === "handled" || statusKey === "approved") {
-    const handled = await fetchCanonicalHandledTransactions({
-      businessId,
-      accountId,
-      rangeParam,
-      rangeStart,
-      rangeEnd,
-      db,
-    });
-    return handled.length;
-  }
   const { data, error } = await db.rpc("count_bookkeeping_transactions_bounded", {
     p_business_id: businessId,
     p_status_filter: rpcStatusFilter(statusFilter),
@@ -850,7 +839,7 @@ export async function countBookkeepingTransactions({
   });
   if (error) throw error;
   const baseCount = Number(data || 0);
-  if (!["matched", "reconciled", "handled", "approved"].includes(statusKey)) return baseCount;
+  if (!["matched", "reconciled"].includes(statusKey)) return baseCount;
   const ccMatchedCount = await countMatchedCreditCardPairLegs({
     db,
     businessId,
@@ -859,52 +848,7 @@ export async function countBookkeepingTransactions({
     rangeStart,
     rangeEnd,
   });
-  if (statusKey === "matched" || statusKey === "reconciled") return baseCount + ccMatchedCount;
-  return Math.max(0, baseCount - ccMatchedCount);
-}
-
-async function fetchCanonicalHandledTransactions({
-  businessId,
-  accountId = null,
-  rangeParam = "this_month",
-  rangeStart,
-  rangeEnd = null,
-  db = supabase,
-} = {}) {
-  const batchSize = 200;
-  const rows = [];
-  let offset = 0;
-  let rawTotal = null;
-  do {
-    const { data, error } = await db.rpc("get_bookkeeping_transactions_bounded", {
-      p_business_id: businessId,
-      p_status_filter: rpcStatusFilter("handled"),
-      p_account_id: accountId || null,
-      p_range_start: resolveRangeStart({ rangeParam, rangeStart }),
-      p_range_end: normalizeBookkeepingDate(rangeEnd),
-      p_limit: batchSize,
-      p_offset: offset,
-    });
-    if (error) throw error;
-    const batch = Array.isArray(data) ? data : [];
-    if (rawTotal === null) rawTotal = batch.length ? Number(batch[0].total_count || batch.length) : 0;
-    rows.push(...batch.map((row) => normalizeBookkeepingRpcRow(row)));
-    offset += batch.length;
-    if (!batch.length || batch.length < batchSize) break;
-  } while (offset < rawTotal);
-
-  return rows
-    // Payment workflows have their own two terminal locations: unresolved in
-    // Needs Review and confirmed in Matched. Never leak either form into the
-    // ordinary Handled queue, even when a legacy row retained `approved`.
-    .filter((row) => !isCreditCardPaymentWorkflow(row))
-    .sort((a, b) => {
-      const dateOrder = String(b.date || "").localeCompare(String(a.date || ""));
-      if (dateOrder) return dateOrder;
-      const timeOrder = String(b.authorized_at || b.datetime || b.created_at || "")
-        .localeCompare(String(a.authorized_at || a.datetime || a.created_at || ""));
-      return timeOrder || String(a.id || "").localeCompare(String(b.id || ""));
-    });
+  return baseCount + ccMatchedCount;
 }
 
 // Job Costing uses posted Books transactions as the source of truth.
@@ -958,42 +902,6 @@ export async function fetchBookkeepingTransactions({
   const safePage = Math.max(parseInt(page, 10) || 1, 1);
   const safePageSize = Math.min(Math.max(parseInt(pageSize, 10) || 25, 1), 200);
   const statusKey = String(statusFilter || "needs_review").toLowerCase();
-  if (statusKey === "handled" || statusKey === "approved") {
-    const canonicalRows = await fetchCanonicalHandledTransactions({
-      businessId,
-      accountId,
-      rangeParam,
-      rangeStart,
-      rangeEnd,
-      db,
-    });
-    const start = (safePage - 1) * safePageSize;
-    const rows = canonicalRows.slice(start, start + safePageSize);
-    const accountDisplayMap = await fetchPlaidAccountDisplayMap({
-      db,
-      businessId,
-      plaidAccountIds: rows.map((row) => row.plaid_account_id || row.plaidAccountId),
-    });
-    const accountEnrichedRows = rows.map((row) => {
-      const display = accountDisplayMap.get(String(row.plaid_account_id || row.plaidAccountId || ""));
-      return display ? { ...row, ...display } : row;
-    });
-    let policy = null;
-    try {
-      policy = await getAutoPostPolicy(db, businessId);
-    } catch {
-      policy = { enabled: false, policy_columns_available: false };
-    }
-    const nowMs = Date.now();
-    const discoveryRows = await attachIncomingDepositDiscoveryForFeed({ db, businessId, rows: accountEnrichedRows, nowMs });
-    return {
-      rows: discoveryRows.map((row) => {
-        const qboPostingLifecycle = buildPostingLifecycleForFeed(row, policy, nowMs);
-        return qboPostingLifecycle ? { ...row, qbo_posting_lifecycle: qboPostingLifecycle } : row;
-      }),
-      totalCount: canonicalRows.length,
-    };
-  }
   const needsCombinedMatchedPagination = statusKey === "matched" || statusKey === "reconciled";
   const rpcLimit = needsCombinedMatchedPagination ? safePage * safePageSize : safePageSize;
   const rpcOffset = needsCombinedMatchedPagination ? 0 : (safePage - 1) * safePageSize;

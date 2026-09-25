@@ -23,12 +23,13 @@ test("excluded is one authoritative primary feed and reconciliation stays second
   assert.equal(classifyBookkeepingLifecycle({ status: "matched", reconciled_at: "2026-09-01" }).bucket, "matched");
 });
 
-test("eligible rows expose Exclude and excluded rows expose Restore", () => {
+test("eligible expanded row details expose Exclude and excluded rows expose Restore", () => {
   assert.match(feed, /allowExclude/);
-  assert.match(feed, />\s*Exclude\s*</);
+  assert.match(feed, /Full bank memo[\s\S]*Exclude transaction/);
   assert.match(feed, /showRestoreExcluded/);
   assert.match(feed, />\s*Restore\s*</);
-  assert.match(feed, /!isPosted && !isPosting && !incomingMatch\.confirmed && !hasCcPair/);
+  assert.match(feed, /allowExclude && !isPosted && !incomingMatch\.confirmed && !hasCcPair/);
+  assert.match(feed, /disabled=\{readOnly \|\| isPosting\}/);
 });
 
 test("exclusion RPCs are exact-ID, idempotent, audited, and do no QBO work", () => {

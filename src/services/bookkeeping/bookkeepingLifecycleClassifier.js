@@ -59,12 +59,12 @@ export function classifyBookkeepingLifecycle(row = {}) {
   let bucket;
   if (excluded) bucket = "excluded";
   else if (pending) bucket = "pending";
-  else if (posted) bucket = "posted";
   // A card-payment workflow is Matched only when its pair reached a confirmed
   // terminal state. A legacy/raw `matched` status can survive a resolution-mode
   // flip or a partially completed old flow; it must not hide an unresolved leg
   // from Needs Review.
   else if (matchedPair || (!creditCardPayment && (matchedExisting || status === "matched"))) bucket = "matched";
+  else if (posted) bucket = "posted";
   // An unresolved card payment is not an ordinary categorized transaction.
   // Payment matching must complete before it can leave Needs Review.
   else if (creditCardPayment && !creditCardPayment.matched) bucket = "needs_review";

@@ -1541,18 +1541,6 @@ export default function BookkeepingFeed({
                   >
                     Restore
                   </button>
-                ) : allowExclude && !isPosted && !isPosting && !incomingMatch.confirmed && !hasCcPair ? (
-                  <button
-                    type="button"
-                    onClick={() => onExclude?.(txn.id)}
-                    disabled={readOnly}
-                    className="inline-flex h-7 items-center justify-center rounded-full border border-rose-300/30 bg-rose-500/8 px-3 text-[10px] font-semibold text-rose-100 disabled:opacity-45"
-                    title="Exclude this transaction from categorization, matching, and QuickBooks posting"
-                  >
-                    Exclude
-                  </button>
-                ) : allowExclude && isPosting ? (
-                  <span className="text-[9px] text-amber-200" title="Posting is currently in progress. Wait for it to finish before excluding this transaction.">Posting</span>
                 ) : isPosted ? (
                   <span className="inline-flex w-fit items-center rounded-full px-2 py-[2px] text-[10px] font-semibold bg-emerald-500/10 text-emerald-200 border border-emerald-500/40">
                     Posted to QuickBooks
@@ -1829,6 +1817,27 @@ export default function BookkeepingFeed({
                      <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
                        {fullMemo}
                      </div>
+                     {allowExclude && !isPosted && !incomingMatch.confirmed && !hasCcPair ? (
+                       <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-rose-300/15 bg-rose-500/[0.035] px-3 py-2.5">
+                         <div className="min-w-0">
+                           <div className="text-[10px] font-semibold text-slate-200">Remove from bookkeeping workflow</div>
+                           <div className="mt-0.5 text-[9px] text-slate-400">
+                             {isPosting
+                               ? "Posting is currently in progress. Wait for it to finish before excluding this transaction."
+                               : "The transaction will remain visible in the Excluded feed and can be restored later."}
+                           </div>
+                         </div>
+                         <button
+                           type="button"
+                           onClick={() => onExclude?.(txn.id)}
+                           disabled={readOnly || isPosting}
+                           className="inline-flex h-8 shrink-0 items-center justify-center rounded-full border border-rose-300/35 bg-rose-500/10 px-4 text-[10px] font-semibold text-rose-100 transition hover:border-rose-300/55 hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-45"
+                           title={isPosting ? "Posting is currently in progress. Wait for it to finish before excluding this transaction." : "Exclude this transaction from categorization, matching, and QuickBooks posting"}
+                         >
+                           Exclude transaction
+                         </button>
+                       </div>
+                     ) : null}
                      {showRestoreExcluded ? (
                        <div className="mt-3 rounded-lg border border-slate-500/25 bg-white/[0.025] px-3 py-2 text-[10px] text-slate-300">
                          <div>Previous feed/status: {txn.pre_exclusion_lifecycle || txn.meta?.pre_exclusion_lifecycle || "Needs Review"}</div>

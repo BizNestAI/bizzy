@@ -220,14 +220,27 @@ router.get("/transactions", requireAuth, async (req, res) => {
     });
 
     if (process.env.NODE_ENV !== "production") {
-      console.info("[bookkeeping][transactions] returning", { count: rows.length, sample: rows[0] });
+      console.info("[bookkeeping][transactions] returning", {
+        business_id: businessId,
+        account_id: accountId,
+        feed: statusFilter,
+        page,
+        page_size: pageSize,
+        authoritative_total: totalCount,
+        returned_ids: rows.map((row) => row.id),
+      });
     }
 
     return res.json({
       ok: true,
+      items: rows,
       rows,
+      total: totalCount,
       totalCount,
       total_count: totalCount,
+      page,
+      pageSize,
+      hasNextPage: page * pageSize < totalCount,
       meta: {
         page,
         page_size: pageSize,
