@@ -1,7 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom";
-import { Check, Loader2, Plus, Trash2, X } from "lucide-react";
+import { Check, Loader2, Plus, Trash2, TriangleAlert, X } from "lucide-react";
 import CreateQuickBooksAccountModal from "./CreateQuickBooksAccountModal.jsx";
+import { normalizeCurrencyAmountDraft, sanitizeCurrencyAmountDraft } from "./currencyAmountDraft.js";
 
 function normalizeAccountType(value = "") {
   return String(value || "").replace(/[\s_-]+/g, "").toLowerCase();
@@ -232,11 +233,11 @@ function AccountSelect({ label, value, accounts = [], placeholder, disabled, onC
         disabled={disabled}
         aria-label={label}
         onClick={() => !disabled && setOpen((current) => !current)}
-        className="flex min-h-11 w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-left text-sm text-white outline-none transition hover:border-emerald-300/45 focus:border-emerald-300/65 focus:ring-2 focus:ring-emerald-500/25 disabled:opacity-50"
+        className="flex min-h-9 w-full items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-1.5 text-left text-xs text-white outline-none transition hover:border-emerald-300/45 focus:border-emerald-300/65 focus:ring-2 focus:ring-emerald-500/25 disabled:opacity-50"
       >
         <span className="min-w-0">
           <span className={`block truncate font-semibold ${selected ? "text-white" : "text-white/50"}`}>{selected ? accountName(selected) : placeholder}</span>
-          {selected && accountTypeLabel(selected) ? <span className="block truncate text-xs text-white/40">{accountTypeLabel(selected)}</span> : null}
+          {selected && accountTypeLabel(selected) ? <span className="block truncate text-[10px] text-white/40">{accountTypeLabel(selected)}</span> : null}
         </span>
         <span className="text-white/45">v</span>
       </button>
@@ -284,11 +285,14 @@ export default function SplitTransactionModal({
   onChange,
   onConfirm,
   onTreatAsRegular,
+  onCancel,
   onClose,
 }) {
   const panelRef = React.useRef(null);
+  const discardDialogRef = React.useRef(null);
   const [saving, setSaving] = React.useState(false);
   const [createAccountLineIndex, setCreateAccountLineIndex] = React.useState(null);
+  const [showDiscardConfirm, setShowDiscardConfirm] = React.useState(false);
   const activeMode = draft.mode || mode;
   const isLoanMode = activeMode === "loan_payment";
   const lines = normalizeDraftLines(draft);
@@ -318,13 +322,29 @@ export default function SplitTransactionModal({
   const updateLine = (index, patch) => update({ lines: lines.map((line, idx) => (idx === index ? { ...line, ...patch } : line)) });
   const addLine = () => update({ lines: [...lines, { id: `line-${Date.now()}`, role: isLoanMode ? "fee" : "general", description: isLoanMode ? "Fee" : "", qboAccountId: "", amount: "" }] });
   const removeLine = (index) => update({ lines: lines.filter((_, idx) => idx !== index) });
+  const cancelAndClose = React.useCallback(() => {
+    if (onCancel) onCancel();
+    else onClose?.();
+  }, [onCancel, onClose]);
   const requestClose = React.useCallback(() => {
     if (saving) return;
     if (createAccountLineIndex != null) return;
-    if (hasUnsavedInput && !window.confirm("Discard this split?")) return;
-    onClose?.();
-  }, [createAccountLineIndex, hasUnsavedInput, onClose, saving]);
-  useFocusTrap(open, panelRef, requestClose);
+    if (showDiscardConfirm) {
+      setShowDiscardConfirm(false);
+      return;
+    }
+    if (hasUnsavedInput) {
+      setShowDiscardConfirm(true);
+      return;
+    }
+    cancelAndClose();
+  }, [cancelAndClose, createAccountLineIndex, hasUnsavedInput, saving, showDiscardConfirm]);
+  useFocusTrap(open && !showDiscardConfirm, panelRef, requestClose);
+  useFocusTrap(showDiscardConfirm, discardDialogRef, () => setShowDiscardConfirm(false));
+
+  React.useEffect(() => {
+    if (!open) setShowDiscardConfirm(false);
+  }, [open]);
 
   if (!open || !txn) return null;
 
@@ -369,35 +389,35 @@ export default function SplitTransactionModal({
   return ReactDOM.createPortal(
     <div className="fixed inset-0 z-[10000]" role="presentation">
       <button type="button" aria-label="Close split transaction modal" className="absolute inset-0 cursor-default bg-black/62 backdrop-blur-[3px]" onClick={requestClose} />
-      <div className="relative z-10 flex min-h-dvh items-center justify-center p-8 max-[850px]:p-4">
-        <section ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="split-transaction-title" className="flex max-h-[calc(100vh-48px)] w-[min(900px,calc(100vw-32px))] flex-col overflow-hidden rounded-2xl border border-emerald-300/20 bg-[#0d100f] text-white shadow-[0_34px_110px_rgba(0,0,0,0.78)] max-[640px]:max-h-[calc(100dvh-24px)] max-[640px]:rounded-xl">
-          <header className="shrink-0 border-b border-white/10 bg-[#0d100f]/98 px-6 py-4 backdrop-blur max-[850px]:px-4">
+      <div className="relative z-10 flex min-h-dvh items-center justify-center p-6 max-[850px]:p-4">
+        <section ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="split-transaction-title" className="relative flex max-h-[calc(100vh-48px)] w-[min(760px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border border-emerald-300/20 bg-[#0d100f] text-white shadow-[0_28px_90px_rgba(0,0,0,0.76)] max-[640px]:max-h-[calc(100dvh-24px)]">
+          <header className="shrink-0 border-b border-white/10 bg-[#0d100f]/98 px-5 py-3.5 backdrop-blur max-[850px]:px-4">
             <div className="flex items-start justify-between gap-5">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h2 id="split-transaction-title" className="text-lg font-semibold text-white">Split transaction</h2>
-                  {isLoanMode ? <span className="rounded-full border border-amber-300/25 bg-amber-300/10 px-2 py-0.5 text-[11px] font-semibold text-amber-100">Loan payment</span> : null}
+                  <h2 id="split-transaction-title" className="text-base font-semibold text-white">Split transaction</h2>
+                  {isLoanMode ? <span className="rounded-full border border-amber-300/25 bg-amber-300/10 px-2 py-0.5 text-[10px] font-semibold text-amber-100">Loan payment</span> : null}
                 </div>
-                <p className="mt-1 max-w-[760px] truncate text-sm text-white/62" title={description}>{description}</p>
-                <p className="mt-1 truncate text-xs text-white/45">{dateLabel} - {sourceLabel} - {formatMoney(totalMinor)}</p>
+                <p className="mt-0.5 max-w-[640px] truncate text-xs text-white/62" title={description}>{description}</p>
+                <p className="mt-0.5 truncate text-[11px] text-white/45">{dateLabel} - {sourceLabel} - {formatMoney(totalMinor)}</p>
               </div>
-              <button type="button" onClick={requestClose} aria-label="Close split transaction modal" className="shrink-0 rounded-full border border-white/10 p-2 text-white/70 hover:bg-white/8 hover:text-white">
-                <X className="h-4 w-4" />
+              <button type="button" onClick={requestClose} aria-label="Close split transaction modal" className="shrink-0 rounded-full border border-white/10 p-1.5 text-white/70 hover:bg-white/8 hover:text-white">
+                <X className="h-3.5 w-3.5" />
               </button>
             </div>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 max-[850px]:px-4">
-            <div className="grid grid-cols-3 gap-3 rounded-xl border border-white/10 bg-black/24 px-4 py-3 max-[640px]:grid-cols-1">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-3.5 max-[850px]:px-4">
+            <div className="grid grid-cols-3 gap-2 rounded-lg border border-white/10 bg-black/24 px-3.5 py-2.5 max-[640px]:grid-cols-1">
               <SummaryItem label="Transaction total" value={formatMoney(totalMinor)} />
               <SummaryItem label="Allocated" value={formatMoney(allocatedMinor)} tone="accent" />
               <SummaryItem label="Remaining" value={formatMoney(remainingMinor)} icon={remainingMinor === 0 ? Check : null} tone={remainingMinor === 0 ? "good" : remainingMinor < 0 ? "bad" : "warn"} />
             </div>
 
-            <section className="mt-5 min-w-0">
-              <h3 className="text-sm font-semibold text-white">Payment allocation</h3>
-              <div className="mt-3 overflow-x-hidden rounded-xl border border-white/10 bg-black/18">
-                <div className="grid grid-cols-[minmax(160px,1fr)_minmax(220px,1.45fr)_128px_44px] gap-2 border-b border-white/10 px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-white/36 max-[640px]:hidden">
+            <section className="mt-4 min-w-0">
+              <h3 className="text-[13px] font-semibold text-white">Payment allocation</h3>
+              <div className="mt-2 overflow-x-hidden rounded-lg border border-white/10 bg-black/18">
+                <div className="grid grid-cols-[minmax(130px,.9fr)_minmax(200px,1.4fr)_112px_36px] gap-2 border-b border-white/10 px-2.5 py-1.5 text-[9px] font-semibold uppercase tracking-[0.15em] text-white/36 max-[640px]:hidden">
                   <span>Type/description</span>
                   <span>QuickBooks account</span>
                   <span className="text-right">Amount</span>
@@ -429,26 +449,50 @@ export default function SplitTransactionModal({
                   })}
                 </div>
               </div>
-              <button type="button" onClick={addLine} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-white/12 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/5">
-                <Plus className="h-4 w-4" />
+              <button type="button" onClick={addLine} className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-white/12 px-2.5 py-1.5 text-xs font-semibold text-white/75 hover:bg-white/5">
+                <Plus className="h-3.5 w-3.5" />
                 Add another line
               </button>
               <ValidationText remainingMinor={remainingMinor} allocatedMinor={allocatedMinor} nonzeroLineCount={nonzeroLines.length} validAccounts={validAccounts} hasInvalidAmounts={hasInvalidAmounts} />
             </section>
           </div>
 
-          <footer className="shrink-0 border-t border-white/10 bg-[#0d100f]/98 px-6 py-4 backdrop-blur max-[850px]:px-4">
+          <footer className="shrink-0 border-t border-white/10 bg-[#0d100f]/98 px-5 py-3 backdrop-blur max-[850px]:px-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              {isLoanMode ? <button type="button" disabled={saving || disabled} onClick={onTreatAsRegular} className="rounded-lg px-3 py-2 text-sm font-semibold text-white/65 hover:bg-white/5 disabled:opacity-45">Treat as regular transaction</button> : <span />}
+              {isLoanMode ? <button type="button" disabled={saving || disabled} onClick={onTreatAsRegular} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-white/65 hover:bg-white/5 disabled:opacity-45">Treat as regular transaction</button> : <span />}
               <div className="flex items-center gap-2">
-                <button type="button" disabled={saving} onClick={requestClose} className="rounded-lg border border-white/12 px-3 py-2 text-sm font-semibold text-white/75 hover:bg-white/5 disabled:opacity-45">Cancel</button>
-                <button type="button" disabled={!canConfirm} onClick={confirm} className="inline-flex items-center gap-2 rounded-lg border border-emerald-300/35 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-500/24 disabled:cursor-not-allowed disabled:opacity-45">
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                <button type="button" disabled={saving} onClick={requestClose} className="rounded-lg border border-white/12 px-2.5 py-1.5 text-xs font-semibold text-white/75 hover:bg-white/5 disabled:opacity-45">Cancel</button>
+                <button type="button" disabled={!canConfirm} onClick={confirm} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300/35 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-50 hover:bg-emerald-500/24 disabled:cursor-not-allowed disabled:opacity-45">
+                  {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
                   {saving ? "Saving..." : "Confirm split"}
                 </button>
               </div>
             </div>
           </footer>
+          {showDiscardConfirm ? (
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/72 p-5 backdrop-blur-[2px]" onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setShowDiscardConfirm(false);
+            }}>
+              <div ref={discardDialogRef} role="alertdialog" aria-modal="true" aria-labelledby="discard-split-title" aria-describedby="discard-split-description" className="w-full max-w-[380px] rounded-xl border border-white/12 bg-[#151917] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.72)]">
+                <div className="flex items-start gap-3">
+                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-amber-300/25 bg-amber-300/10 text-amber-200">
+                    <TriangleAlert className="h-5 w-5" aria-hidden="true" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 id="discard-split-title" className="text-base font-semibold text-white">Discard this split?</h3>
+                    <p id="discard-split-description" className="mt-1 text-sm leading-5 text-white/58">Your allocation amounts and account selections will be lost.</p>
+                  </div>
+                </div>
+                <div className="mt-5 flex justify-end gap-2">
+                  <button type="button" autoFocus onClick={() => setShowDiscardConfirm(false)} className="rounded-lg border border-white/12 px-3.5 py-2 text-sm font-semibold text-white/78 hover:bg-white/6">Continue editing</button>
+                  <button type="button" onClick={() => {
+                    setShowDiscardConfirm(false);
+                    cancelAndClose();
+                  }} className="rounded-lg border border-rose-300/30 bg-rose-400/12 px-3.5 py-2 text-sm font-semibold text-rose-100 hover:bg-rose-400/20">Discard split</button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
       </div>
       <CreateQuickBooksAccountModal
@@ -476,9 +520,9 @@ function SummaryItem({ label, value, tone, icon: Icon }) {
   const toneClass = tone === "good" ? "text-emerald-200" : tone === "bad" ? "text-rose-300" : tone === "warn" ? "text-amber-200" : tone === "accent" ? "text-emerald-100" : "text-white";
   return (
     <div>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/36">{label}</div>
-      <div className={`mt-1 inline-flex items-center gap-1.5 text-sm font-semibold ${toneClass}`}>
-        {Icon ? <Icon className="h-4 w-4" /> : null}
+      <div className="text-[9px] font-semibold uppercase tracking-[0.17em] text-white/36">{label}</div>
+      <div className={`mt-0.5 inline-flex items-center gap-1 text-[13px] font-semibold ${toneClass}`}>
+        {Icon ? <Icon className="h-3.5 w-3.5" /> : null}
         {value}
       </div>
     </div>
@@ -487,11 +531,11 @@ function SummaryItem({ label, value, tone, icon: Icon }) {
 
 function AllocationRow({ line, fixedLabel, accounts, accountPlaceholder, onChange, onCreateAccount, onRemove }) {
   return (
-    <div className="grid grid-cols-[minmax(160px,1fr)_minmax(220px,1.45fr)_128px_44px] items-center gap-2 px-3 py-3 max-[640px]:grid-cols-1">
+    <div className="grid grid-cols-[minmax(130px,.9fr)_minmax(200px,1.4fr)_112px_36px] items-center gap-2 px-2.5 py-2 max-[640px]:grid-cols-1">
       {fixedLabel ? (
-        <div className="text-sm font-semibold text-white/84">{line.description}</div>
+        <div className="text-xs font-semibold text-white/84">{line.description}</div>
       ) : (
-        <input value={line.description || ""} aria-label="Line description" placeholder="Description" onChange={(event) => onChange({ description: event.target.value })} className="h-10 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 text-sm font-semibold text-white outline-none placeholder:text-white/35 focus:border-emerald-300/55" />
+        <input value={line.description || ""} aria-label="Line description" placeholder="Description" onChange={(event) => onChange({ description: event.target.value })} className="h-9 min-w-0 rounded-lg border border-white/10 bg-black/30 px-2.5 text-xs font-semibold text-white outline-none placeholder:text-white/35 focus:border-emerald-300/55" />
       )}
       <div className="min-w-0">
         <AccountSelect label={`${line.description || "Split line"} account`} value={line.qboAccountId || ""} accounts={accounts} placeholder={accountPlaceholder} onChange={(value) => onChange({ qboAccountId: value })} />
@@ -502,12 +546,56 @@ function AllocationRow({ line, fixedLabel, accounts, accountPlaceholder, onChang
           </button>
         ) : null}
       </div>
-      <input value={line.amount || ""} inputMode="decimal" placeholder="0.00" onChange={(event) => onChange({ amount: event.target.value.replace(/[^0-9.-]/g, "") })} className="h-11 min-w-0 rounded-lg border border-white/10 bg-black/30 px-3 text-right text-sm text-white outline-none placeholder:text-white/35 focus:border-emerald-300/55" />
+      <CurrencyAmountInput
+        value={line.amount ?? ""}
+        label={`${line.description || "Split line"} amount`}
+        onChange={(amount) => onChange({ amount })}
+      />
       {onRemove ? (
-        <button type="button" onClick={onRemove} aria-label={`Remove ${line.description || "line"}`} className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/12 text-white/60 hover:bg-white/5">
-          <Trash2 className="h-4 w-4" />
+        <button type="button" onClick={onRemove} aria-label={`Remove ${line.description || "line"}`} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/12 text-white/60 hover:bg-white/5">
+          <Trash2 className="h-3.5 w-3.5" />
         </button>
       ) : <span />}
+    </div>
+  );
+}
+
+function CurrencyAmountInput({ value, label, onChange }) {
+  const inputRef = React.useRef(null);
+  const [draft, setDraft] = React.useState(() => String(value ?? ""));
+
+  React.useEffect(() => {
+    if (document.activeElement !== inputRef.current) setDraft(String(value ?? ""));
+  }, [value]);
+
+  const handleChange = (event) => {
+    const next = sanitizeCurrencyAmountDraft(event.target.value);
+    setDraft(next);
+    onChange?.(next);
+  };
+
+  const handleBlur = () => {
+    const normalized = normalizeCurrencyAmountDraft(draft);
+    setDraft(normalized);
+    if (normalized !== String(value ?? "")) onChange?.(normalized);
+  };
+
+  return (
+    <div className="relative min-w-0">
+      <span aria-hidden="true" className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-white/45">$</span>
+      <input
+        ref={inputRef}
+        type="text"
+        value={draft}
+        inputMode="decimal"
+        autoComplete="off"
+        aria-label={label}
+        placeholder="0.00"
+        onFocus={(event) => event.currentTarget.select()}
+        onChange={handleChange}
+        onBlur={handleBlur}
+        className="h-9 w-full min-w-0 rounded-lg border border-white/10 bg-black/30 py-0 pl-6 pr-2.5 text-right text-xs tabular-nums text-white outline-none placeholder:text-white/35 focus:border-emerald-300/55"
+      />
     </div>
   );
 }
@@ -521,5 +609,5 @@ function ValidationText({ remainingMinor, allocatedMinor, nonzeroLineCount, vali
   else if (!validAccounts) message = "Select a QuickBooks account for every nonzero line.";
   else message = "Payment fully allocated.";
   const tone = message === "Payment fully allocated." ? "text-emerald-100" : "text-amber-100";
-  return <div className={`mt-3 text-sm font-medium ${tone}`}>{message}</div>;
+  return <div className={`mt-2.5 text-xs font-medium ${tone}`}>{message}</div>;
 }

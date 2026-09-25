@@ -477,6 +477,10 @@ function BookkeepingTransactionMirrorRow({
         await onTreatLoanPaymentAsRegular?.(row);
         setLoanSplitDraft(null);
       }}
+      onCancel={() => {
+        setLoanSplitDraft(null);
+        void changeResolution("categorize_new");
+      }}
       onClose={() => setLoanSplitDraft(null)}
     />
     </>

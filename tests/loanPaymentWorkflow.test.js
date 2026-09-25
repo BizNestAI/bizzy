@@ -475,7 +475,7 @@ test("Books Review exposes loan rows through the universal general splitter safe
   assert.match(modal, /document\.body/);
   assert.match(modal, /role="dialog"/);
   assert.match(modal, /aria-modal="true"/);
-  assert.match(modal, /w-\[min\(900px,calc\(100vw-32px\)\)\]/);
+  assert.match(modal, /w-\[min\(760px,calc\(100vw-32px\)\)\]/);
   assert.match(modal, /max-h-\[calc\(100vh-48px\)\]/);
   assert.match(modal, /items-center justify-center/);
   assert.match(modal, /min-h-0 flex-1 overflow-y-auto/);

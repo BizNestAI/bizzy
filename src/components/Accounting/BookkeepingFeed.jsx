@@ -1985,6 +1985,12 @@ export default function BookkeepingFeed({
           await onTreatLoanPaymentAsRegular?.(activeLoanSplitEntry.txnId);
           clearLoanSplit(activeLoanSplitEntry.txnId);
         }}
+        onCancel={() => {
+          if (!activeLoanSplitEntry) return;
+          const entry = activeLoanSplitEntry;
+          clearLoanSplit(entry.txnId);
+          void changeResolution(entry.txn, "categorize_new");
+        }}
         onClose={() => activeLoanSplitEntry && clearLoanSplit(activeLoanSplitEntry.txnId)}
       />
     </div>
