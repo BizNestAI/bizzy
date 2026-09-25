@@ -1,4 +1,5 @@
 import React from "react";
+import { getBookkeepingExclusionEligibility } from "../../services/bookkeeping/exclusionEligibility.js";
 import ReactDOM from "react-dom";
 import { Listbox, ListboxButton, ListboxOption, ListboxOptions } from "@headlessui/react";
 import { Check, CheckCircle2, ChevronDown, Loader2, Plus, RotateCcw, UploadCloud } from "lucide-react";
@@ -966,6 +967,7 @@ export default function BookkeepingFeed({
   onApprove,
   onUndo,
   onExclude,
+  excludingTransactionIds = new Set(),
   onRestoreExcluded,
   onManualPost,
   onRejectCcPayment,
@@ -1817,7 +1819,7 @@ export default function BookkeepingFeed({
                      <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-slate-100">
                        {fullMemo}
                      </div>
-                     {allowExclude && !isPosted && !incomingMatch.confirmed && !hasCcPair ? (
+                     {allowExclude && getBookkeepingExclusionEligibility(txn).eligible ? (
                        <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-rose-300/15 bg-rose-500/[0.035] px-3 py-2.5">
                          <div className="min-w-0">
                            <div className="text-[10px] font-semibold text-slate-200">Remove from bookkeeping workflow</div>
@@ -1829,8 +1831,11 @@ export default function BookkeepingFeed({
                          </div>
                          <button
                            type="button"
-                           onClick={() => onExclude?.(txn.id)}
-                           disabled={readOnly || isPosting}
+                           onClick={async () => {
+                             const excluded = await onExclude?.(txn.transactionId || txn.id);
+                             if (excluded) setExpandedRowId(null);
+                           }}
+                           disabled={readOnly || isPosting || excludingTransactionIds.has(String(txn.transactionId || txn.id))}
                            className="inline-flex h-8 shrink-0 items-center justify-center rounded-full border border-rose-300/35 bg-rose-500/10 px-4 text-[10px] font-semibold text-rose-100 transition hover:border-rose-300/55 hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-45"
                            title={isPosting ? "Posting is currently in progress. Wait for it to finish before excluding this transaction." : "Exclude this transaction from categorization, matching, and QuickBooks posting"}
                          >

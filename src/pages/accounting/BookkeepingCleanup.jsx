@@ -51,6 +51,8 @@ import { ClarificationModal } from "../../components/Bizzy/OperatorRequestsPanel
 import {
   reloadCurrentBookkeepingView,
   suppressUndoneRowsFromLifecyclePage,
+  buildOptimisticallyExcludedRow,
+  patchFeedCacheForExclusion,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 const __motionUsageForLint = motion;
 
@@ -283,6 +285,36 @@ function updateCachedCreditCardPaymentFeeds({ businessId, transactionIds, plaidA
     }
     writeTransactionPageCache(key, { ...cached, rows, totalCount });
   }
+  return () => snapshots.forEach((value, key) => window.sessionStorage.setItem(key, value));
+}
+
+function updateAccountScopedExclusionCaches({ businessId, accountId, sourceTab, transaction, serverResult = {} }) {
+  if (!businessId || !accountId || !transaction?.id || typeof window === "undefined" || !window.sessionStorage) return () => {};
+  const prefix = `${BOOKS_TXN_CACHE_PREFIX}${encodeURIComponent(String(businessId))}:`;
+  const snapshots = new Map();
+  const keys = Array.from({ length: window.sessionStorage.length }, (_, index) => window.sessionStorage.key(index))
+    .filter((key) => key?.startsWith(prefix));
+  const excludedRow = buildOptimisticallyExcludedRow(transaction, serverResult);
+
+  keys.forEach((key) => {
+    const parts = key.slice(BOOKS_TXN_CACHE_PREFIX.length).split(":");
+    const cachedAccount = decodeURIComponent(parts[1] || "");
+    const cachedTab = decodeURIComponent(parts[2] || "");
+    const cachedPage = Number(decodeURIComponent(parts[4] || "1"));
+    const cachedPageSize = Number(decodeURIComponent(parts[5] || "25"));
+    if (cachedAccount !== String(accountId) || ![sourceTab, "excluded"].includes(cachedTab)) return;
+    const raw = window.sessionStorage.getItem(key);
+    const cached = readTransactionPageCache(key);
+    if (!raw || !cached) return;
+    snapshots.set(key, raw);
+    writeTransactionPageCache(key, patchFeedCacheForExclusion(cached, {
+      transaction: excludedRow,
+      sourceTab,
+      targetTab: cachedTab,
+      page: cachedPage,
+      pageSize: cachedPageSize,
+    }));
+  });
   return () => snapshots.forEach((value, key) => window.sessionStorage.setItem(key, value));
 }
 
@@ -728,6 +760,9 @@ function BookkeepingCleanup() {
   const [autoPostConfirmOpen, setAutoPostConfirmOpen] = useState(false);
   const [postingTransactionIds, setPostingTransactionIds] = useState(() => new Set());
   const [undoingTransactionIds, setUndoingTransactionIds] = useState(() => new Set());
+  const [excludingTransactionIds, setExcludingTransactionIds] = useState(() => new Set());
+  const exclusionInFlightRef = useRef(new Set());
+  const excludedTransactionIdsRef = useRef(new Set());
   const undoSuppressedIdsRef = useRef(new Set());
   const [incomingDepositMatchActionState, setIncomingDepositMatchActionState] = useState({});
   const [ccPaymentActionState, setCcPaymentActionState] = useState({});
@@ -1594,31 +1629,74 @@ function BookkeepingCleanup() {
 
   const handleExclude = async (id) => {
     if (!businessId || !canRunAI) return;
+    const exclusionKey = String(id || "");
+    if (!exclusionKey || exclusionInFlightRef.current.has(exclusionKey)) return false;
     const txn = transactions.find((row) => String(row.id) === String(id));
-    if (!txn) return;
-    const confirmed = window.confirm("Exclude this transaction?\n\nThis transaction will not be categorized, matched, or posted to QuickBooks. You can restore it later from the Excluded feed.");
-    if (!confirmed) return;
+    if (!txn) return false;
+    const sourceIndex = transactions.findIndex((row) => String(row.id) === exclusionKey);
+    const previousTotal = totalCount;
+    const previousCounts = tabCounts;
+    exclusionInFlightRef.current.add(exclusionKey);
+    excludedTransactionIdsRef.current.add(exclusionKey);
+    setExcludingTransactionIds((current) => new Set(current).add(exclusionKey));
+    setTransactions((rows) => rows.filter((row) => String(row.id) !== exclusionKey));
+    setTotalCount((value) => typeof value === "number" ? Math.max(0, value - 1) : value);
+    setTabCounts((counts) => counts ? {
+      ...counts,
+      [activeTab]: Math.max(0, Number(counts[activeTab] || 0) - 1),
+      excluded: Number(counts.excluded || 0) + 1,
+    } : counts);
+    const rollbackCaches = updateAccountScopedExclusionCaches({
+      businessId,
+      accountId: accountFilter,
+      sourceTab: activeTab,
+      transaction: txn,
+    });
     try {
-      await excludeTransaction(businessId, id);
-      setTransactions((rows) => rows.filter((row) => String(row.id) !== String(id)));
-      setTabCounts((counts) => counts ? {
-        ...counts,
-        [activeTab]: Math.max(0, Number(counts[activeTab] || 0) - 1),
-        excluded: Number(counts.excluded || 0) + 1,
-      } : counts);
-      window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: { severity: "success", title: "Transaction excluded", body: "You can restore it from Excluded." } }));
-      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: true, refreshProcessingStatus: false });
-      await loadTabCounts();
+      const result = await excludeTransaction(businessId, id, null, accountFilter);
+      updateAccountScopedExclusionCaches({ businessId, accountId: accountFilter, sourceTab: activeTab, transaction: txn, serverResult: result });
+      window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: {
+        severity: "success",
+        title: "Transaction excluded",
+        action: { label: "Undo", onClick: () => handleRestoreExcluded(id, { skipConfirmation: true }) },
+      } }));
+      void Promise.allSettled([
+        reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: true, refreshProcessingStatus: false }),
+        loadTabCounts(),
+      ]);
+      return true;
     } catch (err) {
-      window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: { severity: "error", title: "Could not exclude transaction", body: err?.body?.error === "posting_in_progress" ? "Posting is currently in progress. Wait for it to finish before excluding this transaction." : "Refresh and try again." } }));
+      excludedTransactionIdsRef.current.delete(exclusionKey);
+      rollbackCaches();
+      setTransactions((rows) => {
+        if (rows.some((row) => String(row.id) === exclusionKey)) return rows;
+        const next = [...rows];
+        next.splice(Math.min(Math.max(sourceIndex, 0), next.length), 0, txn);
+        return next;
+      });
+      setTotalCount(previousTotal);
+      setTabCounts(previousCounts);
+      const code = err?.body?.error?.code || err?.body?.code || err?.body?.error || err?.code || "TRANSACTION_EXCLUSION_FAILED";
+      const correlationId = err?.body?.error?.correlationId || err?.body?.correlationId || err?.requestId || null;
+      console.warn("[bookkeeping][exclude] failed", { code, correlation_id: correlationId, transaction_id: exclusionKey });
+      window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: { severity: "error", title: "Could not exclude transaction", body: code === "POSTING_IN_PROGRESS" || code === "posting_in_progress" ? "Posting is currently in progress. Wait for it to finish before excluding this transaction." : "Refresh and try again." } }));
+      return false;
+    } finally {
+      exclusionInFlightRef.current.delete(exclusionKey);
+      setExcludingTransactionIds((current) => {
+        const next = new Set(current);
+        next.delete(exclusionKey);
+        return next;
+      });
     }
   };
 
-  const handleRestoreExcluded = async (id) => {
+  const handleRestoreExcluded = async (id, { skipConfirmation = false } = {}) => {
     if (!businessId || !canRunAI) return;
-    if (!window.confirm("Restore this transaction to the bookkeeping workflow?")) return;
+    if (!skipConfirmation && !window.confirm("Restore this transaction to the bookkeeping workflow?")) return;
     try {
       await restoreExcludedTransaction(businessId, id);
+      excludedTransactionIdsRef.current.delete(String(id));
       setTransactions((rows) => rows.filter((row) => String(row.id) !== String(id)));
       await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: true, refreshProcessingStatus: false });
       await loadTabCounts();
@@ -2683,6 +2761,14 @@ function BookkeepingCleanup() {
       // A completed request is authoritative. Local transition ledgers may make
       // an old cached page less jarring, but they must never discard rows from
       // a fresh server page or alter the total returned with that page.
+      if (activeTab !== "excluded" && excludedTransactionIdsRef.current.size) {
+        const filtered = normalizedList.filter((row) => !excludedTransactionIdsRef.current.has(String(row?.id || "")));
+        const staleExcludedCount = normalizedList.length - filtered.length;
+        normalizedList = filtered;
+        if (typeof nextTotalValue === "number" && staleExcludedCount > 0) {
+          nextTotalValue = Math.max(0, nextTotalValue - staleExcludedCount);
+        }
+      }
       const incomplete = isInconsistentEmptyTransactionPage({ rows: normalizedList, totalCount: nextTotalValue });
       setTotalCount(nextTotalValue);
       if (incomplete) {
@@ -3266,6 +3352,7 @@ function BookkeepingCleanup() {
               onApprove={handleApprove}
               onUndo={handleUndo}
               onExclude={handleExclude}
+              excludingTransactionIds={excludingTransactionIds}
               onRestoreExcluded={handleRestoreExcluded}
               onManualPost={handleManualPostTransaction}
               onRejectCcPayment={handleRejectCreditCardPayment}

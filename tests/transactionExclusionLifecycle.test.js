@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { classifyBookkeepingLifecycle } from "../src/services/bookkeeping/bookkeepingLifecycleClassifier.js";
+import {
+  buildOptimisticallyExcludedRow,
+  patchFeedCacheForExclusion,
+} from "../src/services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 
 const page = readFileSync(new URL("../src/pages/accounting/BookkeepingCleanup.jsx", import.meta.url), "utf8");
 const feed = readFileSync(new URL("../src/components/Accounting/BookkeepingFeed.jsx", import.meta.url), "utf8");
@@ -28,7 +32,7 @@ test("eligible expanded row details expose Exclude and excluded rows expose Rest
   assert.match(feed, /Full bank memo[\s\S]*Exclude transaction/);
   assert.match(feed, /showRestoreExcluded/);
   assert.match(feed, />\s*Restore\s*</);
-  assert.match(feed, /allowExclude && !isPosted && !incomingMatch\.confirmed && !hasCcPair/);
+  assert.match(feed, /allowExclude && getBookkeepingExclusionEligibility\(txn\)\.eligible/);
   assert.match(feed, /disabled=\{readOnly \|\| isPosting\}/);
 });
 
@@ -64,4 +68,61 @@ test("pending finalization does not silently retain a material same-ID exclusion
 test("migration performs no exclusion backfill", () => {
   assert.doesNotMatch(migration, /update\s+public\.transaction_categorizations\s+set\s+status\s*=\s*'excluded'/i);
   assert.doesNotMatch(migration, /where[\s\S]{0,120}(merchant|amount|memo)[\s\S]{0,120}status\s*=\s*'excluded'/i);
+});
+
+test("Exclude is immediate, guarded against duplicates, and never asks for confirmation", () => {
+  const handler = page.slice(page.indexOf("const handleExclude"), page.indexOf("const handleRestoreExcluded"));
+  assert.doesNotMatch(handler, /window\.confirm|\bconfirm\s*\(/);
+  assert.match(handler, /exclusionInFlightRef\.current\.has/);
+  assert.match(handler, /setExcludingTransactionIds/);
+  assert.match(handler, /setTransactions\(\(rows\) => rows\.filter/);
+  assert.match(handler, /excluded:\s*Number\(counts\.excluded \|\| 0\) \+ 1/);
+  assert.match(handler, /rollbackCaches\(\)/);
+  assert.match(handler, /next\.splice/);
+  assert.match(feed, /if \(excluded\) setExpandedRowId\(null\)/);
+});
+
+test("Needs Review, Handled, and Pending caches move only the exact row into Excluded", () => {
+  const transaction = { id: "txn-1", plaid_account_id: "account-a", status: "approved" };
+  for (const sourceTab of ["needs_review", "handled", "pending"]) {
+    const source = patchFeedCacheForExclusion({ rows: [transaction, { id: "txn-2" }], totalCount: 2 }, {
+      transaction, sourceTab, targetTab: sourceTab, page: 1, pageSize: 25,
+    });
+    const excluded = patchFeedCacheForExclusion({ rows: [], totalCount: 0 }, {
+      transaction, sourceTab, targetTab: "excluded", page: 1, pageSize: 25,
+    });
+    assert.deepEqual(source.rows.map((row) => row.id), ["txn-2"]);
+    assert.equal(source.totalCount, 1);
+    assert.equal(excluded.totalCount, 1);
+    assert.equal(excluded.rows[0].id, "txn-1");
+    assert.equal(excluded.rows[0].plaid_account_id, "account-a");
+    assert.equal(excluded.rows[0].status, "excluded");
+  }
+});
+
+test("cache synchronization is scoped to the selected business and financial account", () => {
+  assert.match(page, /cachedAccount !== String\(accountId\)/);
+  assert.match(page, /BOOKS_TXN_CACHE_PREFIX.*businessId/);
+  assert.match(page, /\[sourceTab, "excluded"\]\.includes\(cachedTab\)/);
+});
+
+test("repeated exclusion state patches are idempotent", () => {
+  const transaction = buildOptimisticallyExcludedRow({ id: "txn-1", plaid_account_id: "account-a" });
+  const first = patchFeedCacheForExclusion({ rows: [], totalCount: 0 }, {
+    transaction, sourceTab: "handled", targetTab: "excluded", page: 1, pageSize: 25,
+  });
+  const second = patchFeedCacheForExclusion(first, {
+    transaction, sourceTab: "handled", targetTab: "excluded", page: 1, pageSize: 25,
+  });
+  assert.equal(second.totalCount, 1);
+  assert.equal(second.rows.length, 1);
+});
+
+test("exclude remains isolated from QBO, matching, categorization, and rule operations", () => {
+  const handler = page.slice(page.indexOf("const handleExclude"), page.indexOf("const handleRestoreExcluded"));
+  assert.doesNotMatch(handler, /createQbo|ManualPost|matchTransaction|categorize|createRule|learnRule/);
+  assert.match(handler, /excludeTransaction\(businessId, id, null, accountFilter\)/);
+  assert.match(handler, /action:\s*\{ label: "Undo"/);
+  assert.equal(classifyBookkeepingLifecycle({ status: "excluded", pre_exclusion_lifecycle: "handled" }).bucket, "excluded");
+  assert.equal(classifyBookkeepingLifecycle({ status: "approved" }).bucket, "handled");
 });

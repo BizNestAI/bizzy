@@ -164,6 +164,7 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     (matchedCreditCardPayment ? "credit_card_payment_pair" : matchedExistingQbo ? "qbo_existing_transaction" : null);
   const normalized = {
     id: row.id,
+    transactionId: row.id,
     plaidTransactionId: row.plaid_transaction_id || null,
     plaidAccountId: row.plaid_account_id || null,
     plaid_account_id: row.plaid_account_id || null,

@@ -22,13 +22,14 @@ router.post("/transactions/:transactionId/exclude", requireAuth, async (req, res
       db: supabase,
       businessId,
       transactionId: req.params.transactionId,
+      accountId: req.body?.account_id || null,
       actorId: actorId(req),
       reason: req.body?.reason || null,
     });
     return res.json(result);
   } catch (err) {
-    if (err instanceof TransactionExclusionError) return res.status(err.status).json({ ok: false, error: err.code, ...err.details });
-    return res.status(500).json({ ok: false, error: "transaction_exclusion_failed" });
+    if (err instanceof TransactionExclusionError) return res.status(err.status).json({ ok: false, error: { code: err.code, message: err.message, correlationId: err.details?.correlationId || null } });
+    return res.status(500).json({ ok: false, error: { code: "TRANSACTION_EXCLUSION_FAILED", message: "Transaction could not be excluded.", correlationId: null } });
   }
 });
 
@@ -44,8 +45,8 @@ router.post("/transactions/:transactionId/restore", requireAuth, async (req, res
     });
     return res.json(result);
   } catch (err) {
-    if (err instanceof TransactionExclusionError) return res.status(err.status).json({ ok: false, error: err.code, ...err.details });
-    return res.status(500).json({ ok: false, error: "transaction_restore_failed" });
+    if (err instanceof TransactionExclusionError) return res.status(err.status).json({ ok: false, error: { code: err.code, message: err.message, correlationId: err.details?.correlationId || null } });
+    return res.status(500).json({ ok: false, error: { code: "TRANSACTION_RESTORE_FAILED", message: "Transaction could not be restored.", correlationId: null } });
   }
 });
 

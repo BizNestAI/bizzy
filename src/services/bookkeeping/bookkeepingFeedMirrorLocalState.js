@@ -211,6 +211,53 @@ export function incrementCountBy(value, delta = 0) {
   return Number(value || 0) + Number(delta || 0);
 }
 
+export function buildOptimisticallyExcludedRow(row = {}, serverResult = {}) {
+  const excludedAt = serverResult.excluded_at || new Date().toISOString();
+  const previousFeed = serverResult.previous_feed || row.primary_feed || row.status || "needs_review";
+  return {
+    ...row,
+    status: "excluded",
+    primary_feed: "excluded",
+    excluded_at: excludedAt,
+    pre_exclusion_lifecycle: previousFeed,
+    meta: {
+      ...(row.meta || {}),
+      excluded_at: excludedAt,
+      pre_exclusion_lifecycle: previousFeed,
+    },
+  };
+}
+
+export function patchFeedCacheForExclusion(cached = {}, {
+  transaction,
+  sourceTab,
+  targetTab,
+  page = 1,
+  pageSize = 25,
+} = {}) {
+  const rows = Array.isArray(cached.rows) ? cached.rows : [];
+  const transactionId = String(transaction?.id || "");
+  if (!transactionId) return cached;
+  const contains = rows.some((row) => String(row?.id || "") === transactionId);
+  let nextRows = rows;
+  let nextTotal = Number(cached.totalCount ?? rows.length);
+
+  if (targetTab === sourceTab) {
+    nextRows = rows.filter((row) => String(row?.id || "") !== transactionId);
+    if (contains) nextTotal = Math.max(0, nextTotal - 1);
+  } else if (targetTab === "excluded") {
+    if (!contains) nextTotal += 1;
+    if (Number(page) === 1 && !contains) {
+      nextRows = [buildOptimisticallyExcludedRow(transaction), ...rows].slice(0, Number(pageSize) || 25);
+    } else if (contains) {
+      nextRows = rows.map((row) => String(row?.id || "") === transactionId
+        ? buildOptimisticallyExcludedRow({ ...row, ...transaction })
+        : row);
+    }
+  }
+  return { ...cached, rows: nextRows, totalCount: nextTotal };
+}
+
 export function patchSourceLedgerTransaction(sourceLedger = null, nextRow = {}) {
   if (!sourceLedger || !nextRow?.id) return sourceLedger;
   const patchTraceRow = (row = {}) => {
