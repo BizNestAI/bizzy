@@ -1,7 +1,7 @@
 {
   "status": "skipped",
   "runtimeExecuted": false,
-  "generatedAt": "2026-09-23T22:26:56.625Z",
+  "generatedAt": "2026-09-25T17:21:50.424Z",
   "reason": "TAX_OUTPUT_SAFETY_ENABLED is not true.",
   "missingEnvironment": [
     "TEST_SUPABASE_URL",

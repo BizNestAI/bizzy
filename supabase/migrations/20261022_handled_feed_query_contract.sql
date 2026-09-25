@@ -17,7 +17,7 @@ as $$
   select case lower(coalesce(p_status_filter, 'needs_review'))
     when 'approved' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null) = 'handled'
     when 'handled' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null) = 'handled'
-    when 'reconciled' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null) in ('matched','posted')
+    when 'reconciled' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null) = 'matched'
     when 'matched' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null) = 'matched'
     when 'posted' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null) = 'posted'
     when 'excluded' then public.classify_bookkeeping_primary_feed(false,p_status,null,null,p_meta,p_qbo_txn_id,null,null) = 'excluded'

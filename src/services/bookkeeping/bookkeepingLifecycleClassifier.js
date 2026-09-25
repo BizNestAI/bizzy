@@ -14,9 +14,14 @@ export function derivePostingOutcome(row = {}) {
   const status = String(row.posting_status || "").toLowerCase();
   const legacyStatus = String(row.status || row.categorization_status || "").toLowerCase();
   const reason = String(row.post_error || meta.post_error || meta.post_block_reason || "").toLowerCase();
-  const hasReceipt = Boolean(row.qbo_txn_id || row.qbo_entity_id || row.posted_at);
   const lastOperationId = row.last_operation_id || meta.merchant_group_operation_id ||
     meta.post_intent_id || meta.manual_approval?.operation_id || null;
+  const hasReceipt = Boolean(
+    row.posted_at ||
+    status === "posted" ||
+    legacyStatus === "posted" ||
+    ((row.qbo_txn_id || row.qbo_entity_id) && (meta.qbo_posting_receipt_id || lastOperationId))
+  );
 
   let key = "not_requested";
   if (hasReceipt || status === "posted") key = "succeeded";
@@ -51,7 +56,13 @@ export function classifyBookkeepingLifecycle(row = {}) {
   const matchedExisting = status === "matched_existing_qbo" || meta.matched_existing_qbo === true || meta.incoming_deposit_match_status === "confirmed";
   const matchedPair = Boolean(meta.cc_payment_pair_id || row.cc_payment_pair_id) &&
     isConfirmedCreditCardPaymentPairStatus(meta.cc_payment_pair_status || row.cc_payment_pair_status);
-  const posted = status === "posted" || Boolean(row.qbo_txn_id || row.qbo_entity_id || row.posted_at);
+  const postingOperationId = row.last_operation_id || meta.merchant_group_operation_id ||
+    meta.post_intent_id || meta.manual_approval?.operation_id || null;
+  const posted = status === "posted" || Boolean(
+    row.posted_at ||
+    String(row.posting_status || "").toLowerCase() === "posted" ||
+    ((row.qbo_txn_id || row.qbo_entity_id) && (meta.qbo_posting_receipt_id || postingOperationId))
+  );
   const postingOutcome = derivePostingOutcome(row);
   const failed = postingOutcome.key === "failed";
   const creditCardPayment = deriveCreditCardPaymentStatus(row);
@@ -63,7 +74,7 @@ export function classifyBookkeepingLifecycle(row = {}) {
   // terminal state. A legacy/raw `matched` status can survive a resolution-mode
   // flip or a partially completed old flow; it must not hide an unresolved leg
   // from Needs Review.
-  else if (matchedPair || (!creditCardPayment && (matchedExisting || status === "matched"))) bucket = "matched";
+  else if (matchedPair || (!creditCardPayment && matchedExisting)) bucket = "matched";
   else if (posted) bucket = "posted";
   // An unresolved card payment is not an ordinary categorized transaction.
   // Payment matching must complete before it can leave Needs Review.

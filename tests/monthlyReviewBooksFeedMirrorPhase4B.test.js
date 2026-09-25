@@ -27,7 +27,8 @@ test("shared feed service preserves Books Review status semantics", async () => 
   assert.equal(matchesTransactionStatusFilter("handled", { status: "auto_approved" }), true);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "failed", post_error: "qbo_rejected", last_post_attempt_at: "2026-09-22T00:00:00Z" }), true);
   assert.equal(matchesTransactionStatusFilter("handled", { status: "posted", qbo_txn_id: "1" }), false);
-  assert.equal(matchesTransactionStatusFilter("posted", { status: "approved", qbo_txn_id: "qbo-1" }), true);
+  assert.equal(matchesTransactionStatusFilter("posted", { status: "posted", qbo_txn_id: "qbo-1", posted_at: "2026-09-22T00:00:00Z" }), true);
+  assert.equal(matchesTransactionStatusFilter("posted", { status: "approved", qbo_txn_id: "qbo-1" }), false);
   assert.equal(matchesTransactionStatusFilter("matched", { status: "matched_existing_qbo" }), true);
   assert.equal(matchesTransactionStatusFilter("matched", { status: "needs_review", meta: { incoming_deposit_match_status: "confirmed" } }), true);
   assert.equal(matchesTransactionStatusFilter("needs_review", { status: "matched_existing_qbo" }), false);
@@ -94,7 +95,7 @@ test("shared service sends exact selected-month end bound before pagination", as
   assert.equal(result.rows[0].cc_payment_pair_id, "pair-1");
 });
 
-test("canonical matched feed uses the deployed reconciled RPC predicate for counts and rows", async () => {
+test("canonical matched feed uses the exclusive matched RPC predicate for counts and rows", async () => {
   const { fetchBookkeepingTransactions, countBookkeepingTransactions } = await servicePromise;
   const rpcCalls = [];
   const db = {
@@ -144,8 +145,8 @@ test("canonical matched feed uses the deployed reconciled RPC predicate for coun
   assert.equal(page.totalCount, 1);
   assert.equal(page.rows[0].matched_existing_qbo, true);
   assert.equal(page.rows[0].status, "matched_existing_qbo");
-  assert.equal(rpcCalls[0].params.p_status_filter, "reconciled");
-  assert.equal(rpcCalls[1].params.p_status_filter, "reconciled");
+  assert.equal(rpcCalls[0].params.p_status_filter, "matched");
+  assert.equal(rpcCalls[1].params.p_status_filter, "matched");
 });
 
 test("shared feed service enriches Plaid account ids into human-readable bank labels", async () => {

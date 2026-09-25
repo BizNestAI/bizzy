@@ -23,8 +23,8 @@ test("Books Review replaces the Reconciled navigation button with Excluded", () 
 
 test("excluded is one authoritative primary feed and reconciliation stays secondary", () => {
   assert.equal(classifyBookkeepingLifecycle({ status: "excluded", pending: true }).bucket, "excluded");
-  assert.equal(classifyBookkeepingLifecycle({ status: "approved", reconciled_at: "2026-09-01", qbo_txn_id: "qbo-1" }).bucket, "posted");
-  assert.equal(classifyBookkeepingLifecycle({ status: "matched", reconciled_at: "2026-09-01" }).bucket, "matched");
+  assert.equal(classifyBookkeepingLifecycle({ status: "posted", posted_at: "2026-09-01", qbo_txn_id: "qbo-1" }).bucket, "posted");
+  assert.equal(classifyBookkeepingLifecycle({ status: "matched_existing_qbo", reconciled_at: "2026-09-01", meta: { matched_existing_qbo: true } }).bucket, "matched");
 });
 
 test("eligible expanded row details expose Exclude and excluded rows expose Restore", () => {
@@ -80,6 +80,12 @@ test("Exclude is immediate, guarded against duplicates, and never asks for confi
   assert.match(handler, /rollbackCaches\(\)/);
   assert.match(handler, /next\.splice/);
   assert.match(feed, /if \(excluded\) setExpandedRowId\(null\)/);
+});
+
+test("Restore is immediate and never asks for confirmation", () => {
+  const handler = page.slice(page.indexOf("const handleRestoreExcluded"), page.indexOf("const handleRejectCreditCardPayment"));
+  assert.doesNotMatch(handler, /window\.confirm|\bconfirm\s*\(/);
+  assert.match(handler, /restoreExcludedTransaction\(businessId, id\)/);
 });
 
 test("Needs Review, Handled, and Pending caches move only the exact row into Excluded", () => {

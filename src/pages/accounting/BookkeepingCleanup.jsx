@@ -54,6 +54,7 @@ import {
   buildOptimisticallyExcludedRow,
   patchFeedCacheForExclusion,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
+import { classifyBookkeepingLifecycle } from "../../services/bookkeeping/bookkeepingLifecycleClassifier.js";
 const __motionUsageForLint = motion;
 
 const MOCK_ACCOUNTS = [
@@ -532,30 +533,15 @@ function getTxnAccountKey(txn = {}) {
 
 function matchesBooksTab(txn = {}, tabKey = "needs_review") {
   const status = txn.status || "needs_review";
-  const handledStatuses = ["approved", "auto_approved", "handled", "failed", "failed_post", "post_failed"];
-  const matchedExistingQbo =
-    status === "matched_existing_qbo" ||
-    txn.matched_existing_qbo === true ||
-    txn.meta?.matched_existing_qbo === true ||
-    txn.incoming_deposit_match_status === "confirmed" ||
-    txn.meta?.incoming_deposit_match_status === "confirmed";
   if (tabKey === "all") return true;
-  if (tabKey === "pending") return txn.pending === true;
-  if (tabKey === "excluded") return status === "excluded" || Boolean(txn.excluded_at || txn.meta?.excluded_at);
-  if (status === "excluded" || txn.excluded_at || txn.meta?.excluded_at) return false;
-  if (tabKey === "matched") return txn.pending !== true && (matchedExistingQbo || status === "matched");
-  if (matchedExistingQbo) return false;
-  if (txn.pending === true && tabKey !== "posted") return false;
-  if (tabKey === "needs_review") {
-    if (status === "needs_review" || status === "uncategorized" || !status) return true;
-    return status === "auto_approved" && txn.is_check === true;
+  const lifecycle = classifyBookkeepingLifecycle(txn).bucket;
+  if (["needs_review", "handled", "posted", "matched", "pending", "excluded"].includes(tabKey)) {
+    return lifecycle === tabKey;
   }
   if (tabKey === "uncategorized") {
     return status === "uncategorized" || txn.currentAccount === "Uncategorized" || txn.currentAccount === "Ask My Accountant";
   }
-  if (tabKey === "handled") return handledStatuses.includes(status);
-  if (tabKey === "posted") return status === "posted" || Boolean(txn.qbo_txn_id || txn.qboTxnId);
-  if (tabKey === "reconciled") return status === "matched_existing_qbo" || txn.matched_existing_qbo === true || Boolean(txn.reconciled_at);
+  if (tabKey === "reconciled") return lifecycle === "matched";
   if (tabKey === "flagged") return Boolean(txn.flagged);
   return false;
 }
@@ -1658,7 +1644,7 @@ function BookkeepingCleanup() {
       window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: {
         severity: "success",
         title: "Transaction excluded",
-        action: { label: "Undo", onClick: () => handleRestoreExcluded(id, { skipConfirmation: true }) },
+        action: { label: "Undo", onClick: () => handleRestoreExcluded(id) },
       } }));
       void Promise.allSettled([
         reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: true, refreshProcessingStatus: false }),
@@ -1691,9 +1677,8 @@ function BookkeepingCleanup() {
     }
   };
 
-  const handleRestoreExcluded = async (id, { skipConfirmation = false } = {}) => {
+  const handleRestoreExcluded = async (id) => {
     if (!businessId || !canRunAI) return;
-    if (!skipConfirmation && !window.confirm("Restore this transaction to the bookkeeping workflow?")) return;
     try {
       await restoreExcludedTransaction(businessId, id);
       excludedTransactionIdsRef.current.delete(String(id));

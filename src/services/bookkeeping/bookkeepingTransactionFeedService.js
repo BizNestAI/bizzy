@@ -63,16 +63,16 @@ export function matchesTransactionStatusFilter(statusFilter, cat = {}) {
   const isCheckTxn = cat?.meta?.is_check === true;
   const lifecycle = classifyBookkeepingLifecycle(cat);
   if (statusKey === "approved") return lifecycle.bucket === "handled";
-  if (statusKey === "reconciled") return lifecycle.bucket === "matched" || lifecycle.bucket === "posted";
+  if (statusKey === "reconciled") return lifecycle.bucket === "matched";
   if (statusKey === "needs_review" && cat?.status === "auto_approved" && isCheckTxn) return true;
   return lifecycle.bucket === statusKey;
 }
 
 function rpcStatusFilter(statusFilter = "needs_review") {
   const statusKey = String(statusFilter || "needs_review").toLowerCase();
-  // The deployed bounded feed RPC already exposes existing-QBO matches through
-  // the reconciliation predicate. Keep the public API canonical as `matched`.
-  if (statusKey === "matched") return "reconciled";
+  // Matched and Posted are distinct primary lifecycles. Never route Matched
+  // through the legacy Reconciled predicate, which historically included both.
+  if (statusKey === "reconciled") return "matched";
   return statusKey;
 }
 
