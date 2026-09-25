@@ -2137,9 +2137,18 @@ function BookkeepingCleanup() {
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
     } catch (e) {
-      const message = e?.body?.message || e?.message || "Could not save this split.";
-      console.warn("[bookkeeping] split transaction failed", message);
-      window.alert(message);
+      console.warn("[bookkeeping] split transaction failed", {
+        error: e?.body?.error || e?.code || "split_transaction_failed",
+        correlation_id: e?.body?.correlation_id || null,
+      });
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: {
+          severity: "error",
+          title: "Could not save this split",
+          body: "Your transaction was not changed. Please try again.",
+        },
+      }));
+      throw e;
     }
   };
 

@@ -417,7 +417,8 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
       detail: "This older handled transaction needs an explicit backlog release before auto-posting.",
     };
   }
-  if (!row.final_qbo_account_id && !meta?.cc_payment_cc_qbo_account_id) {
+  const hasConfirmedSplit = meta?.taxonomy_type === "split_transaction" && meta?.split_transaction_status === "confirmed" && meta?.split_transaction_id;
+  if (!row.final_qbo_account_id && !meta?.cc_payment_cc_qbo_account_id && !hasConfirmedSplit) {
     return {
       key: "blocked_missing_final_account",
       label: "Blocked: missing final account",

@@ -1363,6 +1363,7 @@ export default function BookkeepingFeed({
               payeeConfidence === "high";
             const isPosted = txn.status === "posted";
             const isPending = txn.pending === true;
+            const isHandledStatus = ["approved", "auto_approved", "handled", "failed"].includes(String(txn.status || "").toLowerCase());
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
             const incomingMatch = incomingDepositMatchState(txn);
@@ -1677,6 +1678,35 @@ export default function BookkeepingFeed({
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
+                ) : isHandledStatus ? (
+                  <div className="flex items-center justify-center gap-1.5">
+                    <button
+                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
+                      disabled={readOnly || isPosting}
+                      onClick={() => {
+                        if (readOnly || isPosting) return;
+                        onUndo?.(txn.id);
+                      }}
+                      title={readOnly ? "Billing required to edit transactions." : "Undo approval"}
+                      aria-label="Undo approval"
+                    >
+                      <RotateCcw size={11} strokeWidth={2.2} aria-hidden="true" />
+                      Undo
+                    </button>
+                    <button
+                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold text-emerald-100/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-emerald-300/65 hover:bg-emerald-500/16 disabled:cursor-not-allowed disabled:opacity-45"
+                      disabled={readOnly || isPosting || incomingMatchAction.loading === true}
+                      onClick={() => {
+                        if (readOnly || isPosting) return;
+                        if (incomingMatch.active && effectiveResolution === "match_existing_qbo") onInspectIncomingDepositMatch?.(txn.id, null, txn);
+                        else onManualPost?.(txn.id);
+                      }}
+                      aria-label={incomingMatch.active && effectiveResolution === "match_existing_qbo" ? "Retry QuickBooks match check" : txn.status === "failed" ? "Retry QuickBooks posting" : "Post to QuickBooks"}
+                    >
+                      <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
+                      {isPosting || incomingMatchAction.loading === true ? "Working..." : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? "Retry" : txn.status === "failed" ? "Retry" : "Post"}
+                    </button>
+                  </div>
                 ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (
                   incomingMatch.confirmed && allowIncomingDepositUndo && incomingMatch.matchId ? (
                     <button
@@ -1744,35 +1774,6 @@ export default function BookkeepingFeed({
                   )
                 ) : effectiveResolution === "split_transaction" ? (
                   <span className="text-[10px] text-slate-400">{loanSplitDraft ? "Needs split" : "Loan split"}</span>
-                ) : ["approved", "auto_approved", "handled", "failed"].includes(txn.status) ? (
-                  <div className="flex items-center justify-center gap-1.5">
-                    <button
-                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"
-                      disabled={readOnly || isPosting}
-                      onClick={() => {
-                        if (readOnly || isPosting) return;
-                        onUndo && onUndo(txn.id);
-                      }}
-                      title={readOnly ? "Billing required to edit transactions." : "Undo approval"}
-                      aria-label="Undo approval"
-                    >
-                      <RotateCcw size={11} strokeWidth={2.2} aria-hidden="true" />
-                      Undo
-                    </button>
-                    <button
-                      className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-emerald-300/35 bg-emerald-500/10 px-2.5 text-[10px] font-semibold text-emerald-100/95 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-emerald-300/65 hover:bg-emerald-500/16 disabled:cursor-not-allowed disabled:opacity-45"
-                      disabled={readOnly || isPosting}
-                      onClick={() => {
-                        if (readOnly || isPosting) return;
-                        onManualPost && onManualPost(txn.id);
-                      }}
-                      title={readOnly ? "Billing required to post transactions." : txn.status === "failed" ? "Retry posting this handled transaction to QuickBooks." : "Post this handled transaction to QuickBooks now."}
-                      aria-label={txn.status === "failed" ? "Retry QuickBooks posting" : "Post to QuickBooks"}
-                    >
-                      <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
-                      {isPosting ? "Posting..." : txn.status === "failed" ? "Retry" : "Post"}
-                    </button>
-                  </div>
                 ) : (
                  <button
                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/14 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/24 hover:border-emerald-300/90 active:scale-[0.99] disabled:opacity-45 disabled:cursor-not-allowed shadow-[0_2px_6px_rgba(0,0,0,0.2)] transition-transform"

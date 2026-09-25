@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { resolveBankTransactionCurrency } from "./bankTransactionCurrency.js";
 
 const LOAN_KEYWORDS_RE = /\b(?:loan|mortgage|principal|installment|lending|finance|financing|credit union|cu|alliant|navient|nelnet|sba|kabbage|fundbox|ondeck|paypal working capital)\b/i;
 const GENERIC_LENDER_FRAGMENTS = new Set(["payment", "loan", "principal", "finance", "financing", "online", "mobile", "transfer", "ach", "pmt"]);
@@ -394,7 +395,7 @@ export async function confirmLoanPaymentSplit({
     interest_amount_minor: Number(split.interest_amount_minor || 0),
     interest_qbo_account_id: split.interest_qbo_account_id || null,
     fee_lines: Array.isArray(split.fee_lines) ? split.fee_lines : [],
-    currency: split.currency || transaction.iso_currency_code || transaction.currency || "USD",
+    currency: resolveBankTransactionCurrency(transaction, split.currency),
     confirmed_by: actorId,
     confirmed_actor_type: actorType,
     confirmed_at: nowIso,

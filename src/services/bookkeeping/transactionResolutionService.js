@@ -28,7 +28,16 @@ export function suggestedTransactionResolution(transaction = {}) {
 }
 
 export function effectiveTransactionResolution(transaction = {}) {
-  return normalizeTransactionResolution(transaction.meta?.user_selected_resolution) || suggestedTransactionResolution(transaction);
+  const meta = transaction.meta || {};
+  const explicit = normalizeTransactionResolution(meta.user_selected_resolution);
+  if (explicit) return explicit;
+  if (meta.split_transaction_status === "confirmed" || meta.split_transaction_id) return "split_transaction";
+  if (meta.matched_existing_qbo === true || meta.incoming_deposit_match_status === "confirmed") return "match_existing_qbo";
+  if (meta.cc_payment_pair_id && ["confirmed", "posted"].includes(String(meta.cc_payment_pair_status || "").toLowerCase())) return "match_credit_card_payment";
+  const status = String(transaction.status || transaction.cat_status || "").toLowerCase();
+  const finalAccountId = transaction.final_qbo_account_id || transaction.finalQboAccountId || transaction.glAccountId;
+  if (["approved", "auto_approved", "handled", "failed"].includes(status) && finalAccountId) return "categorize_new";
+  return suggestedTransactionResolution(transaction);
 }
 
 export function recoverOrphanedSplitResolution(resolution, hasActiveSplitDraft = false) {

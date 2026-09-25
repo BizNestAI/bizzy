@@ -2148,12 +2148,23 @@ export async function handleItem(item, options = {}) {
 
   const { data: metaRow, error: metaErr } = await supabase
     .from("transaction_categorizations")
-    .select("meta")
+    .select("status,post_after,qbo_txn_id,posted_at,meta")
     .eq("business_id", businessId)
     .eq("transaction_id", txnId)
     .maybeSingle();
   if (metaErr) {
     console.warn("[books-post] failed to refresh meta after lock", metaErr?.message || metaErr);
+    return;
+  } else if (
+    !metaRow ||
+    !["approved", "auto_approved", "failed"].includes(String(metaRow.status || "").toLowerCase()) ||
+    metaRow.qbo_txn_id ||
+    metaRow.posted_at ||
+    metaRow?.meta?.posting_cancelled_at
+  ) {
+    // Undo/reclassification may win the race after this job was queued. The
+    // authoritative row must still be eligible after acquiring the lease.
+    return;
   } else if (metaRow?.meta) {
     item.meta = { ...metaRow.meta, post_idempotency_key: idempotencyKey };
   }
@@ -2437,6 +2448,36 @@ export async function handleItem(item, options = {}) {
     payloadSummary,
     attemptedAt: nowIso,
   });
+
+  const { data: authorizedRow, error: authorizationError } = await supabase
+    .from("transaction_categorizations")
+    .select("status,qbo_txn_id,posted_at,meta")
+    .eq("business_id", businessId)
+    .eq("transaction_id", txnId)
+    .maybeSingle();
+  if (
+    authorizationError ||
+    !authorizedRow ||
+    !["approved", "auto_approved", "failed"].includes(String(authorizedRow.status || "").toLowerCase()) ||
+    authorizedRow.qbo_txn_id ||
+    authorizedRow.posted_at ||
+    authorizedRow?.meta?.posting_cancelled_at ||
+    authorizedRow?.meta?.posting_generation !== item?.meta?.posting_generation
+  ) {
+    await supabase
+      .from("transaction_categorizations")
+      .update({
+        meta: { ...(authorizedRow?.meta || {}), posting_in_progress: false },
+      })
+      .eq("business_id", businessId)
+      .eq("transaction_id", txnId);
+    log.info("[books-post] posting cancelled before QBO write", {
+      businessId,
+      transactionId: txnId,
+      reason: authorizationError ? "authorization_refresh_failed" : "posting_authorization_changed",
+    });
+    return;
+  }
 
   logPostSuccessStage("qbo_write_started", { businessId, transactionId: txnId, requestId, qboTxnType: intentQboTxnTypeForLog });
   const result = await timePostingStage(timing, "qbo_create_ms", () => postToQbo(item, bank, qbo, mapping, requestId)).catch(async (err) => {

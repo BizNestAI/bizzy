@@ -1,4 +1,5 @@
 /* global process */
+import crypto from "node:crypto";
 import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { learnVendorRuleFromTransaction } from "./vendorRuleLearner.js";
 import { isCheck } from "./checkDetector.js";
@@ -340,6 +341,11 @@ export async function approveBookkeepingTransactions({
         ...(existingMetaMap[txnId] || {}),
         ...(extraMetaByTransactionId?.[txnId] || {}),
       };
+      // A new explicit approval starts a new posting generation. Do not let
+      // the cancellation marker written by a prior Undo suppress this one.
+      delete mergedMeta.posting_cancelled_at;
+      mergedMeta.posting_generation = crypto.randomUUID();
+      mergedMeta.posting_in_progress = false;
       const isTransferTaxonomy = mergedMeta?.taxonomy_type === "transfer_internal";
       const isCcPaymentTaxonomy = mergedMeta?.taxonomy_type === "cc_payment";
       const isConfirmedCcPaymentPair =

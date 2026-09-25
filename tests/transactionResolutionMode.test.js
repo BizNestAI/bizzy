@@ -53,6 +53,52 @@ test("immutable transaction override wins over a classifier rerun and persists a
   assert.equal(effectiveTransactionResolution({ meta: { ...db.stored.meta, taxonomy_type: "loan_payment" } }), "match_existing_qbo");
 });
 
+test("a saved manual category outranks a stale credit-card inflow match heuristic after posting failure", () => {
+  assert.equal(effectiveTransactionResolution({
+    status: "failed",
+    final_qbo_account_id: "credit-card-rewards",
+    final_qbo_account_name: "Credit Card Rewards",
+    meta: {
+      incoming_deposit_match_status: "match_check_unavailable",
+      system_suggested_resolution: "match_existing_qbo",
+    },
+  }), "categorize_new");
+});
+
+test("an explicit or confirmed match still outranks a saved category", () => {
+  assert.equal(effectiveTransactionResolution({
+    status: "failed",
+    final_qbo_account_id: "credit-card-rewards",
+    meta: { user_selected_resolution: "match_existing_qbo" },
+  }), "match_existing_qbo");
+  assert.equal(effectiveTransactionResolution({
+    status: "approved",
+    final_qbo_account_id: "credit-card-rewards",
+    meta: { incoming_deposit_match_status: "confirmed" },
+  }), "match_existing_qbo");
+});
+
+test("Handled action rendering makes Undo structural and keeps Retry alongside it", () => {
+  const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
+  const actionStart = feed.indexOf(') : isHandledStatus ? (');
+  const incomingStart = feed.indexOf(') : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (', actionStart);
+  const handledBranch = feed.slice(actionStart, incomingStart);
+  assert.ok(actionStart > 0 && incomingStart > actionStart);
+  assert.match(handledBranch, /aria-label="Undo approval"/);
+  assert.match(handledBranch, /txn\.status === "failed" \? "Retry"/);
+});
+
+test("posting worker rechecks authoritative status and generation immediately before a QBO write", () => {
+  const worker = read("src/jobs/booksPost.cron.js");
+  const authorizationCheck = worker.indexOf('const { data: authorizedRow, error: authorizationError }');
+  const qboWrite = worker.indexOf('postToQbo(item, bank, qbo, mapping, requestId)', authorizationCheck);
+  assert.ok(authorizationCheck > 0 && qboWrite > authorizationCheck);
+  const guard = worker.slice(authorizationCheck, qboWrite);
+  assert.match(guard, /posting_cancelled_at/);
+  assert.match(guard, /posting_generation !== item\?\.meta\?\.posting_generation/);
+  assert.match(guard, /return;/);
+});
+
 test("completed transactions cannot be switched into another posting workflow", async () => {
   const db = resolutionDb({ status: "posted", qbo_txn_id: "qbo-1", meta: {} });
   await assert.rejects(

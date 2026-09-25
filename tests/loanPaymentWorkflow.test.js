@@ -19,6 +19,7 @@ import {
   confirmSplitTransaction,
   validateSplitTransaction,
 } from "../src/services/bookkeeping/splitTransactionWorkflow.js";
+import { resolveBankTransactionCurrency } from "../src/services/bookkeeping/bankTransactionCurrency.js";
 import { classifyTaxonomy } from "../src/services/bookkeeping/taxonomyClassifier.js";
 import { getProtectedWorkflowReason } from "../src/services/bookkeeping/protectedWorkflow.js";
 
@@ -155,6 +156,35 @@ test("general split confirmation persists allocation without lender learning", a
   assert.equal(result.split.lines.length, 2);
   assert.equal(db.inserts.some((entry) => entry.table === "transaction_splits"), true);
   assert.equal(db.inserts.some((entry) => entry.table === "loan_lender_profiles"), false);
+});
+
+test("Alliant checking split preserves liability and interest allocations in exact cents", async () => {
+  const db = createLoanWorkflowDbStub();
+  const result = await confirmSplitTransaction({
+    db,
+    businessId: "biz-1",
+    transaction: { ...alliantTxn, iso_currency_code: "usd" },
+    accountsById: new Map([
+      ["car-loan", { id: "car-loan", type: "Long Term Liability", name: "Car Loan" }],
+      ["car-interest", { id: "car-interest", type: "Expense", name: "Car Loan Interest" }],
+    ]),
+    split: {
+      lines: [
+        { description: "Principal", amount_minor: 46755, qbo_account_id: "car-loan" },
+        { description: "Interest", amount_minor: 5000, qbo_account_id: "car-interest" },
+      ],
+    },
+  });
+  assert.equal(result.split.total_amount_minor, 51755);
+  assert.equal(result.split.currency, "USD");
+  assert.deepEqual(result.split.lines.map((line) => line.amount_minor), [46755, 5000]);
+  assert.deepEqual(result.split.lines.map((line) => line.qbo_account_id), ["car-loan", "car-interest"]);
+});
+
+test("split currency follows the deployed bank transaction schema", () => {
+  assert.equal(resolveBankTransactionCurrency({ iso_currency_code: "cad", unofficial_currency_code: "usd" }), "CAD");
+  assert.equal(resolveBankTransactionCurrency({ unofficial_currency_code: "eur" }), "EUR");
+  assert.equal(resolveBankTransactionCurrency({}), "USD");
 });
 
 test("learned lender helpers exist for tenant-scoped profile matching, confirmation, and override audit", () => {
@@ -522,9 +552,11 @@ test("Books Review exposes loan rows through the universal general splitter safe
   assert.match(approvals, /confirmLoanPaymentSplit/);
   assert.match(approvals, /taxonomy_type:\s*"loan_payment"/);
   assert.match(approvals, /loan_payment_split_status:\s*"confirmed"/);
-  assert.match(approvals, /status:\s*"needs_review"/);
-  assert.match(approvals, /post_after:\s*null/);
+  assert.match(approvals, /status:\s*"approved"/);
+  assert.match(approvals, /safe_to_auto_post:\s*true/);
   assert.match(approvals, /transaction_already_posted/);
+  assert.doesNotMatch(approvals, /iso_currency_code,currency/);
+  assert.match(approvals, /iso_currency_code,unofficial_currency_code/);
   assert.match(approvals, /loan-payments\/:transactionId\/treat-as-regular/);
   assert.match(page, /handleConfirmSplitTransaction/);
   assert.match(page, /handleConfirmLoanPaymentSplit/);

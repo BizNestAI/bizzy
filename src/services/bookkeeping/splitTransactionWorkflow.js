@@ -1,3 +1,5 @@
+import { resolveBankTransactionCurrency } from "./bankTransactionCurrency.js";
+
 export class SplitTransactionWorkflowError extends Error {
   constructor(error, details = {}) {
     super(error);
@@ -77,13 +79,22 @@ export async function confirmSplitTransaction({
   const validation = validateSplitTransaction({ transaction, split, accountsById });
   const nowIso = new Date().toISOString();
   const transactionId = transaction.id || transaction.transaction_id || null;
+  const { data: existing, error: existingError } = await db
+    .from("transaction_splits")
+    .select("*")
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .eq("status", "confirmed")
+    .maybeSingle();
+  if (existingError) throw existingError;
+  if (existing) return { split: existing, created: false };
   const payload = {
     business_id: businessId,
     transaction_id: transactionId,
     status: "confirmed",
     split_type: split.split_type || "general",
     total_amount_minor: validation.expected_amount_minor,
-    currency: split.currency || transaction.iso_currency_code || transaction.currency || "USD",
+    currency: resolveBankTransactionCurrency(transaction, split.currency),
     lines: validation.lines.map((line) => ({
       description: line.description,
       amount_minor: line.amount_minor,
@@ -103,8 +114,19 @@ export async function confirmSplitTransaction({
     .insert(payload)
     .select("*")
     .maybeSingle();
+  if (error?.code === "23505") {
+    const { data: concurrent, error: concurrentError } = await db
+      .from("transaction_splits")
+      .select("*")
+      .eq("business_id", businessId)
+      .eq("transaction_id", transactionId)
+      .eq("status", "confirmed")
+      .maybeSingle();
+    if (concurrentError) throw concurrentError;
+    if (concurrent) return { split: concurrent, created: false };
+  }
   if (error) throw error;
-  return { split: data };
+  return { split: data, created: true };
 }
 
 export async function fetchConfirmedSplitTransaction({ db, businessId, transactionId }) {

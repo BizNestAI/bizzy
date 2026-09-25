@@ -1,5 +1,6 @@
 import { Router } from "express";
 import crypto from "crypto";
+import process from "node:process";
 import { supabase } from "../../../services/supabaseAdmin.js";
 import { requireAuth } from "../../gpt/middlewares/requireAuth.js";
 import { ensureBusinessId } from "./_bookkeepingRouteUtils.js";
@@ -104,16 +105,27 @@ router.post("/undo", requireAuth, async (req, res) => {
     const nowIso = new Date().toISOString();
     const { data: existingCategorization, error: existingCategorizationErr } = await supabase
       .from("transaction_categorizations")
-      .select("meta")
+      .select("status,meta,qbo_txn_id,posted_at")
       .eq("business_id", businessId)
       .eq("transaction_id", txnId)
       .maybeSingle();
     if (existingCategorizationErr) throw existingCategorizationErr;
+    if (existingCategorization?.qbo_txn_id || existingCategorization?.posted_at || existingCategorization?.status === "posted") {
+      return res.status(409).json({ ok: false, error: "transaction_already_posted", message: "This transaction has already posted to QuickBooks." });
+    }
     const undoMeta = {
       ...(existingCategorization?.meta || {}),
       review_reopen_authorized: true,
       review_reopen_reason: "approval_undone_by_user",
+      posting_in_progress: false,
+      next_post_attempt_at: null,
+      posting_cancelled_at: nowIso,
+      posting_generation: crypto.randomUUID(),
     };
+    delete undoMeta.user_selected_resolution;
+    delete undoMeta.resolution_selected_at;
+    delete undoMeta.resolution_selected_by;
+    delete undoMeta.resolution_selection_source;
     const { data: updatedRows, error: updateErr } = await supabase
       .from("transaction_categorizations")
       .update({
@@ -375,7 +387,7 @@ router.post("/loan-payments/:transactionId/confirm-split", requireAuth, async (r
   try {
     const { data: transaction, error: txnErr } = await supabase
       .from("bank_transactions")
-      .select("id,business_id,date,name,merchant_name,counterparty_name,transaction_type,merchant_entity_id,amount,direction,pending,plaid_account_id,iso_currency_code,currency")
+      .select("id,business_id,date,name,merchant_name,counterparty_name,transaction_type,merchant_entity_id,amount,direction,pending,plaid_account_id,iso_currency_code,unofficial_currency_code")
       .eq("business_id", businessId)
       .eq("is_archived", false)
       .eq("id", transactionId)
@@ -459,10 +471,13 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
   if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
   if (req.body?.resolution !== "split_transaction") return res.status(400).json({ ok: false, error: "resolution_payload_mismatch" });
 
+  const correlationId = req.get("x-correlation-id") || crypto.randomUUID();
+  res.set("x-correlation-id", correlationId);
+  let writesOccurred = false;
   try {
     const { data: transaction, error: txnErr } = await supabase
       .from("bank_transactions")
-      .select("id,business_id,date,name,merchant_name,counterparty_name,transaction_type,merchant_entity_id,amount,direction,pending,plaid_account_id,iso_currency_code,currency")
+      .select("id,business_id,date,name,merchant_name,counterparty_name,transaction_type,merchant_entity_id,amount,direction,pending,plaid_account_id,iso_currency_code,unofficial_currency_code")
       .eq("business_id", businessId)
       .eq("is_archived", false)
       .eq("id", transactionId)
@@ -492,6 +507,7 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
       actorId,
       actorType: "user",
     });
+    writesOccurred = result?.created === true;
     const nowIso = new Date().toISOString();
     const nextMeta = {
       ...(existingCat?.meta || {}),
@@ -499,7 +515,8 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
       split_transaction_status: "confirmed",
       split_transaction_id: result?.split?.id || null,
       protected_workflow: "split_transaction",
-      safe_to_auto_post: false,
+      safe_to_auto_post: true,
+      auto_approve_reason: "manual_user",
     };
     const { data: categorization, error: upsertErr } = await supabase
       .from("transaction_categorizations")
@@ -507,13 +524,13 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
         {
           business_id: businessId,
           transaction_id: transactionId,
-          status: "needs_review",
+          status: "approved",
           final_qbo_account_id: null,
           final_qbo_account_name: null,
           decided_by: "user",
           decided_at: nowIso,
           updated_at: nowIso,
-          post_after: null,
+          post_after: nowIso,
           post_error: null,
           meta: nextMeta,
         },
@@ -521,19 +538,33 @@ router.post("/transactions/:transactionId/confirm-split", requireAuth, async (re
       )
       .select("business_id,transaction_id,status,meta,post_after")
       .maybeSingle();
-    if (upsertErr) throw upsertErr;
+    if (upsertErr) {
+      if (result?.created && result?.split?.id) {
+        await supabase.from("transaction_splits").delete().eq("business_id", businessId).eq("id", result.split.id);
+      }
+      throw upsertErr;
+    }
     await refreshOperatorRequestSummaryBestEffort({
       businessId,
       reason: "split_transaction_confirmed",
     });
-    return res.json({ ok: true, split_transaction: true, split: result?.split || null, categorization });
+    return res.json({ ok: true, split_transaction: true, split: result?.split || null, categorization, correlation_id: correlationId });
   } catch (err) {
     const code = String(err?.message || "split_transaction_failed");
     if (err instanceof SplitTransactionWorkflowError || code.startsWith("split_transaction_") || code === "pending_transaction_not_postable") {
       return res.status(err?.status || 400).json({ ok: false, error: code, message: code, details: err?.details || null });
     }
-    console.error("[bookkeeping][confirm-split-transaction] failed", err?.message || err);
-    return res.status(500).json({ ok: false, error: "split_transaction_failed", message: err?.message || "failed" });
+    console.error("[bookkeeping][confirm-split-transaction] failed", {
+      business_id: businessId,
+      transaction_id: transactionId,
+      endpoint: "POST /api/bookkeeping/transactions/:transactionId/confirm-split",
+      deployment_version: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.DEPLOYMENT_VERSION || null,
+      correlation_id: correlationId,
+      database_error_code: err?.code || null,
+      writes_occurred: writesOccurred,
+      error: err?.message || String(err),
+    });
+    return res.status(500).json({ ok: false, error: "split_transaction_failed", message: "Could not save this split. Your transaction was not changed. Please try again.", correlation_id: correlationId });
   }
 });
 
