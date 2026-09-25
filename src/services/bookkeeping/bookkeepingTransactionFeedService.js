@@ -594,156 +594,6 @@ export function incomingDepositOverlayFromResult(result = {}, row = {}) {
   };
 }
 
-function dateInRange(dateValue, startValue, endValue) {
-  const date = normalizeBookkeepingDate(dateValue);
-  if (!date) return true;
-  const start = normalizeBookkeepingDate(startValue);
-  const end = normalizeBookkeepingDate(endValue);
-  if (start && date < start) return false;
-  if (end && date > end) return false;
-  return true;
-}
-
-function isMatchedCreditCardPair(pair = {}) {
-  const status = String(pair.status || "").toLowerCase();
-  return ["matched", "confirmed", "posting", "failed"].includes(status) && !pair.qbo_txn_id;
-}
-
-function ccPairLegDescriptors(pair = {}) {
-  const out = [];
-  if (pair.checking_transaction_id) {
-    out.push({
-      transactionId: pair.checking_transaction_id,
-      plaidAccountId: pair.checking_plaid_account_id,
-      date: pair.payment_date || pair.matched_date,
-    });
-  }
-  if (pair.credit_card_transaction_id) {
-    out.push({
-      transactionId: pair.credit_card_transaction_id,
-      plaidAccountId: pair.credit_card_plaid_account_id,
-      date: pair.matched_date || pair.payment_date,
-    });
-  }
-  return out;
-}
-
-async function fetchMatchedCreditCardPairLegs({
-  db = supabase,
-  businessId,
-  accountId = null,
-  rangeStart = null,
-  rangeEnd = null,
-} = {}) {
-  if (!businessId || typeof db?.from !== "function") return [];
-  let data = [];
-  let error = null;
-  try {
-    let query = db
-      .from("credit_card_payment_pairs")
-      .select("*")
-      .eq("business_id", businessId)
-      .in("status", ["matched", "confirmed", "posting", "failed"])
-      .is("qbo_txn_id", null);
-    if (typeof query.order === "function") query = query.order("updated_at", { ascending: false });
-    const result = await query;
-    data = result?.data || [];
-    error = result?.error || null;
-  } catch (err) {
-    if (err instanceof TypeError) return [];
-    throw err;
-  }
-  if (error) throw error;
-  const legs = [];
-  for (const pair of data || []) {
-    if (!isMatchedCreditCardPair(pair)) continue;
-    for (const leg of ccPairLegDescriptors(pair)) {
-      if (accountId && String(leg.plaidAccountId || "") !== String(accountId)) continue;
-      if (!dateInRange(leg.date, rangeStart, rangeEnd)) continue;
-      legs.push({ ...leg, pair });
-    }
-  }
-  return legs;
-}
-
-async function countMatchedCreditCardPairLegs({ db = supabase, businessId, accountId = null, rangeParam = "this_month", rangeStart, rangeEnd = null } = {}) {
-  const resolvedStart = resolveRangeStart({ rangeParam, rangeStart });
-  const legs = await fetchMatchedCreditCardPairLegs({ db, businessId, accountId, rangeStart: resolvedStart, rangeEnd });
-  return legs.length;
-}
-
-async function fetchMatchedCreditCardPaymentRows({
-  db = supabase,
-  businessId,
-  accountId = null,
-  rangeParam = "this_month",
-  rangeStart,
-  rangeEnd = null,
-  page = 1,
-  pageSize = 25,
-} = {}) {
-  const resolvedStart = resolveRangeStart({ rangeParam, rangeStart });
-  const legs = await fetchMatchedCreditCardPairLegs({ db, businessId, accountId, rangeStart: resolvedStart, rangeEnd });
-  if (!legs.length) return { rows: [], totalCount: 0 };
-  const sortedLegs = legs.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(a.transactionId).localeCompare(String(b.transactionId)));
-  const safePage = Math.max(parseInt(page, 10) || 1, 1);
-  const safePageSize = Math.min(Math.max(parseInt(pageSize, 10) || 25, 1), 200);
-  const pageLegs = sortedLegs.slice((safePage - 1) * safePageSize, safePage * safePageSize);
-  const transactionIds = pageLegs.map((leg) => leg.transactionId).filter(Boolean);
-  const [{ data: bankRows, error: bankErr }, { data: catRows, error: catErr }] = await Promise.all([
-    db
-      .from("bank_transactions")
-      .select("id,business_id,plaid_account_id,plaid_transaction_id,date,name,merchant_name,counterparty_name,counterparty_source,counterparty_confidence,canonical_vendor_id,qbo_entity_type,qbo_entity_id,amount,signed_amount,direction,pending,category_primary,category_detailed,personal_finance_category,accounting_review_required,is_archived")
-      .eq("business_id", businessId)
-      .in("id", transactionIds),
-    db
-      .from("transaction_categorizations")
-      .select("transaction_id,status,suggested_qbo_account_id,suggested_qbo_account_name,suggested_canonical_account_key,confidence,reason,final_qbo_account_id,final_qbo_account_name,final_canonical_account_key,post_after,qbo_txn_id,qbo_txn_type,posted_at,reconciled_at,post_error,last_post_attempt_at,meta")
-      .eq("business_id", businessId)
-      .in("transaction_id", transactionIds),
-  ]);
-  if (bankErr) throw bankErr;
-  if (catErr) throw catErr;
-  const bankById = new Map((bankRows || []).map((row) => [String(row.id), row]));
-  const catById = new Map((catRows || []).map((row) => [String(row.transaction_id), row]));
-  const pairByTxnId = new Map(pageLegs.map((leg) => [String(leg.transactionId), leg.pair]));
-  const rows = transactionIds
-    .map((id) => {
-      const bank = bankById.get(String(id));
-      if (!bank || bank.is_archived === true) return null;
-      const pair = pairByTxnId.get(String(id));
-      const cat = catById.get(String(id)) || {};
-      const pairRole = String(pair?.checking_transaction_id) === String(id) ? "checking" : "credit_card";
-      const mergedMeta = {
-        ...(cat.meta || {}),
-        taxonomy_type: "cc_payment",
-        cc_payment_pair_id: pair.id,
-        cc_payment_pair_role: pairRole,
-        cc_payment_pair_txn_id: pairRole === "checking" ? pair.credit_card_transaction_id || null : pair.checking_transaction_id || null,
-        cc_payment_pair_status: pair.status,
-        cc_payment_pair_confidence: pair.match_confidence,
-        cc_payment_bank_qbo_account_id: pair.checking_qbo_account_id,
-        cc_payment_bank_qbo_account_name: pair.checking_qbo_account_name,
-        cc_payment_cc_qbo_account_id: pair.credit_card_qbo_account_id,
-        cc_payment_cc_qbo_account_name: pair.credit_card_qbo_account_name,
-        cc_payment_transfer_target_qbo_account_id: pairRole === "checking" ? pair.credit_card_qbo_account_id : pair.checking_qbo_account_id,
-        cc_payment_transfer_target_qbo_account_name: pairRole === "checking" ? pair.credit_card_qbo_account_name : pair.checking_qbo_account_name,
-        cc_payment_pair_counterpart_amount: pairRole === "checking" ? Math.abs(Number(pair.amount || 0)) : -Math.abs(Number(pair.amount || 0)),
-        cc_payment_pair_counterpart_date: pairRole === "checking" ? pair.matched_date || pair.payment_date : pair.payment_date || pair.matched_date,
-        cc_payment_pair_counterpart_account_name: pairRole === "checking" ? pair.credit_card_qbo_account_name : pair.checking_qbo_account_name,
-        cc_payment_pair_confirmed_at: pair.updated_at || null,
-        cc_payment_pair_confirmed_by: "user",
-        cc_payment_pair_confirmation_source: "books_review",
-        match_type: "credit_card_payment_pair",
-        safe_to_auto_handle: false,
-        safe_to_auto_post: false,
-      };
-      return normalizeBookkeepingTransactionRow(bank, { ...cat, status: "matched", meta: mergedMeta });
-    })
-    .filter(Boolean);
-  return { rows, totalCount: legs.length };
-}
-
 async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, nowMs }) {
   const targets = rows.filter(shouldDiscoverIncomingDepositForFeed).slice(0, 25);
   if (!targets.length) return rows;
@@ -830,7 +680,6 @@ export async function countBookkeepingTransactions({
   rangeEnd = null,
   db = supabase,
 } = {}) {
-  const statusKey = String(statusFilter || "needs_review").toLowerCase();
   const { data, error } = await db.rpc("count_bookkeeping_transactions_bounded", {
     p_business_id: businessId,
     p_status_filter: rpcStatusFilter(statusFilter),
@@ -839,17 +688,7 @@ export async function countBookkeepingTransactions({
     p_range_end: normalizeBookkeepingDate(rangeEnd),
   });
   if (error) throw error;
-  const baseCount = Number(data || 0);
-  if (!["matched", "reconciled"].includes(statusKey)) return baseCount;
-  const ccMatchedCount = await countMatchedCreditCardPairLegs({
-    db,
-    businessId,
-    accountId,
-    rangeParam,
-    rangeStart,
-    rangeEnd,
-  });
-  return baseCount + ccMatchedCount;
+  return Number(data || 0);
 }
 
 // Job Costing uses posted Books transactions as the source of truth.
@@ -902,23 +741,19 @@ export async function fetchBookkeepingTransactions({
 } = {}) {
   const safePage = Math.max(parseInt(page, 10) || 1, 1);
   const safePageSize = Math.min(Math.max(parseInt(pageSize, 10) || 25, 1), 200);
-  const statusKey = String(statusFilter || "needs_review").toLowerCase();
-  const needsCombinedMatchedPagination = statusKey === "matched" || statusKey === "reconciled";
-  const rpcLimit = needsCombinedMatchedPagination ? safePage * safePageSize : safePageSize;
-  const rpcOffset = needsCombinedMatchedPagination ? 0 : (safePage - 1) * safePageSize;
   const { data, error } = await db.rpc("get_bookkeeping_transactions_bounded", {
     p_business_id: businessId,
     p_status_filter: rpcStatusFilter(statusFilter),
     p_account_id: accountId || null,
     p_range_start: resolveRangeStart({ rangeParam, rangeStart }),
     p_range_end: normalizeBookkeepingDate(rangeEnd),
-    p_limit: rpcLimit,
-    p_offset: rpcOffset,
+    p_limit: safePageSize,
+    p_offset: (safePage - 1) * safePageSize,
   });
   if (error) throw error;
   const pageRows = data || [];
   let totalCount = pageRows.length ? Number(pageRows[0].total_count || 0) : 0;
-  if (!pageRows.length && safePage > 1 && !needsCombinedMatchedPagination) {
+  if (!pageRows.length && safePage > 1) {
     totalCount = await countBookkeepingTransactions({
       businessId,
       statusFilter,
@@ -929,23 +764,14 @@ export async function fetchBookkeepingTransactions({
       db,
     });
   }
-  let rows = pageRows.map((row) => normalizeBookkeepingRpcRow(row));
-  if (statusKey === "matched" || statusKey === "reconciled") {
-    const ccMatched = await fetchMatchedCreditCardPaymentRows({
-      db,
-      businessId,
-      accountId,
-      rangeParam,
-      rangeStart,
-      rangeEnd,
-      page: 1,
-      pageSize: safePage * safePageSize,
-    });
-    rows = [...rows, ...ccMatched.rows]
-      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(a.id || "").localeCompare(String(b.id || "")))
-      .slice((safePage - 1) * safePageSize, safePage * safePageSize);
-    totalCount += ccMatched.totalCount;
-  }
+  // The bounded RPC is transaction-centric and already classifies confirmed
+  // payment-pair metadata as Matched. Never append relationship-table legs: it
+  // emits a second representation of the same Plaid transaction. The Map is a
+  // final exact-ID guard only, not fuzzy visible-field deduplication.
+  const rows = [...new Map(pageRows.map((row) => {
+    const normalized = normalizeBookkeepingRpcRow(row);
+    return [String(normalized.id), normalized];
+  })).values()];
   const accountDisplayMap = await fetchPlaidAccountDisplayMap({
     db,
     businessId,
