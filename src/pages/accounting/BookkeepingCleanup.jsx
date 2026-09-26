@@ -843,15 +843,6 @@ function BookkeepingCleanup() {
     [approvalLedgerEntries, isApprovalLedgerEntryActive]
   );
 
-  const approvalEntryMatchesCurrentScope = useCallback((entry = {}) => {
-    const txn = entry.originalTxn || entry.optimisticTxn || {};
-    const accountFilterNormalized = accountFilter === "all" ? null : accountFilter;
-    const txnAcct = getTxnAccountKey(txn);
-    const matchesAccount = !accountFilterNormalized || txnAcct === accountFilterNormalized;
-    const matchesRange = isWithinBookkeepingDateRange(txn.date, dateRange, { now: new Date() });
-    return matchesAccount && matchesRange;
-  }, [accountFilter, dateRange]);
-
   const suppressLedgerRowsFromNeedsReview = useCallback((rows = [], totalValue = null) => {
     const ledger = approvalMutationLedgerRef.current;
     if (!ledger.size) {
@@ -863,7 +854,7 @@ function BookkeepingCleanup() {
     const nextRows = (rows || []).filter((txn) => {
       const entry = ledger.get(String(txn?.id || ""));
       if (!entry) return true;
-      if (!isNeedsReviewTransaction(txn)) return true;
+      if (!isNeedsReviewTransaction(txn) || entry.status === "pending") return true;
       if (!isApprovalLedgerEntryActive(entry, now)) return true;
       staleApprovalIds.add(String(txn.id));
       removed += 1;
@@ -890,25 +881,15 @@ function BookkeepingCleanup() {
   }, [bumpApprovalLedgerVersion]);
 
   const overlayPendingApprovalCounts = useCallback((counts = {}) => {
-    let next = {
+    return {
       needs_review: Number(counts?.needs_review || 0),
       handled: Number(counts?.handled || 0),
       posted: Number(counts?.posted || 0),
       matched: Number(counts?.matched || 0),
       pending: Number(counts?.pending || 0),
+      excluded: Number(counts?.excluded || 0),
     };
-    approvalMutationLedgerRef.current.forEach((entry) => {
-      if (entry.status !== "pending") return;
-      if (!approvalEntryMatchesCurrentScope(entry)) return;
-      if (!isNeedsReviewTransaction(entry.originalTxn)) return;
-      next = {
-        ...next,
-        needs_review: adjustCount(next.needs_review, -1),
-        handled: matchesBooksTab(entry.optimisticTxn, "handled") ? adjustCount(next.handled, 1) : next.handled,
-      };
-    });
-    return next;
-  }, [approvalEntryMatchesCurrentScope]);
+  }, []);
 
   const loadMappingStatus = useCallback(async () => {
     if (!businessId || usingDemo) return;
@@ -1500,24 +1481,14 @@ function BookkeepingCleanup() {
     const glAccount = chartAccounts.find((a) => a.id === glAccountId) || null;
     const glAccountName =
       glAccount?.name || glAccountId || null;
-    const approvedTxn = { ...txn, status: "approved", glAccountId, glAccountName };
     setApprovalLedgerEntry(id, {
       status: "pending",
       originalTxn: txn,
-      optimisticTxn: approvedTxn,
       startedAt: Date.now(),
       businessId,
       accountFilter,
       dateRange,
     });
-    applyOptimisticCountTransition(txn, approvedTxn);
-    setTransactions((prev) =>
-      prev.map((t) =>
-        t.id === id
-          ? approvedTxn
-          : t
-      )
-    );
     try {
       const approvalResult = await approveTransactions(businessId, [
         { txnId: id, resolution: "categorize_new", newAccountId: glAccountId, newAccountName: glAccountName, newAccountType: glAccount?.type || null },
@@ -1530,21 +1501,18 @@ function BookkeepingCleanup() {
         serverRow,
         confirmedAt: Date.now(),
       });
+      setTransactions((prev) => prev.filter((row) => String(row.id) !== String(id)));
       await reloadAccounts();
-      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] approve failed", e?.message || e);
       removeApprovalLedgerEntry(id);
-      applyOptimisticCountTransition(approvedTxn, txn);
-      setTransactions((prev) =>
-        prev.map((t) => (t.id === id ? txn : t))
-      );
       window.dispatchEvent(new CustomEvent("bizzy:toast", {
         detail: {
           severity: "error",
           title: "Approval failed",
-          body: "This transaction was restored. Please try again.",
+          body: "The transaction remains in Needs Review. Please try again.",
         },
       }));
     }
@@ -2399,25 +2367,16 @@ function BookkeepingCleanup() {
 
     if (!businessId) return;
     const selectedTxnById = new Map(selectedBulkTransactions.map((txn) => [txn.id, txn]));
-    const approvedTxnsById = new Map(
-      selectedBulkTransactions.map((txn) => [
-        txn.id,
-        { ...txn, status: "approved", glAccountId: bulkAccountId, glAccountName: accountName },
-      ])
-    );
-    approvedTxnsById.forEach((approvedTxn, txnId) => {
+    selectedTxnById.forEach((originalTxn, txnId) => {
       setApprovalLedgerEntry(txnId, {
         status: "pending",
-        originalTxn: selectedTxnById.get(txnId),
-        optimisticTxn: approvedTxn,
+        originalTxn,
         startedAt: Date.now(),
         businessId,
         accountFilter,
         dateRange,
       });
-      applyOptimisticCountTransition(selectedTxnById.get(txnId), approvedTxn);
     });
-    setTransactions((prev) => prev.map((txn) => approvedTxnsById.get(txn.id) || txn));
     setSelectedIds(new Set());
     try {
       const approvalResult = await approveTransactions(
@@ -2438,16 +2397,15 @@ function BookkeepingCleanup() {
           confirmedAt: Date.now(),
         });
       });
+      setTransactions((prev) => prev.filter((txn) => !selectedTxnIds.includes(txn.id)));
       await reloadAccounts();
-      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: false });
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
       await loadMappingStatus();
     } catch (e) {
       console.warn("[bookkeeping] bulk approve failed", e?.message || e);
-      approvedTxnsById.forEach((approvedTxn, txnId) => {
+      selectedTxnById.forEach((_originalTxn, txnId) => {
         removeApprovalLedgerEntry(txnId);
-        applyOptimisticCountTransition(approvedTxn, selectedTxnById.get(txnId));
       });
-      setTransactions((prev) => prev.map((txn) => selectedTxnById.get(txn.id) || txn));
       setSelectedIds(new Set(selectedTxnIds));
       window.alert(e?.message || "Could not approve selected transactions.");
     }
@@ -3358,6 +3316,8 @@ function BookkeepingCleanup() {
               toggleSelectAll={toggleSelectAll}
               toggleRow={toggleRow}
               onApprove={handleApprove}
+              activeFeed={activeTab}
+              approvingTransactionIds={pendingApprovalIds}
               onUndo={handleUndo}
               onExclude={handleExclude}
               excludingTransactionIds={excludingTransactionIds}

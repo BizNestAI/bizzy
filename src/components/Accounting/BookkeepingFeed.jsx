@@ -965,6 +965,8 @@ export default function BookkeepingFeed({
   toggleSelectAll,
   toggleRow,
   onApprove,
+  activeFeed = "needs_review",
+  approvingTransactionIds = new Set(),
   onUndo,
   onExclude,
   excludingTransactionIds = new Set(),
@@ -1363,7 +1365,9 @@ export default function BookkeepingFeed({
               payeeConfidence === "high";
             const isPosted = txn.status === "posted";
             const isPending = txn.pending === true;
-            const isHandledStatus = ["approved", "auto_approved", "handled", "failed"].includes(String(txn.status || "").toLowerCase());
+            const isNeedsReviewFeed = activeFeed === "needs_review";
+            const isApproving = isNeedsReviewFeed && approvingTransactionIds.has(String(txn.id));
+            const isHandledStatus = activeFeed === "handled" && ["approved", "auto_approved", "handled", "failed"].includes(String(txn.status || "").toLowerCase());
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
             const incomingMatch = incomingDepositMatchState(txn);
@@ -1640,6 +1644,7 @@ export default function BookkeepingFeed({
                     }}
                     status={txn.status}
                     disabled={
+                      isApproving ||
                       isPosted ||
                       txn.status === "failed" ||
                       (["approved", "auto_approved"].includes(txn.status) && !txn.canEdit) ||
@@ -1673,7 +1678,7 @@ export default function BookkeepingFeed({
                   return `${isOutflow ? "-" : "+"}$${abs.toFixed(2)}`;
                 })()}
               </div>
-              {showQboSchedule && qboSchedule ? (
+              {activeFeed === "handled" && showQboSchedule && qboSchedule ? (
                 <div className="flex min-w-0 items-center justify-center px-2 text-center" title={qboSchedule.detail}>
                   <span
                     className={`inline-flex max-w-full items-center justify-center rounded-full border px-2 py-[3px] text-[10px] font-semibold leading-tight ${
@@ -1685,7 +1690,12 @@ export default function BookkeepingFeed({
                 </div>
               ) : null}
               <div className="flex justify-center pl-3 pr-3" onClick={(e) => e.stopPropagation()}>
-                {isPosted ? (
+                {isApproving ? (
+                  <span role="status" className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-emerald-200/90">
+                    <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                    Approving…
+                  </span>
+                ) : isPosted ? (
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
@@ -1789,6 +1799,7 @@ export default function BookkeepingFeed({
                  <button
                    className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-emerald-300/60 bg-emerald-500/14 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/24 hover:border-emerald-300/90 active:scale-[0.99] disabled:opacity-45 disabled:cursor-not-allowed shadow-[0_2px_6px_rgba(0,0,0,0.2)] transition-transform"
                    disabled={
+                     isApproving ||
                      readOnly ||
                      txn.is_check &&
                      !(accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null)
@@ -1796,6 +1807,8 @@ export default function BookkeepingFeed({
                    title={
                      txn.is_check && !(accountSelections.get(txn.id) ?? txn.glAccountId ?? txn.suggestedAccountId ?? null)
                        ? "Select a category to approve this check."
+                       : isApproving
+                       ? "Approval in progress."
                        : readOnly
                        ? "Billing required to approve transactions."
                        : "Approve"

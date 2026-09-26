@@ -47,7 +47,7 @@ test("Monthly Review Needs Review decisions use the shared approval path that le
   assert.match(reclassification, /requireNeedsReview:\s*true/);
   assert.match(approval, /import \{ learnVendorRuleFromTransaction \}/);
   assert.match(approval, /await learnVendorRuleFromTransaction\(\{/);
-  assert.match(approval, /\.upsert\(payload, \{ onConflict: "business_id,transaction_id" \}\)/);
+  assert.match(approval, /\.rpc\("approve_bookkeeping_transactions_atomic"/);
 });
 
 test("conditional merchant rules require exact identity, signed amount, and description evidence", async () => {

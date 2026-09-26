@@ -30,6 +30,7 @@ import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookk
 import { persistTransactionResolution } from "../../../services/bookkeeping/transactionResolutionService.js";
 
 const router = Router();
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 router.put("/transactions/:transactionId/resolution", requireAuth, async (req, res) => {
   const businessId = ensureBusinessId(req, res);
@@ -53,13 +54,23 @@ router.post("/approve", requireAuth, async (req, res) => {
   const raw = req.body || {};
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
+  const actorId = req.auth?.userId || req.user?.id || null;
+  if (!actorId || !UUID_RE.test(String(actorId))) {
+    return res.status(401).json({
+      ok: false,
+      error: "approval_actor_invalid",
+      message: "Approval could not be authenticated. Please sign in again.",
+    });
+  }
 
   const items = raw.items || raw.transactions || raw.approvals || [];
   try {
     const result = await approveBookkeepingTransactions({
       businessId,
       items,
-      actor: "user",
+      actorId,
+      actorType: "user",
+      requireNeedsReview: true,
       db: supabase,
     });
     return res.json({ ok: true, updated: result.updated, rows: result.rows, warnings: result.warnings, vendor_rule_results: result.vendor_rule_results || [] });
@@ -67,11 +78,22 @@ router.post("/approve", requireAuth, async (req, res) => {
     if (err instanceof BookkeepingApprovalError) {
       return res.status(err.status || 400).json({ ok: false, error: err.error, ...err.details });
     }
-    console.error("[bookkeeping][approve] failed", err?.message || err);
+    console.error("[bookkeeping][approve] failed", {
+      business_id: businessId,
+      transaction_ids: items.map((item) => item?.txnId || item?.transaction_id || item?.id).filter(Boolean),
+      actor_id: actorId,
+      actor_type: "user",
+      endpoint: "/api/bookkeeping/approve",
+      request_id: req.headers["x-request-id"] || req.headers["x-correlation-id"] || null,
+      deploy_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_SHA || null,
+      database_error_code: err?.code || null,
+      rollback_status: "no_approval_commit",
+      error: err?.message || String(err),
+    });
     return res.status(500).json({
       ok: false,
       error: "approve_failed",
-      message: err?.message || "failed",
+      message: "Approval could not be completed. The transaction remains in Needs Review. Please try again.",
     });
   }
 });

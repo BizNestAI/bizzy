@@ -50,6 +50,17 @@ function canonicalKeyFromItem(item = {}) {
   return item?.final_canonical_account_key || item?.canonical_account_key || item?.canonicalAccountKey || null;
 }
 
+function approvalIdempotencyKey({ businessId, approval, actorType }) {
+  return crypto.createHash("sha256").update(JSON.stringify({
+    action: "bookkeeping_approval",
+    business_id: businessId,
+    transaction_id: approval.transaction_id,
+    resolution: approval.meta?.user_selected_resolution || "categorize_new",
+    final_qbo_account_id: approval.final_qbo_account_id || null,
+    actor_type: actorType,
+  })).digest("hex");
+}
+
 const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
   "cc_payment",
   "transfer_internal",
@@ -108,7 +119,9 @@ async function validateSelectedAccounts({ businessId, items, explicitFinalByTxn 
 export async function approveBookkeepingTransactions({
   businessId,
   items = [],
-  actor = "user",
+  actor = null,
+  actorId = actor,
+  actorType = "user",
   reason = null,
   requireNeedsReview = false,
   allowCcPaymentRejection = true,
@@ -118,6 +131,7 @@ export async function approveBookkeepingTransactions({
 } = {}) {
   if (!businessId) throw new BookkeepingApprovalError("missing_business_id", 400);
   if (!Array.isArray(items) || !items.length) throw new BookkeepingApprovalError("missing_items", 400);
+  if (!actorId) throw new BookkeepingApprovalError("missing_approval_actor", 401);
 
   const nowIso = new Date().toISOString();
   const { autoPostEnabled, postAfter } = await resolveBookkeepingPostAfter({ db, businessId, graceHours: 24, nowMs: Date.parse(nowIso) });
@@ -328,7 +342,7 @@ export async function approveBookkeepingTransactions({
       cc_payment_pair_counterpart_account_name:
         currentMeta.cc_payment_pair_role === "credit_card" ? pair.checking_qbo_account_name : pair.credit_card_qbo_account_name,
       cc_payment_pair_confirmed_at: pair.updated_at || nowIso,
-      cc_payment_pair_confirmed_by: actor || "user",
+      cc_payment_pair_confirmed_by: actorId,
       cc_payment_pair_confirmation_source: "books_review",
       match_type: "credit_card_payment_pair",
       safe_to_auto_handle: false,
@@ -351,8 +365,28 @@ export async function approveBookkeepingTransactions({
       // A new explicit approval starts a new posting generation. Do not let
       // the cancellation marker written by a prior Undo suppress this one.
       delete mergedMeta.posting_cancelled_at;
+      delete mergedMeta.post_idempotency_key;
+      delete mergedMeta.qbo_request_id;
+      delete mergedMeta.post_retry_count;
+      delete mergedMeta.posting_started_at;
+      delete mergedMeta.next_post_attempt_at;
       mergedMeta.posting_generation = crypto.randomUUID();
       mergedMeta.posting_in_progress = false;
+      const isManualPayrollIncome =
+        mergedMeta?.taxonomy_type === "payroll" &&
+        Number(bankTxn?.amount || 0) > 0 &&
+        String(bankTxn?.direction || "INFLOW").toUpperCase() === "INFLOW" &&
+        Boolean(explicitFinalId);
+      if (isManualPayrollIncome) {
+        mergedMeta.resolved_taxonomy_type = "payroll";
+        mergedMeta.taxonomy_resolved_by = "manual_income_account_selection";
+        mergedMeta.taxonomy_override = "manual_income_account_selection";
+        delete mergedMeta.taxonomy_type;
+        delete mergedMeta.taxonomy_subtype;
+        delete mergedMeta.taxonomy_confidence;
+        delete mergedMeta.post_block_reason;
+        delete mergedMeta.auto_post_block_reason;
+      }
       const isTransferTaxonomy = mergedMeta?.taxonomy_type === "transfer_internal";
       const isCcPaymentTaxonomy = mergedMeta?.taxonomy_type === "cc_payment";
       const isConfirmedCcPaymentPair =
@@ -443,10 +477,24 @@ export async function approveBookkeepingTransactions({
       db,
       businessId,
       bankTransactionId: approval.transaction_id,
-      actor,
+      actor: actorId,
       actorRole: "manual_approval",
     });
     if (guard.allowed) continue;
+    const explicitlyCategorizedAsNew =
+      String(approval.meta?.user_selected_resolution || "categorize_new") === "categorize_new" &&
+      Boolean(approval.final_qbo_account_id);
+    const matchCheckUnavailable = String(guard.reason || "").includes("match_check_unavailable");
+    if (explicitlyCategorizedAsNew && matchCheckUnavailable) {
+      approval.meta = {
+        ...(approval.meta || {}),
+        incoming_deposit_match_check: "unavailable_manual_override",
+        incoming_deposit_match_status: guard.result?.status || null,
+        incoming_deposit_reason_codes: guard.result?.reason_codes || [],
+      };
+      warnings.push({ transaction_id: approval.transaction_id, code: "match_check_unavailable_manual_override" });
+      continue;
+    }
     approval.status = "needs_review";
     approval.post_after = null;
     approval.post_error = guard.reason || "incoming_deposit_match_required";
@@ -473,6 +521,7 @@ export async function approveBookkeepingTransactions({
       if (checkHit.check_number) mergedMeta.check_number = checkHit.check_number;
       mergedMeta.taxonomy_flags = { ...(mergedMeta.taxonomy_flags || {}), is_check: true };
     }
+    const idempotencyKey = approvalIdempotencyKey({ businessId, approval: item, actorType });
     return {
       business_id: businessId,
       transaction_id: item.transaction_id,
@@ -482,19 +531,24 @@ export async function approveBookkeepingTransactions({
       final_canonical_account_key: item.final_canonical_account_key || null,
       confidence: item.confidence || null,
       reason: item.reason || null,
-      decided_by: actor,
+      decided_by: actorType,
       decided_at: nowIso,
       updated_at: nowIso,
       post_after: item.post_after === undefined ? postAfter : item.post_after,
       post_error: item.post_error || null,
-      meta: mergedMeta || null,
+      meta: { ...(mergedMeta || {}), approval_idempotency_key: idempotencyKey },
+      approval_idempotency_key: idempotencyKey,
     };
   });
 
-  const { data, error } = await db
-    .from("transaction_categorizations")
-    .upsert(payload, { onConflict: "business_id,transaction_id" })
-    .select("business_id,transaction_id,status,final_qbo_account_id,final_qbo_account_name,post_after,meta");
+  const atomicPayload = payload.map(({ approval_idempotency_key, ...row }) => ({ ...row, approval_idempotency_key }));
+  const { data, error } = await db.rpc("approve_bookkeeping_transactions_atomic", {
+    p_business_id: businessId,
+    p_actor_id: actorId,
+    p_actor_type: actorType,
+    p_approvals: atomicPayload,
+    p_require_needs_review: requireNeedsReview === true,
+  });
   if (error) throw new BookkeepingApprovalError("approve_failed", 500, { message: error.message });
 
   for (const pair of confirmedCcPairs.values()) {
@@ -518,7 +572,7 @@ export async function approveBookkeepingTransactions({
           options: {
             allowQboEntityFallback: true,
             learnedFrom: "check",
-            actor,
+            actor: actorId,
             onlyThisTransaction: item.only_this_transaction === true || item.learn_reusable_rule === false,
           },
           db,
@@ -532,7 +586,7 @@ export async function approveBookkeepingTransactions({
           finalAccountName: item.final_qbo_account_name,
           taxonomyType,
           options: {
-            actor,
+            actor: actorId,
             onlyThisTransaction: item.only_this_transaction === true || item.learn_reusable_rule === false,
           },
           db,
