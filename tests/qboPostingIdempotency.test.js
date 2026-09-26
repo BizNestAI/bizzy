@@ -110,7 +110,7 @@ test("posting path records safe stage timings and reuses QBO context for vendor 
   assert.match(cron, /qbo_create_ms/);
   assert.match(cron, /receipt_ms/);
   assert.match(cron, /total_ms/);
-  assert.match(handleBody, /ensureRequiredVendorBeforePosting\(\{ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow \}\)/);
+  assert.match(handleBody, /ensureRequiredVendorBeforePosting\(\{ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow, manual \}\)/);
   assert.match(handleBody, /duplicate_preflight_ran = true/);
   assert.match(handleBody, /posting_timing/);
   assert.doesNotMatch(cron, /access_token|refresh_token|client_secret/i);

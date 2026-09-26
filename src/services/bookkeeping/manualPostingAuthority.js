@@ -79,16 +79,16 @@ export function isSoftReviewPolicyReason(reason) {
     /merchant.*ambig|ambig.*merchant/.test(normalized);
 }
 
-export function decideManualPostingGate({ item = {}, reason, gate = "review_policy" } = {}) {
+export function decideManualPostingGate({ item = {}, reason, gate = "review_policy", explicitManualPost = false } = {}) {
   const authorized = hasAuthorizedMonthlyReviewApproval(item);
   const soft = isSoftReviewPolicyReason(reason);
-  if (authorized && soft) {
+  if ((authorized || explicitManualPost === true) && soft) {
     return {
       allowed: true,
       bypassed: true,
       gate,
       reason: normalizeReason(reason),
-      authority: "admin_manual_approval",
+      authority: authorized ? "admin_manual_approval" : "handled_manual_post",
     };
   }
   return {

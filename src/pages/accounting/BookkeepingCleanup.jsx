@@ -425,12 +425,32 @@ function buildManualPostError(err) {
       "QuickBooks rejected the transaction."
   );
   const normalized = rawMessage.toLowerCase();
+  const referenceId = body?.reference_id || body?.qbo_request_id || err?.qbo_request_id || null;
+  const withReference = (detail) => referenceId ? `${detail} Reference: ${referenceId}.` : detail;
+  if (normalized.includes("existing_qbo_match_found")) {
+    return {
+      type: "error",
+      title: "Existing QuickBooks match found",
+      message: "Bizzi found an existing QuickBooks transaction that matches this item and did not create a duplicate.",
+      detail: withReference("The transaction remains in Handled. Open its matching workflow to review and link the existing record"),
+      primaryLabel: "Close",
+    };
+  }
+  if (normalized.includes("match_check_unavailable") || normalized.includes("could_not_check_qbo") || normalized.includes("duplicate_preflight")) {
+    return {
+      type: "error",
+      title: "Could not check QuickBooks for an existing transaction",
+      message: "Bizzi stopped before posting because the duplicate check did not complete.",
+      detail: withReference("The transaction remains in Handled. Try again after the QuickBooks check is available"),
+      primaryLabel: "Close",
+    };
+  }
   if (normalized.includes("split_transaction") || normalized.includes("missing_final_qbo_account")) {
     return {
       type: "error",
       title: "QuickBooks could not post this split transaction",
       message: "Your split was preserved and nothing was marked Posted.",
-      detail: "Please try again. If the issue continues, Bizzi support can use the posting operation details to investigate.",
+      detail: withReference("Please try again. If the issue continues, Bizzi support can use the posting operation details to investigate"),
       primaryLabel: "Close",
     };
   }
@@ -494,7 +514,7 @@ function buildManualPostError(err) {
     type: "error",
     title: "QuickBooks did not post this transaction",
     message: rawMessage,
-    detail: "Nothing was marked Posted. You can try again after fixing the issue.",
+    detail: withReference("Nothing was marked Posted. You can try again after fixing the issue"),
     primaryLabel: "Close",
   };
 }

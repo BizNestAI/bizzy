@@ -40,6 +40,18 @@ test("probable review remains blocked without durable Monthly Review authority",
 });
 
 for (const reason of ["probable_requires_review", "weak_memo_evidence", "low_classifier_confidence", "merchant_ambiguous", "no_matching_vendor_rule"]) {
+  test(`explicit Handled manual Post overrides only the soft vendor gate: ${reason}`, () => {
+    assert.deepEqual(decideManualPostingGate({ item: { meta: {} }, reason, gate: "vendor_payee", explicitManualPost: true }), {
+      allowed: true,
+      bypassed: true,
+      gate: "vendor_payee",
+      reason,
+      authority: "handled_manual_post",
+    });
+  });
+}
+
+for (const reason of ["probable_requires_review", "weak_memo_evidence", "low_classifier_confidence", "merchant_ambiguous", "no_matching_vendor_rule"]) {
   test(`authorized Monthly Review approval overrides soft gate: ${reason}`, () => {
     const item = approvedItem(reason);
     assert.equal(hasAuthorizedMonthlyReviewApproval(item), true);
@@ -61,6 +73,14 @@ for (const reason of ["missing_final_qbo_account", "missing_source_mapping", "qb
   });
 }
 
+test("explicit Handled manual Post cannot bypass hard posting gates", () => {
+  for (const reason of ["missing_final_qbo_account", "missing_source_mapping", "qbo_client_unavailable", "qbo_api_rejected", "possible_qbo_duplicate"]) {
+    const decision = decideManualPostingGate({ item: { meta: {} }, reason, explicitManualPost: true });
+    assert.equal(decision.allowed, false);
+    assert.equal(decision.bypassed, false);
+  }
+});
+
 test("Google Workspace fixture is durably authorized and reaches the exact QBO call once", async () => {
   const item = approvedItem("probable_requires_review");
   let qboCalls = 0;
@@ -76,7 +96,7 @@ test("Google Workspace fixture is durably authorized and reaches the exact QBO c
 test("posting worker consumes durable authority and only bypasses classified soft vendor gates", () => {
   const worker = readFileSync(new URL("../src/jobs/booksPost.cron.js", import.meta.url), "utf8");
   const control = readFileSync(new URL("../src/services/bookkeeping/autoPostControl.js", import.meta.url), "utf8");
-  assert.match(worker, /decideManualPostingGate\(\{ item, reason: outcome\.reason, gate: "vendor_payee" \}\)/);
+  assert.match(worker, /explicitManualPost: manual === true/);
   assert.match(worker, /manual approval bypassed soft vendor review gate/);
   assert.match(control, /manual_approval_state: "admin_approved_pending_post"/);
   assert.match(control, /categorization_authority: "admin_confirmed"/);

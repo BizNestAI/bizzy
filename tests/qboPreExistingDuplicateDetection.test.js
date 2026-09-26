@@ -54,7 +54,7 @@ test("customer or QBO Bank Feed-created exact transaction becomes duplicate revi
   assert.match(cron, /HIGH_CONFIDENCE_PROBABLE_DUPLICATE/);
   assert.match(cron, /possible_qbo_duplicate/);
   assert.match(cron, /This transaction may already exist in QuickBooks\./);
-  assert.match(cron, /post_anyway_requires_confirmation: true/);
+  assert.match(cron, /post_anyway_requires_confirmation: errorCode === "possible_qbo_duplicate" \? true/);
 });
 
 test("multiple plausible candidates are ambiguous and never auto-linked", () => {
@@ -85,7 +85,7 @@ test("same gas station same amount same date and repeated subscriptions are revi
   assert.match(cron, /HIGH_CONFIDENCE_PROBABLE_DUPLICATE/);
   assert.match(cron, /AMBIGUOUS/);
   assert.match(cron, /markPossibleQboDuplicate/);
-  assert.match(cron, /qbo_duplicate_review_actions: \["link_existing_quickbooks_transaction", "post_anyway"\]/);
+  assert.match(cron, /qbo_duplicate_review_actions: errorCode === "possible_qbo_duplicate"[\s\S]*\["link_existing_quickbooks_transaction", "post_anyway"\]/);
   assert.doesNotMatch(cron, /confidence === "AMBIGUOUS"[\s\S]{0,300}recordQboExistingLink/);
 });
 

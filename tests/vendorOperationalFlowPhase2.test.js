@@ -19,7 +19,7 @@ test("posting gates vendor-required Purchases and CreditCardCharges before QBO t
   assert.ok(gateIndex > 0);
   assert.ok(createIndex > gateIndex);
   assert.match(handleBody, /const vendorGate = await timePostingStage\(timing, "vendor_gate_ms"/);
-  assert.match(handleBody, /ensureRequiredVendorBeforePosting\(\{ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow \}\)/);
+  assert.match(handleBody, /ensureRequiredVendorBeforePosting\(\{ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow, manual \}\)/);
   assert.match(handleBody, /if \(!vendorGate\.ok\) \{[\s\S]*logPostingTiming[\s\S]*return;/);
   assert.doesNotMatch(handleBody, /vendor ensure failed[\s\S]*postToQbo/);
 });
@@ -32,6 +32,36 @@ test("Purchase and CreditCardCharge payloads attach vendor refs from canonical a
   assert.match(cron, /postCreditCardOutflowCharge[\s\S]*const vendorRef = getQboEntityRef\(bankTxn, "vendor"\)/);
   assert.match(cron, /postCreditCardOutflowCharge[\s\S]*EntityRef: \{ value: vendorRef\.value, type: "Vendor" \}/);
   assert.doesNotMatch(cron, /postCreditCardOutflowCharge[\s\S]*PayeeEntityRef/);
+});
+
+test("explicit manual posting may omit an uncertain Vendor without changing scheduled posting", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const vendorGate = cron.slice(cron.indexOf("async function ensureRequiredVendorBeforePosting"), cron.indexOf("async function claimQboPostingIntent"));
+  assert.match(vendorGate, /explicitManualPost: manual === true/);
+  assert.match(vendorGate, /softReviewBypass/);
+  assert.match(vendorGate, /authority: manualDecision\.authority/);
+  assert.match(vendorGate, /bank\.qbo_entity_type = null/);
+  assert.match(vendorGate, /bank\.qbo_entity_id = null/);
+  assert.match(vendorGate, /bank\.posting_display_name = null/);
+  assert.match(cron, /ensureRequiredVendorBeforePosting\(\{ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow, manual \}\)/);
+});
+
+test("a failed manual post stays manual-only instead of entering the scheduler", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+
+  assert.match(cron, /async function markFailed\(item, message, \{ manual = false \} = \{\}\)/);
+  assert.match(cron, /const shouldStop =[\s\S]*manual === true/);
+  assert.match(cron, /markFailed\(item, err\?\.message \|\| "manual_post_failed", \{ manual: true \}\)/);
+});
+
+test("manual deterministic matches stop before create and expose the matching workflow", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const handleBody = cron.slice(cron.indexOf("export async function handleItem"), cron.indexOf("function taxYearFromDate"));
+  const deterministic = handleBody.slice(handleBody.indexOf('duplicateCheck.confidence === "DETERMINISTIC_EXISTING"'), handleBody.indexOf("const linkedResult"));
+  assert.match(deterministic, /if \(manual\)/);
+  assert.match(deterministic, /errorCode: "existing_qbo_match_found"/);
+  assert.match(deterministic, /reviewActions: \["link_existing_quickbooks_transaction"\]/);
+  assert.match(deterministic, /return;/);
 });
 
 test("vendor-required failures are classified into retryable or review states without transaction create", () => {

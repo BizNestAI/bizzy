@@ -760,6 +760,7 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
       ok: false,
       error: err?.message || "manual_post_failed",
       message: err?.message || "Posting to QuickBooks failed.",
+      reference_id: err?.qbo_request_id || err?.child_operation_id || null,
     });
   }
 });

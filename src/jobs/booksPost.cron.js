@@ -763,7 +763,7 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
     .eq("transaction_id", item.transaction_id);
 }
 
-async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, requestId, qboClient = null, tokenRow = null }) {
+async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, requestId, qboClient = null, tokenRow = null, manual = false }) {
   const taxonomyMeta = { ...(item?.meta || {}), taxonomy_type: item?.meta?.taxonomy_type || null };
   const requirement = getVendorPostingRequirement({ bankTxn: bank, taxonomyMeta, qboTxnType });
   if (!requirement.required) return { ok: true, requirement };
@@ -843,12 +843,24 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
       ? "qbo_client_acquisition"
       : "canonical_vendor_db";
     const outcome = classifyVendorEnsureOutcome(null, err, fallbackStage);
-    const manualDecision = decideManualPostingGate({ item, reason: outcome.reason, gate: "vendor_payee" });
+    const manualDecision = decideManualPostingGate({
+      item,
+      reason: outcome.reason,
+      gate: "vendor_payee",
+      explicitManualPost: manual === true,
+    });
     if (manualDecision.allowed && manualDecision.bypassed) {
+      // A soft vendor-confidence override means "post without a vendor", not
+      // "trust whatever vendor-shaped values happened to arrive on the bank
+      // transaction". Clear unvalidated values before payload construction.
+      bank.qbo_entity_type = null;
+      bank.qbo_entity_id = null;
+      bank.posting_display_name = null;
       log.info("[books-post] manual approval bypassed soft vendor review gate", {
         business_id: item.business_id,
         transaction_id: item.transaction_id,
         operation_id: item?.meta?.manual_approval?.operation_id || null,
+        authority: manualDecision.authority,
         reason: outcome.reason,
       });
       return { ok: true, requirement, softReviewBypass: manualDecision };
@@ -871,12 +883,21 @@ async function ensureRequiredVendorBeforePosting({ item, bank, qboTxnType, reque
     return { ok: true, requirement, vendorEnsure };
   }
   const outcome = classifyVendorEnsureOutcome(vendorEnsure);
-  const manualDecision = decideManualPostingGate({ item, reason: outcome.reason, gate: "vendor_payee" });
+  const manualDecision = decideManualPostingGate({
+    item,
+    reason: outcome.reason,
+    gate: "vendor_payee",
+    explicitManualPost: manual === true,
+  });
   if (manualDecision.allowed && manualDecision.bypassed) {
+    bank.qbo_entity_type = null;
+    bank.qbo_entity_id = null;
+    bank.posting_display_name = null;
     log.info("[books-post] manual approval bypassed soft vendor review gate", {
       business_id: item.business_id,
       transaction_id: item.transaction_id,
       operation_id: item?.meta?.manual_approval?.operation_id || null,
+      authority: manualDecision.authority,
       reason: outcome.reason,
     });
     return { ok: true, requirement, vendorEnsure, softReviewBypass: manualDecision };
@@ -1080,7 +1101,15 @@ async function recordQboExistingLink({ businessId, transactionId, requestId, res
   return postedIso;
 }
 
-async function markPossibleQboDuplicate({ item, requestId, confidence, candidates }) {
+async function markPossibleQboDuplicate({
+  item,
+  requestId,
+  confidence,
+  candidates,
+  errorCode = "possible_qbo_duplicate",
+  reviewMessage = "This transaction may already exist in QuickBooks.",
+  reviewActions = ["link_existing_quickbooks_transaction", "post_anyway"],
+}) {
   const nowIso = getNowIso();
   const candidateSummary = summarizeQboDuplicateCandidates(candidates);
   await supabase
@@ -1090,11 +1119,11 @@ async function markPossibleQboDuplicate({ item, requestId, confidence, candidate
       processing_started_at: null,
       lease_expires_at: null,
       last_error: {
-        message: "possible_qbo_duplicate",
+        message: errorCode,
         confidence,
         candidates: candidateSummary,
       },
-      error: "possible_qbo_duplicate",
+      error: errorCode,
       response_summary: {
         duplicate_detection_confidence: confidence,
         candidates: candidateSummary,
@@ -1109,16 +1138,18 @@ async function markPossibleQboDuplicate({ item, requestId, confidence, candidate
     .update({
       status: postingFailureStatus(item.status),
       post_after: null,
-      post_error: "possible_qbo_duplicate",
+      post_error: errorCode,
       last_post_attempt_at: nowIso,
       meta: {
         ...(item.meta || {}),
         possible_qbo_duplicate: true,
         qbo_duplicate_detection_confidence: confidence,
         qbo_duplicate_candidates: candidateSummary,
-        qbo_duplicate_review_message: "This transaction may already exist in QuickBooks.",
-        qbo_duplicate_review_actions: ["link_existing_quickbooks_transaction", "post_anyway"],
-        post_anyway_requires_confirmation: true,
+        qbo_duplicate_review_message: reviewMessage,
+        qbo_duplicate_review_actions: errorCode === "possible_qbo_duplicate"
+          ? ["link_existing_quickbooks_transaction", "post_anyway"]
+          : reviewActions,
+        post_anyway_requires_confirmation: errorCode === "possible_qbo_duplicate" ? true : reviewActions.includes("post_anyway"),
         posting_in_progress: false,
       },
     })
@@ -2374,6 +2405,18 @@ export async function handleItem(item, options = {}) {
     });
     if (duplicateCheck.confidence === "DETERMINISTIC_EXISTING") {
       const match = duplicateCheck.candidates[0];
+      if (manual) {
+        await markPossibleQboDuplicate({
+          item,
+          requestId,
+          confidence: duplicateCheck.confidence,
+          candidates: duplicateCheck.candidates,
+          errorCode: "existing_qbo_match_found",
+          reviewMessage: "An existing QuickBooks transaction matches this item.",
+          reviewActions: ["link_existing_quickbooks_transaction"],
+        });
+        return;
+      }
       const linkedResult = {
         id: match.qbo_txn_id,
         type: match.qbo_txn_type || intentQboTxnType,
@@ -2451,7 +2494,7 @@ export async function handleItem(item, options = {}) {
   }
 
   const vendorGate = await timePostingStage(timing, "vendor_gate_ms", () =>
-    ensureRequiredVendorBeforePosting({ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow })
+    ensureRequiredVendorBeforePosting({ item, bank, qboTxnType: intentQboTxnType, requestId, qboClient: qbo, tokenRow, manual })
   );
   timing.context.vendor_validation_mode =
     vendorGate?.vendorEnsure?.vendor_validation_mode ||
@@ -2632,7 +2675,7 @@ function taxYearFromDate(value) {
   return Number.isFinite(date.getTime()) ? date.getFullYear() : new Date().getFullYear();
 }
 
-async function markFailed(item, message) {
+async function markFailed(item, message, { manual = false } = {}) {
   const retries = Number(item?.meta?.post_retry_count || 0);
   const nextRetries = retries + 1;
   const nowIso = getNowIso();
@@ -2647,6 +2690,7 @@ async function markFailed(item, message) {
     return;
   }
   const shouldStop =
+    manual === true ||
     nextRetries >= MAX_RETRIES ||
     message === "cc_payment_post_not_supported" ||
     message === "cc_payment_mapping_not_safe" ||
@@ -2797,7 +2841,9 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
         child_operation_id: postingIntent.request_id || `qbo:${postingIntent.qbo_txn_id}`,
       };
     }
-    await markFailed(item, err?.message || "manual_post_failed");
+    // A user-initiated failure stays visible for an explicit user retry; it
+    // must not quietly enter the background scheduler.
+    await markFailed(item, err?.message || "manual_post_failed", { manual: true });
     if (postingIntent?.request_id) {
       err.qbo_request_id = postingIntent.request_id;
       err.child_operation_id = postingIntent.request_id;
@@ -2816,6 +2862,8 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
   if (!posted?.qbo_txn_id || posted.status !== "posted") {
     const err = new Error(posted?.post_error || "manual_post_not_completed");
     err.status = 400;
+    err.qbo_request_id = posted?.meta?.qbo_request_id || null;
+    err.child_operation_id = posted?.meta?.qbo_request_id || null;
     throw err;
   }
   return {
