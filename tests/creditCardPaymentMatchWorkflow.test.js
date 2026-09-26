@@ -312,10 +312,10 @@ test("maps a production status constraint failure to a safe schema-compatibility
   assert.equal(data.transaction_categorizations.every((row) => row.status === "needs_review"), true);
 });
 
-test("matches across the full five-day window but not outside it", async () => {
+test("matches across the full seven-day settlement window but not outside it", async () => {
   const within = makeDb({
     bank_transactions: makeDb().data.bank_transactions.map((row) =>
-      row.id === "card-aug4" ? { ...row, date: "2026-08-10" } : row
+      row.id === "card-aug4" ? { ...row, date: "2026-08-12" } : row
     ),
   });
   const matched = await confirmCreditCardPaymentMatchForTransaction({
@@ -329,7 +329,7 @@ test("matches across the full five-day window but not outside it", async () => {
 
   const outside = makeDb({
     bank_transactions: makeDb().data.bank_transactions.map((row) =>
-      row.id === "card-aug4" ? { ...row, date: "2026-08-11" } : row
+      row.id === "card-aug4" ? { ...row, date: "2026-08-13" } : row
     ),
   });
   const notMatched = await confirmCreditCardPaymentMatchForTransaction({
@@ -474,6 +474,94 @@ test("confirms the Sep 7 checking AMEX payment to the Sep 5 card-side payment", 
   assert.equal(cardCat.meta.safe_to_auto_post, false);
   assert.equal(checkingCat.meta.match_type, "credit_card_payment_pair");
   assert.equal(cardCat.meta.match_type, "credit_card_payment_pair");
+});
+
+test("the Jul 3 checking Discover payment and Jul 2 card payment match from either side despite legacy handled metadata", async () => {
+  const buildDiscoverDb = () => {
+    const base = makeDb();
+    return makeDb({
+      bank_transactions: [
+        {
+          ...base.data.bank_transactions[0],
+          id: "checking-jul3-discover-14416",
+          plaid_transaction_id: "plaid-checking-jul3-discover-14416",
+          amount: -144.16,
+          signed_amount: -144.16,
+          date: "2026-07-03",
+          name: "E-PAYMENT DISCOVER 9734 INTERNET PAYMENT",
+        },
+        {
+          ...base.data.bank_transactions[1],
+          id: "discover-jul2-payment-14416",
+          plaid_transaction_id: "plaid-discover-jul2-payment-14416",
+          amount: 144.16,
+          signed_amount: 144.16,
+          date: "2026-07-02",
+          name: "INTERNET PAYMENT - THANK YOU",
+        },
+      ],
+      plaid_accounts: [
+        base.data.plaid_accounts[0],
+        { ...base.data.plaid_accounts[1], name: "Discover it Card" },
+      ],
+      plaid_qbo_account_mappings: [
+        base.data.plaid_qbo_account_mappings[0],
+        {
+          ...base.data.plaid_qbo_account_mappings[1],
+          qbo_account_id: "qbo-blue",
+          qbo_account_name: "DISCOVER IT CARD (9734) - 2",
+        },
+      ],
+      transaction_categorizations: [
+        {
+          business_id: base.businessId,
+          transaction_id: "checking-jul3-discover-14416",
+          status: "auto_approved",
+          review_status: "handled",
+          final_qbo_account_id: null,
+          qbo_txn_id: null,
+          posted_at: null,
+          post_after: null,
+          meta: { taxonomy_type: "cc_payment", safe_to_auto_post: false },
+        },
+        {
+          business_id: base.businessId,
+          transaction_id: "discover-jul2-payment-14416",
+          status: "needs_review",
+          review_status: "needs_review",
+          final_qbo_account_id: null,
+          qbo_txn_id: null,
+          posted_at: null,
+          post_after: null,
+          meta: { taxonomy_type: "cc_payment", safe_to_auto_post: false },
+        },
+      ],
+    });
+  };
+
+  for (const initiatingSide of ["checking", "credit_card"]) {
+    const { db, data, businessId } = buildDiscoverDb();
+    const result = await confirmCreditCardPaymentMatchForTransaction({
+      db,
+      businessId,
+      transactionId: initiatingSide === "checking"
+        ? "checking-jul3-discover-14416"
+        : "discover-jul2-payment-14416",
+      targetQboAccountId: initiatingSide === "checking" ? "qbo-blue" : "qbo-bank",
+      validateQboAccountType: validator,
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(data.credit_card_payment_pairs.length, 1);
+    assert.equal(result.pair.checking_transaction_id, "checking-jul3-discover-14416");
+    assert.equal(result.pair.credit_card_transaction_id, "discover-jul2-payment-14416");
+    for (const cat of data.transaction_categorizations) {
+      assert.equal(cat.status, "matched");
+      assert.equal(cat.qbo_txn_id, null);
+      assert.equal(cat.post_after, null);
+      assert.equal(cat.meta.safe_to_auto_post, false);
+    }
+  }
 });
 
 test("hidden pending and posted versions collapse to one canonical card-side candidate", async () => {

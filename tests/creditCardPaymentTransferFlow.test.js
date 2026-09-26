@@ -123,6 +123,7 @@ test("confirmation and undo atomically transition, validate, and audit both paym
   const compatibilityMigration = read("supabase/migrations/20260922143000_credit_card_payment_pair_handled_lifecycle.sql");
   const fastMigration = read("supabase/migrations/20260922150000_confirm_selected_credit_card_payment_pair_fast.sql");
   const canonicalMigration = read("supabase/migrations/20261013_credit_card_payment_matched_lifecycle.sql");
+  const settlementWindowMigration = read("supabase/migrations/20260925183000_credit_card_payment_seven_day_window.sql");
   const service = read("src/services/bookkeeping/creditCardPaymentPairService.js");
   const audit = read("scripts/manual/auditCreditCardPaymentPairLifecycle.sql");
   const repair = read("scripts/manual/repairCreditCardPaymentPairLifecycle.sql");
@@ -155,6 +156,8 @@ test("confirmation and undo atomically transition, validate, and audit both paym
   assert.match(canonicalMigration, /status='matched'/);
   assert.match(canonicalMigration, /when new\.status in \('matched', 'matched_existing_qbo'\) then 'not_scheduled'/);
   assert.match(canonicalMigration, /never schedules or creates QBO activity/);
+  assert.match(settlementWindowMigration, /if v_days > 7/);
+  assert.match(settlementWindowMigration, /'date_window_days',7/);
   assert.match(migration, /values[\s\S]*'checking'[\s\S]*'credit_card'/);
   assert.match(migration, /status = excluded\.status/);
   assert.match(migration, /credit_card_payment_pair_events/);

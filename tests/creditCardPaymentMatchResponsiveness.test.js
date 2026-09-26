@@ -18,6 +18,15 @@ test("credit-card payment selection starts row-level discovery before confirm", 
   assert.match(page, /ccDiscoverySeqRef/);
   assert.match(page, /AbortController/);
   assert.match(page, /controller\.signal\.aborted/);
+  const accountChange = page.slice(
+    page.indexOf("const handleAccountChange"),
+    page.indexOf("const reloadAccounts")
+  );
+  assert.match(accountChange, /isCreditCardPaymentWorkflowTxn\(txn\)[\s\S]*startCreditCardPaymentDiscovery\(txnId, accountId\)[\s\S]*return;/);
+  assert.ok(
+    accountChange.indexOf("return;") < accountChange.indexOf("updateHandledTransaction"),
+    "credit-card payment selection must not reach the Handled account-change endpoint"
+  );
 });
 
 test("confirm uses the discovered target transaction and prevents duplicate mutations", () => {

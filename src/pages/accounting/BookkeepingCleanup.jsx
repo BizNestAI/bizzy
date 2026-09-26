@@ -2508,6 +2508,12 @@ function BookkeepingCleanup() {
       } else {
         clearCreditCardPaymentDiscovery(txnId);
       }
+      // The account picker is the first step of the dedicated internal
+      // credit-card-payment matching workflow. Some older rows still carry an
+      // approved/handled categorization status even though the lifecycle
+      // classifier correctly presents them in Needs Review. Never let that
+      // legacy status fall through to the ordinary grace-window account edit.
+      return;
     }
     try {
       if (txn && ["approved", "auto_approved", "handled"].includes(txn.status)) {

@@ -3,7 +3,7 @@ import { supabase as defaultSupabase } from "../supabaseAdmin.js";
 import { validateBusinessQboPaymentAccountType } from "./qboAccounts.js";
 import { getMemo as getTaxonomyMemo, isDefinitelyNotCreditCardPayment } from "./taxonomyClassifier.js";
 
-const DATE_WINDOW_DAYS = 5;
+const DATE_WINDOW_DAYS = 7;
 
 export function normalizeCcPaymentText(value = "") {
   return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
@@ -765,6 +765,13 @@ export async function createSafeCreditCardPaymentPairForRow({
   const hasFinalAccountingState = (txnId) => {
     const cat = catByTxnId.get(String(txnId));
     const status = String(cat?.status || "").toLowerCase();
+    const meta = cat?.meta || {};
+    const isUnconfirmedCreditCardPayment =
+      String(meta.taxonomy_type || "").toLowerCase() === "cc_payment" &&
+      !isConfirmedPairStatus(meta.cc_payment_pair_status) &&
+      !cat?.qbo_txn_id &&
+      !cat?.final_qbo_account_id;
+    if (isUnconfirmedCreditCardPayment) return false;
     return Boolean(
       cat?.is_archived === true ||
         cat?.qbo_txn_id ||
