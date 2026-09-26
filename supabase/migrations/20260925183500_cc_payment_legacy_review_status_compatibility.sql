@@ -17,11 +17,17 @@ begin
   end if;
 
   select pg_get_functiondef(v_signature) into v_definition;
-  v_patched := replace(
-    v_definition,
-    $needle$if v_checking_cat.status not in ('needs_review','handled','matched')
-     or v_card_cat.status not in ('needs_review','handled','matched') then raise exception 'cc_payment_pair_transaction_ineligible'; end if;$needle$,
-    $replacement$if not (
+  -- This migration may be replayed from the SQL editor after later migrations
+  -- have reformatted the function. Treat the desired rule as success when it
+  -- is already present instead of requiring the obsolete source text.
+  if strpos(v_definition, $checking$v_checking_cat.status in ('approved','auto_approved')$checking$) > 0
+     and strpos(v_definition, $card$v_card_cat.status in ('approved','auto_approved')$card$) > 0 then
+    v_patched := v_definition;
+  else
+    v_patched := regexp_replace(
+      v_definition,
+      $pattern$if[[:space:]]+v_checking_cat\.status[[:space:]]+not[[:space:]]+in[[:space:]]*\([[:space:]]*'needs_review'[[:space:]]*,[[:space:]]*'handled'[[:space:]]*,[[:space:]]*'matched'[[:space:]]*\)[[:space:]]+or[[:space:]]+v_card_cat\.status[[:space:]]+not[[:space:]]+in[[:space:]]*\([[:space:]]*'needs_review'[[:space:]]*,[[:space:]]*'handled'[[:space:]]*,[[:space:]]*'matched'[[:space:]]*\)[[:space:]]+then[[:space:]]+raise[[:space:]]+exception[[:space:]]+'cc_payment_pair_transaction_ineligible';[[:space:]]+end[[:space:]]+if;$pattern$,
+      $replacement$if not (
        v_checking_cat.status in ('needs_review','handled','matched')
        or (
          v_checking_cat.status in ('approved','auto_approved')
@@ -40,12 +46,13 @@ begin
      ) then
     raise exception 'cc_payment_pair_transaction_ineligible';
   end if;$replacement$
-  );
+    );
 
-  if v_patched = v_definition then
-    raise exception 'credit_card_payment_legacy_review_status_patch_not_applied';
+    if v_patched = v_definition then
+      raise exception 'credit_card_payment_legacy_review_status_patch_not_applied';
+    end if;
+    execute v_patched;
   end if;
-  execute v_patched;
 end;
 $$;
 

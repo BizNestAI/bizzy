@@ -163,6 +163,10 @@ test("confirmation and undo atomically transition, validate, and audit both paym
   assert.match(legacyReviewCompatibilityMigration, /meta ->> 'taxonomy_type'/);
   assert.match(legacyReviewCompatibilityMigration, /qbo_txn_id is null/);
   assert.match(legacyReviewCompatibilityMigration, /posted_at is null/);
+  assert.match(legacyReviewCompatibilityMigration, /strpos\(v_definition/);
+  assert.match(legacyReviewCompatibilityMigration, /regexp_replace\(/);
+  assert.match(legacyReviewCompatibilityMigration, /v_patched := v_definition/);
+  assert.match(legacyReviewCompatibilityMigration, /if v_patched = v_definition then/);
   assert.match(migration, /values[\s\S]*'checking'[\s\S]*'credit_card'/);
   assert.match(migration, /status = excluded\.status/);
   assert.match(migration, /credit_card_payment_pair_events/);
