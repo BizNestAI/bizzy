@@ -158,6 +158,32 @@ export async function approveBookkeepingTransactions({
     suggestedCanonicalMap[row.transaction_id] = row.suggested_canonical_account_key || row.meta?.canonical_account_key || null;
   });
 
+  const requestedIdempotencyKeys = (items || []).map((item) => approvalIdempotencyKey({
+    businessId,
+    actorType,
+    approval: {
+      transaction_id: txnIdFromItem(item),
+      final_qbo_account_id: finalIdFromItem(item),
+      meta: { user_selected_resolution: item?.resolution || existingMetaMap[txnIdFromItem(item)]?.user_selected_resolution || "categorize_new" },
+    },
+  }));
+  const { data: priorApprovalEvents, error: priorApprovalError } = await db
+    .from("bookkeeping_approval_events")
+    .select("idempotency_key")
+    .eq("business_id", businessId)
+    .in("idempotency_key", requestedIdempotencyKeys);
+  if (priorApprovalError) throw new BookkeepingApprovalError("approval_idempotency_check_failed", 500, { message: priorApprovalError.message });
+  const priorKeys = new Set((priorApprovalEvents || []).map((row) => row.idempotency_key));
+  if (requestedIdempotencyKeys.length > 0 && requestedIdempotencyKeys.every((key) => priorKeys.has(key))) {
+    const { data: currentRows, error: currentRowsError } = await db
+      .from("transaction_categorizations")
+      .select("*")
+      .eq("business_id", businessId)
+      .in("transaction_id", txnIds);
+    if (currentRowsError) throw new BookkeepingApprovalError("categorization_fetch_failed", 500, { message: currentRowsError.message });
+    return { updated: currentRows?.length || 0, rows: currentRows || [], warnings: [], vendor_rule_results: [], idempotent: true };
+  }
+
   const excludedIds = txnIds.filter((txnId) => statusMap[txnId] === "excluded" || existingMetaMap[txnId]?.excluded_at);
   if (excludedIds.length) {
     throw new BookkeepingApprovalError("transaction_excluded", 409, { transactions: excludedIds });

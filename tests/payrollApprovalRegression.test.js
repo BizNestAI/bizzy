@@ -38,6 +38,9 @@ test("approval category, schedule and audit commit in one idempotent RPC", () =>
   assert.match(migration, /INSERT INTO public\.bookkeeping_approval_events/);
   assert.match(migration, /FOR UPDATE/);
   assert.match(migration, /post_after/);
+  assert.match(service, /requestedIdempotencyKeys/);
+  assert.match(service, /idempotent: true/);
+  assert.match(migration, /A retry of the same semantic approval is a read-only success/);
 });
 
 test("Needs Review remains authoritative while approval is pending", () => {
