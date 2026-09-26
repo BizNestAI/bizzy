@@ -30,7 +30,7 @@ test("QBO posting schedule formatter renders authoritative lifecycle states", ()
     post_after: "2026-08-31T15:59:00.000Z",
   }, { nowMs });
   assert.equal(due.key, "ready_to_post");
-  assert.equal(due.label, "Ready to post");
+  assert.equal(due.label, "Overdue — posting delayed");
 
   const posted = formatQboPostingSchedule({
     status: "auto_approved",
@@ -49,6 +49,25 @@ test("QBO posting schedule formatter renders authoritative lifecycle states", ()
   }, { nowMs });
   assert.equal(unscheduled.key, "not_scheduled");
   assert.equal(unscheduled.label, "Not scheduled");
+});
+
+test("Handled posting jobs expose retry, processing, and actionable configuration states", () => {
+  const retry = formatQboPostingSchedule({
+    status: "approved",
+    posting_job: { state: "retry_scheduled", next_attempt_at: "2026-09-01T18:14:00.000Z" },
+  }, { nowMs });
+  assert.equal(retry.key, "retry_scheduled");
+  assert.match(retry.label, /Retry/);
+
+  const processing = formatQboPostingSchedule({ status: "approved", posting_job: { state: "processing" } }, { nowMs });
+  assert.equal(processing.key, "posting");
+
+  const blocked = formatQboPostingSchedule({
+    status: "approved",
+    posting_job: { state: "blocked", blocking_code: "missing_source_qbo_account" },
+  }, { nowMs });
+  assert.equal(blocked.key, "configuration_blocked");
+  assert.match(blocked.label, /Source account/);
 });
 
 test("QBO posting schedule only shows Posting from authoritative posting metadata", () => {

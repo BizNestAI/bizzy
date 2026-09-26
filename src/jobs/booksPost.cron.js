@@ -693,6 +693,7 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
   const update = {
     status: outcome.review ? postingFailureStatus(item.status) : item.status,
     post_error: outcome.reason,
+    post_after: nextAttemptIso,
     last_post_attempt_at: nowIso,
     meta,
   };
@@ -735,6 +736,26 @@ async function markVendorPostingBlocked({ item, requestId, requirement, outcome,
     },
     attemptedAt: nowIso,
   });
+  // The QBO intent is claimed before the vendor gate runs. A gate decision made
+  // before any QBO create must release that lease; otherwise the durable intent
+  // remains "processing" until its lease expires and misrepresents external work.
+  await supabase
+    .from("qbo_posted_transactions")
+    .update({
+      status: outcome.retryable ? "pending" : "failed",
+      processing_started_at: null,
+      lease_expires_at: null,
+      last_error: {
+        stage: outcome.diagnostics?.stage || "vendor_payee_gate",
+        code: outcome.diagnostics?.code || outcome.reason,
+        retryable: outcome.retryable === true,
+      },
+      error: outcome.reason,
+      updated_at: nowIso,
+    })
+    .eq("business_id", item.business_id)
+    .eq("transaction_id", item.transaction_id)
+    .eq("request_id", requestId);
   await supabase
     .from("transaction_categorizations")
     .update(update)
@@ -2685,12 +2706,10 @@ async function markFailed(item, message) {
       status: shouldStop ? "failed" : item.status,
       post_error: message || "post_failed",
       last_post_attempt_at: nowIso,
-      post_after:
-        message === "cc_payment_post_not_supported" || message === "cc_payment_mapping_not_safe"
-          ? null
-          : shouldStop
-          ? null
-          : item.post_after,
+      // The scheduler queries post_after. Persisting only the retry timestamp in
+      // JSON left the original due time active and burned through every retry on
+      // consecutive sweeps. Terminal failures remain explicit blocked jobs.
+      post_after: shouldStop ? null : nextAttemptIso,
       meta,
     })
     .eq("business_id", item.business_id)
@@ -3207,6 +3226,13 @@ export function startBooksPostingCron() {
   }
   const intervalMs = Math.max(1, POLL_MINUTES) * 60 * 1000;
   log.info("[books-post] cron started, interval mins:", POLL_MINUTES);
+  // Do not leave already-due jobs waiting for the first interval after a deploy.
+  booksPostSweepRunning = true;
+  runOnce()
+    .catch((err) => log.error("[books-post] startup sweep error", err))
+    .finally(() => {
+      booksPostSweepRunning = false;
+    });
   setInterval(() => {
     if (booksPostSweepRunning) return;
     booksPostSweepRunning = true;

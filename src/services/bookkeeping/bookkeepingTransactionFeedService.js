@@ -411,6 +411,24 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
   if (row.qbo_txn_id) return null;
   if (!isHandledForPosting(row)) return null;
   const meta = row.meta || {};
+  const job = row.posting_job || {};
+  if (["processing", "reconciling"].includes(job.state)) {
+    return { key: job.state === "reconciling" ? "reconciling" : "posting", label: job.state === "reconciling" ? "Checking QuickBooks..." : "Posting...", tone: "info", detail: "Bizzi is confirming this transaction with QuickBooks." };
+  }
+  if (job.state === "retry_scheduled" && job.next_attempt_at) {
+    return { key: "retry_scheduled", label: `Retry ${new Date(job.next_attempt_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`, tone: "warning", detail: "A controlled retry is scheduled.", technical: { job_id: job.id, attempt_count: job.attempt_count, last_error_code: job.last_error_code } };
+  }
+  if (job.state === "blocked") {
+    const sourceProblem = ["missing_source_qbo_account", "missing_qbo_account_mapping", "inactive_source_qbo_account"].includes(job.blocking_code);
+    const connectionProblem = job.blocking_code === "qbo_authorization_expired";
+    return {
+      key: "configuration_blocked",
+      label: connectionProblem ? "Reconnect QuickBooks" : sourceProblem ? "Source account needs attention" : "Not scheduled",
+      tone: "danger",
+      detail: connectionProblem ? "Renew the QuickBooks connection before posting." : sourceProblem ? "Connect this bank or card account to an active QuickBooks account." : "This transaction needs attention before it can be scheduled.",
+      technical: { job_id: job.id, blocking_code: job.blocking_code },
+    };
+  }
   const postingOutcome = derivePostingOutcome(row);
   if (["failed", "blocked", "processing", "queued"].includes(postingOutcome.key)) {
     return {
@@ -499,7 +517,7 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
     if (postAfterMs <= nowMs) {
       return {
         key: "ready_to_post",
-        label: "Ready to post",
+        label: "Overdue — posting delayed",
         tone: "warning",
         detail: "Eligible for the next QuickBooks posting worker run.",
       };
@@ -507,6 +525,22 @@ function buildPostingLifecycleForFeed(row = {}, policy = {}, nowMs = Date.now())
     return null;
   }
   return null;
+}
+
+async function attachPostingJobsForFeed({ db, businessId, rows }) {
+  const ids = rows.map((row) => row.id || row.transactionId).filter(Boolean);
+  if (!ids.length || typeof db?.from !== "function") return rows;
+  const { data, error } = await db
+    .from("bookkeeping_posting_jobs")
+    .select("id,business_id,transaction_id,queue_name,state,scheduled_at,next_attempt_at,attempt_count,lease_owner,lease_expires_at,blocking_code,last_error_code,qbo_request_id,qbo_txn_id,qbo_txn_type,updated_at")
+    .eq("business_id", businessId)
+    .in("transaction_id", ids);
+  if (error) {
+    if (["42P01", "42703"].includes(error.code) || String(error.message || "").includes("does not exist")) return rows;
+    throw error;
+  }
+  const jobs = new Map((data || []).map((job) => [String(job.transaction_id), job]));
+  return rows.map((row) => ({ ...row, posting_job: jobs.get(String(row.id || row.transactionId)) || null }));
 }
 
 function shouldDiscoverIncomingDepositForFeed(row = {}) {
@@ -812,6 +846,7 @@ export async function fetchBookkeepingTransactions({
     return display ? { ...row, ...display } : row;
   });
   const splitEnrichedRows = await attachCanonicalSplitsForFeed({ db, businessId, rows: accountEnrichedRows });
+  const jobEnrichedRows = await attachPostingJobsForFeed({ db, businessId, rows: splitEnrichedRows });
   let policy = null;
   try {
     policy = await getAutoPostPolicy(db, businessId);
@@ -822,7 +857,7 @@ export async function fetchBookkeepingTransactions({
   const discoveryRows = await attachIncomingDepositDiscoveryForFeed({
     db,
     businessId,
-    rows: splitEnrichedRows,
+    rows: jobEnrichedRows,
     nowMs,
   });
   const enrichedRows = discoveryRows.map((row) => {

@@ -23,6 +23,25 @@ function isPostingInProgress(row = {}) {
   return meta.posting_in_progress === true;
 }
 
+const BLOCK_REASON_COPY = {
+  missing_source_qbo_account: ["Source account needs attention", "Connect this bank or card account to its QuickBooks account."],
+  missing_qbo_account_mapping: ["Source account needs attention", "Connect this bank or card account to its QuickBooks account."],
+  inactive_source_qbo_account: ["Source account is inactive", "Reactivate or remap the source account in QuickBooks."],
+  missing_destination_qbo_account: ["QuickBooks category needs attention", "Choose an active QuickBooks category before posting."],
+  missing_final_qbo_account: ["QuickBooks category needs attention", "Choose an active QuickBooks category before posting."],
+  inactive_destination_qbo_account: ["QuickBooks category is inactive", "Choose an active QuickBooks category before posting."],
+  qbo_authorization_expired: ["Reconnect QuickBooks", "The QuickBooks connection must be renewed before posting."],
+  missing_posting_schedule: ["Not scheduled", "This handled transaction has no active posting schedule."],
+};
+
+function structuredBlockReason(row = {}) {
+  const meta = row.meta || {};
+  const job = row.posting_job || row.bookkeeping_posting_job || {};
+  const code = job.blocking_code || meta.post_block_reason || meta.auto_post_block_reason || row.post_block_reason || null;
+  const copy = BLOCK_REASON_COPY[code];
+  return code ? { code, label: copy?.[0] || "Posting needs attention", detail: copy?.[1] || "Review the posting details before trying again." } : null;
+}
+
 export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {}) {
   const authoritative = row.qbo_posting_lifecycle || row.posting_lifecycle || null;
   if (authoritative?.key && authoritative?.label) return authoritative;
@@ -71,6 +90,26 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
   }
 
   const blockReason = meta.post_block_reason || meta.auto_post_block_reason || row.post_block_reason || null;
+  const postingJob = row.posting_job || row.bookkeeping_posting_job || {};
+  const jobBlock = structuredBlockReason(row);
+
+  if (["processing", "reconciling"].includes(postingJob.state)) {
+    return {
+      key: postingJob.state === "reconciling" ? "reconciling" : "posting",
+      label: postingJob.state === "reconciling" ? "Checking QuickBooks..." : "Posting...",
+      tone: "warning",
+      detail: "Bizzi is confirming this transaction with QuickBooks.",
+    };
+  }
+
+  if (postingJob.state === "retry_scheduled" && (postingJob.next_attempt_at || row?.meta?.next_post_attempt_at)) {
+    const retryAt = postingJob.next_attempt_at || row.meta.next_post_attempt_at;
+    return { key: "retry_scheduled", label: `Retry ${formatShortDateTime(retryAt)}`, tone: "warning", detail: "A controlled retry is scheduled." };
+  }
+
+  if (postingJob.state === "blocked" && jobBlock) {
+    return { key: "configuration_blocked", label: jobBlock.label, tone: "danger", detail: jobBlock.detail, code: jobBlock.code };
+  }
   if (
     ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(blockReason) ||
     ["needs_confirmation", "ambiguous", "match_check_unavailable"].includes(row.incoming_deposit_match_status || meta.incoming_deposit_match_status)
@@ -155,7 +194,7 @@ export function deriveQboPostingLifecycle(row = {}, { nowMs = Date.now() } = {})
     if (postAfterMs <= nowMs) {
       return {
         key: "ready_to_post",
-        label: "Ready to post",
+        label: "Overdue — posting delayed",
         tone: "warning",
         detail: "The review window has ended; the posting worker may pick this up shortly.",
       };
@@ -211,6 +250,9 @@ export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) 
       detail: lifecycle.detail || "Bizzi is sending this transaction to QuickBooks.",
     };
   }
+  if (lifecycle.key === "reconciling" || lifecycle.key === "retry_scheduled" || lifecycle.key === "configuration_blocked") {
+    return lifecycle;
+  }
   if (
     [
       "held_historical_backlog",
@@ -234,7 +276,7 @@ export function formatQboPostingSchedule(row = {}, { nowMs = Date.now() } = {}) 
   if (lifecycle.key === "ready_to_post") {
     return {
       key: "ready_to_post",
-      label: "Ready to post",
+      label: "Overdue — posting delayed",
       tone: "warning",
       detail: lifecycle.detail || "The posting worker may pick this up shortly.",
     };
