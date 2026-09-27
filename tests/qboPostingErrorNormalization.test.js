@@ -61,3 +61,14 @@ test("manual route returns normalized provider metadata instead of object coerci
   assert.match(route, /qbo_write_may_have_occurred: normalizedError\.qbo_write_may_have_occurred/);
   assert.doesNotMatch(route.slice(route.indexOf('router.post("/posting/transactions/:transactionId"'), route.indexOf('router.post("/posting/transactions/:transactionId/link-existing"')), /message:\s*err\?\.message \|\| String\(err\)/);
 });
+
+test("successful manual posting uses the temporary app toast instead of the result modal", () => {
+  const page = readFileSync(join(process.cwd(), "src/pages/accounting/BookkeepingCleanup.jsx"), "utf8");
+  const start = page.indexOf("const runManualPostTransaction");
+  const end = page.indexOf("const confirmManualPostTransaction", start);
+  const handler = page.slice(start, end);
+  assert.match(handler, /CustomEvent\("bizzy:toast"/);
+  assert.match(handler, /severity:\s*"success"/);
+  assert.match(handler, /title:\s*"Transaction posted"/);
+  assert.doesNotMatch(handler, /setManualPostResult\(\{\s*type:\s*"success"/);
+});

@@ -2464,13 +2464,13 @@ function BookkeepingCleanup() {
       await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
-      setManualPostResult({
-        type: "success",
-        title: "Transaction posted",
-        message: "Bizzi sent this handled transaction to your connected QuickBooks company.",
-        detail: "It will now appear in the Posted tab after the feed refreshes.",
-        primaryLabel: "Done",
-      });
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: {
+          severity: "success",
+          title: "Transaction posted",
+          body: "Sent to QuickBooks. It is now available in Posted.",
+        },
+      }));
     } catch (err) {
       console.warn("[bookkeeping] manual post failed", err?.message || err);
       setManualPostResult({ ...buildManualPostError(err), transaction: txn });
