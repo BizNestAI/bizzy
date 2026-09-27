@@ -32,6 +32,7 @@ import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../../_shared/i
 import { normalizeMerchantGroupApprovalRequest, UUID_PATTERN } from "../../../contracts/merchantGroupApprovalContract.js";
 import crypto from "node:crypto";
 import { issueManualPostOverrideToken, verifyManualPostOverrideToken } from "../../../services/bookkeeping/manualPostOverrideToken.js";
+import { normalizePostingError } from "../../../services/bookkeeping/postingErrorNormalizer.js";
 
 const router = Router();
 const POSTING_GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
@@ -759,10 +760,18 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
       : await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway });
     return res.json(result);
   } catch (err) {
+    const referenceId = err?.qbo_request_id || err?.child_operation_id || null;
+    const normalizedError = err?.postingError
+      ? { ...err.postingError, reference_id: referenceId || err.postingError.reference_id || null }
+      : normalizePostingError(err, {
+        stage: "manual_post",
+        referenceId,
+        qboWriteStarted: err?.qbo_write_may_have_occurred === true,
+      });
     console.error("[bookkeeping][manual-post] failed", {
       businessId,
       transactionId,
-      message: err?.message || String(err),
+      error: normalizedError,
     });
     let duplicateCheckOverrideToken = null;
     if (err?.message === "match_check_unavailable" && err?.duplicate_check_result && err?.manual_override_context_hash) {
@@ -778,11 +787,16 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
         console.error("[bookkeeping][manual-post] override token issuance failed", tokenError?.message || tokenError);
       }
     }
-    return res.status(err?.status || 500).json({
+    return res.status(normalizedError.http_status || err?.status || 500).json({
       ok: false,
-      error: err?.message || "manual_post_failed",
-      message: err?.message || "Posting to QuickBooks failed.",
-      reference_id: err?.qbo_request_id || err?.child_operation_id || null,
+      error: normalizedError.code,
+      message: normalizedError.user_message,
+      reference_id: normalizedError.reference_id,
+      provider_code: normalizedError.provider_error_code,
+      provider_detail: normalizedError.provider_detail,
+      failure_stage: normalizedError.workflow_stage,
+      retryable: normalizedError.retryable,
+      qbo_write_may_have_occurred: normalizedError.qbo_write_may_have_occurred,
       duplicate_check: err?.duplicate_check_result || null,
       duplicate_check_override_token: duplicateCheckOverrideToken,
     });

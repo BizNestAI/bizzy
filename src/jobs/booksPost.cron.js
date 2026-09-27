@@ -38,6 +38,7 @@ import { assertTransactionNotExcluded } from "../services/bookkeeping/transactio
 import { detectProcessorSettlementActivity } from "../services/bookkeeping/processorSettlementProfiles.js";
 import { decideManualPostingGate, hasAuthorizedMonthlyReviewApproval } from "../services/bookkeeping/manualPostingAuthority.js";
 import { hashManualPostOverrideContext } from "../services/bookkeeping/manualPostOverrideToken.js";
+import { createPostingError, normalizePostingError } from "../services/bookkeeping/postingErrorNormalizer.js";
 import {
   buildLoanPaymentPurchasePayload,
   fetchConfirmedLoanPaymentSplit,
@@ -386,7 +387,12 @@ async function createQboPurchase(qbo, payload) {
   const { fn, context } = candidates[0];
   return new Promise((resolve, reject) => {
     fn.call(context, payload, (err, resp) => {
-      if (err) return reject(err);
+      if (err) return reject(createPostingError(err, {
+        stage: "qbo_create",
+        entityType: "Purchase",
+        referenceId: payload?.requestId || null,
+        qboWriteStarted: true,
+      }));
       return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Purchase", syncToken: resp?.SyncToken || null, raw: resp || null });
     });
   });
@@ -400,7 +406,12 @@ async function createQboDeposit(qbo, payload) {
   const { fn, context } = candidates[0];
   return new Promise((resolve, reject) => {
     fn.call(context, payload, (err, resp) => {
-      if (err) return reject(err);
+      if (err) return reject(createPostingError(err, {
+        stage: "qbo_create",
+        entityType: "Deposit",
+        referenceId: payload?.requestId || null,
+        qboWriteStarted: true,
+      }));
       return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Deposit", syncToken: resp?.SyncToken || null, raw: resp || null });
     });
   });
@@ -414,7 +425,12 @@ async function createQboTransfer(qbo, payload) {
   const { fn, context } = candidates[0];
   return new Promise((resolve, reject) => {
     fn.call(context, payload, (err, resp) => {
-      if (err) return reject(err);
+      if (err) return reject(createPostingError(err, {
+        stage: "qbo_create",
+        entityType: "Transfer",
+        referenceId: payload?.requestId || null,
+        qboWriteStarted: true,
+      }));
       return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Transfer", syncToken: resp?.SyncToken || null, raw: resp || null });
     });
   });
@@ -617,12 +633,11 @@ function summarizeQboDuplicateCandidates(candidates = []) {
 }
 
 function summarizePostingError(err) {
-  return {
-    message: err?.message || String(err || "qbo_post_failed"),
-    status: err?.status || err?.statusCode || err?.code || null,
-    fault_type: err?.fault?.type || null,
-    detail: err?.Fault?.Error?.[0]?.Detail || err?.fault?.error?.[0]?.detail || null,
-  };
+  return err?.postingError || normalizePostingError(err, {
+    stage: "qbo_create",
+    referenceId: err?.qbo_request_id || null,
+    qboWriteStarted: true,
+  });
 }
 
 function resolveQboTxnType(item, bankTxn, mapping) {
@@ -1266,6 +1281,35 @@ async function recordQboPostingUnknown({ businessId, transactionId, requestId, e
   if (!data?.id) throw new Error("qbo_posting_receipt_update_failed");
 }
 
+async function recordQboPostingRejected({ businessId, transactionId, requestId, err }) {
+  const errorPayload = summarizePostingError(err);
+  const { data, error } = await supabase
+    .from("qbo_posted_transactions")
+    .update({
+      status: "failed",
+      processing_started_at: null,
+      lease_expires_at: null,
+      last_error: errorPayload,
+      error: errorPayload.code || "qbo_transaction_rejected",
+      response_summary: {
+        failure_stage: errorPayload.workflow_stage,
+        failure_code: errorPayload.code,
+        provider_error_code: errorPayload.provider_error_code,
+        provider_http_status: errorPayload.provider_http_status,
+        provider_correlation_id: errorPayload.provider_correlation_id,
+        qbo_write_may_have_occurred: false,
+      },
+      updated_at: getNowIso(),
+    })
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .eq("request_id", requestId)
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  if (!data?.id) throw new Error("qbo_posting_receipt_update_failed");
+}
+
 async function insertPostAttempt({
   businessId,
   transactionId,
@@ -1780,6 +1824,7 @@ async function postBankInflowDeposit(item, bankTxn, qbo, mappedAccountId, catego
     DepositToAccountRef: { value: String(mappedAccountId) },
     Line: [
       {
+        DetailType: "DepositLineDetail",
         Amount: amount,
         Description: lineDescription,
         DepositLineDetail: {
@@ -2680,8 +2725,18 @@ export async function handleItem(item, options = {}) {
 
   logPostSuccessStage("qbo_write_started", { businessId, transactionId: txnId, requestId, qboTxnType: intentQboTxnTypeForLog });
   const result = await timePostingStage(timing, "qbo_create_ms", () => postToQbo(item, bank, qbo, mapping, requestId)).catch(async (err) => {
-    timing.context.failure_code = err?.message || "qbo_create_failed";
-    await recordQboPostingUnknown({ businessId, transactionId: txnId, requestId, err });
+    const normalized = err?.postingError || normalizePostingError(err, {
+      stage: "qbo_create",
+      entityType: intentQboTxnTypeForLog,
+      referenceId: requestId,
+      qboWriteStarted: true,
+    });
+    timing.context.failure_code = normalized.code;
+    if (normalized.qbo_write_may_have_occurred === false) {
+      await recordQboPostingRejected({ businessId, transactionId: txnId, requestId, err });
+    } else {
+      await recordQboPostingUnknown({ businessId, transactionId: txnId, requestId, err });
+    }
     logPostingTiming({ businessId, transactionId: txnId, qboTxnType: intentQboTxnTypeForLog, manual, timing, status: "failed", failureCode: timing.context.failure_code });
     throw err;
   });

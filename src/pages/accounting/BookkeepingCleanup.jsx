@@ -424,9 +424,23 @@ function buildManualPostError(err) {
       err ||
       "QuickBooks rejected the transaction."
   );
-  const normalized = rawMessage.toLowerCase();
+  const normalized = [
+    rawMessage,
+    body?.error,
+    body?.provider_code,
+    body?.provider_detail,
+  ].filter(Boolean).join(" ").toLowerCase();
   const referenceId = body?.reference_id || body?.qbo_request_id || err?.qbo_request_id || null;
   const withReference = (detail) => referenceId ? `${detail} Reference: ${referenceId}.` : detail;
+  if (normalized.includes("qbo_transaction_rejected")) {
+    return {
+      type: "error",
+      title: "QuickBooks rejected this transaction",
+      message: body?.message || "QuickBooks could not accept this transaction.",
+      detail: withReference(body?.provider_detail || "Review the selected account and transaction details, then try again"),
+      primaryLabel: "Close",
+    };
+  }
   if (normalized.includes("existing_qbo_match_found")) {
     return {
       type: "error",
