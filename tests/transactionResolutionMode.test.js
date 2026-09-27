@@ -80,14 +80,16 @@ test("an explicit or confirmed match still outranks a saved category", () => {
   }), "match_existing_qbo");
 });
 
-test("Handled action rendering makes Undo structural and keeps Retry alongside it", () => {
+test("Handled action rendering consistently exposes Undo and Post", () => {
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
   const actionStart = feed.indexOf(') : isHandledStatus ? (');
   const incomingStart = feed.indexOf(') : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (', actionStart);
   const handledBranch = feed.slice(actionStart, incomingStart);
   assert.ok(actionStart > 0 && incomingStart > actionStart);
   assert.match(handledBranch, /aria-label="Undo approval"/);
-  assert.match(handledBranch, /txn\.status === "failed" \? "Retry"/);
+  assert.match(handledBranch, /aria-label="Post to QuickBooks"/);
+  assert.match(handledBranch, /onManualPost\?\.\(txn\.id\)/);
+  assert.doesNotMatch(handledBranch, /Retry/);
 });
 
 test("posting worker rechecks authoritative status and generation immediately before a QBO write", () => {

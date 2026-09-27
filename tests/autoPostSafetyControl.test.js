@@ -180,14 +180,15 @@ test("manual posting cannot bypass bookkeeping start date, mapping, idempotency,
   assert.match(cron, /if \(!posted\?\.qbo_txn_id \|\| posted\.status !== "posted"\)/);
 });
 
-test("failed manual QBO writes remain retryable without entering the handled feed", () => {
+test("failed manual QBO writes remain actionable in the handled feed", () => {
   const transactionsService = readFileSync(join(root, "src/services/bookkeeping/bookkeepingTransactionFeedService.js"), "utf8");
   const feed = readFileSync(join(root, "src/components/Accounting/BookkeepingFeed.jsx"), "utf8");
 
-  assert.match(transactionsService, /hasProvenPostingFailure/);
-  assert.match(transactionsService, /\["approved", "auto_approved", "handled"\]\.includes\(status\)/);
-  assert.match(feed, /\["approved", "auto_approved", "failed"\]\.includes\(txn\.status\)/);
-  assert.match(feed, /txn\.status === "failed" \? "Retry" : "Post"/);
+  assert.match(transactionsService, /classifyBookkeepingLifecycle/);
+  assert.match(transactionsService, /\["approved", "auto_approved", "failed", "handled"\]\.includes/);
+  assert.match(feed, /\["approved", "auto_approved", "handled", "failed"\]\.includes\(String\(txn\.status/);
+  assert.match(feed, /aria-label="Post to QuickBooks"/);
+  assert.doesNotMatch(feed, /Retry QuickBooks posting/);
 });
 
 test("manual posting affects only the selected transaction row and prevents repeated clicks", () => {
@@ -198,7 +199,10 @@ test("manual posting affects only the selected transaction row and prevents repe
   assert.match(page, /confirmManualPostTransaction = async \(\)/);
   assert.match(page, /postTransactionToQuickBooks\(businessId, txnId\)/);
   assert.match(page, /new Set\(prev\)\.add\(txnId\)/);
-  assert.match(feed, /disabled=\{readOnly \|\| isPosting\}/);
+  const handlerStart = page.indexOf("const handleManualPostTransaction");
+  const handlerEnd = page.indexOf("const handleManualPostResultPrimary", handlerStart);
+  assert.doesNotMatch(page.slice(handlerStart, handlerEnd), /hasIncomingDepositMatchWorkflow/);
+  assert.match(feed, /disabled=\{readOnly \|\| isPosting \|\| incomingMatchAction\.loading === true\}/);
 });
 
 test("manual posting uses in-app confirmation and mapping guidance modals", () => {

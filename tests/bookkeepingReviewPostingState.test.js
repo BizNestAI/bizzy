@@ -101,9 +101,10 @@ test("suggestion and reconsideration persistence both use compare-and-set", () =
   assert.doesNotMatch(suggest.slice(suggest.indexOf("const normalizedRows")), /\.upsert\(normalizedRows/);
 });
 
-test("posting failure UI exposes Retry and Undo inline", () => {
+test("posting failure UI keeps the historical badge while exposing Post and Undo inline", () => {
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
-  assert.match(feed, /txn\.status === "failed" \? "Retry" : "Post"/);
+  assert.match(feed, /aria-label="Post to QuickBooks"/);
+  assert.doesNotMatch(feed, /Retry QuickBooks posting/);
   assert.match(feed, /aria-label="Undo approval"/);
   assert.match(feed, /formatQboPostingSchedule/);
 });

@@ -1719,13 +1719,12 @@ export default function BookkeepingFeed({
                       disabled={readOnly || isPosting || incomingMatchAction.loading === true}
                       onClick={() => {
                         if (readOnly || isPosting) return;
-                        if (incomingMatch.active && effectiveResolution === "match_existing_qbo") onInspectIncomingDepositMatch?.(txn.id, null, txn);
-                        else onManualPost?.(txn.id);
+                        onManualPost?.(txn.id);
                       }}
-                      aria-label={incomingMatch.active && effectiveResolution === "match_existing_qbo" ? "Retry QuickBooks match check" : txn.status === "failed" ? "Retry QuickBooks posting" : "Post to QuickBooks"}
+                      aria-label="Post to QuickBooks"
                     >
                       <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
-                      {isPosting || incomingMatchAction.loading === true ? "Working..." : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? "Retry" : txn.status === "failed" ? "Retry" : "Post"}
+                      {isPosting || incomingMatchAction.loading === true ? "Working..." : "Post"}
                     </button>
                   </div>
                 ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (

@@ -2435,7 +2435,6 @@ function BookkeepingCleanup() {
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
     const txn = transactions.find((t) => t.id === txnId);
     if (!txn) return;
-    if (hasIncomingDepositMatchWorkflow(txn)) return;
     setManualPostResult(null);
     setManualPostTxn(txn);
   };
@@ -2444,7 +2443,6 @@ function BookkeepingCleanup() {
     const txn = manualPostTxn;
     const txnId = txn?.id;
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
-    if (hasIncomingDepositMatchWorkflow(txn)) return;
     setManualPostTxn(null);
     setPostingTransactionIds((prev) => new Set(prev).add(txnId));
     try {
