@@ -31,6 +31,7 @@ import { runLiveDuplicatePreflight } from "../../../services/bookkeeping/qboDupl
 import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../../_shared/internalStaffAuth.js";
 import { normalizeMerchantGroupApprovalRequest, UUID_PATTERN } from "../../../contracts/merchantGroupApprovalContract.js";
 import crypto from "node:crypto";
+import { issueManualPostOverrideToken, verifyManualPostOverrideToken } from "../../../services/bookkeeping/manualPostOverrideToken.js";
 
 const router = Router();
 const POSTING_GRACE_HOURS = Number(process.env.BOOKS_POST_GRACE_HOURS || 24);
@@ -744,11 +745,18 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
 
   try {
     await assertTaxBusinessAccess({ req, businessId, supabase });
+    const userId = req.user?.id || req.user?.sub || null;
+    const overrideToken = req.body?.duplicate_check_override_token || null;
+    const manualDuplicateOverride = overrideToken
+      ? verifyManualPostOverrideToken(overrideToken, { businessId, transactionId, userId })
+      : null;
     const confirmPostAnyway =
       req.body?.confirm_post_anyway === true ||
       req.body?.post_anyway === true ||
       req.body?.confirmPostAnyway === true;
-    const result = await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway });
+    const result = manualDuplicateOverride
+      ? await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, manualDuplicateOverride })
+      : await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway });
     return res.json(result);
   } catch (err) {
     console.error("[bookkeeping][manual-post] failed", {
@@ -756,11 +764,27 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
       transactionId,
       message: err?.message || String(err),
     });
+    let duplicateCheckOverrideToken = null;
+    if (err?.message === "match_check_unavailable" && err?.duplicate_check_result && err?.manual_override_context_hash) {
+      try {
+        duplicateCheckOverrideToken = issueManualPostOverrideToken({
+          businessId,
+          transactionId,
+          userId: req.user?.id || req.user?.sub || null,
+          checkResult: err.duplicate_check_result,
+          contextHash: err.manual_override_context_hash,
+        });
+      } catch (tokenError) {
+        console.error("[bookkeeping][manual-post] override token issuance failed", tokenError?.message || tokenError);
+      }
+    }
     return res.status(err?.status || 500).json({
       ok: false,
       error: err?.message || "manual_post_failed",
       message: err?.message || "Posting to QuickBooks failed.",
       reference_id: err?.qbo_request_id || err?.child_operation_id || null,
+      duplicate_check: err?.duplicate_check_result || null,
+      duplicate_check_override_token: duplicateCheckOverrideToken,
     });
   }
 });

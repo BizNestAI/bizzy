@@ -89,6 +89,7 @@ test("Handled action rendering consistently exposes Undo and Post", () => {
   assert.match(handledBranch, /aria-label="Undo approval"/);
   assert.match(handledBranch, /aria-label="Post to QuickBooks"/);
   assert.match(handledBranch, /onManualPost\?\.\(txn\.id\)/);
+  assert.match(handledBranch, /\? "Posting\.\.\." : "Post"/);
   assert.doesNotMatch(handledBranch, /Retry/);
 });
 

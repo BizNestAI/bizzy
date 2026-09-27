@@ -1724,7 +1724,7 @@ export default function BookkeepingFeed({
                       aria-label="Post to QuickBooks"
                     >
                       <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
-                      {isPosting || incomingMatchAction.loading === true ? "Working..." : "Post"}
+                      {isPosting || incomingMatchAction.loading === true ? "Posting..." : "Post"}
                     </button>
                   </div>
                 ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (

@@ -438,11 +438,12 @@ function buildManualPostError(err) {
   }
   if (normalized.includes("match_check_unavailable") || normalized.includes("could_not_check_qbo") || normalized.includes("duplicate_preflight")) {
     return {
-      type: "error",
-      title: "Could not check QuickBooks for an existing transaction",
-      message: "Bizzi stopped before posting because the duplicate check did not complete.",
-      detail: withReference("The transaction remains in Handled. Try again after the QuickBooks check is available"),
-      primaryLabel: "Close",
+      type: "duplicate_check_unavailable",
+      title: "QuickBooks duplicate check unavailable",
+      message: "Bizzi could not verify whether this transaction already exists in QuickBooks. Posting anyway could create a duplicate. You can correct any duplicate during reconciliation.",
+      detail: withReference("The transaction remains in Handled and nothing was sent to QuickBooks"),
+      duplicateCheck: body?.duplicate_check || null,
+      overrideToken: body?.duplicate_check_override_token || null,
     };
   }
   if (normalized.includes("split_transaction") || normalized.includes("missing_final_qbo_account")) {
@@ -2439,14 +2440,13 @@ function BookkeepingCleanup() {
     setManualPostTxn(txn);
   };
 
-  const confirmManualPostTransaction = async () => {
-    const txn = manualPostTxn;
+  const runManualPostTransaction = async (txn, options = {}) => {
     const txnId = txn?.id;
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
     setManualPostTxn(null);
     setPostingTransactionIds((prev) => new Set(prev).add(txnId));
     try {
-      await postTransactionToQuickBooks(businessId, txnId);
+      await postTransactionToQuickBooks(businessId, txnId, options);
       await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
@@ -2459,7 +2459,7 @@ function BookkeepingCleanup() {
       });
     } catch (err) {
       console.warn("[bookkeeping] manual post failed", err?.message || err);
-      setManualPostResult(buildManualPostError(err));
+      setManualPostResult({ ...buildManualPostError(err), transaction: txn });
       await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
     } finally {
       setPostingTransactionIds((prev) => {
@@ -2468,6 +2468,26 @@ function BookkeepingCleanup() {
         return next;
       });
     }
+  };
+
+  const confirmManualPostTransaction = async () => {
+    const txn = manualPostTxn;
+    setManualPostTxn(null);
+    await runManualPostTransaction(txn);
+  };
+
+  const retryManualDuplicateCheck = async () => {
+    const txn = manualPostResult?.transaction;
+    setManualPostResult(null);
+    await runManualPostTransaction(txn);
+  };
+
+  const postWithDuplicateCheckOverride = async () => {
+    const txn = manualPostResult?.transaction;
+    const duplicateCheckOverrideToken = manualPostResult?.overrideToken;
+    if (!duplicateCheckOverrideToken) return;
+    setManualPostResult(null);
+    await runManualPostTransaction(txn, { duplicateCheckOverrideToken });
   };
 
   const handleManualPostResultPrimary = () => {
@@ -3651,6 +3671,32 @@ function BookkeepingCleanup() {
                     ) : null}
 
                     <div className="mt-5 flex items-center justify-end gap-2">
+                      {manualPostResult.type === "duplicate_check_unavailable" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => setManualPostResult(null)}
+                            className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.08]"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={retryManualDuplicateCheck}
+                            className="rounded-full border border-white/16 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/[0.1]"
+                          >
+                            Try duplicate check again
+                          </button>
+                          <button
+                            type="button"
+                            onClick={postWithDuplicateCheckOverride}
+                            disabled={!manualPostResult.overrideToken}
+                            className="rounded-full border border-amber-200/45 bg-amber-300 px-4 py-2 text-sm font-semibold text-[#171006] transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-45"
+                          >
+                            Post anyway
+                          </button>
+                        </>
+                      ) : null}
                       {manualPostResult.type === "mapping" ? (
                         <button
                           type="button"
@@ -3660,13 +3706,13 @@ function BookkeepingCleanup() {
                           Close
                         </button>
                       ) : null}
-                      <button
+                      {manualPostResult.type !== "duplicate_check_unavailable" ? <button
                         type="button"
                         onClick={handleManualPostResultPrimary}
                         className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200"
                       >
                         {manualPostResult.primaryLabel || "Close"}
-                      </button>
+                      </button> : null}
                     </div>
                   </motion.div>
                 </motion.div>

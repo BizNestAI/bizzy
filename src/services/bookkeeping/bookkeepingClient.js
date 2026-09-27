@@ -98,11 +98,16 @@ export async function runPostingNow(businessId, options = {}) {
   return res;
 }
 
-export async function postTransactionToQuickBooks(businessId, transactionId) {
+export async function postTransactionToQuickBooks(businessId, transactionId, options = {}) {
   const res = await safeFetch(apiUrl(`/api/bookkeeping/posting/transactions/${encodeURIComponent(transactionId)}`), {
     method: "POST",
     headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
-    body: JSON.stringify({ business_id: businessId }),
+    body: JSON.stringify({
+      business_id: businessId,
+      ...(options.duplicateCheckOverrideToken
+        ? { duplicate_check_override_token: options.duplicateCheckOverrideToken }
+        : {}),
+    }),
   });
   if (res && res.ok === false) {
     throw new Error(res.message || res.error || "manual_post_failed");
