@@ -128,8 +128,7 @@ test("Monthly Review Operator Responses preserve protected special workflow safe
   assert.match(approveRoute, /allowCcPaymentRejection:\s*false/);
   assert.match(approvalService, /confirmCreditCardPaymentPairForTransaction/);
   assert.match(approvalService, /transfer_posting_not_supported/);
-  assert.match(approvalService, /owner_move_posting_not_supported/);
-  assert.match(approvalService, /refund_posting_not_supported/);
+  assert.match(approvalService, /resolveManualApprovalBookkeepingMeta/);
   assert.match(approvalService, /missing_final_account_for_check/);
   assert.match(approvalService, /pending_transaction_not_postable/);
   assert.match(approvalService, /plaid_accounting_review_required/);

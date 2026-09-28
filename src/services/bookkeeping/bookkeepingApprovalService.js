@@ -15,6 +15,9 @@ import { refreshOperatorRequestSummaryBestEffort } from "./operatorRequestSummar
 import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
 import { evaluateIncomingDepositPostingGuard } from "./incomingDepositMatchService.js";
 import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
+import {
+  resolveManualApprovalBookkeepingMeta as resolveManualApprovalPostingMeta,
+} from "./postingDecisionAuthority.js";
 
 export class BookkeepingApprovalError extends Error {
   constructor(error, status = 400, details = {}) {
@@ -61,36 +64,8 @@ function approvalIdempotencyKey({ businessId, approval, actorType }) {
   })).digest("hex");
 }
 
-const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
-  "cc_payment",
-  "transfer_internal",
-  "bank_transfer",
-  "owner_draw",
-  "owner_contribution",
-  "owner_distribution",
-  "refund",
-  "loan_payment",
-  "loan_movement",
-  "tax_payment",
-  "payroll",
-]);
-
-export function resolveManualApprovalBookkeepingMeta(meta = {}, { explicitFinalAccountId = null } = {}) {
-  const next = { ...(meta || {}) };
-  const taxonomyType = String(next.taxonomy_type || "").toLowerCase();
-  if (!explicitFinalAccountId || !taxonomyType || TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW.has(taxonomyType)) {
-    return next;
-  }
-  next.resolved_taxonomy_type = next.taxonomy_type;
-  next.resolved_taxonomy_subtype = next.taxonomy_subtype || null;
-  next.taxonomy_resolved_by = "manual_qbo_account_selection";
-  next.taxonomy_override = next.taxonomy_override || "manual_qbo_account_selection";
-  delete next.taxonomy_type;
-  delete next.taxonomy_subtype;
-  delete next.taxonomy_confidence;
-  if (next.post_block_reason === "taxonomy_requires_review") delete next.post_block_reason;
-  if (next.auto_post_block_reason === "taxonomy_requires_review") delete next.auto_post_block_reason;
-  return next;
+export function resolveManualApprovalBookkeepingMeta(meta = {}, options = {}) {
+  return resolveManualApprovalPostingMeta(meta, options);
 }
 
 async function validateSelectedAccounts({ businessId, items, explicitFinalByTxn }) {
@@ -413,44 +388,35 @@ export async function approveBookkeepingTransactions({
         delete mergedMeta.post_block_reason;
         delete mergedMeta.auto_post_block_reason;
       }
-      const isTransferTaxonomy = mergedMeta?.taxonomy_type === "transfer_internal";
-      const isCcPaymentTaxonomy = mergedMeta?.taxonomy_type === "cc_payment";
+      const postingMeta = resolveManualApprovalBookkeepingMeta(mergedMeta, {
+        explicitFinalAccountId: explicitFinalId,
+        source: isManualPayrollIncome ? "manual_income_account_selection" : "manual_qbo_account_selection",
+      });
+      const isTransferTaxonomy = postingMeta?.taxonomy_type === "transfer_internal" || postingMeta?.taxonomy_type === "bank_transfer";
+      const isCcPaymentTaxonomy = postingMeta?.taxonomy_type === "cc_payment";
       const isConfirmedCcPaymentPair =
         isCcPaymentTaxonomy &&
-        mergedMeta?.cc_payment_pair_id &&
-        String(mergedMeta?.cc_payment_pair_status || "").toLowerCase() === "confirmed";
-      const isOwnerMove = mergedMeta?.taxonomy_type === "owner_draw" || mergedMeta?.taxonomy_type === "owner_contribution";
-      const isRefund = mergedMeta?.taxonomy_type === "refund";
+        postingMeta?.cc_payment_pair_id &&
+        String(postingMeta?.cc_payment_pair_status || "").toLowerCase() === "confirmed";
       if (isTransferTaxonomy) {
-        mergedMeta.safe_to_auto_post = false;
-        mergedMeta.auto_approve_reason = "manual_user";
-        mergedMeta.post_block_reason = "transfer_posting_not_supported";
+        postingMeta.safe_to_auto_post = false;
+        postingMeta.auto_approve_reason = "manual_user";
+        postingMeta.post_block_reason = "transfer_posting_not_supported";
         warnings.push({ transaction_id: txnId, code: "transfer_not_scheduled" });
       } else if (isCcPaymentTaxonomy) {
-        mergedMeta.safe_to_auto_handle = false;
-        mergedMeta.safe_to_auto_post = false;
+        postingMeta.safe_to_auto_handle = false;
+        postingMeta.safe_to_auto_post = false;
         if (isConfirmedCcPaymentPair) {
-          delete mergedMeta.post_block_reason;
-          mergedMeta.match_type = "credit_card_payment_pair";
+          delete postingMeta.post_block_reason;
+          postingMeta.match_type = "credit_card_payment_pair";
         } else {
-          mergedMeta.post_block_reason = "cc_payment_mapping_not_safe";
+          postingMeta.post_block_reason = "cc_payment_mapping_not_safe";
           warnings.push({ transaction_id: txnId, code: "cc_payment_not_scheduled" });
         }
-      } else if (isOwnerMove) {
-        mergedMeta.safe_to_auto_post = false;
-        mergedMeta.auto_approve_reason = "manual_user";
-        mergedMeta.post_block_reason = "owner_move_posting_not_supported";
-        warnings.push({ transaction_id: txnId, code: "owner_move_not_scheduled" });
-      } else if (isRefund) {
-        mergedMeta.safe_to_auto_post = false;
-        mergedMeta.auto_approve_reason = "manual_user";
-        mergedMeta.post_block_reason = "refund_posting_not_supported";
-        warnings.push({ transaction_id: txnId, code: "refund_not_scheduled" });
       } else {
-        mergedMeta.safe_to_auto_post = true;
-        mergedMeta.auto_approve_reason = "manual_user";
+        postingMeta.safe_to_auto_post = true;
+        postingMeta.auto_approve_reason = "manual_user";
       }
-      const postingMeta = resolveManualApprovalBookkeepingMeta(mergedMeta, { explicitFinalAccountId: explicitFinalId });
 
       const effectiveFinalId = isConfirmedCcPaymentPair
         ? null
@@ -465,16 +431,14 @@ export async function approveBookkeepingTransactions({
         status: isConfirmedCcPaymentPair ? "matched" : item?.status,
         final_qbo_account_id: effectiveFinalId,
         final_qbo_account_name: effectiveFinalName,
-        final_canonical_account_key: explicitCanonicalKey || suggestedCanonicalMap[txnId] || mergedMeta?.canonical_account_key || null,
+        final_canonical_account_key: explicitCanonicalKey || suggestedCanonicalMap[txnId] || postingMeta?.canonical_account_key || null,
         confidence: item?.confidence || null,
         reason: item?.reason || reason || null,
         learn_reusable_rule: item?.learn_reusable_rule !== false,
         only_this_transaction: item?.only_this_transaction === true || item?.learn_reusable_rule === false,
         post_after:
           isTransferTaxonomy ||
-          isCcPaymentTaxonomy ||
-          isOwnerMove ||
-          isRefund
+          isCcPaymentTaxonomy
             ? null
             : postAfter,
         meta: postingMeta,

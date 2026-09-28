@@ -284,8 +284,7 @@ test("Books Review and Monthly Review share authoritative human approval service
   assert.match(approvalService, /getAutoPostToQuickBooks/);
   assert.match(approvalService, /resolveBookkeepingPostAfter/);
   assert.match(approvalService, /transfer_posting_not_supported/);
-  assert.match(approvalService, /owner_move_posting_not_supported/);
-  assert.match(approvalService, /refund_posting_not_supported/);
+  assert.match(approvalService, /resolveManualApprovalBookkeepingMeta/);
   assert.match(approvalService, /missing_final_account_for_check/);
   assert.match(approvalService, /pending_transaction_not_postable/);
   assert.match(approvalService, /plaid_accounting_review_required/);

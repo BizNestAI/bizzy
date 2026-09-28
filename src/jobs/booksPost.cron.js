@@ -52,6 +52,11 @@ import {
   markSplitTransactionPosted,
   splitTransactionRowToExecutableSplit,
 } from "../services/bookkeeping/splitTransactionWorkflow.js";
+import {
+  applyManualAccountAuthorityToPostingItem,
+  clearResolvedPostingTaxonomyMeta,
+  taxonomyRequiresBookkeepingPostingReview,
+} from "../services/bookkeeping/postingDecisionAuthority.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 1);
@@ -66,19 +71,6 @@ const SYSTEMIC_FAILURE_THRESHOLD = Number(process.env.BOOKS_POST_SYSTEMIC_FAILUR
 const BACKOFF_SCHEDULE_MS = [5 * 60 * 1000, 15 * 60 * 1000, 60 * 60 * 1000, 6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000];
 const BIZZI_POSTED_LABEL = "Posted by Bizzi";
 const QBO_RECOVERY_REF_LENGTH = 10;
-const TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW = new Set([
-  "cc_payment",
-  "transfer_internal",
-  "bank_transfer",
-  "owner_draw",
-  "owner_contribution",
-  "owner_distribution",
-  "refund",
-  "loan_payment",
-  "loan_movement",
-  "tax_payment",
-  "payroll",
-]);
 
 let postAttemptsTableAvailable = true;
 let booksPostSweepRunning = false;
@@ -264,32 +256,6 @@ function summarizePayload(item, bankTxn, mapping) {
     amount: bankTxn?.amount ?? null,
     date: bankTxn?.date || null,
   };
-}
-
-export function taxonomyRequiresBookkeepingPostingReview(item = {}) {
-  const meta = item?.meta || {};
-  const taxonomyType = String(meta.taxonomy_type || "").toLowerCase();
-  if (!taxonomyType || taxonomyType === "cc_payment") return false;
-  if (!TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW.has(taxonomyType)) return false;
-  return true;
-}
-
-function clearResolvedPostingTaxonomyMeta(meta = {}) {
-  const taxonomyType = String(meta?.taxonomy_type || "").toLowerCase();
-  if (!taxonomyType || TAXONOMY_TYPES_REQUIRING_SPECIAL_POSTING_REVIEW.has(taxonomyType)) return meta || {};
-  const next = {
-    ...(meta || {}),
-    resolved_taxonomy_type: meta.taxonomy_type,
-    resolved_taxonomy_subtype: meta.taxonomy_subtype || null,
-    taxonomy_resolved_by: meta.taxonomy_resolved_by || "manual_qbo_account_selection",
-    taxonomy_override: meta.taxonomy_override || "manual_qbo_account_selection",
-  };
-  delete next.taxonomy_type;
-  delete next.taxonomy_subtype;
-  delete next.taxonomy_confidence;
-  if (next.post_block_reason === "taxonomy_requires_review") delete next.post_block_reason;
-  if (next.auto_post_block_reason === "taxonomy_requires_review") delete next.auto_post_block_reason;
-  return next;
 }
 
 function summarizeResponse(result) {
@@ -1393,7 +1359,7 @@ async function fetchPending(businessId = null, options = {}) {
     let query = supabase
       .from("transaction_categorizations")
       .select(
-        "transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id"
+        "transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id,decided_by"
       )
       .in("status", ["approved", "auto_approved", "failed"])
       .is("qbo_txn_id", null)
@@ -1985,6 +1951,7 @@ async function postSplitTransactionPurchase(item, bankTxn, qbo, mapping, request
 }
 
 async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
+  item = applyManualAccountAuthorityToPostingItem(item);
   if (!qbo) throw new Error("qbo_client_unavailable");
   if (!bankTxn) throw new Error("missing_bank_transaction");
   const mappedAccountId = mapping?.qbo_account_id || null;
@@ -2319,7 +2286,7 @@ export async function handleItem(item, options = {}) {
 
   const { data: metaRow, error: metaErr } = await supabase
     .from("transaction_categorizations")
-    .select("status,post_after,qbo_txn_id,posted_at,meta")
+    .select("status,post_after,qbo_txn_id,posted_at,meta,decided_by")
     .eq("business_id", businessId)
     .eq("transaction_id", txnId)
     .maybeSingle();
@@ -2338,6 +2305,7 @@ export async function handleItem(item, options = {}) {
     return;
   } else if (metaRow?.meta) {
     item.meta = { ...metaRow.meta, post_idempotency_key: idempotencyKey };
+    item.decided_by = metaRow.decided_by || item.decided_by || null;
   }
 
   await supabase
@@ -2361,6 +2329,7 @@ export async function handleItem(item, options = {}) {
     manual_post: manual === true,
     ...(hasAuthorizedMonthlyReviewApproval(item) ? { manual_approval_state: "qbo_posting" } : {}),
   };
+  item = applyManualAccountAuthorityToPostingItem(item);
 
   const qboTxnType = resolveQboTxnType(item, bank, mapping);
   if (!qboTxnType) {
@@ -2951,7 +2920,7 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
 
   const { data: item, error } = await supabase
     .from("transaction_categorizations")
-    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id")
+    .select("transaction_id,business_id,status,final_qbo_account_id,final_qbo_account_name,post_after,post_error,meta,qbo_txn_id,decided_by")
     .eq("business_id", businessId)
     .eq("transaction_id", transactionId)
     .maybeSingle();
