@@ -185,7 +185,8 @@ test("batch duplicate review retains all challenged rows and resolves them with 
   assert.match(page, /mapWithConcurrency\(entries, 3/);
   assert.match(page, /duplicateChallengeId: entry\.challenge\?\.challengeId/);
   assert.match(page, /status: receipt\?\.already_posted \? "already_posted" : "posted"/);
-  assert.match(page, /const nextResults = \(bulkPostDialog\?\.results \|\| \[\]\)\.map/);
+  assert.match(page, /const currentResults = bulkPostDialog\?\.results \|\| \[\]/);
+  assert.match(page, /const nextResults = currentResults\.map/);
 });
 
 test("reviewed post-separately challenge is short-lived and skips duplicate rediscovery", () => {

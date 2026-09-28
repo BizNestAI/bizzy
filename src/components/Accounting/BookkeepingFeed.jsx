@@ -1743,7 +1743,16 @@ export default function BookkeepingFeed({
                       aria-label="Post to QuickBooks"
                     >
                       <UploadCloud size={12} strokeWidth={2.2} aria-hidden="true" />
-                      {isPosting || incomingMatchAction.loading === true ? "Posting..." : "Post"}
+                      {isPosting || incomingMatchAction.loading === true ? (
+                        <span role="status" aria-label="Posting to QuickBooks" className="inline-flex items-baseline">
+                          <span>Posting</span>
+                          <span aria-hidden="true" className="inline-flex w-[1.1em] justify-start">
+                            <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "0ms" }}>.</span>
+                            <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "120ms" }}>.</span>
+                            <span className="inline-block animate-dot-bounce motion-reduce:animate-none" style={{ animationDelay: "240ms" }}>.</span>
+                          </span>
+                        </span>
+                      ) : "Post"}
                     </button>
                   </div>
                 ) : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (

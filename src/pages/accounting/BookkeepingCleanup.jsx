@@ -2552,7 +2552,13 @@ function BookkeepingCleanup() {
 
   const resolveBulkDuplicateEntries = async (entries, decision) => {
     if (!businessId || bulkPosting || !entries.length) return;
+    const currentResults = bulkPostDialog?.results || [];
     setBulkPosting(true);
+    setBulkPostDialog({
+      type: "posting",
+      transactions: entries.map((entry) => entry.transaction),
+      decision,
+    });
     const candidateReservations = new Set();
     const resolved = await mapWithConcurrency(entries, 3, async (entry) => {
       const candidate = entry.challenge?.candidates?.[0];
@@ -2576,7 +2582,7 @@ function BookkeepingCleanup() {
       }
     });
     const resolvedById = new Map(resolved.map((entry) => [entry.transaction.id, entry]));
-    const nextResults = (bulkPostDialog?.results || []).map((entry) => resolvedById.get(entry.transaction.id) || entry);
+    const nextResults = currentResults.map((entry) => resolvedById.get(entry.transaction.id) || entry);
     setBulkPosting(false);
     await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
     setCountsRefreshKey((value) => value + 1);
@@ -3685,11 +3691,26 @@ function BookkeepingCleanup() {
                           <button type="button" onClick={runBulkPost} disabled={bulkPosting} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] disabled:opacity-50">Post {bulkPostSummary.count} transactions</button>
                         </div>
                       </>
-                    ) : bulkPostDialog.type === "progress" ? (
+                    ) : ["progress", "posting"].includes(bulkPostDialog.type) ? (
                       <>
-                        <h2 id="bulk-post-title" className="text-base font-semibold text-white">Checking QuickBooks matches</h2>
-                        <p className="mt-2 text-sm text-slate-300">Reviewing {bulkPostDialog.transactions?.length || 0} transactions with up to three checks running at a time.</p>
-                        <div className="mt-4 space-y-2">{(bulkPostDialog.transactions || []).map((transaction) => <div key={transaction.id} className="flex items-center gap-3 rounded-lg border border-white/10 p-3 text-sm"><span className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-300 border-r-transparent" /><span className="truncate">{transaction.vendor || transaction.description}</span></div>)}</div>
+                        <div className="flex items-start gap-3">
+                          <motion.div
+                            className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-emerald-300/30 bg-emerald-300/[0.08]"
+                            animate={{ boxShadow: ["0 0 0 0 rgba(52,211,153,0.08)", "0 0 0 9px rgba(52,211,153,0)", "0 0 0 0 rgba(52,211,153,0)"] }}
+                            transition={{ duration: 1.8, repeat: Infinity, ease: "easeOut" }}
+                          >
+                            <span className="h-5 w-5 animate-spin rounded-full border-2 border-emerald-200/25 border-r-emerald-300 border-t-emerald-300" />
+                          </motion.div>
+                          <div>
+                            <h2 id="bulk-post-title" className="text-base font-semibold text-white">{bulkPostDialog.type === "posting" ? "Posting to QuickBooks" : "Checking QuickBooks matches"}</h2>
+                            <p className="mt-1 text-sm leading-5 text-slate-300">{bulkPostDialog.type === "posting" ? `Securely posting ${bulkPostDialog.transactions?.length || 0} ${bulkPostDialog.transactions?.length === 1 ? "transaction" : "transactions"}. This may take a few moments.` : `Reviewing ${bulkPostDialog.transactions?.length || 0} transactions with up to three checks running at a time.`}</p>
+                          </div>
+                        </div>
+                        <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
+                          <motion.div className="h-full w-2/5 rounded-full bg-gradient-to-r from-emerald-500 via-emerald-200 to-emerald-500" animate={{ x: ["-110%", "250%"] }} transition={{ duration: 1.35, repeat: Infinity, ease: "easeInOut" }} />
+                        </div>
+                        <div className="mt-4 space-y-2">{(bulkPostDialog.transactions || []).map((transaction, index) => <motion.div key={transaction.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.025] p-3 text-sm" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.06 }}><span className="relative flex h-2.5 w-2.5 shrink-0"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-35" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-300" /></span><span className="min-w-0 flex-1 truncate">{transaction.vendor || transaction.description}</span><span className="text-xs text-slate-500">Processing</span></motion.div>)}</div>
+                        <p className="mt-4 text-center text-xs text-slate-500">Keep this window open while Bizzi confirms each QuickBooks receipt.</p>
                       </>
                     ) : (
                       <>

@@ -60,3 +60,22 @@ test("Needs Review eligibility remains guarded by lifecycle status", () => {
   assert.equal(isBulkActionEligible({ id: "review", status: "needs_review" }, "needs_review"), true);
   assert.equal(isBulkActionEligible(handled("handled"), "needs_review"), false);
 });
+
+test("confirmed bulk posting shows a non-dismissible animated progress state", () => {
+  const source = fs.readFileSync(new URL("../src/pages/accounting/BookkeepingCleanup.jsx", import.meta.url), "utf8");
+  assert.match(source, /type: "posting"/);
+  assert.match(source, /Posting to QuickBooks/);
+  assert.match(source, /This may take a few moments/);
+  assert.match(source, /animate-spin/);
+  assert.match(source, /Keep this window open while Bizzi confirms each QuickBooks receipt/);
+  assert.match(source, /!bulkPosting && \(bulkPostDialog\.type === "results"/);
+});
+
+test("Handled row Posting pill animates its ellipsis", () => {
+  const source = fs.readFileSync(new URL("../src/components/Accounting/BookkeepingFeed.jsx", import.meta.url), "utf8");
+  const postingPill = source.slice(source.indexOf('aria-label="Post to QuickBooks"'), source.indexOf("</button>", source.indexOf('aria-label="Post to QuickBooks"')));
+  assert.match(postingPill, /aria-label="Posting to QuickBooks"/);
+  assert.equal((postingPill.match(/animate-dot-bounce/g) || []).length, 3);
+  assert.match(postingPill, /animationDelay: "240ms"/);
+  assert.match(postingPill, /motion-reduce:animate-none/);
+});
