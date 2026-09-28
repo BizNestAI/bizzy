@@ -3212,27 +3212,28 @@ async function runOnce(options = {}) {
         }
         return true;
       }
-      if (item?.meta?.taxonomy_type === "transfer_internal") {
+      const authorityResolvedItem = applyManualAccountAuthorityToPostingItem(item);
+      if (authorityResolvedItem?.meta?.taxonomy_type === "transfer_internal") {
         if (process.env.NODE_ENV !== "production") {
           log.info("[books-post] skipping transfer taxonomy txn", item.transaction_id);
         }
         return false;
       }
-      if (item?.meta?.taxonomy_type === "owner_draw" || item?.meta?.taxonomy_type === "owner_contribution") {
+      if (authorityResolvedItem?.meta?.taxonomy_type === "owner_draw" || authorityResolvedItem?.meta?.taxonomy_type === "owner_contribution") {
         if (process.env.NODE_ENV !== "production") {
           log.info("[books-post] skipping owner move taxonomy txn", item.transaction_id);
         }
         return false;
       }
       const looksCcMeta =
-        item?.meta?.cc_payment_bank_qbo_account_id ||
-        item?.meta?.cc_payment_cc_qbo_account_id ||
-        item?.meta?.cc_payment_mapping_confidence;
-      if (item?.meta?.taxonomy_type === "cc_payment" || looksCcMeta) {
+        authorityResolvedItem?.meta?.cc_payment_bank_qbo_account_id ||
+        authorityResolvedItem?.meta?.cc_payment_cc_qbo_account_id ||
+        authorityResolvedItem?.meta?.cc_payment_mapping_confidence;
+      if (authorityResolvedItem?.meta?.taxonomy_type === "cc_payment" || looksCcMeta) {
         const safeCc =
-          item?.meta?.safe_to_auto_post === true &&
-          item?.meta?.cc_payment_bank_qbo_account_id &&
-          item?.meta?.cc_payment_cc_qbo_account_id;
+          authorityResolvedItem?.meta?.safe_to_auto_post === true &&
+          authorityResolvedItem?.meta?.cc_payment_bank_qbo_account_id &&
+          authorityResolvedItem?.meta?.cc_payment_cc_qbo_account_id;
         if (!safeCc) {
           if (process.env.NODE_ENV !== "production") {
             log.info("[books-post] skipping cc_payment without safe mapping", item.transaction_id);
@@ -3241,13 +3242,13 @@ async function runOnce(options = {}) {
         }
         return true;
       }
-      if (item?.meta?.taxonomy_type === "refund") {
+      if (authorityResolvedItem?.meta?.taxonomy_type === "refund") {
         if (process.env.NODE_ENV !== "production") {
           log.info("[books-post] skipping refund taxonomy txn", item.transaction_id);
         }
         return false;
       }
-      const safe = item?.meta?.safe_to_auto_post === true;
+      const safe = authorityResolvedItem?.meta?.safe_to_auto_post === true;
       if (item.status === "approved") return safe || item?.meta?.auto_approve_reason === "manual_user";
       if (item.status === "auto_approved") return safe;
       if (item.status === "failed") return safe || item?.meta?.auto_approve_reason === "manual_user";

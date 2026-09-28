@@ -33,6 +33,49 @@ test("legacy manual handled rows with a valid selected QBO account are not block
   assert.equal(resolved.meta.auto_post_block_reason, undefined);
 });
 
+test("legacy positive bank reimbursement with explicit Expense GL account is not blocked by stale transfer taxonomy", () => {
+  const item = {
+    transaction_id: "cc513c09-00a3-4f74-b23f-393afc113e35",
+    status: "failed",
+    decided_by: "user",
+    final_qbo_account_id: "29",
+    final_qbo_account_name: "Fantasy Football",
+    amount: 50,
+    meta: {
+      manual_post: true,
+      taxonomy_type: "transfer_internal",
+      confidence_tier: "high",
+      evidence_source: "taxonomy",
+      suggestion_debug: {
+        taxonomy_type: "transfer_internal",
+        taxonomy_confidence: "high",
+      },
+      post_block_reason: "transfer_posting_not_supported",
+      safe_to_auto_post: false,
+      auto_approve_reason: "manual_user",
+      auto_handle_decision: {
+        requiresReview: true,
+        reason: "taxonomy_requires_review",
+        status: "needs_review",
+        safeToAutoHandle: false,
+      },
+      accounting_decision_source: "manual_qbo_account_selection",
+      manual_qbo_account_selection: true,
+    },
+  };
+
+  assert.equal(hasManualAccountAuthority(item), true);
+  assert.equal(isProtectedPostingWorkflow(item.meta), false);
+  assert.equal(taxonomyRequiresBookkeepingPostingReview(item), false);
+
+  const resolved = applyManualAccountAuthorityToPostingItem(item);
+  assert.equal(resolved.meta.taxonomy_type, undefined);
+  assert.equal(resolved.meta.resolved_taxonomy_type, "transfer_internal");
+  assert.equal(resolved.meta.taxonomy_resolved_by, "manual_qbo_account_selection");
+  assert.equal(resolved.meta.post_block_reason, undefined);
+  assert.equal(resolved.meta.manual_qbo_account_selection, true);
+});
+
 test("auto-approved rows do not bypass taxonomy review solely because an account id exists", () => {
   const item = {
     status: "auto_approved",
@@ -41,6 +84,21 @@ test("auto-approved rows do not bypass taxonomy review solely because an account
     meta: {
       taxonomy_type: "owner_distribution",
       auto_approve_reason: "vendor_rule",
+    },
+  };
+
+  assert.equal(hasManualAccountAuthority(item), false);
+  assert.equal(taxonomyRequiresBookkeepingPostingReview(item), true);
+});
+
+test("unresolved taxonomy review remains blocked without a valid explicit account selection", () => {
+  const item = {
+    status: "needs_review",
+    decided_by: "bizzi",
+    final_qbo_account_id: null,
+    meta: {
+      taxonomy_type: "transfer_internal",
+      post_block_reason: "taxonomy_requires_review",
     },
   };
 
@@ -74,7 +132,11 @@ test("protected credit-card payment, transfer, and split workflows remain protec
   assert.equal(isProtectedPostingWorkflow(cc), true);
 
   const transfer = resolveManualApprovalBookkeepingMeta(
-    { taxonomy_type: "transfer_internal", post_block_reason: "transfer_posting_not_supported" },
+    {
+      taxonomy_type: "transfer_internal",
+      post_block_reason: "transfer_posting_not_supported",
+      transfer_pair_txn_id: "paired-transfer-txn",
+    },
     { explicitFinalAccountId: "expense-account" }
   );
   assert.equal(transfer.taxonomy_type, "transfer_internal");

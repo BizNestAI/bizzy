@@ -7,6 +7,7 @@ import { learnVendorRuleFromTransaction } from "../../../services/bookkeeping/ve
 import { enqueueUnresolvedBookkeepingBacklog } from "../../../services/bookkeeping/backgroundBookkeepingProcessingService.js";
 import { isCheck } from "../../../services/bookkeeping/checkDetector.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../../services/bookkeeping/bookkeepingScope.js";
+import { resolveManualApprovalBookkeepingMeta } from "../../../services/bookkeeping/postingDecisionAuthority.js";
 import {
   computeRangeStartDate,
   countBookkeepingTransactions,
@@ -90,6 +91,12 @@ router.patch("/transactions/:transactionId", requireAuth, async (req, res) => {
       if (checkHit.check_number) metaObj.check_number = checkHit.check_number;
       metaObj.taxonomy_flags = { ...(metaObj.taxonomy_flags || {}), is_check: true };
       nextMeta = metaObj;
+    }
+    if (nextFinalId) {
+      nextMeta = resolveManualApprovalBookkeepingMeta(nextMeta || {}, {
+        explicitFinalAccountId: nextFinalId,
+        source: "manual_qbo_account_selection",
+      });
     }
 
     const updatePayload = {

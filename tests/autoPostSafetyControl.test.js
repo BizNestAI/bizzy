@@ -73,7 +73,7 @@ test("off permits handled state but does not create a posting grace timestamp", 
   assert.match(clarification, /customer_context_only/);
   assert.match(clarification, /accounting_status:\s*"needs_review"/);
   assert.doesNotMatch(clarification, /status = baseMeta\.safe_to_auto_post === true \? "auto_approved" : "approved"/);
-  assert.match(approvals, /status:\s*isConfirmedCcPaymentPair \? "handled" : item\?\.status/);
+  assert.match(approvals, /status:\s*isConfirmedCcPaymentPair \? "matched" : item\?\.status/);
   assert.match(suggest, /status:\s*"auto_approved"/);
 });
 
@@ -197,7 +197,7 @@ test("manual posting affects only the selected transaction row and prevents repe
 
   assert.match(page, /handleManualPostTransaction = \(txnId\)/);
   assert.match(page, /confirmManualPostTransaction = async \(\)/);
-  assert.match(page, /postTransactionToQuickBooks\(businessId, txnId\)/);
+  assert.match(page, /postTransactionToQuickBooks\(businessId, txnId, options\)/);
   assert.match(page, /new Set\(prev\)\.add\(txnId\)/);
   const handlerStart = page.indexOf("const handleManualPostTransaction");
   const handlerEnd = page.indexOf("const handleManualPostResultPrimary", handlerStart);
@@ -231,7 +231,8 @@ test("manual account selection clears stale generic taxonomy without weakening s
   assert.match(authority, /export function isProtectedPostingWorkflow/);
   assert.match(authority, /next\.resolved_taxonomy_type = next\.taxonomy_type/);
   assert.match(authority, /delete next\.taxonomy_type/);
-  assert.match(authority, /if \(next\.post_block_reason === TAXONOMY_REVIEW_BLOCK_REASON\) delete next\.post_block_reason/);
+  assert.match(authority, /TAXONOMY_ONLY_BLOCK_REASONS\.has\(normalized\(next\.post_block_reason\)\)/);
+  assert.match(authority, /delete next\.post_block_reason/);
   assert.match(posting, /taxonomyRequiresBookkeepingPostingReview\(item\)/);
   assert.match(posting, /applyManualAccountAuthorityToPostingItem\(item\)/);
   assert.match(posting, /clearResolvedPostingTaxonomyMeta\(item\.meta \|\| \{\}\)/);
