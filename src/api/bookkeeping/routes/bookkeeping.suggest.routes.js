@@ -420,7 +420,8 @@ function shouldReevaluateExistingSuggestion({
   if (!existingCat) return false;
 
   const statusLower = String(existingCat.status || "").toLowerCase();
-  if (["approved", "auto_approved", "posted"].includes(statusLower) && !allowProtectedReevaluation) return false;
+  if (["approved", "auto_approved", "posted", "matched", "matched_existing_qbo"].includes(statusLower) && !allowProtectedReevaluation) return false;
+  if (existingCat?.meta?.matched_existing_qbo === true || existingCat?.meta?.incoming_deposit_match_status === "confirmed") return false;
 
   if ((existingCat.final_qbo_account_id || existingCat.final_qbo_account_name) && !allowProtectedReevaluation) return false;
   if (existingCat?.meta?.auto_approve_reason === "manual_user") return false;
@@ -1529,7 +1530,7 @@ export async function runBookkeepingSuggestionPass({
       const freshTaxHit = classifyTaxonomy(row, rowTaxonomyContext);
       const freshUniversalHint = await getUniversalVendorHintForTransaction({ bankTxn: row });
       const existingStatusLower = String(existingCat?.status || "").toLowerCase();
-      const existingProtected = ["approved", "auto_approved", "posted"].includes(existingStatusLower);
+      const existingProtected = ["approved", "auto_approved", "posted", "matched", "matched_existing_qbo"].includes(existingStatusLower) || existingCat?.meta?.matched_existing_qbo === true || existingCat?.meta?.incoming_deposit_match_status === "confirmed";
       const confirmedCcPaymentPair =
         freshTaxHit?.type === "cc_payment" &&
         ccPaymentPair?.txnId &&
@@ -1852,7 +1853,7 @@ export async function runBookkeepingSuggestionPass({
           });
         } else {
         let suggestedAcct = suggestedId ? { id: suggestedId, name: suggestedNameResolved || "" } : null;
-        const protectedStatuses = ["approved", "auto_approved", "posted"];
+        const protectedStatuses = ["approved", "auto_approved", "posted", "matched", "matched_existing_qbo"];
         const canUpgrade = !protectedStatuses.includes(statusLower) || protectedBizziGraceEligible;
         const blockedTaxonomy = ["transfer_internal", "refund", "owner_draw", "owner_contribution", "cc_payment"];
         const taxType = String(mergedMeta.taxonomy_type || "").toLowerCase();

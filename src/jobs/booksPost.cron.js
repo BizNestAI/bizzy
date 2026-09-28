@@ -36,6 +36,11 @@ import { evaluateIncomingDepositPostingGuard } from "../services/bookkeeping/inc
 import { postingFailureStatus } from "../services/bookkeeping/bookkeepingLifecycleState.js";
 import { assertTransactionNotExcluded } from "../services/bookkeeping/transactionExclusionService.js";
 import { detectProcessorSettlementActivity } from "../services/bookkeeping/processorSettlementProfiles.js";
+import {
+  detectQuickBooksPaymentsProtectedWorkflow,
+  hasAuthoritativeQuickBooksMatch,
+  quickBooksPaymentsProtectedMeta,
+} from "../services/bookkeeping/quickBooksPaymentsProtectedWorkflow.js";
 import { decideManualPostingGate, hasAuthorizedMonthlyReviewApproval } from "../services/bookkeeping/manualPostingAuthority.js";
 import { hashManualPostOverrideContext } from "../services/bookkeeping/manualPostOverrideToken.js";
 import { createPostingError, normalizePostingError } from "../services/bookkeeping/postingErrorNormalizer.js";
@@ -2221,6 +2226,23 @@ export async function handleItem(item, options = {}) {
   if (!bank) {
     throw new Error("missing_bank_transaction");
   }
+  const quickBooksPayments = detectQuickBooksPaymentsProtectedWorkflow(bank);
+  if (quickBooksPayments) {
+    if (hasAuthoritativeQuickBooksMatch(item)) return { ok: true, outcome: "already_matched" };
+    await supabase
+      .from("transaction_categorizations")
+      .update({
+        status: "needs_review",
+        post_after: null,
+        post_error: null,
+        meta: quickBooksPaymentsProtectedMeta(item.meta || {}, quickBooksPayments),
+        updated_at: getNowIso(),
+      })
+      .eq("business_id", businessId)
+      .eq("transaction_id", txnId)
+      .in("status", ["needs_review", "uncategorized", "approved", "auto_approved", "failed", "handled"]);
+    return { ok: true, outcome: "match_required", reason: "quickbooks_payments_match_required" };
+  }
   if (bank.pending === true) {
     await markTransactionNonPostable(item, "pending_transaction_not_postable");
     return;
@@ -3090,6 +3112,24 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
       qbo_request_id: item?.meta?.qbo_request_id || null,
       child_operation_id: childOperationId,
     };
+  }
+  const manualBank = (await fetchBankTransactions([transactionId], businessId))[transactionId] || null;
+  const quickBooksPayments = detectQuickBooksPaymentsProtectedWorkflow(manualBank || {});
+  if (quickBooksPayments) {
+    if (hasAuthoritativeQuickBooksMatch(item)) return { ok: true, outcome: "already_matched" };
+    await supabase
+      .from("transaction_categorizations")
+      .update({
+        status: "needs_review",
+        post_after: null,
+        post_error: null,
+        meta: quickBooksPaymentsProtectedMeta(item.meta || {}, quickBooksPayments),
+        updated_at: getNowIso(),
+      })
+      .eq("business_id", businessId)
+      .eq("transaction_id", transactionId)
+      .in("status", ["needs_review", "uncategorized", "approved", "auto_approved", "failed", "handled"]);
+    return { ok: true, outcome: "match_required", reason: "quickbooks_payments_match_required" };
   }
   const duplicatePostAnyway = Boolean(
     confirmPostAnyway === true && duplicateChallengeId &&

@@ -13,12 +13,12 @@ const approvalService = readFileSync(join(root, "src/services/bookkeeping/bookke
 test("processor-fee rows expose the dedicated visible reconciliation controls", () => {
   assert.match(feed, /Checking QuickBooks for an existing processing fee/);
   assert.match(feed, /Possible QBO match/);
-  assert.match(feed, /Choose the exact QuickBooks transaction/);
+  assert.match(feed, /Select one or more QuickBooks transactions/);
   assert.match(feed, /No existing QuickBooks fee found/);
   assert.match(feed, /Record New Fee/);
   assert.match(feed, /QuickBooks match check temporarily unavailable/);
   assert.match(feed, /Posting receipt protected/);
-  assert.match(feed, /!isPending && !isCcPaymentWorkflow && !incomingMatch\.active/);
+  assert.match(feed, /!isPending && effectiveResolution === "categorize_new"/);
 });
 
 test("feed contract preserves every processor-fee match state instead of dropping authoritative no-match", () => {

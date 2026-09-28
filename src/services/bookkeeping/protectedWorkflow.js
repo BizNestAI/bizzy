@@ -35,6 +35,13 @@ export function getProtectedWorkflowReason(row = {}) {
   const meta = row.meta || {};
   const taxonomy = String(row.taxonomy_type || row.meta?.taxonomy_type || "").toLowerCase();
   const reason = String(row.accounting_review_reason || row.meta?.accounting_review_reason || "").toLowerCase();
+  const protectedWorkflow = String(row.protected_workflow || meta.protected_workflow || "").toLowerCase();
+  if (protectedWorkflow === "quickbooks_payments_deposit_match_required") {
+    return { label: "QuickBooks payment · Needs match", detail: "This deposit may already be recorded by QuickBooks Payments. Select the matching QuickBooks transaction." };
+  }
+  if (protectedWorkflow === "quickbooks_payments_fee_match_required") {
+    return { label: "QuickBooks processing fee · Needs match", detail: "This processing fee may already be recorded in QuickBooks. Select the matching QuickBooks transaction." };
+  }
   if (row.pending) return { label: "Pending bank transaction", detail: "Wait for the bank to finalize this transaction before accounting changes." };
   const incomingStatus = String(row.incoming_deposit_match_status || meta.incoming_deposit_match_status || "").toLowerCase();
   const incomingBlock = String(row.post_block_reason || meta.post_block_reason || meta.auto_post_block_reason || "").toLowerCase();

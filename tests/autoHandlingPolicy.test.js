@@ -96,7 +96,7 @@ test("incoming deposits cannot bypass matching through high-confidence evidence"
     },
   });
   assert.equal(decision.eligible, false);
-  assert.equal(decision.reason, "incoming_deposit_match_required");
+  assert.equal(decision.reason, "quickbooks_payments_match_required");
 });
 
 test("protected recognizable merchants need business-specific authorization before auto-handling", () => {

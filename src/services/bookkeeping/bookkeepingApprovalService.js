@@ -16,6 +16,11 @@ import { isProtectedCreditCardPaymentWorkflow } from "./protectedWorkflow.js";
 import { evaluateIncomingDepositPostingGuard } from "./incomingDepositMatchService.js";
 import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
 import {
+  detectQuickBooksPaymentsProtectedWorkflow,
+  hasAuthoritativeQuickBooksMatch,
+  quickBooksPaymentsProtectedMeta,
+} from "./quickBooksPaymentsProtectedWorkflow.js";
+import {
   resolveManualApprovalBookkeepingMeta as resolveManualApprovalPostingMeta,
 } from "./postingDecisionAuthority.js";
 
@@ -222,6 +227,24 @@ export async function approveBookkeepingTransactions({
   const reviewIds = (bankTxns || []).filter((row) => row.accounting_review_required === true).map((row) => row.id);
   if (reviewIds.length) {
     throw new BookkeepingApprovalError("plaid_accounting_review_required", 400, { transactions: reviewIds });
+  }
+
+  const protectedQuickBooksPayments = (bankTxns || [])
+    .map((row) => ({ row, detection: detectQuickBooksPaymentsProtectedWorkflow(row) }))
+    .filter(({ row, detection }) => detection && !hasAuthoritativeQuickBooksMatch({ status: statusMap[row.id], meta: existingMetaMap[row.id] }));
+  if (protectedQuickBooksPayments.length) {
+    for (const { row, detection } of protectedQuickBooksPayments) {
+      const meta = quickBooksPaymentsProtectedMeta(existingMetaMap[row.id], detection);
+      await db
+        .from("transaction_categorizations")
+        .update({ status: "needs_review", post_after: null, post_error: null, meta, updated_at: nowIso })
+        .eq("business_id", businessId)
+        .eq("transaction_id", row.id)
+        .in("status", ["needs_review", "uncategorized", "approved", "auto_approved", "failed", "handled"]);
+    }
+    throw new BookkeepingApprovalError("quickbooks_payments_match_required", 409, {
+      transactions: protectedQuickBooksPayments.map(({ row }) => row.id),
+    });
   }
 
   const bookkeepingStartDate = await getBookkeepingStartDate(db, businessId);

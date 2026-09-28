@@ -628,6 +628,8 @@ function independentCandidateCount(candidates = []) {
 
 export function incomingDepositMatchState(txn = {}) {
   const meta = txn.meta || {};
+  const protectedWorkflow = String(meta.protected_workflow || "");
+  const quickBooksPaymentsProtected = protectedWorkflow.startsWith("quickbooks_payments_");
   const processorActivity = detectProcessorSettlementActivity(txn);
   const processorFee = txn.processor_fee || meta.processor_fee || null;
   const isProbableProcessorFee = processorFee?.isProbable === true || processorActivity?.kind === "fee";
@@ -638,7 +640,8 @@ export function incomingDepositMatchState(txn = {}) {
     txn.status === "matched_existing_qbo" ||
     txn.matched_existing_qbo === true ||
     ["needs_confirmation", "ambiguous", "match_check_unavailable", "confirmed"].includes(String(status || "")) ||
-    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required"].includes(String(blockReason || ""));
+    ["possible_existing_qbo_match", "incoming_deposit_needs_match", "match_check_unavailable", "incoming_deposit_bank_account_mapping_unverified", "incoming_deposit_match_rejected_review_required", "quickbooks_payments_match_required"].includes(String(blockReason || "")) ||
+    quickBooksPaymentsProtected;
   if (!active && !isProbableProcessorFee) return { active: false };
   const candidates = txn.incoming_deposit_candidates || meta.incoming_deposit_candidates || [];
   const primary = candidates[0] || null;
@@ -652,6 +655,8 @@ export function incomingDepositMatchState(txn = {}) {
   const invoiceOnly = candidates.length > 0 && candidates.every((candidate) => candidate.match_type === "qbo_invoice_only_context" || candidate.qbo_entity_type === "Invoice");
   return {
     active: true,
+    quickBooksPaymentsProtected,
+    protectedWorkflow,
     isProcessorFee: isProbableProcessorFee,
     processor: processorFee?.processor || processorActivity?.profile?.name || null,
     processorMatchState: confirmed
@@ -743,7 +748,9 @@ export function IncomingDepositMatchPanel({
         ? "Needs match"
       : state.ambiguous
         ? "Needs match"
-        : isProcessorFee ? "Existing QuickBooks fee found" : "Possible QBO match";
+        : state.quickBooksPaymentsProtected
+          ? isProcessorFee ? "QuickBooks processing fee · Needs match" : "QuickBooks payment · Needs match"
+          : isProcessorFee ? "Existing QuickBooks fee found" : "Possible QBO match";
   const description = state.confirmed || transitionSuccess
     ? transitionSuccess ? "Match confirmed. No new QuickBooks transaction was created." : "Confirmed against existing QuickBooks activity. Bizzi did not create a new QuickBooks transaction."
     : action.error
@@ -764,6 +771,10 @@ export function IncomingDepositMatchPanel({
         ? "This deposit needs a fresh QuickBooks match check before it can be posted as income."
       : state.ambiguous
         ? "Bizzi found more than one independent QuickBooks transaction that may explain this deposit."
+        : state.quickBooksPaymentsProtected
+          ? isProcessorFee
+            ? "This processing fee may already be recorded in QuickBooks. Select the matching QuickBooks transaction."
+            : "This deposit may already be recorded by QuickBooks Payments. Select the matching QuickBooks transaction."
         : isProcessorFee
           ? "Bizzi found an existing QuickBooks processing-fee expense that may explain this bank charge."
           : "Bizzi found an existing QuickBooks deposit or payment that may already explain this bank deposit.";
@@ -1371,6 +1382,7 @@ export default function BookkeepingFeed({
             const isPosting = Boolean(postingTransactionIds?.has?.(txn.id));
             const isExpanded = expandedRowId === txn.id;
             const incomingMatch = incomingDepositMatchState(txn);
+            const quickBooksPaymentsProtected = incomingMatch.quickBooksPaymentsProtected === true;
             const selectedResolution = resolutionSelections.get(txn.id) || effectiveTransactionResolution(txn);
             const loanSplitDraft = splitDrafts.get(txn.id) || null;
             const savedSplitLines = Array.isArray(txn.split_lines)
@@ -1574,7 +1586,13 @@ export default function BookkeepingFeed({
                       : "border-amber-300/25 bg-amber-400/10 text-amber-100"
                   }`}>
                     <span className="truncate">
-                      {incomingMatch.confirmed ? "Matched to existing QuickBooks" : incomingMatch.unavailable ? "Match check unavailable" : incomingMatch.ambiguous || incomingMatch.needsFreshCheck ? "Needs Match" : "Possible QBO match"}
+                      {incomingMatch.confirmed
+                        ? "Matched to existing QuickBooks"
+                        : incomingMatch.unavailable
+                          ? "Match check unavailable"
+                          : incomingMatch.quickBooksPaymentsProtected
+                            ? incomingMatch.isProcessorFee ? "QuickBooks processing fee · Needs match" : "QuickBooks payment · Needs match"
+                            : incomingMatch.ambiguous || incomingMatch.needsFreshCheck ? "Needs Match" : "Possible QBO match"}
                     </span>
                     <span className={`truncate text-[9px] font-medium ${incomingMatch.confirmed ? "text-emerald-100/65" : "text-amber-100/65"}`}>
                       {incomingMatch.primary?.qbo_entity_type || "QuickBooks"} {incomingMatch.primary?.txn_date || ""}
@@ -1699,7 +1717,7 @@ export default function BookkeepingFeed({
                   <span className="text-[10px] text-slate-400">Posted</span>
                 ) : isPending ? (
                   <span className="text-[10px] text-amber-100/80">Pending</span>
-                ) : isHandledStatus ? (
+                ) : isHandledStatus && !quickBooksPaymentsProtected ? (
                   <div className="flex items-center justify-center gap-1.5">
                     <button
                       className="inline-flex h-7 items-center justify-center gap-1 rounded-full border border-amber-300/35 bg-amber-400/8 px-2.5 text-[10px] font-semibold text-amber-100/90 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition hover:border-amber-300/60 hover:bg-amber-400/14 disabled:cursor-not-allowed disabled:opacity-45"

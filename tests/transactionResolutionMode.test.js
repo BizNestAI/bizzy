@@ -82,7 +82,7 @@ test("an explicit or confirmed match still outranks a saved category", () => {
 
 test("Handled action rendering consistently exposes Undo and Post", () => {
   const feed = read("src/components/Accounting/BookkeepingFeed.jsx");
-  const actionStart = feed.indexOf(') : isHandledStatus ? (');
+  const actionStart = feed.indexOf(') : isHandledStatus && !quickBooksPaymentsProtected ? (');
   const incomingStart = feed.indexOf(') : incomingMatch.active && effectiveResolution === "match_existing_qbo" ? (', actionStart);
   const handledBranch = feed.slice(actionStart, incomingStart);
   assert.ok(actionStart > 0 && incomingStart > actionStart);

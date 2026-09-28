@@ -94,7 +94,7 @@ test("cache keys isolate business, account, lifecycle, date, page, and page size
 });
 
 test("only genuine reversible matches receive match Undo while Posted renders Posted", () => {
-  assert.match(feed, /\{isPosted \? \([\s\S]*>Posted<\/span>/);
+  assert.match(feed, /: isPosted \? \([\s\S]*>Posted<\/span>/);
   assert.match(feed, /incomingMatch\.confirmed && allowIncomingDepositUndo && incomingMatch\.matchId/);
   assert.match(feed, /onUndoIncomingDepositMatch/);
 });

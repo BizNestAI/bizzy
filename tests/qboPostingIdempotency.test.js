@@ -24,7 +24,7 @@ test("manual double click, manual plus cron race, and two cron workers share an 
   const cron = read("src/jobs/booksPost.cron.js");
   const migration = read("supabase/migrations/20260826_qbo_posting_idempotency_phase2.sql");
 
-  assert.match(cron, /postSingleBookkeepingTransactionNow[\s\S]*await handleItem\(item, \{ manual: true, confirmPostAnyway \}\)/);
+  assert.match(cron, /postSingleBookkeepingTransactionNow[\s\S]*await handleItem\(item, \{[\s\S]*?manual: true,[\s\S]*?confirmPostAnyway,[\s\S]*?duplicateChallengeId/);
   assert.match(cron, /runOnce[\s\S]*await handleItem\(item\)/);
   assert.match(cron, /claimQboPostingIntent/);
   assert.match(cron, /supabase\.rpc\("claim_qbo_posting_intent"/);
@@ -228,7 +228,7 @@ test("Auto-post off blocks autonomous posting while manual one-at-a-time posting
   const cron = read("src/jobs/booksPost.cron.js");
 
   assert.match(cron, /if \(!manual\)[\s\S]*getAutoPostToQuickBooks/);
-  assert.match(cron, /postSingleBookkeepingTransactionNow[\s\S]*await handleItem\(item, \{ manual: true, confirmPostAnyway \}\)/);
+  assert.match(cron, /postSingleBookkeepingTransactionNow[\s\S]*await handleItem\(item, \{[\s\S]*?manual: true,[\s\S]*?confirmPostAnyway,[\s\S]*?duplicateChallengeId/);
   assert.match(cron, /runOnce[\s\S]*policyByBusiness/);
 });
 

@@ -28,6 +28,11 @@ import {
 } from "../../../services/bookkeeping/bookkeepingApprovalService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
 import { persistTransactionResolution } from "../../../services/bookkeeping/transactionResolutionService.js";
+import {
+  detectQuickBooksPaymentsProtectedWorkflow,
+  hasAuthoritativeQuickBooksMatch,
+  quickBooksPaymentsProtectedMeta,
+} from "../../../services/bookkeeping/quickBooksPaymentsProtectedWorkflow.js";
 
 const router = Router();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -128,15 +133,26 @@ router.post("/undo", requireAuth, async (req, res) => {
     const nowIso = new Date().toISOString();
     const { data: existingCategorization, error: existingCategorizationErr } = await supabase
       .from("transaction_categorizations")
-      .select("status,meta,qbo_txn_id,posted_at")
+      .select("status,meta,qbo_txn_id,posted_at,reconciled_at")
       .eq("business_id", businessId)
       .eq("transaction_id", txnId)
       .maybeSingle();
     if (existingCategorizationErr) throw existingCategorizationErr;
+    if (hasAuthoritativeQuickBooksMatch(existingCategorization || {})) {
+      return res.status(409).json({ ok: false, error: "confirmed_match_requires_match_undo", message: "Use the match-specific Undo action to change a confirmed QuickBooks match." });
+    }
     if (existingCategorization?.qbo_txn_id || existingCategorization?.posted_at || existingCategorization?.status === "posted") {
       return res.status(409).json({ ok: false, error: "transaction_already_posted", message: "This transaction has already posted to QuickBooks." });
     }
-    const undoMeta = {
+    const { data: bankTransaction, error: bankTransactionErr } = await supabase
+      .from("bank_transactions")
+      .select("id,name,merchant_name,counterparty_name,amount,direction,raw")
+      .eq("business_id", businessId)
+      .eq("id", txnId)
+      .maybeSingle();
+    if (bankTransactionErr) throw bankTransactionErr;
+    const quickBooksPayments = detectQuickBooksPaymentsProtectedWorkflow(bankTransaction || {});
+    const undoMeta = quickBooksPaymentsProtectedMeta({
       ...(existingCategorization?.meta || {}),
       review_reopen_authorized: true,
       review_reopen_reason: "approval_undone_by_user",
@@ -144,7 +160,7 @@ router.post("/undo", requireAuth, async (req, res) => {
       next_post_attempt_at: null,
       posting_cancelled_at: nowIso,
       posting_generation: crypto.randomUUID(),
-    };
+    }, quickBooksPayments);
     delete undoMeta.user_selected_resolution;
     delete undoMeta.resolution_selected_at;
     delete undoMeta.resolution_selected_by;

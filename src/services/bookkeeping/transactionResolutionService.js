@@ -16,6 +16,7 @@ export function normalizeTransactionResolution(value) {
 
 export function suggestedTransactionResolution(transaction = {}) {
   const meta = transaction.meta || {};
+  if (String(meta.protected_workflow || "").startsWith("quickbooks_payments_")) return "match_existing_qbo";
   const persistedSuggestion = normalizeTransactionResolution(meta.system_suggested_resolution);
   if (persistedSuggestion) return persistedSuggestion;
   const incomingStatus = transaction.incoming_deposit_match_status || meta.incoming_deposit_match_status;
@@ -60,6 +61,12 @@ export async function persistTransactionResolution({ db, businessId, transaction
   if (current?.status === "posted" || current?.posted_at || current?.qbo_txn_id || current?.meta?.matched_existing_qbo === true) {
     const error = new Error("transaction_already_resolved");
     error.code = "transaction_already_resolved";
+    error.status = 409;
+    throw error;
+  }
+  if (String(current?.meta?.protected_workflow || "").startsWith("quickbooks_payments_") && normalized !== "match_existing_qbo") {
+    const error = new Error("quickbooks_payments_match_required");
+    error.code = "quickbooks_payments_match_required";
     error.status = 409;
     throw error;
   }

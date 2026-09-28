@@ -239,7 +239,7 @@ test("June handled processor fee projects its discovered Purchase as confirmable
   assert.equal(overlay.incoming_deposit_candidates[0].txn_date, "2026-06-10");
   assert.equal(overlay.processor_fee.matchState, "qbo_match_found");
   assert.equal(overlay.processor_fee.canCreateNewFee, false);
-  assert.equal(overlay.meta.post_block_reason, "possible_existing_qbo_match");
+  assert.equal(overlay.meta.post_block_reason, "quickbooks_payments_match_required");
 });
 
 test("bounded recovery includes historical handled processor-fee outflows without posting receipts", async () => {
@@ -304,7 +304,8 @@ test("blocks ordinary posting when one verified QBO Deposit candidate already ex
   assert.equal(result.confirmable, true);
   assert.equal(db.tables.transaction_categorizations[0].status, "needs_review");
   assert.equal(db.tables.transaction_categorizations[0].meta.safe_to_auto_post, false);
-  assert.match(db.tables.transaction_categorizations[0].post_error, /possible_existing_qbo_match/);
+  assert.equal(db.tables.transaction_categorizations[0].post_error, null);
+  assert.equal(db.tables.transaction_categorizations[0].meta.post_block_reason, "quickbooks_payments_match_required");
   assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_candidates[0].qbo_entity_id, "dep-300");
   assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_independent_candidate_count, 1);
   assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_confirmable, true);
@@ -326,7 +327,8 @@ test("stale or failed QBO cache blocks income posting without fabricating a matc
   assert.equal(result.status, "match_check_unavailable");
   assert.equal(result.posting_eligibility, "blocked_match_check_unavailable");
   assert.equal(result.candidates.length, 0);
-  assert.equal(db.tables.transaction_categorizations[0].post_error, "match_check_unavailable");
+  assert.equal(db.tables.transaction_categorizations[0].post_error, null);
+  assert.equal(db.tables.transaction_categorizations[0].meta.post_block_reason, "quickbooks_payments_match_required");
 });
 
 test("inferred account mappings cannot produce Tier 1 and remain blocked with visible candidate evidence", async () => {
@@ -345,7 +347,7 @@ test("inferred account mappings cannot produce Tier 1 and remain blocked with vi
 
   assert.equal(result.status, "ambiguous");
   assert.equal(result.confidence_tier, "tier_3");
-  assert.equal(result.posting_eligibility, "blocked_unverified_bank_account_mapping");
+  assert.equal(result.posting_eligibility, "blocked_confirmation_required");
   assert.ok(result.reason_codes.includes("bank_account_could_not_be_fully_verified"));
   assert.equal(result.candidates[0].qbo_entity_id, "dep-300");
 });
@@ -735,7 +737,7 @@ test("posting and frontend paths use incoming deposit guard states", () => {
   assert.match(feed, /Undo match/);
   assert.match(page, /hasIncomingDepositMatchWorkflow/);
   assert.match(page, /key: "matched", label: "Matched"/);
-  assert.match(page, /status: activeTab === "handled" \|\| activeTab === "posted" \|\| activeTab === "matched" \|\| activeTab === "pending" \? activeTab : "needs_review"/);
+  assert.match(page, /status: \["handled", "posted", "matched", "pending", "excluded"\]\.includes\(activeTab\) \? activeTab : "needs_review"/);
   assert.match(page, /const isMatchedTab = activeTab === "matched"/);
   assert.match(page, /allowIncomingDepositUndo=\{isMatchedTab\}/);
   assert.match(page, /onConfirmIncomingDepositMatch/);
@@ -793,7 +795,7 @@ test("existing Needs Review inflows receive feed-time candidate discovery", asyn
   assert.equal(result.rows[0].incoming_deposit_candidates[0].qbo_entity_id, "dep-300");
   assert.equal(result.rows[0].incoming_deposit_independent_candidate_count, 1);
   assert.equal(result.rows[0].incoming_deposit_confirmable, true);
-  assert.equal(result.rows[0].meta.post_block_reason, "possible_existing_qbo_match");
+  assert.equal(result.rows[0].meta.post_block_reason, "quickbooks_payments_match_required");
   assert.equal(db.tables.bank_qbo_matches.length, 1);
   assert.ok(db.calls.every((call) => !["quickbooks_tokens", "qbo_posted_transactions"].includes(call.table || "")));
 });
@@ -891,7 +893,8 @@ test("missing match tables fail closed instead of silently enabling legacy incom
 
   assert.equal(result.status, "match_check_unavailable");
   assert.equal(result.posting_eligibility, "blocked_match_check_unavailable");
-  assert.equal(db.tables.transaction_categorizations[0].post_error, "match_check_unavailable");
+  assert.equal(db.tables.transaction_categorizations[0].post_error, null);
+  assert.equal(db.tables.transaction_categorizations[0].meta.post_block_reason, "quickbooks_payments_match_required");
   assert.ok(db.tables.transaction_categorizations[0].meta.incoming_deposit_reason_codes.includes("incoming_deposit_match_schema_unavailable"));
 });
 
@@ -910,7 +913,8 @@ test("missing match columns and PGRST204 fail closed without exposing raw infras
 
   assert.equal(result.status, "match_check_unavailable");
   assert.equal(result.posting_eligibility, "blocked_match_check_unavailable");
-  assert.equal(db.tables.transaction_categorizations[0].post_error, "match_check_unavailable");
+  assert.equal(db.tables.transaction_categorizations[0].post_error, null);
+  assert.equal(db.tables.transaction_categorizations[0].meta.post_block_reason, "quickbooks_payments_match_required");
   assert.ok(result.reason_codes.includes("quickbooks_match_check_temporarily_unavailable"));
   assert.equal(result.reason_codes.includes("PGRST204"), false);
   assert.equal(db.tables.transaction_categorizations[0].meta.incoming_deposit_reason_codes.includes("PGRST204"), false);

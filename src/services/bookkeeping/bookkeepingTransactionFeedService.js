@@ -10,6 +10,11 @@ import { discoverIncomingDepositQboMatch } from "./incomingDepositMatchService.j
 import { isCashBackRewardCredit, rewardCreditIntent } from "./rewardCreditPolicy.js";
 import { detectProcessorSettlementActivity } from "./processorSettlementProfiles.js";
 import { classifyBookkeepingLifecycle, derivePostingOutcome } from "./bookkeepingLifecycleClassifier.js";
+import {
+  detectQuickBooksPaymentsProtectedWorkflow,
+  hasAuthoritativeQuickBooksMatch,
+  quickBooksPaymentsProtectedMeta,
+} from "./quickBooksPaymentsProtectedWorkflow.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -550,7 +555,7 @@ function shouldDiscoverIncomingDepositForFeed(row = {}) {
   const processorFee = detectProcessorSettlementActivity(row)?.kind === "fee";
   if (!incoming && !processorFee) return false;
   if (incoming && isCashBackRewardCredit(row)) return false;
-  if (row.pending === true || row.status === "posted" || row.status === "matched_existing_qbo") return false;
+  if (row.pending === true || row.status === "posted" || hasAuthoritativeQuickBooksMatch(row)) return false;
   const meta = row.meta || {};
   const matchStatus = String(row.incoming_deposit_match_status || meta.incoming_deposit_match_status || "");
   const rediscoverableStatus = !matchStatus || matchStatus === "unchecked" || matchStatus === "superseded";
@@ -591,6 +596,7 @@ export function incomingDepositOverlayFromResult(result = {}, row = {}) {
   }));
   const status = result.status || null;
   const processorActivity = detectProcessorSettlementActivity(row);
+  const quickBooksPayments = detectQuickBooksPaymentsProtectedWorkflow(row);
   const probableProcessorFee = processorActivity?.kind === "fee" || (result.reason_codes || []).some((reason) => String(reason).startsWith("processor:")) ||
     candidates.some((candidate) => candidate.match_type === "qbo_processing_fee_expense");
   const processorMatchState = status === "match_check_unavailable"
@@ -615,7 +621,7 @@ export function incomingDepositOverlayFromResult(result = {}, row = {}) {
     // A zero-result search permits the ordinary guarded approval path.  Creating a
     // replacement fee is a separate, explicit user decision after rejecting a
     // candidate; never infer that permission from an empty search alone.
-    canCreateNewFee: processorMatchState === "no_existing_qbo_match" && row.meta?.processor_fee_new_fee_authorized === true,
+    canCreateNewFee: !quickBooksPayments && processorMatchState === "no_existing_qbo_match" && row.meta?.processor_fee_new_fee_authorized === true,
     blockingReason: result.confirmability_reason || null,
     lastCheckedAt: result.source_freshness_at || null,
   } : null;
@@ -629,7 +635,9 @@ export function incomingDepositOverlayFromResult(result = {}, row = {}) {
     incoming_deposit_confirmability_reason: result.confirmability_reason || null,
     incoming_deposit_independent_candidate_count: result.independent_candidate_count ?? candidates.filter((candidate) => candidate.candidate_role !== "supporting").length,
     processor_fee: processorFee,
-    post_error: processorMatchState === "no_existing_qbo_match"
+    post_error: quickBooksPayments
+      ? null
+      : processorMatchState === "no_existing_qbo_match"
       ? "processor_fee_record_new_required"
       : status === "match_check_unavailable"
       ? "match_check_unavailable"
@@ -637,8 +645,11 @@ export function incomingDepositOverlayFromResult(result = {}, row = {}) {
         ? "incoming_deposit_needs_match"
         : "possible_existing_qbo_match",
     meta: {
+      ...quickBooksPaymentsProtectedMeta(row.meta || {}, quickBooksPayments),
       safe_to_auto_post: false,
-      post_block_reason: processorMatchState === "no_existing_qbo_match"
+      post_block_reason: quickBooksPayments
+        ? "quickbooks_payments_match_required"
+        : processorMatchState === "no_existing_qbo_match"
         ? "processor_fee_record_new_required"
         : status === "match_check_unavailable"
         ? "match_check_unavailable"
@@ -683,6 +694,7 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
         correlation_id: correlationId,
         error: { code: err?.code || null, message: err?.message || null },
       });
+      const quickBooksPayments = detectQuickBooksPaymentsProtectedWorkflow(row);
       overlays.set(String(row.id), {
         incoming_deposit_match_status: "match_check_unavailable",
         incoming_deposit_confidence_tier: "unavailable",
@@ -702,10 +714,11 @@ async function attachIncomingDepositDiscoveryForFeed({ db, businessId, rows, now
           blockingReason: "match_check_unavailable",
           lastCheckedAt: null,
         } : null,
-        post_error: "match_check_unavailable",
+        post_error: quickBooksPayments ? null : "match_check_unavailable",
         meta: {
+          ...quickBooksPaymentsProtectedMeta(row.meta || {}, quickBooksPayments),
           safe_to_auto_post: false,
-          post_block_reason: "match_check_unavailable",
+          post_block_reason: quickBooksPayments ? "quickbooks_payments_match_required" : "match_check_unavailable",
           incoming_deposit_match_status: "match_check_unavailable",
           incoming_deposit_confidence_tier: "unavailable",
           incoming_deposit_reason_codes: ["quickbooks_match_check_temporarily_unavailable", "ordinary_income_posting_blocked"],
