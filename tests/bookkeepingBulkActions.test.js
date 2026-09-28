@@ -40,10 +40,12 @@ test("Handled bulk workflow uses the canonical posting client and not approval",
   const bulkPostBody = source.slice(source.indexOf("const runBulkPost"), source.indexOf("const reviewBulkPostResult"));
   assert.match(bulkPostBody, /postTransactionToQuickBooks\(businessId, txn\.id\)/);
   assert.doesNotMatch(bulkPostBody, /approveTransactions/);
-  assert.match(bulkPostBody, /for \(const txn of batch\)/);
+  assert.match(bulkPostBody, /mapWithConcurrency\(batch, 3, async \(txn\)/);
   assert.match(bulkPostBody, /status: "duplicate"/);
   assert.match(bulkPostBody, /status: "failed"/);
-  assert.match(bulkPostBody, /status: "posted"/);
+  assert.match(bulkPostBody, /\? "already_posted" : "posted"/);
+  assert.match(bulkPostBody, /results\.some\(\(entry\) => \["duplicate", "failed"\]\.includes\(entry\.status\)\)/);
+  assert.match(bulkPostBody, /if \(requiresReview\) \{\s*setBulkPostDialog\(\{ type: "results", results \}\)/);
   assert.match(source, /bulkAction === "approve" \? handleBulkApprove : openBulkPostConfirmation/);
   assert.doesNotMatch(source.slice(source.indexOf("const handleBulkApprove"), source.indexOf("const handleManualPostTransaction")), /window\.alert/);
 });

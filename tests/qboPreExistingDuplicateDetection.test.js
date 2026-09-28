@@ -177,3 +177,35 @@ test("fuzzy candidate UI shows accounting identity fields and link does not crea
   assert.match(route, /status: "posted"/);
   assert.doesNotMatch(route.slice(route.indexOf('router.post("/posting/transactions/:transactionId/link-existing"')), /createQboDeposit/);
 });
+
+test("batch duplicate review retains all challenged rows and resolves them with bounded concurrency", () => {
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  assert.match(page, /Review possible QuickBooks matches/);
+  assert.match(page, /These are separate charges — post all/);
+  assert.match(page, /mapWithConcurrency\(entries, 3/);
+  assert.match(page, /duplicateChallengeId: entry\.challenge\?\.challengeId/);
+  assert.match(page, /status: receipt\?\.already_posted \? "already_posted" : "posted"/);
+  assert.match(page, /const nextResults = \(bulkPostDialog\?\.results \|\| \[\]\)\.map/);
+});
+
+test("reviewed post-separately challenge is short-lived and skips duplicate rediscovery", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  assert.match(cron, /qbo_duplicate_challenge_expires_at/);
+  assert.match(cron, /let structuredManualCheckCompleted = duplicatePostAnyway/);
+  assert.match(cron, /Date\.parse\(item\?\.meta\?\.qbo_duplicate_challenge_expires_at/);
+});
+
+test("one QuickBooks candidate cannot be linked to two source transactions", () => {
+  const route = read("src/api/bookkeeping/routes/bookkeeping.posting.routes.js");
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  assert.match(route, /qbo_duplicate_candidate_already_linked/);
+  assert.match(route, /\.neq\("transaction_id", transactionId\)/);
+  assert.match(page, /candidateReservations\.has\(candidateKey\)/);
+});
+
+test("expense duplicate confirmation never describes the charge as a deposit", () => {
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  assert.match(page, /function duplicateEntityNoun/);
+  assert.match(page, /amount < 0\) return "expenses"/);
+  assert.doesNotMatch(page, /amount \|\| 0 \}\)\.replace\("\+", ""\)\} deposits dated/);
+});

@@ -826,12 +826,29 @@ router.post("/posting/transactions/:transactionId/link-existing", requireAuth, a
     if (!cat?.meta?.possible_qbo_duplicate) {
       return res.status(409).json({ ok: false, error: "qbo_duplicate_review_required" });
     }
+    if (Date.parse(cat.meta?.qbo_duplicate_challenge_expires_at || "") <= Date.now()) {
+      return res.status(409).json({ ok: false, error: "qbo_duplicate_review_expired" });
+    }
     const reviewedCandidate = (cat.meta?.qbo_duplicate_candidates || []).some((candidate) =>
       String(candidate?.qbo_txn_id || "") === String(qboTxnId) &&
       normalizeQboTxnType(candidate?.qbo_txn_type || null) === qboTxnType
     );
     if (!reviewedCandidate) {
       return res.status(409).json({ ok: false, error: "qbo_duplicate_candidate_changed" });
+    }
+
+    const { data: existingReservation, error: reservationErr } = await supabase
+      .from("qbo_posted_transactions")
+      .select("transaction_id")
+      .eq("business_id", businessId)
+      .eq("qbo_txn_id", qboTxnId)
+      .eq("status", "posted")
+      .neq("transaction_id", transactionId)
+      .limit(1)
+      .maybeSingle();
+    if (reservationErr) throw reservationErr;
+    if (existingReservation?.transaction_id) {
+      return res.status(409).json({ ok: false, error: "qbo_duplicate_candidate_already_linked" });
     }
 
     const { data: receipt, error: receiptErr } = await supabase

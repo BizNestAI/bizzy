@@ -674,6 +674,7 @@ async function recordManualFuzzyDuplicateChallenge({ item, bankTxn, requestId, c
   }));
   const challengeId = duplicateChallengeId({ item, requestId, candidates });
   const nowIso = getNowIso();
+  const challengeExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
   await supabase.from("qbo_posted_transactions").update({
     status: "pending",
     processing_started_at: null,
@@ -692,6 +693,7 @@ async function recordManualFuzzyDuplicateChallenge({ item, bankTxn, requestId, c
       qbo_duplicate_detection_confidence: confidence,
       qbo_duplicate_candidates: candidateSummary,
       qbo_duplicate_challenge_id: challengeId,
+      qbo_duplicate_challenge_expires_at: challengeExpiresAt,
     },
   }).eq("business_id", item.business_id).eq("transaction_id", item.transaction_id);
   return {
@@ -699,6 +701,7 @@ async function recordManualFuzzyDuplicateChallenge({ item, bankTxn, requestId, c
     outcome: "confirmation_required",
     reason: "possible_qbo_match",
     challenge_id: challengeId,
+    challenge_expires_at: challengeExpiresAt,
     transaction: {
       id: item.transaction_id,
       display_name: buildQboDisplayName(bankTxn, "Transaction"),
@@ -2197,7 +2200,8 @@ export async function handleItem(item, options = {}) {
   const duplicatePostAnyway = Boolean(
     manual && confirmPostAnyway && duplicateChallengeIdValue &&
     item?.meta?.possible_qbo_duplicate === true &&
-    item?.meta?.qbo_duplicate_challenge_id === duplicateChallengeIdValue
+    item?.meta?.qbo_duplicate_challenge_id === duplicateChallengeIdValue &&
+    Date.parse(item?.meta?.qbo_duplicate_challenge_expires_at || "") > Date.now()
   );
   const timing = createPostingTiming();
   let intentQboTxnTypeForLog = null;
@@ -2620,7 +2624,10 @@ export async function handleItem(item, options = {}) {
     throw new Error("qbo_client_unavailable:no_active_token_row");
   }
 
-  let structuredManualCheckCompleted = false;
+  // A validated per-transaction challenge is the completed duplicate preflight.
+  // Re-running discovery here is both expensive and can return a different
+  // candidate set after the user has already reviewed the original evidence.
+  let structuredManualCheckCompleted = duplicatePostAnyway;
   if (manual && !duplicatePostAnyway && (intentQboTxnType === "Deposit" || detectProcessorSettlementActivity(bank)?.kind === "fee") && !createNewIncomeOverride) {
     const overrideContext = {
       business_id: businessId,
@@ -3134,7 +3141,8 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
   const duplicatePostAnyway = Boolean(
     confirmPostAnyway === true && duplicateChallengeId &&
     item?.meta?.possible_qbo_duplicate === true &&
-    item?.meta?.qbo_duplicate_challenge_id === duplicateChallengeId
+    item?.meta?.qbo_duplicate_challenge_id === duplicateChallengeId &&
+    Date.parse(item?.meta?.qbo_duplicate_challenge_expires_at || "") > Date.now()
   );
   if (!duplicatePostAnyway && !["approved", "auto_approved", "failed"].includes(item.status)) {
     const err = new Error("transaction_not_handled");

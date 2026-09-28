@@ -59,6 +59,19 @@ import { classifyBookkeepingLifecycle } from "../../services/bookkeeping/bookkee
 import { bulkActionForFeed, isBulkActionEligible, summarizeBulkPost } from "../../services/bookkeeping/bookkeepingBulkActions.js";
 const __motionUsageForLint = motion;
 
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  async function runWorker() {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runWorker));
+  return results;
+}
+
 const MOCK_ACCOUNTS = [
   { id: "acct-cc-1234", name: "Credit Card 1234", type: "Credit Card", balance: -1820.45 },
   { id: "acct-ch-5678", name: "Checking 5678", type: "Checking", balance: 8240.12 },
@@ -394,6 +407,14 @@ function formatShortDate(dateStr) {
 function formatPostingAmount(txn = {}) {
   const amount = Number(txn.signed_amount ?? txn.signedAmount ?? txn.amount ?? 0) || 0;
   return `${amount < 0 ? "-" : "+"}$${Math.abs(amount).toFixed(2)}`;
+}
+
+function duplicateEntityNoun(result = {}) {
+  const type = String(result?.candidates?.[0]?.qbo_txn_type || result?.postingSummary?.qbo_txn_type || "").toLowerCase();
+  const amount = Number(result?.transaction?.amount ?? result?.postingSummary?.amount ?? 0);
+  if (type.includes("deposit") || amount > 0) return "deposits";
+  if (type.includes("purchase") || type.includes("expense") || type.includes("creditcardcharge") || amount < 0) return "expenses";
+  return "transactions";
 }
 
 function getManualPostSummary(txn = {}) {
@@ -2496,41 +2517,85 @@ function BookkeepingCleanup() {
     const batch = bulkPostDialog?.transactions || [];
     if (!businessId || usingDemo || !batch.length || bulkPosting) return;
     setBulkPosting(true);
-    const results = [];
-    setBulkPostDialog(null);
-    for (const txn of batch) {
+    setBulkPostDialog({ type: "progress", transactions: batch });
+    const results = await mapWithConcurrency(batch, 3, async (txn) => {
       if (!isBulkActionEligible(txn, "handled") || hasIncomingDepositMatchWorkflow(txn)) {
-        results.push({ status: "failed", transaction: txn, error: { title: "No longer eligible", message: "Refresh the Handled feed and review this transaction." } });
-        continue;
+        return { status: "failed", transaction: txn, error: { title: "No longer eligible", message: "Refresh the Handled feed and review this transaction." } };
       }
       setPostingTransactionIds((current) => new Set(current).add(txn.id));
       try {
         const result = await postTransactionToQuickBooks(businessId, txn.id);
         if (result?.outcome === "confirmation_required" && result?.reason === "possible_qbo_match") {
-          results.push({ status: "duplicate", transaction: txn, challenge: buildFuzzyDuplicateChallenge(result, txn) });
-        } else {
-          results.push({ status: "posted", transaction: txn, receipt: result });
+          return { status: "duplicate", transaction: txn, challenge: buildFuzzyDuplicateChallenge(result, txn) };
         }
+        return { status: result?.already_posted ? "already_posted" : "posted", transaction: txn, receipt: result };
       } catch (error) {
         console.warn("[bookkeeping] bulk post transaction failed", { transactionId: txn.id, message: error?.message || error });
-        results.push({ status: "failed", transaction: txn, error: buildManualPostError(error) });
+        return { status: "failed", transaction: txn, error: buildManualPostError(error) };
       } finally {
         setPostingTransactionIds((current) => { const next = new Set(current); next.delete(txn.id); return next; });
       }
-    }
+    });
     setBulkPosting(false);
     setSelectedIds(new Set());
-    await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
-    setCountsRefreshKey((value) => value + 1);
-    await loadMappingStatus();
-    setBulkPostDialog({ type: "results", results });
+    const hasDuplicateReview = results.some((entry) => entry.status === "duplicate");
+    const requiresReview = results.some((entry) => ["duplicate", "failed"].includes(entry.status));
+    if (requiresReview) {
+      setBulkPostDialog({ type: "results", results });
+    }
+    if (!hasDuplicateReview) {
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
+      setCountsRefreshKey((value) => value + 1);
+      await loadMappingStatus();
+    }
   };
 
-  const reviewBulkPostResult = (entry) => {
+  const resolveBulkDuplicateEntries = async (entries, decision) => {
+    if (!businessId || bulkPosting || !entries.length) return;
+    setBulkPosting(true);
+    const candidateReservations = new Set();
+    const resolved = await mapWithConcurrency(entries, 3, async (entry) => {
+      const candidate = entry.challenge?.candidates?.[0];
+      try {
+        if (decision === "link") {
+          const candidateKey = `${candidate?.qbo_txn_type || ""}:${candidate?.qbo_txn_id || ""}`;
+          if (!candidate?.qbo_txn_id || candidateReservations.has(candidateKey)) {
+            return { ...entry, status: "failed", error: { title: "Candidate already selected", message: "A QuickBooks transaction can only be linked to one bank transaction." } };
+          }
+          candidateReservations.add(candidateKey);
+          const receipt = await linkExistingQuickBooksTransaction(businessId, entry.transaction.id, candidate);
+          return { ...entry, status: "linked", receipt };
+        }
+        const receipt = await postTransactionToQuickBooks(businessId, entry.transaction.id, {
+          confirmPostAnyway: true,
+          duplicateChallengeId: entry.challenge?.challengeId,
+        });
+        return { ...entry, status: receipt?.already_posted ? "already_posted" : "posted", receipt };
+      } catch (error) {
+        return { ...entry, status: "failed", error: buildManualPostError(error) };
+      }
+    });
+    const resolvedById = new Map(resolved.map((entry) => [entry.transaction.id, entry]));
+    const nextResults = (bulkPostDialog?.results || []).map((entry) => resolvedById.get(entry.transaction.id) || entry);
+    setBulkPosting(false);
+    await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
+    setCountsRefreshKey((value) => value + 1);
+    if (nextResults.some((entry) => ["duplicate", "failed"].includes(entry.status))) {
+      setBulkPostDialog({ type: "results", results: nextResults });
+    } else {
+      setBulkPostDialog(null);
+    }
+  };
+
+  const reviewBulkFailure = (entry) => {
     setBulkPostDialog(null);
-    setManualPostResult(entry.status === "duplicate"
-      ? entry.challenge
-      : { ...entry.error, transaction: entry.transaction });
+    setManualPostResult({ ...entry.error, transaction: entry.transaction });
+  };
+
+  const closeBulkReview = async () => {
+    setBulkPostDialog(null);
+    await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
+    setCountsRefreshKey((value) => value + 1);
   };
 
   const handleManualPostTransaction = (txnId) => {
@@ -3602,7 +3667,7 @@ function BookkeepingCleanup() {
             <AnimatePresence>
               {bulkPostDialog ? (
                 <motion.div className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="bulk-post-title" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                  <button type="button" aria-label="Close bulk posting dialog" className="absolute inset-0 bg-black/72 backdrop-blur-[3px]" onClick={() => !bulkPosting && setBulkPostDialog(null)} />
+                  <button type="button" aria-label="Close bulk posting dialog" className="absolute inset-0 bg-black/72 backdrop-blur-[3px]" onClick={() => !bulkPosting && (bulkPostDialog.type === "results" ? closeBulkReview() : setBulkPostDialog(null))} />
                   <motion.div className="relative max-h-[calc(100vh-3rem)] w-full max-w-[560px] overflow-y-auto rounded-2xl border border-emerald-300/25 bg-[#111312] p-5 text-slate-100 shadow-2xl" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}>
                     {bulkPostDialog.type === "confirm" && bulkPostSummary ? (
                       <>
@@ -3620,18 +3685,45 @@ function BookkeepingCleanup() {
                           <button type="button" onClick={runBulkPost} disabled={bulkPosting} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] disabled:opacity-50">Post {bulkPostSummary.count} transactions</button>
                         </div>
                       </>
+                    ) : bulkPostDialog.type === "progress" ? (
+                      <>
+                        <h2 id="bulk-post-title" className="text-base font-semibold text-white">Checking QuickBooks matches</h2>
+                        <p className="mt-2 text-sm text-slate-300">Reviewing {bulkPostDialog.transactions?.length || 0} transactions with up to three checks running at a time.</p>
+                        <div className="mt-4 space-y-2">{(bulkPostDialog.transactions || []).map((transaction) => <div key={transaction.id} className="flex items-center gap-3 rounded-lg border border-white/10 p-3 text-sm"><span className="h-3 w-3 animate-spin rounded-full border-2 border-emerald-300 border-r-transparent" /><span className="truncate">{transaction.vendor || transaction.description}</span></div>)}</div>
+                      </>
                     ) : (
                       <>
-                        <h2 id="bulk-post-title" className="text-base font-semibold text-white">QuickBooks posting results</h2>
+                        <h2 id="bulk-post-title" className="text-base font-semibold text-white">{bulkPostResults.some((entry) => entry.status === "duplicate") ? "Review possible QuickBooks matches" : "QuickBooks posting results"}</h2>
                         <div className="mt-3 grid grid-cols-3 gap-2 text-center text-sm">
-                          <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.07] p-3"><strong className="block text-lg">{bulkPostResults.filter((r) => r.status === "posted").length}</strong>posted</div>
+                          <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.07] p-3"><strong className="block text-lg">{bulkPostResults.filter((r) => ["posted", "linked", "already_posted"].includes(r.status)).length}</strong>complete</div>
                           <div className="rounded-lg border border-amber-300/20 bg-amber-300/[0.07] p-3"><strong className="block text-lg">{bulkPostResults.filter((r) => r.status === "duplicate").length}</strong>need review</div>
                           <div className="rounded-lg border border-rose-300/20 bg-rose-300/[0.07] p-3"><strong className="block text-lg">{bulkPostResults.filter((r) => r.status === "failed").length}</strong>could not post</div>
                         </div>
                         <div className="mt-4 space-y-2">
-                          {bulkPostResults.map((entry) => <div key={entry.transaction.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 p-3 text-sm"><div className="min-w-0"><div className="truncate font-medium">{entry.transaction.vendor || entry.transaction.description}</div><div className="text-xs text-slate-400">{entry.status === "posted" ? "Posted to QuickBooks" : entry.status === "duplicate" ? "Possible QuickBooks duplicate" : entry.error?.message || "Could not be posted"}</div></div>{entry.status !== "posted" ? <button type="button" onClick={() => reviewBulkPostResult(entry)} className="shrink-0 rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold">Review</button> : null}</div>)}
+                          {bulkPostResults.map((entry) => {
+                            const candidate = entry.challenge?.candidates?.[0] || null;
+                            const amount = Math.abs(Number(entry.transaction.amount || 0)).toFixed(2);
+                            return <div key={entry.transaction.id} className="rounded-lg border border-white/10 p-3 text-sm">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate font-medium">{entry.transaction.vendor || entry.transaction.description}</div>
+                                  <div className="mt-1 text-xs text-slate-400">{entry.transaction.date} · ${amount} · {entry.transaction.currentAccount || entry.transaction.accountName || "Source account"} → {entry.transaction.glAccountName || entry.transaction.final_qbo_account_name || "Selected account"}</div>
+                                  {candidate ? <div className="mt-2 rounded-md border border-amber-300/15 bg-amber-300/[0.05] p-2 text-xs text-slate-300">Possible match: {candidate.txn_date} · ${Math.abs(Number(candidate.amount || 0)).toFixed(2)} · {candidate.qbo_txn_type} #{candidate.qbo_txn_id}</div> : null}
+                                  {!candidate ? <div className="text-xs text-slate-400">{["posted", "linked", "already_posted"].includes(entry.status) ? "Completed" : entry.error?.message || "Could not be posted"}</div> : null}
+                                </div>
+                                {entry.status === "failed" ? <button type="button" onClick={() => reviewBulkFailure(entry)} className="shrink-0 rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold">Review</button> : null}
+                              </div>
+                              {entry.status === "duplicate" ? <div className="mt-3 flex flex-wrap justify-end gap-2">
+                                <button type="button" disabled={bulkPosting || !candidate?.qbo_txn_id} onClick={() => resolveBulkDuplicateEntries([entry], "link")} className="rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold disabled:opacity-45">Link existing</button>
+                                <button type="button" disabled={bulkPosting} onClick={() => resolveBulkDuplicateEntries([entry], "post")} className="rounded-full bg-amber-300 px-3 py-1.5 text-xs font-semibold text-[#171006] disabled:opacity-45">Post separately</button>
+                              </div> : null}
+                            </div>;
+                          })}
                         </div>
-                        <div className="mt-5 flex justify-end"><button type="button" onClick={() => setBulkPostDialog(null)} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c]">Done</button></div>
+                        <div className="mt-5 flex flex-wrap justify-end gap-2">
+                          <button type="button" disabled={bulkPosting} onClick={closeBulkReview} className="rounded-full border border-white/12 px-4 py-2 text-sm font-semibold">Cancel</button>
+                          {bulkPostResults.some((entry) => entry.status === "duplicate") ? <button type="button" disabled={bulkPosting} onClick={() => resolveBulkDuplicateEntries(bulkPostResults.filter((entry) => entry.status === "duplicate"), "post")} className="rounded-full bg-amber-300 px-4 py-2 text-sm font-semibold text-[#171006] disabled:opacity-45">These are separate charges — post all {bulkPostResults.filter((entry) => entry.status === "duplicate").length}</button> : null}
+                        </div>
                       </>
                     )}
                   </motion.div>
@@ -3881,7 +3973,7 @@ function BookkeepingCleanup() {
                           </p>
                         ) : manualPostResult.type === "fuzzy_duplicate_confirmation" ? (
                           <p className="mt-1.5 text-sm leading-5 text-slate-300">
-                            QuickBooks will contain two {formatPostingAmount({ amount: manualPostResult.candidates?.[0]?.amount || 0 }).replace("+", "")} deposits dated {new Date(`${manualPostResult.candidates?.[0]?.txn_date}T00:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}. Continue only if these are different payments.
+                            QuickBooks will contain two {formatPostingAmount({ amount: manualPostResult.candidates?.[0]?.amount || 0 }).replace("+", "")} {duplicateEntityNoun(manualPostResult)} dated {new Date(`${manualPostResult.candidates?.[0]?.txn_date}T00:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}. Continue only if these are different transactions.
                           </p>
                         ) : <p className="mt-2 text-sm leading-6 text-slate-300">{manualPostResult.message}</p>}
                       </div>
