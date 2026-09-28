@@ -1389,3 +1389,10 @@ test("user-confirmed edit path reuses the atomic batch override with explicit ed
   assert.match(service, /input\.allowUserConfirmedEdit/);
   assert.match(migration, /when v_item \? 'user_override'/);
 });
+
+test("annual deductions bank lookups stay below proxy request-line limits", () => {
+  const engine = fs.readFileSync("src/services/tax/taxDeductionsEngine.js", "utf8");
+  assert.match(engine, /BANK_TRANSACTION_CHUNK_SIZE = 100/);
+  assert.match(engine, /transactionIds\.slice\(i, i \+ BANK_TRANSACTION_CHUNK_SIZE\)/);
+  assert.doesNotMatch(engine, /transactionIds\.slice\(i, i \+ 500\)/);
+});

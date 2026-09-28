@@ -436,9 +436,8 @@ function buildManualPostError(err) {
   if (normalized.includes("qbo_duplicate_found") || normalized.includes("possible_qbo_duplicate")) {
     return {
       type: "fuzzy_duplicate",
-      title: "Possible QuickBooks match",
-      message: "This may be a different real-world transaction. Review the QuickBooks candidate before deciding.",
-      detail: "Nothing was posted or linked.",
+      title: "Possible duplicate",
+      message: "QuickBooks already has a similar transaction.",
       candidates: body?.duplicate_check?.candidates || [],
     };
   }
@@ -541,6 +540,17 @@ function buildManualPostError(err) {
     message: rawMessage,
     detail: withReference("Nothing was marked Posted. You can try again after fixing the issue"),
     primaryLabel: "Close",
+  };
+}
+
+function buildFuzzyDuplicateChallenge(result, transaction) {
+  return {
+    type: "fuzzy_duplicate",
+    title: "Possible duplicate",
+    transaction,
+    postingSummary: result?.transaction || null,
+    candidates: result?.candidates || (result?.candidate ? [result.candidate] : []),
+    challengeId: result?.challenge_id || null,
   };
 }
 
@@ -820,6 +830,8 @@ function BookkeepingCleanup() {
   const [incomingDepositUndoTxn, setIncomingDepositUndoTxn] = useState(null);
   const [manualPostTxn, setManualPostTxn] = useState(null);
   const [manualPostResult, setManualPostResult] = useState(null);
+  const manualPostTriggerRef = useRef(null);
+  const manualPostDialogRef = useRef(null);
   const [clarRequests, setClarRequests] = useState([]);
   const [clarOpen, setClarOpen] = useState(false);
   const navigate = useNavigate();
@@ -2460,9 +2472,36 @@ function BookkeepingCleanup() {
     if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
     const txn = transactions.find((t) => t.id === txnId);
     if (!txn) return;
+    manualPostTriggerRef.current = typeof document !== "undefined" ? document.activeElement : null;
     setManualPostResult(null);
     setManualPostTxn(txn);
   };
+
+  useEffect(() => {
+    const dialog = manualPostDialogRef.current;
+    if (!manualPostResult || !dialog) return undefined;
+    const focusable = () => Array.from(dialog.querySelectorAll('button:not([disabled]), summary, [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'));
+    focusable()[0]?.focus();
+    const trapFocus = (event) => {
+      if (event.key !== "Tab") return;
+      const elements = focusable();
+      if (!elements.length) return;
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener("keydown", trapFocus);
+    return () => {
+      dialog.removeEventListener("keydown", trapFocus);
+      manualPostTriggerRef.current?.focus?.();
+    };
+  }, [manualPostResult]);
 
   const runManualPostTransaction = async (txn, options = {}) => {
     const txnId = txn?.id;
@@ -2470,7 +2509,11 @@ function BookkeepingCleanup() {
     setManualPostTxn(null);
     setPostingTransactionIds((prev) => new Set(prev).add(txnId));
     try {
-      await postTransactionToQuickBooks(businessId, txnId, options);
+      const result = await postTransactionToQuickBooks(businessId, txnId, options);
+      if (result?.outcome === "confirmation_required" && result?.reason === "possible_qbo_match") {
+        setManualPostResult(buildFuzzyDuplicateChallenge(result, txn));
+        return;
+      }
       await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
@@ -2520,8 +2563,9 @@ function BookkeepingCleanup() {
 
   const confirmFuzzyPostAnyway = async () => {
     const txn = manualPostResult?.transaction;
+    const duplicateChallengeId = manualPostResult?.challengeId;
     setManualPostResult(null);
-    await runManualPostTransaction(txn, { confirmPostAnyway: true });
+    await runManualPostTransaction(txn, { confirmPostAnyway: true, duplicateChallengeId });
   };
 
   const linkFuzzyDuplicateCandidate = async () => {
@@ -3677,6 +3721,7 @@ function BookkeepingCleanup() {
                     transition={{ duration: 0.18 }}
                   />
                   <motion.div
+                    ref={manualPostDialogRef}
                     className="relative w-full max-w-[520px] rounded-2xl border p-5 text-slate-100 shadow-[0_28px_90px_rgba(0,0,0,0.68),inset_0_1px_0_rgba(255,255,255,0.04)]"
                     style={{
                       background: "rgba(17,19,18,0.97)",
@@ -3704,13 +3749,21 @@ function BookkeepingCleanup() {
                       </div>
                       <div className="min-w-0">
                         <h2 id="manual-post-result-title" className="text-base font-semibold text-white">
-                          {manualPostResult.title}
+                          {manualPostResult.type === "fuzzy_duplicate_confirmation" ? "Post as a separate transaction?" : manualPostResult.title}
                         </h2>
-                        <p className="mt-2 text-sm leading-6 text-slate-300">{manualPostResult.message}</p>
+                        {manualPostResult.type === "fuzzy_duplicate" ? (
+                          <p className="mt-1.5 text-sm leading-5 text-slate-300">
+                            QuickBooks already has a similar {formatPostingAmount({ amount: manualPostResult.candidates?.[0]?.amount || 0 }).replace("+", "")} deposit from {new Date(`${manualPostResult.candidates?.[0]?.txn_date}T00:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}.
+                          </p>
+                        ) : manualPostResult.type === "fuzzy_duplicate_confirmation" ? (
+                          <p className="mt-1.5 text-sm leading-5 text-slate-300">
+                            QuickBooks will contain two {formatPostingAmount({ amount: manualPostResult.candidates?.[0]?.amount || 0 }).replace("+", "")} deposits dated {new Date(`${manualPostResult.candidates?.[0]?.txn_date}T00:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}. Continue only if these are different payments.
+                          </p>
+                        ) : <p className="mt-2 text-sm leading-6 text-slate-300">{manualPostResult.message}</p>}
                       </div>
                     </div>
 
-                    {manualPostResult.detail ? (
+                    {manualPostResult.detail && !["fuzzy_duplicate", "fuzzy_duplicate_confirmation"].includes(manualPostResult.type) ? (
                       <div
                         className={`mt-4 rounded-xl border px-3 py-2.5 text-sm leading-6 ${
                           manualPostResult.type === "success"
@@ -3722,40 +3775,44 @@ function BookkeepingCleanup() {
                       </div>
                     ) : null}
 
-                    {manualPostResult.type === "fuzzy_duplicate" || manualPostResult.type === "fuzzy_duplicate_confirmation" ? (
-                      <div className="mt-4 space-y-3">
-                        {(manualPostResult.candidates || []).slice(0, 5).map((candidate) => (
-                          <div key={`${candidate.qbo_txn_type}-${candidate.qbo_txn_id}`} className="rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3 text-sm">
-                            <div className="grid grid-cols-[112px_1fr] gap-x-3 gap-y-2">
-                              <span className="text-slate-500">Date</span><span>{candidate.txn_date || "Unknown"}</span>
-                              <span className="text-slate-500">Amount</span><span>{formatPostingAmount({ amount: candidate.amount })}</span>
-                              <span className="text-slate-500">Payee / memo</span><span className="break-words">{candidate.payee_or_memo || "Not provided by QuickBooks"}</span>
-                              <span className="text-slate-500">Source account</span><span>{candidate.source_qbo_account_name || candidate.source_qbo_account_id || "Unknown"}</span>
-                              <span className="text-slate-500">Destination</span><span>{candidate.destination_qbo_account_name || candidate.destination_qbo_account_id || "Unknown"}</span>
-                              <span className="text-slate-500">QuickBooks</span><span>{candidate.qbo_txn_type} #{candidate.qbo_txn_id}</span>
-                            </div>
+                    {manualPostResult.type === "fuzzy_duplicate" ? (() => {
+                      const candidate = manualPostResult.candidates?.[0] || {};
+                      const posting = manualPostResult.postingSummary || {};
+                      const shortDate = (value) => value ? new Date(`${value}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "Unknown";
+                      return <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-xl border border-white/10 bg-white/[0.035] p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">You’re posting</div>
+                          <div className="mt-2 truncate text-sm font-semibold text-white">{posting.display_name || manualPostResult.transaction?.description || "Transaction"}</div>
+                          <div className="mt-1 text-xs leading-5 text-slate-400">{shortDate(posting.date)} · {formatPostingAmount({ amount: posting.amount })}<br />{posting.destination_account_name || "Unselected"}</div>
+                        </div>
+                        <div className="rounded-xl border border-amber-300/20 bg-amber-300/[0.055] p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-200/70">Possible QuickBooks match</div>
+                          <div className="mt-2 truncate text-sm font-semibold text-white">{candidate.display_name || "QuickBooks transaction"}</div>
+                          <div className="mt-1 text-xs leading-5 text-slate-400">{shortDate(candidate.txn_date)} · {formatPostingAmount({ amount: candidate.amount })}<br />{candidate.qbo_txn_type} #{candidate.qbo_txn_id}</div>
+                        </div>
+                        <details className="sm:col-span-2 rounded-lg border border-white/8 px-3 py-2 text-xs text-slate-400">
+                          <summary className="cursor-pointer select-none font-medium text-slate-300">View QuickBooks details</summary>
+                          <div className="mt-2 grid grid-cols-[90px_1fr] gap-x-2 gap-y-1.5">
+                            <span>Source</span><span>{candidate.source_qbo_account_name || candidate.source_qbo_account_id || "Unknown"}</span>
+                            <span>Destination</span><span>{candidate.destination_qbo_account_name || candidate.destination_qbo_account_id || "Unknown"}</span>
+                            <span>Original memo</span><span className="break-words">{candidate.payee_or_memo || "Not provided"}</span>
                           </div>
-                        ))}
-                        {manualPostResult.type === "fuzzy_duplicate_confirmation" ? (
-                          <div className="rounded-xl border border-rose-300/25 bg-rose-300/[0.07] px-3 py-2.5 text-sm text-rose-50">
-                            I understand this can create a duplicate in QuickBooks. Continue only if this is a different transaction.
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : null}
+                        </details>
+                      </div>;
+                    })() : null}
 
-                    <div className="mt-5 flex items-center justify-end gap-2">
+                    <div className={`mt-5 gap-2 ${manualPostResult.type === "fuzzy_duplicate" ? "grid grid-cols-1 sm:grid-cols-[auto_auto_auto] sm:justify-end" : "flex items-center justify-end"}`}>
                       {manualPostResult.type === "fuzzy_duplicate" ? (
                         <>
                           <button type="button" onClick={() => setManualPostResult(null)} className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200">Cancel</button>
-                          <button type="button" onClick={linkFuzzyDuplicateCandidate} disabled={!manualPostResult.candidates?.[0]?.qbo_txn_id} className="rounded-full border border-white/16 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white disabled:opacity-45">Already in QuickBooks — link transaction</button>
-                          <button type="button" onClick={requestFuzzyPostConfirmation} className="rounded-full border border-amber-200/45 bg-amber-300 px-4 py-2 text-sm font-semibold text-[#171006]">Different transaction — post anyway</button>
+                          <button type="button" onClick={linkFuzzyDuplicateCandidate} disabled={!manualPostResult.candidates?.[0]?.qbo_txn_id} className="rounded-full border border-white/16 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white disabled:opacity-45">Link existing</button>
+                          <button type="button" onClick={requestFuzzyPostConfirmation} className="rounded-full border border-amber-200/45 bg-amber-300 px-4 py-2 text-sm font-semibold text-[#171006]">Post separately</button>
                         </>
                       ) : null}
                       {manualPostResult.type === "fuzzy_duplicate_confirmation" ? (
                         <>
                           <button type="button" onClick={() => setManualPostResult((current) => current ? { ...current, type: "fuzzy_duplicate" } : current)} className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200">Back</button>
-                          <button type="button" onClick={confirmFuzzyPostAnyway} className="rounded-full border border-rose-200/45 bg-rose-300 px-4 py-2 text-sm font-semibold text-[#170606]">Confirm duplicate risk and post</button>
+                          <button type="button" onClick={confirmFuzzyPostAnyway} className="rounded-full border border-amber-200/45 bg-amber-300 px-4 py-2 text-sm font-semibold text-[#171006]">Post separately</button>
                         </>
                       ) : null}
                       {manualPostResult.type === "duplicate_check_unavailable" ? (

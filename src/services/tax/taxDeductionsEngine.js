@@ -12,6 +12,9 @@ import { getTaxCategoryMeta, sortTaxCategories } from "./taxCategoryCatalog.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate } from "../bookkeeping/bookkeepingScope.js";
 
 const PAGE_SIZE = 1000;
+// Keep PostgREST `.in(...)` URLs comfortably below proxy/request-line limits.
+// UUID-heavy annual datasets can exceed those limits when grouped in 500s.
+const BANK_TRANSACTION_CHUNK_SIZE = 100;
 const INCLUDED_STATUSES = new Set([
   TAX_CLASSIFICATION_STATUSES.AUTO_CLASSIFIED,
   TAX_CLASSIFICATION_STATUSES.USER_CONFIRMED,
@@ -150,8 +153,8 @@ async function fetchAllClassifications({ supabase, businessId, taxYear }) {
 async function fetchBankTransactions({ supabase, businessId, transactionIds }) {
   const map = new Map();
   const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
-  for (let i = 0; i < transactionIds.length; i += 500) {
-    const chunk = transactionIds.slice(i, i + 500);
+  for (let i = 0; i < transactionIds.length; i += BANK_TRANSACTION_CHUNK_SIZE) {
+    const chunk = transactionIds.slice(i, i + BANK_TRANSACTION_CHUNK_SIZE);
     if (!chunk.length) continue;
     const { data, error } = await applyActiveBookkeepingScope(
       supabase

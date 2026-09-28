@@ -755,9 +755,10 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
       req.body?.confirm_post_anyway === true ||
       req.body?.post_anyway === true ||
       req.body?.confirmPostAnyway === true;
+    const duplicateChallengeId = req.body?.duplicate_challenge_id || req.body?.duplicateChallengeId || null;
     const result = manualDuplicateOverride
-      ? await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, manualDuplicateOverride })
-      : await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway });
+      ? await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, duplicateChallengeId, manualDuplicateOverride })
+      : await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, duplicateChallengeId });
     return res.json(result);
   } catch (err) {
     const referenceId = err?.qbo_request_id || err?.child_operation_id || null;

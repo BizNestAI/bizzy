@@ -29,7 +29,9 @@ test("excluded is one authoritative primary feed and reconciliation stays second
 
 test("eligible expanded row details expose Exclude and excluded rows expose Restore", () => {
   assert.match(feed, /allowExclude/);
-  assert.match(feed, /Full bank memo[\s\S]*Exclude transaction/);
+  assert.match(feed, /Full bank memo[\s\S]*Hide from bookkeeping; restore later from Excluded\.[\s\S]*Exclude/);
+  assert.match(feed, /max-h-\[70vh\][\s\S]*overflow-y-auto[\s\S]*overscroll-contain[\s\S]*scroll-pb-6/);
+  assert.match(feed, /px-3 pb-8 pt-3/);
   assert.match(feed, /showRestoreExcluded/);
   assert.match(feed, />\s*Restore\s*</);
   assert.match(feed, /allowExclude && getBookkeepingExclusionEligibility\(txn\)\.eligible/);

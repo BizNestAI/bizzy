@@ -1824,13 +1824,15 @@ export default function BookkeepingFeed({
              </div>
            </div>
            <div
-             className={`overflow-hidden border-b transition-[max-height,opacity] duration-200 ease-out ${
-               isExpanded ? "max-h-[34rem] opacity-100" : "max-h-0 opacity-0"
+             className={`border-b transition-[max-height,opacity] duration-200 ease-out ${
+               isExpanded
+                 ? "max-h-[70vh] overflow-y-auto overscroll-contain scroll-pb-6 opacity-100 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
+                 : "max-h-0 overflow-hidden opacity-0"
              }`}
              style={{ background: "rgba(15,17,20,0.92)", borderColor: panelBorder }}
              aria-hidden={!isExpanded}
            >
-             <div className="px-3 py-3">
+             <div className="px-3 pb-8 pt-3">
                <div
                  className="rounded-xl border px-4 py-3"
                  style={{
@@ -1862,14 +1864,9 @@ export default function BookkeepingFeed({
                        </div>
                      ) : null}
                      {allowExclude && getBookkeepingExclusionEligibility(txn).eligible ? (
-                       <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-rose-300/15 bg-rose-500/[0.035] px-3 py-2.5">
-                         <div className="min-w-0">
-                           <div className="text-[10px] font-semibold text-slate-200">Remove from bookkeeping workflow</div>
-                           <div className="mt-0.5 text-[9px] text-slate-400">
-                             {isPosting
-                               ? "Posting is currently in progress. Wait for it to finish before excluding this transaction."
-                               : "The transaction will remain visible in the Excluded feed and can be restored later."}
-                           </div>
+                       <div className="mt-2 flex items-center justify-between gap-3 border-t border-white/8 pt-2">
+                         <div className="min-w-0 text-[9px] text-slate-500">
+                           {isPosting ? "Available after posting finishes." : "Hide from bookkeeping; restore later from Excluded."}
                          </div>
                          <button
                            type="button"
@@ -1878,10 +1875,10 @@ export default function BookkeepingFeed({
                              if (excluded) setExpandedRowId(null);
                            }}
                            disabled={readOnly || isPosting || excludingTransactionIds.has(String(txn.transactionId || txn.id))}
-                           className="inline-flex h-8 shrink-0 items-center justify-center rounded-full border border-rose-300/35 bg-rose-500/10 px-4 text-[10px] font-semibold text-rose-100 transition hover:border-rose-300/55 hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-45"
+                           className="inline-flex h-7 shrink-0 items-center justify-center rounded-md border border-white/10 px-2.5 text-[9px] font-semibold text-slate-400 transition hover:border-rose-300/35 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-45"
                            title={isPosting ? "Posting is currently in progress. Wait for it to finish before excluding this transaction." : "Exclude this transaction from categorization, matching, and QuickBooks posting"}
                          >
-                           Exclude transaction
+                           Exclude
                          </button>
                        </div>
                      ) : null}

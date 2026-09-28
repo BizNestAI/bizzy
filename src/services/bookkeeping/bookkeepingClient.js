@@ -108,6 +108,7 @@ export async function postTransactionToQuickBooks(businessId, transactionId, opt
         ? { duplicate_check_override_token: options.duplicateCheckOverrideToken }
         : {}),
       ...(options.confirmPostAnyway === true ? { confirm_post_anyway: true } : {}),
+      ...(options.duplicateChallengeId ? { duplicate_challenge_id: options.duplicateChallengeId } : {}),
     }),
   });
   if (res && res.ok === false) {

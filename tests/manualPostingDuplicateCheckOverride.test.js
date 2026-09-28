@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -82,5 +83,6 @@ test("unavailable checks use a token while reviewed fuzzy candidates use explici
   assert.match(client, /duplicate_check_override_token/);
   assert.match(route, /verifyManualPostOverrideToken/);
   assert.match(client, /confirm_post_anyway:\s*true/);
-  assert.match(page, /Confirm duplicate risk and post/);
+  assert.match(page, /Post as a separate transaction\?/);
+  assert.match(page, /Post separately/);
 });

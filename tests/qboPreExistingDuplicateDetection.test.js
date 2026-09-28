@@ -1,3 +1,4 @@
+/* global process */
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -98,10 +99,10 @@ test("manual Post anyway requires explicit confirmation and still uses normal id
 
   assert.match(route, /confirm_post_anyway/);
   assert.match(route, /post_anyway/);
-  assert.match(route, /postSingleBookkeepingTransactionNow\(\{ businessId, transactionId, confirmPostAnyway \}\)/);
+  assert.match(route, /duplicateChallengeId/);
   assert.match(cron, /confirmPostAnyway === true/);
   assert.match(cron, /duplicatePostAnyway/);
-  assert.match(cron, /duplicatePostAnyway = confirmPostAnyway && item\?\.meta\?\.possible_qbo_duplicate === true/);
+  assert.match(cron, /qbo_duplicate_challenge_id === duplicateChallengeIdValue/);
   assert.match(cron, /if \(!structuredManualCheckCompleted\)[\s\S]*classifyPreExistingQboMatch/);
   assert.match(cron, /if \(duplicateCheck\.confidence === "DETERMINISTIC_EXISTING"\)/);
   assert.match(cron, /if \(!duplicatePostAnyway && \([\s\S]*LOW_CONFIDENCE_FUZZY/);
@@ -133,10 +134,35 @@ test("two same-day same-amount Zelle senders remain fuzzy and manual-only overri
   assert.match(cron, /candidateIdentityText/);
   assert.match(cron, /payee_conflicts/);
   assert.match(cron, /manual && !duplicatePostAnyway/);
-  assert.match(page, /Already in QuickBooks — link transaction/);
-  assert.match(page, /Different transaction — post anyway/);
-  assert.match(page, /Confirm duplicate risk and post/);
+  assert.match(page, /Possible duplicate/);
+  assert.match(page, /Link existing/);
+  assert.match(page, /Post separately/);
   assert.match(client, /confirm_post_anyway: true/);
+  assert.match(client, /duplicate_challenge_id/);
+});
+
+test("manual fuzzy duplicate is a successful confirmation challenge, not a failed posting", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const route = read("src/api/bookkeeping/routes/bookkeeping.posting.routes.js");
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  assert.match(cron, /outcome: "confirmation_required"/);
+  assert.match(cron, /reason: "possible_qbo_match"/);
+  assert.match(cron, /recordManualFuzzyDuplicateChallenge/);
+  assert.match(cron, /post_error: null/);
+  assert.match(route, /return res\.json\(result\)/);
+  assert.match(page, /result\?\.outcome === "confirmation_required"/);
+  const expectedBranch = page.slice(page.indexOf('result?.outcome === "confirmation_required"'), page.indexOf("} catch (err)"));
+  assert.doesNotMatch(expectedBranch, /console\.(warn|error)/);
+});
+
+test("compact fuzzy modal compares current and candidate and hides raw details by default", () => {
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  assert.match(page, /You’re posting/);
+  assert.match(page, /Possible QuickBooks match/);
+  assert.match(page, /View QuickBooks details/);
+  assert.match(page, /sm:grid-cols-2/);
+  assert.match(page, /Post as a separate transaction\?/);
+  assert.doesNotMatch(page, /different real-world transaction/);
 });
 
 test("fuzzy candidate UI shows accounting identity fields and link does not create", () => {
@@ -149,5 +175,5 @@ test("fuzzy candidate UI shows accounting identity fields and link does not crea
     assert.match(page, new RegExp(field));
   }
   assert.match(route, /status: "posted"/);
-  assert.doesNotMatch(route.slice(route.indexOf('router.post("\/posting\/transactions\/:transactionId\/link-existing"')), /createQboDeposit/);
+  assert.doesNotMatch(route.slice(route.indexOf('router.post("/posting/transactions/:transactionId/link-existing"')), /createQboDeposit/);
 });

@@ -640,6 +640,71 @@ function summarizeQboDuplicateCandidates(candidates = []) {
   }));
 }
 
+function duplicateChallengeId({ item, requestId, candidates = [] }) {
+  const identities = summarizeQboDuplicateCandidates(candidates)
+    .map((candidate) => `${candidate.qbo_txn_type || ""}:${candidate.qbo_txn_id || ""}`)
+    .sort()
+    .join("|");
+  return crypto.createHash("sha256")
+    .update(`${item.business_id}|${item.transaction_id}|${requestId}|${identities}|manual-fuzzy-v1`)
+    .digest("hex");
+}
+
+function cleanDuplicateDisplayName(value = "") {
+  return String(value || "")
+    .replace(/^\d+\s+/, "")
+    .replace(/posted by bizzi\s+ref\s+[a-z0-9]+\s+/gi, "")
+    .replace(/\s+posted by bizzi.*$/gi, "")
+    .replace(/\s+payment\s+id\s+[a-z0-9]+.*$/gi, "")
+    .replace(/\s+zelle\s+payment\s+from.*$/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase()) || "QuickBooks transaction";
+}
+
+async function recordManualFuzzyDuplicateChallenge({ item, bankTxn, requestId, confidence, candidates }) {
+  const candidateSummary = summarizeQboDuplicateCandidates(candidates).map((candidate) => ({
+    ...candidate,
+    display_name: cleanDuplicateDisplayName(candidate.payee_or_memo),
+  }));
+  const challengeId = duplicateChallengeId({ item, requestId, candidates });
+  const nowIso = getNowIso();
+  await supabase.from("qbo_posted_transactions").update({
+    status: "pending",
+    processing_started_at: null,
+    lease_expires_at: null,
+    last_error: null,
+    error: null,
+    response_summary: { duplicate_detection_confidence: confidence, candidates: candidateSummary, confirmation_required: true },
+    updated_at: nowIso,
+  }).eq("business_id", item.business_id).eq("transaction_id", item.transaction_id).eq("request_id", requestId);
+  await supabase.from("transaction_categorizations").update({
+    post_error: null,
+    meta: {
+      ...(item.meta || {}),
+      posting_in_progress: false,
+      possible_qbo_duplicate: true,
+      qbo_duplicate_detection_confidence: confidence,
+      qbo_duplicate_candidates: candidateSummary,
+      qbo_duplicate_challenge_id: challengeId,
+    },
+  }).eq("business_id", item.business_id).eq("transaction_id", item.transaction_id);
+  return {
+    ok: true,
+    outcome: "confirmation_required",
+    reason: "possible_qbo_match",
+    challenge_id: challengeId,
+    transaction: {
+      id: item.transaction_id,
+      display_name: buildQboDisplayName(bankTxn, "Transaction"),
+      date: getAccountingDateFromBankTransaction(bankTxn),
+      amount: Number(bankTxn?.amount || 0),
+      destination_account_name: item.final_qbo_account_name || null,
+    },
+    candidates: candidateSummary,
+  };
+}
+
 function summarizePostingError(err) {
   return err?.postingError || normalizePostingError(err, {
     stage: "qbo_create",
@@ -1097,8 +1162,18 @@ export async function finalizeCategorizationAfterQboSuccess({
   let current = item || null;
   for (let attempt = 1; attempt <= Math.max(1, maxAttempts); attempt += 1) {
     if (sameReceipt(current)) return { ok: true, reconciled: attempt > 1, row: current };
+    const retainedMeta = { ...(current?.meta || item?.meta || {}) };
+    for (const key of [
+      "possible_qbo_duplicate",
+      "qbo_duplicate_detection_confidence",
+      "qbo_duplicate_candidates",
+      "qbo_duplicate_challenge_id",
+      "qbo_duplicate_review_message",
+      "qbo_duplicate_review_actions",
+      "post_anyway_requires_confirmation",
+    ]) delete retainedMeta[key];
     const nextMeta = {
-      ...(current?.meta || item?.meta || {}),
+      ...retainedMeta,
       posting_in_progress: false,
       post_retry_count: null,
       next_post_attempt_at: null,
@@ -2112,8 +2187,13 @@ export async function handleItem(item, options = {}) {
   const manual = options?.manual === true;
   const manualDuplicateOverride = manual && options?.manualDuplicateOverride ? options.manualDuplicateOverride : null;
   const confirmPostAnyway = options?.confirmPostAnyway === true;
+  const duplicateChallengeIdValue = options?.duplicateChallengeId || null;
   const createNewIncomeOverride = options?.createNewIncomeOverride === true && item?.meta?.incoming_deposit_resolution?.resolution === "create_new_income";
-  const duplicatePostAnyway = confirmPostAnyway && item?.meta?.possible_qbo_duplicate === true;
+  const duplicatePostAnyway = Boolean(
+    manual && confirmPostAnyway && duplicateChallengeIdValue &&
+    item?.meta?.possible_qbo_duplicate === true &&
+    item?.meta?.qbo_duplicate_challenge_id === duplicateChallengeIdValue
+  );
   const timing = createPostingTiming();
   let intentQboTxnTypeForLog = null;
 
@@ -2567,6 +2647,16 @@ export async function handleItem(item, options = {}) {
         })
       );
       if (duplicateCheck.status === "completed_match_found" || duplicateCheck.status === "completed_possible_match") {
+        const deterministicMatch = duplicateCheck.candidates.some((candidate) => candidate.deterministic === true);
+        if (!deterministicMatch) {
+          return recordManualFuzzyDuplicateChallenge({
+            item,
+            bankTxn: bank,
+            requestId,
+            confidence: duplicateCheck.status === "completed_match_found" ? "HIGH_CONFIDENCE_PROBABLE_DUPLICATE" : "AMBIGUOUS",
+            candidates: duplicateCheck.candidates,
+          });
+        }
         await markPossibleQboDuplicate({
           item,
           requestId,
@@ -2684,6 +2774,9 @@ export async function handleItem(item, options = {}) {
       duplicateCheck.confidence === "LOW_CONFIDENCE_FUZZY" ||
       duplicateCheck.confidence === "AMBIGUOUS"
     )) {
+      if (manual) {
+        return recordManualFuzzyDuplicateChallenge({ item, bankTxn: bank, requestId, confidence: duplicateCheck.confidence, candidates: duplicateCheck.candidates });
+      }
       await markPossibleQboDuplicate({
         item,
         requestId,
@@ -2971,7 +3064,7 @@ async function markFailed(item, message, { manual = false } = {}) {
     .eq("transaction_id", item.transaction_id);
 }
 
-export async function postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway = false, createNewIncomeOverride = false, manualDuplicateOverride = null }) {
+export async function postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway = false, duplicateChallengeId = null, createNewIncomeOverride = false, manualDuplicateOverride = null }) {
   if (!businessId) throw new Error("missing_business_id");
   if (!transactionId) throw new Error("missing_transaction_id");
 
@@ -2998,8 +3091,11 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
       child_operation_id: childOperationId,
     };
   }
-  const duplicatePostAnyway =
-    confirmPostAnyway === true && item.status === "needs_review" && item?.meta?.possible_qbo_duplicate === true;
+  const duplicatePostAnyway = Boolean(
+    confirmPostAnyway === true && duplicateChallengeId &&
+    item?.meta?.possible_qbo_duplicate === true &&
+    item?.meta?.qbo_duplicate_challenge_id === duplicateChallengeId
+  );
   if (!duplicatePostAnyway && !["approved", "auto_approved", "failed"].includes(item.status)) {
     const err = new Error("transaction_not_handled");
     err.status = 400;
@@ -3023,15 +3119,16 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
   try {
     if (createNewIncomeOverride) {
       if (manualDuplicateOverride) {
-        await handleItem(item, { manual: true, confirmPostAnyway, createNewIncomeOverride: true, manualDuplicateOverride });
+        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true, manualDuplicateOverride });
       } else {
-        await handleItem(item, { manual: true, confirmPostAnyway, createNewIncomeOverride: true });
+        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true });
       }
     } else {
       if (manualDuplicateOverride) {
-        await handleItem(item, { manual: true, confirmPostAnyway, manualDuplicateOverride });
+        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, manualDuplicateOverride });
       } else {
-        await handleItem(item, { manual: true, confirmPostAnyway });
+        const handleResult = await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId });
+        if (handleResult?.outcome === "confirmation_required") return handleResult;
       }
     }
   } catch (err) {

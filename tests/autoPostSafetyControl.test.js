@@ -142,9 +142,9 @@ test("manual row-level posting uses the shared QBO posting path while auto-post 
 
   assert.match(route, /router\.post\("\/posting\/transactions\/:transactionId"/);
   assert.match(route, /assertTaxBusinessAccess\(\{ req, businessId, supabase \}\)/);
-  assert.match(route, /postSingleBookkeepingTransactionNow\(\{ businessId, transactionId, confirmPostAnyway \}\)/);
+  assert.match(route, /postSingleBookkeepingTransactionNow\(\{[\s\S]*?businessId,[\s\S]*?transactionId,[\s\S]*?confirmPostAnyway,[\s\S]*?duplicateChallengeId,[\s\S]*?\}\)/);
   assert.match(cron, /export async function postSingleBookkeepingTransactionNow/);
-  assert.match(cron, /await handleItem\(item, \{ manual: true, confirmPostAnyway \}\)/);
+  assert.match(cron, /await handleItem\(item, \{[\s\S]*?manual: true,[\s\S]*?confirmPostAnyway,[\s\S]*?duplicateChallengeId,[\s\S]*?\}\)/);
   assert.match(cron, /if \(!manual\)[\s\S]*?getAutoPostToQuickBooks/);
   assert.match(client, /postTransactionToQuickBooks/);
   assert.match(page, /Post this transaction to QuickBooks\?/);
@@ -1815,14 +1815,14 @@ test("all QBO posting entry points flow through finalized bank-transaction guard
   const monthlyReviewRoutes = readFileSync(join(root, "src/api/admin/monthlyReview.routes.js"), "utf8");
 
   assert.match(cron, /if \(bank\.pending === true\) \{[\s\S]*?markTransactionNonPostable\(item, "pending_transaction_not_postable"\)/);
-  assert.match(cron, /await handleItem\(item, \{ manual: true, confirmPostAnyway \}\)/);
+  assert.match(cron, /await handleItem\(item, \{[\s\S]*?manual: true,[\s\S]*?confirmPostAnyway,[\s\S]*?duplicateChallengeId,[\s\S]*?\}\)/);
   assert.match(cron, /await handleItem\(item\)/);
   assert.match(cron, /if \(item\?\.meta\?\.taxonomy_type === "cc_payment" && item\?\.meta\?\.cc_payment_pair_id\)[\s\S]*?handleCreditCardPaymentPairItem/);
   assert.match(cron, /fetchBankTransactions[\s\S]*pending,is_archived/);
   assert.match(autoPost, /\.eq\("pending", false\)[\s\S]*?\.in\("id", ids\)/);
   assert.match(autoPost, /bankTxn\?\.pending === true \|\| item\?\.meta\?\.pending === true/);
   assert.match(autoPost, /pending_transaction_not_postable/);
-  assert.match(postingRoutes, /postSingleBookkeepingTransactionNow\(\{ businessId, transactionId, confirmPostAnyway \}\)/);
+  assert.match(postingRoutes, /postSingleBookkeepingTransactionNow\(\{[\s\S]*?businessId,[\s\S]*?transactionId,[\s\S]*?confirmPostAnyway,[\s\S]*?duplicateChallengeId,[\s\S]*?\}\)/);
   assert.match(postingRoutes, /runBooksPostOnce\(\{ businessId, force \}\)/);
   assert.match(monthlyReviewRoutes, /postSingleBookkeepingTransactionNow\(/);
   assert.doesNotMatch(postingRoutes, /postToQbo|createQboPurchase|createQboDeposit|createQboTransfer/);
