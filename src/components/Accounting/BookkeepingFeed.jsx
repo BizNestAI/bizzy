@@ -975,6 +975,7 @@ export default function BookkeepingFeed({
   allSelected,
   toggleSelectAll,
   toggleRow,
+  selectableIds = null,
   onApprove,
   activeFeed = "needs_review",
   approvingTransactionIds = new Set(),
@@ -1471,7 +1472,7 @@ export default function BookkeepingFeed({
             const ccConfirmBusy = ccAction.loading === true || ccAction.matching === true;
             const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
             const canUndoCcPaymentPair = allowCreditCardPaymentUndo && isCcPaymentWorkflow && hasCcPair && !isPosted && !txn.qbo_txn_id && !txn.qboTxnId && !txn.posted_at;
-            const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly;
+            const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly && (!selectableIds || selectableIds.has(txn.id));
 
             return (
               <React.Fragment key={txn.id}>

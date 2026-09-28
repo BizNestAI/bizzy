@@ -56,6 +56,7 @@ import {
   patchFeedCacheForExclusion,
 } from "../../services/bookkeeping/bookkeepingFeedMirrorLocalState.js";
 import { classifyBookkeepingLifecycle } from "../../services/bookkeeping/bookkeepingLifecycleClassifier.js";
+import { bulkActionForFeed, isBulkActionEligible, summarizeBulkPost } from "../../services/bookkeeping/bookkeepingBulkActions.js";
 const __motionUsageForLint = motion;
 
 const MOCK_ACCOUNTS = [
@@ -830,6 +831,8 @@ function BookkeepingCleanup() {
   const [incomingDepositUndoTxn, setIncomingDepositUndoTxn] = useState(null);
   const [manualPostTxn, setManualPostTxn] = useState(null);
   const [manualPostResult, setManualPostResult] = useState(null);
+  const [bulkPostDialog, setBulkPostDialog] = useState(null);
+  const [bulkPosting, setBulkPosting] = useState(false);
   const manualPostTriggerRef = useRef(null);
   const manualPostDialogRef = useRef(null);
   const [clarRequests, setClarRequests] = useState([]);
@@ -1422,8 +1425,11 @@ function BookkeepingCleanup() {
       ? categorizedTransactions.slice(start, start + rowsPerPage)
       : categorizedTransactions
     : tableTransactions;
-  const selectableRows = feedRows.filter((t) => !pendingApprovalIds.has(String(t?.id || "")) && t?.status !== "posted" && !hasIncomingDepositMatchWorkflow(t) && t?.pending !== true && t?.taxonomy_type !== "cc_payment" && t?.meta?.taxonomy_type !== "cc_payment");
+  const bulkAction = bulkActionForFeed(activeTab);
+  const selectableRows = feedRows.filter((t) => !pendingApprovalIds.has(String(t?.id || "")) && isBulkActionEligible(t, activeTab) && !hasIncomingDepositMatchWorkflow(t));
   const selectableIds = selectableRows.map((t) => t.id);
+  const selectableIdsSignature = selectableIds.join("|");
+  const selectableIdSet = useMemo(() => new Set(selectableIdsSignature ? selectableIdsSignature.split("|") : []), [selectableIdsSignature]);
   const allVisibleSelected = selectableRows.length > 0 && selectableRows.every((txn) => selectedIds.has(txn.id));
   const pageCount = Math.max(
     1,
@@ -1475,6 +1481,10 @@ function BookkeepingCleanup() {
       : `Categorizing ${serverProcessingCount} new transactions.`;
   }, [hasRelevantProcessing, processingStatus?.current_run, serverProcessingCount]);
   const manualPostSummary = manualPostTxn ? getManualPostSummary(manualPostTxn) : null;
+  const bulkPostSummary = bulkPostDialog?.type === "confirm"
+    ? summarizeBulkPost(bulkPostDialog.transactions, new Map(chartAccounts.map((account) => [String(account.id), account.name])))
+    : null;
+  const bulkPostResults = bulkPostDialog?.type === "results" ? bulkPostDialog.results || [] : [];
   const pendingCount = useMemo(() => {
     return transactions.filter(
       (t) => t.status === "needs_review" || t.status === "uncategorized" || !t.status
@@ -1487,7 +1497,7 @@ function BookkeepingCleanup() {
   }, [totalCount, pendingCount, filteredTransactions.length]);
 
   const toggleRow = (id) => {
-    if (!canRunAI) return;
+    if (!canRunAI || !selectableIdSet.has(id)) return;
     const next = new Set(selectedIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
@@ -2400,6 +2410,7 @@ function BookkeepingCleanup() {
     const account = chartAccounts.find((a) => String(a.id) === String(bulkAccountId));
     const accountName = account?.name || bulkAccountId;
     const selectedTxnIds = selectedTransactions
+      .filter((txn) => isBulkActionEligible(txn, "needs_review") && !hasIncomingDepositMatchWorkflow(txn))
       .map((txn) => txn.id)
       .filter((txnId) => !approvalMutationLedgerRef.current.has(String(txnId)));
     const selectedBulkTransactions = selectedTransactions.filter((txn) => selectedTxnIds.includes(txn.id));
@@ -2464,8 +2475,62 @@ function BookkeepingCleanup() {
         removeApprovalLedgerEntry(txnId);
       });
       setSelectedIds(new Set(selectedTxnIds));
-      window.alert(e?.message || "Could not approve selected transactions.");
+      window.dispatchEvent(new CustomEvent("bizzy:toast", {
+        detail: {
+          severity: "error",
+          title: "Selected transactions were not approved",
+          body: "Refresh the feed and confirm the selected transactions still need review.",
+        },
+      }));
     }
+  };
+
+  const openBulkPostConfirmation = () => {
+    if (!canRunAI || activeTab !== "handled") return;
+    const eligible = selectedTransactions.filter((txn) => isBulkActionEligible(txn, "handled") && !hasIncomingDepositMatchWorkflow(txn));
+    if (!eligible.length) return;
+    setBulkPostDialog({ type: "confirm", transactions: eligible });
+  };
+
+  const runBulkPost = async () => {
+    const batch = bulkPostDialog?.transactions || [];
+    if (!businessId || usingDemo || !batch.length || bulkPosting) return;
+    setBulkPosting(true);
+    const results = [];
+    setBulkPostDialog(null);
+    for (const txn of batch) {
+      if (!isBulkActionEligible(txn, "handled") || hasIncomingDepositMatchWorkflow(txn)) {
+        results.push({ status: "failed", transaction: txn, error: { title: "No longer eligible", message: "Refresh the Handled feed and review this transaction." } });
+        continue;
+      }
+      setPostingTransactionIds((current) => new Set(current).add(txn.id));
+      try {
+        const result = await postTransactionToQuickBooks(businessId, txn.id);
+        if (result?.outcome === "confirmation_required" && result?.reason === "possible_qbo_match") {
+          results.push({ status: "duplicate", transaction: txn, challenge: buildFuzzyDuplicateChallenge(result, txn) });
+        } else {
+          results.push({ status: "posted", transaction: txn, receipt: result });
+        }
+      } catch (error) {
+        console.warn("[bookkeeping] bulk post transaction failed", { transactionId: txn.id, message: error?.message || error });
+        results.push({ status: "failed", transaction: txn, error: buildManualPostError(error) });
+      } finally {
+        setPostingTransactionIds((current) => { const next = new Set(current); next.delete(txn.id); return next; });
+      }
+    }
+    setBulkPosting(false);
+    setSelectedIds(new Set());
+    await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
+    setCountsRefreshKey((value) => value + 1);
+    await loadMappingStatus();
+    setBulkPostDialog({ type: "results", results });
+  };
+
+  const reviewBulkPostResult = (entry) => {
+    setBulkPostDialog(null);
+    setManualPostResult(entry.status === "duplicate"
+      ? entry.challenge
+      : { ...entry.error, transaction: entry.transaction });
   };
 
   const handleManualPostTransaction = (txnId) => {
@@ -2603,6 +2668,22 @@ function BookkeepingCleanup() {
       loadProcessingStatus();
     }
   }, [accountFilter, activeTab, dateRange, showCategorized, loadMappingStatus, loadProcessingStatus, usingDemo, businessId]);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [transactionViewKey]);
+
+  const transactionEligibilitySignature = useMemo(
+    () => transactions.map((txn) => `${txn.id}:${txn.status || ""}:${txn.updated_at || ""}:${isBulkActionEligible(txn, activeTab) ? 1 : 0}`).join("|"),
+    [activeTab, transactions]
+  );
+
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((id) => selectableIdSet.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [selectableIdSet, transactionEligibilitySignature]);
 
   useEffect(() => {
     if (usingDemo) {
@@ -3296,7 +3377,7 @@ function BookkeepingCleanup() {
         </label>
       </div>
 
-      {selectedIds.size > 0 && (
+      {selectedIds.size > 0 && bulkAction && (
         <div
           className="mb-2 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs sm:text-sm text-slate-200"
           style={{ background: PANEL_BG, borderColor: PANEL_BORDER }}
@@ -3311,7 +3392,7 @@ function BookkeepingCleanup() {
             ) : null}
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <div className="w-[230px] max-w-full">
+            {bulkAction === "approve" ? <div className="w-[230px] max-w-full">
               <CoaDropdown
                 value={bulkAccountId}
                 accounts={groupedChartAccounts}
@@ -3325,7 +3406,7 @@ function BookkeepingCleanup() {
                 status="needs_review"
                 disabled={!canRunAI}
               />
-            </div>
+            </div> : null}
             <div
               className="inline-flex min-h-[34px] max-w-[220px] items-center rounded-full border border-white/10 bg-black/20 px-3 text-xs font-medium text-slate-300"
               title={selectedVendorLabel}
@@ -3333,11 +3414,11 @@ function BookkeepingCleanup() {
               <span className="truncate">{selectedVendorLabel}</span>
             </div>
             <button
-              onClick={handleBulkApprove}
-              disabled={!canRunAI || !bulkAccountId}
+              onClick={bulkAction === "approve" ? handleBulkApprove : openBulkPostConfirmation}
+              disabled={!canRunAI || bulkPosting || (bulkAction === "approve" && !bulkAccountId)}
               className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Approve Selected
+              {bulkAction === "approve" ? "Approve Selected" : "Post Selected"}
             </button>
           </div>
         </div>
@@ -3455,6 +3536,7 @@ function BookkeepingCleanup() {
               allSelected={allVisibleSelected}
               toggleSelectAll={toggleSelectAll}
               toggleRow={toggleRow}
+              selectableIds={selectableIdSet}
               onApprove={handleApprove}
               activeFeed={activeTab}
               approvingTransactionIds={pendingApprovalIds}
@@ -3515,6 +3597,48 @@ function BookkeepingCleanup() {
           </>
         )}
       </BillingGate>
+      {typeof document !== "undefined"
+        ? createPortal(
+            <AnimatePresence>
+              {bulkPostDialog ? (
+                <motion.div className="bizzy-modal-main-backdrop fixed inset-0 z-[10000] flex items-center justify-center px-4 py-6" role="dialog" aria-modal="true" aria-labelledby="bulk-post-title" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+                  <button type="button" aria-label="Close bulk posting dialog" className="absolute inset-0 bg-black/72 backdrop-blur-[3px]" onClick={() => !bulkPosting && setBulkPostDialog(null)} />
+                  <motion.div className="relative max-h-[calc(100vh-3rem)] w-full max-w-[560px] overflow-y-auto rounded-2xl border border-emerald-300/25 bg-[#111312] p-5 text-slate-100 shadow-2xl" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }}>
+                    {bulkPostDialog.type === "confirm" && bulkPostSummary ? (
+                      <>
+                        <h2 id="bulk-post-title" className="text-base font-semibold text-white">Post {bulkPostSummary.count} transactions to QuickBooks?</h2>
+                        <p className="mt-2 text-sm text-slate-300">Each transaction will be posted independently using its own account, vendor, source identity, and duplicate checks.</p>
+                        <div className="mt-4 grid grid-cols-[120px_1fr] gap-2 rounded-xl border border-white/10 bg-white/[0.035] p-3 text-sm">
+                          <span className="text-slate-500">Vendor</span><span>{bulkPostSummary.vendor}</span>
+                          <span className="text-slate-500">Account</span><span>{bulkPostSummary.account}</span>
+                          <span className="text-slate-500">Transactions</span><span>{bulkPostSummary.count}</span>
+                          {bulkPostSummary.totalExpenses > 0 ? <><span className="text-slate-500">Total expenses</span><span>${bulkPostSummary.totalExpenses.toFixed(2)}</span></> : null}
+                          {bulkPostSummary.totalDeposits > 0 ? <><span className="text-slate-500">Total deposits</span><span>${bulkPostSummary.totalDeposits.toFixed(2)}</span></> : null}
+                        </div>
+                        <div className="mt-5 flex justify-end gap-2">
+                          <button type="button" onClick={() => setBulkPostDialog(null)} className="rounded-full border border-white/12 px-4 py-2 text-sm font-semibold">Cancel</button>
+                          <button type="button" onClick={runBulkPost} disabled={bulkPosting} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] disabled:opacity-50">Post {bulkPostSummary.count} transactions</button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <h2 id="bulk-post-title" className="text-base font-semibold text-white">QuickBooks posting results</h2>
+                        <div className="mt-3 grid grid-cols-3 gap-2 text-center text-sm">
+                          <div className="rounded-lg border border-emerald-300/20 bg-emerald-300/[0.07] p-3"><strong className="block text-lg">{bulkPostResults.filter((r) => r.status === "posted").length}</strong>posted</div>
+                          <div className="rounded-lg border border-amber-300/20 bg-amber-300/[0.07] p-3"><strong className="block text-lg">{bulkPostResults.filter((r) => r.status === "duplicate").length}</strong>need review</div>
+                          <div className="rounded-lg border border-rose-300/20 bg-rose-300/[0.07] p-3"><strong className="block text-lg">{bulkPostResults.filter((r) => r.status === "failed").length}</strong>could not post</div>
+                        </div>
+                        <div className="mt-4 space-y-2">
+                          {bulkPostResults.map((entry) => <div key={entry.transaction.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/10 p-3 text-sm"><div className="min-w-0"><div className="truncate font-medium">{entry.transaction.vendor || entry.transaction.description}</div><div className="text-xs text-slate-400">{entry.status === "posted" ? "Posted to QuickBooks" : entry.status === "duplicate" ? "Possible QuickBooks duplicate" : entry.error?.message || "Could not be posted"}</div></div>{entry.status !== "posted" ? <button type="button" onClick={() => reviewBulkPostResult(entry)} className="shrink-0 rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold">Review</button> : null}</div>)}
+                        </div>
+                        <div className="mt-5 flex justify-end"><button type="button" onClick={() => setBulkPostDialog(null)} className="rounded-full bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c]">Done</button></div>
+                      </>
+                    )}
+                  </motion.div>
+                </motion.div>
+              ) : null}
+            </AnimatePresence>, document.body)
+        : null}
       {typeof document !== "undefined"
         ? createPortal(
             <AnimatePresence>
