@@ -34,6 +34,7 @@ import {
   getAccountMappings,
   getClarificationRequests,
   postTransactionToQuickBooks,
+  linkExistingQuickBooksTransaction,
   inspectIncomingDepositMatch,
   refreshIncomingDepositMatch,
   confirmIncomingDepositMatch,
@@ -432,6 +433,15 @@ function buildManualPostError(err) {
   ].filter(Boolean).join(" ").toLowerCase();
   const referenceId = body?.reference_id || body?.qbo_request_id || err?.qbo_request_id || null;
   const withReference = (detail) => referenceId ? `${detail} Reference: ${referenceId}.` : detail;
+  if (normalized.includes("qbo_duplicate_found") || normalized.includes("possible_qbo_duplicate")) {
+    return {
+      type: "fuzzy_duplicate",
+      title: "Possible QuickBooks match",
+      message: "This may be a different real-world transaction. Review the QuickBooks candidate before deciding.",
+      detail: "Nothing was posted or linked.",
+      candidates: body?.duplicate_check?.candidates || [],
+    };
+  }
   if (normalized.includes("qbo_transaction_rejected")) {
     return {
       type: "error",
@@ -2504,6 +2514,34 @@ function BookkeepingCleanup() {
     await runManualPostTransaction(txn, { duplicateCheckOverrideToken });
   };
 
+  const requestFuzzyPostConfirmation = () => {
+    setManualPostResult((current) => current ? { ...current, type: "fuzzy_duplicate_confirmation" } : current);
+  };
+
+  const confirmFuzzyPostAnyway = async () => {
+    const txn = manualPostResult?.transaction;
+    setManualPostResult(null);
+    await runManualPostTransaction(txn, { confirmPostAnyway: true });
+  };
+
+  const linkFuzzyDuplicateCandidate = async () => {
+    const txn = manualPostResult?.transaction;
+    const candidate = manualPostResult?.candidates?.[0];
+    if (!txn?.id || !candidate?.qbo_txn_id || !candidate?.qbo_txn_type) return;
+    setManualPostResult(null);
+    setPostingTransactionIds((prev) => new Set(prev).add(txn.id));
+    try {
+      await linkExistingQuickBooksTransaction(businessId, txn.id, candidate);
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
+      setCountsRefreshKey((value) => value + 1);
+      window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: { severity: "success", title: "Transaction linked", body: "Linked to the existing QuickBooks transaction without creating a duplicate." } }));
+    } catch (err) {
+      setManualPostResult({ ...buildManualPostError(err), transaction: txn });
+    } finally {
+      setPostingTransactionIds((prev) => { const next = new Set(prev); next.delete(txn.id); return next; });
+    }
+  };
+
   const handleManualPostResultPrimary = () => {
     const result = manualPostResult;
     setManualPostResult(null);
@@ -3684,7 +3722,42 @@ function BookkeepingCleanup() {
                       </div>
                     ) : null}
 
+                    {manualPostResult.type === "fuzzy_duplicate" || manualPostResult.type === "fuzzy_duplicate_confirmation" ? (
+                      <div className="mt-4 space-y-3">
+                        {(manualPostResult.candidates || []).slice(0, 5).map((candidate) => (
+                          <div key={`${candidate.qbo_txn_type}-${candidate.qbo_txn_id}`} className="rounded-xl border border-amber-300/20 bg-amber-300/[0.06] p-3 text-sm">
+                            <div className="grid grid-cols-[112px_1fr] gap-x-3 gap-y-2">
+                              <span className="text-slate-500">Date</span><span>{candidate.txn_date || "Unknown"}</span>
+                              <span className="text-slate-500">Amount</span><span>{formatPostingAmount({ amount: candidate.amount })}</span>
+                              <span className="text-slate-500">Payee / memo</span><span className="break-words">{candidate.payee_or_memo || "Not provided by QuickBooks"}</span>
+                              <span className="text-slate-500">Source account</span><span>{candidate.source_qbo_account_name || candidate.source_qbo_account_id || "Unknown"}</span>
+                              <span className="text-slate-500">Destination</span><span>{candidate.destination_qbo_account_name || candidate.destination_qbo_account_id || "Unknown"}</span>
+                              <span className="text-slate-500">QuickBooks</span><span>{candidate.qbo_txn_type} #{candidate.qbo_txn_id}</span>
+                            </div>
+                          </div>
+                        ))}
+                        {manualPostResult.type === "fuzzy_duplicate_confirmation" ? (
+                          <div className="rounded-xl border border-rose-300/25 bg-rose-300/[0.07] px-3 py-2.5 text-sm text-rose-50">
+                            I understand this can create a duplicate in QuickBooks. Continue only if this is a different transaction.
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
                     <div className="mt-5 flex items-center justify-end gap-2">
+                      {manualPostResult.type === "fuzzy_duplicate" ? (
+                        <>
+                          <button type="button" onClick={() => setManualPostResult(null)} className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200">Cancel</button>
+                          <button type="button" onClick={linkFuzzyDuplicateCandidate} disabled={!manualPostResult.candidates?.[0]?.qbo_txn_id} className="rounded-full border border-white/16 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white disabled:opacity-45">Already in QuickBooks — link transaction</button>
+                          <button type="button" onClick={requestFuzzyPostConfirmation} className="rounded-full border border-amber-200/45 bg-amber-300 px-4 py-2 text-sm font-semibold text-[#171006]">Different transaction — post anyway</button>
+                        </>
+                      ) : null}
+                      {manualPostResult.type === "fuzzy_duplicate_confirmation" ? (
+                        <>
+                          <button type="button" onClick={() => setManualPostResult((current) => current ? { ...current, type: "fuzzy_duplicate" } : current)} className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200">Back</button>
+                          <button type="button" onClick={confirmFuzzyPostAnyway} className="rounded-full border border-rose-200/45 bg-rose-300 px-4 py-2 text-sm font-semibold text-[#170606]">Confirm duplicate risk and post</button>
+                        </>
+                      ) : null}
                       {manualPostResult.type === "duplicate_check_unavailable" ? (
                         <>
                           <button
@@ -3720,7 +3793,7 @@ function BookkeepingCleanup() {
                           Close
                         </button>
                       ) : null}
-                      {manualPostResult.type !== "duplicate_check_unavailable" ? <button
+                      {!['duplicate_check_unavailable', 'fuzzy_duplicate', 'fuzzy_duplicate_confirmation'].includes(manualPostResult.type) ? <button
                         type="button"
                         onClick={handleManualPostResultPrimary}
                         className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200"

@@ -107,12 +107,25 @@ export async function postTransactionToQuickBooks(businessId, transactionId, opt
       ...(options.duplicateCheckOverrideToken
         ? { duplicate_check_override_token: options.duplicateCheckOverrideToken }
         : {}),
+      ...(options.confirmPostAnyway === true ? { confirm_post_anyway: true } : {}),
     }),
   });
   if (res && res.ok === false) {
     throw new Error(res.message || res.error || "manual_post_failed");
   }
   return res;
+}
+
+export async function linkExistingQuickBooksTransaction(businessId, transactionId, candidate = {}) {
+  return safeFetch(apiUrl(`/api/bookkeeping/posting/transactions/${encodeURIComponent(transactionId)}/link-existing`), {
+    method: "POST",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      business_id: businessId,
+      qbo_txn_id: candidate.qbo_txn_id,
+      qbo_txn_type: candidate.qbo_txn_type,
+    }),
+  });
 }
 
 export async function inspectIncomingDepositMatch(businessId, transactionId, { persist = true } = {}) {

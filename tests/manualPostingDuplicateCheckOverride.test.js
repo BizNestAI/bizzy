@@ -72,7 +72,7 @@ test("manual posting checks deposit-capable QBO entities and keeps automatic pos
   assert.match(cron, /if \(!claim\.claimed\)/);
 });
 
-test("manual UI offers retry and token-backed Post anyway without a raw override boolean", () => {
+test("unavailable checks use a token while reviewed fuzzy candidates use explicit confirmation", () => {
   const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
   const client = read("src/services/bookkeeping/bookkeepingClient.js");
   const route = read("src/api/bookkeeping/routes/bookkeeping.posting.routes.js");
@@ -81,5 +81,6 @@ test("manual UI offers retry and token-backed Post anyway without a raw override
   assert.match(page, /Post anyway/);
   assert.match(client, /duplicate_check_override_token/);
   assert.match(route, /verifyManualPostOverrideToken/);
-  assert.doesNotMatch(client, /confirm_post_anyway:\s*true/);
+  assert.match(client, /confirm_post_anyway:\s*true/);
+  assert.match(page, /Confirm duplicate risk and post/);
 });

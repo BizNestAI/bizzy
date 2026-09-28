@@ -61,7 +61,7 @@ test("multiple plausible candidates are ambiguous and never auto-linked", () => 
   const cron = read("src/jobs/booksPost.cron.js");
 
   assert.match(cron, /deterministic\.length > 1\) return \{ confidence: "AMBIGUOUS"/);
-  assert.match(cron, /strong\.length > 1 \|\| scored\.length > 0/);
+  assert.match(cron, /if \(strong\.length > 1\) return \{ confidence: "AMBIGUOUS"/);
   assert.match(cron, /duplicateCheck\.confidence === "AMBIGUOUS"/);
   assert.doesNotMatch(cron, /AMBIGUOUS"[\s\S]{0,200}recordQboExistingLink/);
 });
@@ -71,7 +71,10 @@ test("same account date amount with missing or conflicting payee becomes ambiguo
 
   assert.match(cron, /const strong = scored\.filter\(\(c\) => c\.payee_matches\)/);
   assert.match(cron, /if \(strong\.length === 1\) return \{ confidence: "HIGH_CONFIDENCE_PROBABLE_DUPLICATE"/);
-  assert.match(cron, /if \(strong\.length > 1 \|\| scored\.length > 0\) return \{ confidence: "AMBIGUOUS"/);
+  assert.match(cron, /payeeConflicts/);
+  assert.match(cron, /LOW_CONFIDENCE_FUZZY/);
+  assert.match(cron, /scored\.every\(\(c\) => c\.payee_conflicts\)/);
+  assert.match(cron, /if \(scored\.length > 0\) return \{ confidence: "AMBIGUOUS"/);
   assert.match(cron, /return \{ confidence: "NO_MATCH", candidates: \[\] \}/);
   assert.match(cron, /function isNearQboTxnDate/);
   assert.match(cron, /dateMatches = isNearQboTxnDate/);
@@ -99,8 +102,10 @@ test("manual Post anyway requires explicit confirmation and still uses normal id
   assert.match(cron, /confirmPostAnyway === true/);
   assert.match(cron, /duplicatePostAnyway/);
   assert.match(cron, /duplicatePostAnyway = confirmPostAnyway && item\?\.meta\?\.possible_qbo_duplicate === true/);
-  assert.match(cron, /if \(!duplicatePostAnyway\)[\s\S]*classifyPreExistingQboMatch/);
-  assert.match(cron, /claimQboPostingIntent[\s\S]*if \(!duplicatePostAnyway\)/);
+  assert.match(cron, /if \(!structuredManualCheckCompleted\)[\s\S]*classifyPreExistingQboMatch/);
+  assert.match(cron, /if \(duplicateCheck\.confidence === "DETERMINISTIC_EXISTING"\)/);
+  assert.match(cron, /if \(!duplicatePostAnyway && \([\s\S]*LOW_CONFIDENCE_FUZZY/);
+  assert.match(cron, /claimQboPostingIntent/);
 });
 
 test("Link existing QuickBooks transaction action records receipt without provider create", () => {
@@ -114,6 +119,35 @@ test("Link existing QuickBooks transaction action records receipt without provid
   assert.match(route, /String\(fetchedId \|\| ""\) !== String\(qboTxnId\)/);
   assert.match(route, /from\("qbo_posted_transactions"\)[\s\S]*status: "posted"/);
   assert.match(route, /linked_existing_qbo_transaction: true/);
+  assert.match(route, /qbo_duplicate_candidate_changed/);
   assert.doesNotMatch(route, /link-existing[\s\S]*postToQbo/);
   assert.doesNotMatch(route, /link-existing[\s\S]*purchase\.create/);
+});
+
+test("two same-day same-amount Zelle senders remain fuzzy and manual-only override is explicit", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+
+  assert.match(cron, /sourcePayeeText/);
+  assert.match(cron, /candidateIdentityText/);
+  assert.match(cron, /payee_conflicts/);
+  assert.match(cron, /manual && !duplicatePostAnyway/);
+  assert.match(page, /Already in QuickBooks — link transaction/);
+  assert.match(page, /Different transaction — post anyway/);
+  assert.match(page, /Confirm duplicate risk and post/);
+  assert.match(client, /confirm_post_anyway: true/);
+});
+
+test("fuzzy candidate UI shows accounting identity fields and link does not create", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const page = read("src/pages/accounting/BookkeepingCleanup.jsx");
+  const route = read("src/api/bookkeeping/routes/bookkeeping.posting.routes.js");
+
+  for (const field of ["payee_or_memo", "source_qbo_account_name", "destination_qbo_account_name", "qbo_txn_type", "qbo_txn_id"]) {
+    assert.match(cron, new RegExp(field));
+    assert.match(page, new RegExp(field));
+  }
+  assert.match(route, /status: "posted"/);
+  assert.doesNotMatch(route.slice(route.indexOf('router.post("\/posting\/transactions\/:transactionId\/link-existing"')), /createQboDeposit/);
 });

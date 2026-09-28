@@ -306,6 +306,21 @@ function collectQboText(entity = {}) {
   return normalizeMatchText(out.filter(Boolean).join(" "));
 }
 
+function collectQboPayeeText(entity = {}) {
+  const values = [
+    entity.EntityRef?.name,
+    entity.PayeeEntityRef?.name,
+    entity.VendorRef?.name,
+    entity.CustomerRef?.name,
+  ];
+  for (const line of entity.Line || []) {
+    values.push(line?.DepositLineDetail?.Entity?.name);
+    values.push(line?.DepositLineDetail?.Entity?.EntityRef?.name);
+    values.push(line?.AccountBasedExpenseLineDetail?.CustomerRef?.name);
+  }
+  return normalizeMatchText(values.filter(Boolean).join(" "));
+}
+
 function getQboTxnId(entity = {}) {
   return entity.Id || entity.id || null;
 }
@@ -545,6 +560,14 @@ function scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }) 
       ? [entity.FromAccountRef?.value, entity.ToAccountRef?.value].filter(Boolean).map(String)
       : [getQboPostingAccountId(entity, qboTxnType)].filter(Boolean).map(String);
   const accountMatches = Boolean(mappedAccountId && entityAccountIds.includes(mappedAccountId));
+  const destinationRefs = (entity.Line || []).map((line) =>
+    line?.DepositLineDetail?.AccountRef ||
+    line?.AccountBasedExpenseLineDetail?.AccountRef ||
+    line?.SalesItemLineDetail?.ItemRef ||
+    line?.JournalEntryLineDetail?.AccountRef ||
+    null
+  ).filter((ref) => ref?.value && String(ref.value) !== mappedAccountId);
+  const candidateDestination = destinationRefs[0] || null;
   const dateMatches = isNearQboTxnDate(getQboTxnDate(entity), getOptionalAccountingDateFromBankTransaction(bankTxn));
   // A balanced journal entry's total line amount is normally twice the bank
   // amount. Compare the mapped bank-account line instead of summing both legs.
@@ -554,8 +577,11 @@ function scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }) 
       .reduce((sum, line) => sum + Math.abs(Number(line?.Amount || 0)), 0)
     : getQboTxnAmount(entity);
   const amountMatches = cents(candidateAmount) === cents(bankTxn?.amount);
-  const payeeText = normalizeMatchText(bankTxn?.qbo_entity_id ? bankTxn?.counterparty_name || bankTxn?.merchant_name || bankTxn?.name : bankTxn?.merchant_name || bankTxn?.counterparty_name || bankTxn?.name);
-  const payeeMatches = Boolean(payeeText && text.includes(payeeText));
+  const sourcePayeeText = normalizeMatchText(bankTxn?.qbo_entity_id ? bankTxn?.counterparty_name || bankTxn?.merchant_name || bankTxn?.name : bankTxn?.merchant_name || bankTxn?.counterparty_name || bankTxn?.name);
+  const candidatePayeeText = collectQboPayeeText(entity);
+  const candidateIdentityText = candidatePayeeText || text;
+  const payeeMatches = Boolean(sourcePayeeText && candidatePayeeText && candidatePayeeText.includes(sourcePayeeText));
+  const payeeConflicts = Boolean(sourcePayeeText && candidateIdentityText && !candidateIdentityText.includes(sourcePayeeText));
   const deterministic = Boolean((requestText && text.includes(requestText)) || (marker && text.includes(marker)));
   return {
     qbo_txn_id: qboId,
@@ -566,6 +592,12 @@ function scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }) 
     date_matches: dateMatches,
     amount_matches: amountMatches,
     payee_matches: payeeMatches,
+    payee_conflicts: payeeConflicts,
+    payee_or_memo: candidatePayeeText || text || null,
+    source_qbo_account_id: mappedAccountId || null,
+    source_qbo_account_name: mapping?.qbo_account_name || null,
+    destination_qbo_account_id: candidateDestination?.value || mapping?.destination_qbo_account_id || null,
+    destination_qbo_account_name: candidateDestination?.name || mapping?.destination_qbo_account_name || null,
     deterministic,
     text,
     raw: entity,
@@ -581,7 +613,11 @@ function classifyPreExistingQboMatch({ qboCandidates = [], bankTxn, mapping, qbo
   if (deterministic.length > 1) return { confidence: "AMBIGUOUS", candidates: deterministic };
   const strong = scored.filter((c) => c.payee_matches);
   if (strong.length === 1) return { confidence: "HIGH_CONFIDENCE_PROBABLE_DUPLICATE", candidates: strong };
-  if (strong.length > 1 || scored.length > 0) return { confidence: "AMBIGUOUS", candidates: strong.length ? strong : scored };
+  if (strong.length > 1) return { confidence: "AMBIGUOUS", candidates: strong };
+  if (scored.length > 0 && scored.every((c) => c.payee_conflicts)) {
+    return { confidence: "LOW_CONFIDENCE_FUZZY", candidates: scored };
+  }
+  if (scored.length > 0) return { confidence: "AMBIGUOUS", candidates: scored };
   return { confidence: "NO_MATCH", candidates: [] };
 }
 
@@ -595,6 +631,12 @@ function summarizeQboDuplicateCandidates(candidates = []) {
     date_matches: c.date_matches,
     amount_matches: c.amount_matches,
     payee_matches: c.payee_matches,
+    payee_conflicts: c.payee_conflicts,
+    payee_or_memo: c.payee_or_memo,
+    source_qbo_account_id: c.source_qbo_account_id,
+    source_qbo_account_name: c.source_qbo_account_name,
+    destination_qbo_account_id: c.destination_qbo_account_id,
+    destination_qbo_account_name: c.destination_qbo_account_name,
   }));
 }
 
@@ -2477,7 +2519,7 @@ export async function handleItem(item, options = {}) {
   }
 
   let structuredManualCheckCompleted = false;
-  if (manual && (intentQboTxnType === "Deposit" || detectProcessorSettlementActivity(bank)?.kind === "fee") && !createNewIncomeOverride) {
+  if (manual && !duplicatePostAnyway && (intentQboTxnType === "Deposit" || detectProcessorSettlementActivity(bank)?.kind === "fee") && !createNewIncomeOverride) {
     const overrideContext = {
       business_id: businessId,
       transaction_id: txnId,
@@ -2512,7 +2554,17 @@ export async function handleItem(item, options = {}) {
       structuredManualCheckCompleted = true;
     } else {
       const duplicateCheck = await timePostingStage(timing, "duplicate_preflight_ms", () =>
-        runStructuredManualDuplicateCheck({ qbo, qboTxnType: intentQboTxnType, bankTxn: bank, mapping, requestId })
+        runStructuredManualDuplicateCheck({
+          qbo,
+          qboTxnType: intentQboTxnType,
+          bankTxn: bank,
+          mapping: {
+            ...mapping,
+            destination_qbo_account_id: item.final_qbo_account_id || null,
+            destination_qbo_account_name: item.final_qbo_account_name || null,
+          },
+          requestId,
+        })
       );
       if (duplicateCheck.status === "completed_match_found" || duplicateCheck.status === "completed_possible_match") {
         await markPossibleQboDuplicate({
@@ -2537,13 +2589,17 @@ export async function handleItem(item, options = {}) {
     }
   }
 
-  if (!duplicatePostAnyway && !structuredManualCheckCompleted) {
+  if (!structuredManualCheckCompleted) {
     timing.context.duplicate_preflight_ran = true;
     const qboCandidates = await timePostingStage(timing, "duplicate_preflight_ms", () => findQboTransactions(qbo, intentQboTxnType, bank));
     const duplicateCheck = classifyPreExistingQboMatch({
       qboCandidates,
       bankTxn: bank,
-      mapping,
+      mapping: {
+        ...mapping,
+        destination_qbo_account_id: item.final_qbo_account_id || null,
+        destination_qbo_account_name: item.final_qbo_account_name || null,
+      },
       qboTxnType: intentQboTxnType,
       requestId,
     });
@@ -2623,10 +2679,11 @@ export async function handleItem(item, options = {}) {
       }
       return;
     }
-    if (
+    if (!duplicatePostAnyway && (
       duplicateCheck.confidence === "HIGH_CONFIDENCE_PROBABLE_DUPLICATE" ||
+      duplicateCheck.confidence === "LOW_CONFIDENCE_FUZZY" ||
       duplicateCheck.confidence === "AMBIGUOUS"
-    ) {
+    )) {
       await markPossibleQboDuplicate({
         item,
         requestId,
@@ -3023,7 +3080,15 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
   if (postedErr) throw postedErr;
   if (!posted?.qbo_txn_id || posted.status !== "posted") {
     const err = new Error(posted?.post_error || "manual_post_not_completed");
-    err.status = 400;
+    const duplicateReview = posted?.meta?.possible_qbo_duplicate === true;
+    err.status = duplicateReview ? 409 : 400;
+    if (duplicateReview) {
+      err.duplicate_check_result = {
+        status: "completed_possible_match",
+        confidence: posted?.meta?.qbo_duplicate_detection_confidence || "AMBIGUOUS",
+        candidates: posted?.meta?.qbo_duplicate_candidates || [],
+      };
+    }
     err.qbo_request_id = posted?.meta?.qbo_request_id || null;
     err.child_operation_id = posted?.meta?.qbo_request_id || null;
     throw err;
