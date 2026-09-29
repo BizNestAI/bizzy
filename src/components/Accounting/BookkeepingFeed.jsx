@@ -60,6 +60,7 @@ export function CoaDropdown({
   creationContext,
   status,
   disabled,
+  disabledReason = null,
   resolution,
   resolutionOptions = RESOLUTION_OPTIONS,
   onResolutionChange,
@@ -174,6 +175,7 @@ export function CoaDropdown({
         ref={buttonRef}
         type="button"
         disabled={disabled}
+        title={disabled ? disabledReason || "Account editing is unavailable for this transaction." : undefined}
         onClick={(e) => {
           if (disabled) return;
           e.stopPropagation();
@@ -1481,6 +1483,8 @@ export default function BookkeepingFeed({
               ["credit_card_statement_credit", "Cash back or statement credit"],
               ["credit_card_credit_other", "Something else"],
             ] : RESOLUTION_OPTIONS;
+            const showCanonicalCoa = ["needs_review", "handled"].includes(String(activeFeed || "").toLowerCase()) && !isPending && !isPosted;
+            const coaEditingProtected = effectiveResolution === "match_credit_card_payment" || Boolean(ccWorkflowStatus || ccTransferLabel);
             const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly && (!selectableIds || selectableIds.has(txn.id));
 
             return (
@@ -1661,7 +1665,8 @@ export default function BookkeepingFeed({
                   <span className="inline-flex w-fit max-w-full rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
                     Loan Payment · Needs Split
                   </span>
-                ) : !isPending && effectiveResolution === "categorize_new" && accounts.length > 0 ? (
+                ) : null}
+                {showCanonicalCoa && accounts.length > 0 ? (
                   <CoaDropdown
                     value={selectedAccountValue}
                     suggestedId={txn.suggestedAccountId}
@@ -1679,10 +1684,11 @@ export default function BookkeepingFeed({
                     disabled={
                       isApproving ||
                       isPosted ||
-                      txn.status === "failed" ||
+                      coaEditingProtected ||
                       (["approved", "auto_approved"].includes(txn.status) && !txn.canEdit) ||
                       readOnly
                     }
+                    disabledReason={coaEditingProtected ? "Resolve this transaction through the protected credit-card payment matching workflow." : null}
                     resolution={effectiveResolution}
                     resolutionOptions={rowResolutionOptions}
                     onResolutionChange={(nextResolution) => changeResolution(txn, nextResolution)}
@@ -1691,8 +1697,10 @@ export default function BookkeepingFeed({
                       if (id && selectedResolution !== "categorize_new") changeResolution(txn, "categorize_new");
                     }}
                   />
-                ) : !isPending && effectiveResolution === "categorize_new" ? (
-                  <span className="text-slate-400 text-[11px] truncate">{readOnlyGlLabel}</span>
+                ) : showCanonicalCoa ? (
+                  <button type="button" disabled className="inline-flex h-7 w-full items-center justify-between rounded-lg border border-white/10 bg-[#101312] px-3 text-[10px] font-medium text-slate-400">
+                    <span>{selectedAccountValue ? readOnlyGlLabel : "Account unavailable"}</span><span>▾</span>
+                  </button>
                 ) : null}
                 {txn.status === "auto_approved" && !isCcPaymentWorkflow ? (
                   <span className="inline-flex w-fit items-center rounded-full border border-emerald-400/25 bg-emerald-500/10 px-2 py-[2px] text-[9px] font-semibold uppercase tracking-wide text-emerald-200/90">

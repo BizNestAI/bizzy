@@ -62,6 +62,7 @@ import {
   clearResolvedPostingTaxonomyMeta,
   taxonomyRequiresBookkeepingPostingReview,
 } from "../services/bookkeeping/postingDecisionAuthority.js";
+import { buildCreditCardMerchantRefundPayload } from "../services/bookkeeping/creditCardMerchantRefundPayload.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 1);
@@ -371,15 +372,18 @@ async function createQboPurchase(qbo, payload) {
     throw new Error("purchase_post_not_supported");
   }
   const { fn, context } = candidates[0];
+  const entityType = payload?.PaymentType === "CreditCard" && payload?.Credit === true
+    ? "CreditCardCredit"
+    : "Purchase";
   return new Promise((resolve, reject) => {
     fn.call(context, payload, (err, resp) => {
       if (err) return reject(createPostingError(err, {
         stage: "qbo_create",
-        entityType: "Purchase",
+        entityType,
         referenceId: payload?.requestId || null,
         qboWriteStarted: true,
       }));
-      return resolve({ id: resp?.Id || null, type: resp?.TxnType || "Purchase", syncToken: resp?.SyncToken || null, raw: resp || null });
+      return resolve({ id: resp?.Id || null, type: resp?.TxnType || entityType, syncToken: resp?.SyncToken || null, raw: resp || null });
     });
   });
 }
@@ -622,7 +626,7 @@ function scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }) 
   // Equal absolute amounts in opposite economic directions are not duplicates.
   // In particular, an earlier card charge must not block a later refund.
   const directionMatches = qboTxnType === "CreditCardCredit"
-    ? Number(candidateAmount) < 0 || String(entity?.TxnType || "").toLowerCase() === "creditcardcredit"
+    ? entity?.Credit === true || Number(candidateAmount) < 0 || String(entity?.TxnType || "").toLowerCase() === "creditcardcredit"
     : true;
   const sourcePayeeText = normalizeMatchText(bankTxn?.qbo_entity_id ? bankTxn?.counterparty_name || bankTxn?.merchant_name || bankTxn?.name : bankTxn?.merchant_name || bankTxn?.counterparty_name || bankTxn?.name);
   const candidatePayeeText = collectQboPayeeText(entity);
@@ -2039,24 +2043,17 @@ async function postCreditCardInflowCredit(item, bankTxn, qbo, mappedAccountId, c
   const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note, lineDescription } = buildQboPostText(bankTxn, "CC refund", requestId);
   const vendorRef = getQboEntityRef(bankTxn, "vendor");
-  // QBO models a credit-card refund as a Purchase with PaymentType CreditCard
-  // and negative expense-line semantics. This reduces both the card liability
-  // and the selected expense/asset account; it is not an income deposit.
-  return createQboPurchase(qbo, {
+  const payload = buildCreditCardMerchantRefundPayload({
     requestId,
-    PaymentType: "CreditCard",
-    AccountRef: { value: String(mappedAccountId) },
-    TxnDate: txnDate,
-    TotalAmt: -amount,
-    PrivateNote: note,
-    ...(vendorRef ? { EntityRef: { value: vendorRef.value, type: "Vendor" } } : {}),
-    Line: [{
-      DetailType: "AccountBasedExpenseLineDetail",
-      Amount: -amount,
-      Description: lineDescription,
-      AccountBasedExpenseLineDetail: { AccountRef: { value: String(categoryAccountId) } },
-    }],
+    amount,
+    txnDate,
+    sourceCreditCardAccountId: mappedAccountId,
+    categoryAccountId,
+    privateNote: note,
+    lineDescription,
+    vendorRef,
   });
+  return createQboPurchase(qbo, payload);
 }
 
 async function markLoanPaymentSplitRequired(item, reason = "loan_payment_split_required") {

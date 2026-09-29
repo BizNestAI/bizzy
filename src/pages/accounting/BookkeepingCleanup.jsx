@@ -858,6 +858,7 @@ function BookkeepingCleanup() {
   const [bulkPosting, setBulkPosting] = useState(false);
   const manualPostTriggerRef = useRef(null);
   const manualPostDialogRef = useRef(null);
+  const activeManualPostRequestsRef = useRef(new Set());
   const [clarRequests, setClarRequests] = useState([]);
   const [clarOpen, setClarOpen] = useState(false);
   const navigate = useNavigate();
@@ -1859,9 +1860,13 @@ function BookkeepingCleanup() {
 
   const isCreditCardPaymentWorkflowTxn = useCallback((txn = {}) => {
     const meta = txn.meta || {};
+    const explicitResolution = String(meta.user_selected_resolution || txn.resolution || "").toLowerCase();
+    const hasDurablePair = Boolean(txn.cc_payment_pair_id || meta.cc_payment_pair_id);
+    if (explicitResolution && explicitResolution !== "match_credit_card_payment" && !hasDurablePair) return false;
     return (
+      explicitResolution === "match_credit_card_payment" ||
       String(txn.taxonomy_type || meta.taxonomy_type || "").toLowerCase() === "cc_payment" ||
-      Boolean(txn.cc_payment_pair_id || meta.cc_payment_pair_id) ||
+      hasDurablePair ||
       String(txn.cc_payment_pair_status || meta.cc_payment_pair_status || "").length > 0 ||
       String(txn.post_error || meta.post_block_reason || "").startsWith("cc_payment_")
     );
@@ -2666,7 +2671,8 @@ function BookkeepingCleanup() {
 
   const runManualPostTransaction = async (txn, options = {}) => {
     const txnId = txn?.id;
-    if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId)) return;
+    if (!businessId || usingDemo || !txnId || postingTransactionIds.has(txnId) || activeManualPostRequestsRef.current.has(txnId)) return;
+    activeManualPostRequestsRef.current.add(txnId);
     setManualPostTxn(null);
     setPostingTransactionIds((prev) => new Set(prev).add(txnId));
     try {
@@ -2700,6 +2706,7 @@ function BookkeepingCleanup() {
       setManualPostResult({ ...buildManualPostError(err), transaction: txn });
       await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
     } finally {
+      activeManualPostRequestsRef.current.delete(txnId);
       setPostingTransactionIds((prev) => {
         const next = new Set(prev);
         next.delete(txnId);

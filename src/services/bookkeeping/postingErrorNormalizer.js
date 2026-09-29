@@ -45,7 +45,9 @@ export function normalizePostingError(error, context = {}) {
   if (explicitProviderRejection) {
     code = "qbo_transaction_rejected";
     httpStatus = 422;
-    userMessage = providerDetail?.includes("Add a line item")
+    userMessage = /transaction amount that is 0 or greater/i.test(providerDetail || providerMessage || "") && context.entityType === "CreditCardCredit"
+      ? "QuickBooks rejected the merchant refund amount. Nothing was posted; review the selected expense account and try again."
+      : providerDetail?.includes("Add a line item")
       ? "QuickBooks rejected the deposit because it did not contain a valid line item."
       : "QuickBooks rejected this transaction. Review its account and transaction details, then try again.";
     qboWriteMayHaveOccurred = false;

@@ -89,7 +89,7 @@ test("Handled action rendering consistently exposes Undo and Post", () => {
   assert.match(handledBranch, /aria-label="Undo approval"/);
   assert.match(handledBranch, /aria-label="Post to QuickBooks"/);
   assert.match(handledBranch, /onManualPost\?\.\(txn\.id\)/);
-  assert.match(handledBranch, /\? "Posting\.\.\." : "Post"/);
+  assert.match(handledBranch, /<span>Posting<\/span>[\s\S]*animate-dot-bounce[\s\S]*: "Post"/);
   assert.doesNotMatch(handledBranch, /Retry/);
 });
 
@@ -205,7 +205,7 @@ test("resolution and COA menus share an accessible dark non-native command surfa
   assert.doesNotMatch(selector, /<select/);
   assert.match(selector, /role="alert"[\s\S]*Retry/);
 
-  assert.match(coa, /RESOLUTION_OPTIONS\.filter\(\(\[id\]\) => id !== "categorize_new"\)/);
+  assert.match(coa, /resolutionOptions\.filter\(\(\[id\]\) => id !== "categorize_new"\)/);
   assert.match(feed, /\["match_existing_qbo", "Match existing QuickBooks transaction"\]/);
   assert.match(feed, /\["match_credit_card_payment", "Match as credit card payment"\]/);
   assert.match(feed, /\["split_transaction", "Split transaction"\]/);

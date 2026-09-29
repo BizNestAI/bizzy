@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { normalizeTransactionResolution } from "../src/services/bookkeeping/transactionResolutionService.js";
 import { classifyBookkeepingLifecycle, derivePostingOutcome } from "../src/services/bookkeeping/bookkeepingLifecycleClassifier.js";
+import { buildCreditCardMerchantRefundPayload } from "../src/services/bookkeeping/creditCardMerchantRefundPayload.js";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -23,13 +24,19 @@ test("unresolved credit-card inflow fails closed before any QuickBooks write", (
   assert.match(cron.slice(guard, write), /credit_card_inflow_resolution_required/);
 });
 
-test("merchant refunds use negative card and expense semantics", () => {
-  const cron = read("src/jobs/booksPost.cron.js");
-  const body = cron.slice(cron.indexOf("async function postCreditCardInflowCredit"), cron.indexOf("async function markLoanPaymentSplitRequired"));
-  assert.match(body, /PaymentType: "CreditCard"/);
-  assert.match(body, /TotalAmt: -amount/);
-  assert.match(body, /Amount: -amount/);
-  assert.match(body, /EntityRef/);
+test("merchant refunds use Credit direction with nonnegative card and expense magnitudes", () => {
+  const payload = buildCreditCardMerchantRefundPayload({
+    amount: 75.76,
+    txnDate: "2026-08-25",
+    sourceCreditCardAccountId: "card-1",
+    categoryAccountId: "entertainment-1",
+    vendorRef: { value: "sony-1" },
+  });
+  assert.equal(payload.PaymentType, "CreditCard");
+  assert.equal(payload.Credit, true);
+  assert.equal(payload.TotalAmt, 75.76);
+  assert.equal(payload.Line[0].Amount, 75.76);
+  assert.deepEqual(payload.EntityRef, { value: "sony-1", type: "Vendor" });
 });
 
 test("opposite-sign original card charge is not a refund duplicate", () => {

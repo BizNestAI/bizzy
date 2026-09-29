@@ -15,6 +15,7 @@ import {
   hasAuthoritativeQuickBooksMatch,
   quickBooksPaymentsProtectedMeta,
 } from "./quickBooksPaymentsProtectedWorkflow.js";
+import { normalizeTransactionResolution } from "./transactionResolutionService.js";
 
 function makeCorrelationId(prefix = "feed") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -142,18 +143,24 @@ function stripIncomingDepositReviewForRewardCredit(normalized = {}) {
   };
 }
 
-function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, operatorRequest = null) {
+export function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, operatorRequest = null) {
   const meta = cat.meta || {};
-  const specialCcPayment = isCreditCardPaymentWorkflow({
+  const explicitResolution = normalizeTransactionResolution(meta.user_selected_resolution);
+  const ccPaymentWorkflow = isCreditCardPaymentWorkflow({
     taxonomy_type: meta.taxonomy_type || null,
     cc_payment_rejected: meta.cc_payment_rejected,
     cc_payment_pair_id: meta.cc_payment_pair_id,
     meta,
   });
+  const specialCcPayment = Boolean(
+    meta.cc_payment_pair_id ||
+    explicitResolution === "match_credit_card_payment" ||
+    (!explicitResolution && ccPaymentWorkflow)
+  );
   const suggestedId = specialCcPayment ? null : cat.suggested_qbo_account_id || null;
   const suggestedName = specialCcPayment ? null : cat.suggested_qbo_account_name || null;
-  const finalId = specialCcPayment ? null : cat.final_qbo_account_id || null;
-  const finalName = specialCcPayment ? null : cat.final_qbo_account_name || null;
+  const finalId = specialCcPayment ? null : cat.final_qbo_account_id || meta.credit_card_inflow_resolution?.destination_qbo_account_id || null;
+  const finalName = specialCcPayment ? null : cat.final_qbo_account_name || meta.credit_card_inflow_resolution?.destination_qbo_account_name || null;
   const amount = Number(row.amount || 0);
   const dir = row.direction || (amount < 0 ? "OUTFLOW" : amount > 0 ? "INFLOW" : "UNKNOWN");
   const matchedExistingQbo =
@@ -278,7 +285,10 @@ function normalizeBookkeepingTransactionRow(row, cat = {}, acctName = null, oper
     };
   }
   const workflowNormalized = stripIncomingDepositReviewForRewardCredit(normalized);
-  const ccStatus = deriveCreditCardPaymentStatus(workflowNormalized);
+  // A classifier-only cc_payment tag is not allowed to erase an explicit
+  // categorization. Only the authoritative payment workflow owns the account
+  // suppression used by the transfer matcher.
+  const ccStatus = specialCcPayment ? deriveCreditCardPaymentStatus(workflowNormalized) : null;
   return ccStatus
     ? {
         ...workflowNormalized,
