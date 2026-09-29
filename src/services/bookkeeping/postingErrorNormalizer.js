@@ -77,6 +77,11 @@ export function normalizePostingError(error, context = {}) {
     httpStatus = 409;
     userMessage = "Bizzi found a possible existing QuickBooks transaction and did not create a duplicate.";
     qboWriteMayHaveOccurred = false;
+  } else if (lower.includes("credit_card_inflow_resolution_required") || lower.includes("credit_card_inflow_requires_review")) {
+    code = "credit_card_inflow_resolution_required";
+    httpStatus = 409;
+    userMessage = "Identify this credit as a merchant refund, credit-card payment, or cash back/statement credit before posting.";
+    qboWriteMayHaveOccurred = false;
   } else if (context.stage && context.qboWriteStarted !== true) {
     code = firstString(context.internalCode, "posting_validation_failed");
     httpStatus = 422;

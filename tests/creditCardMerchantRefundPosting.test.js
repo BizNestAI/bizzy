@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
-  buildCreditCardMerchantRefundPayload,
+  buildCreditCardCreditPayload,
   qboAmountFieldsAreNonnegative,
 } from "../src/services/bookkeeping/creditCardMerchantRefundPayload.js";
 import { normalizePostingError } from "../src/services/bookkeeping/postingErrorNormalizer.js";
@@ -22,7 +22,7 @@ const playstationRefund = Object.freeze({
 });
 
 test("PlayStation merchant refund serializes an exact nonnegative QBO CreditCardCredit payload", () => {
-  const payload = buildCreditCardMerchantRefundPayload({
+  const payload = buildCreditCardCreditPayload({
     requestId: playstationRefund.requestId,
     amount: playstationRefund.amount,
     txnDate: playstationRefund.date,
@@ -52,7 +52,7 @@ test("PlayStation merchant refund serializes an exact nonnegative QBO CreditCard
 });
 
 test("refund accounting direction comes from Credit true and uses the selected Entertainment offset", () => {
-  const payload = buildCreditCardMerchantRefundPayload({
+  const payload = buildCreditCardCreditPayload({
     amount: playstationRefund.amount,
     txnDate: playstationRefund.date,
     sourceCreditCardAccountId: playstationRefund.sourceAccountId,
@@ -66,7 +66,7 @@ test("refund accounting direction comes from Credit true and uses the selected E
 });
 
 test("an unrelated original purchase category is neither required nor serialized", () => {
-  const payload = buildCreditCardMerchantRefundPayload({
+  const payload = buildCreditCardCreditPayload({
     amount: playstationRefund.amount,
     txnDate: playstationRefund.date,
     sourceCreditCardAccountId: playstationRefund.sourceAccountId,

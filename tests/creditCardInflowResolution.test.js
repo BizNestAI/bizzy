@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { normalizeTransactionResolution } from "../src/services/bookkeeping/transactionResolutionService.js";
 import { classifyBookkeepingLifecycle, derivePostingOutcome } from "../src/services/bookkeeping/bookkeepingLifecycleClassifier.js";
-import { buildCreditCardMerchantRefundPayload } from "../src/services/bookkeeping/creditCardMerchantRefundPayload.js";
+import { buildCreditCardCreditPayload } from "../src/services/bookkeeping/creditCardMerchantRefundPayload.js";
 
 const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -25,7 +25,7 @@ test("unresolved credit-card inflow fails closed before any QuickBooks write", (
 });
 
 test("merchant refunds use Credit direction with nonnegative card and expense magnitudes", () => {
-  const payload = buildCreditCardMerchantRefundPayload({
+  const payload = buildCreditCardCreditPayload({
     amount: 75.76,
     txnDate: "2026-08-25",
     sourceCreditCardAccountId: "card-1",

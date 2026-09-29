@@ -62,7 +62,7 @@ import {
   clearResolvedPostingTaxonomyMeta,
   taxonomyRequiresBookkeepingPostingReview,
 } from "../services/bookkeeping/postingDecisionAuthority.js";
-import { buildCreditCardMerchantRefundPayload } from "../services/bookkeeping/creditCardMerchantRefundPayload.js";
+import { buildCreditCardCreditPayload } from "../services/bookkeeping/creditCardMerchantRefundPayload.js";
 
 const POLL_MINUTES = Number(process.env.BOOKS_POST_CRON_MINUTES || 10);
 const MERCHANT_APPROVAL_QUEUE_SECONDS = Number(process.env.BOOKS_MERCHANT_APPROVAL_QUEUE_SECONDS || 1);
@@ -772,25 +772,31 @@ function resolveQboTxnType(item, bankTxn, mapping) {
   const mappedType = (mapping?.qbo_account_type || "").toLowerCase();
   const isBank = mappedType === "bank";
   const isCreditCard = mappedType === "creditcard" || mappedType === "credit_card" || mappedType === "credit card";
+  const creditResolution = item?.meta?.credit_card_inflow_resolution?.resolution_type || null;
+  const durableCcPaymentPair = Boolean(item?.meta?.cc_payment_pair_id);
   const looksCcMeta =
-    item?.meta?.taxonomy_type === "cc_payment" ||
-    item?.meta?.cc_payment_bank_qbo_account_id ||
-    item?.meta?.cc_payment_cc_qbo_account_id ||
-    item?.meta?.cc_payment_mapping_confidence;
+    creditResolution === "match_credit_card_payment" ||
+    durableCcPaymentPair ||
+    (!creditResolution && (
+      item?.meta?.taxonomy_type === "cc_payment" ||
+      item?.meta?.cc_payment_bank_qbo_account_id ||
+      item?.meta?.cc_payment_cc_qbo_account_id ||
+      item?.meta?.cc_payment_mapping_confidence
+    ));
   if (looksCcMeta) return "Transfer";
   if (item?.meta?.taxonomy_type === "split_transaction" || item?.meta?.split_transaction_status === "confirmed") {
     if ((isBank || isCreditCard) && isOutflowLike(bankTxn)) return "Purchase";
     return null;
   }
-  if (item?.meta?.taxonomy_type && item.meta.taxonomy_type !== "cc_payment") return null;
   if (!item?.final_qbo_account_id) return null;
   if (!isBank && !isCreditCard) return null;
   const amount = Number(bankTxn?.amount || 0);
   if (!Number.isFinite(amount) || amount === 0) return null;
+  if (isCreditCard && isInflowLike(bankTxn) && ["merchant_refund", "credit_card_statement_credit"].includes(creditResolution)) return "CreditCardCredit";
+  if (item?.meta?.taxonomy_type && item.meta.taxonomy_type !== "cc_payment") return null;
   if (isBank && isOutflowLike(bankTxn)) return "Purchase";
   if (isBank && isInflowLike(bankTxn)) return "Deposit";
   if (isCreditCard && isOutflowLike(bankTxn)) return "CreditCardCharge";
-  if (isCreditCard && isInflowLike(bankTxn) && ["merchant_refund", "credit_card_statement_credit"].includes(item?.meta?.credit_card_inflow_resolution?.resolution_type)) return "CreditCardCredit";
   return null;
 }
 
@@ -2043,7 +2049,7 @@ async function postCreditCardInflowCredit(item, bankTxn, qbo, mappedAccountId, c
   const txnDate = getAccountingDateFromBankTransaction(bankTxn);
   const { note, lineDescription } = buildQboPostText(bankTxn, "CC refund", requestId);
   const vendorRef = getQboEntityRef(bankTxn, "vendor");
-  const payload = buildCreditCardMerchantRefundPayload({
+  const payload = buildCreditCardCreditPayload({
     requestId,
     amount,
     txnDate,
@@ -2152,11 +2158,17 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
   const mappedType = (mapping?.qbo_account_type || "").toLowerCase();
   const isBank = mappedType === "bank";
   const isCreditCard = mappedType === "creditcard" || mappedType === "credit_card" || mappedType === "credit card";
+  const creditResolution = item?.meta?.credit_card_inflow_resolution?.resolution_type || null;
+  const durableCcPaymentPair = Boolean(item?.meta?.cc_payment_pair_id);
   const looksCcMeta =
-    item?.meta?.taxonomy_type === "cc_payment" ||
-    item?.meta?.cc_payment_bank_qbo_account_id ||
-    item?.meta?.cc_payment_cc_qbo_account_id ||
-    item?.meta?.cc_payment_mapping_confidence;
+    creditResolution === "match_credit_card_payment" ||
+    durableCcPaymentPair ||
+    (!creditResolution && (
+      item?.meta?.taxonomy_type === "cc_payment" ||
+      item?.meta?.cc_payment_bank_qbo_account_id ||
+      item?.meta?.cc_payment_cc_qbo_account_id ||
+      item?.meta?.cc_payment_mapping_confidence
+    ));
 
   if (looksCcMeta) {
     return postCcPaymentToQbo(item, bankTxn, qbo, mapping, requestId);
@@ -2167,7 +2179,7 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
   if (item?.meta?.taxonomy_type === "split_transaction" || item?.meta?.split_transaction_status === "confirmed") {
     return postSplitTransactionPurchase(item, bankTxn, qbo, mapping, requestId);
   }
-  if (taxonomyRequiresBookkeepingPostingReview(item)) {
+  if (taxonomyRequiresBookkeepingPostingReview(item) && !["merchant_refund", "credit_card_statement_credit"].includes(creditResolution)) {
     await supabase
       .from("transaction_categorizations")
       .update({
@@ -2222,7 +2234,7 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
     return null;
   }
 
-  if (isCreditCard && !isOutflow && !["merchant_refund", "credit_card_statement_credit"].includes(item?.meta?.credit_card_inflow_resolution?.resolution_type)) {
+  if (isCreditCard && !isOutflow && !["merchant_refund", "credit_card_statement_credit"].includes(creditResolution)) {
     await supabase
       .from("transaction_categorizations")
       .update({
@@ -2406,6 +2418,14 @@ export async function handleItem(item, options = {}) {
   const isUnresolvedCreditCardInflow = mappedType === "creditcard" && isInflowLike(bank) &&
     !["merchant_refund", "match_credit_card_payment", "credit_card_statement_credit"].includes(item?.meta?.credit_card_inflow_resolution?.resolution_type);
   if (isUnresolvedCreditCardInflow) {
+    log.info("[books-post] credit type required before QBO write", {
+      businessId,
+      transactionId: txnId,
+      manual,
+      qboWriteStarted: false,
+      selectedAccountPreserved: Boolean(item.final_qbo_account_id),
+      reason: "credit_card_inflow_resolution_required",
+    });
     if (!manual) {
       await supabase.from("transaction_categorizations").update({
         status: "needs_review",

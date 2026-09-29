@@ -10,7 +10,7 @@ function nonnegativeMagnitude(value, fieldName = "amount") {
 
 // QBO represents a card refund as a Purchase whose Credit flag supplies the
 // accounting direction. Monetary fields remain unsigned magnitudes.
-export function buildCreditCardMerchantRefundPayload({
+export function buildCreditCardCreditPayload({
   requestId,
   amount,
   txnDate,
