@@ -63,7 +63,7 @@ import {
   discoverIncomingDepositQboMatch,
 } from "../../services/bookkeeping/incomingDepositMatchService.js";
 import { refreshProcessorFeeQboEvidence } from "../../services/bookkeeping/processorFeeQboRefreshService.js";
-import { persistTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
+import { persistCreditCardInflowResolution, persistTransactionResolution } from "../../services/bookkeeping/transactionResolutionService.js";
 import {
   BookkeepingReclassificationError,
   reclassifyBookkeepingTransaction,
@@ -1945,6 +1945,7 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
       businessId: run.business_id,
       transactionId,
       confirmPostAnyway,
+      duplicateChallengeId: req.body?.duplicate_challenge_id || req.body?.duplicateChallengeId || null,
     });
     if (result?.ok === false) {
       return res.status(result?.status || 409).json({
@@ -1982,6 +1983,36 @@ router.post("/runs/:runId/transactions/:transactionId/post-qbo", async (req, res
       ok: false,
       error: e?.code || e?.message || "monthly_review_manual_post_failed",
       message: e?.message || "Could not post transaction to QuickBooks.",
+    });
+  }
+});
+
+router.put("/runs/:runId/transactions/:transactionId/credit-card-inflow-resolution", async (req, res) => {
+  try {
+    const { runId, transactionId } = req.params;
+    if (!UUID_RE.test(String(runId))) return res.status(400).json({ ok: false, error: "invalid_run_id" });
+    if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
+    const run = await fetchRun(runId);
+    await assertRunTransactionInSelectedMonth(run, transactionId);
+    const result = await persistCreditCardInflowResolution({
+      db: supabase,
+      businessId: run.business_id,
+      transactionId,
+      resolution: req.body?.resolution,
+      selectedQboAccountId: req.body?.selected_qbo_account_id,
+      selectedQboAccountName: req.body?.selected_qbo_account_name,
+      linkedOriginalTransactionId: req.body?.linked_original_transaction_id,
+      matchedAccountId: req.body?.matched_account_id,
+      matchedQboTransactionId: req.body?.matched_qbo_transaction_id,
+      actor: req.user?.id || null,
+      source: "monthly_review_manual_post_credit_type",
+    });
+    return res.json(result);
+  } catch (e) {
+    return res.status(e?.status || 500).json({
+      ok: false,
+      error: e?.code || "credit_card_inflow_resolution_save_failed",
+      message: e?.status ? e.message : "Could not save this credit type.",
     });
   }
 });

@@ -109,7 +109,7 @@ test("Monthly Review mirror UI requires explicit actions and does not mutate on 
   assert.doesNotMatch(dropdownSnippet, /onApprove|onReclassify|safeFetch|fetch\(/);
   assert.match(table, />\s*\{isActionBusy\("approve"\) \? "Approving\.\.\." : "Approve"\}\s*</);
   assert.match(table, />\s*\{isActionBusy\("reclassify"\) \? "Saving\.\.\." : "Reclassify"\}\s*</);
-  assert.match(table, /Post to QBO/);
+  assert.match(table, /Post now/);
   assert.match(table, /Retry QBO/);
   assert.match(table, /getProtectedWorkflowReason/);
   assert.match(table, /onChange=\{\(accountId\) => setSelectedAccountId\(accountId\)\}/);

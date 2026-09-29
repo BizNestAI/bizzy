@@ -401,11 +401,27 @@ test("posted transactions table supports requested sort and filter controls", as
 
   assert.equal(boardSource.includes("sourceFilter"), false);
   assert.equal(boardSource.includes("All sources"), false);
-  assert.equal(boardSource.includes('setTransactionSort("date_desc")'), true);
-  assert.equal(boardSource.includes('setTransactionSort("vendor_asc")'), true);
+  assert.equal(boardSource.includes('current === "date_desc" ? "date_asc" : "date_desc"'), true);
+  assert.equal(boardSource.includes('current === "vendor_asc" ? "vendor_desc" : "vendor_asc"'), true);
   assert.equal(boardSource.includes("getTransactionVendorName(a).localeCompare"), true);
   assert.equal(boardSource.includes("Vendor / Description"), true);
   assert.equal(source.includes("moneyCents.format(amount)"), true);
+});
+
+test("posted transactions retain cached rows and expose complete month, sorting, and retry controls", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const start = source.indexOf("function JobAssignmentBoard({");
+  const end = source.indexOf("function ImportJobsDrawer", start);
+  const boardSource = source.slice(start, end);
+
+  assert.equal(boardSource.includes('{ value: "all", label: "All dates" }'), true);
+  assert.equal(boardSource.includes('String(txn.date || "").slice(0, 7) === dateRangeFilter'), true);
+  assert.equal(boardSource.includes('current === "vendor_asc" ? "vendor_desc" : "vendor_asc"'), true);
+  assert.equal(boardSource.includes("We couldn’t load posted transactions."), true);
+  assert.equal(boardSource.includes("Showing the last available data."), true);
+  assert.equal(boardSource.includes("onClick={onRetryTransactions}"), true);
+  assert.equal(boardSource.includes("!officiallyAssigned"), false);
+  assert.equal(source.includes("jobCostingRequestRef.current.controller?.abort()"), true);
 });
 
 test("Suggested Jobs cards are wrapped in a card-level render boundary", async () => {
@@ -616,7 +632,7 @@ test("drag/drop assignment updates job buckets optimistically before server reco
 test("Import Jobs opens in the dashboard-centered animated modal", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const boardStart = source.indexOf("function JobAssignmentBoard({");
-  const boardEnd = source.indexOf("const [dateRangeFilter]", boardStart);
+  const boardEnd = source.indexOf("const [dateRangeFilter", boardStart);
   const importStart = source.indexOf("function ImportJobsDrawer({");
   const importEnd = source.indexOf("function JobCostingPage", importStart);
   assert.ok(boardStart > 0);

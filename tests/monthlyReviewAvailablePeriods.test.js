@@ -89,6 +89,14 @@ test("Monthly Review console consumes backend periods instead of generated futur
   assert.doesNotMatch(ui, /value === "2026-05"/);
 });
 
+test("Monthly Review month menu is opaque, interactive, and stacked above panel actions", () => {
+  const ui = readFileSync(join(root, "src/pages/Admin/MonthlyReviewConsole.jsx"), "utf8");
+
+  assert.match(ui, /relative z-\[10030\] min-w-\[220px\] isolate/);
+  assert.match(ui, /pointer-events-auto absolute left-0 top-full z-10/);
+  assert.match(ui, /bg-\[#101216\][^"]*opacity-100/);
+});
+
 test("Monthly Review backend exposes a business-scoped available-period authority", () => {
   const route = readFileSync(join(root, "src/api/admin/monthlyReview.routes.js"), "utf8");
 

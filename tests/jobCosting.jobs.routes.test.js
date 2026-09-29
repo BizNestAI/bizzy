@@ -190,17 +190,17 @@ class SupabaseQuery {
   }
 }
 
-function makeRpcPostedRow({ id, businessId = BUSINESS_ID, date = "2026-08-01", qboId = null, assigned = false } = {}) {
+function makeRpcPostedRow({ id, businessId = BUSINESS_ID, date = "2026-08-01", qboId = null, assigned = false, status = null, vendor = null, amount = -25 } = {}) {
   return {
     id,
     business_id: businessId,
     plaid_account_id: "plaid-account-1",
     date,
-    name: `Vendor ${id}`,
-    merchant_name: `Vendor ${id}`,
-    amount: -25,
+    name: vendor || `Vendor ${id}`,
+    merchant_name: vendor || `Vendor ${id}`,
+    amount,
     pending: false,
-    cat_status: qboId ? "posted" : "approved",
+    cat_status: status || (qboId ? "posted" : "approved"),
     qbo_txn_id: qboId,
     qbo_txn_type: qboId ? "Purchase" : null,
     final_qbo_account_id: "acct-cost",
@@ -238,12 +238,14 @@ function createSupabaseMock(initial = {}) {
       if (name !== "get_bookkeeping_transactions_bounded") {
         return { data: null, error: { code: "42883", message: `Unknown RPC ${name}` } };
       }
+      if (store.__bookkeepingRpcError) return { data: null, error: store.__bookkeepingRpcError };
       const businessId = args.p_business_id;
       const status = String(args.p_status_filter || "needs_review").toLowerCase();
       const limit = Math.max(Number(args.p_limit || 25), 0);
       const offset = Math.max(Number(args.p_offset || 0), 0);
       let rows = (store.bookkeeping_rpc_rows || []).filter((row) => String(row.business_id) === String(businessId));
-      if (status === "posted") rows = rows.filter((row) => Boolean(row.qbo_txn_id) || String(row.cat_status || "").toLowerCase() === "posted");
+      if (status === "posted") rows = rows.filter((row) => String(row.cat_status || "").toLowerCase() === "posted" && Boolean(row.qbo_txn_id));
+      if (status === "matched") rows = rows.filter((row) => ["matched", "reconciled"].includes(String(row.cat_status || "").toLowerCase()) && Boolean(row.qbo_txn_id));
       rows = rows
         .slice()
         .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(b.id).localeCompare(String(a.id)));
@@ -857,6 +859,58 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.jobs[0].can_delete_manual_job, true);
     assert.equal(response.body.jobs[0].revenue_source_status, "manual_no_revenue_source");
     assert.equal(response.body.jobs[0].change_order_count, 0);
+  });
+
+  test("job costing reconciles all locally confirmed Posted and Matched transactions by stable QBO identity", async () => {
+    mockSupabase.store.bookkeeping_rpc_rows = [
+      makeRpcPostedRow({ id: "manual-post", qboId: "qbo-1", vendor: "Same Vendor", amount: -12.5 }),
+      makeRpcPostedRow({ id: "bulk-post", qboId: "qbo-2", vendor: "Same Vendor", amount: -12.5 }),
+      makeRpcPostedRow({ id: "matched", qboId: "qbo-3", status: "matched", vendor: null, amount: 30 }),
+      makeRpcPostedRow({ id: "duplicate-representation", qboId: "qbo-3", status: "matched", amount: 30 }),
+      makeRpcPostedRow({ id: "future", qboId: "qbo-future", date: "2099-01-01" }),
+      makeRpcPostedRow({ id: "failed", qboId: null, status: "approved" }),
+    ];
+    mockSupabase.store.job_transaction_assignments = [{
+      id: "assignment-1",
+      business_id: BUSINESS_ID,
+      transaction_id: "manual-post",
+      job_id: JOB_ID,
+      allocation_percent: 100,
+      allocated_amount: 12.5,
+    }];
+
+    const response = await request(app, "/api/job-costing/job-costing", { method: "GET" });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.transactions.map((row) => row.id).sort(), ["bulk-post", "manual-post", "matched"]);
+    assert.equal(response.body.transactions.find((row) => row.id === "manual-post").assignment_status, "assigned");
+    assert.equal(response.body.pagination.total_posted_transactions, 3);
+    assert.equal(response.body.pagination.assigned_count, 1);
+    assert.equal(response.body.pagination.unassigned_count, 2);
+    assert.equal(response.body.pagination.deliberately_excluded_count, 0);
+  });
+
+  test("job costing classifies Supabase transport failures without logging credentials", async () => {
+    const transportError = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("Connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+    });
+    mockSupabase.store.__bookkeepingRpcError = transportError;
+    const logged = [];
+    const originalError = console.error;
+    console.error = (...args) => logged.push(args);
+    try {
+      const response = await request(app, "/api/job-costing/job-costing", { method: "GET" });
+      assert.equal(response.status, 500);
+      const diagnostic = logged.find((entry) => entry[0] === "[jobs.job-costing.upstream]")?.[1];
+      assert.equal(diagnostic.upstream, "supabase_postgrest_rpc");
+      assert.equal(diagnostic.operation, "get_bookkeeping_transactions_bounded");
+      assert.equal(diagnostic.timeout, true);
+      assert.equal(diagnostic.cause.code, "UND_ERR_CONNECT_TIMEOUT");
+      assert.equal(JSON.stringify(diagnostic).includes("Authorization"), false);
+    } finally {
+      console.error = originalError;
+      delete mockSupabase.store.__bookkeepingRpcError;
+    }
   });
 
   test("job candidates endpoint returns the real bounded total for suggested jobs", async () => {

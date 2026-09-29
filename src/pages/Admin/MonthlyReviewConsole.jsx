@@ -4,6 +4,7 @@ import { safeFetch } from "../../utils/safeFetch.js";
 import { getDemoData, shouldUseDemoData } from "../../services/demo/demoClient.js";
 import { CoaDropdown } from "../../components/Accounting/BookkeepingFeed.jsx";
 import BookkeepingTransactionMirrorTable from "../../components/Accounting/BookkeepingTransactionMirrorTable.jsx";
+import ManualQuickBooksPostingWorkflow from "../../components/Accounting/ManualQuickBooksPostingWorkflow.jsx";
 import { ADMIN_VIEW_RETURN_MESSAGE } from "../../services/adminViewReturn.js";
 import { normalizeExpectedQboAccountCreationResult } from "../../services/bookkeeping/qboAccountCreationErrors.js";
 import { deriveQboPostingLifecycle } from "../../services/bookkeeping/qboPostingLifecycle.js";
@@ -269,6 +270,7 @@ export default function MonthlyReviewConsole() {
   const acceptedPostingReviewIdsRef = useRef(new Set());
   const [expandedPostingReviewGroup, setExpandedPostingReviewGroup] = useState(null);
   const [busyFeedActions, setBusyFeedActions] = useState({});
+  const [manualPostingRequest, setManualPostingRequest] = useState(null);
   const [bookkeepingFeedActionErrors, setBookkeepingFeedActionErrors] = useState({});
   const [bookkeepingRulePreferences, setBookkeepingRulePreferences] = useState({});
   const [ccPaymentActionState, setCcPaymentActionState] = useState({});
@@ -1510,6 +1512,75 @@ export default function MonthlyReviewConsole() {
     }
   }, [bookkeepingRulePreferences, detail?.run?.id, patchBookkeepingFeedsAfterApproval, patchBookkeepingFeedsAfterReclassification, refreshAfterFeedAction]);
 
+  const openManualPostingWorkflow = useCallback((intent, row) => {
+    if (!selectedBusinessId || !row?.id) return;
+    const actionId = `${intent}:${row.id}`;
+    if (busyFeedActions[actionId]) return;
+    setBookkeepingFeedActionErrors((current) => ({ ...current, [row.id]: "" }));
+    setManualPostingRequest({ intent, transaction: row });
+  }, [busyFeedActions, selectedBusinessId]);
+
+  const setManualPostingBusy = useCallback((transactionId, busy, intent) => {
+    const actionId = `${intent || "post"}:${transactionId}`;
+    setBusyFeedActions((current) => {
+      const next = { ...current };
+      if (busy) next[actionId] = true;
+      else delete next[actionId];
+      return next;
+    });
+    setBusyFeedAction(busy ? actionId : "");
+  }, []);
+
+  const completeManualPostingWorkflow = useCallback(async (outcome) => {
+    if (outcome?.type === "failed" && outcome.transaction?.id) {
+      const message = outcome.error?.body?.message || outcome.error?.message || "QuickBooks did not post this transaction.";
+      setBookkeepingFeedActionErrors((current) => ({ ...current, [outcome.transaction.id]: message }));
+    }
+    await refreshAfterFeedAction();
+  }, [refreshAfterFeedAction]);
+
+  const monthlyReviewManualPostRequest = useCallback(async (row, options = {}) => {
+    if (!detail?.run?.id || !row?.id) throw new Error("Monthly Review posting context is unavailable.");
+    const route = `/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(row.id)}/post-qbo`;
+    return safeFetch(route, {
+      method: "POST",
+      body: {
+        confirm_post_anyway: options.confirmPostAnyway === true,
+        duplicate_challenge_id: options.duplicateChallengeId || null,
+        duplicate_check_override_token: options.duplicateCheckOverrideToken || null,
+      },
+    });
+  }, [detail?.run?.id]);
+
+  const monthlyReviewSaveCreditTypeRequest = useCallback(async (row, resolution, details = {}) => {
+    if (!detail?.run?.id || !row?.id) throw new Error("Monthly Review posting context is unavailable.");
+    return safeFetch(`/api/admin/monthly-review/runs/${encodeURIComponent(detail.run.id)}/transactions/${encodeURIComponent(row.id)}/credit-card-inflow-resolution`, {
+      method: "PUT",
+      body: {
+        resolution,
+        selected_qbo_account_id: details.selectedQboAccountId || null,
+        selected_qbo_account_name: details.selectedQboAccountName || null,
+      },
+    });
+  }, [detail?.run?.id]);
+
+  const monthlyReviewLinkRequest = useCallback(async (row, candidate) => {
+    if (!selectedBusinessId || !row?.id) throw new Error("Monthly Review posting context is unavailable.");
+    return safeFetch(`/api/bookkeeping/posting/transactions/${encodeURIComponent(row.id)}/link-existing`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-business-id": selectedBusinessId,
+        "x-bizzi-monthly-review-action": "link-existing",
+      },
+      body: {
+        business_id: selectedBusinessId,
+        qbo_txn_id: candidate?.qbo_txn_id,
+        qbo_txn_type: candidate?.qbo_txn_type,
+      },
+    });
+  }, [selectedBusinessId]);
+
   const handleMirrorConfirmLoanPaymentSplit = useCallback(async (row, split) => {
     if (!selectedBusinessId || !row?.id) return;
     const transactionId = row.id;
@@ -2291,8 +2362,8 @@ export default function MonthlyReviewConsole() {
                   }}
                   onApprove={(row, accountId) => runBookkeepingFeedAction("approve", row, accountId)}
                   onReclassify={(row, accountId) => runBookkeepingFeedAction("reclassify", row, accountId)}
-                  onPost={(row) => runBookkeepingFeedAction("post", row)}
-                  onRetry={(row) => runBookkeepingFeedAction("retry", row)}
+                  onPost={(row) => openManualPostingWorkflow("post", row)}
+                  onRetry={(row) => openManualPostingWorkflow("retry", row)}
                   onConfirmCcPaymentMatch={handleMirrorConfirmCreditCardPaymentMatch}
                   onMarkCcPayment={handleMirrorMarkCreditCardPayment}
                   onRejectCcPayment={handleMirrorRejectCreditCardPayment}
@@ -2379,6 +2450,17 @@ export default function MonthlyReviewConsole() {
                   finalizing={finalizing}
                   onCancel={() => setConfirmFinalizeOpen(false)}
                   onConfirm={finalizeReview}
+                />
+                <ManualQuickBooksPostingWorkflow
+                  businessId={selectedBusinessId}
+                  transaction={manualPostingRequest?.transaction || null}
+                  intent={manualPostingRequest?.intent || "post"}
+                  postRequest={monthlyReviewManualPostRequest}
+                  linkRequest={monthlyReviewLinkRequest}
+                  saveCreditTypeRequest={monthlyReviewSaveCreditTypeRequest}
+                  onClose={() => setManualPostingRequest(null)}
+                  onBusyChange={setManualPostingBusy}
+                  onComplete={completeManualPostingWorkflow}
                 />
               </div>
             )}
@@ -4591,7 +4673,7 @@ function MonthDropdown({ value, options = [], disabled = false, onChange }) {
   };
 
   return (
-    <div ref={rootRef} className="relative min-w-[220px]">
+    <div ref={rootRef} className="relative z-[10030] min-w-[220px] isolate">
       <button
         type="button"
         disabled={disabled}
@@ -4604,7 +4686,7 @@ function MonthDropdown({ value, options = [], disabled = false, onChange }) {
         <ChevronDown className={`h-4 w-4 shrink-0 text-white/55 transition ${open ? "rotate-180" : ""}`} />
       </button>
       {open ? (
-        <div className="absolute left-0 top-full z-[10020] mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-white/12 bg-[#101216] p-1 shadow-[0_18px_45px_rgba(0,0,0,0.55)]" role="listbox">
+        <div className="pointer-events-auto absolute left-0 top-full z-10 mt-2 max-h-72 w-full overflow-y-auto rounded-xl border border-white/12 bg-[#101216] p-1 opacity-100 shadow-[0_18px_45px_rgba(0,0,0,0.55)]" role="listbox">
           {options.map((option) => {
             const selectedOption = option.value === value;
             return (

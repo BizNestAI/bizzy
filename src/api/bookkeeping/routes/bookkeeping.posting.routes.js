@@ -28,7 +28,7 @@ import { getQBOClient } from "../../../utils/qboClient.js";
 import { getLatestQuickBooksTokenRow } from "../../../services/quickbooksTokenService.js";
 import { emitTaxDataChanged, TAX_CHANGE_TYPES } from "../../../services/tax/taxChangeEvents.js";
 import { runLiveDuplicatePreflight } from "../../../services/bookkeeping/qboDuplicatePreflightService.js";
-import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole } from "../../_shared/internalStaffAuth.js";
+import { MONTHLY_REVIEW_STAFF_ROLES, requireInternalRole, resolveInternalStaff } from "../../_shared/internalStaffAuth.js";
 import { normalizeMerchantGroupApprovalRequest, UUID_PATTERN } from "../../../contracts/merchantGroupApprovalContract.js";
 import crypto from "node:crypto";
 import { issueManualPostOverrideToken, verifyManualPostOverrideToken } from "../../../services/bookkeeping/manualPostOverrideToken.js";
@@ -821,7 +821,11 @@ router.post("/posting/transactions/:transactionId/link-existing", requireAuth, a
   if (!qboTxnId || !qboTxnType) return res.status(400).json({ ok: false, error: "missing_qbo_transaction" });
 
   try {
-    await assertTaxBusinessAccess({ req, businessId, supabase });
+    if (req.get("x-bizzi-monthly-review-action") === "link-existing") {
+      await resolveInternalStaff({ req, roles: MONTHLY_REVIEW_STAFF_ROLES, supabase });
+    } else {
+      await assertTaxBusinessAccess({ req, businessId, supabase });
+    }
     const nowIso = new Date().toISOString();
     const { data: cat, error: catErr } = await supabase
       .from("transaction_categorizations")

@@ -3043,6 +3043,7 @@ function JobAssignmentBoard({
   jobCandidates = [],
   jobCandidatesTotal = 0,
   transactionsError = "",
+  onRetryTransactions,
   jobsError = "",
   jobCandidatesError = "",
   projectsCapability = null,
@@ -3115,7 +3116,7 @@ function JobAssignmentBoard({
     : projectsCapabilityView.available
       ? "Import QuickBooks Projects."
       : "QuickBooks Projects are not enabled or authorized for this company. Review suggested jobs or create a job manually.";
-  const [dateRangeFilter] = useState("all");
+  const [dateRangeFilter, setDateRangeFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
   const [transactionSearch, setTransactionSearch] = useState("");
   const [glFilter, setGlFilter] = useState("all");
@@ -3125,6 +3126,13 @@ function JobAssignmentBoard({
   const [assignmentModalMounted, setAssignmentModalMounted] = useState(false);
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
   const transactionsPerPage = 25;
+  const monthOptions = useMemo(() => {
+    const months = [...new Set(postedTransactions.map((txn) => String(txn.date || "").slice(0, 7)).filter((value) => /^\d{4}-\d{2}$/.test(value)))];
+    return months.sort((a, b) => b.localeCompare(a)).map((value) => ({
+      value,
+      label: new Date(`${value}-01T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" }),
+    }));
+  }, [postedTransactions]);
   const bucketRailRef = useRef(null);
   const bucketScrollTimerRef = useRef(null);
   const assignmentModalTimerRef = useRef(null);
@@ -3245,26 +3253,8 @@ function JobAssignmentBoard({
   const filteredTransactions = useMemo(() => {
     if (assignmentDisabled) return [];
     const q = transactionSearch.trim().toLowerCase();
-    const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const last30 = new Date(now.getTime() - 30 * 86400000);
-    const last90 = new Date(now.getTime() - 90 * 86400000);
     return postedTransactions.filter((txn) => {
-      const assignedPercent = Number(txn.assigned_total_percent || 0);
-      const remainingPercent = Number(txn.remaining_percent ?? Math.max(0, 100 - assignedPercent));
-      const officiallyAssigned =
-        txn.assignment_status === "assigned" ||
-        txn.assignment_status === "partial" ||
-        assignedPercent > 0 ||
-        remainingPercent < 100 ||
-        Boolean(txn.job_id || txn.job_label || txn.assignment_id);
-      const txnDate = txn.date ? new Date(txn.date) : null;
-      const matchesDate =
-        dateRangeFilter === "all" ||
-        !txnDate ||
-        (dateRangeFilter === "this_month" && txnDate >= startOfMonth) ||
-        (dateRangeFilter === "last_30" && txnDate >= last30) ||
-        (dateRangeFilter === "last_90" && txnDate >= last90);
+      const matchesDate = dateRangeFilter === "all" || String(txn.date || "").slice(0, 7) === dateRangeFilter;
       const roleMeta = getTransactionRoleMeta(txn);
       const roleKey = roleMeta.key;
       const payeeDisplay = getPostedTransactionDisplayName(txn);
@@ -3294,18 +3284,19 @@ function JobAssignmentBoard({
         roleMeta.source,
       ].filter(Boolean).join(" ").toLowerCase();
       return (
-        !officiallyAssigned &&
         matchesDate &&
         (roleFilter === "all" || roleFilter === roleKey || (roleFilter === "revenue" && ["invoice", "payment", "deposit", "sales_receipt", "unmatched_inflow"].includes(roleKey))) &&
         (!q || haystack.includes(q)) &&
         (glFilter === "all" || getTransactionGlFilterValues(txn).has(glFilter))
       );
     }).sort((a, b) => {
-      if (transactionSort === "vendor_asc") {
+      if (transactionSort === "vendor_asc" || transactionSort === "vendor_desc") {
         const vendorCompare = getTransactionVendorName(a).localeCompare(getTransactionVendorName(b), undefined, { sensitivity: "base" });
-        if (vendorCompare !== 0) return vendorCompare;
+        if (vendorCompare !== 0) return transactionSort === "vendor_desc" ? -vendorCompare : vendorCompare;
       }
-      const dateCompare = Date.parse(b.date || 0) - Date.parse(a.date || 0);
+      const dateCompare = transactionSort === "date_asc"
+        ? Date.parse(a.date || 0) - Date.parse(b.date || 0)
+        : Date.parse(b.date || 0) - Date.parse(a.date || 0);
       if (dateCompare !== 0) return dateCompare;
       return String(b.id || "").localeCompare(String(a.id || ""));
     });
@@ -3530,7 +3521,7 @@ function JobAssignmentBoard({
       <div className="relative z-10">
         <div className="flex max-h-[calc(100vh-430px)] min-h-[300px] flex-col overflow-hidden rounded-[18px] border border-white/10 bg-black/15">
           <div className="relative z-[110] shrink-0 border-b border-white/8 bg-[#1d231f]/95 px-3 py-2 backdrop-blur">
-            <div className="grid gap-2 md:grid-cols-[auto_0.62fr_0.9fr_minmax(220px,1.35fr)]">
+            <div className="grid gap-2 md:grid-cols-[auto_0.62fr_0.82fr_0.9fr_minmax(220px,1.35fr)]">
               <button
                 type="button"
                 onClick={readOnly ? undefined : openAssignmentModal}
@@ -3555,6 +3546,13 @@ function JobAssignmentBoard({
                   { value: "credit", label: "Credits" },
                   { value: "unmatched_inflow", label: "Unmatched inflows" },
                 ]}
+              />
+              <DarkFilterSelect
+                value={dateRangeFilter}
+                onChange={setDateRangeFilter}
+                ariaLabel="Filter by transaction month"
+                compact
+                options={[{ value: "all", label: "All dates" }, ...monthOptions]}
               />
               <DarkFilterSelect
                 value={glFilter}
@@ -3588,31 +3586,37 @@ function JobAssignmentBoard({
                 <div />
                 <button
                   type="button"
-                  onClick={() => setTransactionSort("date_desc")}
+                  onClick={() => setTransactionSort((current) => current === "date_desc" ? "date_asc" : "date_desc")}
                   className={`inline-flex items-center gap-1 text-left uppercase tracking-[0.12em] transition hover:text-emerald-100 ${
-                    transactionSort === "date_desc" ? "text-emerald-100" : ""
+                    transactionSort.startsWith("date_") ? "text-emerald-100" : ""
                   }`}
                   title="Sort by most recent date"
                 >
                   Date
-                  <ChevronDown className={`h-2.5 w-2.5 ${transactionSort === "date_desc" ? "opacity-100" : "opacity-0"}`} />
+                  <ChevronDown className={`h-2.5 w-2.5 transition ${transactionSort.startsWith("date_") ? "opacity-100" : "opacity-0"} ${transactionSort === "date_asc" ? "rotate-180" : ""}`} />
                 </button>
                 <button
                   type="button"
-                  onClick={() => setTransactionSort("vendor_asc")}
+                  onClick={() => setTransactionSort((current) => current === "vendor_asc" ? "vendor_desc" : "vendor_asc")}
                   className={`inline-flex items-center gap-1 text-left uppercase tracking-[0.12em] transition hover:text-emerald-100 ${
-                    transactionSort === "vendor_asc" ? "text-emerald-100" : ""
+                    transactionSort.startsWith("vendor_") ? "text-emerald-100" : ""
                   }`}
-                  title="Sort by vendor or payee A to Z"
+                  title="Sort by vendor, payee, or description"
                 >
                   Vendor / Description
-                  <ChevronDown className={`h-2.5 w-2.5 -rotate-90 ${transactionSort === "vendor_asc" ? "opacity-100" : "opacity-0"}`} />
+                  <ChevronDown className={`h-2.5 w-2.5 transition ${transactionSort.startsWith("vendor_") ? "opacity-100" : "opacity-0"} ${transactionSort === "vendor_asc" ? "rotate-180" : ""}`} />
                 </button>
                 <div>GL Account</div>
                 <div className="text-right">Amount</div>
                 <div className="pl-2">Assignment Status</div>
                 <div className="text-right">Action</div>
               </div>
+              {transactionsError ? (
+                <div className="m-3 flex items-center justify-between gap-3 rounded-xl border border-amber-300/20 bg-amber-300/[0.08] px-3 py-2 text-xs text-amber-50/80">
+                  <span>We couldn’t load posted transactions.{postedTransactions.length ? " Showing the last available data." : ""}</span>
+                  <button type="button" onClick={onRetryTransactions} className="rounded-full border border-amber-200/25 px-3 py-1 font-semibold hover:bg-amber-200/10">Retry</button>
+                </div>
+              ) : null}
               <div className="min-h-[180px] pb-28 md:pb-24">
                 {loading ? (
                   <JobCostingInitialLoadingState type="transactions" />
@@ -3643,7 +3647,7 @@ function JobAssignmentBoard({
                   })
                 ) : (
                   <div className="px-4 py-8 text-center text-sm text-white/55">
-                    {transactionsError || "No unassigned posted QuickBooks transactions match those filters."}
+                    {transactionsError ? "No cached transactions are available." : "No posted QuickBooks transactions match those filters."}
                   </div>
                 )}
               </div>
@@ -3653,7 +3657,7 @@ function JobAssignmentBoard({
             <span>
               {loading
                 ? "Loading posted QuickBooks transactions..."
-                : `Showing ${transactionRangeStart}-${transactionRangeEnd} of ${filteredTransactions.length} unassigned posted transactions · 25 per page`}
+                : `Showing ${transactionRangeStart}-${transactionRangeEnd} of ${filteredTransactions.length} posted transactions · 25 per page`}
             </span>
             <div className="flex items-center gap-2">
               <button
@@ -6409,6 +6413,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
   const [candidateApprovalPreview, setCandidateApprovalPreview] = useState(null);
   const assignmentPickerTimerRef = useRef(null);
   const hasVisibleJobCostingDataRef = useRef(hasJobCostingCacheData(initialLiveCache));
+  const jobCostingRequestRef = useRef({ sequence: 0, controller: null });
   const pendingDeletedJobIdsRef = useRef(new Set());
   const confirmedDeletedJobIdsRef = useRef(new Set());
 
@@ -6480,11 +6485,16 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
     setError("");
     setTransactionsError("");
     setJobsError("");
+    jobCostingRequestRef.current.controller?.abort();
+    const controller = new AbortController();
+    const sequence = jobCostingRequestRef.current.sequence + 1;
+    jobCostingRequestRef.current = { sequence, controller };
     try {
       const [dataResult, summaryResult] = await Promise.allSettled([
-        safeFetch(apiUrl(`/api/jobs/job-costing?business_id=${encodeURIComponent(businessId)}`)),
-        safeFetch(apiUrl(`/api/job-costing/jobs/summary?business_id=${encodeURIComponent(businessId)}`)),
+        safeFetch(apiUrl(`/api/jobs/job-costing?business_id=${encodeURIComponent(businessId)}`), { signal: controller.signal }),
+        safeFetch(apiUrl(`/api/job-costing/jobs/summary?business_id=${encodeURIComponent(businessId)}`), { signal: controller.signal }),
       ]);
+      if (jobCostingRequestRef.current.sequence !== sequence) return;
 
       if (dataResult.status === "fulfilled") {
         const data = dataResult.value || {};
@@ -6494,7 +6504,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         hasVisibleJobCostingDataRef.current = true;
       } else {
         console.warn("[JobCosting] posted transactions failed", dataResult.reason?.message || dataResult.reason);
-        setTransactionsError("Unable to load posted QuickBooks transactions.");
+        setTransactionsError("We couldn’t load posted transactions.");
       }
 
       if (summaryResult.status === "fulfilled") {
@@ -6523,7 +6533,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       console.warn("[JobCosting] load failed", e?.message || e);
       setError(e?.message || "Failed to load job costing.");
     } finally {
-      setLoading(false);
+      if (jobCostingRequestRef.current.sequence === sequence) setLoading(false);
     }
   }, [businessId, readOnly, usingDemo]);
 
@@ -7914,6 +7924,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
             jobCandidates={jobCandidates}
             jobCandidatesTotal={jobCandidatesTotal}
             transactionsError={transactionsError}
+            onRetryTransactions={loadJobCosting}
             jobsError={jobsError}
             jobCandidatesError={jobCandidatesError}
             projectsCapability={projectsCapability}

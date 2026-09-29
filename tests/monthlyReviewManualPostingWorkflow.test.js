@@ -1,0 +1,46 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const read = (path) => readFileSync(join(process.cwd(), path), "utf8");
+
+test("Monthly Review exposes first-attempt and retry manual posting through the shared workflow", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  const workflow = read("src/components/Accounting/ManualQuickBooksPostingWorkflow.jsx");
+
+  assert.match(page, /ManualQuickBooksPostingWorkflow/);
+  assert.match(page, /openManualPostingWorkflow\("post", row\)/);
+  assert.match(page, /openManualPostingWorkflow\("retry", row\)/);
+  assert.match(page, /postRequest=\{monthlyReviewManualPostRequest\}/);
+  assert.match(table, /isFailed \? \(/);
+  assert.match(table, /Retry QBO/);
+  assert.match(table, /Post now/);
+  assert.doesNotMatch(table, /!isQueued \? \(/);
+  assert.match(workflow, /activeIds\.current\.has\(source\.id\)/);
+  assert.match(workflow, /Posting…/);
+});
+
+test("Monthly Review manual posting preserves duplicate and credit-type decisions", () => {
+  const workflow = read("src/components/Accounting/ManualQuickBooksPostingWorkflow.jsx");
+  const route = read("src/api/admin/monthlyReview.routes.js");
+
+  assert.match(workflow, /possible_qbo_match/);
+  assert.match(workflow, /Already in QuickBooks — link transaction/);
+  assert.match(workflow, /Different transaction — post anyway/);
+  assert.match(workflow, /Confirm duplicate risk and post/);
+  assert.match(workflow, /credit_card_inflow_resolution_required/);
+  assert.match(workflow, /merchant_refund/);
+  assert.match(workflow, /match_credit_card_payment/);
+  assert.match(workflow, /credit_card_statement_credit/);
+  assert.match(route, /duplicateChallengeId:\s*req\.body\?\.duplicate_challenge_id/);
+});
+
+test("protected and completed Monthly Review rows cannot expose ordinary posting", () => {
+  const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  assert.match(table, /getProtectedWorkflowReason\(row\)/);
+  assert.match(table, /!genericActionsBlocked/);
+  assert.match(table, /!isPosted/);
+  assert.match(table, /!isPending/);
+});

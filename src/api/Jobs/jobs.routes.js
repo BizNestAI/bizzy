@@ -883,28 +883,83 @@ async function recordJobAssignmentHistory({
   return data;
 }
 
+function safeUpstreamFailure(error, context = {}) {
+  const cause = error?.cause || null;
+  const message = String(error?.message || error || "unknown failure");
+  const causeMessage = String(cause?.message || "");
+  const code = String(cause?.code || error?.code || "");
+  return {
+    upstream: "supabase_postgrest_rpc",
+    operation: "get_bookkeeping_transactions_bounded",
+    business_id: context.businessId || null,
+    status_filter: context.statusFilter || null,
+    page: context.page || null,
+    elapsed_ms: context.elapsedMs || 0,
+    timeout: /timeout|timed out|abort/i.test(`${message} ${causeMessage}`) || ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"].includes(code),
+    cause: { name: cause?.name || error?.name || "Error", code: code || null, message: causeMessage || message },
+  };
+}
+
+async function fetchAllConfirmedBookkeepingRows(businessId, statusFilter) {
+  const rows = [];
+  const pageSize = 200;
+  let page = 1;
+  let totalCount = null;
+  while (totalCount === null || rows.length < totalCount) {
+    const startedAt = Date.now();
+    let result;
+    try {
+      result = await fetchBookkeepingTransactions({
+        businessId,
+        statusFilter,
+        rangeParam: "all",
+        page,
+        pageSize,
+      });
+    } catch (error) {
+      console.error("[jobs.job-costing.upstream]", safeUpstreamFailure(error, {
+        businessId,
+        statusFilter,
+        page,
+        elapsedMs: Date.now() - startedAt,
+      }));
+      throw error;
+    }
+    const pageRows = Array.isArray(result?.rows) ? result.rows : [];
+    if (totalCount === null) totalCount = Number(result?.totalCount || pageRows.length || 0);
+    rows.push(...pageRows);
+    if (!pageRows.length || pageRows.length < pageSize) break;
+    page += 1;
+  }
+  return rows;
+}
+
+function confirmedQboIdentity(row = {}) {
+  const qboId = String(row.qbo_txn_id || "").trim();
+  if (qboId) return `${String(row.qbo_realm_id || row.realm_id || "realm")}:${String(row.qbo_txn_type || "Transaction")}:${qboId}`;
+  return `bizzi:${String(row.id || row.transaction_id || "")}`;
+}
+
 async function fetchJobCostingRows(businessId) {
   // Job Costing uses posted Books transactions as the source of truth.
   // This endpoint intentionally mirrors Books Review Posted transactions for job costing assignment.
   // This reuses the same underlying query as Books Review > Posted:
   // GET /api/bookkeeping/transactions?status=posted
-  const postedRows = [];
-  const pageSize = 200;
-  let totalCount = 0;
-  for (let page = 1; page <= 25; page += 1) {
-    const result = await fetchBookkeepingTransactions({
-      businessId,
-      statusFilter: "posted",
-      rangeParam: "all",
-      page,
-      pageSize,
-    });
-    const rows = Array.isArray(result?.rows) ? result.rows : [];
-    if (page === 1) totalCount = Number(result?.totalCount || rows.length || 0);
-    postedRows.push(...rows);
-    if (!rows.length || postedRows.length >= totalCount) break;
-  }
-  const txns = (postedRows || []).map(normalizePostedBookTransaction);
+  const [postedRows, matchedRows] = await Promise.all([
+    fetchAllConfirmedBookkeepingRows(businessId, "posted"),
+    fetchAllConfirmedBookkeepingRows(businessId, "matched"),
+  ]);
+  const businessToday = new Date().toISOString().slice(0, 10);
+  const confirmedRows = [...postedRows, ...matchedRows].filter((row) => (
+    Boolean(row?.qbo_txn_id) && String(row?.date || "") <= businessToday
+  ));
+  const confirmedByIdentity = new Map();
+  confirmedRows.forEach((row) => {
+    const normalized = normalizePostedBookTransaction(row);
+    const identity = confirmedQboIdentity(normalized);
+    if (!confirmedByIdentity.has(identity)) confirmedByIdentity.set(identity, normalized);
+  });
+  const txns = [...confirmedByIdentity.values()];
 
   const ids = (txns || []).map((row) => row.id);
   let assignmentsByTransaction = {};
@@ -1071,9 +1126,14 @@ async function fetchJobCostingRows(businessId) {
     transactions: rows,
     jobs: normalizedJobs,
     pagination: {
-      total_posted_transactions: totalCount || rows.length,
+      total_posted_transactions: rows.length,
       loaded_posted_transactions: rows.length,
-      page_size: pageSize,
+      confirmed_posted_count: postedRows.filter((row) => Boolean(row?.qbo_txn_id)).length,
+      confirmed_matched_count: matchedRows.filter((row) => Boolean(row?.qbo_txn_id)).length,
+      assigned_count: rows.filter((row) => row.assignment_status !== "unassigned").length,
+      unassigned_count: rows.filter((row) => row.assignment_status === "unassigned").length,
+      deliberately_excluded_count: 0,
+      page_size: 200,
     },
   };
 }
