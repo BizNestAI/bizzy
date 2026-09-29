@@ -511,6 +511,51 @@ test("Job Costing first-load state shows an explicit loading animation instead o
   assert.equal(source.includes('<JobCostingInitialLoadingState type="transactions" />'), true);
 });
 
+test("posted transaction assignment modal is viewport-centered with a dedicated blurred backdrop", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
+  const start = source.indexOf("{assignmentPickerTxn && typeof document");
+  const end = source.indexOf("{assignedModalJob ? (", start);
+  assert.ok(start > 0);
+  assert.ok(end > start);
+  const modalSource = source.slice(start, end);
+
+  assert.equal(modalSource.includes("createPortal("), true);
+  assert.equal(modalSource.includes("document.body"), true);
+  assert.equal(modalSource.includes("data-job-costing-assignment-dialog"), true);
+  assert.equal(modalSource.includes('role="dialog"'), true);
+  assert.equal(modalSource.includes('aria-modal="true"'), true);
+  assert.equal(modalSource.includes("items-center justify-center"), true);
+  assert.equal(modalSource.includes("min-h-[100dvh]"), true);
+  assert.match(css, /\[data-job-costing-assignment-dialog\]\.bizzy-modal-main-backdrop\s*\{[\s\S]*left:\s*0\s*!important;[\s\S]*width:\s*100vw;[\s\S]*backdrop-filter:\s*blur\(14px\)/);
+});
+
+test("completed job assignments leave Posted Transactions immediately without a success alert", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+
+  assert.match(source, /const postedTransactions = transactions\.filter\(\(txn\) => \{[\s\S]*assignedPercent < 99\.999 && remainingPercent > 0\.001/);
+  assert.equal(source.includes("setAssignmentMessage(`Transaction assigned to ${getJobDisplayName(job)}.`)"), false);
+  assert.equal(source.includes("setAssignmentMessage(`Transaction assigned to ${job.jobName}.`)"), false);
+  assert.equal(source.includes("setAssignmentMessage(data?.message || `Transaction assigned to ${job.jobName}.`)"), false);
+  assert.match(source, /writeJobCostingLiveCache\(businessId, readOnly, \{ transactions: optimisticTransactions, jobs: optimisticJobs \}\);\s*closeAssignmentPicker\(\);/);
+});
+
+test("assigned transaction detail modal is viewport-centered in a blurred document portal", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  const css = await readFile(new URL("../src/index.css", import.meta.url), "utf8");
+  const start = source.indexOf("function AssignedTransactionsModal");
+  const end = source.indexOf("function shouldRunDailySync", start);
+  const modalSource = source.slice(start, end);
+
+  assert.equal(modalSource.includes("return createPortal("), true);
+  assert.equal(modalSource.includes("document.body"), true);
+  assert.equal(modalSource.includes("data-job-costing-detail-dialog"), true);
+  assert.equal(modalSource.includes('role="dialog"'), true);
+  assert.equal(modalSource.includes('aria-modal="true"'), true);
+  assert.equal(modalSource.includes("items-center justify-center"), true);
+  assert.match(css, /\[data-job-costing-detail-dialog\]\.bizzy-modal-main-backdrop\s*\{[\s\S]*left:\s*0\s*!important;[\s\S]*width:\s*100vw;[\s\S]*backdrop-filter:\s*blur\(14px\)/);
+});
+
 test("Add Job opens in a dashboard-centered animated modal without Trade Type", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   const modalStart = source.indexOf("function JobCostingModal({");

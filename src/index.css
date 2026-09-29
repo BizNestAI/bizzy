@@ -239,6 +239,24 @@
   width: 100vw;
 }
 
+/* Transaction allocation is a viewport-level decision, so center it against
+   the full page rather than the content area remaining beside the nav rail. */
+[data-job-costing-assignment-dialog].bizzy-modal-main-backdrop {
+  left: 0 !important;
+  width: 100vw;
+  background: rgba(0, 0, 0, 0.66);
+  backdrop-filter: blur(14px) saturate(115%);
+  -webkit-backdrop-filter: blur(14px) saturate(115%);
+}
+
+[data-job-costing-detail-dialog].bizzy-modal-main-backdrop {
+  left: 0 !important;
+  width: 100vw;
+  background: rgba(0, 0, 0, 0.66);
+  backdrop-filter: blur(14px) saturate(115%);
+  -webkit-backdrop-filter: blur(14px) saturate(115%);
+}
+
 @media (prefers-reduced-transparency: reduce) {
   .bizzy-modal-main-backdrop {
     background: rgba(0, 0, 0, 0.72);

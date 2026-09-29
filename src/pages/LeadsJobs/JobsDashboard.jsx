@@ -3101,7 +3101,12 @@ function JobAssignmentBoard({
   readOnly = false,
 }) {
   const projectsCapabilityView = getProjectsCapabilityView(projectsCapability || {});
-  const postedTransactions = transactions.filter((txn) => String(txn.status || "").toLowerCase() === "posted");
+  const postedTransactions = transactions.filter((txn) => {
+    if (String(txn.status || "").toLowerCase() !== "posted") return false;
+    const assignedPercent = Number(txn.assigned_total_percent || 0);
+    const remainingPercent = Number(txn.remaining_percent ?? Math.max(0, 100 - assignedPercent));
+    return assignedPercent < 99.999 && remainingPercent > 0.001;
+  });
   const pendingCandidates = useMemo(() => (
     (Array.isArray(jobCandidates) ? jobCandidates : [])
       .filter((candidate) => String(candidate.candidate_status || candidate.status || "pending") === "pending")
@@ -7520,7 +7525,7 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
         setTransactions(optimisticTransactions);
         setJobs(optimisticJobs);
         writeJobCostingLiveCache(businessId, readOnly, { transactions: optimisticTransactions, jobs: optimisticJobs });
-        setAssignmentMessage(`Transaction assigned to ${getJobDisplayName(job)}.`);
+        closeAssignmentPicker();
       }
       let impact = options.impactPreview || null;
       if (!options.previewConfirmed) {
@@ -7588,7 +7593,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           setJobs(buildDemoJobCostingJobs(next));
           return next;
         });
-        setAssignmentMessage(`Transaction assigned to ${job.jobName}.`);
         closeAssignmentPicker();
         return;
       }
@@ -7608,7 +7612,6 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
       setTransactions(nextTransactions);
       setJobs(nextJobs);
       writeJobCostingLiveCache(businessId, readOnly, { transactions: nextTransactions, jobs: nextJobs });
-      setAssignmentMessage(data?.message || `Transaction assigned to ${job.jobName}.`);
       closeAssignmentPicker();
       void loadSuggestions();
     } catch (e) {
@@ -8038,16 +8041,20 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
           </section>
         ) : null}
 
-        {assignmentPickerTxn ? (
+        {assignmentPickerTxn && typeof document !== "undefined" ? createPortal(
           <div
-            className={`bizzy-modal-main-backdrop fixed inset-0 z-[95] flex items-start justify-center px-3 py-[6vh] transition-opacity duration-200 ease-out ${
+            data-job-costing-assignment-dialog
+            role="dialog"
+            aria-modal="true"
+            aria-label="Allocate transaction to job"
+            className={`bizzy-modal-main-backdrop fixed inset-0 z-[95] flex min-h-[100dvh] items-center justify-center overflow-y-auto px-3 py-6 transition-opacity duration-200 ease-out ${
               assignmentPickerVisible ? "opacity-100" : "opacity-0"
             }`}
             onMouseDown={(event) => {
               if (event.target === event.currentTarget) closeAssignmentPicker();
             }}
           >
-            <div className={`relative flex max-h-[54vh] w-full max-w-lg flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#1b201e] p-3 shadow-[0_28px_80px_rgba(0,0,0,0.55)] transition-all duration-200 ease-out sm:p-4 ${
+            <div className={`relative flex max-h-[min(78dvh,760px)] w-full max-w-lg flex-col overflow-hidden rounded-[24px] border border-white/10 bg-[#1b201e] p-3 shadow-[0_28px_80px_rgba(0,0,0,0.65)] transition-all duration-200 ease-out sm:p-4 ${
               assignmentPickerVisible ? "translate-y-0 scale-100 opacity-100" : "translate-y-3 scale-[0.97] opacity-0"
             }`}>
               <div className="flex shrink-0 items-start justify-between gap-4">
@@ -8168,7 +8175,8 @@ function JobCostingPage({ businessId, usingDemo, readOnly = false }) {
                 </div>
               ) : null}
             </div>
-          </div>
+          </div>,
+          document.body
         ) : null}
 
         {assignedModalJob ? (
@@ -8258,16 +8266,21 @@ function AssignedTransactionsModal({ job, onClose, onRemove, removingId }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [closeModal]);
-  return (
+  if (typeof document === "undefined") return null;
+  return createPortal(
     <div
-      className={`bizzy-modal-main-backdrop fixed inset-0 z-[90] flex items-start justify-center px-3 pt-[10vh] transition-opacity duration-200 ease-out ${
+      data-job-costing-detail-dialog
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${job?.jobName || "Job"} assigned transactions`}
+      className={`bizzy-modal-main-backdrop fixed inset-0 z-[95] flex min-h-[100dvh] items-center justify-center overflow-y-auto px-3 py-6 transition-opacity duration-200 ease-out ${
         visible ? "opacity-100" : "opacity-0"
       }`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) closeModal();
       }}
     >
-      <div className={`w-full max-w-[820px] overflow-hidden rounded-[22px] border border-emerald-300/25 bg-[#17211d]/98 shadow-[0_24px_70px_rgba(0,0,0,0.55)] backdrop-blur-xl transition-all duration-200 ease-out ${
+      <div className={`flex max-h-[min(84dvh,820px)] w-full max-w-[820px] flex-col overflow-hidden rounded-[22px] border border-emerald-300/25 bg-[#17211d]/98 shadow-[0_28px_80px_rgba(0,0,0,0.65)] backdrop-blur-xl transition-all duration-200 ease-out ${
         visible ? "translate-y-0 scale-100 opacity-100" : "translate-y-3 scale-[0.97] opacity-0"
       }`}>
         <div className="flex items-start justify-between gap-4 border-b border-white/8 p-4">
@@ -8308,7 +8321,7 @@ function AssignedTransactionsModal({ job, onClose, onRemove, removingId }) {
         </div>
 
         {assigned.length ? (
-          <div className="custom-scrollbar max-h-[50vh] overflow-y-auto px-3 py-2">
+          <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto px-3 py-2">
             <div className="hidden grid-cols-[0.65fr_1fr_1.35fr_1fr_0.75fr_0.65fr_0.75fr] gap-3 border-b border-white/8 px-2 pb-1.5 text-[10px] uppercase tracking-[0.12em] text-white/38 lg:grid">
               <div>Date</div>
               <div>Vendor / Payee</div>
@@ -8363,7 +8376,8 @@ function AssignedTransactionsModal({ job, onClose, onRemove, removingId }) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
