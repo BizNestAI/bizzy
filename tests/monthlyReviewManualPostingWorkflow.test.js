@@ -16,9 +16,9 @@ test("Monthly Review exposes first-attempt and retry manual posting through the 
   assert.match(page, /openManualPostingWorkflow\("post", row\)/);
   assert.match(page, /openManualPostingWorkflow\("retry", row\)/);
   assert.match(page, /postRequest=\{monthlyReviewManualPostRequest\}/);
-  assert.match(table, /isFailed \? \(/);
   assert.match(table, /Retry QBO/);
-  assert.match(table, /Post now/);
+  assert.match(table, /manualPostBusy \? "Posting…" : "Post"/);
+  assert.match(table, /\{isHandledFeed \? \(\s*<button[\s\S]*?onClick=\{\(\) => onPost\?\.\(row\)\}/);
   assert.doesNotMatch(table, /!isQueued \? \(/);
   assert.match(workflow, /activeIds\.current\.has\(source\.id\)/);
   assert.match(workflow, /Posting…/);
@@ -39,12 +39,36 @@ test("Monthly Review manual posting preserves duplicate and credit-type decision
   assert.match(route, /duplicateChallengeId:\s*req\.body\?\.duplicate_challenge_id/);
 });
 
-test("protected and completed Monthly Review rows cannot expose ordinary posting", () => {
+test("every Monthly Review Handled row keeps the shared manual Post action", () => {
   const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
   assert.match(table, /getProtectedWorkflowReason\(row\)/);
-  assert.match(table, /!genericActionsBlocked/);
-  assert.match(table, /!isPosted/);
-  assert.match(table, /!isPending/);
+  const postAction = table.slice(table.indexOf("{isHandledFeed ? ("), table.indexOf("{isHandledFeed && resolution", table.indexOf("{isHandledFeed ? (")));
+  assert.match(postAction, /onPost\?\.\(row\)/);
+  assert.match(postAction, /disabled=\{manualPostBusy\}/);
+  assert.doesNotMatch(postAction, /genericActionsBlocked|isPending|isPosted|isFailed|resolution ===/);
+  assert.match(table, /\{genericActionsBlocked \? \(/);
+  assert.match(table, /Retry QBO/);
+});
+
+test("Handled Post remains visible for every lifecycle and protected-workflow fixture", () => {
+  const table = read("src/components/Accounting/BookkeepingTransactionMirrorTable.jsx");
+  const postAction = table.slice(table.indexOf("{isHandledFeed ? ("), table.indexOf("{isHandledFeed && resolution", table.indexOf("{isHandledFeed ? (")));
+  const fixtures = [
+    "waiting_to_post",
+    "posting_failed",
+    "auto_approved",
+    "match_check_unavailable",
+    "duplicate_candidate",
+    "credit_card_inflow",
+    "merchant_refund",
+    "statement_credit",
+    "credit_card_payment",
+  ];
+
+  for (const fixture of fixtures) {
+    assert.match(postAction, /\{isHandledFeed \? \(/, `${fixture} must retain Post in the Handled feed`);
+  }
+  assert.match(postAction, /\{manualPostBusy \? "Posting…" : "Post"\}/);
 });
 
 test("Monthly Review never mounts transaction modal content for a null selection", () => {

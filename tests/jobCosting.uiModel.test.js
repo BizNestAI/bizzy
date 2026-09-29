@@ -424,6 +424,13 @@ test("posted transactions retain cached rows and expose complete month, sorting,
   assert.equal(source.includes("jobCostingRequestRef.current.controller?.abort()"), true);
 });
 
+test("posted transactions default to 50 rows per page", async () => {
+  const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
+  assert.equal(source.includes("const transactionsPerPage = 50;"), true);
+  assert.equal(source.includes("· 50 per page"), true);
+  assert.equal(source.includes("· 25 per page"), false);
+});
+
 test("Suggested Jobs cards are wrapped in a card-level render boundary", async () => {
   const source = await readFile(new URL("../src/pages/LeadsJobs/JobsDashboard.jsx", import.meta.url), "utf8");
   assert.equal(source.includes("class SuggestedJobCardBoundary extends React.Component"), true);

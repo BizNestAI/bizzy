@@ -104,15 +104,15 @@ test("Monthly Review mirror UI requires explicit actions and does not mutate on 
   assert.match(page, /setBusyFeedActions/);
   assert.match(page, /else\s*\{\s*await refreshAfterFeedAction\(\);\s*\}/);
 
-  const dropdownSnippet = table.slice(table.indexOf("<CoaDropdown"), table.indexOf("onChange={(accountId) => setSelectedAccountId(accountId)}") + 80);
-  assert.match(dropdownSnippet, /onChange=\{\(accountId\) => setSelectedAccountId\(accountId\)\}/);
+  const dropdownSnippet = table.slice(table.indexOf("<CoaDropdown"), table.indexOf("          />", table.indexOf("<CoaDropdown")) + 12);
+  assert.match(dropdownSnippet, /onChange=\{\(accountId\) => \{\s*setSelectedAccountId\(accountId\)/);
   assert.doesNotMatch(dropdownSnippet, /onApprove|onReclassify|safeFetch|fetch\(/);
   assert.match(table, />\s*\{isActionBusy\("approve"\) \? "Approving\.\.\." : "Approve"\}\s*</);
   assert.match(table, />\s*\{isActionBusy\("reclassify"\) \? "Saving\.\.\." : "Reclassify"\}\s*</);
-  assert.match(table, /Post now/);
+  assert.match(table, /manualPostBusy \? "Posting…" : "Post"/);
   assert.match(table, /Retry QBO/);
   assert.match(table, /getProtectedWorkflowReason/);
-  assert.match(table, /onChange=\{\(accountId\) => setSelectedAccountId\(accountId\)\}/);
+  assert.match(table, /onChange=\{\(accountId\) => \{\s*setSelectedAccountId\(accountId\)/);
   assert.match(table, /Bank Account/);
   assert.match(table, /GL Account/);
   assert.match(table, /QBO Status/);
@@ -165,7 +165,8 @@ test("Monthly Review feed actions preserve Phase 4B bounded mirror source", () =
 
   assert.match(page, /BOOKKEEPING_FEED_PAGE_SIZE\s*=\s*25/);
   assert.match(page, /bookkeeping\/transactions\?month=/);
-  assert.match(page, /\[\.\.\.\(current\[status\]\?\.rows \|\| \[\]\), \.\.\.rows\]/);
+  assert.match(page, /const byId = new Map\(previousRows\.map/);
+  assert.match(page, /const mergedRows = \[\.\.\.byId\.values\(\)\]/);
   assert.match(service, /p_range_end:\s*normalizeBookkeepingDate\(rangeEnd\)/);
   assert.match(service, /matchesTransactionStatusFilter/);
 });

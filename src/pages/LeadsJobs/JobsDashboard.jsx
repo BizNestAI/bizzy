@@ -3125,7 +3125,7 @@ function JobAssignmentBoard({
   const [expandedTransactionId, setExpandedTransactionId] = useState("");
   const [assignmentModalMounted, setAssignmentModalMounted] = useState(false);
   const [assignmentModalVisible, setAssignmentModalVisible] = useState(false);
-  const transactionsPerPage = 25;
+  const transactionsPerPage = 50;
   const monthOptions = useMemo(() => {
     const months = [...new Set(postedTransactions.map((txn) => String(txn.date || "").slice(0, 7)).filter((value) => /^\d{4}-\d{2}$/.test(value)))];
     return months.sort((a, b) => b.localeCompare(a)).map((value) => ({
@@ -3657,7 +3657,7 @@ function JobAssignmentBoard({
             <span>
               {loading
                 ? "Loading posted QuickBooks transactions..."
-                : `Showing ${transactionRangeStart}-${transactionRangeEnd} of ${filteredTransactions.length} posted transactions · 25 per page`}
+                : `Showing ${transactionRangeStart}-${transactionRangeEnd} of ${filteredTransactions.length} posted transactions · 50 per page`}
             </span>
             <div className="flex items-center gap-2">
               <button

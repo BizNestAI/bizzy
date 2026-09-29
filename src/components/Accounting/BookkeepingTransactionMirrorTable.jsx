@@ -167,6 +167,7 @@ function BookkeepingTransactionMirrorRow({
   const isPosted = qboStatus.key === "posted";
   const isFailed = qboStatus.key === "failed";
   const isActionBusy = (action) => Boolean(busyActions?.[`${action}:${row.id}`]) || busyAction === `${action}:${row.id}`;
+  const manualPostBusy = isActionBusy("post") || isActionBusy("retry");
   const hasAccounts = Array.isArray(accounts) && accounts.length > 0;
   const selectedChanged = selectedAccountId && String(selectedAccountId) !== String(initialAccountId || "");
   const protectedReason = getProtectedWorkflowReason(row);
@@ -409,14 +410,16 @@ function BookkeepingTransactionMirrorRow({
           {displayResolution === "split_transaction" ? (
             <span className="text-[11px] text-amber-100/80">Split review</span>
           ) : null}
-          {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && !isPending && !isPosted && !isFailed ? (
+          {isHandledFeed ? (
             <button
               type="button"
               onClick={() => onPost?.(row)}
-              disabled={isActionBusy("post")}
-              className="rounded-lg border border-sky-300/20 bg-sky-300/[0.1] px-2 py-1 text-[11px] font-semibold text-sky-100 hover:bg-sky-300/[0.16] disabled:opacity-45"
+              disabled={manualPostBusy}
+              aria-label={`Post ${row.payee || row.vendor || row.description || "transaction"} to QuickBooks`}
+              className="inline-flex items-center gap-1 rounded-lg border border-sky-300/20 bg-sky-300/[0.1] px-2 py-1 text-[11px] font-semibold text-sky-100 hover:bg-sky-300/[0.16] disabled:cursor-not-allowed disabled:opacity-45"
             >
-              {isActionBusy("post") ? "Posting…" : "Post now"}
+              {manualPostBusy ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> : null}
+              {manualPostBusy ? "Posting…" : "Post"}
             </button>
           ) : null}
           {isHandledFeed && resolution === "categorize_new" && !genericActionsBlocked && isFailed ? (
