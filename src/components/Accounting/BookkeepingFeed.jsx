@@ -61,6 +61,7 @@ export function CoaDropdown({
   status,
   disabled,
   resolution,
+  resolutionOptions = RESOLUTION_OPTIONS,
   onResolutionChange,
 }) {
   const [open, setOpen] = React.useState(false);
@@ -215,7 +216,7 @@ export function CoaDropdown({
               >
                 {onResolutionChange ? (
                   <div className="border-b border-emerald-400/20 bg-emerald-950/15 py-1">
-                    {RESOLUTION_OPTIONS.filter(([id]) => id !== "categorize_new").map(([id, label]) => (
+                    {resolutionOptions.filter(([id]) => id !== "categorize_new").map(([id, label]) => (
                       <button
                         key={id}
                         type="button"
@@ -1472,6 +1473,14 @@ export default function BookkeepingFeed({
             const ccConfirmBusy = ccAction.loading === true || ccAction.matching === true;
             const isLoanSplitWorkflow = Boolean(loanSplitDraft) || String(txn.taxonomy_type || txn.meta?.taxonomy_type || "").toLowerCase() === "loan_payment";
             const canUndoCcPaymentPair = allowCreditCardPaymentUndo && isCcPaymentWorkflow && hasCcPair && !isPosted && !txn.qbo_txn_id && !txn.qboTxnId && !txn.posted_at;
+            const isCreditCardInflow = String(txn.account_type || txn.account_subtype || "").replace(/[\s_-]+/g, "").toLowerCase().includes("creditcard") && Number(txn.signed_amount ?? txn.amount ?? 0) > 0;
+            const creditCardInflowResolved = Boolean(txn.meta?.credit_card_inflow_resolution?.resolution_type);
+            const rowResolutionOptions = isCreditCardInflow && !creditCardInflowResolved ? [
+              ["merchant_refund", "Merchant refund"],
+              ["match_credit_card_payment", "Credit-card payment"],
+              ["credit_card_statement_credit", "Cash back or statement credit"],
+              ["credit_card_credit_other", "Something else"],
+            ] : RESOLUTION_OPTIONS;
             const rowSelectable = !isPosted && !isPending && effectiveResolution === "categorize_new" && !readOnly && (!selectableIds || selectableIds.has(txn.id));
 
             return (
@@ -1634,6 +1643,11 @@ export default function BookkeepingFeed({
                     Possible credit card payment
                   </span>
                 ) : null}
+                {isCreditCardInflow && !creditCardInflowResolved ? (
+                  <span className="inline-flex w-fit rounded-md border border-amber-300/25 bg-amber-400/10 px-2 py-1 text-[10px] font-semibold text-amber-100">
+                    What type of credit is this?
+                  </span>
+                ) : null}
                 {effectiveResolution === "split_transaction" && hasSavedSplit ? (
                   <span className="inline-flex w-fit max-w-full flex-col rounded-md border border-emerald-300/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-semibold text-emerald-100">
                     <span>Transaction Split</span>
@@ -1670,6 +1684,7 @@ export default function BookkeepingFeed({
                       readOnly
                     }
                     resolution={effectiveResolution}
+                    resolutionOptions={rowResolutionOptions}
                     onResolutionChange={(nextResolution) => changeResolution(txn, nextResolution)}
                     onChange={(id) => {
                       handleAccountSelect(txn.id, id);

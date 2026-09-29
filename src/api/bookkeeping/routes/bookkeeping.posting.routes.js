@@ -739,13 +739,19 @@ router.post("/posting/run", requireAuth, async (req, res) => {
 });
 
 router.post("/posting/transactions/:transactionId", requireAuth, async (req, res) => {
+  const requestStartedAt = Date.now();
   const businessId = ensureBusinessId(req, res);
   if (!businessId) return;
   const transactionId = req.params?.transactionId;
   if (!transactionId) return res.status(400).json({ ok: false, error: "missing_transaction_id" });
 
   try {
+    const operationId = req.body?.operation_id || req.get("x-bizzi-operation-id") || null;
+    const childOperationId = req.body?.child_operation_id || req.get("x-bizzi-child-operation-id") || null;
+    console.info("[bookkeeping][manual-post] request received", { operationId, childOperationId, transactionId, receivedAt: new Date(requestStartedAt).toISOString() });
+    const authStartedAt = Date.now();
     await assertTaxBusinessAccess({ req, businessId, supabase });
+    console.info("[bookkeeping][manual-post] auth resolved", { operationId, childOperationId, transactionId, elapsedMs: Date.now() - authStartedAt });
     const userId = req.user?.id || req.user?.sub || null;
     const overrideToken = req.body?.duplicate_check_override_token || null;
     const manualDuplicateOverride = overrideToken
@@ -757,8 +763,9 @@ router.post("/posting/transactions/:transactionId", requireAuth, async (req, res
       req.body?.confirmPostAnyway === true;
     const duplicateChallengeId = req.body?.duplicate_challenge_id || req.body?.duplicateChallengeId || null;
     const result = manualDuplicateOverride
-      ? await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, duplicateChallengeId, manualDuplicateOverride })
-      : await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, duplicateChallengeId });
+      ? await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, duplicateChallengeId, manualDuplicateOverride, operationId, childOperationId })
+      : await postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway, duplicateChallengeId, operationId, childOperationId });
+    console.info("[bookkeeping][manual-post] response serialized", { operationId, childOperationId, transactionId, totalServerMs: Date.now() - requestStartedAt, outcome: result?.outcome || result?.status || (result?.already_posted ? "already_posted" : "complete") });
     return res.json(result);
   } catch (err) {
     const referenceId = err?.qbo_request_id || err?.child_operation_id || null;

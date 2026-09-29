@@ -423,7 +423,7 @@ async function createQboTransfer(qbo, payload) {
 }
 
 function getQboPostingAccountId(entity = {}, qboTxnType) {
-  if (qboTxnType === "Purchase" || qboTxnType === "CreditCardCharge") return entity.AccountRef?.value || null;
+  if (["Purchase", "CreditCardCharge", "CreditCardCredit"].includes(qboTxnType)) return entity.AccountRef?.value || null;
   if (qboTxnType === "Deposit") return entity.DepositToAccountRef?.value || null;
   if (qboTxnType === "Payment" || qboTxnType === "SalesReceipt") return entity.DepositToAccountRef?.value || entity.AccountRef?.value || null;
   if (qboTxnType === "JournalEntry") {
@@ -461,6 +461,7 @@ function qboFindMethodName(qboTxnType) {
     SalesReceipt: "findSalesReceipts",
     JournalEntry: "findJournalEntries",
     CreditCardCharge: "findPurchases",
+    CreditCardCredit: "findPurchases",
     CreditCardPayment: "findTransfers",
     Transfer: "findTransfers",
   }[qboTxnType] || null;
@@ -469,6 +470,7 @@ function qboFindMethodName(qboTxnType) {
 function qboNestedFindKeys(qboTxnType) {
   return {
     CreditCardCharge: ["creditcardcharge", "creditCardCharge"],
+    CreditCardCredit: ["purchase"],
     CreditCardPayment: ["creditcardpayment", "creditCardPayment"],
     Transfer: ["transfer"],
     Payment: ["payment"],
@@ -487,27 +489,62 @@ function unwrapFindResponse(resp, qboTxnType) {
   return values.flat();
 }
 
-async function findQboTransactions(qbo, qboTxnType, bankTxn) {
+async function findQboTransactions(qbo, qboTxnType, bankTxn, telemetry = {}) {
   const criteria = buildQboFindCriteria(bankTxn);
   const directName = qboFindMethodName(qboTxnType);
   const direct = directName && typeof qbo?.[directName] === "function" ? qbo[directName].bind(qbo) : null;
   const nested = qboNestedFindKeys(qboTxnType)
     .map((key) => (typeof qbo?.[key]?.find === "function" ? qbo[key].find.bind(qbo[key]) : null))
     .filter(Boolean);
-  const candidates = [direct, ...nested].filter(Boolean);
-  if (!candidates.length) throw new Error(`qbo_find_not_supported_${qboTxnType}`);
-  let lastErr = null;
-  for (const fn of candidates) {
-    try {
-      const resp = await new Promise((resolve, reject) => {
-        fn(criteria, (err, data) => (err ? reject(err) : resolve(data)));
-      });
-      return unwrapFindResponse(resp, qboTxnType);
-    } catch (err) {
-      lastErr = err;
-    }
+  // The direct and nested functions are alternate adapters for the same QBO
+  // query. Calling both after a timeout doubled the wait without adding a new
+  // source of truth. Select one adapter and keep retry policy at one layer.
+  const fn = direct || nested[0] || null;
+  if (!fn) throw new Error(`qbo_find_not_supported_${qboTxnType}`);
+  const startedAt = Date.now();
+  const timeoutMs = 15_000;
+  let timeoutId = null;
+  try {
+    const resp = await Promise.race([
+      new Promise((resolve, reject) => fn(criteria, (err, data) => (err ? reject(err) : resolve(data)))),
+      new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const err = new Error("qbo_duplicate_query_timeout");
+          err.code = "QBO_DUPLICATE_QUERY_TIMEOUT";
+          reject(err);
+        }, timeoutMs);
+      }),
+    ]);
+    console.info("[books-post] qbo request timing", {
+      operationId: telemetry.operationId || null,
+      childOperationId: telemetry.childOperationId || null,
+      transactionId: telemetry.transactionId || null,
+      queryType: qboTxnType,
+      attempt: 1,
+      startedAt: new Date(startedAt).toISOString(),
+      elapsedMs: Date.now() - startedAt,
+      status: "succeeded",
+      retried: false,
+      qboRequestId: telemetry.qboRequestId || null,
+    });
+    return unwrapFindResponse(resp, qboTxnType);
+  } catch (err) {
+    console.warn("[books-post] qbo request timing", {
+      operationId: telemetry.operationId || null,
+      childOperationId: telemetry.childOperationId || null,
+      transactionId: telemetry.transactionId || null,
+      queryType: qboTxnType,
+      attempt: 1,
+      startedAt: new Date(startedAt).toISOString(),
+      elapsedMs: Date.now() - startedAt,
+      status: err?.code || "failed",
+      retried: false,
+      qboRequestId: telemetry.qboRequestId || null,
+    });
+    throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
-  throw lastErr || new Error(`qbo_find_not_supported_${qboTxnType}`);
 }
 
 function classifyDuplicateSearchError(err) {
@@ -518,7 +555,7 @@ function classifyDuplicateSearchError(err) {
   return "unavailable_internal";
 }
 
-async function runStructuredManualDuplicateCheck({ qbo, qboTxnType, bankTxn, mapping, requestId }) {
+async function runStructuredManualDuplicateCheck({ qbo, qboTxnType, bankTxn, mapping, requestId, telemetry = {} }) {
   const entityTypes = qboTxnType === "Deposit"
     ? ["Deposit", "Payment", "SalesReceipt", "JournalEntry", "Transfer"]
     : [qboTxnType];
@@ -526,7 +563,7 @@ async function runStructuredManualDuplicateCheck({ qbo, qboTxnType, bankTxn, map
   const candidates = [];
   for (const entityType of entityTypes) {
     try {
-      const rows = await findQboTransactions(qbo, entityType, bankTxn);
+      const rows = await findQboTransactions(qbo, entityType, bankTxn, telemetry);
       searches.push({ entity_type: entityType, status: "succeeded", candidate_count: rows.length });
       candidates.push(...rows.map((raw) => ({ raw, entityType })));
     } catch (err) {
@@ -582,6 +619,11 @@ function scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }) 
       .reduce((sum, line) => sum + Math.abs(Number(line?.Amount || 0)), 0)
     : getQboTxnAmount(entity);
   const amountMatches = cents(candidateAmount) === cents(bankTxn?.amount);
+  // Equal absolute amounts in opposite economic directions are not duplicates.
+  // In particular, an earlier card charge must not block a later refund.
+  const directionMatches = qboTxnType === "CreditCardCredit"
+    ? Number(candidateAmount) < 0 || String(entity?.TxnType || "").toLowerCase() === "creditcardcredit"
+    : true;
   const sourcePayeeText = normalizeMatchText(bankTxn?.qbo_entity_id ? bankTxn?.counterparty_name || bankTxn?.merchant_name || bankTxn?.name : bankTxn?.merchant_name || bankTxn?.counterparty_name || bankTxn?.name);
   const candidatePayeeText = collectQboPayeeText(entity);
   const candidateIdentityText = candidatePayeeText || text;
@@ -596,6 +638,7 @@ function scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }) 
     account_matches: accountMatches,
     date_matches: dateMatches,
     amount_matches: amountMatches,
+    direction_matches: directionMatches,
     payee_matches: payeeMatches,
     payee_conflicts: payeeConflicts,
     payee_or_memo: candidatePayeeText || text || null,
@@ -612,7 +655,7 @@ function scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }) 
 function classifyPreExistingQboMatch({ qboCandidates = [], bankTxn, mapping, qboTxnType, requestId }) {
   const scored = qboCandidates
     .map((entity) => scoreQboCandidate({ entity, bankTxn, mapping, qboTxnType, requestId }))
-    .filter((c) => c.qbo_txn_id && c.account_matches && c.date_matches && c.amount_matches);
+    .filter((c) => c.qbo_txn_id && c.account_matches && c.date_matches && c.amount_matches && c.direction_matches);
   const deterministic = scored.filter((c) => c.deterministic);
   if (deterministic.length === 1) return { confidence: "DETERMINISTIC_EXISTING", candidates: deterministic };
   if (deterministic.length > 1) return { confidence: "AMBIGUOUS", candidates: deterministic };
@@ -743,6 +786,7 @@ function resolveQboTxnType(item, bankTxn, mapping) {
   if (isBank && isOutflowLike(bankTxn)) return "Purchase";
   if (isBank && isInflowLike(bankTxn)) return "Deposit";
   if (isCreditCard && isOutflowLike(bankTxn)) return "CreditCardCharge";
+  if (isCreditCard && isInflowLike(bankTxn) && ["merchant_refund", "credit_card_statement_credit"].includes(item?.meta?.credit_card_inflow_resolution?.resolution_type)) return "CreditCardCredit";
   return null;
 }
 
@@ -1989,6 +2033,32 @@ async function postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, 
   return createQboPurchase(qbo, payload);
 }
 
+async function postCreditCardInflowCredit(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId) {
+  await assertTransactionNotExcluded({ db: supabase, businessId: item.business_id, transactionId: item.transaction_id });
+  const amount = Math.abs(Number(bankTxn.amount || 0));
+  const txnDate = getAccountingDateFromBankTransaction(bankTxn);
+  const { note, lineDescription } = buildQboPostText(bankTxn, "CC refund", requestId);
+  const vendorRef = getQboEntityRef(bankTxn, "vendor");
+  // QBO models a credit-card refund as a Purchase with PaymentType CreditCard
+  // and negative expense-line semantics. This reduces both the card liability
+  // and the selected expense/asset account; it is not an income deposit.
+  return createQboPurchase(qbo, {
+    requestId,
+    PaymentType: "CreditCard",
+    AccountRef: { value: String(mappedAccountId) },
+    TxnDate: txnDate,
+    TotalAmt: -amount,
+    PrivateNote: note,
+    ...(vendorRef ? { EntityRef: { value: vendorRef.value, type: "Vendor" } } : {}),
+    Line: [{
+      DetailType: "AccountBasedExpenseLineDetail",
+      Amount: -amount,
+      Description: lineDescription,
+      AccountBasedExpenseLineDetail: { AccountRef: { value: String(categoryAccountId) } },
+    }],
+  });
+}
+
 async function markLoanPaymentSplitRequired(item, reason = "loan_payment_split_required") {
   await supabase
     .from("transaction_categorizations")
@@ -2155,7 +2225,7 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
     return null;
   }
 
-  if (isCreditCard && !isOutflow) {
+  if (isCreditCard && !isOutflow && !["merchant_refund", "credit_card_statement_credit"].includes(item?.meta?.credit_card_inflow_resolution?.resolution_type)) {
     await supabase
       .from("transaction_categorizations")
       .update({
@@ -2185,6 +2255,9 @@ async function postToQbo(item, bankTxn, qbo, mapping, requestId) {
   if (isCreditCard && isOutflow) {
     return postCreditCardOutflowCharge(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId);
   }
+  if (isCreditCard && !isOutflow) {
+    return postCreditCardInflowCredit(item, bankTxn, qbo, mappedAccountId, categoryAccountId, requestId);
+  }
 
   throw new Error("invalid_qbo_account_mapping_type");
 }
@@ -2196,6 +2269,8 @@ export async function handleItem(item, options = {}) {
   const manualDuplicateOverride = manual && options?.manualDuplicateOverride ? options.manualDuplicateOverride : null;
   const confirmPostAnyway = options?.confirmPostAnyway === true;
   const duplicateChallengeIdValue = options?.duplicateChallengeId || null;
+  const operationId = options?.operationId || null;
+  const childOperationId = options?.childOperationId || null;
   const createNewIncomeOverride = options?.createNewIncomeOverride === true && item?.meta?.incoming_deposit_resolution?.resolution === "create_new_income";
   const duplicatePostAnyway = Boolean(
     manual && confirmPostAnyway && duplicateChallengeIdValue &&
@@ -2204,6 +2279,8 @@ export async function handleItem(item, options = {}) {
     Date.parse(item?.meta?.qbo_duplicate_challenge_expires_at || "") > Date.now()
   );
   const timing = createPostingTiming();
+  timing.context.operation_id = operationId;
+  timing.context.child_operation_id = childOperationId;
   let intentQboTxnTypeForLog = null;
 
   await assertTransactionNotExcluded({ db: supabase, businessId, transactionId: txnId });
@@ -2326,6 +2403,37 @@ export async function handleItem(item, options = {}) {
       .eq("business_id", businessId)
       .eq("transaction_id", txnId);
     return;
+  }
+
+  const mappedType = String(mapping?.qbo_account_type || "").replace(/[\s_-]+/g, "").toLowerCase();
+  const isUnresolvedCreditCardInflow = mappedType === "creditcard" && isInflowLike(bank) &&
+    !["merchant_refund", "match_credit_card_payment", "credit_card_statement_credit"].includes(item?.meta?.credit_card_inflow_resolution?.resolution_type);
+  if (isUnresolvedCreditCardInflow) {
+    if (!manual) {
+      await supabase.from("transaction_categorizations").update({
+        status: "needs_review",
+        post_after: null,
+        post_error: null,
+        meta: { ...(item.meta || {}), post_block_reason: "credit_card_inflow_resolution_required", posting_in_progress: false },
+      }).eq("business_id", businessId).eq("transaction_id", txnId);
+      return;
+    }
+    return {
+      ok: true,
+      outcome: "confirmation_required",
+      reason: "credit_card_inflow_resolution_required",
+      message: "Tell Bizzi whether this credit is a refund, card payment, or statement credit before posting.",
+      available_resolution_actions: ["merchant_refund", "match_credit_card_payment", "credit_card_statement_credit", "credit_card_credit_other"],
+      transaction: {
+        id: txnId,
+        date: getAccountingDateFromBankTransaction(bank),
+        amount: Number(bank?.amount || 0),
+        display_name: buildQboDisplayName(bank, "Credit-card credit"),
+        source_account_name: mapping?.qbo_account_name || "Credit-card account",
+        destination_account_id: item.final_qbo_account_id || null,
+        destination_account_name: item.final_qbo_account_name || null,
+      },
+    };
   }
 
   if (item?.meta?.taxonomy_type === "cc_payment" && item?.meta?.cc_payment_pair_id) {
@@ -2673,6 +2781,7 @@ export async function handleItem(item, options = {}) {
             destination_qbo_account_name: item.final_qbo_account_name || null,
           },
           requestId,
+          telemetry: { operationId, childOperationId, transactionId: txnId, qboRequestId: requestId },
         })
       );
       if (duplicateCheck.status === "completed_match_found" || duplicateCheck.status === "completed_possible_match") {
@@ -2710,7 +2819,12 @@ export async function handleItem(item, options = {}) {
 
   if (!structuredManualCheckCompleted) {
     timing.context.duplicate_preflight_ran = true;
-    const qboCandidates = await timePostingStage(timing, "duplicate_preflight_ms", () => findQboTransactions(qbo, intentQboTxnType, bank));
+    const qboCandidates = await timePostingStage(timing, "duplicate_preflight_ms", () => findQboTransactions(qbo, intentQboTxnType, bank, {
+      operationId,
+      childOperationId,
+      transactionId: txnId,
+      qboRequestId: requestId,
+    }));
     const duplicateCheck = classifyPreExistingQboMatch({
       qboCandidates,
       bankTxn: bank,
@@ -3093,7 +3207,7 @@ async function markFailed(item, message, { manual = false } = {}) {
     .eq("transaction_id", item.transaction_id);
 }
 
-export async function postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway = false, duplicateChallengeId = null, createNewIncomeOverride = false, manualDuplicateOverride = null }) {
+export async function postSingleBookkeepingTransactionNow({ businessId, transactionId, confirmPostAnyway = false, duplicateChallengeId = null, createNewIncomeOverride = false, manualDuplicateOverride = null, operationId = null, childOperationId = null }) {
   if (!businessId) throw new Error("missing_business_id");
   if (!transactionId) throw new Error("missing_transaction_id");
 
@@ -3167,15 +3281,15 @@ export async function postSingleBookkeepingTransactionNow({ businessId, transact
   try {
     if (createNewIncomeOverride) {
       if (manualDuplicateOverride) {
-        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true, manualDuplicateOverride });
+        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true, manualDuplicateOverride, operationId, childOperationId });
       } else {
-        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true });
+        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, createNewIncomeOverride: true, operationId, childOperationId });
       }
     } else {
       if (manualDuplicateOverride) {
-        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, manualDuplicateOverride });
+        await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, manualDuplicateOverride, operationId, childOperationId });
       } else {
-        const handleResult = await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId });
+        const handleResult = await handleItem(item, { manual: true, confirmPostAnyway, duplicateChallengeId, operationId, childOperationId });
         if (handleResult?.outcome === "confirmation_required") return handleResult;
       }
     }

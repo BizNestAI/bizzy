@@ -27,7 +27,7 @@ import {
   resolveBookkeepingPostAfter,
 } from "../../../services/bookkeeping/bookkeepingApprovalService.js";
 import { refreshOperatorRequestSummaryBestEffort } from "../../../services/bookkeeping/operatorRequestSummaryService.js";
-import { persistTransactionResolution } from "../../../services/bookkeeping/transactionResolutionService.js";
+import { persistCreditCardInflowResolution, persistTransactionResolution } from "../../../services/bookkeeping/transactionResolutionService.js";
 import {
   detectQuickBooksPaymentsProtectedWorkflow,
   hasAuthoritativeQuickBooksMatch,
@@ -52,6 +52,29 @@ router.put("/transactions/:transactionId/resolution", requireAuth, async (req, r
     return res.json(result);
   } catch (err) {
     return res.status(err?.status || 500).json({ ok: false, error: err?.code || "transaction_resolution_save_failed", message: err?.status ? err.message : "Could not save this workflow selection." });
+  }
+});
+
+router.put("/transactions/:transactionId/credit-card-inflow-resolution", requireAuth, async (req, res) => {
+  const businessId = ensureBusinessId(req, res);
+  if (!businessId) return;
+  try {
+    const result = await persistCreditCardInflowResolution({
+      db: supabase,
+      businessId,
+      transactionId: req.params.transactionId,
+      resolution: req.body?.resolution,
+      selectedQboAccountId: req.body?.selected_qbo_account_id,
+      selectedQboAccountName: req.body?.selected_qbo_account_name,
+      linkedOriginalTransactionId: req.body?.linked_original_transaction_id,
+      matchedAccountId: req.body?.matched_account_id,
+      matchedQboTransactionId: req.body?.matched_qbo_transaction_id,
+      actor: req.user?.id || req.auth?.userId || null,
+      source: "manual_post_credit_type",
+    });
+    return res.json(result);
+  } catch (err) {
+    return res.status(err?.status || 500).json({ ok: false, error: err?.code || "credit_card_inflow_resolution_save_failed", message: err?.status ? err.message : "Could not save this credit type." });
   }
 });
 

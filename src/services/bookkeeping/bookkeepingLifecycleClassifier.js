@@ -28,6 +28,7 @@ export function derivePostingOutcome(row = {}) {
   else if (status === "posting" || meta.posting_in_progress === true) key = "processing";
   else if (status === "scheduled" || row.post_after) key = "queued";
   else if (status === "posting_failed" || POSTING_FAILURE_STATUSES.has(legacyStatus)) key = "failed";
+  else if (reason === "credit_card_inflow_resolution_required" || reason === "credit_card_inflow_requires_review") key = "needs_credit_type";
   else if (reason) key = POSTING_BLOCK_REASONS.has(reason) || !row.last_post_attempt_at ? "blocked" : "failed";
 
   const labels = {
@@ -35,6 +36,7 @@ export function derivePostingOutcome(row = {}) {
     queued: "Waiting to post",
     processing: "Posting",
     blocked: "Posting needs review",
+    needs_credit_type: "Needs credit type",
     failed: "Posting failed",
     succeeded: "Posted to QuickBooks",
   };
@@ -66,6 +68,9 @@ export function classifyBookkeepingLifecycle(row = {}) {
   const postingOutcome = derivePostingOutcome(row);
   const failed = postingOutcome.key === "failed";
   const creditCardPayment = deriveCreditCardPaymentStatus(row);
+  const accountType = String(row.account_type || row.account_subtype || meta.account_type || "").replace(/[\s_-]+/g, "").toLowerCase();
+  const signedAmount = Number(row.signed_amount ?? row.amount ?? 0);
+  const unresolvedCreditCardInflow = accountType.includes("creditcard") && signedAmount > 0 && !meta.credit_card_inflow_resolution?.resolution_type;
 
   let bucket;
   if (excluded) bucket = "excluded";
@@ -79,6 +84,7 @@ export function classifyBookkeepingLifecycle(row = {}) {
   // An unresolved card payment is not an ordinary categorized transaction.
   // Payment matching must complete before it can leave Needs Review.
   else if (creditCardPayment && !creditCardPayment.matched) bucket = "needs_review";
+  else if (unresolvedCreditCardInflow) bucket = "needs_review";
   else if (
     ["approved", "auto_approved", "handled", "failed", "failed_post", "post_failed", "ignored"].includes(status) ||
     String(row.review_status || "").toLowerCase() === "handled"

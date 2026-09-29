@@ -210,3 +210,18 @@ test("expense duplicate confirmation never describes the charge as a deposit", (
   assert.match(page, /amount < 0\) return "expenses"/);
   assert.doesNotMatch(page, /amount \|\| 0 \}\)\.replace\("\+", ""\)\} deposits dated/);
 });
+
+test("QuickBooks discovery has one retry layer, a hard timeout, and correlated timing logs", () => {
+  const cron = read("src/jobs/booksPost.cron.js");
+  const route = read("src/api/bookkeeping/routes/bookkeeping.posting.routes.js");
+  const client = read("src/services/bookkeeping/bookkeepingClient.js");
+  assert.match(cron, /const fn = direct \|\| nested\[0\] \|\| null/);
+  assert.match(cron, /const timeoutMs = 15_000/);
+  assert.match(cron, /qbo_duplicate_query_timeout/);
+  assert.match(cron, /\[books-post\] qbo request timing/);
+  assert.match(route, /request received/);
+  assert.match(route, /auth resolved/);
+  assert.match(route, /totalServerMs/);
+  assert.match(client, /operation_id: options\.operationId/);
+  assert.match(client, /child_operation_id: options\.childOperationId/);
+});

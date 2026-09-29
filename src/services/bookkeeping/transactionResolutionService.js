@@ -2,6 +2,9 @@ export const TRANSACTION_RESOLUTIONS = Object.freeze([
   "categorize_new",
   "match_existing_qbo",
   "match_credit_card_payment",
+  "merchant_refund",
+  "credit_card_statement_credit",
+  "credit_card_credit_other",
   "split_transaction",
 ]);
 
@@ -120,4 +123,78 @@ export async function persistTransactionResolution({ db, businessId, transaction
   const { data, error } = await db.from("transaction_categorizations").upsert(payload, { onConflict: "business_id,transaction_id" }).select("transaction_id,status,meta").maybeSingle();
   if (error) throw error;
   return { ok: true, transaction_id: transactionId, system_suggested_resolution: nextMeta.system_suggested_resolution, user_selected_resolution: normalized, effective_resolution: normalized, row: data || payload };
+}
+
+export async function persistCreditCardInflowResolution({
+  db,
+  businessId,
+  transactionId,
+  resolution,
+  selectedQboAccountId = null,
+  selectedQboAccountName = null,
+  linkedOriginalTransactionId = null,
+  matchedAccountId = null,
+  matchedQboTransactionId = null,
+  actor = null,
+  source = "books_review",
+} = {}) {
+  const normalized = normalizeTransactionResolution(resolution);
+  if (!["merchant_refund", "match_credit_card_payment", "credit_card_statement_credit", "credit_card_credit_other"].includes(normalized)) {
+    const error = new Error("invalid_credit_card_inflow_resolution");
+    error.code = "invalid_credit_card_inflow_resolution";
+    error.status = 400;
+    throw error;
+  }
+  const { data: existing, error: existingError } = await db.from("transaction_categorizations")
+    .select("final_qbo_account_id")
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  const effectiveAccountId = selectedQboAccountId || existing?.final_qbo_account_id || null;
+  if (["merchant_refund", "credit_card_statement_credit"].includes(normalized) && !effectiveAccountId) {
+    const error = new Error("credit_card_inflow_account_required");
+    error.code = "credit_card_inflow_account_required";
+    error.status = 400;
+    throw error;
+  }
+  const result = await persistTransactionResolution({ db, businessId, transactionId, resolution: normalized, actor, source });
+  const now = new Date().toISOString();
+  const currentMeta = result?.row?.meta || {};
+  const resolutionAudit = {
+    resolution_type: normalized,
+    destination_qbo_account_id: effectiveAccountId ? String(effectiveAccountId) : null,
+    destination_qbo_account_name: selectedQboAccountName || null,
+    linked_original_transaction_id: linkedOriginalTransactionId || null,
+    matched_account_id: matchedAccountId || null,
+    matched_qbo_transaction_id: matchedQboTransactionId || null,
+    decision_source: actor ? "user" : "automated",
+    decided_by: actor,
+    decided_at: now,
+  };
+  const payment = normalized === "match_credit_card_payment";
+  const nextMeta = {
+    ...currentMeta,
+    credit_card_inflow_resolution: resolutionAudit,
+    ...(payment ? {} : { post_block_reason: null, posting_in_progress: false }),
+  };
+  const payload = {
+    meta: nextMeta,
+    status: payment || normalized === "credit_card_credit_other" ? "needs_review" : "approved",
+    post_error: payment ? "cc_payment_pair_requires_confirmation" : null,
+    post_after: null,
+    updated_at: now,
+    ...(effectiveAccountId && !payment ? {
+      final_qbo_account_id: String(effectiveAccountId),
+      final_qbo_account_name: selectedQboAccountName || null,
+    } : {}),
+  };
+  const { data, error } = await db.from("transaction_categorizations")
+    .update(payload)
+    .eq("business_id", businessId)
+    .eq("transaction_id", transactionId)
+    .select("transaction_id,status,final_qbo_account_id,final_qbo_account_name,meta")
+    .maybeSingle();
+  if (error) throw error;
+  return { ...result, row: data || { ...result.row, ...payload }, credit_card_inflow_resolution: resolutionAudit };
 }

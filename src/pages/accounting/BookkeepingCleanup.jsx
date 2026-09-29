@@ -42,6 +42,7 @@ import {
   undoIncomingDepositMatch,
   recordIncomingDepositAsNewIncome,
   saveTransactionResolution,
+  saveCreditCardInflowResolution,
   getAutoPostStatus,
   updateAutoPostStatus,
 } from "../../services/bookkeeping/bookkeepingClient.js";
@@ -59,13 +60,14 @@ import { classifyBookkeepingLifecycle } from "../../services/bookkeeping/bookkee
 import { bulkActionForFeed, isBulkActionEligible, summarizeBulkPost } from "../../services/bookkeeping/bookkeepingBulkActions.js";
 const __motionUsageForLint = motion;
 
-async function mapWithConcurrency(items, limit, worker) {
+async function mapWithConcurrency(items, limit, worker, onSettled = null) {
   const results = new Array(items.length);
   let cursor = 0;
   async function runWorker() {
     while (cursor < items.length) {
       const index = cursor++;
       results[index] = await worker(items[index], index);
+      onSettled?.(results[index], index);
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runWorker));
@@ -2401,7 +2403,14 @@ function BookkeepingCleanup() {
       },
     } : row));
     if (usingDemo) { applySelection(); return; }
-    const result = await saveTransactionResolution(businessId, id, resolution);
+    const transaction = transactions.find((row) => row.id === id);
+    const creditCardInflowResolutions = new Set(["merchant_refund", "match_credit_card_payment", "credit_card_statement_credit", "credit_card_credit_other"]);
+    const result = creditCardInflowResolutions.has(resolution)
+      ? await saveCreditCardInflowResolution(businessId, id, resolution, {
+          selectedQboAccountId: transaction?.glAccountId || transaction?.final_qbo_account_id || transaction?.suggestedAccountId || null,
+          selectedQboAccountName: transaction?.glAccountName || transaction?.final_qbo_account_name || transaction?.suggestedAccountName || null,
+        })
+      : await saveTransactionResolution(businessId, id, resolution);
     const savedMeta = result?.row?.meta;
     applySelection(savedMeta);
   };
@@ -2517,25 +2526,39 @@ function BookkeepingCleanup() {
     const batch = bulkPostDialog?.transactions || [];
     if (!businessId || usingDemo || !batch.length || bulkPosting) return;
     setBulkPosting(true);
-    setBulkPostDialog({ type: "progress", transactions: batch });
+    setBulkPostDialog({ type: "progress", transactions: batch, progressItems: batch.map((transaction) => ({ transaction, stage: "Checking local history", complete: false })) });
+    const operationId = globalThis.crypto?.randomUUID?.() || `bulk-${Date.now()}`;
+    const frontendStartedAt = performance.now();
     const results = await mapWithConcurrency(batch, 3, async (txn) => {
+      const childOperationId = `${operationId}:${txn.id}`;
+      setBulkPostDialog((current) => current?.type === "progress" ? {
+        ...current,
+        progressItems: current.progressItems.map((item) => item.transaction.id === txn.id ? { ...item, stage: "Checking QuickBooks" } : item),
+      } : current);
       if (!isBulkActionEligible(txn, "handled") || hasIncomingDepositMatchWorkflow(txn)) {
         return { status: "failed", transaction: txn, error: { title: "No longer eligible", message: "Refresh the Handled feed and review this transaction." } };
       }
       setPostingTransactionIds((current) => new Set(current).add(txn.id));
       try {
-        const result = await postTransactionToQuickBooks(businessId, txn.id);
+        const result = await postTransactionToQuickBooks(businessId, txn.id, { operationId, childOperationId });
         if (result?.outcome === "confirmation_required" && result?.reason === "possible_qbo_match") {
-          return { status: "duplicate", transaction: txn, challenge: buildFuzzyDuplicateChallenge(result, txn) };
+          return { status: "duplicate", transaction: txn, challenge: buildFuzzyDuplicateChallenge(result, txn), operationId, childOperationId };
         }
-        return { status: result?.already_posted ? "already_posted" : "posted", transaction: txn, receipt: result };
+        return { status: result?.already_posted ? "already_posted" : "posted", transaction: txn, receipt: result, operationId, childOperationId };
       } catch (error) {
         console.warn("[bookkeeping] bulk post transaction failed", { transactionId: txn.id, message: error?.message || error });
         return { status: "failed", transaction: txn, error: buildManualPostError(error) };
       } finally {
         setPostingTransactionIds((current) => { const next = new Set(current); next.delete(txn.id); return next; });
       }
+    }, (result) => {
+      const stage = result.status === "duplicate" ? "Possible match" : result.status === "failed" ? "Could not complete check" : "Ready to post";
+      setBulkPostDialog((current) => current?.type === "progress" ? {
+        ...current,
+        progressItems: current.progressItems.map((item) => item.transaction.id === result.transaction.id ? { ...item, stage, complete: true } : item),
+      } : current);
     });
+    console.info("[bookkeeping] bulk post frontend timing", { operationId, transactionCount: batch.length, elapsedMs: Math.round(performance.now() - frontendStartedAt) });
     setBulkPosting(false);
     setSelectedIds(new Set());
     const hasDuplicateReview = results.some((entry) => entry.status === "duplicate");
@@ -2575,6 +2598,8 @@ function BookkeepingCleanup() {
         const receipt = await postTransactionToQuickBooks(businessId, entry.transaction.id, {
           confirmPostAnyway: true,
           duplicateChallengeId: entry.challenge?.challengeId,
+          operationId: entry.operationId,
+          childOperationId: entry.childOperationId,
         });
         return { ...entry, status: receipt?.already_posted ? "already_posted" : "posted", receipt };
       } catch (error) {
@@ -2650,6 +2675,16 @@ function BookkeepingCleanup() {
         setManualPostResult(buildFuzzyDuplicateChallenge(result, txn));
         return;
       }
+      if (result?.outcome === "confirmation_required" && result?.reason === "credit_card_inflow_resolution_required") {
+        setManualPostResult({
+          type: "credit_card_inflow_resolution",
+          title: "What type of credit is this?",
+          message: result.message,
+          transaction: txn,
+          resolutionTransaction: result.transaction || {},
+        });
+        return;
+      }
       await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false });
       setCountsRefreshKey((value) => value + 1);
       await loadMappingStatus();
@@ -2702,6 +2737,30 @@ function BookkeepingCleanup() {
     const duplicateChallengeId = manualPostResult?.challengeId;
     setManualPostResult(null);
     await runManualPostTransaction(txn, { confirmPostAnyway: true, duplicateChallengeId });
+  };
+
+  const resolveCreditCardInflow = async (resolution) => {
+    const txn = manualPostResult?.transaction;
+    if (!txn?.id) return;
+    const selectedQboAccountId = txn.glAccountId || txn.final_qbo_account_id || txn.suggestedAccountId || null;
+    const selectedQboAccountName = txn.glAccountName || txn.final_qbo_account_name || txn.suggestedAccountName || null;
+    setManualPostResult(null);
+    try {
+      await saveCreditCardInflowResolution(businessId, txn.id, resolution, { selectedQboAccountId, selectedQboAccountName });
+      if (resolution === "merchant_refund" || resolution === "credit_card_statement_credit") {
+        await runManualPostTransaction(txn);
+        return;
+      }
+      await reloadCurrentBookkeepingView(reloadTransactionsRef, { showBackgroundRefresh: false, refreshProcessingStatus: false, refreshCounts: true });
+      setCountsRefreshKey((value) => value + 1);
+      window.dispatchEvent(new CustomEvent("bizzy:toast", { detail: {
+        severity: "info",
+        title: resolution === "match_credit_card_payment" ? "Credit-card payment needs matching" : "Credit type saved",
+        body: resolution === "match_credit_card_payment" ? "Use the protected payment-matching workflow in Needs Review." : "Review the accounting treatment in Needs Review before posting.",
+      } }));
+    } catch (err) {
+      setManualPostResult({ ...buildManualPostError(err), transaction: txn });
+    }
   };
 
   const linkFuzzyDuplicateCandidate = async () => {
@@ -3703,13 +3762,13 @@ function BookkeepingCleanup() {
                           </motion.div>
                           <div>
                             <h2 id="bulk-post-title" className="text-base font-semibold text-white">{bulkPostDialog.type === "posting" ? "Posting to QuickBooks" : "Checking QuickBooks matches"}</h2>
-                            <p className="mt-1 text-sm leading-5 text-slate-300">{bulkPostDialog.type === "posting" ? `Securely posting ${bulkPostDialog.transactions?.length || 0} ${bulkPostDialog.transactions?.length === 1 ? "transaction" : "transactions"}. This may take a few moments.` : `Reviewing ${bulkPostDialog.transactions?.length || 0} transactions with up to three checks running at a time.`}</p>
+                            <p className="mt-1 text-sm leading-5 text-slate-300">{bulkPostDialog.type === "posting" ? `Securely posting ${bulkPostDialog.transactions?.length || 0} ${bulkPostDialog.transactions?.length === 1 ? "transaction" : "transactions"}. This may take a few moments.` : `${bulkPostDialog.progressItems?.filter((item) => item.complete).length || 0} of ${bulkPostDialog.transactions?.length || 0} checked · up to three checks running at a time.`}</p>
                           </div>
                         </div>
                         <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-white/[0.07]">
                           <motion.div className="h-full w-2/5 rounded-full bg-gradient-to-r from-emerald-500 via-emerald-200 to-emerald-500" animate={{ x: ["-110%", "250%"] }} transition={{ duration: 1.35, repeat: Infinity, ease: "easeInOut" }} />
                         </div>
-                        <div className="mt-4 space-y-2">{(bulkPostDialog.transactions || []).map((transaction, index) => <motion.div key={transaction.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.025] p-3 text-sm" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.06 }}><span className="relative flex h-2.5 w-2.5 shrink-0"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-35" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-300" /></span><span className="min-w-0 flex-1 truncate">{transaction.vendor || transaction.description}</span><span className="text-xs text-slate-500">Processing</span></motion.div>)}</div>
+                        <div className="mt-4 space-y-2">{(bulkPostDialog.progressItems || (bulkPostDialog.transactions || []).map((transaction) => ({ transaction, stage: "Processing", complete: false }))).map((item, index) => <motion.div key={item.transaction.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.025] p-3 text-sm" initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.06 }}><span className="relative flex h-2.5 w-2.5 shrink-0">{item.complete ? <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-300" /> : <><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-35" /><span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-300" /></>}</span><span className="min-w-0 flex-1 truncate">{item.transaction.vendor || item.transaction.description}</span><span className={`text-xs ${item.complete ? "text-emerald-200/80" : "text-slate-500"}`}>{item.stage}</span></motion.div>)}</div>
                         <p className="mt-4 text-center text-xs text-slate-500">Keep this window open while Bizzi confirms each QuickBooks receipt.</p>
                       </>
                     ) : (
@@ -4012,7 +4071,17 @@ function BookkeepingCleanup() {
                       </div>
                     ) : null}
 
-                    {manualPostResult.type === "fuzzy_duplicate" ? (() => {
+                    {manualPostResult.type === "credit_card_inflow_resolution" ? (() => {
+                      const summary = manualPostResult.resolutionTransaction || {};
+                      const shortDate = summary.date ? new Date(`${summary.date}T00:00:00`).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" }) : "Unknown";
+                      return <div className="mt-4 grid grid-cols-[110px_1fr] gap-x-3 gap-y-2 rounded-xl border border-white/10 bg-white/[0.035] p-4 text-sm">
+                        <span className="text-slate-500">Transaction</span><span className="text-slate-200">{summary.display_name || manualPostResult.transaction?.description || "Credit-card credit"}</span>
+                        <span className="text-slate-500">Date</span><span className="text-slate-200">{shortDate}</span>
+                        <span className="text-slate-500">Amount</span><span className="text-emerald-300">{formatPostingAmount({ amount: summary.amount })}</span>
+                        <span className="text-slate-500">Source</span><span className="text-slate-200">{summary.source_account_name || "Credit-card account"}</span>
+                        <span className="text-slate-500">Selected account</span><span className="text-slate-200">{summary.destination_account_name || manualPostResult.transaction?.glAccountName || "Unselected"}</span>
+                      </div>;
+                    })() : manualPostResult.type === "fuzzy_duplicate" ? (() => {
                       const candidate = manualPostResult.candidates?.[0] || {};
                       const posting = manualPostResult.postingSummary || {};
                       const shortDate = (value) => value ? new Date(`${value}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "Unknown";
@@ -4052,6 +4121,14 @@ function BookkeepingCleanup() {
                           <button type="button" onClick={confirmFuzzyPostAnyway} className="rounded-full border border-amber-200/45 bg-amber-300 px-4 py-2 text-sm font-semibold text-[#171006]">Post separately</button>
                         </>
                       ) : null}
+                      {manualPostResult.type === "credit_card_inflow_resolution" ? (
+                        <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                          <button type="button" onClick={() => setManualPostResult(null)} className="rounded-full border border-white/12 bg-white/[0.04] px-4 py-2 text-sm font-semibold text-slate-200">Cancel</button>
+                          <button type="button" onClick={() => resolveCreditCardInflow("merchant_refund")} className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c]">Merchant refund — reduce {manualPostResult.resolutionTransaction?.destination_account_name || manualPostResult.transaction?.glAccountName || "selected account"}</button>
+                          <button type="button" onClick={() => resolveCreditCardInflow("match_credit_card_payment")} className="rounded-full border border-cyan-200/30 bg-cyan-300/15 px-4 py-2 text-sm font-semibold text-cyan-100">Credit-card payment — match account</button>
+                          <button type="button" onClick={() => resolveCreditCardInflow("credit_card_statement_credit")} className="rounded-full border border-white/16 bg-white/[0.06] px-4 py-2 text-sm font-semibold text-white">Cash back or statement credit</button>
+                        </div>
+                      ) : null}
                       {manualPostResult.type === "duplicate_check_unavailable" ? (
                         <>
                           <button
@@ -4087,7 +4164,7 @@ function BookkeepingCleanup() {
                           Close
                         </button>
                       ) : null}
-                      {!['duplicate_check_unavailable', 'fuzzy_duplicate', 'fuzzy_duplicate_confirmation'].includes(manualPostResult.type) ? <button
+                      {!['duplicate_check_unavailable', 'fuzzy_duplicate', 'fuzzy_duplicate_confirmation', 'credit_card_inflow_resolution'].includes(manualPostResult.type) ? <button
                         type="button"
                         onClick={handleManualPostResultPrimary}
                         className="rounded-full border border-emerald-200/40 bg-emerald-300 px-4 py-2 text-sm font-semibold text-[#06100c] shadow-[0_10px_24px_rgba(16,185,129,0.18)] transition hover:bg-emerald-200"

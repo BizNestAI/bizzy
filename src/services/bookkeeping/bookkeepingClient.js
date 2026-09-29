@@ -52,6 +52,22 @@ export async function saveTransactionResolution(businessId, transactionId, resol
   });
 }
 
+export async function saveCreditCardInflowResolution(businessId, transactionId, resolution, details = {}) {
+  return safeFetch(apiUrl(`/api/bookkeeping/transactions/${encodeURIComponent(transactionId)}/credit-card-inflow-resolution`), {
+    method: "PUT",
+    headers: withBizHeaders(businessId, { "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      business_id: businessId,
+      resolution,
+      selected_qbo_account_id: details.selectedQboAccountId || null,
+      selected_qbo_account_name: details.selectedQboAccountName || null,
+      linked_original_transaction_id: details.linkedOriginalTransactionId || null,
+      matched_account_id: details.matchedAccountId || null,
+      matched_qbo_transaction_id: details.matchedQboTransactionId || null,
+    }),
+  });
+}
+
 export async function getOperatorRequests(businessId, params = {}) {
   const search = new URLSearchParams();
   Object.entries(params || {}).forEach(([k, v]) => {
@@ -109,6 +125,8 @@ export async function postTransactionToQuickBooks(businessId, transactionId, opt
         : {}),
       ...(options.confirmPostAnyway === true ? { confirm_post_anyway: true } : {}),
       ...(options.duplicateChallengeId ? { duplicate_challenge_id: options.duplicateChallengeId } : {}),
+      ...(options.operationId ? { operation_id: options.operationId } : {}),
+      ...(options.childOperationId ? { child_operation_id: options.childOperationId } : {}),
     }),
   });
   if (res && res.ok === false) {

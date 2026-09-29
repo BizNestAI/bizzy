@@ -38,7 +38,7 @@ test("same vendor and GL account remain distinct rows in the posting summary", (
 test("Handled bulk workflow uses the canonical posting client and not approval", () => {
   const source = fs.readFileSync(new URL("../src/pages/accounting/BookkeepingCleanup.jsx", import.meta.url), "utf8");
   const bulkPostBody = source.slice(source.indexOf("const runBulkPost"), source.indexOf("const reviewBulkPostResult"));
-  assert.match(bulkPostBody, /postTransactionToQuickBooks\(businessId, txn\.id\)/);
+  assert.match(bulkPostBody, /postTransactionToQuickBooks\(businessId, txn\.id, \{ operationId, childOperationId \}\)/);
   assert.doesNotMatch(bulkPostBody, /approveTransactions/);
   assert.match(bulkPostBody, /mapWithConcurrency\(batch, 3, async \(txn\)/);
   assert.match(bulkPostBody, /status: "duplicate"/);
@@ -69,6 +69,10 @@ test("confirmed bulk posting shows a non-dismissible animated progress state", (
   assert.match(source, /animate-spin/);
   assert.match(source, /Keep this window open while Bizzi confirms each QuickBooks receipt/);
   assert.match(source, /!bulkPosting && \(bulkPostDialog\.type === "results"/);
+  assert.match(source, /Checking local history/);
+  assert.match(source, /Checking QuickBooks/);
+  assert.match(source, /Could not complete check/);
+  assert.match(source, /of \$\{bulkPostDialog\.transactions\?\.length \|\| 0\} checked/);
 });
 
 test("Handled row Posting pill animates its ellipsis", () => {
