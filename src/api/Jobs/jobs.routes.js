@@ -1596,7 +1596,11 @@ router.get("/job-costing", requireRouteAuth, async (req, res) => {
     return res.json({ ok: true, ...payload });
   } catch (e) {
     console.error("[jobs.job-costing]", e);
-    res.status(500).json({ ok: false, error: "job_costing_failed", message: e?.message || "failed" });
+    res.status(500).json({
+      ok: false,
+      error: "job_costing_failed",
+      message: "We couldn’t load posted transactions.",
+    });
   }
 });
 

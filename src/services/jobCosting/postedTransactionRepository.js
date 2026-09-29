@@ -5,6 +5,19 @@ import { supabase as defaultDb } from "../supabaseAdmin.js";
 const PAGE_SIZE = 500;
 const IN_QUERY_SIZE = 200;
 const CONFIRMED_STATUSES = new Set(["posted", "matched", "matched_existing_qbo", "reconciled"]);
+export const JOB_COSTING_BANK_TRANSACTION_COLUMNS = [
+  "id",
+  "date",
+  "name",
+  "merchant_name",
+  "counterparty_name",
+  "raw",
+  "amount",
+  "direction",
+  "pending",
+  "is_archived",
+  "plaid_account_id",
+];
 
 function chunks(values, size = IN_QUERY_SIZE) {
   const result = [];
@@ -39,13 +52,30 @@ async function fetchBankTransactions(db, businessId, transactionIds) {
   for (const ids of chunks(transactionIds)) {
     const { data, error } = await db
       .from("bank_transactions")
-      .select("id,date,name,merchant_name,counterparty_name,original_description,amount,direction,pending,is_archived,plaid_account_id")
+      .select(JOB_COSTING_BANK_TRANSACTION_COLUMNS.join(","))
       .eq("business_id", businessId)
       .in("id", ids);
     if (error) throw error;
     rows.push(...(data || []));
   }
   return rows;
+}
+
+function cleanText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function getCanonicalBankDescription(bank = {}) {
+  const raw = bank.raw && typeof bank.raw === "object" && !Array.isArray(bank.raw) ? bank.raw : {};
+  return [bank.name, raw.name, raw.memo, raw.original_description]
+    .map(cleanText)
+    .find(Boolean) || "";
+}
+
+export function getCanonicalBankVendor(bank = {}) {
+  return [bank.counterparty_name, bank.merchant_name]
+    .map(cleanText)
+    .find(Boolean) || "";
 }
 
 /** Durable, provider-independent source for Job Costing's confirmed transaction list. */
@@ -72,16 +102,21 @@ export async function fetchConfirmedJobCostingTransactions({ businessId, db = de
     const matched = ["matched", "matched_existing_qbo", "reconciled"].includes(String(cat.status || "").toLowerCase());
     if (matched) matchedCount += 1;
     else postedCount += 1;
+    const vendor = getCanonicalBankVendor(bank);
+    const description = getCanonicalBankDescription(bank);
     rows.push({
       id: bank.id,
       transaction_id: bank.id,
       date: bank.date,
-      vendor: bank.counterparty_name || bank.merchant_name || "",
-      payee: bank.counterparty_name || bank.merchant_name || "",
-      description: bank.original_description || bank.name || "",
-      memo: bank.original_description || bank.name || "",
-      bank_memo: bank.original_description || bank.name || "",
-      original_description: bank.original_description || bank.name || "",
+      vendor,
+      payee: vendor,
+      description,
+      memo: description,
+      bank_memo: description,
+      // Compatibility field for existing UI consumers. This is derived from
+      // schema-backed data and is not a bank_transactions database column.
+      original_description: description,
+      display_description: vendor || description || "No description",
       amount: Number(bank.amount || 0),
       direction: bank.direction || (Number(bank.amount || 0) < 0 ? "OUTFLOW" : "INFLOW"),
       final_qbo_account_id: cat.final_qbo_account_id || null,
@@ -119,7 +154,7 @@ export function safeJobCostingDataFailure(error, context = {}) {
     cause_name: cause?.name || null,
     cause_message: cause?.message || null,
     cause_code: cause?.code || null,
-    network_classification: /ENOTFOUND|EAI_AGAIN/.test(String(code)) ? "dns" : /ECONNREFUSED/.test(String(code)) ? "connection_refused" : /TIMEOUT|ETIMEDOUT/i.test(String(code)) ? "timeout" : /CERT|TLS/i.test(String(code)) ? "tls" : code ? "transport" : "unknown",
+    network_classification: /^\d{5}$/.test(String(code || "")) || /^PGRST/.test(String(code || "")) ? "database" : /ENOTFOUND|EAI_AGAIN/.test(String(code)) ? "dns" : /ECONNREFUSED/.test(String(code)) ? "connection_refused" : /TIMEOUT|ETIMEDOUT/i.test(String(code)) ? "timeout" : /CERT|TLS/i.test(String(code)) ? "tls" : code ? "transport" : "unknown",
     attempt_count: 1,
     aborted: error?.name === "AbortError" || cause?.name === "AbortError",
     deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.DEPLOYMENT_SHA || null,

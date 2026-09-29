@@ -2,17 +2,24 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import { Readable, Writable } from "node:stream";
+import { readFileSync } from "node:fs";
 import express from "express";
 
 process.env.SUPABASE_URL ||= "http://127.0.0.1:54321";
 process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 process.env.BIZZY_AUTH_BYPASS = "true";
 
-const [{ default: jobsRouter }, { supabase }, { getJobCostingRepositoryConfig }] = await Promise.all([
+const [{ default: jobsRouter }, { supabase }, repository] = await Promise.all([
   import("../src/api/Jobs/jobs.routes.js"),
   import("../src/services/supabaseAdmin.js"),
   import("../src/services/jobCosting/postedTransactionRepository.js"),
 ]);
+const {
+  JOB_COSTING_BANK_TRANSACTION_COLUMNS,
+  getCanonicalBankDescription,
+  getCanonicalBankVendor,
+  getJobCostingRepositoryConfig,
+} = repository;
 
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_BUSINESS_ID = "22222222-2222-4222-8222-222222222222";
@@ -20,6 +27,13 @@ const JOB_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const OTHER_JOB_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const TXN_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const OTHER_TXN_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+function productionBankTransactionColumns() {
+  const schema = readFileSync(new URL("../supabase/live_schema_snapshot.sql", import.meta.url), "utf8");
+  const table = schema.match(/CREATE TABLE IF NOT EXISTS "public"\."bank_transactions" \(([\s\S]*?)\n\);/);
+  assert.ok(table, "bank_transactions must exist in the checked-in live schema");
+  return new Set([...table[1].matchAll(/^\s+"([^"]+)"/gm)].map((match) => match[1]));
+}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -38,6 +52,18 @@ class SupabaseQuery {
   }
 
   select(_columns, options = {}) {
+    if (this.store.__schemaColumns?.[this.table] && _columns !== "*") {
+      const known = this.store.__schemaColumns[this.table];
+      const selected = String(_columns || "").split(",").map((column) => column.trim()).filter(Boolean);
+      const missing = selected.find((column) => !known.has(column));
+      if (missing) {
+        this.store.__tableErrors ||= {};
+        this.store.__tableErrors[this.table] = {
+          code: "42703",
+          message: `column ${this.table}.${missing} does not exist`,
+        };
+      }
+    }
     this.countRequested = Boolean(options?.count);
     return this;
   }
@@ -220,7 +246,7 @@ function seedConfirmedRows(mockSupabase, rpcRows) {
     name: row.name,
     merchant_name: row.merchant_name,
     counterparty_name: row.counterparty_name || null,
-    original_description: row.original_description || row.name,
+    raw: row.raw || null,
     amount: row.amount,
     direction: row.amount < 0 ? "OUTFLOW" : "INFLOW",
     pending: row.pending,
@@ -293,7 +319,7 @@ function createApp() {
   return app;
 }
 
-async function request(app, path, { method = "GET", body, businessId = BUSINESS_ID } = {}) {
+async function request(app, path, { method = "GET", body, businessId = BUSINESS_ID, headers = {} } = {}) {
   const chunks = [];
   const requestBody = body ? JSON.stringify(body) : "";
   const req = new Readable({
@@ -308,6 +334,7 @@ async function request(app, path, { method = "GET", body, businessId = BUSINESS_
     "content-type": "application/json",
     "content-length": Buffer.byteLength(requestBody),
     "x-business-id": businessId,
+    ...headers,
   };
 
   const res = new Writable({
@@ -923,6 +950,80 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.pagination.assigned_count, 1);
     assert.equal(response.body.pagination.unassigned_count, 2);
     assert.equal(response.body.pagination.deliberately_excluded_count, 0);
+  });
+
+  test("the real Job Costing select references only production bank transaction columns", async () => {
+    const schemaColumns = productionBankTransactionColumns();
+    mockSupabase.store.__schemaColumns = { bank_transactions: schemaColumns };
+    assert.equal(schemaColumns.has("original_description"), false);
+    assert.equal(JOB_COSTING_BANK_TRANSACTION_COLUMNS.includes("original_description"), false);
+    assert.deepEqual(
+      JOB_COSTING_BANK_TRANSACTION_COLUMNS.filter((column) => !schemaColumns.has(column)),
+      [],
+    );
+
+    seedConfirmedRows(mockSupabase, [
+      makeRpcPostedRow({ id: "schema-posted", qboId: "qbo-schema-posted", vendor: "Acme Supply" }),
+      makeRpcPostedRow({ id: "schema-matched", qboId: "qbo-schema-matched", status: "matched", vendor: null }),
+    ]);
+    const nullVendor = mockSupabase.store.bank_transactions.find((row) => row.id === "schema-matched");
+    nullVendor.merchant_name = null;
+    nullVendor.counterparty_name = null;
+    nullVendor.name = "IMPORTED BANK MEMO";
+
+    const response = await request(app, "/api/job-costing/job-costing", { method: "GET" });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.pagination.total_posted_transactions, 2);
+    assert.equal(response.body.pagination.loaded_posted_transactions, 2);
+    assert.equal(response.body.pagination.confirmed_posted_count, 1);
+    assert.equal(response.body.pagination.confirmed_matched_count, 1);
+    assert.deepEqual(response.body.transactions.map((row) => row.status), ["posted", "posted"]);
+    assert.equal(response.body.transactions.find((row) => row.id === "schema-posted").vendor, "Acme Supply");
+    const matched = response.body.transactions.find((row) => row.id === "schema-matched");
+    assert.equal(matched.vendor, "");
+    assert.equal(matched.description, "IMPORTED BANK MEMO");
+    assert.equal(matched.bank_memo, "IMPORTED BANK MEMO");
+  });
+
+  test("canonical Job Costing display fields prefer vendor and safely fall back to imported description", () => {
+    assert.equal(getCanonicalBankVendor({ counterparty_name: "Normalized Vendor", merchant_name: "Plaid Merchant" }), "Normalized Vendor");
+    assert.equal(getCanonicalBankVendor({ counterparty_name: null, merchant_name: "Plaid Merchant" }), "Plaid Merchant");
+    assert.equal(getCanonicalBankVendor({ counterparty_name: null, merchant_name: null }), "");
+    assert.equal(getCanonicalBankDescription({ name: "CANONICAL IMPORTED DESCRIPTION", raw: { memo: "Raw memo" } }), "CANONICAL IMPORTED DESCRIPTION");
+    assert.equal(getCanonicalBankDescription({ name: "", raw: { memo: "Raw memo" } }), "Raw memo");
+  });
+
+  test("database failures retain structured diagnostics while the route returns a safe message", async () => {
+    process.env.DEPLOYMENT_SHA = "test-deployment-sha";
+    mockSupabase.store.__tableErrors = {
+      bank_transactions: { code: "42703", message: "column bank_transactions.invalid_column does not exist" },
+    };
+    seedConfirmedRows(mockSupabase, [makeRpcPostedRow({ id: "schema-error", qboId: "qbo-schema-error" })]);
+    const logged = [];
+    const originalError = console.error;
+    console.error = (...args) => logged.push(args);
+    try {
+      const response = await request(app, "/api/job-costing/job-costing", {
+        method: "GET",
+        headers: { "x-request-id": "schema-correlation-id" },
+      });
+      assert.equal(response.status, 500);
+      assert.equal(response.body.message, "We couldn’t load posted transactions.");
+      assert.equal(JSON.stringify(response.body).includes("invalid_column"), false);
+      const diagnostic = logged.find((entry) => entry[0] === "[jobs.job-costing.upstream]")?.[1];
+      assert.equal(diagnostic.error_code, "42703");
+      assert.equal(diagnostic.error_message, "column bank_transactions.invalid_column does not exist");
+      assert.equal(diagnostic.network_classification, "database");
+      assert.equal(diagnostic.operation, "job_costing_confirmed_transactions");
+      assert.equal(diagnostic.business_id, BUSINESS_ID);
+      assert.equal(diagnostic.correlation_id, "schema-correlation-id");
+      assert.equal(diagnostic.deployment_sha, "test-deployment-sha");
+    } finally {
+      console.error = originalError;
+      delete process.env.DEPLOYMENT_SHA;
+      delete mockSupabase.store.__tableErrors;
+    }
   });
 
   test("job costing classifies Supabase transport failures without logging credentials", async () => {
