@@ -87,6 +87,44 @@ const BOOKKEEPING_FEED_CONFIG = {
   },
 };
 
+class MonthlyReviewActionsBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("[monthly-review.actions.render]", {
+      correlation_id: this.props.correlationId || null,
+      message: error?.message || "render_failed",
+      component_stack: info?.componentStack || null,
+    });
+  }
+
+  componentDidUpdate(previousProps) {
+    if (this.state.failed && previousProps.resetKey !== this.props.resetKey) {
+      this.setState({ failed: false });
+    }
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <section className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.07] p-4 text-amber-50" role="alert">
+        <div className="font-semibold">Monthly Review could not be displayed.</div>
+        <p className="mt-1 text-sm text-amber-50/75">The rest of the workspace is still available. Retry this section or refresh its data.</p>
+        <button type="button" onClick={() => { this.setState({ failed: false }); this.props.onRetry?.(); }} className="mt-3 rounded-lg border border-amber-200/25 px-3 py-1.5 text-sm font-semibold hover:bg-amber-200/10">
+          Retry
+        </button>
+      </section>
+    );
+  }
+}
+
 function buildInitialBookkeepingFeeds() {
   return Object.fromEntries(Object.keys(BOOKKEEPING_FEED_CONFIG).map((key) => [
     key,
@@ -226,6 +264,7 @@ function showPostingReviewNotice(setNotice, timerRef, message) {
 }
 
 export default function MonthlyReviewConsole() {
+  const renderCorrelationIdRef = useRef(`monthly-review-${Date.now().toString(36)}`);
   const [month, setMonth] = useState(() => initialMonthValue());
   const [businesses, setBusinesses] = useState([]);
   const [selectedBusinessId, setSelectedBusinessId] = useState(() => initialBusinessIdValue());
@@ -1118,6 +1157,7 @@ export default function MonthlyReviewConsole() {
     setError("");
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
+    setManualPostingRequest(null);
     updateReviewUrl({ businessId, month });
   }, [applyQboPnlSnapshot, month, selectedBusinessId]);
 
@@ -1138,6 +1178,7 @@ export default function MonthlyReviewConsole() {
     setError("");
     setAccountSearch("");
     setHistoryDrawer({ open: false, transaction: null, rows: [], loading: false });
+    setManualPostingRequest(null);
     updateReviewUrl({ businessId: selectedBusinessId, month: nextMonth });
   }, [applyQboPnlSnapshot, month, selectedBusinessId]);
 
@@ -1519,6 +1560,18 @@ export default function MonthlyReviewConsole() {
     setBookkeepingFeedActionErrors((current) => ({ ...current, [row.id]: "" }));
     setManualPostingRequest({ intent, transaction: row });
   }, [busyFeedActions, selectedBusinessId]);
+
+  useEffect(() => {
+    const selected = manualPostingRequest?.transaction;
+    const handled = bookkeepingFeeds.handled;
+    if (!selected?.id || !handled?.loaded) return;
+    const requestBusy = Boolean(busyFeedActions[`${manualPostingRequest.intent || "post"}:${selected.id}`]);
+    const stillPresent = (handled.rows || []).some((row) => String(row?.id) === String(selected.id));
+    if (!stillPresent && !requestBusy) {
+      setManualPostingRequest(null);
+      setError("The selected transaction changed during refresh. Reopen it from the current Monthly Review list.");
+    }
+  }, [bookkeepingFeeds.handled, busyFeedActions, manualPostingRequest]);
 
   const setManualPostingBusy = useCallback((transactionId, busy, intent) => {
     const actionId = `${intent || "post"}:${transactionId}`;
@@ -2322,6 +2375,11 @@ export default function MonthlyReviewConsole() {
 	                  onRefresh={loadConnectedAccounts}
 	                />
 
+                <MonthlyReviewActionsBoundary
+                  correlationId={renderCorrelationIdRef.current}
+                  resetKey={`${selectedBusinessId}:${month}:feeds`}
+                  onRetry={refreshBookkeepingFeeds}
+                >
                 <BookkeepingFeedMirrorPanels
                   feeds={bookkeepingFeeds}
                   loadingCounts={loadingBookkeepingCounts}
@@ -2379,6 +2437,7 @@ export default function MonthlyReviewConsole() {
                   onCreatedAccountSelect={injectSourceLedgerAccount}
                   accountTypes={qboAccountTypes}
                 />
+                </MonthlyReviewActionsBoundary>
 	
 	                {Array.isArray(detail?.changed_since_finalized) && detail.changed_since_finalized.length ? (
                   <div className="rounded-2xl border border-amber-300/20 bg-amber-300/[0.07] p-4">
@@ -2451,17 +2510,25 @@ export default function MonthlyReviewConsole() {
                   onCancel={() => setConfirmFinalizeOpen(false)}
                   onConfirm={finalizeReview}
                 />
-                <ManualQuickBooksPostingWorkflow
-                  businessId={selectedBusinessId}
-                  transaction={manualPostingRequest?.transaction || null}
-                  intent={manualPostingRequest?.intent || "post"}
-                  postRequest={monthlyReviewManualPostRequest}
-                  linkRequest={monthlyReviewLinkRequest}
-                  saveCreditTypeRequest={monthlyReviewSaveCreditTypeRequest}
-                  onClose={() => setManualPostingRequest(null)}
-                  onBusyChange={setManualPostingBusy}
-                  onComplete={completeManualPostingWorkflow}
-                />
+                <MonthlyReviewActionsBoundary
+                  correlationId={renderCorrelationIdRef.current}
+                  resetKey={`${selectedBusinessId}:${month}:manual-post`}
+                  onRetry={() => setManualPostingRequest(null)}
+                >
+                  {manualPostingRequest?.transaction ? (
+                    <ManualQuickBooksPostingWorkflow
+                      businessId={selectedBusinessId}
+                      transaction={manualPostingRequest.transaction}
+                      intent={manualPostingRequest.intent || "post"}
+                      postRequest={monthlyReviewManualPostRequest}
+                      linkRequest={monthlyReviewLinkRequest}
+                      saveCreditTypeRequest={monthlyReviewSaveCreditTypeRequest}
+                      onClose={() => setManualPostingRequest(null)}
+                      onBusyChange={setManualPostingBusy}
+                      onComplete={completeManualPostingWorkflow}
+                    />
+                  ) : null}
+                </MonthlyReviewActionsBoundary>
               </div>
             )}
           </main>

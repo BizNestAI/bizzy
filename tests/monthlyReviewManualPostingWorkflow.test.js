@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+/* global process */
+
 const read = (path) => readFileSync(join(process.cwd(), path), "utf8");
 
 test("Monthly Review exposes first-attempt and retry manual posting through the shared workflow", () => {
@@ -43,4 +45,38 @@ test("protected and completed Monthly Review rows cannot expose ordinary posting
   assert.match(table, /!genericActionsBlocked/);
   assert.match(table, /!isPosted/);
   assert.match(table, /!isPending/);
+});
+
+test("Monthly Review never mounts transaction modal content for a null selection", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const workflow = read("src/components/Accounting/ManualQuickBooksPostingWorkflow.jsx");
+
+  assert.match(page, /\{manualPostingRequest\?\.transaction \? \(/);
+  assert.match(page, /transaction=\{manualPostingRequest\.transaction\}/);
+  assert.match(workflow, /const summary = txn \? summaryFor\(txn\) : null/);
+  assert.match(workflow, /if \(!transaction \|\| typeof document === "undefined"\) return null/);
+  assert.match(workflow, /manual_post_transaction_required/);
+});
+
+test("Monthly Review closes manual posting safely on cancel, month changes, and stale refetch rows", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+
+  assert.match(page, /onClose=\{\(\) => setManualPostingRequest\(null\)\}/);
+  assert.match(page, /const selectMonth = useCallback[\s\S]*?setManualPostingRequest\(null\)/);
+  assert.match(page, /const selectBusiness = useCallback[\s\S]*?setManualPostingRequest\(null\)/);
+  assert.match(page, /const stillPresent = \(handled\.rows \|\| \[\]\)\.some/);
+  assert.match(page, /if \(!stillPresent && !requestBusy\)/);
+});
+
+test("Monthly Review posting workflow contains malformed rows and active-request unmounts", () => {
+  const page = read("src/pages/Admin/MonthlyReviewConsole.jsx");
+  const workflow = read("src/components/Accounting/ManualQuickBooksPostingWorkflow.jsx");
+
+  assert.match(page, /class MonthlyReviewActionsBoundary extends React\.Component/);
+  assert.match(page, /Monthly Review could not be displayed\./);
+  assert.match(page, /\[monthly-review\.actions\.render\]/);
+  assert.match(page, /component_stack/);
+  assert.doesNotMatch(page, /transaction[_ ]?(id|date|amount).*component_stack/i);
+  assert.match(workflow, /mountedRef\.current = false/);
+  assert.match(workflow, /activeRequests\.clear\(\)/);
 });

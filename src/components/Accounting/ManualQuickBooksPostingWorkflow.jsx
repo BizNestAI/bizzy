@@ -13,6 +13,9 @@ function amountLabel(value) {
 }
 
 function summaryFor(transaction = {}) {
+  if (!transaction || typeof transaction !== "object") {
+    throw new TypeError("manual_post_transaction_required");
+  }
   return {
     date: transaction.date || "Unknown",
     description: transaction.payee || transaction.vendor || transaction.description || "Transaction",
@@ -37,50 +40,72 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
   const [step, setStep] = useState(transaction ? "confirm" : null);
   const [result, setResult] = useState(null);
   const activeIds = useRef(new Set());
+  const mountedRef = useRef(true);
   const txn = result?.transaction || transaction;
-  const summary = summaryFor(txn);
+  const summary = txn ? summaryFor(txn) : null;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    const activeRequests = activeIds.current;
+    return () => {
+      mountedRef.current = false;
+      activeRequests.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (transaction?.id) {
       setStep("confirm");
       setResult(null);
+    } else {
+      setStep(null);
+      setResult(null);
     }
   }, [transaction?.id]);
 
   const finish = useCallback(async (outcome) => {
+    if (!mountedRef.current) return;
     await onComplete?.(outcome);
-    onClose?.();
+    if (mountedRef.current) onClose?.();
   }, [onClose, onComplete]);
 
   const post = useCallback(async (options = {}, source = txn) => {
     if (!businessId || !source?.id || activeIds.current.has(source.id)) return;
     activeIds.current.add(source.id);
     onBusyChange?.(source.id, true, intent);
-    setStep("posting");
-    setResult(null);
+    if (mountedRef.current) {
+      setStep("posting");
+      setResult(null);
+    }
     try {
       const rawResponse = postRequest
         ? await postRequest(source, options)
         : await postTransactionToQuickBooks(businessId, source.id, options);
       const response = rawResponse?.posting_result || rawResponse?.posting_summary || rawResponse;
       if (response?.outcome === "confirmation_required" && response?.reason === "possible_qbo_match") {
-        setResult({ type: "fuzzy_duplicate", title: "Possible QuickBooks match", transaction: source, posting: response.transaction || {}, candidates: response.candidates || (response.candidate ? [response.candidate] : []), challengeId: response.challenge_id || null });
-        setStep("result");
+        if (mountedRef.current) {
+          setResult({ type: "fuzzy_duplicate", title: "Possible QuickBooks match", transaction: source, posting: response.transaction || {}, candidates: response.candidates || (response.candidate ? [response.candidate] : []), challengeId: response.challenge_id || null });
+          setStep("result");
+        }
         return;
       }
       if (response?.outcome === "confirmation_required" && response?.reason === "credit_card_inflow_resolution_required") {
-        setResult({ type: "credit_type", title: "What type of credit is this?", message: response.message, transaction: source, resolution: response.transaction || {} });
-        setStep("result");
+        if (mountedRef.current) {
+          setResult({ type: "credit_type", title: "What type of credit is this?", message: response.message, transaction: source, resolution: response.transaction || {} });
+          setStep("result");
+        }
         return;
       }
       await finish({ type: "posted", response, transaction: source });
     } catch (error) {
-      setResult(postingError(error, source));
-      setStep("result");
-      await onComplete?.({ type: "failed", error, transaction: source });
+      if (mountedRef.current) {
+        setResult(postingError(error, source));
+        setStep("result");
+      }
+      if (mountedRef.current) await onComplete?.({ type: "failed", error, transaction: source });
     } finally {
       activeIds.current.delete(source.id);
-      onBusyChange?.(source.id, false, intent);
+      if (mountedRef.current) onBusyChange?.(source.id, false, intent);
     }
   }, [businessId, finish, intent, onBusyChange, onComplete, postRequest, txn]);
 
@@ -93,7 +118,7 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
       if (["merchant_refund", "credit_card_statement_credit"].includes(resolution)) await post({}, txn);
       else await finish({ type: "review_required", resolution, transaction: txn });
     } catch (error) {
-      setResult(postingError(error, txn));
+      if (mountedRef.current) setResult(postingError(error, txn));
     }
   };
 
@@ -102,19 +127,21 @@ export default function ManualQuickBooksPostingWorkflow({ businessId, transactio
     if (!candidate?.qbo_txn_id || !candidate?.qbo_txn_type || activeIds.current.has(txn.id)) return;
     activeIds.current.add(txn.id);
     onBusyChange?.(txn.id, true, intent);
-    setStep("posting");
+    if (mountedRef.current) setStep("posting");
     try {
       const response = linkRequest
         ? await linkRequest(txn, candidate)
         : await linkExistingQuickBooksTransaction(businessId, txn.id, candidate);
       await finish({ type: "matched", response, transaction: txn });
     } catch (error) {
-      setResult(postingError(error, txn));
-      setStep("result");
-      await onComplete?.({ type: "failed", error, transaction: txn });
+      if (mountedRef.current) {
+        setResult(postingError(error, txn));
+        setStep("result");
+        await onComplete?.({ type: "failed", error, transaction: txn });
+      }
     } finally {
       activeIds.current.delete(txn.id);
-      onBusyChange?.(txn.id, false, intent);
+      if (mountedRef.current) onBusyChange?.(txn.id, false, intent);
     }
   };
 

@@ -8,9 +8,10 @@ process.env.SUPABASE_URL ||= "http://127.0.0.1:54321";
 process.env.SUPABASE_SERVICE_ROLE_KEY ||= "test-service-role-key";
 process.env.BIZZY_AUTH_BYPASS = "true";
 
-const [{ default: jobsRouter }, { supabase }] = await Promise.all([
+const [{ default: jobsRouter }, { supabase }, { getJobCostingRepositoryConfig }] = await Promise.all([
   import("../src/api/Jobs/jobs.routes.js"),
   import("../src/services/supabaseAdmin.js"),
+  import("../src/services/jobCosting/postedTransactionRepository.js"),
 ]);
 
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
@@ -208,6 +209,33 @@ function makeRpcPostedRow({ id, businessId = BUSINESS_ID, date = "2026-08-01", q
     posted_at: qboId ? "2026-09-02T12:00:00.000Z" : null,
     assigned,
   };
+}
+
+function seedConfirmedRows(mockSupabase, rpcRows) {
+  mockSupabase.store.bank_transactions = rpcRows.map((row) => ({
+    id: row.id,
+    business_id: row.business_id,
+    plaid_account_id: row.plaid_account_id,
+    date: row.date,
+    name: row.name,
+    merchant_name: row.merchant_name,
+    counterparty_name: row.counterparty_name || null,
+    original_description: row.original_description || row.name,
+    amount: row.amount,
+    direction: row.amount < 0 ? "OUTFLOW" : "INFLOW",
+    pending: row.pending,
+    is_archived: false,
+  }));
+  mockSupabase.store.transaction_categorizations = rpcRows.map((row) => ({
+    transaction_id: row.id,
+    business_id: row.business_id,
+    status: row.cat_status,
+    qbo_txn_id: row.qbo_txn_id,
+    qbo_txn_type: row.qbo_txn_type,
+    final_qbo_account_id: row.final_qbo_account_id,
+    final_qbo_account_name: row.final_qbo_account_name,
+    posted_at: row.posted_at,
+  }));
 }
 
 function createSupabaseMock(initial = {}) {
@@ -748,9 +776,9 @@ describe("job costing jobs routes", () => {
     mockSupabase.store.job_transaction_assignments = [
       { id: "assignment-manual", business_id: BUSINESS_ID, job_id: "manual-delete-blocked", transaction_id: TXN_ID },
     ];
-    mockSupabase.store.bookkeeping_rpc_rows = [
+    seedConfirmedRows(mockSupabase, [
       makeRpcPostedRow({ id: TXN_ID, qboId: "qbo-1", assigned: true }),
-    ];
+    ]);
 
     const response = await request(app, "/api/job-costing/jobs/manual-delete-blocked/manual", {
       method: "DELETE",
@@ -832,16 +860,17 @@ describe("job costing jobs routes", () => {
     mockSupabase.store.__tableErrors = {
       job_change_orders: { code: "42703", message: "column job_change_orders.title does not exist" },
     };
-    mockSupabase.store.bookkeeping_rpc_rows = Array.from({ length: 204 }, (_, index) => makeRpcPostedRow({
+    const confirmedRows = Array.from({ length: 204 }, (_, index) => makeRpcPostedRow({
       id: `posted-${String(index + 1).padStart(3, "0")}`,
       qboId: `qbo-${index + 1}`,
       date: `2026-08-${String((index % 28) + 1).padStart(2, "0")}`,
     }));
-    mockSupabase.store.bookkeeping_rpc_rows.push(makeRpcPostedRow({
+    confirmedRows.push(makeRpcPostedRow({
       id: "not-posted",
       qboId: null,
       date: "2026-08-31",
     }));
+    seedConfirmedRows(mockSupabase, confirmedRows);
 
     const response = await request(app, "/api/job-costing/job-costing", { method: "GET" });
 
@@ -862,7 +891,7 @@ describe("job costing jobs routes", () => {
   });
 
   test("job costing reconciles all locally confirmed Posted and Matched transactions by stable QBO identity", async () => {
-    mockSupabase.store.bookkeeping_rpc_rows = [
+    const confirmedRows = [
       makeRpcPostedRow({ id: "manual-post", qboId: "qbo-1", vendor: "Same Vendor", amount: -12.5 }),
       makeRpcPostedRow({ id: "bulk-post", qboId: "qbo-2", vendor: "Same Vendor", amount: -12.5 }),
       makeRpcPostedRow({ id: "matched", qboId: "qbo-3", status: "matched", vendor: null, amount: 30 }),
@@ -870,6 +899,12 @@ describe("job costing jobs routes", () => {
       makeRpcPostedRow({ id: "future", qboId: "qbo-future", date: "2099-01-01" }),
       makeRpcPostedRow({ id: "failed", qboId: null, status: "approved" }),
     ];
+    seedConfirmedRows(mockSupabase, confirmedRows);
+    const matchedCategorization = mockSupabase.store.transaction_categorizations.find((row) => row.transaction_id === "matched");
+    matchedCategorization.qbo_txn_id = null;
+    matchedCategorization.qbo_txn_type = null;
+    matchedCategorization.meta = { confirmed_qbo_entity_id: "qbo-3", confirmed_qbo_entity_type: "Deposit" };
+    mockSupabase.store.transaction_categorizations.find((row) => row.transaction_id === "duplicate-representation").qbo_txn_type = "Deposit";
     mockSupabase.store.job_transaction_assignments = [{
       id: "assignment-1",
       business_id: BUSINESS_ID,
@@ -894,7 +929,7 @@ describe("job costing jobs routes", () => {
     const transportError = new TypeError("fetch failed", {
       cause: Object.assign(new Error("Connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
     });
-    mockSupabase.store.__bookkeepingRpcError = transportError;
+    mockSupabase.store.__tableErrors = { transaction_categorizations: transportError };
     const logged = [];
     const originalError = console.error;
     console.error = (...args) => logged.push(args);
@@ -902,15 +937,53 @@ describe("job costing jobs routes", () => {
       const response = await request(app, "/api/job-costing/job-costing", { method: "GET" });
       assert.equal(response.status, 500);
       const diagnostic = logged.find((entry) => entry[0] === "[jobs.job-costing.upstream]")?.[1];
-      assert.equal(diagnostic.upstream, "supabase_postgrest_rpc");
-      assert.equal(diagnostic.operation, "get_bookkeeping_transactions_bounded");
-      assert.equal(diagnostic.timeout, true);
-      assert.equal(diagnostic.cause.code, "UND_ERR_CONNECT_TIMEOUT");
+      assert.equal(diagnostic.upstream_service, "supabase_postgrest");
+      assert.equal(diagnostic.operation, "job_costing_confirmed_transactions");
+      assert.equal(diagnostic.network_classification, "timeout");
+      assert.equal(diagnostic.cause_code, "UND_ERR_CONNECT_TIMEOUT");
+      assert.equal(diagnostic.method, "GET");
+      assert.equal(diagnostic.attempt_count, 1);
       assert.equal(JSON.stringify(diagnostic).includes("Authorization"), false);
     } finally {
       console.error = originalError;
-      delete mockSupabase.store.__bookkeepingRpcError;
+      delete mockSupabase.store.__tableErrors;
     }
+  });
+
+  test("job costing repository validates its upstream configuration without exposing secrets", () => {
+    const config = getJobCostingRepositoryConfig({
+      SUPABASE_URL: "https://example-project.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "never-log-this-secret",
+    });
+    assert.deepEqual(config, {
+      upstream_service: "supabase_postgrest",
+      hostname: "example-project.supabase.co",
+      protocol: "https:",
+      url_valid: true,
+      service_role_configured: true,
+    });
+    assert.equal(JSON.stringify(config).includes("never-log-this-secret"), false);
+  });
+
+  test("job costing uses only local confirmed receipts, is tenant scoped, and never calls the Books feed RPC", async () => {
+    const rows = [
+      makeRpcPostedRow({ id: "local-post", qboId: "qbo-local" }),
+      makeRpcPostedRow({ id: "other-tenant", businessId: OTHER_BUSINESS_ID, qboId: "qbo-other" }),
+    ];
+    seedConfirmedRows(mockSupabase, rows);
+    let rpcCalls = 0;
+    supabase.rpc = async () => {
+      rpcCalls += 1;
+      throw new Error("Books feed RPC must not be used by Job Costing");
+    };
+
+    const response = await request(app, "/api/job-costing/job-costing", { method: "GET" });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.transactions.map((row) => row.id), ["local-post"]);
+    assert.equal(rpcCalls, 0);
+    assert.deepEqual(response.body.filters.available_months, ["2026-08"]);
+    assert.deepEqual(response.body.filters.gl_accounts, [{ id: "acct-cost", name: "Materials" }]);
   });
 
   test("job candidates endpoint returns the real bounded total for suggested jobs", async () => {

@@ -4,6 +4,7 @@ import { supabase } from "../../services/supabaseAdmin.js"; // your existing hel
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { createRateLimiter } from "../_shared/rateLimit.js";
 import { fetchBookkeepingTransactions, normalizePostedBookTransaction } from "../bookkeeping/routes/bookkeeping.transactions.routes.js";
+import { fetchConfirmedJobCostingTransactions, safeJobCostingDataFailure } from "../../services/jobCosting/postedTransactionRepository.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
 import { generateJobAssignmentSuggestionsForBusiness } from "../../services/jobCosting/jobAssignmentSuggestionEngine.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../services/insights/contractorCfoTriggerService.js";
@@ -883,72 +884,29 @@ async function recordJobAssignmentHistory({
   return data;
 }
 
-function safeUpstreamFailure(error, context = {}) {
-  const cause = error?.cause || null;
-  const message = String(error?.message || error || "unknown failure");
-  const causeMessage = String(cause?.message || "");
-  const code = String(cause?.code || error?.code || "");
-  return {
-    upstream: "supabase_postgrest_rpc",
-    operation: "get_bookkeeping_transactions_bounded",
-    business_id: context.businessId || null,
-    status_filter: context.statusFilter || null,
-    page: context.page || null,
-    elapsed_ms: context.elapsedMs || 0,
-    timeout: /timeout|timed out|abort/i.test(`${message} ${causeMessage}`) || ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT"].includes(code),
-    cause: { name: cause?.name || error?.name || "Error", code: code || null, message: causeMessage || message },
-  };
-}
-
-async function fetchAllConfirmedBookkeepingRows(businessId, statusFilter) {
-  const rows = [];
-  const pageSize = 200;
-  let page = 1;
-  let totalCount = null;
-  while (totalCount === null || rows.length < totalCount) {
-    const startedAt = Date.now();
-    let result;
-    try {
-      result = await fetchBookkeepingTransactions({
-        businessId,
-        statusFilter,
-        rangeParam: "all",
-        page,
-        pageSize,
-      });
-    } catch (error) {
-      console.error("[jobs.job-costing.upstream]", safeUpstreamFailure(error, {
-        businessId,
-        statusFilter,
-        page,
-        elapsedMs: Date.now() - startedAt,
-      }));
-      throw error;
-    }
-    const pageRows = Array.isArray(result?.rows) ? result.rows : [];
-    if (totalCount === null) totalCount = Number(result?.totalCount || pageRows.length || 0);
-    rows.push(...pageRows);
-    if (!pageRows.length || pageRows.length < pageSize) break;
-    page += 1;
-  }
-  return rows;
-}
-
 function confirmedQboIdentity(row = {}) {
   const qboId = String(row.qbo_txn_id || "").trim();
   if (qboId) return `${String(row.qbo_realm_id || row.realm_id || "realm")}:${String(row.qbo_txn_type || "Transaction")}:${qboId}`;
   return `bizzi:${String(row.id || row.transaction_id || "")}`;
 }
 
-async function fetchJobCostingRows(businessId) {
-  // Job Costing uses posted Books transactions as the source of truth.
-  // This endpoint intentionally mirrors Books Review Posted transactions for job costing assignment.
-  // This reuses the same underlying query as Books Review > Posted:
-  // GET /api/bookkeeping/transactions?status=posted
-  const [postedRows, matchedRows] = await Promise.all([
-    fetchAllConfirmedBookkeepingRows(businessId, "posted"),
-    fetchAllConfirmedBookkeepingRows(businessId, "matched"),
-  ]);
+async function fetchJobCostingRows(businessId, { correlationId = null } = {}) {
+  // Read only Bizzi's durable posting receipts. Page loads never call QuickBooks or
+  // the much broader Books Review feed/RPC.
+  const repositoryStartedAt = Date.now();
+  let confirmedResult;
+  try {
+    confirmedResult = await fetchConfirmedJobCostingTransactions({ businessId, db: supabase });
+  } catch (error) {
+    console.error("[jobs.job-costing.upstream]", safeJobCostingDataFailure(error, {
+      businessId,
+      elapsedMs: Date.now() - repositoryStartedAt,
+      correlationId,
+    }));
+    throw error;
+  }
+  const postedRows = confirmedResult.rows.filter((row) => row.status === "posted");
+  const matchedRows = confirmedResult.rows.filter((row) => row.status === "matched");
   const businessToday = new Date().toISOString().slice(0, 10);
   const confirmedRows = [...postedRows, ...matchedRows].filter((row) => (
     Boolean(row?.qbo_txn_id) && String(row?.date || "") <= businessToday
@@ -1125,6 +1083,14 @@ async function fetchJobCostingRows(businessId) {
   return {
     transactions: rows,
     jobs: normalizedJobs,
+    filters: {
+      available_months: [...new Set(rows.map((row) => String(row.date || "").slice(0, 7)).filter(Boolean))].sort().reverse(),
+      gl_accounts: [...new Map(rows.filter((row) => row.gl_account_id || row.gl_account).map((row) => [
+        String(row.gl_account_id || row.gl_account),
+        { id: row.gl_account_id || null, name: row.gl_account || row.final_qbo_account_name || "Uncategorized" },
+      ])).values()].sort((left, right) => left.name.localeCompare(right.name)),
+      roles: ["cost", "revenue"],
+    },
     pagination: {
       total_posted_transactions: rows.length,
       loaded_posted_transactions: rows.length,
@@ -1624,7 +1590,9 @@ router.get("/job-costing", requireRouteAuth, async (req, res) => {
   try {
     const businessId = ensureBusinessId(req, res);
     if (!businessId) return;
-    const payload = await fetchJobCostingRows(businessId);
+    const correlationId = String(req.get("x-request-id") || `job-costing-${Date.now().toString(36)}`);
+    res.set("x-request-id", correlationId);
+    const payload = await fetchJobCostingRows(businessId, { correlationId });
     return res.json({ ok: true, ...payload });
   } catch (e) {
     console.error("[jobs.job-costing]", e);
