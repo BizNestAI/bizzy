@@ -4,6 +4,7 @@ import { supabase as defaultDb } from "../supabaseAdmin.js";
 
 const PAGE_SIZE = 500;
 const IN_QUERY_SIZE = 200;
+const ASSIGNMENT_IN_QUERY_SIZE = 75;
 const CONFIRMED_STATUSES = new Set(["posted", "matched", "matched_existing_qbo", "reconciled"]);
 export const JOB_COSTING_BANK_TRANSACTION_COLUMNS = [
   "id",
@@ -17,6 +18,18 @@ export const JOB_COSTING_BANK_TRANSACTION_COLUMNS = [
   "pending",
   "is_archived",
   "plaid_account_id",
+];
+export const JOB_COSTING_ASSIGNMENT_COLUMNS = [
+  "id",
+  "business_id",
+  "transaction_id",
+  "job_id",
+  "job_label",
+  "allocation_percent",
+  "allocated_amount",
+  "source",
+  "assignment_source",
+  "confidence",
 ];
 
 function chunks(values, size = IN_QUERY_SIZE) {
@@ -55,6 +68,22 @@ async function fetchBankTransactions(db, businessId, transactionIds) {
       .select(JOB_COSTING_BANK_TRANSACTION_COLUMNS.join(","))
       .eq("business_id", businessId)
       .in("id", ids);
+    if (error) throw error;
+    rows.push(...(data || []));
+  }
+  return rows;
+}
+
+export async function fetchJobCostingAssignments({ businessId, transactionIds, db = defaultDb } = {}) {
+  if (!businessId) throw new Error("business_id_required");
+  const uniqueIds = [...new Set((transactionIds || []).filter(Boolean).map(String))];
+  const rows = [];
+  for (const ids of chunks(uniqueIds, ASSIGNMENT_IN_QUERY_SIZE)) {
+    const { data, error } = await db
+      .from("job_transaction_assignments")
+      .select(JOB_COSTING_ASSIGNMENT_COLUMNS.join(","))
+      .eq("business_id", businessId)
+      .in("transaction_id", ids);
     if (error) throw error;
     rows.push(...(data || []));
   }
@@ -138,12 +167,19 @@ export async function fetchConfirmedJobCostingTransactions({ businessId, db = de
 export function safeJobCostingDataFailure(error, context = {}) {
   const cause = error?.cause || null;
   const code = cause?.code || error?.code || null;
-  const hostname = (() => {
+  const destination = (() => {
     try { return new URL(process.env.SUPABASE_URL || "").hostname || null; } catch { return null; }
   })();
   return {
     upstream_service: "supabase_postgrest",
-    hostname,
+    destination_origin: (() => {
+      try { return new URL(process.env.SUPABASE_URL || "").origin; } catch { return null; }
+    })(),
+    destination_path: context.destinationPath || null,
+    hostname: cause?.hostname || destination,
+    syscall: cause?.syscall || null,
+    address: cause?.address || null,
+    port: cause?.port || null,
     method: "GET",
     operation: context.operation || "job_costing_confirmed_transactions",
     timeout_ms: context.timeoutMs || null,
@@ -157,6 +193,9 @@ export function safeJobCostingDataFailure(error, context = {}) {
     network_classification: /^\d{5}$/.test(String(code || "")) || /^PGRST/.test(String(code || "")) ? "database" : /ENOTFOUND|EAI_AGAIN/.test(String(code)) ? "dns" : /ECONNREFUSED/.test(String(code)) ? "connection_refused" : /TIMEOUT|ETIMEDOUT/i.test(String(code)) ? "timeout" : /CERT|TLS/i.test(String(code)) ? "tls" : code ? "transport" : "unknown",
     attempt_count: 1,
     aborted: error?.name === "AbortError" || cause?.name === "AbortError",
+    abort_reason: error?.name === "AbortError" ? error?.message || "aborted" : null,
+    upstream_status: error?.status || error?.statusCode || null,
+    upstream_body: typeof error?.body === "string" ? error.body.slice(0, 500) : null,
     deployment_sha: process.env.RAILWAY_GIT_COMMIT_SHA || process.env.DEPLOYMENT_SHA || null,
     business_id: context.businessId || null,
     correlation_id: context.correlationId || null,

@@ -15,7 +15,9 @@ const [{ default: jobsRouter }, { supabase }, repository] = await Promise.all([
   import("../src/services/jobCosting/postedTransactionRepository.js"),
 ]);
 const {
+  JOB_COSTING_ASSIGNMENT_COLUMNS,
   JOB_COSTING_BANK_TRANSACTION_COLUMNS,
+  fetchJobCostingAssignments,
   getCanonicalBankDescription,
   getCanonicalBankVendor,
   getJobCostingRepositoryConfig,
@@ -32,6 +34,14 @@ function productionBankTransactionColumns() {
   const schema = readFileSync(new URL("../supabase/live_schema_snapshot.sql", import.meta.url), "utf8");
   const table = schema.match(/CREATE TABLE IF NOT EXISTS "public"\."bank_transactions" \(([\s\S]*?)\n\);/);
   assert.ok(table, "bank_transactions must exist in the checked-in live schema");
+  return new Set([...table[1].matchAll(/^\s+"([^"]+)"/gm)].map((match) => match[1]));
+}
+
+function productionTableColumns(tableName) {
+  const schema = readFileSync(new URL("../supabase/live_schema_snapshot.sql", import.meta.url), "utf8");
+  const escaped = tableName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const table = schema.match(new RegExp(`CREATE TABLE IF NOT EXISTS "public"\\."${escaped}" \\(([\\s\\S]*?)\\n\\);`));
+  assert.ok(table, `${tableName} must exist in the checked-in live schema`);
   return new Set([...table[1].matchAll(/^\s+"([^"]+)"/gm)].map((match) => match[1]));
 }
 
@@ -74,6 +84,8 @@ class SupabaseQuery {
   }
 
   in(field, values) {
+    this.store.__inCalls ||= [];
+    this.store.__inCalls.push({ table: this.table, field, values: [...(values || [])] });
     const accepted = new Set((values || []).map(String));
     this.filters.push((row) => accepted.has(String(row[field])));
     return this;
@@ -915,6 +927,9 @@ describe("job costing jobs routes", () => {
     assert.equal(response.body.jobs[0].can_delete_manual_job, true);
     assert.equal(response.body.jobs[0].revenue_source_status, "manual_no_revenue_source");
     assert.equal(response.body.jobs[0].change_order_count, 0);
+    const assignmentCalls = mockSupabase.store.__inCalls.filter((call) => call.table === "job_transaction_assignments");
+    assert.equal(assignmentCalls.length, 3);
+    assert.equal(assignmentCalls.every((call) => call.values.length <= 75), true);
   });
 
   test("job costing reconciles all locally confirmed Posted and Matched transactions by stable QBO identity", async () => {
@@ -986,6 +1001,46 @@ describe("job costing jobs routes", () => {
     assert.equal(matched.bank_memo, "IMPORTED BANK MEMO");
   });
 
+  test("production-shaped assignment access is schema verified and chunks the complete transaction population", async () => {
+    const assignmentColumns = productionTableColumns("job_transaction_assignments");
+    mockSupabase.store.__schemaColumns = { job_transaction_assignments: assignmentColumns };
+    assert.deepEqual(
+      JOB_COSTING_ASSIGNMENT_COLUMNS.filter((column) => !assignmentColumns.has(column)),
+      [],
+    );
+    const transactionIds = Array.from({ length: 181 }, (_, index) => `transaction-${index + 1}`);
+    mockSupabase.store.job_transaction_assignments = [
+      {
+        id: "assignment-first",
+        business_id: BUSINESS_ID,
+        transaction_id: transactionIds[0],
+        job_id: JOB_ID,
+        allocation_percent: 100,
+        allocated_amount: 25,
+      },
+      {
+        id: "assignment-last",
+        business_id: BUSINESS_ID,
+        transaction_id: transactionIds.at(-1),
+        job_id: OTHER_JOB_ID,
+        allocation_percent: 100,
+        allocated_amount: 30,
+      },
+    ];
+
+    const rows = await fetchJobCostingAssignments({
+      businessId: BUSINESS_ID,
+      transactionIds,
+      db: supabase,
+    });
+
+    assert.deepEqual(rows.map((row) => row.id), ["assignment-first", "assignment-last"]);
+    const calls = mockSupabase.store.__inCalls.filter((call) => call.table === "job_transaction_assignments");
+    assert.equal(calls.length, 3);
+    assert.equal(calls.every((call) => call.values.length <= 75), true);
+    assert.equal(calls.flatMap((call) => call.values).length, transactionIds.length);
+  });
+
   test("canonical Job Costing display fields prefer vendor and safely fall back to imported description", () => {
     assert.equal(getCanonicalBankVendor({ counterparty_name: "Normalized Vendor", merchant_name: "Plaid Merchant" }), "Normalized Vendor");
     assert.equal(getCanonicalBankVendor({ counterparty_name: null, merchant_name: "Plaid Merchant" }), "Plaid Merchant");
@@ -1028,7 +1083,13 @@ describe("job costing jobs routes", () => {
 
   test("job costing classifies Supabase transport failures without logging credentials", async () => {
     const transportError = new TypeError("fetch failed", {
-      cause: Object.assign(new Error("Connect timeout"), { code: "UND_ERR_CONNECT_TIMEOUT" }),
+      cause: Object.assign(new Error("Connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+        syscall: "connect",
+        hostname: "example-project.supabase.co",
+        address: "203.0.113.10",
+        port: 443,
+      }),
     });
     mockSupabase.store.__tableErrors = { transaction_categorizations: transportError };
     const logged = [];
@@ -1042,6 +1103,10 @@ describe("job costing jobs routes", () => {
       assert.equal(diagnostic.operation, "job_costing_confirmed_transactions");
       assert.equal(diagnostic.network_classification, "timeout");
       assert.equal(diagnostic.cause_code, "UND_ERR_CONNECT_TIMEOUT");
+      assert.equal(diagnostic.syscall, "connect");
+      assert.equal(diagnostic.hostname, "example-project.supabase.co");
+      assert.equal(diagnostic.address, "203.0.113.10");
+      assert.equal(diagnostic.port, 443);
       assert.equal(diagnostic.method, "GET");
       assert.equal(diagnostic.attempt_count, 1);
       assert.equal(JSON.stringify(diagnostic).includes("Authorization"), false);

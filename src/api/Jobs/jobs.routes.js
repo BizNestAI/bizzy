@@ -4,7 +4,11 @@ import { supabase } from "../../services/supabaseAdmin.js"; // your existing hel
 import { requireAuth } from "../gpt/middlewares/requireAuth.js";
 import { createRateLimiter } from "../_shared/rateLimit.js";
 import { fetchBookkeepingTransactions, normalizePostedBookTransaction } from "../bookkeeping/routes/bookkeeping.transactions.routes.js";
-import { fetchConfirmedJobCostingTransactions, safeJobCostingDataFailure } from "../../services/jobCosting/postedTransactionRepository.js";
+import {
+  fetchConfirmedJobCostingTransactions,
+  fetchJobCostingAssignments,
+  safeJobCostingDataFailure,
+} from "../../services/jobCosting/postedTransactionRepository.js";
 import { applyActiveBookkeepingScope, getBookkeepingStartDate, isTransactionInActiveBookkeepingScope } from "../../services/bookkeeping/bookkeepingScope.js";
 import { generateJobAssignmentSuggestionsForBusiness } from "../../services/jobCosting/jobAssignmentSuggestionEngine.js";
 import { triggerContractorCfoInsightsBestEffort } from "../../services/insights/contractorCfoTriggerService.js";
@@ -922,12 +926,20 @@ async function fetchJobCostingRows(businessId, { correlationId = null } = {}) {
   const ids = (txns || []).map((row) => row.id);
   let assignmentsByTransaction = {};
   if (ids.length) {
-    const { data: assignments, error: assignmentErr } = await supabase
-      .from("job_transaction_assignments")
-      .select("*")
-      .eq("business_id", businessId)
-      .in("transaction_id", ids);
-    if (assignmentErr) throw assignmentErr;
+    let assignments;
+    const assignmentStartedAt = Date.now();
+    try {
+      assignments = await fetchJobCostingAssignments({ businessId, transactionIds: ids, db: supabase });
+    } catch (error) {
+      console.error("[jobs.job-costing.upstream]", safeJobCostingDataFailure(error, {
+        operation: "job_costing_assignments_by_transaction",
+        destinationPath: "/rest/v1/job_transaction_assignments",
+        businessId,
+        elapsedMs: Date.now() - assignmentStartedAt,
+        correlationId,
+      }));
+      throw error;
+    }
     assignmentsByTransaction = (assignments || []).reduce((acc, row) => {
       const key = String(row.transaction_id);
       if (!acc[key]) acc[key] = [];
