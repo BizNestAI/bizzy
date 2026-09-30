@@ -1030,15 +1030,17 @@ export async function generateBizzyResponseHandler(req, res) {
     }
 
     let orchestration;
+    const contextRequestId = randomUUID();
     try {
       orchestration = await buildChatContext({
         businessId: business_id,
         message,
         forcedIntent: normalizedType,
         db: supabase,
+        requestId: contextRequestId,
       });
     } catch (contextError) {
-      const requestId = randomUUID();
+      const requestId = contextRequestId;
       console.error('[gpt handler] context compilation failed', {
         request_id: requestId,
         business_id,

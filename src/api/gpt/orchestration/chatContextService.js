@@ -4,11 +4,12 @@ import { resolveFinancialPeriod } from "./periodResolver.js";
 
 const MAX_DETAIL_ROWS = 40;
 const CASH_BASIS = "Cash";
+const PERIOD_WORDS = /\b(today|yesterday|this|last|previous|month|quarter|year|ytd|mtd|qtd|january|february|march|april|may|june|july|august|september|october|november|december|\d{4}-\d{2}-\d{2})\b/i;
 
 function queryData(result, source) {
   if (result?.error) {
     const error = new Error(result.error.message || `${source}_query_failed`);
-    error.code = `${source}_query_failed`;
+    error.code = result.error.code || `${source}_query_failed`;
     throw error;
   }
   return result?.data || [];
@@ -68,9 +69,17 @@ function normalizeSnapshot(row, key, currentPeriod, isCurrent) {
   const bounds = monthBounds(key, currentPeriod, isCurrent);
   if (!row) return { month: key, ...bounds, revenue: null, expenses: null, net_income: null, profit_margin: null, basis: CASH_BASIS, source: "monthly_review_qbo_pnl_snapshots", data_through: null, refreshed_at: null, availability: "unavailable", availability_reason: "cash_basis_snapshot_unavailable", is_partial: isCurrent };
   const revenue = row.revenue == null ? null : Number(row.revenue);
+  const reconciliationTotals = row.metadata?.reconciliation?.summary_totals || row.metadata?.summary_totals || {};
+  const cogs = row.cogs == null ? Number(reconciliationTotals.cogs || 0) : Number(row.cogs);
+  const otherIncome = Number(reconciliationTotals.other_income || 0);
+  const otherExpense = Number(reconciliationTotals.other_expense || 0);
   const netIncome = row.net_profit == null ? null : Number(row.net_profit);
+  const expenses = row.expenses == null ? null : Number(row.expenses);
+  const componentNetIncome = [revenue, expenses, cogs, otherIncome, otherExpense].every(Number.isFinite)
+    ? Math.round((revenue - cogs - expenses + otherIncome - otherExpense) * 100) / 100
+    : null;
   const evidencedThrough = isCurrent && row.source_end_date > currentPeriod.end_date ? currentPeriod.end_date : row.source_end_date;
-  return { month: key, ...bounds, revenue, expenses: row.expenses == null ? null : Number(row.expenses), net_income: netIncome, profit_margin: revenue ? (netIncome / revenue) * 100 : null, basis: row.accounting_method, source: "monthly_review_qbo_pnl_snapshots", data_through: evidencedThrough || null, refreshed_at: row.pulled_at || null, availability: "available", is_partial: isCurrent };
+  return { month: key, ...bounds, revenue, cogs, expenses, other_income: otherIncome, other_expense: otherExpense, net_income: netIncome, net_income_is_authoritative: true, component_net_income: componentNetIncome, reconciliation_difference: netIncome == null || componentNetIncome == null ? null : Math.round((netIncome - componentNetIncome) * 100) / 100, profit_margin: revenue ? (netIncome / revenue) * 100 : null, basis: row.accounting_method, source: "monthly_review_qbo_pnl_snapshots", data_through: evidencedThrough || null, refreshed_at: row.pulled_at || null, availability: "available", is_partial: isCurrent };
 }
 
 async function loadFinancialSummary({ db, businessId, currentPeriod }) {
@@ -81,7 +90,7 @@ async function loadFinancialSummary({ db, businessId, currentPeriod }) {
     return monthKey(date.getUTCFullYear(), date.getUTCMonth() + 1);
   });
   const result = await db.from("monthly_review_qbo_pnl_snapshots")
-    .select("id,review_year,review_month,accounting_method,source_start_date,source_end_date,pulled_at,revenue,expenses,net_profit,is_current,status")
+    .select("id,review_year,review_month,accounting_method,source_start_date,source_end_date,pulled_at,revenue,cogs,expenses,net_profit,is_current,status,metadata")
     .eq("business_id", businessId).eq("accounting_method", CASH_BASIS).eq("is_current", true).eq("status", "current")
     .gte("source_start_date", `${previousKeys[0]}-01`).lte("source_start_date", currentPeriod.end_date)
     .order("review_year", { ascending: true }).order("review_month", { ascending: true }).limit(13);
@@ -125,7 +134,7 @@ async function loadBookkeepingHealth({ db, businessId, period }) {
 }
 
 async function loadCurrentSnapshots({ db, businessId, period }) {
-  return queryData(await db.from("monthly_review_qbo_pnl_snapshots").select("id,review_year,review_month,accounting_method,source_start_date,source_end_date,pulled_at,revenue,expenses,net_profit,status,is_current")
+  return queryData(await db.from("monthly_review_qbo_pnl_snapshots").select("id,review_year,review_month,accounting_method,source_start_date,source_end_date,pulled_at,revenue,cogs,expenses,net_profit,status,is_current,metadata")
     .eq("business_id", businessId).eq("accounting_method", CASH_BASIS).eq("is_current", true).eq("status", "current")
     .gte("source_start_date", period.start_date).lte("source_start_date", period.end_date).order("source_start_date", { ascending: true }).limit(24), "monthly_review_qbo_pnl_snapshots");
 }
@@ -144,7 +153,70 @@ async function loadTable({ db, businessId, period, table, select, configure, sou
   return { data: rows, source, requested_period: period, accounting_basis: null, data_through: null, refreshed_at: null, status: rows.length ? "available" : "unavailable" };
 }
 
-async function loadIntentContext({ db, businessId, period, intent, entities, message }) {
+function normalizeSearch(value) {
+  return String(value || "").toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function availability(rows) {
+  return rows.length ? "available_with_results" : "available_no_matches";
+}
+
+function dedupeTransactions(rows) {
+  const seen = new Set();
+  return rows.filter((row) => {
+    const key = row.duplicate_fingerprint || row.plaid_transaction_id || row.transaction_id || [row.transaction_date, row.signed_amount ?? row.amount, normalizeSearch(row.normalized_merchant_name || row.merchant_name || row.description)].join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function loadTransactionSearch({ db, businessId, period, entities, message }) {
+  const term = normalizeSearch(entities.search_text);
+  let query = db.from("bizzy_chat_bookkeeping_feed")
+    .select("transaction_id,plaid_transaction_id,duplicate_fingerprint,transaction_date,description,original_description,memo,merchant_name,normalized_merchant_name,signed_amount,amount,direction,account_name,gl_category,primary_feed,posting_outcome,qbo_entity_id,matched_relationship_id,last_status_at,source_provenance")
+    .eq("business_id", businessId);
+  if (PERIOD_WORDS.test(message)) query = query.gte("transaction_date", period.start_date).lte("transaction_date", period.end_date);
+  if (term) query = query.or(["description", "original_description", "memo", "merchant_name", "normalized_merchant_name"].map((field) => `${field}.ilike.%${term}%`).join(","));
+  const rows = dedupeTransactions(queryData(await query.order("transaction_date", { ascending: false }).limit(MAX_DETAIL_ROWS), "bizzy_chat_bookkeeping_feed_search"))
+    .map((row) => ({ ...row, account_name: row.account_name ? maskAccountName(row.account_name) : null }));
+  return { data: rows, source: "bizzy_chat_bookkeeping_feed", requested_period: PERIOD_WORDS.test(message) ? period : null, search_scope: PERIOD_WORDS.test(message) ? "requested_period" : "bounded_available_history", accounting_basis: null, data_through: rows[0]?.transaction_date || null, refreshed_at: rows.map((row) => row.last_status_at).filter(Boolean).sort().at(-1) || null, status: availability(rows) };
+}
+
+function jobMatchScore(jobName, search) {
+  const name = normalizeSearch(jobName);
+  const needle = normalizeSearch(search);
+  if (!needle) return 1;
+  if (name === needle) return 100;
+  if (name.includes(needle) || needle.includes(name)) return 80;
+  const stop = new Set(["and", "the", "of", "llc", "inc", "company", "co"]);
+  const tokens = name.split(" ").filter((token) => token && !stop.has(token));
+  const needleTokens = needle.split(" ").filter((token) => token && !stop.has(token));
+  const initials = tokens.map((token) => token[0]).join("");
+  const needleInitials = needleTokens.map((token) => token[0]).join("");
+  if (needleInitials.length >= 2 && initials === needleInitials) return 75;
+  const overlap = needleTokens.filter((token) => tokens.includes(token)).length;
+  return needleTokens.length && overlap ? 40 + (overlap / needleTokens.length) * 30 : 0;
+}
+
+async function loadJobProfitability({ businessId, entities, db, jobSummaryLoader }) {
+  const loader = jobSummaryLoader || (async (...args) => (await import("../../Jobs/jobs.routes.js")).fetchJobSummaries(...args));
+  const summaries = await loader(businessId, { db });
+  const ranked = summaries.map((row) => ({ row, score: jobMatchScore(row.job_name, entities.job_search) })).filter(({ score }) => score > 0).sort((a, b) => b.score - a.score);
+  const rows = ranked.slice(0, entities.job_search ? 5 : MAX_DETAIL_ROWS).map(({ row, score }) => ({
+    job_id: row.job_id || row.id, job_name: row.job_name, invoiced_revenue: row.net_invoiced_revenue ?? 0,
+    collected_revenue: row.collected_cash ?? 0, assigned_direct_costs: row.total_cost ?? 0,
+    gross_profit: row.gross_margin ?? 0, margin_percent: row.margin_percent,
+    assigned_source_count: row.assigned_transaction_count ?? 0, status: row.status,
+    revenue_basis: row.selected_revenue_basis, revenue_basis_label: row.revenue_basis_label,
+    profitability_verification: Number(row.assigned_transaction_count || 0) === 0 ? "incomplete_unverified_no_cost_sources" : "calculated_from_assigned_sources",
+    warning: Number(row.assigned_transaction_count || 0) === 0 ? "No costs have been assigned, so the calculated margin is not a reliable final measure of profitability." : null,
+    data_freshness: row.data_freshness || null, match_score: score, source_provenance: "job_costing_page_canonical_summary",
+  }));
+  return { data: rows, source: "job_costing_page_canonical_summary", requested_period: null, accounting_basis: null, data_through: null, refreshed_at: null, status: availability(rows) };
+}
+
+async function loadIntentContext({ db, businessId, period, intent, entities, message, jobSummaryLoader }) {
   if (["financial_summary", "financial_revenue", "financial_expenses", "financial_net_income", "financial_basis"].includes(intent)) {
     const snapshots = await loadCurrentSnapshots({ db, businessId, period });
     return { data: snapshots, source: "monthly_review_qbo_pnl_snapshots", requested_period: period, accounting_basis: CASH_BASIS, requested_basis: entities.requested_basis, supported_basis: "cash", company_specific_accrual_available: false, comparable: true, data_through: snapshots.map((r) => r.source_end_date).sort().at(-1) || null, refreshed_at: snapshots.map((r) => r.pulled_at).sort().at(-1) || null, interpretation: intent === "financial_revenue" && /money .*made|money .*make|how much money/i.test(message) ? "revenue" : null, status: snapshots.length ? "available" : "unavailable", availability_reason: snapshots.length ? null : "cash_basis_snapshot_unavailable" };
@@ -153,19 +225,16 @@ async function loadIntentContext({ db, businessId, period, intent, entities, mes
   if (intent === "chart_of_accounts") return loadSnapshotDetails({ db, businessId, period, childTable: "monthly_review_qbo_pnl_accounts", select: "snapshot_id,account_name,account_type,account_subtype,total_amount,display_order", orderField: "display_order" });
   if (intent === "cash_balance") return loadPlaidSummary({ db, businessId, period });
   if (intent === "plaid_transactions") return loadTable({ db, businessId, period, table: "bank_transactions", select: "date,amount,direction,name,merchant_name,pending", configure: (q) => q.gte("date", period.start_date).lte("date", period.end_date).order("date", { ascending: false }) });
-  if (intent === "transaction_search") {
-    const term = String(entities.search_text || "").replace(/[%_,()]/g, " ").trim();
-    return loadTable({ db, businessId, period, table: "bank_transactions", source: "bank_transactions_search", select: "date,amount,direction,name,merchant_name,pending", configure: (q) => { let out = q.gte("date", period.start_date).lte("date", period.end_date); if (term) out = out.or(`name.ilike.%${term}%,merchant_name.ilike.%${term}%`); return out.order("date", { ascending: false }); } });
-  }
+  if (intent === "transaction_search") return loadTransactionSearch({ db, businessId, period, entities, message });
   if (intent === "invoice_status") return loadTable({ db, businessId, period, table: "ar_aging_v2", select: "qbo_invoice_id,client,amount,days,due_date,status", configure: (q) => q.gt("amount", 0).gt("days", 0).in("status", ["unpaid", "partial", "overdue"]).order("days", { ascending: false }) });
   if (intent === "books_review") return loadTable({ db, businessId, period, table: "bizzy_chat_bookkeeping_feed", select: "transaction_id,transaction_date,description,merchant_name,amount,direction,primary_feed,posting_outcome,failure_review_reason,last_status_at", configure: (q) => q.gte("transaction_date", period.start_date).lte("transaction_date", period.end_date).order("transaction_date", { ascending: false }) });
-  if (intent === "job_profitability") return loadTable({ db, businessId, period, table: "jobs_profitability", select: "job_id,job_name,profit,margin,month", configure: (q) => { let out = q.gte("month", period.start_date.slice(0, 7)).lte("month", period.end_date.slice(0, 7)); if (entities.job_search) out = out.ilike("job_name", `%${entities.job_search}%`); return out.order("profit", { ascending: true }); } });
+  if (intent === "job_profitability") return loadJobProfitability({ businessId, entities, db, jobSummaryLoader });
   if (intent === "forecast_generate") return loadTable({ db, businessId, period, table: "cashflow_forecast", select: "month,cash_in,cash_out,net_cash,source,updated_at", configure: (q) => q.gte("month", period.start_date).lte("month", period.end_date).order("month", { ascending: true }) });
   if (intent === "tax_readiness") { const year = Number(period.start_date.slice(0, 4)); return loadTable({ db, businessId, period, table: "tax_calculation_runs", select: "tax_year,status,as_of_date,completed_at,confidence_score,source_freshness", configure: (q) => q.eq("tax_year", year).eq("status", "completed").is("superseded_by_run_id", null).order("completed_at", { ascending: false }), limit: 1 }); }
   return undefined;
 }
 
-export async function buildChatContext({ businessId, message, forcedIntent = null, timezone, now = new Date(), db, logger = console } = {}) {
+export async function buildChatContext({ businessId, message, forcedIntent = null, timezone, now = new Date(), db, logger = console, requestId = null, jobSummaryLoader = null } = {}) {
   if (!businessId) throw new Error("business_id_required");
   if (!db) throw new Error("database_client_required");
   const intent = resolveChatIntent(message, forcedIntent);
@@ -173,13 +242,18 @@ export async function buildChatContext({ businessId, message, forcedIntent = nul
   const period = resolveFinancialPeriod(message, { now, timezone });
   const currentPeriod = resolveFinancialPeriod("this month", { now, timezone });
   const tasks = { account_status: getCanonicalOnboardingStatus({ businessId, db }), financial_summary: loadFinancialSummary({ db, businessId, currentPeriod }), plaid_summary: loadPlaidSummary({ db, businessId, period: currentPeriod }), bookkeeping_health: loadBookkeepingHealth({ db, businessId, period: currentPeriod }) };
-  const detail = loadIntentContext({ db, businessId, period, intent, entities, message });
+  const detailStartedAt = Date.now();
+  const detail = loadIntentContext({ db, businessId, period, intent, entities, message, jobSummaryLoader });
   if (detail) tasks.intent_context = detail;
   const entries = Object.entries(tasks);
   const settled = await Promise.allSettled(entries.map(([, promise]) => promise));
   const context = { intent, entities, period, loader_status: {} };
-  settled.forEach((result, index) => { const key = entries[index][0]; if (result.status === "fulfilled") { context[key] = result.value; context.loader_status[key] = { status: result.value?.status || "available" }; } else { context[key] = null; context.loader_status[key] = { status: "error", error: result.reason?.code || result.reason?.message || "loader_failed" }; logger.warn?.("[chat-context] loader failed", { business_id: businessId, loader: key, intent, error: context.loader_status[key].error }); } });
+  settled.forEach((result, index) => { const key = entries[index][0]; if (result.status === "fulfilled") { context[key] = result.value; context.loader_status[key] = { status: result.value?.status || "available" }; } else { context[key] = null; context.loader_status[key] = { status: "failed", error_code: result.reason?.code || "loader_failed", error_message: String(result.reason?.message || "Loader failed").replace(/(?:sk-|Bearer\s+)[A-Za-z0-9._-]+/gi, "[redacted]").replace(/\b(token|password|secret|api[_-]?key)\s*[=:]\s*[^\s,;]+/gi, "$1=[redacted]").slice(0, 240) }; } });
+  if (detail) {
+    const diagnostic = context.loader_status.intent_context || { status: "failed" };
+    logger[diagnostic.status === "failed" ? "error" : "info"]?.("[bizzy.chat.loader]", { request_id: requestId, business_id: businessId, intent, loader: context.intent_context?.source || (intent === "transaction_search" ? "bizzy_chat_bookkeeping_feed" : intent), normalized_search_term: normalizeSearch(entities.search_text || entities.job_search) || null, normalized_period: PERIOD_WORDS.test(message) ? `${period.start_date}/${period.end_date}` : null, availability_status: diagnostic.status, result_count: context.intent_context?.data?.length || 0, duration_ms: Date.now() - detailStartedAt, database_error: diagnostic.status === "failed" ? { code: diagnostic.error_code, message: diagnostic.error_message } : null });
+  }
   return context;
 }
 
-export { CASH_BASIS, maskAccountName };
+export { CASH_BASIS, maskAccountName, dedupeTransactions, jobMatchScore };

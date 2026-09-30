@@ -72,7 +72,10 @@ export async function getCanonicalOnboardingStatus({ businessId, db } = {}) {
       connected: qboConnected.value,
       status: qboConnected.status,
       health: qboConnected.value === null ? "unknown" : qboConnected.value ? "healthy" : "disconnected",
-      last_successful_sync_at: qboRow?.last_connected_at || null,
+      authorization_status: qboConnected.value === null ? "unknown" : qboConnected.value ? "authorized" : "disconnected",
+      connection_established_at: qboRow?.last_connected_at || null,
+      integration_sync_at: null,
+      last_successful_sync_at: null,
     },
     plaid: {
       connected: plaidConnected.value,

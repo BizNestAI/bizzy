@@ -183,7 +183,7 @@ test("independent loader failure preserves successful context", async () => {
   assert.equal(context.account_status.onboarded, true);
   assert.equal(context.financial_summary.status, "available");
   assert.equal(context.intent_context, null);
-  assert.equal(context.loader_status.intent_context.status, "error");
+  assert.equal(context.loader_status.intent_context.status, "failed");
 });
 
 test("intent-specific loaders stay targeted", async () => {
@@ -192,10 +192,63 @@ test("intent-specific loaders stay targeted", async () => {
   const invoices = await buildChatContext({ businessId: BUSINESS, message: "Which invoices are overdue?", now: NOW, db: dbFor(baseStore()), logger: { warn() {} } });
   assert.equal(invoices.intent_context.source, "ar_aging_v2");
   const jobs = await buildChatContext({ businessId: BUSINESS, message: "Which jobs are profitable?", now: NOW, db: dbFor(baseStore()), logger: { warn() {} } });
-  assert.equal(jobs.intent_context.source, "jobs_profitability");
+  assert.equal(jobs.intent_context.source, "job_costing_page_canonical_summary");
   const plaid = await buildChatContext({ businessId: BUSINESS, message: "Show me Plaid transactions this month", now: NOW, db: dbFor(baseStore()), logger: { warn() {} } });
   assert.equal(plaid.intent_context.source, "bank_transactions");
   assert.equal(maskAccountName("Checking 123456789"), "Checking •••••6789");
+});
+
+test("merchant search uses bounded available history, returns canonical fields, and suppresses duplicates", async () => {
+  const store = baseStore();
+  store.bizzy_chat_bookkeeping_feed = [
+    { business_id: BUSINESS, transaction_id: "adobe-1", plaid_transaction_id: "plaid-adobe", transaction_date: "2026-08-12", merchant_name: "ADOBE", description: "Adobe Creative Cloud", memo: "Design tools", signed_amount: -59.99, direction: "OUTFLOW", account_name: "Checking 6789", gl_category: "Software", posting_outcome: "posted", source_provenance: "canonical" },
+    { business_id: BUSINESS, transaction_id: "adobe-copy", plaid_transaction_id: "plaid-adobe", transaction_date: "2026-08-12", merchant_name: "Adobe", signed_amount: -59.99 },
+    { business_id: "22222222-2222-4222-8222-222222222222", transaction_id: "other-business", transaction_date: "2026-09-01", merchant_name: "Adobe" },
+  ];
+  const context = await buildChatContext({ businessId: BUSINESS, message: "Show me my transactions with adobe", now: NOW, db: dbFor(store), logger: { info() {}, error() {} } });
+  assert.equal(context.intent_context.status, "available_with_results");
+  assert.equal(context.intent_context.search_scope, "bounded_available_history");
+  assert.equal(context.intent_context.requested_period, null);
+  assert.deepEqual(context.intent_context.data.map((row) => row.transaction_id), ["adobe-1"]);
+  assert.equal(context.intent_context.data[0].gl_category, "Software");
+});
+
+test("merchant no-match and query failure remain distinct and safely observable", async () => {
+  const logs = [];
+  const logger = { info: (...args) => logs.push(args), error: (...args) => logs.push(args) };
+  const noMatch = await buildChatContext({ businessId: BUSINESS, message: "Show me my transactions with Adobe", now: NOW, db: dbFor(baseStore()), requestId: "req-safe", logger });
+  assert.equal(noMatch.intent_context.status, "available_no_matches");
+  const failed = await buildChatContext({ businessId: BUSINESS, message: "Show me my transactions with Adobe", now: NOW, db: dbFor(baseStore(), { bizzy_chat_bookkeeping_feed: "database unavailable token=secret" }), requestId: "req-safe", logger });
+  assert.equal(failed.loader_status.intent_context.status, "failed");
+  assert.match(logs.at(-1)[0], /bizzy\.chat\.loader/);
+  assert.doesNotMatch(JSON.stringify(logs), /Creative Cloud|sk-[A-Za-z0-9]+/);
+});
+
+test("job profitability reuses canonical summaries with exact, partial, and initials matching", async () => {
+  const canonical = async () => [{ job_id: "pv", job_name: "Projection and Video LLC", net_invoiced_revenue: 7800, collected_cash: 5000, total_cost: 0, gross_margin: 7800, margin_percent: 100, assigned_transaction_count: 0, status: "healthy", selected_revenue_basis: "invoiced", revenue_basis_label: "Net invoiced revenue" }];
+  for (const name of ["Projection and Video LLC", "Projection and Video", "P&V"]) {
+    const context = await buildChatContext({ businessId: BUSINESS, message: `How profitable was the ${name} job?`, now: NOW, db: dbFor(baseStore()), jobSummaryLoader: canonical, logger: { info() {}, error() {} } });
+    assert.equal(context.intent_context.data[0].invoiced_revenue, 7800);
+    assert.equal(context.intent_context.data[0].assigned_direct_costs, 0);
+    assert.equal(context.intent_context.data[0].margin_percent, 100);
+    assert.equal(context.intent_context.data[0].profitability_verification, "incomplete_unverified_no_cost_sources");
+    assert.match(context.intent_context.data[0].warning, /not a reliable final measure/);
+  }
+});
+
+test("cash snapshot exposes reconciling other income and separates connection time from freshness", async () => {
+  const store = baseStore();
+  const september = store.monthly_review_qbo_pnl_snapshots.find((row) => row.review_year === 2026 && row.review_month === 9);
+  Object.assign(september, { revenue: 975, cogs: 0, expenses: 2893.43, net_profit: -1887.93, metadata: { reconciliation: { summary_totals: { other_income: 30.5, other_expense: 0 } } }, source_end_date: "2026-09-30", pulled_at: "2026-09-30T12:00:00Z" });
+  store.quickbooks_tokens[0].last_connected_at = "2026-08-14T10:00:00Z";
+  const context = await buildChatContext({ businessId: BUSINESS, message: "Show September net income", now: NOW, db: dbFor(store), logger: { info() {}, error() {} } });
+  assert.equal(context.financial_summary.current_month.other_income, 30.5);
+  assert.equal(context.financial_summary.current_month.component_net_income, -1887.93);
+  assert.equal(context.financial_summary.current_month.reconciliation_difference, 0);
+  assert.equal(context.account_status.quickbooks.connection_established_at, "2026-08-14T10:00:00Z");
+  assert.equal(context.account_status.quickbooks.integration_sync_at, null);
+  assert.equal(context.financial_summary.current_month.data_through, "2026-09-30");
+  assert.equal(context.financial_summary.current_month.basis, "Cash");
 });
 
 test("overdue invoice context excludes paid, voided, zero-balance, and not-yet-overdue rows", async () => {

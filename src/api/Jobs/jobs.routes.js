@@ -1057,6 +1057,7 @@ async function fetchJobCostingRows(businessId, { correlationId = null } = {}) {
       tradeType: normalized.tradeType,
       trade_type: normalized.tradeType,
       status: normalized.status,
+      data_freshness: job.updated_at || job.last_update_at || null,
       base_revenue: baseRevenue,
       base_total_cost: baseCost,
       revenue_summary: summary?.revenue_summary || null,
@@ -1290,14 +1291,14 @@ function isCostAssignment(transaction = {}, categorization = {}) {
   return classifyCostTransaction(transaction, categorization);
 }
 
-async function fetchJobSummaries(businessId) {
+export async function fetchJobSummaries(businessId, { db = supabase } = {}) {
   const [{ data: jobs, error: jobsErr }, { data: assignments, error: assignmentsErr }] = await Promise.all([
-    supabase
+    db
       .from("jobs")
       .select("*")
       .eq("business_id", businessId)
       .limit(200),
-    supabase
+    db
       .from("job_transaction_assignments")
       .select("*")
       .eq("business_id", businessId),
@@ -1319,10 +1320,10 @@ async function fetchJobSummaries(businessId) {
   let transactionMap = {};
   let categorizationMap = {};
   if (transactionIds.length) {
-    const bookkeepingStartDate = await getBookkeepingStartDate(supabase, businessId);
+    const bookkeepingStartDate = await getBookkeepingStartDate(db, businessId);
     const [{ data: transactions, error: txnErr }, { data: categorizations, error: catErr }] = await Promise.all([
       applyActiveBookkeepingScope(
-        supabase
+        db
         .from("bank_transactions")
         .select("id,business_id,amount,direction,is_archived")
         .eq("business_id", businessId)
@@ -1330,7 +1331,7 @@ async function fetchJobSummaries(businessId) {
         bookkeepingStartDate
       )
         .in("id", transactionIds),
-      supabase
+      db
         .from("transaction_categorizations")
         .select("*")
         .eq("business_id", businessId)
@@ -1375,6 +1376,7 @@ async function fetchJobSummaries(businessId) {
   const canonicalRevenueByJob = await fetchCanonicalJobRevenueSummaries({
     businessId,
     jobs: activeJobs,
+    supabase: db,
   });
 
   return activeJobs.map((job) => {
