@@ -6,7 +6,7 @@ import { getCanonicalOnboardingStatus } from "../src/services/onboardingStatusSe
 import { resolveFinancialPeriod } from "../src/api/gpt/orchestration/periodResolver.js";
 import { buildChatContext, resolveChatIntent, extractChatEntities, maskAccountName } from "../src/api/gpt/orchestration/chatContextService.js";
 import { buildBizzySystemMessages } from "../src/api/gpt/brain/bizzySystemPrompt.js";
-import { invokeBizzyChatCompletion } from "../src/api/gpt/brain/openaiInvocation.js";
+import { invokeBizzyChatCompletion, normalizeOpenAIOutput, resolveOpenAIInvocation } from "../src/api/gpt/brain/openaiInvocation.js";
 import { isOperationalMemory } from "../src/api/gpt/brain/bizzyMemoryService.js";
 import { qboEnvName } from "../src/utils/qboEnv.js";
 
@@ -118,6 +118,11 @@ test("ordinary user text resolves financial, cash, AR, job, and integration inte
   assert.equal(resolveChatIntent("What expenses need review?"), "books_review");
   assert.equal(extractChatEntities("Show me my transactions with Adobe.", "transaction_search").search_text, "Adobe");
   assert.equal(extractChatEntities("How profitable was the Smith job?", "job_profitability").job_search, "Smith");
+  assert.equal(resolveChatIntent("Show my September numbers on an accrual basis"), "financial_summary");
+  assert.equal(resolveChatIntent("What is accrual accounting?"), "general");
+  assert.equal(resolveChatIntent("What is the difference between Cash and Accrual?"), "general");
+  assert.equal(resolveChatIntent("Why would a contractor use Cash basis?"), "general");
+  assert.equal(resolveChatIntent("What accounting basis are these numbers using?"), "financial_basis");
 });
 
 test("always-on context separates current MTD from 12 completed cash-basis months", async () => {
@@ -142,6 +147,35 @@ test("missing financial months are explicit unavailable slots", async () => {
   const april = context.financial_summary.previous_12_completed_months.find((row) => row.month === "2026-04");
   assert.equal(april.availability, "unavailable");
   assert.equal(april.revenue, null);
+  assert.equal(april.availability_reason, "cash_basis_snapshot_unavailable");
+});
+
+test("Accrual snapshots are never selected or combined with company Cash reporting", async () => {
+  const store = baseStore();
+  store.monthly_review_qbo_pnl_snapshots.push({
+    id: "accrual-september", business_id: BUSINESS, review_year: 2026, review_month: 9,
+    accounting_method: "Accrual", source_start_date: "2026-09-01", source_end_date: "2026-09-30",
+    pulled_at: "2026-09-30T13:00:00Z", revenue: 999999, expenses: 1, net_profit: 999998,
+    is_current: true, status: "current",
+  });
+  const context = await buildChatContext({ businessId: BUSINESS, message: "Show my September numbers on an accrual basis", now: NOW, db: dbFor(store), logger: { warn() {} } });
+  assert.equal(context.entities.requested_basis, "accrual");
+  assert.equal(context.entities.supported_basis, "cash");
+  assert.equal(context.entities.company_specific_accrual_available, false);
+  assert.ok(context.intent_context.data.every((row) => row.accounting_method === "Cash"));
+  assert.equal(context.intent_context.data.some((row) => row.id === "accrual-september"), false);
+});
+
+test("a period with only an Accrual snapshot remains unavailable rather than falling back", async () => {
+  const store = baseStore();
+  store.monthly_review_qbo_pnl_snapshots = store.monthly_review_qbo_pnl_snapshots
+    .filter((row) => !(row.review_year === 2026 && row.review_month === 9));
+  store.monthly_review_qbo_pnl_snapshots.push({ id: "accrual-only", business_id: BUSINESS, review_year: 2026, review_month: 9, accounting_method: "Accrual", source_start_date: "2026-09-01", source_end_date: "2026-09-30", pulled_at: "2026-09-30T13:00:00Z", revenue: 900, expenses: 100, net_profit: 800, is_current: true, status: "current" });
+  const context = await buildChatContext({ businessId: BUSINESS, message: "How much revenue this month?", now: NOW, db: dbFor(store), logger: { warn() {} } });
+  assert.equal(context.financial_summary.current_month.availability, "unavailable");
+  assert.equal(context.financial_summary.current_month.availability_reason, "cash_basis_snapshot_unavailable");
+  assert.equal(context.financial_summary.current_month.revenue, null);
+  assert.equal(context.intent_context.status, "unavailable");
 });
 
 test("independent loader failure preserves successful context", async () => {
@@ -184,6 +218,8 @@ test("compiled model messages include status, current metrics, Plaid summary, an
   assert.match(text, /Financial Summary.*2026-09/s);
   assert.match(text, /Plaid Balance Summary.*total_cash/s);
   assert.match(text, /Requested Period.*2026-09-01/s);
+  assert.match(text, /Bizzi currently uses Cash-basis financial reporting/);
+  assert.match(text, /Never substitute or combine Accrual-basis figures/);
 });
 
 test("OpenAI missing configuration and empty completion have distinct diagnostics", async () => {
@@ -201,6 +237,58 @@ test("OpenAI requests use a bounded timeout and one SDK retry", async () => {
   assert.deepEqual(requestOptions, { timeout: 1234, maxRetries: 1 });
 });
 
+test("GPT-5.6 uses Responses without unsupported temperature and normalizes output", async () => {
+  let requestBody;
+  const client = { responses: { create: async (body) => { requestBody = body; return { model: "gpt-5.6-terra", output_text: "  response text  " }; } } };
+  const result = await invokeBizzyChatCompletion({ client, model: "gpt-5.6-terra", messages: [{ role: "system", content: "policy" }, { role: "user", content: "hello" }] });
+  assert.equal(resolveOpenAIInvocation("gpt-5.6-terra").api_method, "responses");
+  assert.equal(result.content, "response text");
+  assert.equal(requestBody.max_output_tokens, 1400);
+  assert.equal("temperature" in requestBody, false);
+  assert.equal("max_completion_tokens" in requestBody, false);
+  assert.equal(requestBody.instructions, "policy");
+  assert.equal(requestBody.input[0].content, "hello");
+  assert.equal(normalizeOpenAIOutput({ choices: [{ message: { content: " chat text " } }] }, "chat.completions"), "chat text");
+  assert.equal(normalizeOpenAIOutput({ output: [{ type: "message", content: [{ type: "output_text", text: "nested response" }] }] }, "responses"), "nested response");
+});
+
+test("OpenAI 400 diagnostics expose safe provider fields and do not retry", async () => {
+  let calls = 0;
+  const logs = [];
+  const prompt = "PRIVATE_FINANCIAL_PROMPT";
+  const error = Object.assign(new Error(`Invalid value for temperature; input was ${prompt}; key sk-test-secret`), {
+    status: 400,
+    request_id: "req_safe",
+    error: { type: "invalid_request_error", code: "unsupported_value", param: "temperature", message: `Invalid value for temperature; input was ${prompt}; key sk-test-secret` },
+  });
+  const client = { responses: { create: async () => { calls += 1; throw error; } } };
+  const result = await invokeBizzyChatCompletion({ client, model: "gpt-5.6-terra", messages: [{ role: "user", content: prompt }], logger: { error: (...args) => logs.push(args) } });
+  assert.equal(calls, 1);
+  assert.equal(result.diagnostic.http_status, 400);
+  assert.equal(result.diagnostic.error_type, "invalid_request_error");
+  assert.equal(result.diagnostic.error_code, "unsupported_value");
+  assert.equal(result.diagnostic.invalid_parameter, "temperature");
+  assert.equal(result.diagnostic.provider_request_id, "req_safe");
+  assert.equal(result.diagnostic.configured_model, "gpt-5.6-terra");
+  assert.equal(result.diagnostic.api_method, "responses");
+  assert.equal(logs[0][0], "[bizzy.openai.failure]");
+  const serialized = JSON.stringify(logs);
+  assert.doesNotMatch(serialized, /PRIVATE_FINANCIAL_PROMPT|sk-test-secret/);
+});
+
+test("invalid model and invalid parameter failures retain distinct provider codes", async () => {
+  for (const providerError of [
+    { code: "model_not_found", param: "model", message: "The model does not exist" },
+    { code: "unknown_parameter", param: "response_format", message: "Unknown parameter" },
+  ]) {
+    const client = { chat: { completions: { create: async () => { throw Object.assign(new Error(providerError.message), { status: 400, error: { type: "invalid_request_error", ...providerError } }); } } } };
+    const result = await invokeBizzyChatCompletion({ client, model: "legacy-test-model", messages: [], logger: { error() {} } });
+    assert.equal(result.diagnostic.error_code, providerError.code);
+    assert.equal(result.diagnostic.invalid_parameter, providerError.param);
+    assert.equal(result.diagnostic.error_class, "request_rejected");
+  }
+});
+
 test("operational provider messages are excluded from semantic memory", () => {
   assert.equal(isOperationalMemory({ bizzy_response: "I’m having trouble generating a response right now." }), true);
   assert.equal(isOperationalMemory({ input_text: "How much revenue did we make?", bizzy_response: "$12,000." }), false);
@@ -214,4 +302,5 @@ test("chat source removes misleading fallback, page-view onboarding, and financi
   assert.doesNotMatch(prompt, /financial moves|Suggested Financial Moves|moveSuggestions/i);
   assert.doesNotMatch(hook, /hasViewedIntegrationsPage|onboardingCompletedOnce|visitedIntegrations/);
   assert.match(generator, /operationalError \? null/);
+  assert.doesNotMatch(readFileSync("src/api/gpt/orchestration/chatContextService.js", "utf8"), /\? "Accrual"|basis\s*=\s*entities\.accounting_basis/);
 });

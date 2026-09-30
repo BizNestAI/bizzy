@@ -36,7 +36,7 @@ const BIZZY_CHAT_MODEL = process.env.BIZZY_GPT_MODEL || 'gpt-5.6-terra';
 console.info('[bizzy-openai] configuration', {
   configured: Boolean(openaiKey),
   model: BIZZY_CHAT_MODEL,
-  invocation_method: 'chat.completions',
+  invocation_method: /^gpt-5\.6(?:-|$)/i.test(BIZZY_CHAT_MODEL) ? 'responses' : 'chat.completions',
   timeout_ms: 45_000,
   max_retries: 1,
 });
@@ -350,7 +350,7 @@ export async function generateBizzyResponse({
   const requestId = randomUUID();
   const llmInvocation = {
     requested_model: BIZZY_CHAT_MODEL,
-    method: 'chat.completions',
+    method: /^gpt-5\.6(?:-|$)/i.test(BIZZY_CHAT_MODEL) ? 'responses' : 'chat.completions',
   };
   let responseArtifacts = [];
   let responseActions = [];
@@ -789,7 +789,7 @@ export async function generateBizzyResponse({
       console.log('[gpt] calling LLM');
       const invocation = await invokeBizzyChatCompletion({ client: openai, model: BIZZY_CHAT_MODEL, messages });
       llmInvocation.actual_model = invocation.response?.model || null;
-      llmInvocation.api = 'chat.completions';
+      llmInvocation.api = invocation.apiMethod;
       llmInvocation.diagnostic = invocation.diagnostic;
       openaiUsageTelemetry = invocation.response ? buildMainChatUsageTelemetry(invocation.response, BIZZY_CHAT_MODEL) : null;
       bizzyReply = invocation.content;
@@ -801,7 +801,7 @@ export async function generateBizzyResponse({
           intent,
           period: bundle.chatContext?.period || null,
           model: BIZZY_CHAT_MODEL,
-          invocation_method: 'chat.completions',
+          invocation_method: invocation.apiMethod,
           context_loader_availability: bundle.chatContext?.loader_status || null,
           ...invocation.diagnostic,
         });

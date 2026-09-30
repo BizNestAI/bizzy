@@ -18,12 +18,15 @@ export function resolveChatIntent(message, forcedIntent = null) {
   if (forcedIntent && !["general", "unclassified", "user_text"].includes(forcedIntent)) return forcedIntent;
   const text = String(message || "").toLowerCase();
   if (/\b(is|are|status|linked|set up|setup|connected)\b/.test(text) && /\b(quickbooks|plaid|integrations?|accounts?)\b/.test(text)) return "integration_status";
+  if (/\bwhat is accrual accounting\b/.test(text) || /\bdifference between (?:cash and accrual|accrual and cash)\b/.test(text) || /\bwhy (?:would|do|does).{0,40}\buse cash basis\b/.test(text)) return "general";
   if (/\b(overdue|past due)\b/.test(text) && /\b(invoice|invoices|receivables?|ar)\b/.test(text)) return "invoice_status";
   if (/\b(needs? review|waiting to post|failed to post|posting failed|handled|books review)\b/.test(text)) return "books_review";
   if (/\b(credit[ -]?card balances?|cash|bank balance|money in (?:the )?bank)\b/.test(text)) return "cash_balance";
   if (/\b(jobs?|projects?)\b/.test(text) && /\b(profit|profitable|profitability|margin|cost|perform)\b/.test(text)) return "job_profitability";
   if (/\b(tax|deduction|tax-ready|tax readiness)\b/.test(text)) return "tax_readiness";
   if (/\b(forecast|projection|runway)\b/.test(text)) return "forecast_generate";
+  if (/\bwhat accounting basis\b|\bwhich accounting basis\b/.test(text)) return "financial_basis";
+  if (/\baccrual(?: basis)?\b/.test(text) && /\b(my|our|company|business|numbers?|figures?|financials?|performance|report|p&l|revenue|expenses?|profit|income|margin)\b/.test(text)) return "financial_summary";
   if (/\b(quickbooks|qbo) transactions?\b/.test(text)) return "qbo_transactions";
   if (/\b(plaid|bank) transactions?\b/.test(text)) return "plaid_transactions";
   if (/\b(?:show|find|list|search).{0,30}\btransactions?\b|\btransactions?\s+(?:with|from|for)\b/.test(text)) return "transaction_search";
@@ -36,16 +39,21 @@ export function resolveChatIntent(message, forcedIntent = null) {
 
 export function extractChatEntities(message, intent) {
   const text = String(message || "").trim();
-  const basis = /\baccrual(?: basis)?\b/i.test(text) ? "Accrual" : CASH_BASIS;
+  const requestedAccrual = /\baccrual(?: basis)?\b/i.test(text) && ["financial_summary", "financial_revenue", "financial_expenses", "financial_net_income", "financial_basis"].includes(intent);
+  const basisContext = requestedAccrual
+    ? { requested_basis: "accrual", supported_basis: "cash", company_specific_accrual_available: false }
+    : { requested_basis: null, supported_basis: "cash", company_specific_accrual_available: false };
   if (intent === "transaction_search") {
     const match = text.match(/transactions?\s+(?:with|from|for)\s+(.+?)[?.!]*$/i);
-    return { search_text: match?.[1]?.trim().slice(0, 80) || null, accounting_basis: basis };
+    return { search_text: match?.[1]?.trim().slice(0, 80) || null };
   }
   if (intent === "job_profitability") {
     const match = text.match(/(?:the\s+)?(.+?)\s+(?:job|project)\b/i) || text.match(/\b(?:job|project)\s+(.+?)[?.!]*$/i);
-    return { job_search: match?.[1]?.replace(/^how\s+profitable\s+(?:was\s+)?(?:the\s+)?/i, "").replace(/^was\s+(?:the\s+)?/i, "").trim().slice(0, 80) || null, accounting_basis: basis };
+    return { job_search: match?.[1]?.replace(/^how\s+profitable\s+(?:was\s+)?(?:the\s+)?/i, "").replace(/^was\s+(?:the\s+)?/i, "").trim().slice(0, 80) || null };
   }
-  return { accounting_basis: basis };
+  return ["financial_summary", "financial_revenue", "financial_expenses", "financial_net_income", "financial_basis"].includes(intent)
+    ? { accounting_basis: CASH_BASIS, ...basisContext }
+    : {};
 }
 
 function monthKey(year, month) { return `${year}-${String(month).padStart(2, "0")}`; }
@@ -58,7 +66,7 @@ function monthBounds(key, currentPeriod, isCurrent) {
 }
 function normalizeSnapshot(row, key, currentPeriod, isCurrent) {
   const bounds = monthBounds(key, currentPeriod, isCurrent);
-  if (!row) return { month: key, ...bounds, revenue: null, expenses: null, net_income: null, profit_margin: null, basis: CASH_BASIS, source: "monthly_review_qbo_pnl_snapshots", data_through: null, refreshed_at: null, availability: "unavailable", is_partial: isCurrent };
+  if (!row) return { month: key, ...bounds, revenue: null, expenses: null, net_income: null, profit_margin: null, basis: CASH_BASIS, source: "monthly_review_qbo_pnl_snapshots", data_through: null, refreshed_at: null, availability: "unavailable", availability_reason: "cash_basis_snapshot_unavailable", is_partial: isCurrent };
   const revenue = row.revenue == null ? null : Number(row.revenue);
   const netIncome = row.net_profit == null ? null : Number(row.net_profit);
   const evidencedThrough = isCurrent && row.source_end_date > currentPeriod.end_date ? currentPeriod.end_date : row.source_end_date;
@@ -116,9 +124,9 @@ async function loadBookkeepingHealth({ db, businessId, period }) {
   return { source: "bookkeeping_health", requested_period: period, accounting_basis: null, data_through: row?.last_evaluated_at || null, refreshed_at: row?.updated_at || row?.last_sync_at || null, status: row ? "available" : "unavailable", needs_review_count: row?.needs_review_count ?? null, uncategorized_count: row?.uncategorized_count ?? null };
 }
 
-async function loadCurrentSnapshots({ db, businessId, period, basis = CASH_BASIS }) {
+async function loadCurrentSnapshots({ db, businessId, period }) {
   return queryData(await db.from("monthly_review_qbo_pnl_snapshots").select("id,review_year,review_month,accounting_method,source_start_date,source_end_date,pulled_at,revenue,expenses,net_profit,status,is_current")
-    .eq("business_id", businessId).eq("accounting_method", basis).eq("is_current", true).eq("status", "current")
+    .eq("business_id", businessId).eq("accounting_method", CASH_BASIS).eq("is_current", true).eq("status", "current")
     .gte("source_start_date", period.start_date).lte("source_start_date", period.end_date).order("source_start_date", { ascending: true }).limit(24), "monthly_review_qbo_pnl_snapshots");
 }
 
@@ -137,10 +145,9 @@ async function loadTable({ db, businessId, period, table, select, configure, sou
 }
 
 async function loadIntentContext({ db, businessId, period, intent, entities, message }) {
-  if (["financial_revenue", "financial_expenses", "financial_net_income"].includes(intent)) {
-    const basis = entities.accounting_basis || CASH_BASIS;
-    const snapshots = await loadCurrentSnapshots({ db, businessId, period, basis });
-    return { data: snapshots, source: "monthly_review_qbo_pnl_snapshots", requested_period: period, accounting_basis: basis, comparable: true, data_through: snapshots.map((r) => r.source_end_date).sort().at(-1) || null, refreshed_at: snapshots.map((r) => r.pulled_at).sort().at(-1) || null, interpretation: intent === "financial_revenue" && /money .*made|money .*make|how much money/i.test(message) ? "revenue" : null, status: snapshots.length ? "available" : "unavailable" };
+  if (["financial_summary", "financial_revenue", "financial_expenses", "financial_net_income", "financial_basis"].includes(intent)) {
+    const snapshots = await loadCurrentSnapshots({ db, businessId, period });
+    return { data: snapshots, source: "monthly_review_qbo_pnl_snapshots", requested_period: period, accounting_basis: CASH_BASIS, requested_basis: entities.requested_basis, supported_basis: "cash", company_specific_accrual_available: false, comparable: true, data_through: snapshots.map((r) => r.source_end_date).sort().at(-1) || null, refreshed_at: snapshots.map((r) => r.pulled_at).sort().at(-1) || null, interpretation: intent === "financial_revenue" && /money .*made|money .*make|how much money/i.test(message) ? "revenue" : null, status: snapshots.length ? "available" : "unavailable", availability_reason: snapshots.length ? null : "cash_basis_snapshot_unavailable" };
   }
   if (intent === "qbo_transactions") return loadSnapshotDetails({ db, businessId, period, childTable: "monthly_review_qbo_pnl_transactions", select: "snapshot_id,txn_date,qbo_txn_type,amount,qbo_account_name,entity_name,payee_name,customer_name,vendor_name,description,linkage_status", orderField: "txn_date" });
   if (intent === "chart_of_accounts") return loadSnapshotDetails({ db, businessId, period, childTable: "monthly_review_qbo_pnl_accounts", select: "snapshot_id,account_name,account_type,account_subtype,total_amount,display_order", orderField: "display_order" });

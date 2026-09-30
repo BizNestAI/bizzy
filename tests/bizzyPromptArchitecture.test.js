@@ -1,3 +1,4 @@
+/* global process */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -47,7 +48,8 @@ test('runtime prompt preserves financial states, basis, period, and source fresh
   assert.match(text, /Handled in the grace period/);
   assert.match(text, /posting-failed/);
   assert.match(text, /successfully posted to QuickBooks/);
-  assert.match(text, /cash versus accrual basis/);
+  assert.match(text, /uses Cash-basis financial reporting for company-specific financial analysis/);
+  assert.match(text, /never substitute or combine Accrual figures/i);
   assert.match(text, /reporting period/);
   assert.match(text, /data-through or refresh date/);
   assert.match(text, /Do not treat imported bank activity as posted QuickBooks activity/);

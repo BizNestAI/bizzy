@@ -1,3 +1,4 @@
+/* global process */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -79,7 +80,8 @@ test('dated financial snapshots preserve source semantics without a live-access 
     memoryContext: 'QuickBooks report snapshot: August 2026; cash basis; refreshed September 3, 2026.',
     monthlyMetrics: [{ month: '2026-08', total_revenue: 120000, total_expenses: 90000, net_profit: 30000, profit_margin: 0.25 }],
   });
-  assert.match(text, /cash versus accrual basis/i);
+  assert.match(text, /uses Cash-basis financial reporting for company-specific financial analysis/i);
+  assert.match(text, /never substitute or combine Accrual figures/i);
   assert.match(text, /reporting period/i);
   assert.match(text, /data-through or refresh date/i);
   assert.match(text, /report snapshot is dated evidence, not a live check/i);
